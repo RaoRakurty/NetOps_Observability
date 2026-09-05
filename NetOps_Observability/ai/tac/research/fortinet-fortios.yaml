@@ -1,0 +1,1672 @@
+vendor: fortinet-fortios
+sources:
+  - {title: "CLI troubleshooting cheat sheet (FortiOS)", url: "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"}
+  - {title: "Troubleshooting methodologies", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies"}
+  - {title: "Troubleshooting scenarios", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/517124/troubleshooting-scenarios"}
+  - {title: "Checking CPU and memory resources", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources"}
+  - {title: "Troubleshooting high CPU usage", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage"}
+  - {title: "Conserve mode", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode"}
+  - {title: "IPsec related diagnose commands", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands"}
+  - {title: "Understanding VPN related logs", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/834425/understanding-vpn-related-logs"}
+  - {title: "IPsec monitor", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221346/ipsec-monitor"}
+  - {title: "SSL VPN troubleshooting - common issues", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues"}
+  - {title: "SSL-VPN monitor", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/28104/ssl-vpn-monitor"}
+  - {title: "Troubleshoot an HA formation", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation"}
+  - {title: "Check HA synchronization status", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status"}
+  - {title: "Troubleshooting BGP", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp"}
+  - {title: "SD-WAN related diagnose commands", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/818746/sd-wan-related-diagnose-commands"}
+  - {title: "Understanding SD-WAN related logs", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/856781/understanding-sd-wan-related-logs"}
+  - {title: "Log-related diagnostic commands", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands"}
+  - {title: "SNMP OID for logs that failed to send", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668490/snmp-oid-for-logs-that-failed-to-send"}
+  - {title: "Troubleshooting process for FortiGuard updates", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates"}
+  - {title: "Verifying connectivity to FortiGuard", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/703926/verifying-connectivity-to-fortiguard"}
+  - {title: "FortiGuard server settings", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/691153/fortiguard-server-settings"}
+  - {title: "DNS troubleshooting", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/126629/dns-troubleshooting"}
+  - {title: "Troubleshooting for DNS filter", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/150448/troubleshooting-for-dns-filter"}
+  - {title: "VXLAN troubleshooting", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/386565/vxlan-troubleshooting"}
+  - {title: "Diagnosing NPU-based interfaces", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/926361/diagnosing-npu-based-interfaces"}
+  - {title: "Troubleshooting your installation", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation"}
+  - {title: "Using a session table", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"}
+  - {title: "Verifying the correct firewall policy is being used", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used"}
+  - {title: "Seven-day rolling counter for policy hit counters", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters"}
+  - {title: "ARP table", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/473534/arp-table"}
+  - {title: "Checking FortiOS network settings", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings"}
+  - {title: "Verifying the correct route is being used", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/838132/verifying-the-correct-route-is-being-used"}
+  - {title: "Verifying routing table contents in NAT mode", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221343/verifying-routing-table-contents-in-nat-mode"}
+  - {title: "Static & dynamic routing monitor", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/655407/static-dynamic-routing-monitor"}
+  - {title: "DHCP monitor", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/38214/dhcp-monitor"}
+  - {title: "No session timeout", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/743069/no-session-timeout"}
+  - {title: "Full cone NAT for fixed port range IP pools", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/949754/full-cone-nat-for-fixed-port-range-ip-pools-new"}
+  - {title: "Controlling return path with auxiliary session", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/14295/controlling-return-path-with-auxiliary-session"}
+  - {title: "Testing an antivirus profile", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/315155/testing-an-antivirus-profile"}
+  - {title: "ZTNA troubleshooting and debugging commands", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/286458/ztna-troubleshooting-and-debugging-commands"}
+  - {title: "Checking the hardware connections", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/165256/checking-the-hardware-connections"}
+  - {title: "Interface MTU packet size", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/596096/interface-mtu-packet-size"}
+  - {title: "WAN optimization - testing and troubleshooting the configuration", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/98874/testing-and-troubleshooting-the-configuration"}
+  - {title: "FortiToken troubleshooting and diagnosis", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/180506/troubleshooting-and-diagnosis"}
+  - {title: "Checking the logs", url: "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/458906/checking-the-logs"}
+
+tac_baseline:
+  commands:
+    - {cmd: "get system status", intent: platform.version, params: []}
+    - {cmd: "get system performance status", intent: system.health, params: []}
+    - {cmd: "get system performance top", intent: system.process.top, params: []}
+    - {cmd: "diagnose sys top {interval} {lines}", intent: system.cpu, params: [interval, lines]}
+    - {cmd: "get hardware memory", intent: system.memory, params: []}
+    - {cmd: "diagnose hardware sysinfo memory", intent: system.memory, params: []}
+    - {cmd: "diagnose hardware sysinfo conserve", intent: system.memory.conserve, params: []}
+    - {cmd: "get system session status", intent: session.count, params: []}
+    - {cmd: "diagnose sys session stat", intent: session.stats, params: []}
+    - {cmd: "diagnose sys vd list", intent: platform.vdom.list, params: []}
+    - {cmd: "get system interface", intent: interface.summary, params: []}
+    - {cmd: "get router info routing-table all", intent: route.table, params: []}
+    - {cmd: "show sys dns", intent: dns.config, params: []}
+    - {cmd: "diagnose sys ntp status", intent: system.ntp, params: []}
+    - {cmd: "execute time", intent: system.clock, params: []}
+    - {cmd: "diagnose autoupdate versions", intent: update.status, params: []}
+    - {cmd: "diagnose autoupdate status", intent: update.status, params: []}
+    - {cmd: "get webfilter ftgd-statistics", intent: utm.webfilter.stats, params: []}
+    - {cmd: "get ips session", intent: utm.ips.memory, params: []}
+    - {cmd: "diagnose sys cmdb info", intent: config.lastchange, params: []}
+    - {cmd: "diagnose debug crashlog read", intent: system.crashlog, params: []}
+    - {cmd: "diagnose debug config-error-log read", intent: config.errors, params: []}
+    - {cmd: "diagnose sys session list", intent: session.table, params: []}
+    - {cmd: "execute tac report", intent: support.techsupport, params: [], writes_file: false}
+  notes: >-
+    Fortinet's own "gather information for technical support" checklist
+    (troubleshooting-methodologies) asks for: the firmware build version from
+    `get system status`, a network topology diagram, a recent configuration
+    file, an optional recent debug log, and a written summary of the steps
+    already taken. The same page tells administrators to record the output of
+    `get system status`, `get system performance status`, `get hardware
+    memory`, `get system session status`, `get router info routing-table all`,
+    `get ips session`, `get webfilter ftgd-statistics`, `diagnose sys session
+    list`, `show sys dns` and `diagnose sys ntp status` as a BASELINE while the
+    box is healthy, so a later capture can be diffed against it - that diff is
+    the single most valuable artefact on a FortiGate case.
+    execute tac report: the guide describes it as "an extensive snapshot of your
+    system - this command runs many diagnostic commands for specific
+    configurations ... if you need to troubleshoot later, you can run the same
+    command again and compare the differences". It also warns: "Do not provide
+    the output from the execute tac report unless the support team requests it.
+    The output from this command is very large and is not required in many
+    cases." NO page we fetched states that it writes a file to the FortiGate
+    filesystem - it is described purely in terms of its output, so it is marked
+    writes_file: false (i.e. capture the console/session transcript). Treat that
+    as "documented as output, file-writing not claimed" rather than proven.
+    `diagnose debug report` could NOT be verified: it does not appear anywhere in
+    the FortiOS 7.6.0 Administration Guide page set nor in the CLI
+    troubleshooting cheat sheet, so it is deliberately omitted from this file.
+    VDOM caveat: when VDOMs are enabled most `diagnose`/`get` output is
+    per-VDOM. Run the collection inside the affected VDOM, and use `diagnose sys
+    vd list` plus a global-scope pass for global-only state (HA, FortiGuard,
+    logging daemons, hardware). `diagnose sys session filter vd -1` matches all
+    VDOMs. The session setup rate reported by `get system performance status` is
+    a GLOBAL value and is slower per-VDOM when many VDOMs are busy.
+    Runtime/CPU caveat: the cheat sheet's own banner is "Real-time debugging is a
+    CPU intensive task. Use it with caution." Every real-time debug family
+    (`diagnose debug flow`, `diagnose debug application ...`, IPS/WAD debugs) is
+    excluded from this catalogue for exactly that reason - this product performs
+    read-only collection only. `diagnose sys session list` and
+    `diagnose firewall iprope list` are unbounded on a busy firewall: always set
+    a session filter first, and expect very large output.
+    Where output goes: all commands here print to the CLI session. Nothing in
+    this baseline writes a file to the device.
+  sources:
+    - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies"
+    - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+    - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources"
+    - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode"
+    - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+
+issues:
+  # ---------------------------------------------------------------- sessions
+  - id: fos-session-table-full
+    class: session-table
+    proposed_class: true
+    title: "Session table full / session setup rate collapsed"
+    symptoms:
+      - "New connections through the FortiGate fail while existing ones keep working"
+      - "Average session setup rate reported by get system performance status drops to 0-3 sessions/second"
+      - "Session count sits at or near the platform or per-VDOM session limit"
+      - "GUI is sluggish and new admin logins are refused"
+    log_signatures: []
+    likely_causes:
+      - "A host or scanner is opening sessions faster than they expire (session flood)"
+      - "Per-VDOM session limit reached - the setup rate is a global value and is divided across busy VDOMs"
+      - "Proxy overload: a very low or zero average session setup rate indicates the proxy is unable to do its job"
+      - "Session TTL raised (or set to never) on a policy or service so sessions never age out"
+    commands:
+      - {cmd: "get system performance status", intent: system.health, params: []}
+      - {cmd: "get system session status", intent: session.count, params: []}
+      - {cmd: "diagnose sys session stat", intent: session.stats, params: []}
+      - {cmd: "diagnose sys session exp-stat", intent: session.stats.expectation, params: []}
+      - {cmd: "diagnose sys vd list", intent: platform.vdom.list, params: []}
+      - {cmd: "diagnose sys session filter src {src-ip}", intent: session.filter, params: [src-ip]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "diagnose sys top {interval} {lines}", intent: system.cpu, params: [interval, lines]}
+    tac_first_look: "TAC reads the average sessions and average session setup rate lines out of `get system performance status` first, then compares the total from `diagnose sys session stat` against the model's session limit. A near-limit count with a collapsed setup rate points at a flood; a normal count with a collapsed rate points at proxy overload."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+
+  - id: fos-session-not-created
+    class: session-table
+    proposed_class: true
+    title: "No session is created for a flow the customer expects to pass"
+    symptoms:
+      - "Application times out; nothing appears in the session table for that 5-tuple"
+      - "Traffic is seen arriving on the ingress interface but never leaves"
+      - "The firewall policy the customer believes should match shows no hit count increase"
+    log_signatures: []
+    likely_causes:
+      - "Traffic never reaches the FortiGate (upstream routing/switching, wrong VLAN)"
+      - "No route to the destination so the policy lookup never happens"
+      - "ARP is not resolving for the next hop"
+      - "Matched by a deny policy or the implicit deny at the bottom of the policy list"
+    commands:
+      - {cmd: "diagnose sys session filter src {src-ip}", intent: session.filter, params: [src-ip]}
+      - {cmd: "diagnose sys session filter dst {dst-ip}", intent: session.filter, params: [dst-ip]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "get router info routing-table all", intent: route.table, params: []}
+      - {cmd: "get system arp", intent: arp.table, params: []}
+      - {cmd: "diagnose ip arp list", intent: arp.table, params: []}
+      - {cmd: "diagnose sniffer packet {interface} '{bpf}' 4 {count} l", intent: capture.sniffer, params: [interface, bpf, count]}
+    tac_first_look: "TAC filters the session table on the exact 5-tuple; if there is no entry at all the question becomes whether the packet ever arrived, which the sniffer answers on the ingress interface, then whether a route and an ARP entry exist for the next hop."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/517124/troubleshooting-scenarios"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/473534/arp-table"
+
+  - id: fos-asymmetric-routing-drop
+    class: session-table
+    proposed_class: true
+    title: "Asymmetric return path - traffic drops when reply arrives on a different interface"
+    symptoms:
+      - "TCP handshakes complete one way then stall; UDP flows are one-directional"
+      - "Session exists but the reply direction statistic stays at 0 packets"
+      - "Problem appears only with ECMP, multiple ISP links, SD-WAN or ADVPN topologies"
+    log_signatures: []
+    likely_causes:
+      - "Return traffic arrives on an interface other than the original outgoing interface (auxiliary-session behaviour)"
+      - "Policy routes or SD-WAN rules send the reply out a different member than the original session used"
+      - "Upstream device load-balances the return path"
+    commands:
+      - {cmd: "diagnose sys session filter src {src-ip}", intent: session.filter, params: [src-ip]}
+      - {cmd: "diagnose sys session filter dst {dst-ip}", intent: session.filter, params: [dst-ip]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "diagnose firewall proute list", intent: policyroute.table, params: []}
+      - {cmd: "get router info routing-table all", intent: route.table, params: []}
+      - {cmd: "diagnose sys sdwan service4", intent: sdwan.rules, params: []}
+    tac_first_look: "TAC reads the `orgin->sink ... dev=A->B/B->A` line and the org/reply byte counters of the session entry: a session with org packets but zero reply packets, on a box with more than one path, is the asymmetry signature. `diagnose firewall proute list` then shows whether a policy route or SD-WAN rule is steering the reply elsewhere."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/14295/controlling-return-path-with-auxiliary-session"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/655407/static-dynamic-routing-monitor"
+
+  - id: fos-session-ttl-premature-expiry
+    class: session-table
+    proposed_class: true
+    title: "Long-lived application session torn down early (session TTL / idle timeout)"
+    symptoms:
+      - "Idle SSH, database or legacy medical application sessions drop after a fixed interval"
+      - "Re-connect always works immediately, so it is not a reachability problem"
+      - "Session entry disappears from the table while the client still believes it is up"
+    log_signatures: []
+    likely_causes:
+      - "Default session-ttl for the matched service/policy/VDOM is shorter than the application's idle period"
+      - "tcp-halfclose / tcp-halfopen / udp-idle timers tightened during a previous high-CPU remediation"
+      - "Session offloaded and aged by the NPU rather than the CPU"
+    commands:
+      - {cmd: "diagnose sys session filter dport {dst-port}", intent: session.filter, params: [dst-port]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "diagnose sys session stat", intent: session.stats, params: []}
+      - {cmd: "diagnose sys session list expectation", intent: session.table.expectation, params: []}
+    tac_first_look: "TAC reads the `expire=` and `timeout=` fields on the session entry (a policy with session-ttl never shows `expire=never timeout=never`) and compares them against how long the customer says the session survives."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/743069/no-session-timeout"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/949754/full-cone-nat-for-fixed-port-range-ip-pools-new"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  # ------------------------------------------------------------ firewall policy
+  - id: fos-traffic-denied-implicit-deny
+    class: firewall-policy
+    proposed_class: true
+    title: "Traffic blocked by the implicit deny policy"
+    symptoms:
+      - "Client gets no response; deny traffic logs reference the implicit policy"
+      - "No matching accept policy hit count moves"
+      - "Works from one subnet and not another that the customer believes is covered"
+    log_signatures: []
+    likely_causes:
+      - "Source or destination address object does not actually contain the host"
+      - "Wrong srcintf/dstintf pair (zone vs member, VLAN vs parent)"
+      - "Service object does not include the port/protocol actually used"
+      - "Schedule or the policy status disabled the rule"
+    commands:
+      - {cmd: "diagnose firewall iprope list", intent: policy.list, params: []}
+      - {cmd: "diagnose firewall iprope show 100004 {policy-id}", intent: policy.hitcount, params: [policy-id]}
+      - {cmd: "diagnose sys session filter dst {dst-ip}", intent: session.filter, params: [dst-ip]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "execute log filter category 0", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+    tac_first_look: "TAC pulls the traffic log for the flow and reads the policyid it was matched against; if it is the implicit deny they walk the policy list with `diagnose firewall iprope list` looking for the first rule that should have matched and check its hit counter is genuinely zero."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-policy-order-wrong-match
+    class: firewall-policy
+    proposed_class: true
+    title: "Wrong firewall policy matched because of policy order"
+    symptoms:
+      - "Traffic is permitted or inspected by a policy the customer did not intend"
+      - "A newly added policy never increments its hit count"
+      - "Security profiles applied to the flow are not the ones configured on the intended policy"
+    log_signatures: []
+    likely_causes:
+      - "A broader policy sits above the specific one - FortiOS matches top-down"
+      - "The intended policy was added at the bottom of the list after installation"
+      - "Zone membership makes a wider interface pair match first"
+    commands:
+      - {cmd: "diagnose firewall iprope list", intent: policy.list, params: []}
+      - {cmd: "diagnose firewall iprope show 100004 {policy-id}", intent: policy.hitcount, params: [policy-id]}
+      - {cmd: "diagnose firewall iprope6 show 100004 {policy-id}", intent: policy.hitcount.v6, params: [policy-id]}
+      - {cmd: "diagnose sys session filter src {src-ip}", intent: session.filter, params: [src-ip]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+    tac_first_look: "TAC compares the policy_id carried on the live session entry with the policy the customer expected, then reads the per-policy hit counters to prove which rule is actually absorbing the traffic."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+
+  - id: fos-identify-matching-policy-id
+    class: firewall-policy
+    proposed_class: true
+    title: "Identify which policy id a given connection is using"
+    symptoms:
+      - "Customer needs to know which rule is inspecting or shaping a specific connection"
+      - "Security profile behaviour (AV, IPS, web filter) differs from expectation for one flow"
+    log_signatures: []
+    likely_causes:
+      - "Multiple overlapping policies for the same subnet pair"
+      - "Traffic taking an unexpected interface pair"
+    commands:
+      - {cmd: "diagnose sys session filter src {src-ip}", intent: session.filter, params: [src-ip]}
+      - {cmd: "diagnose sys session filter dst {dst-ip}", intent: session.filter, params: [dst-ip]}
+      - {cmd: "diagnose sys session filter dport {dst-port}", intent: session.filter, params: [dst-port]}
+      - {cmd: "diagnose sys session filter policy {policy-id}", intent: session.filter, params: [policy-id]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "diagnose firewall iprope show 100004 {policy-id}", intent: policy.hitcount, params: [policy-id]}
+    tac_first_look: "The session table is the authoritative answer: filter it down to the exact 5-tuple and read the `policy_id=` field on the entry, then confirm with that policy's hit counter."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters"
+
+  # ------------------------------------------------------------------------ NAT
+  - id: fos-snat-port-exhaustion
+    class: nat
+    proposed_class: true
+    title: "SNAT / IP-pool port exhaustion behind a single public address"
+    symptoms:
+      - "Intermittent connection failures for many internal hosts at peak hours"
+      - "New outbound sessions fail while established ones survive"
+      - "Failures correlate with a single overloaded IP pool or the outgoing-interface address"
+    log_signatures: []
+    likely_causes:
+      - "Overload IP pool with too few addresses for the concurrent session count"
+      - "Fixed-port-range pool sized too small, or one-to-one mapping exhausted"
+      - "A small number of internal hosts consuming the whole port range"
+    commands:
+      - {cmd: "diagnose sys session stat", intent: session.stats, params: []}
+      - {cmd: "diagnose sys session filter nsrc {nat-ip}", intent: session.filter, params: [nat-ip]}
+      - {cmd: "diagnose sys session filter nport {nat-port}", intent: session.filter, params: [nat-port]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "diagnose firewall iprope list", intent: policy.list, params: []}
+      - {cmd: "get system performance status", intent: system.health, params: []}
+    tac_first_look: "TAC filters the session table on the NAT'd source address (`nsrc`) to count how many translations one pool address is carrying, which is the direct measurement of pool/port pressure."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/949754/full-cone-nat-for-fixed-port-range-ip-pools-new"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-vip-dnat-not-working
+    class: nat
+    proposed_class: true
+    title: "VIP / DNAT published service unreachable from outside"
+    symptoms:
+      - "External clients cannot reach the published server; internal clients can"
+      - "Session table shows no dnat hook, or dnat to the wrong internal address/port"
+      - "Works for one protocol/port of the VIP and not another"
+    log_signatures: []
+    likely_causes:
+      - "VIP not referenced as the destination address of an inbound policy"
+      - "Port-forwarding mapped to the wrong external/internal port pair"
+      - "External interface of the VIP does not match the interface the traffic arrives on"
+      - "Upstream ISP or an intermediate firewall blocking the service port"
+    commands:
+      - {cmd: "diagnose sys session filter dst {vip-ip}", intent: session.filter, params: [vip-ip]}
+      - {cmd: "diagnose sys session filter dport {dst-port}", intent: session.filter, params: [dst-port]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "diagnose firewall iprope list", intent: policy.list, params: []}
+      - {cmd: "diagnose sniffer packet {interface} '{bpf}' 4 {count} l", intent: capture.sniffer, params: [interface, bpf, count]}
+      - {cmd: "get system arp", intent: arp.table, params: []}
+    tac_first_look: "TAC reads the `hook=pre dir=org act=dnat` line of the session entry: the presence and the target of that dnat hook says immediately whether the VIP matched at all and where it is sending the packet."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/743069/no-session-timeout"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/517124/troubleshooting-scenarios"
+
+  - id: fos-central-vs-policy-nat-confusion
+    class: nat
+    proposed_class: true
+    title: "Central NAT enabled - per-policy NAT settings no longer apply"
+    symptoms:
+      - "NAT stops happening (or starts happening) after a migration or an upgrade"
+      - "The NAT toggle on the firewall policy appears to have no effect"
+      - "Translated source address is not the one configured on the policy"
+    log_signatures: []
+    likely_causes:
+      - "Central SNAT table is in control; the policy-level NAT flag is ignored"
+      - "No central SNAT entry matches the source/destination/interface combination"
+      - "Central SNAT entries ordered so a broader rule wins"
+    commands:
+      - {cmd: "diagnose sys session filter src {src-ip}", intent: session.filter, params: [src-ip]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "diagnose sys session filter nsrc {nat-ip}", intent: session.filter, params: [nat-ip]}
+      - {cmd: "diagnose firewall iprope list", intent: policy.list, params: []}
+    tac_first_look: "TAC compares the `act=snat` hook line in the session entry (which shows the address and port actually used) against what the customer configured; a translation to an address that appears in no policy is the central-NAT tell."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/743069/no-session-timeout"
+
+  # ------------------------------------------------------------------ IPsec VPN
+  - id: fos-ipsec-p1-not-up
+    class: ipsec-vpn
+    proposed_class: true
+    title: "IPsec IKE phase-1 does not come up"
+    symptoms:
+      - "Tunnel shows down in the IPsec monitor; no IKE SA is established"
+      - "diagnose vpn ike gateway list shows the gateway with no established SA, or shows nothing at all"
+      - "Peer never progresses past the first exchange"
+    log_signatures:
+      - 'logid="0101037127" logdesc="Progress IPsec phase 1" action="negotiate" ... stage=1 result="OK"'
+      - 'logid="0101037138" logdesc="IPsec connection status changed" action="tunnel-down"'
+      - 'logid="0101037134" logdesc="IPsec phase 1 SA deleted" action="delete_phase1_sa"'
+    likely_causes:
+      - "Pre-shared key or peer ID mismatch"
+      - "Phase-1 proposal mismatch (encryption/hash/DH group) - the negotiation result block lists what each side offered"
+      - "Wrong local/remote gateway address or wrong outgoing interface"
+      - "IKE (UDP 500) or NAT-T (UDP 4500) blocked upstream, or NAT-T not detected"
+      - "Aggressive vs main mode and IKEv1 vs IKEv2 mismatch"
+    commands:
+      - {cmd: "diagnose vpn ike status", intent: vpn.ipsec.ike.summary, params: []}
+      - {cmd: "diagnose vpn ike gateway list", intent: vpn.ipsec.ike.gateways, params: []}
+      - {cmd: "get vpn ipsec tunnel summary", intent: vpn.ipsec.tunnel.summary, params: []}
+      - {cmd: "diagnose vpn ike errors", intent: vpn.ipsec.ike.errors, params: []}
+      - {cmd: "diagnose vpn ike counts", intent: vpn.ipsec.ike.counters, params: []}
+      - {cmd: "diagnose vpn ike crypto", intent: vpn.ipsec.ike.crypto, params: []}
+      - {cmd: "execute log filter category 1", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+    tac_first_look: "TAC opens `diagnose vpn ike gateway list` and looks for the gateway entry, its `status:` line and the `proposal:` it settled on; an entry with created counters but zero established is a proposal or authentication mismatch, and no entry at all means the peer's packets are not arriving."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/834425/understanding-vpn-related-logs"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-ipsec-p2-selector-mismatch
+    class: ipsec-vpn
+    proposed_class: true
+    title: "IPsec phase-2 fails - quick mode selector or PFS mismatch"
+    symptoms:
+      - "Phase-1 is established but no IPsec SA is installed"
+      - "diagnose vpn tunnel list shows the tunnel with proxyid but sa=0"
+      - "One subnet pair of a multi-selector tunnel works and another does not"
+    log_signatures:
+      - 'logid="0101037129" logdesc="Progress IPsec phase 2" action="negotiate" mode="quick"'
+      - 'logid="0101037139" logdesc="IPsec phase 2 status changed" action="phase2-up"'
+      - 'logid="0101037133" logdesc="IPsec SA installed" action="install_sa"'
+    likely_causes:
+      - "Phase-2 quick-mode selectors (src/dst subnets) do not mirror the peer's"
+      - "PFS DH group enabled on one side only, or a different group"
+      - "Phase-2 transform set (ESP cipher / auth) mismatch"
+      - "Different SA lifetimes causing repeated failed rekeys"
+    commands:
+      - {cmd: "diagnose vpn tunnel list", intent: vpn.ipsec.tunnel.detail, params: []}
+      - {cmd: "diagnose vpn ike gateway list", intent: vpn.ipsec.ike.gateways, params: []}
+      - {cmd: "get vpn ipsec tunnel details", intent: vpn.ipsec.tunnel.summary, params: []}
+      - {cmd: "diagnose vpn ike errors", intent: vpn.ipsec.ike.errors, params: []}
+    tac_first_look: "TAC reads the `proxyid=... proto=... sa=N` block plus the `src:` / `dst:` selector lines from `diagnose vpn tunnel list`; sa=0 with selectors present is the classic phase-2 mismatch, and the selector lines are compared directly with the peer's."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/834425/understanding-vpn-related-logs"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221346/ipsec-monitor"
+
+  - id: fos-ipsec-tunnel-up-no-traffic
+    class: ipsec-vpn
+    proposed_class: true
+    title: "IPsec tunnel is up but no user traffic passes"
+    symptoms:
+      - "Tunnel shows established and the SA is installed, yet applications time out"
+      - "Encrypt counters increment but decrypt counters stay at zero (or vice versa)"
+      - "Ping across the tunnel fails in one direction only"
+    log_signatures:
+      - 'logid="0101037141" logdesc="IPsec tunnel statistics" action="tunnel-stats" sentbyte= rcvdbyte='
+    likely_causes:
+      - "No firewall policy for the tunnel interface pair, or the policy is below a deny"
+      - "Missing route (static or via the tunnel interface) for the remote subnet"
+      - "Peer is dropping the encrypted packets - one-way ESP reachability"
+      - "Overlapping subnets / NAT applied inside the tunnel policy"
+      - "Offload path (npu_flag) hiding the traffic from software counters"
+    commands:
+      - {cmd: "diagnose vpn tunnel list", intent: vpn.ipsec.tunnel.detail, params: []}
+      - {cmd: "diagnose vpn ipsec status", intent: vpn.ipsec.crypto.counters, params: []}
+      - {cmd: "get router info routing-table all", intent: route.table, params: []}
+      - {cmd: "diagnose firewall iprope list", intent: policy.list, params: []}
+      - {cmd: "diagnose sys session filter dst {dst-ip}", intent: session.filter, params: [dst-ip]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "execute ping {dst-ip}", intent: reachability.ping, params: [dst-ip]}
+    tac_first_look: "TAC compares the `stat: rxp/txp/rxb/txb` and the `dec:pkts/bytes` vs `enc:pkts/bytes` counters on the tunnel: txp climbing with rxp flat means we are encrypting and the peer is not answering, so the problem is on the far side or in transit, not in our policy."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/834425/understanding-vpn-related-logs"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation"
+
+  - id: fos-ipsec-dpd-rekey-flap
+    class: ipsec-vpn
+    proposed_class: true
+    title: "IPsec tunnel flapping on DPD or rekey"
+    symptoms:
+      - "Tunnel drops and re-establishes on a regular interval matching the SA lifetime"
+      - "tunnel-down / tunnel-up log pairs repeat through the day"
+      - "DPD sent counter rises while the received counter stays flat"
+    log_signatures:
+      - 'logid="0101037138" logdesc="IPsec connection status changed" action="tunnel-down"'
+      - 'logid="0101037138" logdesc="IPsec connection status changed" action="tunnel-up"'
+      - 'logid="0101037134" logdesc="IPsec phase 1 SA deleted" action="delete_phase1_sa"'
+    likely_causes:
+      - "Dead peer detection false positives - packet loss or high latency on the underlay"
+      - "Mismatched phase-1/phase-2 lifetimes so one side rekeys while the other tears down"
+      - "NAT device in the path expiring the UDP 4500 mapping faster than the DPD interval"
+      - "Underlay (SD-WAN member / ISP link) itself flapping"
+    commands:
+      - {cmd: "diagnose vpn ike gateway list", intent: vpn.ipsec.ike.gateways, params: []}
+      - {cmd: "diagnose vpn tunnel list", intent: vpn.ipsec.tunnel.detail, params: []}
+      - {cmd: "diagnose vpn ike stats", intent: vpn.ipsec.ike.counters, params: []}
+      - {cmd: "diagnose sys link-monitor status", intent: linkmonitor.status, params: []}
+      - {cmd: "diagnose sys sdwan health-check", intent: sdwan.healthcheck, params: []}
+      - {cmd: "execute log filter category 1", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+    tac_first_look: "TAC reads the `dpd: mode=... count= seqno=` and `lifetime/rekey:` values from the gateway/tunnel dumps and lines the tunnel-down timestamps up against the SD-WAN health-check or link-monitor history to decide between a rekey bug and an unstable underlay."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/834425/understanding-vpn-related-logs"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/818746/sd-wan-related-diagnose-commands"
+
+  # -------------------------------------------------------------------- SSL VPN
+  - id: fos-sslvpn-login-failure
+    class: ssl-vpn
+    proposed_class: true
+    title: "SSL VPN login fails or the portal URL returns nothing"
+    symptoms:
+      - "Browser gets no response from https://<fortigate>:<port>"
+      - "FortiClient reports credentials rejected, or hangs on connecting"
+      - "Some users can log in and others cannot"
+    log_signatures: []
+    likely_causes:
+      - "SSL VPN not enabled, or listening on a different port than the URL used"
+      - "Restrict Access (source host restriction) excluding the client"
+      - "No firewall policy for SSL VPN traffic"
+      - "Remote authentication server (LDAP/RADIUS) unreachable or group mapping wrong"
+      - "Client TLS version disabled in the browser or in FortiClient"
+    commands:
+      - {cmd: "diagnose vpn ssl list", intent: vpn.ssl.sessions, params: []}
+      - {cmd: "get vpn ssl monitor", intent: vpn.ssl.sessions, params: []}
+      - {cmd: "diagnose vpn ssl statistics", intent: vpn.ssl.stats, params: []}
+      - {cmd: "diagnose firewall auth list", intent: auth.sessions, params: []}
+      - {cmd: "diagnose firewall iprope list", intent: policy.list, params: []}
+      - {cmd: "execute log filter category 1", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+    tac_first_look: "TAC checks whether the connection ever became a session at all with `diagnose vpn ssl list` / `get vpn ssl monitor`; a login that never appears there failed before authentication, which redirects the case to listener/port/policy rather than to the user database."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/28104/ssl-vpn-monitor"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-sslvpn-tunnel-mode-drops
+    class: ssl-vpn
+    proposed_class: true
+    title: "SSL VPN tunnel mode hangs at 98% or disconnects after a few seconds"
+    symptoms:
+      - "FortiClient stalls at 98% then fails"
+      - "Tunnel establishes then drops within seconds on a multi-WAN / SD-WAN FortiGate"
+      - "Users land in the wrong IP range, or no address is assigned at all"
+    log_signatures: []
+    likely_causes:
+      - "Latency or poor connectivity exceeding the SSL VPN login timeout"
+      - "Multiple internet-facing interfaces making the session dirty (route-source / preserve-session-route)"
+      - "SSL VPN IP pool exhausted - the default SSLVPN_TUNNEL_ADDR1 pool has only 10 addresses"
+      - "Different IP pools configured on the portal and on the SSL VPN settings, so the portal wins"
+      - "FortiClient version incompatible with the FortiOS build"
+    commands:
+      - {cmd: "diagnose vpn ssl list", intent: vpn.ssl.sessions, params: []}
+      - {cmd: "get vpn ssl monitor", intent: vpn.ssl.sessions, params: []}
+      - {cmd: "execute vpn sslvpn list", intent: vpn.ssl.sessions, params: []}
+      - {cmd: "diagnose vpn ssl statistics", intent: vpn.ssl.stats, params: []}
+      - {cmd: "diagnose vpn ssl mux-stat", intent: vpn.ssl.stats, params: []}
+      - {cmd: "get system status", intent: platform.version, params: []}
+    tac_first_look: "TAC counts the assigned tunnel addresses in `diagnose vpn ssl list` against the pool size first - an exhausted 10-address default pool explains most 'connects then drops' reports - and confirms the FortiOS build against the FortiClient version."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/28104/ssl-vpn-monitor"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-sslvpn-high-cpu-slow-throughput
+    class: ssl-vpn
+    proposed_class: true
+    title: "SSL VPN slow throughput / SSL VPN driving high CPU"
+    symptoms:
+      - "Remote users report poor throughput while the link itself is idle"
+      - "sslvpnd / httpsd near the top of the process list"
+      - "Throughput degrades as the concurrent user count rises"
+    log_signatures: []
+    likely_causes:
+      - "TCP-in-TCP retransmission behaviour when DTLS is not used"
+      - "Very high concurrent tunnel count for the platform"
+      - "Deep inspection or AV applied to all tunnelled traffic"
+      - "General CPU exhaustion from other features (see high-cpu)"
+    commands:
+      - {cmd: "diagnose vpn ssl statistics", intent: vpn.ssl.stats, params: []}
+      - {cmd: "diagnose vpn ssl list", intent: vpn.ssl.sessions, params: []}
+      - {cmd: "get system performance top", intent: system.process.top, params: []}
+      - {cmd: "diagnose sys top {interval} {lines}", intent: system.cpu, params: [interval, lines]}
+      - {cmd: "diagnose sys mpstat {interval}", intent: system.cpu.percore, params: [interval]}
+      - {cmd: "get system performance status", intent: system.health, params: []}
+    tac_first_look: "TAC correlates the concurrent tunnel count from the SSL VPN statistics with the per-process CPU from `get system performance top`; if sslvpnd/httpsd dominate they pursue DTLS and inspection settings, otherwise the SSL VPN is a victim of another feature."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  # ------------------------------------------------------------------------- HA
+  - id: fos-ha-cluster-not-forming
+    class: ha-cluster
+    proposed_class: true
+    title: "HA cluster will not form"
+    symptoms:
+      - "Second unit never joins; each box reports itself standalone"
+      - "One member shuts itself down during HA setup"
+      - "get system ha status lists only one member"
+    log_signatures: []
+    likely_causes:
+      - "Members are not the same model, hardware configuration, connections or generation"
+      - "HA mode, group-name, group-id or password do not match between members"
+      - "Heartbeat interfaces not physically connected or not up"
+      - "One member has a failed hard drive - it is shut down during HA setup and needs RMA"
+    commands:
+      - {cmd: "get system ha status", intent: ha.status, params: []}
+      - {cmd: "diagnose system ha status", intent: ha.status, params: []}
+      - {cmd: "get system status", intent: platform.version, params: []}
+      - {cmd: "get system interface", intent: interface.summary, params: []}
+      - {cmd: "diagnose hardware deviceinfo disk", intent: hardware.disk, params: []}
+      - {cmd: "diagnose sys ha history read", intent: ha.history, params: []}
+    tac_first_look: "TAC reads `get system ha status` on both members: the HA Health Status warnings and the HBDEV stats block (up/down plus rx/tx counters per heartbeat port) settle in one screen whether the heartbeat is alive, and `get system status` on each proves model/firmware parity."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-ha-out-of-sync
+    class: ha-cluster
+    proposed_class: true
+    title: "HA cluster members out of sync"
+    symptoms:
+      - "Configuration Status reports out-of-sync for one member"
+      - "GUI HA monitor shows a member in red with differing checksums"
+      - "Configuration changes appear on the primary but not the secondary"
+    log_signatures: []
+    likely_causes:
+      - "A configuration table that cannot be synchronised (interface-specific or licence-specific settings)"
+      - "Different firmware or FortiGuard object versions between members"
+      - "Manual configuration performed directly on the secondary"
+      - "External file signatures (certificates, replacement messages) differing"
+    commands:
+      - {cmd: "get system ha status", intent: ha.status, params: []}
+      - {cmd: "get system ha status {vcluster-id}", intent: ha.status.vcluster, params: [vcluster-id]}
+      - {cmd: "diagnose sys ha checksum cluster", intent: ha.checksum, params: []}
+      - {cmd: "diagnose sys ha checksum show {vdom}", intent: ha.checksum.vdom, params: [vdom]}
+      - {cmd: "diagnose sys ha history read", intent: ha.history, params: []}
+      - {cmd: "diagnose sys cmdb info", intent: config.lastchange, params: []}
+    tac_first_look: "TAC reads the Configuration Status block and the per-member `chksum dump` from `get system ha status`, then narrows to the offending table with `diagnose sys ha checksum show <vdom>` on both members and diffs the two."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-ha-split-brain
+    class: ha-cluster
+    proposed_class: true
+    title: "HA split brain - both members claim the primary role"
+    symptoms:
+      - "get system ha status shows each FortiGate as the primary"
+      - "Admin connections to the cluster work only intermittently"
+      - "Sessions cannot be established through the FortiGate and traffic drops"
+      - "L2 switches flap the same MAC address between ports"
+    log_signatures: []
+    likely_causes:
+      - "Complete loss of the heartbeat link(s) - physical failure or something blocking heartbeat packets"
+      - "Congestion/latency on the heartbeat links exceeding the lost intervals and thresholds"
+      - "Heartbeat carried through a switch instead of back-to-back in a two-member cluster"
+      - "Different group-id values producing different virtual MACs while the IP conflict persists"
+    commands:
+      - {cmd: "get system ha status", intent: ha.status, params: []}
+      - {cmd: "diagnose system ha status", intent: ha.status, params: []}
+      - {cmd: "diagnose sys ha checksum cluster", intent: ha.checksum, params: []}
+      - {cmd: "get system interface", intent: interface.summary, params: []}
+      - {cmd: "diagnose hardware deviceinfo nic {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "get system arp", intent: arp.table, params: []}
+    tac_first_look: "Console into both members and run `get system ha status` on each - two boxes each reporting themselves primary is the definition of the fault; the HBDEV stats then say whether the heartbeat ports are down or merely lossy."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status"
+
+  - id: fos-ha-unexpected-failover
+    class: ha-cluster
+    proposed_class: true
+    title: "Unexpected HA failover / repeated role changes"
+    symptoms:
+      - "Primary role moves between members without an operator action"
+      - "Short traffic outages that coincide with a cluster state change"
+      - "Downstream routers see route flap each time the cluster fails over"
+    log_signatures: []
+    likely_causes:
+      - "Monitored interface (MONDEV) going down and triggering a failover"
+      - "Heartbeat loss on one of several heartbeat interfaces"
+      - "Override or priority changes causing the cluster to re-elect"
+      - "Routing neighbours timing out during failover - HA timers shorter than the neighbour hold time"
+    commands:
+      - {cmd: "get system ha status", intent: ha.status, params: []}
+      - {cmd: "diagnose sys ha history read", intent: ha.history, params: []}
+      - {cmd: "diagnose hardware deviceinfo nic {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "get router info bgp summary", intent: bgp.summary, params: []}
+      - {cmd: "execute log filter category 1", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+    tac_first_look: "TAC reads the `Primary selected using:` history block and `diagnose sys ha history read` for the timestamped election reasons, then checks MONDEV/HBDEV error counters at those timestamps."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  # -------------------------------------------------------------------- routing
+  - id: fos-bgp-session-down
+    class: bgp-session
+    proposed_class: false
+    title: "BGP neighbor will not establish"
+    symptoms:
+      - "get router info bgp summary shows the peer in Active/Idle/Connect"
+      - "Prefix count for the neighbour is zero"
+      - "Peer works from another device on the same segment"
+    log_signatures: []
+    likely_causes:
+      - "TCP 179 blocked by a local-in policy or an upstream device"
+      - "Wrong remote-as, router-id or update-source"
+      - "eBGP multihop / ttl-security not configured for a non-adjacent peer"
+      - "Neighbour password mismatch"
+      - "Underlying interface or route to the peer address missing"
+    commands:
+      - {cmd: "get router info bgp summary", intent: bgp.summary, params: []}
+      - {cmd: "get router info bgp neighbors", intent: bgp.neighbors, params: []}
+      - {cmd: "get router info protocols", intent: routing.protocols, params: []}
+      - {cmd: "get router info routing-table all", intent: route.table, params: []}
+      - {cmd: "execute ping {peer-ip}", intent: reachability.ping, params: [peer-ip]}
+      - {cmd: "diagnose sys session filter dport 179", intent: session.filter, params: []}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+    tac_first_look: "TAC reads the neighbour state and uptime from `get router info bgp summary`, then checks with the session table whether a TCP 179 session to the peer exists at all - no session means the problem is reachability or filtering, not BGP configuration."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221343/verifying-routing-table-contents-in-nat-mode"
+
+  - id: fos-bgp-route-missing
+    class: bgp-route-missing
+    proposed_class: false
+    title: "BGP prefix received but not installed / not advertised"
+    symptoms:
+      - "Peer says it is advertising a prefix that does not appear in the routing table"
+      - "Prefix appears in the BGP database but not as a best path"
+      - "The FortiGate is not advertising a prefix the peer expects"
+    log_signatures: []
+    likely_causes:
+      - "Inbound or outbound route-map / prefix-list filtering the prefix"
+      - "Best-path selection preferring another path (weight, local-pref, AS path length, MED, eBGP over iBGP)"
+      - "Next hop unresolvable so the path is not valid"
+      - "Prefix suppressed by route dampening after repeated flaps"
+    commands:
+      - {cmd: "get router info bgp summary", intent: bgp.summary, params: []}
+      - {cmd: "get router info bgp neighbors {peer-ip} received-routes", intent: bgp.received.routes, params: [peer-ip]}
+      - {cmd: "get router info bgp neighbors {peer-ip} advertised-routes", intent: bgp.advertised.routes, params: [peer-ip]}
+      - {cmd: "get router info bgp neighbors {peer-ip} routes", intent: bgp.neighbor.routes, params: [peer-ip]}
+      - {cmd: "get router info bgp network {prefix}", intent: bgp.prefix.detail, params: [prefix]}
+      - {cmd: "get router info routing-table database", intent: route.database, params: []}
+      - {cmd: "get router info routing-table all", intent: route.table, params: []}
+    tac_first_look: "TAC compares received-routes with the routing table for the same prefix: present in received-routes but absent from the table means local filtering or best-path loss, and `get router info bgp network <prefix>` prints the per-path attributes that decided it."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/818746/sd-wan-related-diagnose-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-bgp-route-flap
+    class: bgp-instability
+    proposed_class: false
+    title: "BGP route flap / dampened prefixes"
+    symptoms:
+      - "Prefixes appear and disappear repeatedly, generating constant update churn"
+      - "Neighbour uptime resets frequently in the BGP summary"
+      - "Flapping starts after an HA failover"
+    log_signatures: []
+    likely_causes:
+      - "Faulty cable, interface or power on a device along the route"
+      - "HA cluster failover being seen by neighbours as the FortiGate going offline"
+      - "Holdtime/keepalive timers too aggressive for the path"
+      - "Dampening already suppressing the prefix so it stays out longer than the outage"
+    commands:
+      - {cmd: "get router info bgp summary", intent: bgp.summary, params: []}
+      - {cmd: "get router info bgp neighbors", intent: bgp.neighbors, params: []}
+      - {cmd: "get router info routing-table database", intent: route.database, params: []}
+      - {cmd: "diagnose hardware deviceinfo nic {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "get system ha status", intent: ha.status, params: []}
+      - {cmd: "get router info bfd neighbor", intent: bfd.neighbors, params: []}
+    tac_first_look: "TAC checks hardware first as the guide instructs - interface error counters on the transit port - then reads neighbour uptime and the HA history to decide whether the flap is a cable, a timer, or a cluster failover being misread as an outage."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status"
+
+  - id: fos-ospf-adjacency-stuck
+    class: ospf-adjacency
+    proposed_class: false
+    title: "OSPF adjacency does not reach FULL"
+    symptoms:
+      - "Neighbour stuck in INIT, 2-WAY or EXSTART"
+      - "get router info ospf neighbor lists no neighbour on an interface that should have one"
+      - "Routes learned from that neighbour are missing"
+    log_signatures: []
+    likely_causes:
+      - "Area id, hello/dead interval, network type or authentication mismatch"
+      - "MTU mismatch stalling database exchange at EXSTART"
+      - "Interface not enabled for OSPF, or in the wrong area"
+      - "Multicast blocked on the segment"
+    commands:
+      - {cmd: "get router info ospf status", intent: ospf.status, params: []}
+      - {cmd: "get router info ospf neighbor all", intent: ospf.neighbors, params: []}
+      - {cmd: "get router info ospf interface", intent: ospf.interfaces, params: []}
+      - {cmd: "get router info ospf database brief", intent: ospf.database, params: []}
+      - {cmd: "get system interface", intent: interface.summary, params: []}
+      - {cmd: "get router info protocols", intent: routing.protocols, params: []}
+    tac_first_look: "TAC reads `get router info ospf interface` on both ends and compares area, network type, hello/dead timers and MTU; a neighbour stuck at EXSTART with matching timers is an MTU mismatch until proven otherwise."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/596096/interface-mtu-packet-size"
+
+  - id: fos-route-not-in-table
+    class: routing-table
+    proposed_class: true
+    title: "Expected route (default/static/connected) missing from the routing table"
+    symptoms:
+      - "Limited or no connectivity from behind the FortiGate"
+      - "Default route absent, or present via the wrong interface"
+      - "A connected subnet has no C route"
+    log_signatures: []
+    likely_causes:
+      - "Static route's outgoing interface is down, so the route is withdrawn"
+      - "A link-monitor or SD-WAN health-check removed the static route on failure"
+      - "Distance/priority making another route win"
+      - "Interface has no IP address or is administratively down"
+    commands:
+      - {cmd: "get router info routing-table all", intent: route.table, params: []}
+      - {cmd: "get router info routing-table database", intent: route.database, params: []}
+      - {cmd: "diagnose ip route list", intent: route.kernel, params: []}
+      - {cmd: "get router info kernel", intent: route.kernel, params: []}
+      - {cmd: "get system interface", intent: interface.summary, params: []}
+      - {cmd: "diagnose ip address list", intent: interface.addresses, params: []}
+      - {cmd: "diagnose sys link-monitor status", intent: linkmonitor.status, params: []}
+      - {cmd: "diagnose firewall proute list", intent: policyroute.table, params: []}
+    tac_first_look: "TAC checks the routing table for the default route, the specific statics and one C route per connected interface; anything missing is then traced to interface state or to a link-monitor/health-check withdrawal."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221343/verifying-routing-table-contents-in-nat-mode"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/838132/verifying-the-correct-route-is-being-used"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/655407/static-dynamic-routing-monitor"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  # -------------------------------------------------------------------- SD-WAN
+  - id: fos-sdwan-healthcheck-sla-fail
+    class: sdwan-link
+    proposed_class: true
+    title: "SD-WAN health-check dead or failing its SLA"
+    symptoms:
+      - "A member shows state(dead) or packet-loss 100% in the health-check output"
+      - "Traffic all shifts to one link; the other stops forwarding"
+      - "SLA logs report the member out-of-sla even though the link is up"
+    log_signatures:
+      - 'logid="0100022921" logdesc="Routing information changed" status="down" msg="Static route on interface ... may be removed by health-check test"'
+      - 'logid="0113022923" logdesc="SDWAN status" eventtype="Health Check" msg="Member status changed. Member out-of-sla."'
+      - 'logid="0113022925" logdesc="SDWAN SLA information" eventtype="SLA" msg="Health Check SLA status. SLA failed due to being over the performance metric threshold."'
+      - 'logid="0113022923" logdesc="SDWAN status" eventtype="Service" msg="Member link is unreachable or miss threshold. Stop forwarding traffic. "'
+    likely_causes:
+      - "Health-check server unreachable, or reachable only via the other member"
+      - "Latency/jitter/packet-loss genuinely exceeding the configured SLA thresholds"
+      - "Health-check probe sourced from the wrong interface or missing a route"
+      - "Underlay ISP degradation short of a full outage"
+    commands:
+      - {cmd: "diagnose sys sdwan health-check", intent: sdwan.healthcheck, params: []}
+      - {cmd: "diagnose sys sdwan health-check {healthcheck}", intent: sdwan.healthcheck, params: [healthcheck]}
+      - {cmd: "diagnose sys sdwan member", intent: sdwan.members, params: []}
+      - {cmd: "diagnose sys sdwan sla-log {healthcheck} {sla-id}", intent: sdwan.sla.history, params: [healthcheck, sla-id]}
+      - {cmd: "diagnose sys sdwan intf-sla-log {interface}", intent: sdwan.interface.history, params: [interface]}
+      - {cmd: "diagnose sys link-monitor status", intent: linkmonitor.status, params: []}
+      - {cmd: "diagnose sys link-monitor interface {interface}", intent: linkmonitor.interface, params: [interface]}
+    tac_first_look: "TAC reads `diagnose sys sdwan health-check` for state/packet-loss/latency/jitter and sla_map per member, then uses the 10-minute `sla-log` history to separate a hard-down probe from an SLA threshold that is only marginally exceeded."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/818746/sd-wan-related-diagnose-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/856781/understanding-sd-wan-related-logs"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-sdwan-rule-not-steering
+    class: sdwan-link
+    proposed_class: true
+    title: "SD-WAN rule not steering traffic to the expected member"
+    symptoms:
+      - "Traffic leaves via the wrong WAN member despite an explicit SD-WAN rule"
+      - "A rule shows no members selected, or the wrong member selected"
+      - "Steering works for some destinations and not others"
+    log_signatures:
+      - 'logid="0113022923" logdesc="SDWAN status" eventtype="Service" msg="Service prioritized by SLA will be redirected in sequence order."'
+      - 'logid="0113022924" logdesc="SDWAN volume status" eventtype="Volume" msg="Member enters into conservative status with limited ablity to receive new sessions for too much traffic."'
+    likely_causes:
+      - "Destination address / internet service object does not cover the actual destination"
+      - "All members failing the rule's SLA so the rule falls back to the implicit route"
+      - "Rule ordered below a broader rule"
+      - "Existing session pinned to the old member (steering applies at session creation)"
+      - "Volume/spillover ratio pushing new sessions off the preferred member"
+    commands:
+      - {cmd: "diagnose sys sdwan service4", intent: sdwan.rules, params: []}
+      - {cmd: "diagnose sys sdwan service6", intent: sdwan.rules.v6, params: []}
+      - {cmd: "diagnose sys sdwan member", intent: sdwan.members, params: []}
+      - {cmd: "diagnose firewall proute list", intent: policyroute.table, params: []}
+      - {cmd: "diagnose netlink dstmac list {interface}", intent: sdwan.spillover, params: [interface]}
+      - {cmd: "diagnose sys sdwan internet-service-app-ctrl-list", intent: sdwan.internetservice.map, params: []}
+      - {cmd: "diagnose sys sdwan route-tag-list", intent: sdwan.routetags, params: []}
+      - {cmd: "diagnose sys session filter dst {dst-ip}", intent: session.filter, params: [dst-ip]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+    tac_first_look: "TAC reads the Service block from `diagnose sys sdwan service4` for the rule's mode, its member list and which member is marked `selected`, and cross-checks the data-plane view with `diagnose firewall proute list` including its hit_count."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/818746/sd-wan-related-diagnose-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/856781/understanding-sd-wan-related-logs"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/655407/static-dynamic-routing-monitor"
+
+  # ----------------------------------------------------------------- interfaces
+  - id: fos-interface-down-or-errors
+    class: interface-errors
+    proposed_class: false
+    title: "Interface down, flapping, or showing errors/drops"
+    symptoms:
+      - "Link Status Down on Network > Interfaces while the cable appears connected"
+      - "Rising rx/tx error or dropped counters on a port"
+      - "Intermittent loss on one interface only"
+    log_signatures: []
+    likely_causes:
+      - "Damaged cable or connector, or the wrong cable type"
+      - "Speed/duplex mismatch with the peer switch port"
+      - "Interface administratively down (Status not Up)"
+      - "Failing port on the FortiGate or on the switch"
+    commands:
+      - {cmd: "get system interface", intent: interface.summary, params: []}
+      - {cmd: "get sys interface physical", intent: interface.physical, params: []}
+      - {cmd: "show system interface {interface}", intent: interface.config, params: [interface]}
+      - {cmd: "diagnose hardware deviceinfo nic {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "get hardware nic {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "diagnose ip address list", intent: interface.addresses, params: []}
+      - {cmd: "diagnose hardware sysinfo interrupts", intent: hardware.interrupts, params: []}
+    tac_first_look: "TAC reads `diagnose hardware deviceinfo nic <interface>` for link state, speed/duplex and the error/drop counters, and compares them against the peer switch port; the counters distinguish a physical fault from a configuration or capacity problem."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/165256/checking-the-hardware-connections"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings"
+
+  - id: fos-transceiver-optics
+    class: optics
+    proposed_class: false
+    title: "SFP/optical transceiver not recognised or degraded"
+    symptoms:
+      - "Port stays down with a transceiver installed"
+      - "Link comes up then drops under load"
+      - "Transceiver missing from the transceiver listing"
+    log_signatures: []
+    likely_causes:
+      - "Unsupported or failing transceiver"
+      - "Fibre type / wavelength mismatch with the far end"
+      - "Dirty or damaged fibre, or receive power out of range"
+      - "Port hard-set to a speed the optic cannot do"
+    commands:
+      - {cmd: "get sys interface transceiver", intent: interface.transceiver, params: []}
+      - {cmd: "diagnose hardware deviceinfo nic {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "get sys interface physical", intent: interface.physical, params: []}
+      - {cmd: "get system interface", intent: interface.summary, params: []}
+    tac_first_look: "TAC lists the connected transceivers and matches the port in question against it, then reads the NIC-level link and error counters for the same port."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/165256/checking-the-hardware-connections"
+
+  - id: fos-mtu-fragmentation
+    class: mtu-path
+    proposed_class: true
+    title: "MTU / fragmentation problem on a path (large packets fail)"
+    symptoms:
+      - "Small pings succeed but large transfers, HTTPS pages or VPN traffic hang"
+      - "Performance is fine for interactive traffic and terrible for bulk"
+      - "Problem appears only across a tunnel or a carrier link"
+    log_signatures: []
+    likely_causes:
+      - "Path MTU smaller than the interface MTU, with DF-set packets being dropped rather than fragmented"
+      - "Tunnel overhead (IPsec/VXLAN) pushing packets over the underlay MTU"
+      - "MTU mismatch between a VLAN sub-interface and its parent"
+      - "Jumbo frames configured on one side only"
+    commands:
+      - {cmd: "get system interface", intent: interface.summary, params: []}
+      - {cmd: "show system interface {interface}", intent: interface.config, params: [interface]}
+      - {cmd: "diagnose hardware deviceinfo nic {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "diagnose vpn tunnel list", intent: vpn.ipsec.tunnel.detail, params: []}
+      - {cmd: "execute ping {dst-ip}", intent: reachability.ping, params: [dst-ip]}
+      - {cmd: "execute traceroute {dst-ip}", intent: reachability.traceroute, params: [dst-ip]}
+    tac_first_look: "TAC reads the configured MTU on the ingress/egress interfaces and, for tunnelled traffic, the `mtu=` value on the IPsec SA, then walks the path with sized DF pings from a host to find the real path MTU."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/596096/interface-mtu-packet-size"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation"
+
+  - id: fos-npu-offload-hides-traffic
+    class: hardware-offload
+    proposed_class: true
+    title: "Offloaded (NPU) sessions invisible to software diagnostics"
+    symptoms:
+      - "Session exists but software-level tracing shows nothing for it"
+      - "Counters on the software path do not match the observed throughput"
+      - "Sniffer trace on an offloading interface does not show the expected packets"
+    log_signatures: []
+    likely_causes:
+      - "Session offloaded to an NP6/NP6XLite/NP6Lite/NP7 processor, so it is not handled by the CPU"
+      - "Traffic hardware-accelerated on a specific port pair only"
+      - "IPsec SA offloaded (npu_flag set) so crypto counters live on the NPU"
+    commands:
+      - {cmd: "diagnose npu np7 port-list", intent: npu.portmap, params: []}
+      - {cmd: "get hardware npu np6 port-list", intent: npu.portmap, params: []}
+      - {cmd: "diagnose npu np6 port-list", intent: npu.portmap, params: []}
+      - {cmd: "get hardware npu np6xlite port-list", intent: npu.portmap, params: []}
+      - {cmd: "get hardware npu np6lite port-list", intent: npu.portmap, params: []}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "diagnose vpn ipsec status", intent: vpn.ipsec.crypto.counters, params: []}
+      - {cmd: "diagnose hardware deviceinfo nic {interface}", intent: interface.detail, params: [interface]}
+    tac_first_look: "TAC establishes which NPU owns the interfaces in question from the port-list output, then reads the session entry's offload flags and the per-engine counters in `diagnose vpn ipsec status`; a session with no software footprint but healthy NPU counters is offloaded, not broken."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/926361/diagnosing-npu-based-interfaces"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands"
+
+  # ----------------------------------------------------------------- CPU/memory
+  - id: fos-high-cpu-by-process
+    class: high-cpu
+    proposed_class: false
+    title: "High CPU usage attributable to a specific process"
+    symptoms:
+      - "CPU states line shows very low idle, e.g. 1% user 98% system 1% idle"
+      - "Network slow, GUI unresponsive, new connections delayed"
+      - "One process (ipsengine, scanunitd, httpsd, iked, wad) dominating the process list"
+    log_signatures: []
+    likely_causes:
+      - "Too many CPU-intensive features enabled at once (high-level VPN encryption, intensive scanning, logging all traffic and packets)"
+      - "IPS/AV scanning far more traffic than intended, or traffic being scanned twice"
+      - "Packet logging left enabled on a busy policy"
+      - "A sniffer or real-time debug left running"
+      - "Dashboard widgets polling frequently"
+    commands:
+      - {cmd: "get system performance status", intent: system.health, params: []}
+      - {cmd: "get system performance top", intent: system.process.top, params: []}
+      - {cmd: "diagnose sys top {interval} {lines}", intent: system.cpu, params: [interval, lines]}
+      - {cmd: "diagnose sys top-all {interval} {lines}", intent: system.cpu.threads, params: [interval, lines]}
+      - {cmd: "diagnose sys mpstat {interval}", intent: system.cpu.percore, params: [interval]}
+      - {cmd: "diagnose hardware sysinfo cpu", intent: hardware.cpu, params: []}
+      - {cmd: "diagnose sys process pidof {daemon}", intent: system.process.pid, params: [daemon]}
+      - {cmd: "diagnose test application ipsmonitor 1", intent: utm.ips.engine.info, params: []}
+    tac_first_look: "TAC reads the U/S/I split on the second line of `diagnose sys top` (user vs system vs idle) and then the named process at the top of `get system performance top`; a system-heavy profile points at kernel/forwarding load, a user-heavy one at a named daemon."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-high-memory
+    class: high-memory
+    proposed_class: false
+    title: "High memory usage (short of conserve mode)"
+    symptoms:
+      - "Memory widget above 80-90%"
+      - "Services freeze, connections lost, new connections refused"
+      - "Antivirus dropping or bypassing connections (failopen behaviour)"
+    log_signatures: []
+    likely_causes:
+      - "High traffic volume on a proxy, exceeding the connection pool limit"
+      - "Too many features enabled for the platform's RAM"
+      - "Memory logging enabled on a busy box"
+      - "A leaking or oversized daemon (wad, ipsengine, miglogd children)"
+    commands:
+      - {cmd: "get system performance status", intent: system.health, params: []}
+      - {cmd: "get hardware memory", intent: system.memory, params: []}
+      - {cmd: "diagnose hardware sysinfo memory", intent: system.memory, params: []}
+      - {cmd: "diagnose sys top {interval} {lines}", intent: system.cpu, params: [interval, lines]}
+      - {cmd: "diagnose test application wad 2", intent: proxy.wad.memory, params: []}
+      - {cmd: "diagnose test application wad 1000", intent: proxy.wad.processes, params: []}
+      - {cmd: "get ips session", intent: utm.ips.memory, params: []}
+    tac_first_look: "TAC reads the Memory line of `get system performance status` (used vs freeable) against the 90% guidance, then sorts `diagnose sys top` by memory to find the owning daemon."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-conserve-mode
+    class: conserve-mode
+    proposed_class: true
+    title: "FortiGate in memory conserve mode"
+    symptoms:
+      - "Conserve mode banner in the GUI; conserve mode logs and SNMP traps generated"
+      - "Antivirus proxy bypassed (av-failopen pass) or all proxy traffic blocked (av-failopen off)"
+      - "New sessions dropped once the extreme threshold is crossed"
+      - "Flow-based inspection dropping new sessions when IPS fail-open is disabled"
+    log_signatures:
+      - 'logid="0100022011" type="event" subtype="system" level="critical" logdesc="Memory conserve mode entered" service="kernel" conserve="on" msg="Kernel enters memory conserve mode"'
+      - 'service=kernel conserve=on total="997 MB" used="720 MB" red="877 MB" msg="Kernel enters memory conserve mode"'
+    likely_causes:
+      - "Memory used crossed memory-use-threshold-red (default 88%) and has not fallen back to green (default 82%)"
+      - "Sustained proxy load or an oversized daemon"
+      - "Undersized platform for the enabled feature set"
+      - "Memory pressure from logging to memory on a busy box"
+    commands:
+      - {cmd: "diagnose hardware sysinfo conserve", intent: system.memory.conserve, params: []}
+      - {cmd: "get system performance status", intent: system.health, params: []}
+      - {cmd: "diagnose hardware sysinfo memory", intent: system.memory, params: []}
+      - {cmd: "diagnose sys top {interval} {lines}", intent: system.cpu, params: [interval, lines]}
+      - {cmd: "execute log filter category 1", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+      - {cmd: "diagnose debug crashlog read", intent: system.crashlog, params: []}
+    tac_first_look: "`diagnose hardware sysinfo conserve` is the single authoritative read: it prints conserve mode on/off together with total RAM, used, freeable and all three thresholds, so TAC can see how far above red the box is and whether it is anywhere near green."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources"
+
+  # ------------------------------------------------------- FortiGuard / licence
+  - id: fos-fortiguard-update-failing
+    class: content-update
+    proposed_class: true
+    title: "FortiGuard updates not being received (AV/IPS/web filter definitions stale)"
+    symptoms:
+      - "Definition versions stale by days or weeks"
+      - "Licences widget shows services not connected"
+      - "Web filter ratings fail or fall back to allow"
+    log_signatures: []
+    likely_causes:
+      - "No valid FortiGuard licence for the service (or unequal support levels across HA members)"
+      - "Service not enabled on the device"
+      - "No route to the FortiGuard servers, or DNS failing to resolve their names"
+      - "Upstream firewall/ISP blocking FortiGuard traffic (port 53 by default)"
+      - "Source port rewritten by an intermediate NAT device"
+      - "No security policy uses antivirus, so the AV database is never updated"
+    commands:
+      - {cmd: "diagnose autoupdate versions", intent: update.status, params: []}
+      - {cmd: "diagnose autoupdate status", intent: update.status, params: []}
+      - {cmd: "diagnose debug rating", intent: fortiguard.servers, params: []}
+      - {cmd: "get webfilter status", intent: fortiguard.webfilter.status, params: []}
+      - {cmd: "get webfilter ftgd-statistics", intent: utm.webfilter.stats, params: []}
+      - {cmd: "diagnose webfilter fortiguard statistics", intent: utm.webfilter.stats, params: []}
+      - {cmd: "execute ping service.fortiguard.net", intent: reachability.ping, params: []}
+      - {cmd: "execute ping update.fortiguard.net", intent: reachability.ping, params: []}
+      - {cmd: "get router info routing-table all", intent: route.table, params: []}
+    tac_first_look: "TAC reads `diagnose debug rating` for the FortiGuard gateway list with its Weight/RTT/Flags/Curr Lost columns - flags with no contract-server contact, or all servers failing, immediately separates a licence problem from a reachability problem."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/703926/verifying-connectivity-to-fortiguard"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/691153/fortiguard-server-settings"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation"
+
+  - id: fos-license-expired-or-unregistered
+    class: licensing
+    proposed_class: true
+    title: "Licence expired / device unregistered - security services degraded"
+    symptoms:
+      - "Licence widget entries red or greyed out"
+      - "DNS rating, web filter or AV silently stop enforcing"
+      - "FGD_DNS_SERVICE_LICENSE shows expired=1"
+    log_signatures: []
+    likely_causes:
+      - "Support contract lapsed for one or more FortiGuard services"
+      - "HA members with different support levels"
+      - "VM licence not applied or not validated after a rebuild"
+      - "Device unable to reach the registration/entitlement servers"
+    commands:
+      - {cmd: "get system status", intent: platform.version, params: []}
+      - {cmd: "diagnose autoupdate versions", intent: update.status, params: []}
+      - {cmd: "diagnose autoupdate status", intent: update.status, params: []}
+      - {cmd: "get webfilter status", intent: fortiguard.webfilter.status, params: []}
+      - {cmd: "diagnose test application dnsproxy 3", intent: dns.proxy.status, params: []}
+      - {cmd: "execute ping fds1.fortinet.com", intent: reachability.ping, params: []}
+      - {cmd: "execute ping directregistration.fortinet.com", intent: reachability.ping, params: []}
+    tac_first_look: "TAC reads the licence/expiry lines out of `diagnose autoupdate versions` and the FGD_DNS_SERVICE_LICENSE block of `diagnose test application dnsproxy 3`; both carry an explicit expiry date and expired flag."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/150448/troubleshooting-for-dns-filter"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/180506/troubleshooting-and-diagnosis"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates"
+
+  # ----------------------------------------------------------------- logging
+  - id: fos-logs-not-reaching-fortianalyzer
+    class: logging-pipeline
+    proposed_class: true
+    title: "Logs not arriving at FortiAnalyzer / FortiGate Cloud"
+    symptoms:
+      - "FortiAnalyzer shows no recent logs from this device"
+      - "Log queue growing on the FortiGate"
+      - "OFTP state not connected"
+    log_signatures: []
+    likely_causes:
+      - "OFTP session to the FortiAnalyzer not established (routing, firewall, wrong address)"
+      - "Serial-number or certificate verification failing on the FortiAnalyzer side"
+      - "Log filter severity or category excluding the logs the customer expects"
+      - "FortiAnalyzer disk quota exhausted so logging is not allowed"
+      - "Remote log queue full and dropping"
+    commands:
+      - {cmd: "diagnose test application fgtlogd 1", intent: logging.faz.status, params: []}
+      - {cmd: "diagnose test application fgtlogd 3", intent: logging.faz.stats, params: []}
+      - {cmd: "diagnose test application fgtlogd 41", intent: logging.queue, params: []}
+      - {cmd: "diagnose test application fgtlogd 20", intent: logging.cloud.status, params: []}
+      - {cmd: "execute log fortianalyzer test-connectivity", intent: logging.faz.test, params: []}
+      - {cmd: "diagnose test application miglogd 6", intent: logging.stats, params: []}
+      - {cmd: "diagnose test application locallogd 3", intent: logging.local.stats, params: []}
+    tac_first_look: "TAC reads `diagnose test application fgtlogd 1`: it shows state=connected/disconnected, server_log_status (whether logging is allowed), conn_verified, the configured severity/category filter and the current queue length - which is usually the whole diagnosis in one screen."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-syslog-logs-dropped
+    class: logging-pipeline
+    proposed_class: true
+    title: "Syslog messages failing or being dropped"
+    symptoms:
+      - "SIEM shows gaps in FortiGate logs during busy periods"
+      - "Failed/dropped counters non-zero for a syslog device"
+      - "Only some of the configured syslog servers receive traffic"
+    log_signatures: []
+    likely_causes:
+      - "Slow or overloaded syslog server causing kernel buffer overflow after retransmissions"
+      - "Syslog server unreachable from the source VDOM/interface"
+      - "Per-VDOM syslog override sending logs somewhere unexpected"
+      - "Log rate exceeding what the transport can carry"
+    commands:
+      - {cmd: "diagnose test application syslogd 4", intent: logging.syslog.stats, params: []}
+      - {cmd: "diagnose test application fgtlogd 3", intent: logging.faz.stats, params: []}
+      - {cmd: "diagnose test application fgtlogd 41", intent: logging.queue, params: []}
+      - {cmd: "diagnose test application miglogd 6", intent: logging.stats, params: []}
+      - {cmd: "diagnose test application miglogd 15", intent: logging.miglogd.children, params: []}
+      - {cmd: "execute ping {syslog-ip}", intent: reachability.ping, params: [syslog-ip]}
+    tac_first_look: "TAC reads the per-device `sent=/failed=/cached=/dropped=` counters from `diagnose test application syslogd 4`; non-zero dropped on a specific syslog index names both the failing destination and the failure mode."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668490/snmp-oid-for-logs-that-failed-to-send"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands"
+
+  - id: fos-log-disk-and-rate
+    class: logging-pipeline
+    proposed_class: true
+    title: "Local log disk pressure / excessive log rate"
+    symptoms:
+      - "Disk nearly full; log searches slow or failing"
+      - "Log volume far higher than expected for the traffic level"
+      - "CPU elevated with miglogd/locallogd prominent"
+    log_signatures: []
+    likely_causes:
+      - "Logging level too verbose, or logging all traffic and packets"
+      - "Packet logging enabled on a busy policy"
+      - "Disk almost full - a nearly full disk consumes resources finding free space"
+      - "Local disk logging on a platform that should log remotely"
+    commands:
+      - {cmd: "diagnose test application locallogd 3", intent: logging.local.stats, params: []}
+      - {cmd: "diagnose test application miglogd 6", intent: logging.stats, params: []}
+      - {cmd: "diagnose hardware deviceinfo disk", intent: hardware.disk, params: []}
+      - {cmd: "execute disk list", intent: hardware.disk, params: []}
+      - {cmd: "diagnose sys flash list", intent: hardware.flash, params: []}
+      - {cmd: "diagnose sys top {interval} {lines}", intent: system.cpu, params: [interval, lines]}
+    tac_first_look: "TAC reads the per-category, per-day log counts and compressed sizes from `diagnose test application locallogd 3` to see which log type dominates, then checks free space with `diagnose hardware deviceinfo disk`."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/458906/checking-the-logs"
+
+  # ------------------------------------------------------------- UTM inspection
+  - id: fos-ips-engine-dropping-traffic
+    class: utm-inspection
+    proposed_class: true
+    title: "IPS engine blocking or dropping legitimate traffic"
+    symptoms:
+      - "An application breaks only when an IPS profile is applied to the policy"
+      - "IPS attacks blocked counter rising in the performance status output"
+      - "Traffic dropped on new sessions when the box is under memory pressure"
+    log_signatures: []
+    likely_causes:
+      - "A signature false positive on the application's protocol"
+      - "Flow-based inspection failing closed while in conserve mode (IPS fail-open disabled drops all new sessions needing flow inspection)"
+      - "IPS engine restarted or unhealthy"
+      - "Traffic scanned twice because it re-enters the FortiGate"
+    commands:
+      - {cmd: "diagnose test application ipsmonitor 1", intent: utm.ips.engine.info, params: []}
+      - {cmd: "diagnose ips session list", intent: utm.ips.sessions, params: []}
+      - {cmd: "diagnose test application ipsmonitor 13", intent: utm.ips.sessions, params: []}
+      - {cmd: "get ips session", intent: utm.ips.memory, params: []}
+      - {cmd: "get system performance status", intent: system.health, params: []}
+      - {cmd: "diagnose hardware sysinfo conserve", intent: system.memory.conserve, params: []}
+      - {cmd: "execute log filter {filter}", intent: logging.filter, params: [filter]}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+    tac_first_look: "TAC checks the IPS engine's own view (`diagnose test application ipsmonitor 1`, `get ips session` for memory headroom) and whether the box is in conserve mode, because a conserve-mode FortiGate with IPS fail-open disabled drops new flow-inspected sessions by design rather than by signature."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies"
+
+  - id: fos-antivirus-not-scanning
+    class: utm-inspection
+    proposed_class: true
+    title: "Antivirus not detecting / AV bypassed"
+    symptoms:
+      - "A known test file passes through unblocked"
+      - "Virus caught counter stays at zero on a policy with AV applied"
+      - "AV behaviour changes under load"
+    log_signatures: []
+    likely_causes:
+      - "Conserve mode with av-failopen pass, bypassing the antivirus proxy entirely"
+      - "AV database never updated because no policy referenced antivirus"
+      - "Traffic encrypted and no SSL inspection applied"
+      - "Profile applied to the wrong policy, or the wrong protocol set"
+    commands:
+      - {cmd: "diagnose ips av stats show", intent: utm.av.stats, params: []}
+      - {cmd: "diagnose autoupdate versions", intent: update.status, params: []}
+      - {cmd: "get system performance status", intent: system.health, params: []}
+      - {cmd: "diagnose hardware sysinfo conserve", intent: system.memory.conserve, params: []}
+      - {cmd: "execute log filter category 2", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+      - {cmd: "diagnose firewall iprope show 100004 {policy-id}", intent: policy.hitcount, params: [policy-id]}
+    tac_first_look: "TAC confirms the AV engine and signature versions with `diagnose autoupdate versions`, reads the AV statistics counters, and checks conserve mode - av-failopen pass in conserve mode silently bypasses the AV proxy and every profile that depends on it."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/315155/testing-an-antivirus-profile"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates"
+
+  - id: fos-webfilter-rating-failure
+    class: utm-inspection
+    proposed_class: true
+    title: "Web filter / URL rating failing or miscategorising"
+    symptoms:
+      - "Sites allowed or blocked contrary to the configured categories"
+      - "Rating requests timing out; pages slow to load with web filtering on"
+      - "FortiGuard rating server list shows failures"
+    log_signatures: []
+    likely_causes:
+      - "No connectivity to the FortiGuard rating servers"
+      - "Web filter licence expired (the DNS rating service shares this licence)"
+      - "Rating cache stale or the daemon overloaded"
+      - "Traffic is HTTPS and no inspection profile is applied, so only the SNI/certificate is visible"
+    commands:
+      - {cmd: "diagnose debug rating", intent: fortiguard.servers, params: []}
+      - {cmd: "get webfilter status", intent: fortiguard.webfilter.status, params: []}
+      - {cmd: "get webfilter ftgd-statistics", intent: utm.webfilter.stats, params: []}
+      - {cmd: "diagnose webfilter fortiguard statistics", intent: utm.webfilter.stats, params: []}
+      - {cmd: "execute ping service.fortiguard.net", intent: reachability.ping, params: []}
+      - {cmd: "execute log filter category 3", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+    tac_first_look: "TAC reads the rating server table from `diagnose debug rating` (RTT, flags, current/total lost) and the rating cache/daemon statistics; a server list with everything failing is a connectivity or licence issue rather than a category mistake."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/691153/fortiguard-server-settings"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation"
+
+  - id: fos-ssl-deep-inspection-breaks-traffic
+    class: ssl-inspection
+    proposed_class: true
+    title: "SSL deep inspection breaking applications"
+    symptoms:
+      - "Clients see untrusted-certificate warnings after deep inspection is enabled"
+      - "Certificate-pinned applications fail outright while browsers work"
+      - "Problem disappears when the policy is switched to certificate inspection"
+    log_signatures: []
+    likely_causes:
+      - "The FortiGate's CA certificate is not installed in the client trust store"
+      - "Server or application performs certificate pinning and rejects the re-signed certificate"
+      - "Mutual TLS: the client certificate cannot be presented through the proxy"
+      - "Proxy (WAD) resource pressure under deep inspection load"
+    commands:
+      - {cmd: "diagnose sys session filter dport 443", intent: session.filter, params: []}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "diagnose test application wad 1000", intent: proxy.wad.processes, params: []}
+      - {cmd: "diagnose test application wad 2", intent: proxy.wad.memory, params: []}
+      - {cmd: "diagnose wad user list", intent: proxy.users, params: []}
+      - {cmd: "diagnose firewall iprope show 100004 {policy-id}", intent: policy.hitcount, params: [policy-id]}
+      - {cmd: "get system performance status", intent: system.health, params: []}
+    tac_first_look: "TAC confirms the flow is actually being proxied (a WAD-handled session on 443 for the policy in question) and checks WAD process/memory pressure, then hands the certificate-trust question back to the client side, since pinning cannot be fixed on the firewall."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters"
+
+  # ------------------------------------------------------------ user auth / ZTNA
+  - id: fos-fsso-users-missing
+    class: user-auth-fsso
+    proposed_class: true
+    title: "FSSO users not learned - identity-based policies not matching"
+    symptoms:
+      - "Users fall through to a guest or deny policy despite being logged into the domain"
+      - "FSSO logon list empty or stale"
+      - "Connection to the collector agent reported down"
+    log_signatures: []
+    likely_causes:
+      - "Collector agent unreachable from the FortiGate, or the connection has dropped"
+      - "DC polling not returning logon events (permissions, WMI/SMB path)"
+      - "User's group not mapped to a FortiGate user group used in policy"
+      - "Logon record aged out before the user's session"
+    commands:
+      - {cmd: "diagnose debug authd fsso server-status", intent: auth.fsso.serverstatus, params: []}
+      - {cmd: "diagnose debug authd fsso list", intent: auth.fsso.users, params: []}
+      - {cmd: "diagnose debug fsso-polling summary", intent: auth.fsso.polling, params: []}
+      - {cmd: "diagnose debug fsso-polling detail", intent: auth.fsso.polling, params: []}
+      - {cmd: "diagnose debug fsso-polling user", intent: auth.fsso.users, params: []}
+      - {cmd: "diagnose firewall auth list", intent: auth.sessions, params: []}
+      - {cmd: "diagnose firewall dynamic list", intent: firewall.dynamic.addresses, params: []}
+    tac_first_look: "TAC reads `diagnose debug authd fsso server-status` for the FortiGate-to-collector connection state first; if it is up they compare the logon list against the specific user, and only then look at group mapping."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/286458/ztna-troubleshooting-and-debugging-commands"
+
+  - id: fos-remote-auth-ldap-radius-fail
+    class: user-auth-fsso
+    proposed_class: true
+    title: "LDAP / RADIUS authentication failing for firewall or VPN users"
+    symptoms:
+      - "Users rejected with valid credentials"
+      - "Authentication succeeds for local users and fails for remote ones"
+      - "Long delay before the login is rejected (server timeout)"
+    log_signatures: []
+    likely_causes:
+      - "Auth server unreachable from the correct source interface/VDOM"
+      - "Wrong bind DN / shared secret / NAS-IP"
+      - "Group membership attribute or search base not matching"
+      - "Only one of several configured servers reachable, with failover timing out"
+    commands:
+      - {cmd: "diagnose firewall auth list", intent: auth.sessions, params: []}
+      - {cmd: "diagnose wad user list", intent: proxy.users, params: []}
+      - {cmd: "execute ping {auth-server-ip}", intent: reachability.ping, params: [auth-server-ip]}
+      - {cmd: "diagnose sys session filter dst {auth-server-ip}", intent: session.filter, params: [auth-server-ip]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "execute log filter category 1", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+    tac_first_look: "TAC proves the FortiGate can actually reach the auth server from the right source (session table entry to port 389/636/1812 plus a ping), then reads the authenticated-user list to see whether anyone at all is being authenticated by that server."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation"
+
+  - id: fos-ztna-tags-or-ems-connectivity
+    class: ztna
+    proposed_class: true
+    title: "ZTNA policy not matching - EMS connectivity or endpoint tags missing"
+    symptoms:
+      - "ZTNA rules never match; users get access denied"
+      - "Endpoint tags absent from the dynamic address list"
+      - "EMS connector shows disconnected or unverified"
+    log_signatures: []
+    likely_causes:
+      - "FortiGate-to-EMS connection down or the EMS certificate not verified"
+      - "Endpoint not registered to EMS, or registered to a different EMS/tenant"
+      - "Tags not synchronised so the dynamic address group is empty"
+      - "ZTNA proxy policy ordering or the wrong ZTNA tag referenced"
+    commands:
+      - {cmd: "diagnose endpoint fctems test-connectivity {ems}", intent: ztna.ems.connectivity, params: [ems]}
+      - {cmd: "execute fctems verify {ems}", intent: ztna.ems.certificate, params: [ems]}
+      - {cmd: "diagnose test application fcnacd 2", intent: ztna.ems.status, params: []}
+      - {cmd: "diagnose test application fcnacd 7", intent: ztna.cache, params: []}
+      - {cmd: "diagnose test application fcnacd 8", intent: ztna.route.cache, params: []}
+      - {cmd: "diagnose firewall dynamic list", intent: firewall.dynamic.addresses, params: []}
+      - {cmd: "diagnose endpoint record list {endpoint-ip}", intent: ztna.endpoint.record, params: [endpoint-ip]}
+      - {cmd: "diagnose wad dev query-by ipv4 {endpoint-ip}", intent: ztna.endpoint.query, params: [endpoint-ip]}
+      - {cmd: "diagnose wad worker policy list", intent: proxy.policy.list, params: []}
+    tac_first_look: "TAC tests the EMS connection and certificate first, then reads `diagnose firewall dynamic list` for the ZTNA tags: an empty tag list with a healthy EMS connection moves the case to endpoint registration rather than to policy."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/286458/ztna-troubleshooting-and-debugging-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  # --------------------------------------------------------------- DNS / DHCP
+  - id: fos-dns-resolution-failure
+    class: dns-resolution
+    proposed_class: true
+    title: "DNS resolution failing on or through the FortiGate"
+    symptoms:
+      - "FQDN address objects never resolve; FortiGuard names fail to resolve"
+      - "Name-based traceroute fails while IP-based works"
+      - "Intermittent internet connectivity for clients using the FortiGate as resolver"
+    log_signatures: []
+    likely_causes:
+      - "Configured DNS servers unreachable or not answering (rating=1, ready=0 in the dnsproxy dump)"
+      - "An interface in DHCP mode overriding the system DNS entries"
+      - "A deny policy blocking DNS"
+      - "DoT/DoH configured to a server that is filtered upstream"
+    commands:
+      - {cmd: "diagnose test application dnsproxy 3", intent: dns.proxy.status, params: []}
+      - {cmd: "diagnose test application dnsproxy 7", intent: dns.cache, params: []}
+      - {cmd: "show sys dns", intent: dns.config, params: []}
+      - {cmd: "execute ping {dns-server-ip}", intent: reachability.ping, params: [dns-server-ip]}
+      - {cmd: "execute traceroute {dst-fqdn}", intent: reachability.traceroute, params: [dst-fqdn]}
+      - {cmd: "diagnose sys session filter dport 53", intent: session.filter, params: []}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+    tac_first_look: "TAC reads the per-server lines of `diagnose test application dnsproxy 3` - req/to/res counts, rt (round-trip), rating, ready and failure - which name exactly which resolver is unhealthy and whether the FortiGate is even sending queries."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/126629/dns-troubleshooting"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/150448/troubleshooting-for-dns-filter"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation"
+
+  - id: fos-dhcp-clients-no-lease
+    class: dhcp
+    proposed_class: true
+    title: "Clients not receiving a DHCP address from the FortiGate"
+    symptoms:
+      - "Hosts fall back to link-local addresses on a FortiGate-served subnet"
+      - "Lease list empty or far shorter than the number of connected hosts"
+      - "Some hosts get an address and others do not"
+    log_signatures: []
+    likely_causes:
+      - "DHCP server disabled, or set to Relay with no reachable upstream server"
+      - "Address range exhausted or overlapping with statically configured hosts"
+      - "No gateway entry configured, so clients get an address but no default route"
+      - "Interface DNS override handing out an unusable resolver"
+    commands:
+      - {cmd: "execute dhcp lease-list", intent: dhcp.leases, params: []}
+      - {cmd: "get system interface", intent: interface.summary, params: []}
+      - {cmd: "show system interface {interface}", intent: interface.config, params: [interface]}
+      - {cmd: "get system arp", intent: arp.table, params: []}
+      - {cmd: "diagnose sniffer packet {interface} '{bpf}' 4 {count} l", intent: capture.sniffer, params: [interface, bpf, count]}
+    tac_first_look: "TAC reads `execute dhcp lease-list` to see how much of the pool is actually allocated; a full pool is exhaustion, an empty pool with clients present means the DISCOVER never arrives or the server is in relay mode."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/38214/dhcp-monitor"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  # ------------------------------------------------------ management / platform
+  - id: fos-management-access-denied
+    class: management-access
+    proposed_class: true
+    title: "Cannot reach the GUI/SSH management interface"
+    symptoms:
+      - "HTTPS or SSH to the FortiGate times out from an administrator workstation"
+      - "Ping to the management interface works but the GUI does not open"
+      - "Access works from the console but not over the network"
+    log_signatures: []
+    likely_causes:
+      - "The required protocol is not enabled for administrative access on that interface"
+      - "Trusted-host restriction excluding the administrator's source address"
+      - "Interface has no IP address, is in DHCP mode without a server, or is administratively down"
+      - "A local-in restriction or an upstream device blocking the management port"
+    commands:
+      - {cmd: "show system interface {interface}", intent: interface.config, params: [interface]}
+      - {cmd: "get system interface", intent: interface.summary, params: []}
+      - {cmd: "diagnose ip address list", intent: interface.addresses, params: []}
+      - {cmd: "diagnose sys session filter dport {mgmt-port}", intent: session.filter, params: [mgmt-port]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "execute log filter category 1", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+      - {cmd: "get system status", intent: platform.version, params: []}
+    tac_first_look: "TAC reads `show system interface <interface>` for the allowaccess list, the addressing mode and the status, then checks whether a session to the management port is even being created - which separates 'blocked before us' from 'refused by us'."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/517124/troubleshooting-scenarios"
+
+  - id: fos-faz-certificate-verification-failure
+    class: certificate
+    proposed_class: true
+    title: "Certificate / serial-number verification failure on the FortiAnalyzer OFTP session"
+    symptoms:
+      - "Log connection repeatedly connects and drops"
+      - "conn_verified reported as not verified"
+      - "Logging works to one FortiAnalyzer and not to another after a certificate change"
+    log_signatures: []
+    likely_causes:
+      - "FortiAnalyzer serial number does not match the one the FortiGate expects"
+      - "Peer certificate replaced or expired"
+      - "Certificate verification enabled with an untrusted CA chain"
+      - "Device not authorised on the FortiAnalyzer side"
+    commands:
+      - {cmd: "diagnose test application fgtlogd 1", intent: logging.faz.status, params: []}
+      - {cmd: "execute log fortianalyzer test-connectivity", intent: logging.faz.test, params: []}
+      - {cmd: "diagnose test application fgtlogd 41", intent: logging.queue, params: []}
+      - {cmd: "get system status", intent: platform.version, params: []}
+      - {cmd: "execute time", intent: system.clock, params: []}
+    tac_first_look: "TAC reads the `conn_verified` flag and the SN list from `diagnose test application fgtlogd 1`, and checks the device clock - an out-of-date clock is a common cause of certificate validation failures."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+
+  - id: fos-config-change-caused-outage
+    class: config-change
+    proposed_class: false
+    title: "Outage correlated with a recent configuration change"
+    symptoms:
+      - "Everything worked until a change window"
+      - "Behaviour differs between HA members after a change"
+      - "Configuration errors reported at boot or after a restore"
+    log_signatures: []
+    likely_causes:
+      - "A policy, route or interface change with a wider blast radius than intended"
+      - "Configuration lines rejected on load (version or model mismatch after a restore)"
+      - "Change made on one HA member only"
+      - "Feature visibility change hiding or disabling a required feature"
+    commands:
+      - {cmd: "diagnose sys cmdb info", intent: config.lastchange, params: []}
+      - {cmd: "diagnose debug config-error-log read", intent: config.errors, params: []}
+      - {cmd: "execute log filter category 1", intent: logging.filter, params: []}
+      - {cmd: "execute log display", intent: logging.recent, params: []}
+      - {cmd: "get system ha status", intent: ha.status, params: []}
+      - {cmd: "diagnose sys ha checksum cluster", intent: ha.checksum, params: []}
+      - {cmd: "get system status", intent: platform.version, params: []}
+    tac_first_look: "TAC uses the event log to identify the configuration changes around the outage window (the guide's own 'what has changed?' step), reads `diagnose debug config-error-log read` for lines the box refused, and checks HA checksums to see whether the change landed on both members."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status"
+
+  # ----------------------------------------------------------- overlay / shaping
+  - id: fos-vxlan-no-traffic
+    class: evpn-vxlan
+    proposed_class: false
+    title: "VXLAN overlay up but no traffic crossing the segment"
+    symptoms:
+      - "Hosts on the two sides of the VXLAN cannot reach each other"
+      - "MAC addresses of remote hosts missing from the bridge/FDB"
+      - "VXLAN (UDP 4789) packets not seen on the underlay"
+    log_signatures: []
+    likely_causes:
+      - "Remote VTEP address wrong or unreachable over the underlay"
+      - "VNI mismatch between endpoints"
+      - "UDP 4789 blocked in the underlay path"
+      - "Software switch/bridge membership not including the VXLAN interface"
+      - "Underlay MTU too small for the VXLAN overhead"
+    commands:
+      - {cmd: "diagnose sys vxlan fdb list {vxlan-interface}", intent: vxlan.fdb, params: [vxlan-interface]}
+      - {cmd: "diagnose sys vxlan fdb stat {vxlan-interface}", intent: vxlan.fdb.stats, params: [vxlan-interface]}
+      - {cmd: "diagnose netlink brctl list", intent: bridge.list, params: []}
+      - {cmd: "diagnose netlink brctl name host {switch-interface}", intent: bridge.mactable, params: [switch-interface]}
+      - {cmd: "diagnose sniffer packet any 'udp and port 4789' 4 {count} l", intent: capture.sniffer, params: [count]}
+      - {cmd: "get system interface", intent: interface.summary, params: []}
+      - {cmd: "get router info routing-table all", intent: route.table, params: []}
+    tac_first_look: "TAC reads the VXLAN FDB for the remote MAC/VTEP entries and then sniffs UDP 4789 on the underlay interface: entries present but no encapsulated packets means the underlay path is blocking VXLAN."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/386565/vxlan-troubleshooting"
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/596096/interface-mtu-packet-size"
+
+  - id: fos-traffic-shaper-not-limiting
+    class: traffic-shaping
+    proposed_class: true
+    title: "Traffic shaper not applying the expected bandwidth limit"
+    symptoms:
+      - "A flow exceeds its configured guaranteed/maximum bandwidth"
+      - "Shaper statistics show no packets or drops for the shaper in question"
+      - "Shaping works for some policies and not others"
+    log_signatures: []
+    likely_causes:
+      - "Shaper attached to a policy the traffic does not match"
+      - "Per-IP versus shared shaper confusion so the limit is applied per source"
+      - "Session offloaded to hardware and bypassing the software shaper"
+      - "Bandwidth unit of measurement different from what the customer assumed"
+    commands:
+      - {cmd: "diagnose firewall shaper traffic-shaper list", intent: qos.shaper.list, params: []}
+      - {cmd: "diagnose firewall shaper traffic-shaper stats list", intent: qos.shaper.stats, params: []}
+      - {cmd: "diagnose sys session filter dst {dst-ip}", intent: session.filter, params: [dst-ip]}
+      - {cmd: "diagnose sys session list", intent: session.table, params: []}
+      - {cmd: "diagnose firewall iprope show 100004 {policy-id}", intent: policy.hitcount, params: [policy-id]}
+    tac_first_look: "TAC reads the shaper statistics for packets and drops; a shaper with zero accounting is not on the path at all, which turns the case into a policy-matching question rather than a shaping one, and the session entry's origin-shaper/reply-shaper fields confirm it."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/743069/no-session-timeout"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters"
+
+  - id: fos-platform-crash-or-instability
+    class: hardware-fault
+    proposed_class: false
+    title: "Daemon crashes, reboots or unexplained instability"
+    symptoms:
+      - "Unexpected reboots or a daemon restarting repeatedly"
+      - "Crash log entries present"
+      - "Disk errors or a member shutting down in an HA pair"
+    log_signatures:
+      - 'service=kernel conserve=on msg="Kernel enters memory conserve mode"'
+    likely_causes:
+      - "Hardware fault (disk, memory) - a failed hard drive shuts a member down during HA setup"
+      - "Software defect in a specific build"
+      - "Repeated conserve-mode entry starving a daemon"
+      - "Power or thermal problem"
+    commands:
+      - {cmd: "diagnose debug crashlog read", intent: system.crashlog, params: []}
+      - {cmd: "get system status", intent: platform.version, params: []}
+      - {cmd: "diagnose hardware deviceinfo disk", intent: hardware.disk, params: []}
+      - {cmd: "diagnose sys flash list", intent: hardware.flash, params: []}
+      - {cmd: "diagnose hardware sysinfo cpu", intent: hardware.cpu, params: []}
+      - {cmd: "diagnose hardware sysinfo memory", intent: system.memory, params: []}
+      - {cmd: "diagnose hardware sysinfo interrupts", intent: hardware.interrupts, params: []}
+      - {cmd: "diagnose hardware sysinfo conserve", intent: system.memory.conserve, params: []}
+    tac_first_look: "TAC reads the crash log with the exact firmware build from `get system status`; a repeating crash signature on a known build becomes a firmware case, whereas disk errors alongside it become an RMA."
+    sources:
+      - "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode"
+      - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation"

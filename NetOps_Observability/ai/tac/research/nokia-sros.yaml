@@ -1,0 +1,1390 @@
+# Nokia SR OS (7750 SR / 7250 IXR / 7705 SAR / 7210 SAS) — TAC escalation pack.
+# Dialect: nokia/sros, CLASSIC CLI. Every command below is quoted from an
+# official Nokia public documentation page listed in `sources` (the SR OS
+# "Clear, Monitor, Show, and Tools CLI Command Reference Guide" is the primary
+# authority for show/monitor syntax; the "Log Events Guide" is the authority for
+# the event names in `log_signatures`).
+# MD-CLI equivalents are deliberately NOT given: they were not verified against a
+# fetched page, so this file stays classic CLI only.
+vendor: nokia-sros
+
+sources:
+  - {title: "SR OS 22.10.R2 — Clear, Monitor, Show, and Tools CLI Command Reference Guide (book index)", url: "https://documentation.nokia.com/sr/22-10-2/titles/clear-monitor-show-tools-commands.html"}
+  - {title: "CMST Command Reference Guide — a Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html"}
+  - {title: "CMST Command Reference Guide — b Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-b-commands.html"}
+  - {title: "CMST Command Reference Guide — c Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html"}
+  - {title: "CMST Command Reference Guide — d Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html"}
+  - {title: "CMST Command Reference Guide — e Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-e-commands.html"}
+  - {title: "CMST Command Reference Guide — f Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html"}
+  - {title: "CMST Command Reference Guide — h Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-h-commands.html"}
+  - {title: "CMST Command Reference Guide — i Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-i-commands.html"}
+  - {title: "CMST Command Reference Guide — l Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-l-commands.html"}
+  - {title: "CMST Command Reference Guide — m Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html"}
+  - {title: "CMST Command Reference Guide — n Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html"}
+  - {title: "CMST Command Reference Guide — o Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-o-commands.html"}
+  - {title: "CMST Command Reference Guide — p Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html"}
+  - {title: "CMST Command Reference Guide — q Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-q-commands.html"}
+  - {title: "CMST Command Reference Guide — r Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html"}
+  - {title: "CMST Command Reference Guide — s Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html"}
+  - {title: "CMST Command Reference Guide — t Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-t-commands.html"}
+  - {title: "CMST Command Reference Guide — u Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-u-commands.html"}
+  - {title: "CMST Command Reference Guide — v Commands", url: "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html"}
+  - {title: "SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)", url: "https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html"}
+  - {title: "SR OS 23.7.R2 Classic CLI Command Reference — d Commands (admin display-config)", url: "https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html"}
+  - {title: "SR OS Log Events Guide — BGP", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bgp.html"}
+  - {title: "SR OS Log Events Guide — OSPF", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ospf.html"}
+  - {title: "SR OS Log Events Guide — ISIS", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-isis.html"}
+  - {title: "SR OS Log Events Guide — LDP", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ldp.html"}
+  - {title: "SR OS Log Events Guide — MPLS", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-mpls.html"}
+  - {title: "SR OS Log Events Guide — RSVP", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-rsvp.html"}
+  - {title: "SR OS Log Events Guide — PORT", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-port.html"}
+  - {title: "SR OS Log Events Guide — CHASSIS", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-chassis.html"}
+  - {title: "SR OS Log Events Guide — LAG", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-lag.html"}
+  - {title: "SR OS Log Events Guide — SVCMGR", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html"}
+  - {title: "SR OS Log Events Guide — VRTR", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-vrtr.html"}
+  - {title: "SR OS Log Events Guide — SYSTEM", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-system.html"}
+  - {title: "SR OS Log Events Guide — SECURITY", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-security.html"}
+  - {title: "SR OS Log Events Guide — USER", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-user.html"}
+  - {title: "SR OS Log Events Guide — SNMP", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-snmp.html"}
+  - {title: "SR OS Log Events Guide — NTP", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ntp.html"}
+  - {title: "SR OS Log Events Guide — STP", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-stp.html"}
+  - {title: "SR OS Log Events Guide — BFD", url: "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bfd.html"}
+  - {title: "7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference", url: "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html"}
+  - {title: "7750 SR Unicast Routing Protocols Guide — OSPF Show, Clear and Debug Command Reference", url: "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/ospf_show_cli.html"}
+  - {title: "7750 SR Unicast Routing Protocols Guide — IS-IS Show, Clear and Debug Command Reference", url: "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/isis_show_cli.html"}
+  - {title: "7750 SR Unicast Routing Protocols Guide — BGP Show Command Reference", url: "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/bgp_show_cli.html"}
+  - {title: "7750 SR MPLS Guide — MPLS/RSVP Show Command Reference", url: "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html"}
+  - {title: "7750 SR MPLS Guide — LDP Show Command Reference", url: "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html"}
+  - {title: "7750 SR OS Basic System Configuration Guide — Show, Clear, Debug and Tools Command Reference", url: "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.basic/html/system_show_cli.html"}
+  - {title: "7750 SR OS System Basics Guide — System Command Reference (admin command tree)", url: "https://documentation.nokia.com/html/0_add-h-f/93-0070-10-01/7750_SR_OS_System_Basics_Guide/system-cli-tree.html"}
+  - {title: "7750 SR OS Router Configuration Guide — Show Command Reference", url: "https://documentation.nokia.com/html/0_add-h-f/93-0073-10-01/7750_SR_OS_Router_Configuration_Guide/router-cli-Show-CLI.html"}
+  - {title: "7750 SR OS Routing Protocols Guide — BGP Show Commands", url: "https://documentation.nokia.com/html/0_add-h-f/93-0074-HTML/7750_SR_OS_Routing_Protols_Guide/BGP-CLI-Show-CLI.html"}
+  - {title: "7705 SAR 24.4.R1 — Show Router Commands", url: "https://documentation.nokia.com/sar/24-4-1/books/services/show-router-commands.html"}
+
+tac_baseline:
+  commands:
+    - {cmd: "show system information", intent: platform.version, params: []}
+    - {cmd: "show uptime", intent: platform.uptime, params: []}
+    - {cmd: "show system time", intent: platform.time, params: []}
+    - {cmd: "show chassis environment power-supply", intent: platform.environment, params: []}
+    - {cmd: "show card state", intent: platform.cards, params: []}
+    - {cmd: "show mda", intent: platform.mda, params: []}
+    - {cmd: "show port", intent: interface.summary, params: []}
+    - {cmd: "show system cpu sample-period {seconds}", intent: system.cpu, params: [seconds]}
+    - {cmd: "show system memory-pools", intent: system.memory, params: []}
+    - {cmd: "show system alarms", intent: platform.alarms, params: []}
+    - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+    - {cmd: "show redundancy synchronization", intent: platform.redundancy, params: []}
+    - {cmd: "admin display-config", intent: config.running, params: []}
+    - {cmd: "admin tech-support {file-url}", intent: support.techsupport, params: [file-url], writes_file: true}
+  notes: >-
+    `admin tech-support [file-url]` is the Nokia support bundle. Nokia's own
+    command reference states it "creates a system core dump" and that it
+    "should only be used with authorized direction of Nokia support" — treat it
+    as an owner-approved, change-window action, not a routine collector. It
+    WRITES A FILE: if file-url is omitted and `configure system security
+    tech-support ts-location` is set, SR OS auto-names the file
+    ts-XXXXX.YYYYMMDD.HHMMUTC.dat and drops it in the ts-location directory
+    (SR OS does NOT auto-create that directory). If no ts-location is
+    configured, a file-url MUST be given. The dump is large and takes real time
+    on a loaded CPM; prefer writing it to a remote ftp/tftp URL or to cf3: with
+    verified free space rather than to a small local flash. `admin
+    display-config` prints only non-default configuration by default (`detail`
+    prints defaults too) and is the safe read-only way to capture running
+    config — never `admin save`. Collect the baseline BEFORE the per-issue
+    commands so TAC can correlate timestamps against `show system time`.
+  sources:
+    - "https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html"
+    - "https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html"
+    - "https://documentation.nokia.com/html/0_add-h-f/93-0070-10-01/7750_SR_OS_System_Basics_Guide/system-cli-tree.html"
+    - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-i-commands.html"
+    - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html"
+
+issues:
+  # ------------------------------------------------------------------ BGP ---
+  - id: sros-bgp-session-down
+    class: bgp-session
+    title: "BGP peer will not establish (Connect / Active / Idle)"
+    symptoms:
+      - "`show router bgp summary` shows the peer in a state other than Established"
+      - "Prefixes learned from the peer disappear from the route table"
+      - "Peer uptime resets continuously"
+    log_signatures:
+      - "bgpBackwardTransNotification"
+      - "tBgpNgBackwardTransition"
+      - "bgpConnNoOpenRcvd"
+      - "bgpRejectConnBadLocAddr"
+      - "bgpRemoteEndClosedConn"
+    likely_causes:
+      - "TCP 179 blocked by a CPM filter / management-access-filter or an upstream ACL"
+      - "local-address / update-source mismatch — peer rejects the source address"
+      - "peer-as mismatch, or authentication (MD5 keychain) mismatch"
+      - "Underlay route to the peer address missing, so the session never opens"
+    commands:
+      - {cmd: "show router bgp summary", intent: bgp.summary, params: []}
+      - {cmd: "show router bgp neighbor {ip-address} detail", intent: bgp.neighbor.detail, params: [ip-address]}
+      - {cmd: "show router bgp group {name} detail", intent: bgp.group, params: [name]}
+      - {cmd: "show router bgp auth-keychain", intent: bgp.auth, params: []}
+      - {cmd: "show router route-table {ip-prefix}", intent: route.prefix, params: [ip-prefix]}
+      - {cmd: "show system security cpm-filter", intent: security.cpmfilter, params: []}
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+    tac_first_look: "Read the State and the Last Event / Last Error fields in `show router bgp neighbor <peer> detail` — SR OS records the exact notification code there, which usually separates a TCP-reachability problem from an OPEN-negotiation problem. Then confirm the peer address is actually resolvable in the route table."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bgp.html"
+
+  - id: sros-bgp-session-flapping
+    class: bgp-instability
+    title: "BGP session flapping / repeated hold-timer expiry"
+    symptoms:
+      - "Peer bounces between Established and Active; uptime never exceeds a few minutes"
+      - "Route churn and repeated SPF/FIB updates downstream"
+      - "Keepalives not seen for a hold-time interval"
+    log_signatures:
+      - "bgpConnNoKA"
+      - "bgpBackwardTransNotification"
+      - "tBgpNgBackwardTransition"
+      - "tBgpPeerNgHoldTimeInconsistent"
+      - "tBgpInstConvStateTransition"
+    likely_causes:
+      - "Underlay link flap or congestion dropping keepalives (check the port first)"
+      - "Hold-time inconsistency between the two peers"
+      - "CPM overload / CPU protection dropping control-plane packets"
+      - "MTU or fragmentation problem on the peering path"
+    commands:
+      - {cmd: "show router bgp neighbor {ip-address} detail", intent: bgp.neighbor.detail, params: [ip-address]}
+      - {cmd: "show router bgp summary", intent: bgp.summary, params: []}
+      - {cmd: "show router bgp convergence", intent: bgp.convergence, params: []}
+      - {cmd: "show system cpu sample-period {seconds}", intent: system.cpu, params: [seconds]}
+      - {cmd: "show system security cpu-protection violators", intent: security.cpuprotect, params: []}
+      - {cmd: "show port {port-id} detail", intent: interface.detail, params: [port-id]}
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+    tac_first_look: "Correlate the bgpConnNoKA timestamps in the event log against port-level counters — an SR OS BGP flap is far more often a transport/CPU symptom than a BGP bug."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bgp.html"
+
+  - id: sros-bgp-route-missing-policy
+    class: bgp-route-missing
+    title: "Expected BGP prefix absent — import/export policy or invalid update"
+    symptoms:
+      - "Peer is Established but the prefix is not in `show router bgp routes`"
+      - "Prefix is visible in received-routes but never becomes used/valid"
+      - "Prefix present in BGP but absent from the route table"
+    log_signatures:
+      - "tBgp4RouteInvalid"
+      - "tBgp4UpdateInvalid"
+      - "tBgp4PathAttrDiscarded"
+      - "tBgp4PathAttrInvalid"
+      - "tBgpReceivedInvalidNlri"
+    likely_causes:
+      - "Inbound import policy rejecting the prefix"
+      - "Far-end outbound policy never advertised it"
+      - "Malformed / discarded path attribute in the update"
+      - "Better path from another protocol wins in the RTM (preference)"
+    commands:
+      - {cmd: "show router bgp neighbor {ip-address} received-routes brief", intent: bgp.neighbor.received, params: [ip-address]}
+      - {cmd: "show router bgp neighbor {ip-address} advertised-routes brief", intent: bgp.neighbor.advertised, params: [ip-address]}
+      - {cmd: "show router bgp routes {ip-prefix} detail", intent: bgp.routes.prefix, params: [ip-prefix]}
+      - {cmd: "show router bgp routes {ip-prefix} hunt", intent: bgp.routes.hunt, params: [ip-prefix]}
+      - {cmd: "show router route-table {ip-prefix} exact", intent: route.prefix, params: [ip-prefix]}
+      - {cmd: "show router bgp policy-test", intent: bgp.policy.test, params: []}
+    tac_first_look: "`show router bgp routes <prefix> hunt` is the single most useful command here — it shows every copy of the prefix (received, best, used, suppressed) and why the losers lost."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-h-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bgp.html"
+
+  - id: sros-bgp-nexthop-unresolved
+    class: bgp-route-missing
+    title: "BGP route present but not installed — next-hop unresolved"
+    symptoms:
+      - "Route shows in BGP but never appears in the route table / FIB"
+      - "`show router bgp next-hop` reports the next hop as not resolved"
+      - "Traffic blackholes toward the prefix"
+    log_signatures:
+      - "tBgpFibResourceFailPeer"
+      - "bgpInterfaceDown"
+      - "tmnxVRtrFibOccupancyThreshold"
+    likely_causes:
+      - "IGP lost the route to the BGP next-hop address"
+      - "Required tunnel (LDP/RSVP/SR) to the next-hop is down, for a labelled family"
+      - "next-hop-resolution policy excludes the available tunnel type"
+      - "FIB occupancy limit reached"
+    commands:
+      - {cmd: "show router bgp next-hop", intent: bgp.nexthop, params: []}
+      - {cmd: "show router bgp routes {ip-prefix} detail", intent: bgp.routes.prefix, params: [ip-prefix]}
+      - {cmd: "show router route-table {ip-prefix} exact", intent: route.prefix, params: [ip-prefix]}
+      - {cmd: "show router tunnel-table {ip-prefix}", intent: mpls.tunneltable, params: [ip-prefix]}
+      - {cmd: "show router fib {slot-number} {ip-prefix}", intent: route.fib, params: [slot-number, ip-prefix]}
+    tac_first_look: "Resolve the chain top-down: BGP next-hop → route-table entry for that next-hop → tunnel-table entry if the family is labelled. The first empty step is the fault."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-t-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html"
+
+  - id: sros-bgp-damping-suppressed
+    class: bgp-instability
+    title: "Prefix suppressed by route flap damping"
+    symptoms:
+      - "Prefix intermittently reachable then withdrawn for long periods"
+      - "Prefix listed with a non-zero FoM / suppressed state in the damping table"
+    log_signatures:
+      - "tBgp4WithdrawnRtFromUpdateError"
+      - "bgpBackwardTransNotification"
+    likely_causes:
+      - "Genuine upstream instability accumulating a damping penalty"
+      - "Damping profile too aggressive for the prefix's normal churn rate"
+      - "Peer session flap re-penalising every prefix behind it"
+    commands:
+      - {cmd: "show router bgp damping detail", intent: bgp.damping, params: []}
+      - {cmd: "show router bgp damping {ip-prefix} detail", intent: bgp.damping.prefix, params: [ip-prefix]}
+      - {cmd: "show router bgp neighbor {ip-address} suppressed", intent: bgp.neighbor.suppressed, params: [ip-address]}
+      - {cmd: "show router bgp neighbor {ip-address} history", intent: bgp.neighbor.history, params: [ip-address]}
+    tac_first_look: "Look at the reuse time and figure-of-merit per prefix; if every prefix from one peer is suppressed at once, chase the session flap, not the prefixes."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html"
+
+  - id: sros-bgp-vpn-ipv4-routes-missing
+    class: bgp-route-missing
+    title: "VPN-IPv4 / VPN-IPv6 routes not reaching the VPRN"
+    symptoms:
+      - "MP-BGP session Established but the VPRN route table is empty"
+      - "Routes visible under vpn-ipv4 in the base router but not imported"
+      - "Only one direction of the L3VPN works"
+    log_signatures:
+      - "tBgp4RouteInvalid"
+      - "tBgpFibResourceFailPeer"
+      - "tmnxVRtrMaxRoutes"
+    likely_causes:
+      - "vrf-import / vrf-target route-target mismatch"
+      - "Address family vpn-ipv4 not negotiated on the session"
+      - "Next-hop / transport tunnel to the remote PE missing"
+      - "VPRN max-routes limit reached"
+    commands:
+      - {cmd: "show router bgp summary all", intent: bgp.summary, params: []}
+      - {cmd: "show router bgp routes vpn-ipv4 brief", intent: bgp.routes.vpn, params: []}
+      - {cmd: "show router bgp routes vpn-ipv4 detail rd {rd}", intent: bgp.routes.vpn.rd, params: [rd]}
+      - {cmd: "show router bgp routes route-target brief", intent: bgp.routetarget, params: []}
+      - {cmd: "show router {router-instance} route-table", intent: route.table, params: [router-instance]}
+      - {cmd: "show service id {service-id} base", intent: service.base, params: [service-id]}
+      - {cmd: "show router tunnel-table", intent: mpls.tunneltable, params: []}
+    tac_first_look: "Confirm the RT actually carried on the route (`... rd <rd> detail`) matches the VPRN's import target, then verify a tunnel exists to the advertising PE — those two account for most L3VPN 'routes missing' cases."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-b-commands.html"
+
+  # ----------------------------------------------------------------- OSPF ---
+  - id: sros-ospf-adjacency-stuck
+    class: ospf-adjacency
+    title: "OSPF adjacency stuck in Init / ExStart / Exchange"
+    symptoms:
+      - "`show router ospf neighbor` never reaches Full"
+      - "Interface shows hellos sent but no bidirectional agreement"
+      - "Routes from the neighbor never appear"
+    log_signatures:
+      - "tmnxOspfNgNbrStateChange"
+      - "tmnxOspfNgIfStateChange"
+      - "tmnxOspfNgIfConfigError"
+      - "tmnxOspfNgIfAuthFailure"
+      - "tmnxOspfNgIfRxBadPacket"
+    likely_causes:
+      - "Hello/dead interval, area-id, or network-type mismatch"
+      - "Authentication mismatch (tmnxOspfNgIfAuthFailure)"
+      - "Passive interface on one side, or interface admin-down"
+      - "Duplicate router-id in the area"
+    commands:
+      - {cmd: "show router ospf neighbor detail", intent: ospf.neighbors, params: []}
+      - {cmd: "show router ospf interface {ip-int-name} detail", intent: ospf.interface, params: [ip-int-name]}
+      - {cmd: "show router ospf statistics", intent: ospf.statistics, params: []}
+      - {cmd: "show router ospf area {area-id} detail", intent: ospf.area, params: [area-id]}
+      - {cmd: "show router interface {ip-int-name} detail", intent: interface.detail, params: [ip-int-name]}
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+    tac_first_look: "Diff the two ends' `show router ospf interface <name> detail` output field by field — hello/dead, area, type, auth. SR OS reports the mismatch class in tmnxOspfNgIfConfigError; that event names the offending parameter."
+    sources:
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/ospf_show_cli.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ospf.html"
+
+  - id: sros-ospf-mtu-mismatch
+    class: ospf-adjacency
+    title: "OSPF adjacency hangs in ExStart/Exchange — IP MTU mismatch"
+    symptoms:
+      - "Neighbor cycles ExStart → Exchange → ExStart"
+      - "Large DBD packets never acknowledged"
+      - "Small pings succeed, large ones fail across the link"
+    log_signatures:
+      - "tmnxOspfNgNbrStateChange"
+      - "tmnxOspfNgIfRxBadPacket"
+    likely_causes:
+      - "IP MTU differs between the two router interfaces"
+      - "Port MTU smaller than the configured interface IP MTU"
+      - "An intermediate L2 device clamping frame size"
+    commands:
+      - {cmd: "show router ospf neighbor detail", intent: ospf.neighbors, params: []}
+      - {cmd: "show router ospf interface {ip-int-name} detail", intent: ospf.interface, params: [ip-int-name]}
+      - {cmd: "show router interface {ip-int-name} detail", intent: interface.detail, params: [ip-int-name]}
+      - {cmd: "show port {port-id} detail", intent: interface.detail, params: [port-id]}
+    tac_first_look: "Compare the IP MTU reported by `show router ospf interface ... detail` on both ends against the physical port MTU — SR OS will hold in ExStart indefinitely rather than log an explicit MTU error."
+    sources:
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/ospf_show_cli.html"
+      - "https://documentation.nokia.com/html/0_add-h-f/93-0073-10-01/7750_SR_OS_Router_Configuration_Guide/router-cli-Show-CLI.html"
+
+  - id: sros-ospf-lsdb-overflow
+    class: ospf-database
+    title: "OSPF LSDB overflow / external LSA limit reached"
+    symptoms:
+      - "Router enters LSDB overflow state and stops originating external LSAs"
+      - "External routes disappear network-wide"
+      - "Overflow warnings in the event log before the drop"
+    log_signatures:
+      - "tmnxOspfLsdbOverflow"
+      - "tmnxOspfLsdbApproachingOverflow"
+      - "tmnxOspfOverloadEntered"
+      - "tmnxOspfOverloadExited"
+      - "tmnxOspfExportLimitReached"
+      - "tmnxOspfRoutesExpLmtDropped"
+    likely_causes:
+      - "Redistribution loop injecting a large external set"
+      - "overflow-limit configured below the real external LSA count"
+      - "A misconfigured export policy leaking the full table into OSPF"
+    commands:
+      - {cmd: "show router ospf database type external", intent: ospf.database, params: []}
+      - {cmd: "show router ospf database type all", intent: ospf.database.all, params: []}
+      - {cmd: "show router ospf statistics", intent: ospf.statistics, params: []}
+      - {cmd: "show router ospf area {area-id} detail", intent: ospf.area, params: [area-id]}
+      - {cmd: "show router ospf routes", intent: ospf.routes, params: []}
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+    tac_first_look: "Count the external LSAs and identify the advertising router — one adv-router usually dominates the database and is the redistribution source to fix."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ospf.html"
+
+  - id: sros-ospf-flapping-link-spf-churn
+    class: ospf-flapping-link
+    title: "Repeated SPF runs from a flapping OSPF link"
+    symptoms:
+      - "SPF runs spike; route table churn across the area"
+      - "One interface repeatedly transitions in the event log"
+      - "Transient traffic loss coinciding with each transition"
+    log_signatures:
+      - "tmnxOspfNgIfStateChange"
+      - "tmnxOspfNgNbrStateChange"
+      - "tmnxOspfNgLinkOriginateLsa"
+      - "tmnxOspfNgLinkMaxAgeLsa"
+      - "tmnxOspfSpfRunsRestarted"
+    likely_causes:
+      - "Physical/optical instability on the underlying port"
+      - "LDP-IGP sync timer repeatedly starting and expiring"
+      - "BFD session under the adjacency flapping"
+    commands:
+      - {cmd: "show router ospf neighbor detail", intent: ospf.neighbors, params: []}
+      - {cmd: "show router ospf interface {ip-int-name} detail", intent: ospf.interface, params: [ip-int-name]}
+      - {cmd: "show router ospf statistics", intent: ospf.statistics, params: []}
+      - {cmd: "show port {port-id} detail", intent: interface.detail, params: [port-id]}
+      - {cmd: "show port {port-id} optical", intent: optics.dom, params: [port-id]}
+      - {cmd: "show router bfd session summary", intent: bfd.session, params: []}
+    tac_first_look: "Pin the flap to a layer: if the port counters and DDM are clean but the OSPF interface still transitions, look at BFD and LDP-sync before OSPF itself."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ospf.html"
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html"
+
+  # ----------------------------------------------------------------- ISIS ---
+  - id: sros-isis-adjacency-down
+    class: isis-adjacency
+    title: "IS-IS adjacency down or stuck in Initializing"
+    symptoms:
+      - "`show router isis adjacency` shows no adjacency or a non-Up state"
+      - "IIH hellos sent but no neighbour recorded"
+      - "IS-IS routes absent from the route table"
+    log_signatures:
+      - "tmnxIsisAdjacencyChange"
+      - "tmnxIsisRejectedAdjacency"
+      - "tmnxIsisAreaMismatch"
+      - "tmnxIsisAuthFail"
+      - "tmnxIsisAutTypeFail"
+      - "tmnxIsisIDLenMismatch"
+      - "tmnxIsisMaxAreaAddrsMismatch"
+      - "tmnxIsisProtoSuppMismatch"
+      - "tmnxIsisCircMtuTooLow"
+    likely_causes:
+      - "Level mismatch (L1 vs L2) or area address mismatch on an L1 adjacency"
+      - "Authentication type or key mismatch"
+      - "Circuit MTU below the IS-IS minimum for the configured LSP size"
+      - "IPv4/IPv6 protocol support not advertised on one side"
+    commands:
+      - {cmd: "show router isis adjacency detail", intent: isis.adjacency, params: []}
+      - {cmd: "show router isis interface {ip-int-name} detail", intent: isis.interface, params: [ip-int-name]}
+      - {cmd: "show router isis status", intent: isis.status, params: []}
+      - {cmd: "show router isis statistics", intent: isis.statistics, params: []}
+      - {cmd: "show router interface {ip-int-name} detail", intent: interface.detail, params: [ip-int-name]}
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+    tac_first_look: "The SR OS IS-IS mismatch events are unusually specific — tmnxIsisAreaMismatch / AuthFail / CircMtuTooLow each name the fault outright, so read the log before diffing config."
+    sources:
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/isis_show_cli.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-isis.html"
+
+  - id: sros-isis-lsp-purge
+    class: isis-lsp
+    title: "IS-IS LSP purge / corrupt LSP in the database"
+    symptoms:
+      - "Routes disappear area-wide for a few seconds at a time"
+      - "Own-LSP purges logged repeatedly"
+      - "LSP sequence numbers jumping"
+    log_signatures:
+      - "tmnxIsisOwnLSPPurge"
+      - "tmnxIsisLSPPurge"
+      - "tmnxIsisCorruptedLSPDetected"
+      - "tmnxIsisCorruptRemainingLifetime"
+      - "tmnxIsisSequenceNumberSkip"
+      - "tmnxIsisMaxSeqExceedAttempt"
+      - "tmnxIsisLSPTooLargeToPropagate"
+    likely_causes:
+      - "Duplicate system-id in the level"
+      - "A node re-originating an LSP another node still holds"
+      - "LSP larger than the smallest circuit MTU on the path"
+      - "Memory/hardware corruption on one node"
+    commands:
+      - {cmd: "show router isis database detail", intent: isis.database, params: []}
+      - {cmd: "show router isis database {lsp-id} detail", intent: isis.database.lsp, params: [lsp-id]}
+      - {cmd: "show router isis hostname", intent: isis.hostname, params: []}
+      - {cmd: "show router isis statistics", intent: isis.statistics, params: []}
+      - {cmd: "show router isis spf-log detail", intent: isis.spflog, params: []}
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+    tac_first_look: "Map the purged LSP-ID to a hostname with `show router isis hostname`, then check whether two nodes claim the same system-id — that is the classic cause of a persistent own-LSP purge."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-h-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-isis.html"
+
+  - id: sros-ldp-session-down
+    class: mpls-ldp
+    title: "LDP session down or never establishing"
+    symptoms:
+      - "`show router ldp session` shows no session or a non-Established state"
+      - "Discovery adjacency present but session never forms"
+      - "Service SDPs bound to LDP go operationally down"
+    log_signatures:
+      - "vRtrLdpNgSessionStateChange"
+      - "vRtrLdpNgIfStateChange"
+      - "vRtrLdpNgTargPeerStateChange"
+      - "vRtrLdpGroupIdMismatch"
+      - "vRtrLdpNgResourceExhaustion"
+      - "vRtrLdpStateChange"
+    likely_causes:
+      - "No route to the peer LSR-id (transport address unreachable)"
+      - "LDP not enabled on the interface, or hello adjacency mismatched"
+      - "Authentication (keychain/MD5) mismatch on the TCP session"
+      - "Label/resource exhaustion"
+    commands:
+      - {cmd: "show router ldp status", intent: ldp.status, params: []}
+      - {cmd: "show router ldp session detail", intent: ldp.session, params: []}
+      - {cmd: "show router ldp discovery detail", intent: ldp.discovery, params: []}
+      - {cmd: "show router ldp interface detail", intent: ldp.interface, params: []}
+      - {cmd: "show router ldp targ-peer detail", intent: ldp.targpeer, params: []}
+      - {cmd: "show router ldp parameters", intent: ldp.parameters, params: []}
+      - {cmd: "show router route-table {ip-prefix} exact", intent: route.prefix, params: [ip-prefix]}
+    tac_first_look: "If discovery shows an adjacency but no session, the hello succeeded and the TCP session failed — check reachability of the transport/LSR-id address and any keychain, not the interface config."
+    sources:
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ldp.html"
+
+  - id: sros-ldp-label-binding-missing
+    class: mpls-ldp
+    title: "LDP label binding missing for a FEC / no active egress label"
+    symptoms:
+      - "Session is up but a prefix has no active LDP binding"
+      - "Tunnel-table has no LDP entry to the far-end system address"
+      - "Services over the LDP tunnel are down while the IGP is fine"
+    log_signatures:
+      - "vRtrLdpNgAddrFecCommMismatch"
+      - "vRtrLdpNgSessMaxFecLimitReached"
+      - "vRtrLdpNgSessMaxFecThresChanged"
+      - "vRtrLdpNgResourceExhaustion"
+    likely_causes:
+      - "Import/export prefix policy filtering the FEC"
+      - "Peer never advertised the FEC (its own export policy)"
+      - "FEC limit on the session reached"
+      - "Route to the FEC absent, so the binding cannot become active"
+    commands:
+      - {cmd: "show router ldp bindings prefixes prefix {ip-prefix} detail", intent: ldp.bindings.prefix, params: [ip-prefix]}
+      - {cmd: "show router ldp bindings active prefixes", intent: ldp.bindings.active, params: []}
+      - {cmd: "show router ldp bindings summary", intent: ldp.bindings.summary, params: []}
+      - {cmd: "show router ldp session detail", intent: ldp.session, params: []}
+      - {cmd: "show router tunnel-table {ip-prefix}", intent: mpls.tunneltable, params: [ip-prefix]}
+      - {cmd: "show router route-table {ip-prefix} exact", intent: route.prefix, params: [ip-prefix]}
+    tac_first_look: "Check the binding first, then whether it is ACTIVE — an inactive binding almost always means the IGP route that would resolve it is missing or points elsewhere."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ldp.html"
+
+  - id: sros-rsvp-lsp-down-cspf
+    class: mpls-rsvp-te
+    proposed_class: true
+    title: "RSVP-TE LSP down — CSPF cannot compute a path"
+    symptoms:
+      - "`show router mpls lsp` shows the LSP operationally down"
+      - "Path shows no CSPF result / no route"
+      - "LSP came up before a topology or constraint change"
+    log_signatures:
+      - "vRtrMplsLspDown"
+      - "vRtrMplsLspPathDown"
+      - "mplsTunnelDown"
+      - "vRtrMplsLspResourceExhaustion"
+      - "vRtrMplsNodeInIgpOverload"
+    likely_causes:
+      - "Bandwidth constraint unavailable on every candidate path"
+      - "Admin-group / SRLG constraint excludes all paths"
+      - "Hop in the strict path is unreachable or TE is not enabled on it"
+      - "A transit node is in IGP overload"
+    commands:
+      - {cmd: "show router mpls lsp {lsp-name} detail", intent: mpls.lsp, params: [lsp-name]}
+      - {cmd: "show router mpls lsp {lsp-name} path detail", intent: mpls.lsp.path, params: [lsp-name]}
+      - {cmd: "show router mpls status", intent: mpls.status, params: []}
+      - {cmd: "show router mpls interface", intent: mpls.interface, params: []}
+      - {cmd: "show router mpls srlg-database", intent: mpls.srlg, params: []}
+      - {cmd: "show router rsvp interface {ip-int-name} statistics detail", intent: rsvp.interface, params: [ip-int-name]}
+      - {cmd: "show router rsvp status", intent: rsvp.status, params: []}
+    tac_first_look: "`show router mpls lsp <name> path detail` prints the failure code from the last CSPF attempt — that code, not the LSP-level state, tells you which constraint is unsatisfiable."
+    sources:
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-l-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-mpls.html"
+
+  - id: sros-rsvp-lsp-path-flapping
+    class: mpls-rsvp-te
+    proposed_class: true
+    title: "RSVP-TE LSP repeatedly rerouting / being preempted"
+    symptoms:
+      - "LSP active path changes frequently"
+      - "Make-before-make (MBB) events logged in bursts"
+      - "Jitter/loss on services riding the LSP"
+    log_signatures:
+      - "vRtrMplsLspPathRerouted"
+      - "vRtrMplsLspPathSoftPreempted"
+      - "vRtrMplsLspActivePathChanged"
+      - "vRtrMplsLspPathMbbStatusEvent"
+      - "mplsTunnelRerouted"
+      - "mplsTunnelReoptimized"
+      - "vRtrRsvpIfNbrStateDown"
+    likely_causes:
+      - "Higher-priority LSPs preempting this one on a congested link"
+      - "Resignal timer / auto-bandwidth re-optimising aggressively"
+      - "Underlying RSVP interface neighbour flapping"
+      - "IGP metric churn changing the CSPF result"
+    commands:
+      - {cmd: "show router mpls lsp {lsp-name} detail", intent: mpls.lsp, params: [lsp-name]}
+      - {cmd: "show router mpls lsp {lsp-name} activepath", intent: mpls.lsp.activepath, params: [lsp-name]}
+      - {cmd: "show router mpls lsp {lsp-name} auto-bandwidth", intent: mpls.lsp.autobw, params: [lsp-name]}
+      - {cmd: "show router rsvp session detail", intent: rsvp.session, params: []}
+      - {cmd: "show router rsvp neighbor detail", intent: rsvp.neighbor, params: []}
+      - {cmd: "show router rsvp statistics", intent: rsvp.statistics, params: []}
+      - {cmd: "show router mpls statistics-summary", intent: mpls.statistics, params: []}
+    tac_first_look: "Separate preemption from re-optimisation: soft-preempt events point at bandwidth contention with higher-priority LSPs, resignal/MBB events point at your own timers."
+    sources:
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-mpls.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-rsvp.html"
+
+  # ----------------------------------------------------------------- EVPN ---
+  - id: sros-evpn-vxlan-destination-missing
+    class: evpn-vxlan
+    title: "EVPN-VXLAN: remote VTEP destination missing from the service"
+    symptoms:
+      - "Local MACs learn fine, remote MACs never appear"
+      - "`show service id <n> vxlan destinations` is empty or short a VTEP"
+      - "Unicast to remote hosts blackholes while BUM may still work"
+    log_signatures:
+      - "svcBgpEvpnDupMacAddrsDetected"
+      - "sapStatusChanged"
+      - "tmnxVRtrStaticRouteStatusChanged"
+    likely_causes:
+      - "Route-target mismatch, so inclusive-multicast routes are not imported"
+      - "VNI mismatch between the two ends"
+      - "Underlay route to the remote VTEP address missing"
+      - "EVPN address family not negotiated on the BGP session"
+    commands:
+      - {cmd: "show service id {service-id} vxlan", intent: evpn.vxlan, params: [service-id]}
+      - {cmd: "show service id {service-id} vxlan instance {vxlan-instance} destinations", intent: evpn.vxlan.destinations, params: [service-id, vxlan-instance]}
+      - {cmd: "show service id {service-id} bgp-evpn", intent: evpn.service, params: [service-id]}
+      - {cmd: "show service system vxlan", intent: evpn.system.vxlan, params: []}
+      - {cmd: "show router bgp routes evpn incl-mcast detail", intent: evpn.routes.imet, params: []}
+      - {cmd: "show router bgp summary all", intent: bgp.summary, params: []}
+      - {cmd: "show router route-table {ip-prefix} exact", intent: route.prefix, params: [ip-prefix]}
+    tac_first_look: "If the inclusive-multicast route for the remote VTEP is in BGP but not in the service's destination list, the fault is import RT / VNI; if it is not in BGP at all, the fault is upstream of this box."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-i-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-b-commands.html"
+
+  - id: sros-evpn-duplicate-mac
+    class: evpn-vxlan
+    title: "EVPN duplicate MAC detected / MAC oscillating between sites"
+    symptoms:
+      - "A MAC repeatedly moves between a local SAP and a remote VTEP"
+      - "SR OS raises duplicate-MAC and may block the address"
+      - "Intermittent loss for one host only"
+    log_signatures:
+      - "svcBgpEvpnDupMacAddrsDetected"
+      - "svcBgpEvpnDupMacAddrsCleared"
+      - "svcBgpEvpnBHDupMacAddrsDetected"
+      - "sapTlsMacMoveExceeded"
+      - "sdpBindTlsMacMoveExceeded"
+    likely_causes:
+      - "A genuine L2 loop between the two attachment points"
+      - "Duplicated MAC on two hosts (VM clone, bad NIC config)"
+      - "Multihoming misconfiguration — both PEs forwarding as DF"
+    commands:
+      - {cmd: "show service id {service-id} bgp-evpn", intent: evpn.service, params: [service-id]}
+      - {cmd: "show service id {service-id} fdb detail", intent: service.fdb, params: [service-id]}
+      - {cmd: "show service fdb-mac {ieee-address}", intent: service.fdb.mac, params: [ieee-address]}
+      - {cmd: "show service id {service-id} mac-move", intent: service.macmove, params: [service-id]}
+      - {cmd: "show router bgp routes evpn mac detail mac-address {mac-address}", intent: evpn.routes.mac, params: [mac-address]}
+      - {cmd: "show service system bgp-evpn ethernet-segment", intent: evpn.ethernetsegment, params: []}
+    tac_first_look: "Confirm from the EVPN MAC routes whether two different PEs are advertising the same MAC with different sequence numbers — that distinguishes a real duplicate from a legitimate mobility event."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html"
+
+  - id: sros-evpn-mpls-ethernet-segment-df
+    class: evpn-vxlan
+    title: "EVPN-MPLS multihoming: wrong or missing DF election on an ethernet-segment"
+    symptoms:
+      - "Both multihomed PEs forward BUM traffic (duplicates) or neither does (blackhole)"
+      - "Ethernet-segment shows an unexpected DF state"
+      - "Auto-discovery routes missing for the ESI"
+    log_signatures:
+      - "svcBgpEvpnDupMacAddrsDetected"
+      - "sapStatusChanged"
+      - "sdpBindStatusChanged"
+    likely_causes:
+      - "ESI mismatch between the two PEs"
+      - "Ethernet-segment route (type-4) not received — RT or session issue"
+      - "Service-carving / DF preference misconfigured"
+      - "One PE's access SAP or LAG is down so it withdrew its AD route"
+    commands:
+      - {cmd: "show service system bgp-evpn ethernet-segment", intent: evpn.ethernetsegment, params: []}
+      - {cmd: "show service system bgp-evpn ethernet-segment name {name} all", intent: evpn.ethernetsegment.detail, params: [name]}
+      - {cmd: "show service id {service-id} evpn-mpls", intent: evpn.mpls, params: [service-id]}
+      - {cmd: "show service id {service-id} evpn-mpls esi {esi}", intent: evpn.mpls.esi, params: [service-id, esi]}
+      - {cmd: "show router bgp routes evpn eth-seg detail", intent: evpn.routes.ethseg, params: []}
+      - {cmd: "show router bgp routes evpn auto-disc detail", intent: evpn.routes.ad, params: []}
+    tac_first_look: "Compare the ESI value configured locally with the ESI in the received type-4 routes; a one-digit ESI difference is the most common cause of a 'both PEs are DF' incident."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-e-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html"
+
+  # ------------------------------------------------------------- SERVICES ---
+  - id: sros-sap-down
+    class: sap-service
+    proposed_class: true
+    title: "SAP operationally down on a VPLS/Epipe/VPRN service"
+    symptoms:
+      - "Service is up but one SAP shows oper state down"
+      - "Customer traffic stops on a single attachment circuit"
+      - "SAP status change logged at the time of the outage"
+    log_signatures:
+      - "sapStatusChanged"
+      - "sapPortStateChangeProcessed"
+      - "sapIfIgnorePortStateStart"
+      - "sapIfIgnorePortStateStop"
+      - "iesIfStatusChanged"
+    likely_causes:
+      - "Underlying port or LAG down"
+      - "Encap (VLAN tag) no longer provisioned on the port"
+      - "MTU mismatch between the SAP and the service"
+      - "Oper-group / MC-LAG state forcing the SAP down"
+    commands:
+      - {cmd: "show service id {service-id} base", intent: service.base, params: [service-id]}
+      - {cmd: "show service id {service-id} sap {sap-id} detail", intent: service.sap, params: [service-id, sap-id]}
+      - {cmd: "show service id {service-id} all", intent: service.all, params: [service-id]}
+      - {cmd: "show service sap-using sap {sap-id}", intent: service.sap.using, params: [sap-id]}
+      - {cmd: "show port {port-id} detail", intent: interface.detail, params: [port-id]}
+      - {cmd: "show service oper-group", intent: service.opergroup, params: []}
+    tac_first_look: "Walk down: service base → SAP detail → the port behind it. `sapStatusChanged` paired with a port event in the same second is a physical problem, not a service problem."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-b-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html"
+
+  - id: sros-sdp-down-keepalive
+    class: oam-sdp
+    proposed_class: true
+    title: "SDP down / SDP keepalive failing"
+    symptoms:
+      - "SDP oper state down; every service bound to it drops"
+      - "Keepalive probe failures logged"
+      - "Far-end system address reachable by ping but the SDP stays down"
+    log_signatures:
+      - "sdpStatusChanged"
+      - "sdpKeepAliveProbeFailure"
+      - "sdpKeepAliveLateReply"
+      - "sdpKeepAliveStarted"
+      - "sdpKeepAliveStopped"
+      - "sdpBindStatusChanged"
+    likely_causes:
+      - "Transport tunnel (LDP/RSVP/SR) to the far-end down"
+      - "far-end address changed or does not match the far-end system address"
+      - "Keepalive timers too aggressive for the path latency"
+      - "MTU too small for the keepalive/service payload"
+    commands:
+      - {cmd: "show service sdp {sdp-id} detail", intent: service.sdp, params: [sdp-id]}
+      - {cmd: "show service sdp {sdp-id} keep-alive-history", intent: service.sdp.keepalive, params: [sdp-id]}
+      - {cmd: "show service sdp-using {sdp-id}", intent: service.sdp.using, params: [sdp-id]}
+      - {cmd: "show router tunnel-table", intent: mpls.tunneltable, params: []}
+      - {cmd: "show router ldp session detail", intent: ldp.session, params: []}
+      - {cmd: "show router mpls lsp {lsp-name} detail", intent: mpls.lsp, params: [lsp-name]}
+    tac_first_look: "`show service sdp <id> keep-alive-history` gives per-probe timestamps — a clean history with a down SDP points at the tunnel binding, an erratic history points at the path."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html"
+
+  - id: sros-spoke-sdp-pw-status
+    class: l2vpn-vpls
+    proposed_class: true
+    title: "Spoke-SDP / pseudowire signalling PW status bits (service down end to end)"
+    symptoms:
+      - "SDP binding up locally but the service is down"
+      - "PW peer status bits set (remote fault) in the binding detail"
+      - "Only one direction of the pseudowire forwards"
+    log_signatures:
+      - "sdpBindPwPeerStatusBitsChanged"
+      - "sdpBindPwLocalStatusBitsChanged"
+      - "sdpBindPwPeerFaultAddrChanged"
+      - "sdpBindStatusChanged"
+      - "sdpControlPwActiveStateChg"
+    likely_causes:
+      - "Far-end SAP down, so the remote PE signals a PW fault"
+      - "VC-id / VC-type mismatch between the two ends"
+      - "Service MTU mismatch preventing the PW from coming up"
+      - "Control-word or FEC-type mismatch"
+    commands:
+      - {cmd: "show service id {service-id} sdp {sdp-id}:{vc-id} detail", intent: service.sdpbind, params: [service-id, sdp-id, vc-id]}
+      - {cmd: "show service id {service-id} base", intent: service.base, params: [service-id]}
+      - {cmd: "show service id {service-id} labels", intent: service.labels, params: [service-id]}
+      - {cmd: "show service id {service-id} endpoint", intent: service.endpoint, params: [service-id]}
+      - {cmd: "show service id {service-id} spoke-sdp-fec", intent: service.spokesdpfec, params: [service-id]}
+      - {cmd: "show service sdp {sdp-id} detail", intent: service.sdp, params: [sdp-id]}
+    tac_first_look: "Peer status bits set with local bits clear means the far end is complaining — collect the same binding detail from the remote PE before touching this one."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-l-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html"
+
+  - id: sros-vpls-mac-move-limit
+    class: l2vpn-vpls
+    proposed_class: true
+    title: "VPLS MAC move / MAC limit alarm — suspected L2 loop"
+    symptoms:
+      - "MACs flapping between SAPs or between a SAP and an SDP binding"
+      - "MAC-move exceeded raises and may block a SAP"
+      - "FDB size climbing toward the configured limit"
+    log_signatures:
+      - "sapTlsMacMoveExceeded"
+      - "sapTlsMacMoveExceedNonBlock"
+      - "sdpBindTlsMacMoveExceeded"
+      - "sapTlsMacAddrLimitAlarmRaised"
+      - "sapTlsMacAddrLimitAlarmCleared"
+      - "sdpTlsMacAddrLimitAlarmRaised"
+      - "svcEndPointMacLimitAlarmRaised"
+    likely_causes:
+      - "Physical or logical loop in the customer L2 domain"
+      - "STP disabled or not interoperating with the customer bridge"
+      - "Split-horizon group misconfigured on a mesh"
+      - "Duplicate MAC on two hosts"
+    commands:
+      - {cmd: "show service id {service-id} mac-move", intent: service.macmove, params: [service-id]}
+      - {cmd: "show service id {service-id} fdb detail", intent: service.fdb, params: [service-id]}
+      - {cmd: "show service fdb-mac {ieee-address}", intent: service.fdb.mac, params: [ieee-address]}
+      - {cmd: "show service fdb-info", intent: service.fdb.info, params: []}
+      - {cmd: "show service id {service-id} stp detail", intent: service.stp, params: [service-id]}
+      - {cmd: "show service id {service-id} split-horizon-group", intent: service.shg, params: [service-id]}
+      - {cmd: "show service system fdb-usage", intent: service.fdb.usage, params: []}
+    tac_first_look: "Identify the two endpoints the MAC is oscillating between — the loop is almost always between exactly those two, and `show service id <n> stp detail` says whether anything was supposed to be blocking it."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html"
+
+  - id: sros-vprn-routes-missing
+    class: l3vpn-vprn
+    proposed_class: true
+    title: "VPRN customer routes missing / CE-PE routing not populating the VRF"
+    symptoms:
+      - "VPRN interface up but the VRF route table lacks CE prefixes"
+      - "Only directly connected routes present in the VPRN"
+      - "One site of the L3VPN unreachable from all others"
+    log_signatures:
+      - "iesIfStatusChanged"
+      - "tmnxVRtrMaxRoutes"
+      - "tmnxVRtrHighRouteTCA"
+      - "tmnxVRtrMidRouteTCA"
+      - "sapHostBGPPeeringSetupFailed"
+    likely_causes:
+      - "PE-CE protocol (BGP/OSPF/static) not up inside the VPRN"
+      - "vrf-export policy not advertising the CE routes into MP-BGP"
+      - "VPRN max-routes / route limit reached"
+      - "Interface bound to the wrong SAP or the SAP is down"
+    commands:
+      - {cmd: "show service id {service-id} base", intent: service.base, params: [service-id]}
+      - {cmd: "show service id {service-id} interface detail", intent: service.interface, params: [service-id]}
+      - {cmd: "show router {router-instance} route-table", intent: route.table, params: [router-instance]}
+      - {cmd: "show router {router-instance} bgp summary", intent: bgp.summary, params: [router-instance]}
+      - {cmd: "show router {router-instance} ospf neighbor detail", intent: ospf.neighbors, params: [router-instance]}
+      - {cmd: "show router {router-instance} status", intent: route.status, params: [router-instance]}
+      - {cmd: "show service id {service-id} sap {sap-id} detail", intent: service.sap, params: [service-id, sap-id]}
+    tac_first_look: "In classic CLI everything inside the VPRN is reached with `show router <service-id> ...`; run the PE-CE protocol checks in that context first — an empty VRF table with a healthy MP-BGP session means the CE side never delivered the routes."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-i-commands.html"
+      - "https://documentation.nokia.com/sar/24-4-1/books/services/show-router-commands.html"
+
+  # ------------------------------------------------------------ INTERFACE ---
+  - id: sros-port-crc-errors
+    class: interface-errors
+    title: "Rising CRC / FCS errors on an Ethernet port"
+    symptoms:
+      - "CRC error counter increments steadily"
+      - "Ethernet CRC alarm raised on the port"
+      - "Application-level retransmits and throughput loss"
+    log_signatures:
+      - "tmnxEqPortEtherCrcAlarm"
+      - "tmnxEqPortEtherCrcAlarmClear"
+      - "tmnxEqPortEtherAlarm"
+      - "tmnxEqPortEtherSymMonAlarm"
+      - "tmnxEqPortError"
+    likely_causes:
+      - "Dirty / damaged fibre or connector, or a marginal patch"
+      - "Failing or out-of-spec optic"
+      - "Duplex or speed mismatch on a copper port"
+      - "Faulty MDA/XMA port ASIC"
+    commands:
+      - {cmd: "show port {port-id} detail", intent: interface.detail, params: [port-id]}
+      - {cmd: "show port {port-id} ethernet detail", intent: interface.ethernet, params: [port-id]}
+      - {cmd: "show port {port-id} statistics", intent: interface.statistics, params: [port-id]}
+      - {cmd: "show port {port-id} optical", intent: optics.dom, params: [port-id]}
+      - {cmd: "monitor port {port-id} interval {seconds} repeat {repeat} rate", intent: interface.monitor, params: [port-id, seconds, repeat]}
+      - {cmd: "show mda {slot}/{mda} detail", intent: platform.mda, params: [slot, mda]}
+    tac_first_look: "Use `monitor port <id> ... rate` to see whether errors are still accruing right now, and read the optical receive power in the same window — the two together separate a media fault from a historical counter."
+    sources:
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-port.html"
+
+  - id: sros-port-link-flap
+    class: link-flap
+    title: "Port repeatedly bouncing up/down"
+    symptoms:
+      - "Repeated linkDown/linkUp events for the same port"
+      - "Protocols over the port re-converge each time"
+      - "Ethernet alarm raised and cleared in a cycle"
+    log_signatures:
+      - "linkDown"
+      - "linkUp"
+      - "tmnxEqPortEtherAlarm"
+      - "tmnxEqPortEtherAlarmClear"
+      - "tmnxEqPortSFPRemoved"
+      - "tmnxEqPortSFPInserted"
+      - "tmnxEqPortEtherLoopDetected"
+    likely_causes:
+      - "Loose or failing optic / connector"
+      - "Far-end device rebooting or its port flapping"
+      - "Auto-negotiation instability on copper"
+      - "Marginal power to the optic, or a failing MDA"
+    commands:
+      - {cmd: "show port {port-id} detail", intent: interface.detail, params: [port-id]}
+      - {cmd: "show port {port-id} optical", intent: optics.dom, params: [port-id]}
+      - {cmd: "show port {port-id} ethernet detail", intent: interface.ethernet, params: [port-id]}
+      - {cmd: "show port {port-id} ethernet lldp remote-info detail", intent: interface.lldp, params: [port-id]}
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+      - {cmd: "show system alarms", intent: platform.alarms, params: []}
+    tac_first_look: "Count the transitions in the log and check whether SFP-removed events accompany them — an optic reseat/replace is the fix when they do, and a far-end investigation when they do not."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-port.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-snmp.html"
+
+  - id: sros-mtu-mismatch
+    class: interface-errors
+    title: "MTU mismatch — large frames dropped, small ones pass"
+    symptoms:
+      - "Ping succeeds at small sizes and fails at large"
+      - "Protocol adjacencies that exchange large PDUs hang"
+      - "Service reports an MTU-too-small condition"
+    log_signatures:
+      - "sapTunnelEncapIpMtuTooSmall"
+      - "tmnxIsisCircMtuTooLow"
+      - "sdpBindInsufficientBandwidth"
+    likely_causes:
+      - "Port MTU below the sum of service MTU + encapsulation overhead"
+      - "SDP path MTU smaller than the service MTU"
+      - "MPLS label stack overhead not accounted for in the port MTU"
+      - "Different MTU on the two ends of a link"
+    commands:
+      - {cmd: "show port {port-id} detail", intent: interface.detail, params: [port-id]}
+      - {cmd: "show router interface {ip-int-name} detail", intent: interface.detail, params: [ip-int-name]}
+      - {cmd: "show service id {service-id} base", intent: service.base, params: [service-id]}
+      - {cmd: "show service id {service-id} sap {sap-id} detail", intent: service.sap, params: [service-id, sap-id]}
+      - {cmd: "show service sdp {sdp-id} detail", intent: service.sdp, params: [sdp-id]}
+    tac_first_look: "Collect port MTU, interface IP MTU, service MTU and SDP path MTU on both PEs in one pass — the mismatch is only visible when all four are on the page together."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-b-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html"
+
+  - id: sros-optics-ddm-alarm
+    class: optics
+    title: "Optical DDM threshold crossed (Rx/Tx power, temperature, bias)"
+    symptoms:
+      - "Digital diagnostic monitoring failure raised on a port"
+      - "Errors and flaps correlate with low receive power"
+      - "Coherent/OTU port alarms on long-haul interfaces"
+    log_signatures:
+      - "tmnxEqDigitalDiagMonitorFailure"
+      - "tmnxEqDigitalDiagMonitorClear"
+      - "tmnxEqCohOptPortAlarm"
+      - "tmnxOtuIfAlarmNotification"
+      - "SFPStatusDDMCorrupt"
+      - "SFPStatusFailure"
+      - "SFPStatusReadError"
+      - "SFPStatusUnsupported"
+    likely_causes:
+      - "Attenuation from a dirty connector, bend, or too-long span"
+      - "Optic ageing out of spec (falling Tx power, rising bias)"
+      - "Wrong optic type for the reach / wavelength plan"
+      - "Unsupported or counterfeit optic reporting bad DDM data"
+    commands:
+      - {cmd: "show port {port-id} optical", intent: optics.dom, params: [port-id]}
+      - {cmd: "show port {port-id} detail", intent: interface.detail, params: [port-id]}
+      - {cmd: "show port {port-id} otu", intent: optics.otu, params: [port-id]}
+      - {cmd: "show port {port-id} monitor-threshold", intent: optics.thresholds, params: [port-id]}
+      - {cmd: "show system alarms", intent: platform.alarms, params: []}
+      - {cmd: "show mda {slot}/{mda} detail", intent: platform.mda, params: [slot, mda]}
+    tac_first_look: "Read Rx power against the optic's documented low-warning/low-alarm thresholds in `show port <id> optical`; an SFPStatusUnsupported event means TAC will ask you to swap to a Nokia-qualified optic before anything else."
+    sources:
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-port.html"
+
+  - id: sros-lag-member-down
+    class: lag-lacp
+    proposed_class: true
+    title: "LAG member port not selected / LACP not converging"
+    symptoms:
+      - "LAG oper state degraded; fewer active members than configured"
+      - "One member never becomes selected"
+      - "Throughput ceiling below the expected aggregate"
+    log_signatures:
+      - "LagPortAddFailed"
+      - "LagPortAddFailureCleared"
+      - "LagStateEvent"
+      - "tLagMemberStateEvent"
+      - "LagSubGroupSelected"
+      - "tmnxLagBfdMemStateChanged"
+    likely_causes:
+      - "LACP mode/key mismatch with the partner"
+      - "Member ports of differing speed or MTU"
+      - "Partner placed the port in a different aggregation group"
+      - "Member port physically down or erroring"
+    commands:
+      - {cmd: "show lag {lag-id} detail", intent: lag.detail, params: [lag-id]}
+      - {cmd: "show lag {lag-id} port", intent: lag.ports, params: [lag-id]}
+      - {cmd: "show lag {lag-id} lacp-partner", intent: lag.lacp.partner, params: [lag-id]}
+      - {cmd: "show lag {lag-id} detail lacp-statistics", intent: lag.lacp.statistics, params: [lag-id]}
+      - {cmd: "show lag {lag-id} bfd", intent: lag.bfd, params: [lag-id]}
+      - {cmd: "show port {port-id} detail", intent: interface.detail, params: [port-id]}
+    tac_first_look: "`show lag <id> lacp-partner` shows the partner's system-id, key and port state — a key or system-id that differs from the expectation explains a member that never selects, without needing the far-end box."
+    sources:
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-l-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-lag.html"
+
+  # ------------------------------------------------------- HARDWARE / ENV ---
+  - id: sros-card-mda-failure
+    class: hardware-fault
+    title: "IOM / MDA / XMA failure or repeated soft reset"
+    symptoms:
+      - "Card or MDA in a failed / booting state in `show card state`"
+      - "All ports on one MDA go down simultaneously"
+      - "Chip parity, memory or datapath events logged for the slot"
+    log_signatures:
+      - "tmnxEqCardFailure"
+      - "tmnxEqCardSoftResetAlarm"
+      - "tmnxEqCardPChipError"
+      - "tmnxEqCardPChipMemoryEvent"
+      - "tmnxEqCardQChipBufMemoryEvent"
+      - "tmnxEqCardTChipParityEvent"
+      - "tmnxEqCardChipIfDownEvent"
+      - "tmnxEqDataPathFailureProtImpact"
+      - "tmnxEqCardRemoved"
+      - "tmnxEqCardInserted"
+    likely_causes:
+      - "Genuine hardware failure requiring RMA"
+      - "Card not fully seated, or backplane/EPROM fault"
+      - "Software/firmware mismatch after an upgrade"
+      - "Thermal event forcing a card reset"
+    commands:
+      - {cmd: "show card state", intent: platform.cards, params: []}
+      - {cmd: "show card {slot-number} detail", intent: platform.card.detail, params: [slot-number]}
+      - {cmd: "show mda {slot}/{mda} detail", intent: platform.mda, params: [slot, mda]}
+      - {cmd: "show chassis detail", intent: platform.chassis, params: []}
+      - {cmd: "show system alarms", intent: platform.alarms, params: []}
+      - {cmd: "show card {slot-number} fp {fp-number} fwd-engine drop-reason statistics", intent: platform.forwarding.drops, params: [slot-number, fp-number]}
+      - {cmd: "admin tech-support {file-url}", intent: support.techsupport, params: [file-url], writes_file: true}
+    tac_first_look: "Nokia TAC will want `show card state` plus the tech-support bundle taken while the card is still in the failed state — capture both before any reseat, because the failure evidence is lost on reset."
+    sources:
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-chassis.html"
+
+  - id: sros-environment-fan-power-temperature
+    class: hardware-fault
+    title: "Environmental alarm — fan, power supply, or over-temperature"
+    symptoms:
+      - "Fan failure or power-supply failure alarm active"
+      - "Chassis temperature above threshold"
+      - "Power capacity exceeded / safety-level alarms"
+    log_signatures:
+      - "tmnxEqPhysChassisFanFailure"
+      - "tmnxEqPhysChassisFanFailureClear"
+      - "tmnxEnvTempTooHigh"
+      - "tmnxEqPhysChassPowerSupAcFail"
+      - "tmnxEqPhysChassPowerSupDcFail"
+      - "tmnxEqPhysChassPowerSupOvrTmp"
+      - "tmnxEqPowerCapacityExceeded"
+      - "tmnxEqPowerOverloadState"
+      - "tChassisAirflowDirMismatch"
+      - "tChassisPowerSupplyMismatch"
+    likely_causes:
+      - "Failed fan tray or blocked airflow / filter"
+      - "Feed loss or failed PSU module"
+      - "Provisioned power draw exceeding installed capacity"
+      - "Mixed airflow-direction modules in one chassis"
+    commands:
+      - {cmd: "show chassis environment power-supply", intent: platform.environment, params: []}
+      - {cmd: "show chassis detail", intent: platform.chassis, params: []}
+      - {cmd: "show chassis power-management utilization", intent: platform.power, params: []}
+      - {cmd: "show chassis power-management requirements", intent: platform.power.requirements, params: []}
+      - {cmd: "show system alarms", intent: platform.alarms, params: []}
+      - {cmd: "show system thresholds", intent: platform.thresholds, params: []}
+      - {cmd: "show card state", intent: platform.cards, params: []}
+    tac_first_look: "Treat a temperature alarm as urgent even if traffic looks fine — SR OS will reset cards to protect them, and the power-management utilization output tells you whether a PSU loss has already put the chassis over budget."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-u-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-chassis.html"
+
+  # ----------------------------------------------------------- CPU / MEM ---
+  - id: sros-high-cpu
+    class: high-cpu
+    title: "High CPM CPU utilization"
+    symptoms:
+      - "CLI sluggish; protocol keepalives missed"
+      - "One task dominating `show system cpu`"
+      - "CPU-protection violators appearing"
+    log_signatures:
+      - "tmnxCpmProtViolIf"
+      - "tmnxCpmProtDefPolModified"
+      - "tmnxStateChange"
+    likely_causes:
+      - "Control-plane flood (ARP/ICMP/BGP churn) punting to the CPM"
+      - "A protocol re-converging continuously (BGP or IGP flap)"
+      - "Excessive SNMP/telemetry polling"
+      - "A management script or logging loop"
+    commands:
+      - {cmd: "show system cpu sample-period {seconds}", intent: system.cpu, params: [seconds]}
+      - {cmd: "show card {slot-number} cpu sample-period {seconds}", intent: system.cpu.card, params: [slot-number, seconds]}
+      - {cmd: "show system security cpu-protection violators", intent: security.cpuprotect, params: []}
+      - {cmd: "show system security cpu-protection excessive-sources", intent: security.cpuprotect.sources, params: []}
+      - {cmd: "show system connections detail", intent: system.connections, params: []}
+      - {cmd: "show snmp counters", intent: snmp.counters, params: []}
+      - {cmd: "show router bgp summary", intent: bgp.summary, params: []}
+    tac_first_look: "Take two `show system cpu sample-period` snapshots a minute apart; a task that is consistently top (rather than momentarily) plus a matching CPU-protection violator names the traffic class to rate-limit."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html"
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.basic/html/system_show_cli.html"
+
+  - id: sros-high-memory
+    class: high-memory
+    title: "Memory pressure / allocation failures"
+    symptoms:
+      - "Memory pools near exhaustion"
+      - "Module allocation failures logged"
+      - "Protocols shedding state (IS-IS overload, BGP peer memory errors)"
+    log_signatures:
+      - "tmnxModuleMallocFailed"
+      - "bgpNoMemoryPeer"
+      - "tmnxIsisDatabaseOverload"
+      - "tmnxVRtrFibOccupancyThreshold"
+      - "tmnxVRtrFibVPNOccupancyThreshold"
+    likely_causes:
+      - "Route/FIB scale beyond the platform's provisioned capacity"
+      - "A leak in a specific process (needs a tech-support bundle)"
+      - "Very large FDB or subscriber-host tables"
+      - "Excessive log/accounting retention in memory"
+    commands:
+      - {cmd: "show system memory-pools", intent: system.memory, params: []}
+      - {cmd: "show card {slot-number} memory-pools", intent: system.memory.card, params: [slot-number]}
+      - {cmd: "show router fib {slot-number} summary", intent: route.fib.summary, params: [slot-number]}
+      - {cmd: "show service system fdb-usage", intent: service.fdb.usage, params: []}
+      - {cmd: "show router bgp summary all", intent: bgp.summary, params: []}
+      - {cmd: "admin tech-support {file-url}", intent: support.techsupport, params: [file-url], writes_file: true}
+    tac_first_look: "Record which pool is growing and whether it tracks route/FDB scale; a pool that grows with no matching scale increase is the leak signature TAC needs the tech-support bundle for."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-system.html"
+
+  # ------------------------------------------------------------------ QoS ---
+  - id: sros-qos-queue-discards
+    class: qos-drops
+    title: "Traffic discarded in QoS queues / buffer pools"
+    symptoms:
+      - "Queue discard counters rising on a SAP, port or network queue"
+      - "Latency-sensitive traffic degrading under load"
+      - "Buffer pool depth alarms"
+    log_signatures:
+      - "tmnxResvCbsPoolThreshAmber"
+      - "tmnxHwAggShpSchedOperColorRed"
+      - "tmnxHwAggShpSchedOperColorAmber"
+    likely_causes:
+      - "Offered rate above the configured PIR/CIR for the queue"
+      - "Buffer pool (CBS/MBS) too small for the burst profile"
+      - "Wrong forwarding class mapping sending traffic to the wrong queue"
+      - "Port-level scheduler or aggregate rate throttling below expectation"
+    commands:
+      - {cmd: "show service id {service-id} sap {sap-id} stats", intent: service.sap.stats, params: [service-id, sap-id]}
+      - {cmd: "show service id {service-id} sap {sap-id} qos", intent: service.sap.qos, params: [service-id, sap-id]}
+      - {cmd: "show port {port-id} port-queues queue-depth", intent: qos.queue.depth, params: [port-id]}
+      - {cmd: "show port {port-id} queue-group summary", intent: qos.queuegroup, params: [port-id]}
+      - {cmd: "show pools {mda-id}", intent: qos.pools, params: [mda-id]}
+      - {cmd: "show port {port-id} statistics", intent: interface.statistics, params: [port-id]}
+      - {cmd: "show card {slot-number} fp {fp-number} fwd-engine drop-reason statistics", intent: platform.forwarding.drops, params: [slot-number, fp-number]}
+    tac_first_look: "Separate policy drops from resource drops: SAP/queue discards with healthy pools mean the shaper is doing its job, while pool exhaustion in `show pools` is a buffer-sizing problem."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html"
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html"
+
+  # ------------------------------------------------------------------ BFD ---
+  - id: sros-bfd-session-down
+    class: bfd
+    proposed_class: true
+    title: "BFD session down, taking protocols with it"
+    symptoms:
+      - "BFD session in Down state while the link looks up"
+      - "IGP/BGP adjacency torn down immediately after a BFD event"
+      - "Sessions bouncing under load"
+    log_signatures:
+      - "tmnxVRtrNgBfdSessDown"
+      - "tmnxVRtrNgBfdSessUp"
+      - "tmnxVRtrBfdSessExtDown"
+      - "tmnxVRtrNgBfdNoCpmNpResources"
+      - "tmnxVRtrBfdMaxSessionOnSlot"
+      - "tmnxOspfAdjBfdSessionSetupFail"
+      - "tmnxIsisAdjBfdSessionSetupFail"
+      - "tmnxBfdOnLspSessDown"
+    likely_causes:
+      - "Timers too aggressive for the platform or the path"
+      - "BFD session limit / NP resource exhaustion on the slot"
+      - "Multiplier and interval mismatched between the two ends"
+      - "Congestion or CPU load delaying BFD control packets"
+    commands:
+      - {cmd: "show router bfd session summary", intent: bfd.session.summary, params: []}
+      - {cmd: "show router bfd session detail", intent: bfd.session, params: []}
+      - {cmd: "show router bfd interface detail", intent: bfd.interface, params: []}
+      - {cmd: "show router bfd resources", intent: bfd.resources, params: []}
+      - {cmd: "show router bfd bfd-template", intent: bfd.template, params: []}
+      - {cmd: "show system cpu sample-period {seconds}", intent: system.cpu, params: [seconds]}
+    tac_first_look: "Check `show router bfd resources` before blaming the path — a slot that has hit its session or NP-resource limit fails new sessions silently and looks exactly like a link problem."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-i-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-vrtr.html"
+
+  # --------------------------------------------------------- CONFIG / OPS ---
+  - id: sros-config-change-unexpected
+    class: config-change
+    title: "Unexpected configuration change / need to identify what changed"
+    symptoms:
+      - "Behaviour changed with no planned work"
+      - "Config create/modify/delete events in the log"
+      - "Rollback checkpoints present from an unknown session"
+    log_signatures:
+      - "tmnxConfigModify"
+      - "tmnxConfigCreate"
+      - "tmnxConfigDelete"
+      - "tmnxConfigConflict"
+      - "cli_config_io"
+      - "cli_user_io"
+      - "ssiSaveConfigSucceeded"
+      - "tmnxSysRollbackDeleteStarted"
+    likely_causes:
+      - "An operator or automation session changed the running config"
+      - "A rollback or config restore was applied"
+      - "A script-control policy fired"
+      - "Standby CPM synchronised a config from the active"
+    commands:
+      - {cmd: "admin display-config", intent: config.running, params: []}
+      - {cmd: "admin display-config detail", intent: config.running.full, params: []}
+      - {cmd: "show system rollback", intent: config.rollback, params: []}
+      - {cmd: "show users", intent: aaa.sessions, params: []}
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+      - {cmd: "show system script-control", intent: config.scriptcontrol, params: []}
+      - {cmd: "show redundancy synchronization", intent: platform.redundancy, params: []}
+    tac_first_look: "READ-ONLY only: `admin display-config` for the current state and `show system rollback` for the checkpoint list. Never run `admin save`, `rollback`, or any configure command while gathering evidence — you would overwrite the thing you are trying to explain."
+    sources:
+      - "https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-system.html"
+
+  - id: sros-ntp-unsynchronized
+    class: ntp-sync
+    proposed_class: true
+    title: "NTP not synchronised / clock drifting"
+    symptoms:
+      - "No NTP server reachable or all servers rejected"
+      - "Log timestamps inconsistent with other devices"
+      - "Certificate or authentication operations failing on time skew"
+    log_signatures:
+      - "tmnxNtpNoServersAvail"
+      - "tmnxNtpServersAvail"
+      - "tmnxNtpAuthMismatch"
+      - "tmnxNtpOperChange"
+      - "tmnxNtpServerChange"
+      - "sntpTimeDiffExceedsThreshold"
+      - "stiDateAndTimeChanged"
+    likely_causes:
+      - "Server unreachable from the management VRF / wrong router-instance"
+      - "NTP authentication key mismatch"
+      - "Server stratum unacceptable or marked false-ticker"
+      - "Firewall blocking UDP 123"
+    commands:
+      - {cmd: "show system ntp all detail", intent: ntp.status, params: []}
+      - {cmd: "show system ntp servers detail", intent: ntp.servers, params: []}
+      - {cmd: "show system ntp peers detail", intent: ntp.peers, params: []}
+      - {cmd: "show system sntp", intent: ntp.sntp, params: []}
+      - {cmd: "show system time", intent: platform.time, params: []}
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+    tac_first_look: "Confirm which routing instance the NTP servers are configured in — a server that is reachable from Base but configured against the management instance (or the reverse) is the most common SR OS NTP fault."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html"
+      - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.basic/html/system_show_cli.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ntp.html"
+
+  - id: sros-snmp-unreachable
+    class: snmp
+    proposed_class: true
+    title: "SNMP polling failing / traps not arriving at the NMS"
+    symptoms:
+      - "NMS reports the device as unreachable while SSH works"
+      - "SNMP authentication failures logged"
+      - "Traps stop arriving after a config or ACL change"
+    log_signatures:
+      - "authenticationFailure"
+      - "host_snmp_attempts"
+      - "tmnxSnmpdStateChange"
+      - "coldStart"
+      - "warmStart"
+    likely_causes:
+      - "Community / USM user or view mismatch"
+      - "management-access-filter or SNMP src-access-list blocking the NMS"
+      - "snmp-trap-group destination wrong or unreachable"
+      - "SNMP daemon administratively shut down"
+    commands:
+      - {cmd: "show system security snmp community", intent: snmp.community, params: []}
+      - {cmd: "show system security snmp src-access-list", intent: snmp.acl, params: []}
+      - {cmd: "show system security view", intent: snmp.views, params: []}
+      - {cmd: "show system security management-access-filter", intent: security.maf, params: []}
+      - {cmd: "show snmp counters", intent: snmp.counters, params: []}
+      - {cmd: "show log snmp-trap-group", intent: snmp.trapgroup, params: []}
+      - {cmd: "show system connections detail", intent: system.connections, params: []}
+    tac_first_look: "`show snmp counters` distinguishes 'packets never arrived' from 'arrived and were rejected'; a rising bad-community/auth counter points straight at the community or access-list."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-snmp.html"
+
+  - id: sros-aaa-login-failures
+    class: aaa-auth
+    proposed_class: true
+    title: "Operator login failing — TACACS+ / RADIUS / local authentication"
+    symptoms:
+      - "Login rejected or extremely slow, then falls back to local"
+      - "Repeated failed-login events in the security log"
+      - "Users authenticate but land in the wrong profile"
+    log_signatures:
+      - "cli_user_login_failed"
+      - "cli_user_login_max_attempts"
+      - "ssh_user_login_failed"
+      - "ssh_user_login_max_attempts"
+      - "netconf_user_login_failed"
+      - "tacplusOperStatusChange"
+      - "tacplusInetSrvrOperStatusChange"
+      - "radiusOperStatusChange"
+      - "radiusInetServerOperStatusChange"
+      - "radiusUserProfileInvalid"
+      - "radiusSystemIpAddrNotSet"
+      - "mafEntryMatch"
+    likely_causes:
+      - "AAA server unreachable from the configured routing instance"
+      - "Shared secret mismatch"
+      - "Authentication order puts an unreachable server first, causing timeouts"
+      - "Returned profile/VSA does not map to a local profile"
+      - "management-access-filter blocking the client"
+    commands:
+      - {cmd: "show system security authentication statistics", intent: aaa.statistics, params: []}
+      - {cmd: "show system security user {user-id} detail", intent: aaa.user, params: [user-id]}
+      - {cmd: "show system security user {user-id} lockout", intent: aaa.lockout, params: [user-id]}
+      - {cmd: "show system security profile", intent: aaa.profile, params: []}
+      - {cmd: "show system security management-access-filter", intent: security.maf, params: []}
+      - {cmd: "show system security password-options", intent: aaa.passwordpolicy, params: []}
+      - {cmd: "show users", intent: aaa.sessions, params: []}
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+    tac_first_look: "`show system security authentication statistics` gives per-server accept/reject/timeout counts — timeouts mean reachability, rejects mean secret or credentials. Check the lockout state before assuming the password is wrong."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-u-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/books/log-events/log-security.html"
+
+  - id: sros-logging-not-delivered
+    class: generic
+    title: "Events not reaching syslog / log file, or the wrong events suppressed"
+    symptoms:
+      - "Expected events absent from the remote collector"
+      - "Local log file rolling faster than expected, losing history"
+      - "An event class was suppressed and nobody noticed"
+    log_signatures:
+      - "persistencyFileSysThresRaised"
+      - "persistencyFileSysThresCleared"
+      - "tmnxEhsHandlerInvoked"
+      - "tmnxEhsDroppedByMinDelay"
+      - "schedActionFailure"
+    likely_causes:
+      - "log-id filter dropping the events before the destination"
+      - "Syslog destination unreachable from the configured routing instance"
+      - "Event-control set to suppress the event class"
+      - "Compact-flash full so the log file cannot be written"
+    commands:
+      - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
+      - {cmd: "show log file-id {log-file-id}", intent: logging.files, params: [log-file-id]}
+      - {cmd: "show log syslog {syslog-id}", intent: logging.syslog, params: [syslog-id]}
+      - {cmd: "show log filter-id", intent: logging.filters, params: []}
+      - {cmd: "show log event-control {application-id}", intent: logging.eventcontrol, params: [application-id]}
+      - {cmd: "show log applications", intent: logging.applications, params: []}
+      - {cmd: "show log event-handling", intent: logging.eventhandling, params: []}
+    tac_first_look: "`show log event-control <application>` shows generated vs dropped counts per event — a high dropped count with a zero delivery count identifies suppression rather than a transport problem."
+    sources:
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-l-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-e-commands.html"
+      - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html"

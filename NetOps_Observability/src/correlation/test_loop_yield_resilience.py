@@ -59,7 +59,7 @@ _YIELD_BUDGET_MS = 50.0
 # Growing the DEVICE COUNT is the axis that keeps the per-device shape — the
 # pair of signals, their 1 s gap, the fold to one object — exactly as it is.
 _STORM_DEVICES = 700
-_STORM_MAX_DEVICES = 2_500     # ~11 s of grind on the 4-core lab box; the cap
+_STORM_MAX_DEVICES = 8_000     # ~11 s of grind at 2 500 on the 4-core lab box; a GitHub-hosted runner outran 2 500 (1.055 s vs a 1.132 s floor, 2026-09-05) so the cap
 _DET_DEVICES = 300     # equality needs no scale; keep the determinism run quick
 
 # The un-yielded baseline must freeze the heartbeat proxy for at least this long

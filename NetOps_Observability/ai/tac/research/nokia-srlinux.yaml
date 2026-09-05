@@ -1,0 +1,1445 @@
+vendor: nokia-srlinux
+# Nokia SR Linux (SR Linux CLI, `nokia/srlinux` dialect).
+# Every command below appears literally in one of the `sources` pages that was
+# fetched while building this file. Read-only only: `show`, `info`, `info from
+# state`, `info with-context`, `watch`, plus the sanctioned `tech-support`
+# bundle (which writes a file on the device and is flagged as such).
+# Release baseline: SR Linux R26.7 (current at time of research, 2026-09-05);
+# learn.srlinux.dev examples are release-agnostic.
+sources:
+  - {title: "SR Linux documentation portal (release index)", url: "https://documentation.nokia.com/srlinux/"}
+  - {title: "SR Linux R26.7 documentation home", url: "https://documentation.nokia.com/srlinux/26-7/index.html"}
+  - {title: "SR Linux R26.7 - Monitor and troubleshoot", url: "https://documentation.nokia.com/srlinux/26-7/html/product/Monitor.html"}
+  - {title: "SR Linux System Management Guide - CLI interface", url: "https://documentation.nokia.com/srlinux/26-3/books/system-mgmt/cli-interface.html"}
+  - {title: "SR Linux R26.7 - General and operational commands", url: "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html"}
+  - {title: "SR Linux R26.7 - Pre-defined show reports", url: "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"}
+  - {title: "Learn SR Linux - Show commands index", url: "https://learn.srlinux.dev/cli/show-commands/"}
+  - {title: "Learn SR Linux - Troubleshooting BGP", url: "https://learn.srlinux.dev/cli/show-commands/bgp/"}
+  - {title: "Learn SR Linux - OSPF show commands", url: "https://learn.srlinux.dev/cli/show-commands/ospf/"}
+  - {title: "Learn SR Linux - IS-IS show commands", url: "https://learn.srlinux.dev/cli/show-commands/is-is/"}
+  - {title: "Learn SR Linux - Interface show commands", url: "https://learn.srlinux.dev/cli/show-commands/interface/"}
+  - {title: "Learn SR Linux - LAG show commands", url: "https://learn.srlinux.dev/cli/show-commands/lag/"}
+  - {title: "Learn SR Linux - EVPN show commands", url: "https://learn.srlinux.dev/cli/show-commands/evpn/"}
+  - {title: "Learn SR Linux - Network-instance show commands", url: "https://learn.srlinux.dev/cli/show-commands/network-instance/"}
+  - {title: "Learn SR Linux - ACL show commands", url: "https://learn.srlinux.dev/cli/show-commands/acl/"}
+  - {title: "Learn SR Linux - CPM filter show commands", url: "https://learn.srlinux.dev/cli/show-commands/cpm-filter/"}
+  - {title: "Learn SR Linux - DHCP relay show commands", url: "https://learn.srlinux.dev/cli/show-commands/dhcp-relay/"}
+  - {title: "Learn SR Linux - TACACS show commands", url: "https://learn.srlinux.dev/cli/show-commands/tacacs/"}
+  - {title: "Learn SR Linux - Chassis and environment show commands", url: "https://learn.srlinux.dev/cli/show-commands/chassis-and-env/"}
+  - {title: "Learn SR Linux - Getting started with the CLI", url: "https://learn.srlinux.dev/get-started/cli/"}
+  - {title: "Learn SR Linux - EVPN multi-homing verification", url: "https://learn.srlinux.dev/tutorials/evpn-mh/basics/verify/"}
+  - {title: "Learn SR Linux - L2 EVPN service", url: "https://learn.srlinux.dev/tutorials/l2evpn/evpn/"}
+  - {title: "Learn SR Linux - L2 EVPN fabric (underlay)", url: "https://learn.srlinux.dev/tutorials/l2evpn/fabric/"}
+  - {title: "Learn SR Linux - L3 EVPN (RT5) instance", url: "https://learn.srlinux.dev/tutorials/l3evpn/rt5-only/l3evpn/"}
+  - {title: "Learn SR Linux - MPLS LDP tutorial", url: "https://learn.srlinux.dev/tutorials/mpls/mpls-ldp/ldp/"}
+  - {title: "SR Linux R26.7 Interfaces Guide - Displaying interface status", url: "https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html"}
+  - {title: "SR Linux R26.7 Interfaces Guide - Displaying interface statistics", url: "https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-statistics.html"}
+  - {title: "SR Linux R26.7 Interfaces Guide - MTU", url: "https://documentation.nokia.com/srlinux/26-7/books/interfaces/mtu.html"}
+  - {title: "SR Linux R26.7 Interfaces Guide - LAG", url: "https://documentation.nokia.com/srlinux/26-7/books/interfaces/lag.html"}
+  - {title: "SR Linux R26.7 Interfaces Guide - LLDP", url: "https://documentation.nokia.com/srlinux/26-7/books/interfaces/lldp.html"}
+  - {title: "SR Linux R26.7 Interfaces Guide - IPv4 ARP and IPv6 ND", url: "https://documentation.nokia.com/srlinux/26-7/books/interfaces/ipv4-arp-ipv6-nd.html"}
+  - {title: "SR Linux R26.7 Routing Protocols Guide - BGP", url: "https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/bgp.html"}
+  - {title: "SR Linux R26.7 Routing Protocols Guide - IS-IS", url: "https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/is-is.html"}
+  - {title: "SR Linux R26.7 Config Basics - SR Linux applications", url: "https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html"}
+  - {title: "SR Linux R26.7 Config Basics - Control plane resource monitoring", url: "https://documentation.nokia.com/srlinux/26-7/books/config-basics/cpm-resources.html"}
+  - {title: "SR Linux R26.7 Config Basics - Configuration management", url: "https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html"}
+  - {title: "SR Linux R26.7 Config Basics - System management", url: "https://documentation.nokia.com/srlinux/26-7/books/config-basics/system-management.html"}
+  - {title: "SR Linux R26.7 Config Basics - Securing access", url: "https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html"}
+  - {title: "SR Linux R26.7 Config Basics - Management servers", url: "https://documentation.nokia.com/srlinux/26-7/books/config-basics/management-servers.html"}
+  - {title: "SR Linux R26.7 Config Basics - Logging", url: "https://documentation.nokia.com/srlinux/26-7/books/config-basics/logg.html"}
+  - {title: "SR Linux R26.7 QoS Guide - Displaying QoS statistics", url: "https://documentation.nokia.com/srlinux/26-7/books/qos/display-qos-statistics.html"}
+  - {title: "SR Linux R26.7 QoS Guide - Buffer utilization display", url: "https://documentation.nokia.com/srlinux/26-7/books/qos/buffer-utilization-display.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - bgp", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - ospf", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - isis", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-isis.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - lag", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lag.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - chassis", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - platform", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-platform.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - evpn", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - bridgetable", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bridgetable.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - arpnd", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-arpnd.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - aaa", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-aaa.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - ldp", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ldp.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - dhcp", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-dhcp.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - qos", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-qos.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - acl", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-acl.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - linux", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - mgmt", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-mgmt.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - netinst", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-netinst.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - lldp", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lldp.html"}
+  - {title: "SR Linux R26.7 Log Events Guide - sync", url: "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-sync.html"}
+
+tac_baseline:
+  commands:
+    - {cmd: "show version", intent: platform.version, params: []}
+    - {cmd: "info from state /system information", intent: platform.system-info, params: []}
+    - {cmd: "show platform", intent: platform.components, params: []}
+    - {cmd: "show platform chassis", intent: platform.chassis, params: []}
+    - {cmd: "show platform environment", intent: platform.environment, params: []}
+    - {cmd: "show platform resource-monitoring", intent: platform.resource-monitoring, params: []}
+    - {cmd: "show system alarms", intent: system.alarms, params: []}
+    - {cmd: "show system application", intent: system.processes, params: []}
+    - {cmd: "show interface brief", intent: interface.brief, params: []}
+    - {cmd: "show network-instance summary", intent: vrf.summary, params: []}
+    - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    - {cmd: "info", intent: config.running, params: []}
+    - {cmd: "tech-support", intent: support.techsupport, params: [], writes_file: true}
+    - {cmd: "tech-support exclude-binaries", intent: support.techsupport.no-binaries, params: [], writes_file: true}
+  notes: >-
+    Nokia TAC opens almost every SR Linux case with the tech-support bundle plus
+    `show version` for the exact build. `tech-support` is a global CLI command
+    (usable from any mode, not under `tools`); it pauses ~5 s while the
+    applications dump their reports and then WRITES A ZIP ON THE DEVICE under
+    /tmp, e.g. "/tmp/admintech-report-2019_06_19_20_26_05.zip" (newer builds name
+    it /tmp/tech-support-<timestamp>-<hostname>.zip). Because it lands in /tmp
+    the bundle competes with device disk space - check `show platform
+    resource-monitoring` / the partitionUsage* log events first on a box that is
+    already tight on disk, and copy the archive off promptly. `tech-support
+    exclude-binaries` produces a smaller archive that omits IDB database content,
+    application data and other proprietary binary content; use it when the link
+    to the device is slow or when the customer needs to review the contents
+    before shipping. Everything else in this baseline is a plain read: `show
+    version` gives hostname/chassis/serial/software version/build/boot time,
+    `show platform environment` gives per-module oper state and temperature,
+    `show system application` shows every SR Linux application (bgp_mgr,
+    isis_mgr, chassis_mgr, aaa_mgr, ...) and whether it is running, and `show
+    system logging file messages` renders the on-box message log that TAC will
+    correlate against the Log Events Guide identifiers used throughout this file.
+  sources:
+    - "https://documentation.nokia.com/srlinux/26-3/books/system-mgmt/cli-interface.html"
+    - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html"
+    - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+    - "https://learn.srlinux.dev/cli/show-commands/chassis-and-env/"
+    - "https://learn.srlinux.dev/get-started/cli/"
+
+issues:
+  # ------------------------------------------------------------------ BGP ----
+  - id: srl-bgp-session-down
+    class: bgp-session
+    title: "BGP session will not reach ESTABLISHED (stuck in Active/Connect/OpenSent)"
+    symptoms:
+      - "Peer shows a non-established state in the BGP neighbor summary table"
+      - "Underlay or overlay prefixes disappear from the route table on one side only"
+      - "Session comes up briefly and drops back to a lower state"
+    log_signatures:
+      - "bgpNeighborBackwardTransition"
+      - "bgpNeighborClosedTCPConn"
+      - "bgpNeighborNoOpenReceived"
+      - "bgpNeighborUnknownRemoteIP"
+      - "bgpNeighborInvalidLocalIP"
+      - "bgpNeighborHoldTimeExpired"
+    likely_causes:
+      - "Peer address / local-address mismatch, or the session sourced from the wrong network-instance"
+      - "Remote AS or router-id mismatch, or the peer is not configured for this source IP"
+      - "Underlay reachability to the peer address is missing (no route / interface down)"
+      - "TCP-MD5 or transport authentication mismatch"
+      - "Peer is administratively disabled or a filter/CPM policy is dropping TCP/179"
+    commands:
+      - {cmd: "show network-instance {ni} protocols bgp summary", intent: bgp.summary, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols bgp neighbor", intent: bgp.neighbors, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols bgp neighbor {peer} detail", intent: bgp.neighbor.detail, params: [ni, peer]}
+      - {cmd: "show network-instance {ni} route-table ipv4-unicast prefix {prefix} detail", intent: route.prefix, params: [ni, prefix]}
+      - {cmd: "show network-instance {ni} interfaces", intent: vrf.interfaces, params: [ni]}
+      - {cmd: "show acl cpm-filter ipv4-filter", intent: acl.cpm-filter, params: []}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "The neighbor detail output is opened first - it carries the session state, the TCP connection details (local/remote address and port), the negotiated hold time and the last notification. TAC compares the local-address and peer-address it reports against the route-table entry for the peer address to separate 'no TCP path' from 'TCP up but BGP rejected'."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/bgp/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html"
+      - "https://learn.srlinux.dev/cli/show-commands/network-instance/"
+      - "https://learn.srlinux.dev/tutorials/mpls/mpls-ldp/ldp/"
+
+  - id: srl-bgp-session-flapping
+    class: bgp-instability
+    title: "BGP session flapping / repeated backward transitions"
+    symptoms:
+      - "Neighbor uptime resets every few minutes"
+      - "Route churn in the fabric, transient blackholing during reconvergence"
+      - "Session drops correlate with interface or LAG member events"
+    log_signatures:
+      - "bgpNeighborBackwardTransition"
+      - "bgpNeighborEstablished"
+      - "bgpNeighborHoldTimeExpired"
+      - "bgpNotificationReceivedFromNeighbor"
+      - "bgpNotificationSentToNeighbor"
+      - "bgpNeighborGRHelpingStarted"
+      - "bgpNeighborGRHelpingStopped"
+    likely_causes:
+      - "Underlying physical link or LAG member instability under the session"
+      - "Hold timer expiry caused by control-plane load or queue drops on the CPM path"
+      - "Peer sending NOTIFICATION on malformed updates or capability renegotiation"
+      - "MTU / fragmentation problem on the transport path"
+    commands:
+      - {cmd: "show network-instance {ni} protocols bgp neighbor {peer} detail", intent: bgp.neighbor.detail, params: [ni, peer]}
+      - {cmd: "info from state network-instance {ni} protocols bgp statistics", intent: bgp.statistics, params: [ni]}
+      - {cmd: "info from state network-instance {ni} protocols bgp graceful-restart", intent: bgp.graceful-restart, params: [ni]}
+      - {cmd: "show interface {intf} detail", intent: interface.detail, params: [intf]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+      - {cmd: "watch interval 10 info from state interface * statistics", intent: interface.statistics.watch, params: []}
+    tac_first_look: "TAC reads the neighbor detail for the last-notification code/subcode and the message counters, then walks the message log for the bgpNeighborBackwardTransition / bgpNeighborEstablished pairs to get the exact flap cadence, and compares that cadence against portDown/lagMemberOperDown timestamps on the transport interface."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/bgp/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/bgp.html"
+      - "https://documentation.nokia.com/srlinux/26-3/books/system-mgmt/cli-interface.html"
+
+  - id: srl-bgp-prefix-limit-exceeded
+    class: bgp-session
+    title: "BGP peer torn down or damped by the received prefix limit"
+    symptoms:
+      - "Session drops shortly after the peer starts advertising a full table"
+      - "Warning raised at a percentage threshold before the session goes down"
+      - "Only one address family is affected"
+    log_signatures:
+      - "bgpNeighborPrefixLimitReached"
+      - "bgpNeighborPrefixLimitThresholdReached"
+      - "bgpLowMemory"
+    likely_causes:
+      - "Peer leaked more prefixes than the configured per-AFI/SAFI limit"
+      - "Import policy stopped filtering, so the post-policy count jumped"
+      - "Limit configured too tightly for the customer's real table size"
+    commands:
+      - {cmd: "show network-instance {ni} protocols bgp neighbor {peer} detail", intent: bgp.neighbor.detail, params: [ni, peer]}
+      - {cmd: "info from state network-instance {ni} protocols bgp neighbor afi-safi", intent: bgp.afi-safi.state, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols bgp neighbor {peer} received-routes ipv4", intent: bgp.neighbor.received-routes, params: [ni, peer]}
+      - {cmd: "show network-instance {ni} protocols bgp routes ipv4 summary", intent: bgp.routes.summary, params: [ni]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "The afi-safi state under the neighbor is opened first: it carries the received/accepted counters and the suppressed-routes count next to the configured limit, which immediately says whether the peer over-advertised or the local import policy stopped filtering."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/bgp.html"
+      - "https://learn.srlinux.dev/cli/show-commands/bgp/"
+
+  - id: srl-bgp-route-missing-from-peer
+    class: bgp-route-missing
+    title: "Prefix missing across a BGP peering - not received, or not advertised"
+    symptoms:
+      - "Destination unreachable from this device but reachable from its neighbour"
+      - "Prefix visible in the peer's advertised routes but not in the local RIB"
+      - "Route present in the BGP RIB but not installed in the route table"
+      - "The peer reports it never receives a prefix this device owns"
+    log_signatures:
+      - "bgpNLRIInvalid"
+      - "bgpPathAttributeDiscarded"
+      - "bgpPathAttributeMalformed"
+      - "bgpRouteWithdrawnDueToError"
+      - "bgpUpdateInvalid"
+    likely_causes:
+      - "Import policy rejecting the prefix (pre-policy present, post-policy absent)"
+      - "Next hop unresolvable in the local route table"
+      - "Malformed or discarded path attribute causing the route to be treated as withdrawn"
+      - "Prefix never advertised by the peer (problem is on the remote side)"
+      - "Better route from another protocol wins on preference"
+      - "Export policy on this device suppressing the prefix towards the peer"
+    commands:
+      - {cmd: "show network-instance {ni} protocols bgp neighbor {peer} received-routes ipv4", intent: bgp.neighbor.received-routes, params: [ni, peer]}
+      - {cmd: "show network-instance {ni} protocols bgp routes ipv4 summary", intent: bgp.routes.summary, params: [ni]}
+      - {cmd: "show network-instance {ni} route-table ipv4-unicast prefix {prefix} detail", intent: route.prefix, params: [ni, prefix]}
+      - {cmd: "show network-instance {ni} route-table summary", intent: route.table.summary, params: [ni]}
+      - {cmd: "info from state network-instance {ni} bgp-rib afi-safi ipv4-unicast ipv4-unicast rib-in-out rib-in-post route", intent: bgp.rib.in-post, params: [ni]}
+      - {cmd: "info from state network-instance {ni} bgp-rib afi-safi ipv4-unicast ipv4-unicast local-rib route", intent: bgp.rib.local, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols bgp neighbor {peer} advertised-routes ipv4", intent: bgp.neighbor.advertised-routes, params: [ni, peer]}
+    tac_first_look: "TAC compares three layers in order - what the peer sent (received-routes), what survived import policy (rib-in-post), and what won best-path and got installed (local-rib / route-table prefix detail). The first layer where the prefix disappears names the culprit."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/bgp/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/bgp.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html"
+      - "https://learn.srlinux.dev/tutorials/mpls/mpls-ldp/ldp/"
+
+  # ----------------------------------------------------------------- OSPF ----
+  - id: srl-ospf-adjacency-stuck
+    class: ospf-adjacency
+    title: "OSPF adjacency does not reach FULL (stuck in Init/2-Way/ExStart)"
+    symptoms:
+      - "Neighbor listed but never leaves a non-FULL state"
+      - "Dead timer counts down and the neighbor is relearned"
+      - "Adjacency forms on one interface of a pair but not the other"
+    log_signatures:
+      - "ospfAdjacencyChange"
+      - "ospfIfStateChange"
+      - "ospIfAuthDataFailure"
+    likely_causes:
+      - "Hello/dead interval, area id, or interface-type (broadcast vs point-to-point) mismatch"
+      - "Authentication key or type mismatch on the segment"
+      - "Subnet mask / secondary address mismatch, or passive interface on one side"
+      - "One side is a stub/NSSA and the other is not"
+      - "Router-id collision between the two speakers"
+    commands:
+      - {cmd: "show network-instance {ni} protocols ospf neighbor", intent: ospf.neighbors, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols ospf status", intent: ospf.status, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols ospf statistics", intent: ospf.statistics, params: [ni]}
+      - {cmd: "info with-context network-instance {ni}", intent: vrf.config, params: [ni]}
+      - {cmd: "show network-instance {ni} interfaces", intent: vrf.interfaces, params: [ni]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "TAC opens the OSPF neighbor table for the state and dead-timer, then the OSPF status output for router-id and timers, and finally the statistics counters - a rising authentication-failure or bad-checksum counter converts a vague 'stuck adjacency' into a concrete mismatch."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/ospf/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html"
+      - "https://learn.srlinux.dev/cli/show-commands/network-instance/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/ospf.html"
+
+  - id: srl-ospf-mtu-mismatch
+    class: ospf-adjacency
+    title: "OSPF adjacency stuck in ExStart/Exchange because of an MTU mismatch"
+    symptoms:
+      - "Neighbor oscillates between ExStart and Exchange"
+      - "Database description packets are retransmitted repeatedly"
+      - "Adjacency works for small LSDBs and fails once the database grows"
+    log_signatures:
+      - "ospfNbrMtuMismatch"
+      - "ospfAdjacencyChange"
+    likely_causes:
+      - "Interface or subinterface IP MTU differs between the two routers"
+      - "Subinterface MTU larger than the port MTU (oper-down-reason ip-mtu-too-large)"
+      - "Intervening L2 device with a smaller MTU on the segment"
+    commands:
+      - {cmd: "show network-instance {ni} protocols ospf neighbor", intent: ospf.neighbors, params: [ni]}
+      - {cmd: "show interface {intf} detail", intent: interface.detail, params: [intf]}
+      - {cmd: "info with-context from state interface {intf}", intent: interface.state, params: [intf]}
+      - {cmd: "show interface all", intent: interface.all, params: []}
+      - {cmd: "show network-instance {ni} protocols ospf statistics", intent: ospf.statistics, params: [ni]}
+    tac_first_look: "The ospfNbrMtuMismatch event names the neighbour and subinterface; TAC then reads the interface state on both ends and looks for the documented oper-down-reason values ip-mtu-too-large, ip-mtu-resource-exceeded and port-mtu-resource-exceeded before touching OSPF itself."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/mtu.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-statistics.html"
+      - "https://learn.srlinux.dev/cli/show-commands/ospf/"
+
+  - id: srl-ospf-database-inconsistent
+    class: ospf-database
+    title: "OSPF LSDB inconsistency - missing LSAs, stale sequence numbers or SPF churn"
+    symptoms:
+      - "Routers in the same area disagree about which prefixes exist"
+      - "LSA ages pin near max-age or sequence numbers advance constantly"
+      - "SPF run counter climbs steadily with no topology change"
+    log_signatures:
+      - "ospfAdjacencyChange"
+      - "ospfIfStateChange"
+    likely_causes:
+      - "An unstable adjacency elsewhere in the area is regenerating LSAs"
+      - "Area type mismatch (stub/NSSA) suppressing external or summary LSAs"
+      - "Duplicate router-id causing two routers to overwrite each other's router LSA"
+      - "Filtering or a route-limit stopping a prefix from ever being originated"
+    commands:
+      - {cmd: "show network-instance {ni} protocols ospf database", intent: ospf.database, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols ospf status", intent: ospf.status, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols ospf statistics", intent: ospf.statistics, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols ospf neighbor", intent: ospf.neighbors, params: [ni]}
+      - {cmd: "show network-instance {ni} route-table summary", intent: route.table.summary, params: [ni]}
+    tac_first_look: "TAC takes the database dump from two routers in the same area and diffs LSA type, advertising router, sequence number and age; the SPF-run and LSA counters in the statistics output tell them whether the churn is local or being injected from elsewhere."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/ospf/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html"
+      - "https://learn.srlinux.dev/cli/show-commands/network-instance/"
+
+  - id: srl-ospf-flapping-interface
+    class: ospf-flapping-link
+    title: "OSPF interface flapping, driving repeated adjacency loss"
+    symptoms:
+      - "Interface state transitions logged in bursts"
+      - "Neighbor drops to Down and re-forms within seconds"
+      - "Route table entries for prefixes behind the link churn"
+    log_signatures:
+      - "ospfIfStateChange"
+      - "ospfAdjacencyChange"
+      - "portDown"
+      - "portUp"
+      - "networkInstanceInterfaceDown"
+      - "networkInstanceInterfaceUp"
+    likely_causes:
+      - "Physical layer instability (see optics and CRC issues) under the L3 interface"
+      - "LAG member churn changing the aggregate oper state"
+      - "BFD session bouncing and pulling the protocol down with it"
+      - "Port dampening or hold timers not tuned for a marginal link"
+    commands:
+      - {cmd: "show network-instance {ni} protocols ospf neighbor", intent: ospf.neighbors, params: [ni]}
+      - {cmd: "show interface {intf} detail", intent: interface.detail, params: [intf]}
+      - {cmd: "show network-instance {ni} interfaces", intent: vrf.interfaces, params: [ni]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+      - {cmd: "watch interval 10 info from state interface * statistics", intent: interface.statistics.watch, params: []}
+    tac_first_look: "TAC lines up ospfIfStateChange against portDown/portUp and networkInstanceInterfaceDown in the same message log; if the port events lead the OSPF events the case is a physical-layer case and moves to the optics/CRC path."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-netinst.html"
+      - "https://learn.srlinux.dev/cli/show-commands/interface/"
+
+  # ----------------------------------------------------------------- IS-IS ---
+  - id: srl-isis-adjacency-down
+    class: isis-adjacency
+    title: "IS-IS adjacency down or never forming on a fabric link"
+    symptoms:
+      - "Expected neighbour absent from the adjacency table"
+      - "Adjacency state moves to Down and the hold time expires"
+      - "Underlay loopbacks unreachable through that link"
+    log_signatures:
+      - "isisAdjacencyChange"
+      - "isisAdjacencyBfdSessionSetupFailed"
+    likely_causes:
+      - "Level mismatch (L1 vs L2) or interface not enabled for the right level"
+      - "Interface-type mismatch (point-to-point vs broadcast)"
+      - "IPv4/IPv6 address family not enabled on the IS-IS interface"
+      - "BFD session for the adjacency never establishing"
+      - "Underlying port or subinterface operationally down"
+    commands:
+      - {cmd: "show network-instance {ni} protocols isis adjacency", intent: isis.adjacency, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols isis summary", intent: isis.summary, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols isis interface", intent: isis.interfaces, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols isis interface {intf} detail", intent: isis.interface.detail, params: [ni, intf]}
+      - {cmd: "info from state network-instance {ni} protocols isis instance {instance}", intent: isis.instance.state, params: [ni, instance]}
+      - {cmd: "show interface {intf} detail", intent: interface.detail, params: [intf]}
+    tac_first_look: "TAC reads the adjacency table for level, system-id and hold time, then the per-interface detail on both ends to compare level, interface-type and enabled address families - most fabric IS-IS cases are a level or interface-type mismatch, not a transport failure."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/is-is/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/is-is.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-isis.html"
+
+  - id: srl-isis-pdu-mismatch
+    class: isis-adjacency
+    title: "IS-IS PDUs rejected - area, authentication, version or max-area mismatch"
+    symptoms:
+      - "Adjacency never forms even though hellos are seen on the wire"
+      - "Errors logged on every hello interval"
+      - "Only L1 (or only L2) adjacency fails on a dual-level link"
+    log_signatures:
+      - "isisAreaMismatch"
+      - "isisAuthDataFail"
+      - "isisAuthTypeMismatch"
+      - "isisMaxAreaAddressesMismatch"
+      - "isisVersionMismatch"
+    likely_causes:
+      - "Different area addresses configured on the two L1 routers"
+      - "Authentication key or key type (TLV 10) mismatch on the interface or instance"
+      - "Max-area-addresses value differs between the two systems"
+      - "Peer running an unsupported/incompatible IS-IS protocol version"
+    commands:
+      - {cmd: "show network-instance {ni} protocols isis adjacency", intent: isis.adjacency, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols isis summary", intent: isis.summary, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols isis interface {intf} detail", intent: isis.interface.detail, params: [ni, intf]}
+      - {cmd: "info from state network-instance {ni} protocols isis instance {instance}", intent: isis.instance.state, params: [ni, instance]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "The specific log event decides the branch: isisAreaMismatch points at the area address in the instance summary, isisAuthDataFail/isisAuthTypeMismatch at the interface-level key configuration. TAC reads the IS-IS summary on both routers side by side rather than guessing from the adjacency table alone."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-isis.html"
+      - "https://learn.srlinux.dev/cli/show-commands/is-is/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/is-is.html"
+
+  - id: srl-isis-lsp-corruption-purge
+    class: isis-lsp
+    title: "IS-IS LSP purged or corrupted in the link-state database"
+    symptoms:
+      - "Prefixes originated by one system vanish network-wide"
+      - "LSP sequence numbers spike as the originator re-floods"
+      - "Database sizes differ between routers at the same level"
+    log_signatures:
+      - "isisLspPurge"
+      - "isisCorruptedLspDetected"
+    likely_causes:
+      - "Another system purging an LSP it believes is stale"
+      - "Memory or checksum corruption on the LSP in the local database"
+      - "Overload bit or route limit suppressing origination"
+      - "LSP lifetime expiry due to a partitioned flooding topology"
+    commands:
+      - {cmd: "show network-instance {ni} protocols isis database", intent: isis.database, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols isis database {level}", intent: isis.database.level, params: [ni, level]}
+      - {cmd: "show network-instance {ni} protocols isis summary", intent: isis.summary, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols isis adjacency", intent: isis.adjacency, params: [ni]}
+      - {cmd: "show network-instance {ni} route-table summary", intent: route.table.summary, params: [ni]}
+    tac_first_look: "TAC pulls the level-scoped database from every router in the level and compares the LSP-ID, sequence number, checksum and remaining lifetime for the affected system; isisLspPurge names the purge originator, which is usually the actual defective node."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/is-is/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/is-is.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-isis.html"
+
+  # ------------------------------------------------------------ INTERFACES ---
+  - id: srl-interface-crc-errors
+    class: interface-errors
+    title: "Rising CRC / FCS / symbol errors on an Ethernet interface"
+    symptoms:
+      - "Input error and CRC counters climbing on one interface"
+      - "Intermittent packet loss or retransmissions across the link"
+      - "Protocol adjacencies over the link occasionally drop"
+    log_signatures:
+      - "portEtherCrcMonAlarmSet"
+      - "portEtherSymMonAlarmSet"
+      - "portDown"
+      - "transceiverModuleDown"
+    likely_causes:
+      - "Dirty, damaged or badly seated fibre / DAC cable"
+      - "Marginal or failing transceiver on either end"
+      - "Speed/FEC mismatch between the two ports"
+      - "Faulty port on the linecard"
+    commands:
+      - {cmd: "show interface {intf} detail", intent: interface.detail, params: [intf]}
+      - {cmd: "info with-context from state interface {intf}", intent: interface.state, params: [intf]}
+      - {cmd: "show interface all", intent: interface.all, params: []}
+      - {cmd: "show interface detail", intent: interface.detail.all, params: []}
+      - {cmd: "watch interval 10 info from state interface * statistics", intent: interface.statistics.watch, params: []}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "The interface detail output carries both the error counters (frame errors, CRC, FCS) and the transceiver block in one place, so TAC reads it once and immediately knows whether the errors sit next to a marginal optical level. Two samples ten seconds apart via watch establish the error rate rather than the lifetime total - no counter is ever zeroed for this."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/interface/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-statistics.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html"
+
+  - id: srl-interface-oper-down-flap
+    class: link-flap
+    title: "Interface operationally down or flapping with an oper-down-reason"
+    symptoms:
+      - "Interface admin-enabled but oper-state down"
+      - "Repeated up/down transitions in the message log"
+      - "Downstream network-instance interface follows the port down"
+    log_signatures:
+      - "portDown"
+      - "portUp"
+      - "transceiverModuleDown"
+      - "transceiverModuleUp"
+      - "networkInstanceInterfaceDown"
+      - "networkInstanceInterfaceUp"
+    likely_causes:
+      - "No transceiver present, or transceiver not compatible with the configured port speed"
+      - "Far-end port administratively disabled"
+      - "LAG-driven reasons such as lag-admin-disabled or lag-resource-exceeded on member links"
+      - "MTU resource exhaustion (port-mtu-resource-exceeded)"
+      - "Physical cable fault or a dampened / held-down port"
+    commands:
+      - {cmd: "show interface all", intent: interface.all, params: []}
+      - {cmd: "show interface {intf}", intent: interface.status, params: [intf]}
+      - {cmd: "show interface {intf} brief", intent: interface.brief.one, params: [intf]}
+      - {cmd: "show interface {intf} detail", intent: interface.detail, params: [intf]}
+      - {cmd: "info with-context from state interface {intf}", intent: interface.state, params: [intf]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "`show interface all` is the entry point because it prints the down interfaces together with their specific down reason; the portDown log message repeats that reason with a timestamp, which is what TAC correlates against the customer's outage window."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/interface/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/lag.html"
+
+  - id: srl-interface-mtu-too-large
+    class: interface-errors
+    title: "Subinterface down or traffic dropped because of an MTU misconfiguration"
+    symptoms:
+      - "Subinterface oper-down with an MTU-related reason"
+      - "Large frames dropped while small frames pass"
+      - "Protocol adjacency stuck in a database-exchange state over the link"
+    log_signatures:
+      - "platformMtuHighUtilization"
+      - "ospfNbrMtuMismatch"
+      - "networkInstanceInterfaceDown"
+    likely_causes:
+      - "IP MTU plus Ethernet/VLAN overhead exceeds the configured port MTU"
+      - "Only a limited number of distinct MTU values are supported by the datapath (resource exceeded)"
+      - "MTU asymmetry between the two ends of a link"
+      - "Overlay encapsulation (VXLAN/MPLS) overhead not accounted for in the underlay MTU"
+    commands:
+      - {cmd: "show interface all", intent: interface.all, params: []}
+      - {cmd: "show interface {intf} detail", intent: interface.detail, params: [intf]}
+      - {cmd: "info with-context from state interface {intf}", intent: interface.state, params: [intf]}
+      - {cmd: "show network-instance {ni} interfaces", intent: vrf.interfaces, params: [ni]}
+      - {cmd: "show platform resource-monitoring", intent: platform.resource-monitoring, params: []}
+    tac_first_look: "TAC looks for the documented oper-down-reason strings ip-mtu-too-large, ip-mtu-resource-exceeded and port-mtu-resource-exceeded in the interface state, since those distinguish 'you configured it wrong' from 'the datapath ran out of distinct MTU profiles'."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/mtu.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html"
+      - "https://learn.srlinux.dev/cli/show-commands/network-instance/"
+
+  # --------------------------------------------------------------- OPTICS ----
+  - id: srl-optics-power-alarm
+    class: optics
+    title: "Transceiver DOM alarm - Rx/Tx power, laser bias, temperature or voltage out of range"
+    symptoms:
+      - "Link down or erroring with an optical alarm raised on the port"
+      - "Rx power well below the module's low threshold"
+      - "Alarm clears and re-raises as the module warms up"
+    log_signatures:
+      - "transceiverLowInputPowerAlarm"
+      - "transceiverHighInputPowerAlarm"
+      - "transceiverLowOutputPowerAlarm"
+      - "transceiverHighOutputPowerAlarm"
+      - "transceiverLowLaserBiasCurrentAlarm"
+      - "transceiverHighLaserBiasCurrentAlarm"
+      - "transceiverModuleHighTemperatureAlarm"
+      - "transceiverModuleHighVoltageAlarm"
+      - "transceiverModuleDown"
+    likely_causes:
+      - "Dirty or damaged fibre, or excessive attenuation in the span"
+      - "Failing laser (bias current drifting out of range)"
+      - "Wrong optic type for the distance or the far-end optic"
+      - "Module overheating because of a fan or airflow problem in the chassis"
+      - "Unsupported or counterfeit transceiver"
+    commands:
+      - {cmd: "show interface {intf} detail", intent: optics.dom, params: [intf]}
+      - {cmd: "info with-context from state interface {intf}", intent: interface.state, params: [intf]}
+      - {cmd: "show interface detail", intent: interface.detail.all, params: []}
+      - {cmd: "show platform environment", intent: platform.environment, params: []}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "The transceiver and transceiver-channel blocks inside `show interface <name> detail` give form factor, vendor, temperature, voltage and per-lane Rx/Tx power and bias in one output; TAC checks those readings against the module thresholds and against the far-end reading before accepting an RMA."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/interface/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html"
+      - "https://learn.srlinux.dev/cli/show-commands/chassis-and-env/"
+
+  # ------------------------------------------------------------ LAG / LACP ---
+  - id: srl-lag-member-down
+    class: lag-lacp
+    proposed_class: true
+    title: "LAG degraded or down - member link out, min-links not met, LACP not converging"
+    symptoms:
+      - "LAG oper-state down while some member ports are up"
+      - "Aggregate bandwidth lower than expected"
+      - "Traffic polarises onto a subset of members"
+    log_signatures:
+      - "lagDown"
+      - "lagUp"
+      - "lagDownMinLinks"
+      - "lagMemberOperDown"
+      - "lagMemberOperUp"
+      - "lagMemberLinkAdded"
+      - "lagMemberLinkRemoved"
+    likely_causes:
+      - "Member count fell below the configured min-links threshold"
+      - "LACP mode, interval or system-id mismatch with the peer"
+      - "Member ports have different speeds so they cannot aggregate"
+      - "lag-admin-disabled or lag-resource-exceeded on member links"
+      - "Peer configured for static LAG while this side runs LACP"
+    commands:
+      - {cmd: "show lag", intent: lag.summary, params: []}
+      - {cmd: "show lag {lag} detail", intent: lag.detail, params: [lag]}
+      - {cmd: "show lag {lag} lacp-state", intent: lag.lacp.state, params: [lag]}
+      - {cmd: "show lag lacp-statistics", intent: lag.lacp.statistics, params: []}
+      - {cmd: "show lag {lag} member-statistics", intent: lag.member.statistics, params: [lag]}
+      - {cmd: "info with-context from state interface {lag} statistics", intent: lag.statistics.state, params: [lag]}
+      - {cmd: "show interface {lag}", intent: interface.status, params: [lag]}
+    tac_first_look: "`show lag <name> detail` gives oper-state, the down reason, min-links and per-member state in one screen; if members are up but the LAG is not forming, TAC moves straight to `show lag <name> lacp-state` and compares the local and partner system-id, key and port state flags."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/lag/"
+      - "https://learn.srlinux.dev/tutorials/evpn-mh/basics/verify/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lag.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/lag.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+
+  # ------------------------------------------------------------ EVPN-VXLAN ---
+  - id: srl-evpn-mac-not-learned
+    class: evpn-vxlan
+    title: "Remote MAC not learned in the mac-vrf bridge table"
+    symptoms:
+      - "Host reachable locally but not across the fabric"
+      - "MAC present on the remote leaf but absent from the local bridge table"
+      - "Unicast flooded rather than switched to a VTEP"
+    log_signatures:
+      - "evpnMacRouteAddDroppedDueToUnexpectedEthTag"
+      - "evpnMacRouteWithdrawnDueToUnexpectedVni"
+      - "evpnVxlanMacIpRouteWithdrawnDueToNextHopTypeMismatch"
+    likely_causes:
+      - "Route-target import/export mismatch between the two mac-vrf instances"
+      - "VNI mismatch between the local and remote vxlan-interface"
+      - "Type 2 route received but not imported because of the ethernet tag or next-hop type"
+      - "Overlay BGP session to the route reflector not established"
+      - "MAC limit reached on the subinterface or network-instance"
+    commands:
+      - {cmd: "show network-instance {mac-vrf} bridge-table mac-table all", intent: evpn.mac-table, params: [mac-vrf]}
+      - {cmd: "show network-instance {ni} protocols bgp routes evpn route-type 2 summary", intent: evpn.route-type2.summary, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols bgp neighbor {peer} received-routes evpn", intent: evpn.neighbor.received, params: [ni, peer]}
+      - {cmd: "show network-instance {mac-vrf} protocols bgp-vpn bgp-instance {bgp-instance}", intent: evpn.bgp-vpn.instance, params: [mac-vrf, bgp-instance]}
+      - {cmd: "show tunnel-interface {vxlan-if} vxlan-interface {vni-if} bridge-table mac-table", intent: evpn.vtep.mac-table, params: [vxlan-if, vni-if]}
+      - {cmd: "show tunnel-interface vxlan-interface brief", intent: evpn.vxlan-interface.brief, params: []}
+    tac_first_look: "TAC checks whether the Type 2 route arrived at all (received-routes evpn / route-type 2 summary) before looking at the bridge table; if the route is present but the MAC is not installed, the route-target and VNI in the bgp-vpn instance output are the next comparison."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/evpn/"
+      - "https://learn.srlinux.dev/tutorials/l2evpn/evpn/"
+      - "https://learn.srlinux.dev/cli/show-commands/network-instance/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html"
+
+  - id: srl-evpn-vxlan-tunnel-missing
+    class: evpn-vxlan
+    title: "VXLAN tunnel / VTEP missing or not operational"
+    symptoms:
+      - "Remote VTEP absent from the tunnel table"
+      - "Type 3 inclusive multicast routes present but no tunnel built"
+      - "BUM traffic not reaching remote leaves"
+    log_signatures:
+      - "evpnInclMcastRouteAddDroppedDueToUnexpectedEthTag"
+      - "evpnInclMcastRouteWithdrawnDueToUnexpectedVni"
+      - "evpnVxlanAutoDiscoveryEviRouteWithdrawnDueToNextHopTypeMismatch"
+      - "networkInstanceStateDown"
+    likely_causes:
+      - "Remote VTEP loopback address not reachable in the underlay route table"
+      - "Type 3 route not received or filtered by policy"
+      - "VNI or vxlan-interface mismatch between leaves"
+      - "Underlay ECMP/next-hop resolution failure for the VTEP address"
+    commands:
+      - {cmd: "show tunnel vxlan-tunnel all", intent: evpn.vxlan-tunnels, params: []}
+      - {cmd: "show tunnel vxlan-tunnel vtep {vtep}", intent: evpn.vxlan-tunnel.vtep, params: [vtep]}
+      - {cmd: "show network-instance {ni} tunnel-table all", intent: tunnel.table, params: [ni]}
+      - {cmd: "info from state /tunnel vxlan-tunnel", intent: evpn.vxlan-tunnel.state, params: []}
+      - {cmd: "show network-instance {ni} protocols bgp routes evpn route-type 3 summary", intent: evpn.route-type3.summary, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols bgp routes evpn route-type 3 detail", intent: evpn.route-type3.detail, params: [ni]}
+      - {cmd: "show network-instance {ni} route-table ipv4-unicast prefix {prefix} detail", intent: route.prefix, params: [ni, prefix]}
+      - {cmd: "show tunnel-interface {vxlan-if} vxlan-interface {vni-if} bridge-table multicast-destinations", intent: evpn.vtep.multicast-destinations, params: [vxlan-if, vni-if]}
+    tac_first_look: "TAC starts at the tunnel table: a VTEP that is missing there almost always means the underlay route to that loopback is missing, so the very next command is the route-table lookup for the VTEP address. If the underlay is fine, the Type 3 detail output shows whether the inclusive multicast route carries the expected VNI."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/evpn/"
+      - "https://learn.srlinux.dev/tutorials/l2evpn/evpn/"
+      - "https://learn.srlinux.dev/tutorials/l3evpn/rt5-only/l3evpn/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html"
+
+  - id: srl-evpn-mac-duplication
+    class: evpn-vxlan
+    title: "Duplicate MAC detected / MAC move storm in a mac-vrf"
+    symptoms:
+      - "The same MAC oscillates between a local subinterface and a remote VTEP"
+      - "MAC put into a duplicate/blackhole state and traffic for it stops"
+      - "Bridge table churn across several leaves at once"
+    log_signatures:
+      - "l2SubinterfaceBridgeTableDuplicateMacAddressDetected"
+      - "l2ConnectionpointBridgeTableDuplicateMacAddressDetected"
+      - "networkInstanceBridgeTableDuplicateMacAddressDetected"
+      - "networkInstanceBridgeTableDuplicateMacAddressDeleted"
+    likely_causes:
+      - "A genuine L2 loop in the attached access network"
+      - "Duplicated MAC address on two hosts (cloned VM / bad NIC configuration)"
+      - "Multi-homing misconfiguration causing the same MAC to be advertised from two ESIs"
+      - "Host moving legitimately faster than the mac-duplication detection window"
+    commands:
+      - {cmd: "show network-instance {mac-vrf} bridge-table mac-table all", intent: evpn.mac-table, params: [mac-vrf]}
+      - {cmd: "show network-instance {mac-vrf} bridge-table mac-duplication", intent: evpn.mac-duplication, params: [mac-vrf]}
+      - {cmd: "show tunnel-interface {vxlan-if} vxlan-interface {vni-if} bridge-table mac-table", intent: evpn.vtep.mac-table, params: [vxlan-if, vni-if]}
+      - {cmd: "show network-instance {ni} protocols bgp routes evpn route-type 2 summary", intent: evpn.route-type2.summary, params: [ni]}
+      - {cmd: "show network-instance {mac-vrf} bridge-table stp", intent: l2.stp, params: [mac-vrf]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "TAC reads the mac-duplication report to get the offending MAC and the two destinations it is bouncing between, then checks the Type 2 summary to see whether two different leaves are both originating it - that split decides 'access loop' versus 'multi-homing misconfiguration'."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bridgetable.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+      - "https://learn.srlinux.dev/cli/show-commands/evpn/"
+      - "https://learn.srlinux.dev/cli/show-commands/network-instance/"
+
+  - id: srl-evpn-es-df-election
+    class: evpn-vxlan
+    title: "EVPN ethernet-segment / multi-homing problem - DF election or ESI not converging"
+    symptoms:
+      - "Both multi-homed leaves forward BUM traffic (duplicate frames at the host)"
+      - "Neither leaf is designated forwarder, so BUM traffic is dropped"
+      - "MAC entries point at a single VTEP instead of resolving through the ESI"
+    log_signatures:
+      - "ethernetsegmentNetworkInstanceBgpInstanceDfStatusChanged"
+      - "ethernetsegmentPreferenceOperValueChanged"
+      - "evpnAutoDiscoveryEviRouteAddDroppedDueToUnexpectedEthTag"
+      - "evpnVxlanAutoDiscoveryEviRouteWithdrawnDueToNextHopTypeMismatch"
+      - "lagMemberOperDown"
+    likely_causes:
+      - "ESI value mismatch between the two multi-homing peers"
+      - "Type 1 (auto-discovery) or Type 4 (ES route) not exchanged because of RT filtering"
+      - "Multi-homing mode mismatch (all-active vs single-active)"
+      - "LACP not converged on the multi-homed LAG, so the ES is not operationally up"
+      - "DF preference / do-not-preempt configuration differing between peers"
+    commands:
+      - {cmd: "show system network-instance ethernet-segments {es} detail", intent: evpn.ethernet-segment.detail, params: [es]}
+      - {cmd: "show system network-instance ethernet-segments", intent: evpn.ethernet-segments, params: []}
+      - {cmd: "show lag {lag} lacp-state", intent: lag.lacp.state, params: [lag]}
+      - {cmd: "show interface {lag}", intent: interface.status, params: [lag]}
+      - {cmd: "show network-instance {ni} protocols bgp neighbor {peer} advertised-routes evpn", intent: evpn.neighbor.advertised, params: [ni, peer]}
+      - {cmd: "show network-instance {ni} protocols bgp routes evpn route-type summary", intent: evpn.routes.summary, params: [ni]}
+      - {cmd: "show tunnel-interface {vxlan-if} vxlan-interface {vni-if} bridge-table unicast-destinations destination", intent: evpn.vtep.unicast-destinations, params: [vxlan-if, vni-if]}
+    tac_first_look: "The ethernet-segment detail output is the single most useful screen here: it shows the ESI, the multi-homing mode, the operational DF state and the DF candidate list. TAC compares that candidate list across both leaves - a one-entry list means the peer's Type 4 route never arrived."
+    sources:
+      - "https://learn.srlinux.dev/tutorials/evpn-mh/basics/verify/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+      - "https://learn.srlinux.dev/cli/show-commands/lag/"
+
+  - id: srl-evpn-type5-prefix-missing
+    class: evpn-vxlan
+    title: "EVPN Type 5 (IP prefix) route missing in an ip-vrf"
+    symptoms:
+      - "Tenant subnet on a remote leaf unreachable from this leaf"
+      - "Prefix visible as an EVPN route on the remote side only"
+      - "ip-vrf route table lacks the expected remote prefix"
+    log_signatures:
+      - "evpnIpPrefixRouteNotImportedDueToUnexpectedVni"
+      - "evpnIpPrefixRouteWithdrawnDueToNoGwMac"
+      - "evpnIpPrefixRouteWithdrawnDueToUnexpectedGwIp"
+      - "evpnVxlanIpPrefixRouteWithdrawnDueToNextHopTypeMismatch"
+    likely_causes:
+      - "Import/export route-target mismatch on the ip-vrf bgp-vpn instance"
+      - "Routed vxlan-interface VNI mismatch between the two ip-vrf instances"
+      - "Gateway MAC/IP missing in the Type 5 route (RT5 with gateway semantics)"
+      - "Overlay BGP session down or EVPN family not negotiated"
+    commands:
+      - {cmd: "show network-instance {ni} protocols bgp routes evpn route-type 5 summary", intent: evpn.route-type5.summary, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols bgp routes evpn route-type 5 prefix {prefix} detail", intent: evpn.route-type5.detail, params: [ni, prefix]}
+      - {cmd: "show network-instance {vrf} route-table", intent: route.table, params: [vrf]}
+      - {cmd: "show network-instance {vrf} protocols bgp-vpn bgp-instance {bgp-instance}", intent: evpn.bgp-vpn.instance, params: [vrf, bgp-instance]}
+      - {cmd: "show network-instance {ni} protocols bgp neighbor {peer} received-routes evpn", intent: evpn.neighbor.received, params: [ni, peer]}
+      - {cmd: "show tunnel vxlan-tunnel vtep {vtep}", intent: evpn.vxlan-tunnel.vtep, params: [vtep]}
+    tac_first_look: "TAC opens the Type 5 detail for the exact prefix to read its route-distinguisher, route-target, VNI and gateway attributes, then compares them against the local ip-vrf bgp-vpn instance's import RT and routed VNI - the mismatch is nearly always in one of those four fields."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/evpn/"
+      - "https://learn.srlinux.dev/tutorials/l3evpn/rt5-only/l3evpn/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html"
+
+  - id: srl-evpn-irb-anycast-gateway
+    class: evpn-vxlan
+    title: "IRB / anycast gateway not resolving for tenant hosts"
+    symptoms:
+      - "Hosts cannot ping their default gateway on one leaf but can on another"
+      - "ARP entry for the anycast gateway missing or pointing at the wrong MAC"
+      - "Inter-subnet routing broken while intra-subnet bridging works"
+    log_signatures:
+      - "ipSubinterfaceDuplicateMacAddress"
+      - "ipSubinterfaceDuplicateIpv4Address"
+      - "evpnIpPrefixRouteWithdrawnDueToNoGwMac"
+      - "networkInstanceInterfaceDown"
+    likely_causes:
+      - "Anycast gateway MAC not identical across the leaves serving the subnet"
+      - "IRB subinterface not attached to both the mac-vrf and the ip-vrf"
+      - "Proxy-ARP/ND not populated, so hosts never resolve the gateway"
+      - "IRB subinterface operationally down inside the network-instance"
+    commands:
+      - {cmd: "show arpnd arp-entries", intent: arp.entries, params: []}
+      - {cmd: "show arpnd arp-entries interface {intf}", intent: arp.entries.interface, params: [intf]}
+      - {cmd: "show arpnd neighbors", intent: nd.neighbors, params: []}
+      - {cmd: "show network-instance {vrf} interfaces", intent: vrf.interfaces, params: [vrf]}
+      - {cmd: "show network-instance {mac-vrf} bridge-table proxy-arp", intent: l2.proxy-arp, params: [mac-vrf]}
+      - {cmd: "show network-instance {mac-vrf} bridge-table proxy-nd", intent: l2.proxy-nd, params: [mac-vrf]}
+      - {cmd: "show network-instance {mac-vrf} bridge-table mac-table all", intent: evpn.mac-table, params: [mac-vrf]}
+      - {cmd: "show network-instance {vrf} route-table", intent: route.table, params: [vrf]}
+    tac_first_look: "TAC lists the network-instance interfaces to confirm the IRB is attached and up in both the mac-vrf and the ip-vrf, then reads the ARP/proxy-ARP tables to see which MAC the hosts are actually resolving for the gateway address."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/evpn/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+      - "https://learn.srlinux.dev/cli/show-commands/network-instance/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-arpnd.html"
+
+  # -------------------------------------------------------------- ARP / ND ---
+  - id: srl-arp-nd-resolution
+    class: arp-nd
+    proposed_class: true
+    title: "ARP / IPv6 ND resolution failure, duplicate address or neighbor limit reached"
+    symptoms:
+      - "Next hop stays unresolved and traffic to a directly connected host fails"
+      - "Duplicate address warnings for an interface address"
+      - "IPv6 neighbor entries stop being created on a busy subinterface"
+    log_signatures:
+      - "ipSubinterfaceDuplicateIpv4Address"
+      - "ipSubinterfaceDuplicateIpv6Address"
+      - "ipSubinterfaceDuplicateMacAddress"
+      - "ipv6NeighborSubinterfaceLimit"
+      - "ipv6NeighborSubinterfaceLimitThreshold"
+    likely_causes:
+      - "Another host or router on the subnet is using the same IPv4/IPv6/MAC address"
+      - "Neighbor table limit reached on the subinterface"
+      - "ARP timeout / ND stale timers tuned too aggressively for the host population"
+      - "Layer 2 path to the host broken while the subinterface stays up"
+    commands:
+      - {cmd: "show arpnd arp-entries", intent: arp.entries, params: []}
+      - {cmd: "show arpnd arp-entries interface {intf}", intent: arp.entries.interface, params: [intf]}
+      - {cmd: "show arpnd neighbors", intent: nd.neighbors, params: []}
+      - {cmd: "show arpnd neighbors interface {intf}", intent: nd.neighbors.interface, params: [intf]}
+      - {cmd: "info with-context interface {intf} subinterface {subif} ipv4 arp", intent: arp.config, params: [intf, subif]}
+      - {cmd: "info with-context interface {intf} subinterface {subif} ipv6 neighbor-discovery", intent: nd.config, params: [intf, subif]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "TAC pulls the per-interface ARP/ND entries and looks for the address in question - present-but-wrong-MAC points at a duplicate address, absent points at either a broken L2 path or the neighbor limit, which the ipv6NeighborSubinterfaceLimit event confirms."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-arpnd.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/ipv4-arp-ipv6-nd.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+      - "https://learn.srlinux.dev/cli/show-commands/evpn/"
+
+  # ------------------------------------------------------ HARDWARE / CHASSIS --
+  - id: srl-platform-thermal-alarm
+    class: hardware-fault
+    title: "Component over-temperature or fan-tray fault"
+    symptoms:
+      - "Temperature alarm raised against a control, linecard, fabric or power-supply module"
+      - "Fan tray reported empty or in a failed state"
+      - "Warning that a component will be powered down shortly"
+    log_signatures:
+      - "componentTemperatureExceeded"
+      - "componentTemperatureFailure"
+      - "componentTemperatureNormal"
+      - "psuTemperatureFault"
+      - "fantrayEmpty"
+      - "airflowMismatch"
+      - "airflowCorrected"
+    likely_causes:
+      - "Fan tray removed, failed, or spinning below its required speed"
+      - "Airflow direction of a module does not match the rest of the chassis"
+      - "Blocked intake / high ambient temperature in the rack"
+      - "Blanking panels missing so hot air recirculates"
+    commands:
+      - {cmd: "show platform environment", intent: platform.environment, params: []}
+      - {cmd: "show platform fan-tray", intent: platform.fan-tray, params: []}
+      - {cmd: "show platform fan-tray {slot} detail", intent: platform.fan-tray.detail, params: [slot]}
+      - {cmd: "show platform chassis", intent: platform.chassis, params: []}
+      - {cmd: "show platform linecard {slot} detail", intent: platform.linecard.detail, params: [slot]}
+      - {cmd: "show platform control * detail", intent: platform.control.detail, params: []}
+      - {cmd: "show system alarms", intent: system.alarms, params: []}
+    tac_first_look: "`show platform environment` is the single screen that lists every module (control, linecard, fan-tray, power-supply, fabric) with oper state and temperature; TAC reads it first, then drills into the specific fan-tray or linecard detail for the module that is out of range, and confirms the airflow direction matches the rest of the chassis."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/chassis-and-env/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-platform.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+
+  - id: srl-platform-power-fault
+    class: hardware-fault
+    title: "Power supply input/output failure or insufficient chassis power"
+    symptoms:
+      - "PSU shows down or failed in the platform view"
+      - "Alarm about insufficient power for the installed components"
+      - "Linecards or fabric modules refuse to come up after an insertion"
+    log_signatures:
+      - "psuInputDown"
+      - "psuInputUp"
+      - "psuOutputDown"
+      - "psuOutputUp"
+      - "platformLowPower"
+      - "platformLowReservePower"
+      - "platformNormalPower"
+    likely_causes:
+      - "Feed lost on one PSU (breaker, PDU or cord)"
+      - "PSU hardware failure"
+      - "More modules installed than the present PSUs can power"
+      - "Mixed PSU models with different capacities"
+    commands:
+      - {cmd: "show platform power-supply", intent: platform.power-supply, params: []}
+      - {cmd: "show platform power-supply {slot} detail", intent: platform.power-supply.detail, params: [slot]}
+      - {cmd: "show platform environment", intent: platform.environment, params: []}
+      - {cmd: "show platform chassis", intent: platform.chassis, params: []}
+      - {cmd: "show platform linecard {slot} detail", intent: platform.linecard.detail, params: [slot]}
+      - {cmd: "show system alarms", intent: system.alarms, params: []}
+    tac_first_look: "The power-supply detail output carries capacity plus measured input voltage/current/power, which separates 'feed lost upstream' (input zero) from 'PSU failed' (input present, output down); the platformLowPower event then tells TAC whether the chassis is simply over-populated for the installed PSUs."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/chassis-and-env/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-platform.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+
+  - id: srl-linecard-fabric-degraded
+    class: hardware-fault
+    title: "Linecard fabric capacity degraded or fabric module fault"
+    symptoms:
+      - "Reduced forwarding capacity reported for a linecard forwarding complex"
+      - "Fabric module missing, down, or reporting errors"
+      - "Packet loss under load with no interface-level error counters"
+    log_signatures:
+      - "linecardCapacityDegraded"
+      - "linecardCapacityNormal"
+      - "componentTemperatureExceeded"
+    likely_causes:
+      - "One or more fabric modules failed or were removed"
+      - "Fabric link errors between the linecard and a fabric module"
+      - "Fabric module not fully seated after maintenance"
+      - "Insufficient power keeping a fabric module offline"
+    commands:
+      - {cmd: "show platform fabric * detail", intent: platform.fabric.detail, params: []}
+      - {cmd: "show platform linecard {slot} detail", intent: platform.linecard.detail, params: [slot]}
+      - {cmd: "show platform", intent: platform.components, params: []}
+      - {cmd: "show platform environment", intent: platform.environment, params: []}
+      - {cmd: "show platform redundancy", intent: platform.redundancy, params: []}
+      - {cmd: "show system alarms", intent: system.alarms, params: []}
+      - {cmd: "show platform resource-monitoring", intent: platform.resource-monitoring, params: []}
+    tac_first_look: "TAC compares the fabric module inventory and per-module state against the linecard detail's reported capacity; linecardCapacityDegraded names the exact slot and forwarding complex, which is what goes on the RMA."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/chassis-and-env/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-platform.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+
+  # ------------------------------------------------------------ CPU / MEM ----
+  - id: srl-high-cpu
+    class: high-cpu
+    title: "Sustained high control-plane CPU utilization"
+    symptoms:
+      - "CPU utilization alarms on a control or linecard module"
+      - "CLI and gNMI responses slow; protocol hold timers occasionally expire"
+      - "Convergence noticeably slower than usual"
+    log_signatures:
+      - "cpuUsageHigh"
+      - "cpuUsageCritical"
+      - "cpuUsageNormal"
+      - "systemResourceHighUtilization"
+    likely_causes:
+      - "Route churn or a flapping neighbour keeping a protocol manager busy"
+      - "Control-plane punt storm (ARP/ND, TTL-expired, or unfiltered traffic hitting the CPM)"
+      - "Heavy telemetry subscription load from gNMI/JSON-RPC clients"
+      - "A single application looping or leaking"
+    commands:
+      - {cmd: "show platform control * detail", intent: system.cpu, params: []}
+      - {cmd: "show system application", intent: system.processes, params: []}
+      - {cmd: "info with-context from state system utilization resource *", intent: system.utilization, params: []}
+      - {cmd: "show acl cpm-filter ipv4-filter", intent: acl.cpm-filter, params: []}
+      - {cmd: "info from state system app-management application * cgroup", intent: system.app.cgroup, params: []}
+      - {cmd: "info from state platform control {slot} cgroup *", intent: system.control.cgroup, params: [slot]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "`show platform control * detail` gives CPU spec, per-core utilization and the running process list in one output; TAC pairs it with the cgroup state to attribute the load to a specific SR Linux application, and reads the CPM filter counters to rule out a control-plane punt storm."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/chassis-and-env/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/cpm-resources.html"
+      - "https://learn.srlinux.dev/cli/show-commands/cpm-filter/"
+
+  - id: srl-high-memory
+    class: high-memory
+    title: "High memory utilization or a full disk partition on a control module"
+    symptoms:
+      - "Memory utilization alarms escalating from high to critical to full"
+      - "Partition usage warnings, or a partition reported full"
+      - "Applications terminated by the OOM killer"
+    log_signatures:
+      - "memoryUsageHigh"
+      - "memoryUsageCritical"
+      - "memoryUsageFull"
+      - "partitionUsageWarning"
+      - "partitionUsageCritical"
+      - "partitionUsageFull"
+      - "bgpLowMemory"
+    likely_causes:
+      - "Very large RIB/FIB or EVPN table for the platform's memory"
+      - "Log files, core files or old tech-support archives filling /var or /tmp"
+      - "Memory leak in an application (correlate with its cgroup usage)"
+      - "Too many concurrent telemetry subscriptions retaining state"
+    commands:
+      - {cmd: "show platform control * detail", intent: system.memory, params: []}
+      - {cmd: "show platform resource-monitoring", intent: platform.resource-monitoring, params: []}
+      - {cmd: "info with-context from state system utilization resource *", intent: system.utilization, params: []}
+      - {cmd: "show system application", intent: system.processes, params: []}
+      - {cmd: "info from state system app-management application * cgroup", intent: system.app.cgroup, params: []}
+      - {cmd: "info from state platform control {slot} cgroup *", intent: system.control.cgroup, params: [slot]}
+      - {cmd: "file ls /etc/opt/srlinux/checkpoint", intent: config.checkpoints.list, params: []}
+      - {cmd: "show system logging", intent: logging.files, params: []}
+    tac_first_look: "TAC reads the control module detail for disk and memory statistics, then the cgroup usage per application to attribute growth; on a partition-full case the first thing checked is whether previous tech-support archives are still sitting in /tmp, because that is where `tech-support` writes."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html"
+      - "https://learn.srlinux.dev/cli/show-commands/chassis-and-env/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html"
+      - "https://documentation.nokia.com/srlinux/26-3/books/system-mgmt/cli-interface.html"
+
+  - id: srl-application-not-running
+    class: process-health
+    proposed_class: true
+    title: "An SR Linux application is not running or keeps coming back up"
+    symptoms:
+      - "A manager (bgp_mgr, isis_mgr, chassis_mgr, aaa_mgr ...) is absent or not in a running state"
+      - "The feature it owns stops working while the rest of the node is fine"
+      - "Application start time is far newer than the system boot time"
+    log_signatures:
+      - "memoryUsageCritical"
+      - "cpuUsageCritical"
+      - "commitFailed"
+      - "systemResourceHighUtilization"
+    likely_causes:
+      - "Application terminated under memory pressure (OOM)"
+      - "A software defect causing the application to exit"
+      - "Feature not licensed / not enabled, so the application never starts"
+      - "Dependency application down, cascading to this one"
+    commands:
+      - {cmd: "show system application", intent: system.processes, params: []}
+      - {cmd: "info from state system app-management application {app}", intent: system.app.state, params: [app]}
+      - {cmd: "info with-context from state system app-management application {app}", intent: system.app.state.context, params: [app]}
+      - {cmd: "info with-context from state system app-management application * oom-score-adj", intent: system.app.oom-score, params: []}
+      - {cmd: "info from state system app-management application * cgroup", intent: system.app.cgroup, params: []}
+      - {cmd: "show version", intent: platform.version, params: []}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "`show system application` lists every application with its state; TAC compares the application's start time against the system boot time from `show version` to tell 'never started' from 'exited and came back', then reads the app-management state and OOM score for the reason."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+      - "https://learn.srlinux.dev/cli/show-commands/chassis-and-env/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html"
+
+  # ------------------------------------------------------------------ QoS ----
+  - id: srl-qos-queue-drops
+    class: qos-drops
+    title: "Egress queue drops / buffer exhaustion on an interface"
+    symptoms:
+      - "Application-level loss under bursty load with no interface errors"
+      - "Drop counters climbing on a specific forwarding class queue"
+      - "Buffer memory utilization high on the forwarding complex"
+    log_signatures:
+      - "platformQoSProfileHighUtilization"
+      - "platformCoreQoSProfileHighUtilization"
+      - "platformQoSProfileHighUtilizationLowered"
+      - "interfaceStormControlRateReached"
+    likely_causes:
+      - "Genuine congestion / oversubscription on the egress port"
+      - "Classification sending traffic into the wrong forwarding class"
+      - "Queue management (WRED/tail-drop) thresholds tuned too aggressively"
+      - "Buffer allocation profile too small for the traffic burst profile"
+      - "Config/state mismatch on the QoS profile applied to the interface"
+    commands:
+      - {cmd: "show interface {intf} queue-statistics", intent: qos.queue.statistics, params: [intf]}
+      - {cmd: "show interface queue-detail", intent: qos.queue.detail, params: []}
+      - {cmd: "show qos interfaces mismatches", intent: qos.mismatches, params: []}
+      - {cmd: "info from state qos interfaces interface {intf} output queues queue * queue-statistics aggregate-statistics | filter fields * | as table", intent: qos.queue.statistics.state, params: [intf]}
+      - {cmd: "info from state qos interfaces interface {intf} output queues queue * queue-statistics", intent: qos.queue.statistics.member, params: [intf]}
+      - {cmd: "info with-context from state platform linecard {linecard} forwarding-complex {complex} buffer-memory", intent: qos.buffer-memory, params: [linecard, complex]}
+      - {cmd: "info with-context from state platform linecard {linecard} forwarding-complex {complex} qos", intent: qos.profile.resources, params: [linecard, complex]}
+    tac_first_look: "TAC reads the per-queue statistics table to find which forwarding class is dropping, then `show qos interfaces mismatches` to confirm the intended QoS policy is actually programmed, and finally the forwarding-complex buffer-memory to see whether the drops are a device-wide buffer problem or a single-queue policy problem."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/qos/display-qos-statistics.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/qos/buffer-utilization-display.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-qos.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html"
+
+  # ------------------------------------------------------------------ ACL ----
+  - id: srl-acl-unexpected-drops
+    class: acl
+    proposed_class: true
+    title: "Traffic dropped by an ACL or by the control-plane (CPM) filter"
+    symptoms:
+      - "A flow that used to work is blocked after a policy change"
+      - "Management or protocol sessions to the device itself fail"
+      - "ACL entry match counters increment on the drop entry"
+    log_signatures:
+      - "aclInterfaceInputIpv4MatchedPacket"
+      - "aclInterfaceInputIpv6MatchedPacket"
+      - "aclInterfaceOutputIpv4MatchedPacket"
+      - "aclCpmIpv4MatchedPacket"
+      - "aclCpmIpv6MatchedPacket"
+      - "aclTcamProgComplete"
+    likely_causes:
+      - "Entry ordering - a broader deny above the intended permit"
+      - "Filter applied to the wrong subinterface or the wrong direction"
+      - "CPM filter dropping protocol traffic destined to the control plane"
+      - "TCAM exhaustion preventing the filter from being fully programmed"
+    commands:
+      - {cmd: "show acl summary", intent: acl.summary, params: []}
+      - {cmd: "show acl ipv4-filter {filter}", intent: acl.filter.detail, params: [filter]}
+      - {cmd: "show acl ipv4-filter {filter} entry {entry} subinterface {subif}", intent: acl.entry.subinterface, params: [filter, entry, subif]}
+      - {cmd: "show acl cpm-filter ipv4-filter", intent: acl.cpm-filter, params: []}
+      - {cmd: "info acl ipv4-filter {filter}", intent: acl.filter.config, params: [filter]}
+      - {cmd: "info system logging file {logfile}", intent: logging.file.config, params: [logfile]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "TAC reads the filter with its per-entry counters and the list of subinterfaces it is bound to; a non-zero counter on a deny entry plus the matching aclInterfaceInputIpv4MatchedPacket log line is a closed case. For device-terminated traffic the CPM filter output, which also reports TCAM usage per entry, is checked first."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/acl/"
+      - "https://learn.srlinux.dev/cli/show-commands/cpm-filter/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-acl.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+
+  # ------------------------------------------------------------- MPLS / LDP --
+  - id: srl-mpls-ldp-session-down
+    class: mpls-ldp
+    title: "LDP session or interface down, LSPs missing from the tunnel table"
+    symptoms:
+      - "LDP peer absent from the session list"
+      - "Tunnel table has no LDP tunnel to a remote loopback"
+      - "MPLS-encapsulated services over the LSP fail while IP reachability is fine"
+    log_signatures:
+      - "ldpSessionDown"
+      - "ldpSessionUp"
+      - "ldpIpv4InstanceDown"
+      - "ldpIPv4InterfaceDown"
+      - "ldpIPv4TargetDown"
+      - "ldpSessionFecLimitReached"
+      - "ldpSessionLocalIPv4Overload"
+      - "ldpSessionPeerIPv4Overload"
+    likely_causes:
+      - "LDP not enabled on the interface, or the interface is operationally down"
+      - "No dynamic label block assigned, so the label manager cannot allocate labels"
+      - "Transport address unreachable in the IGP"
+      - "FEC limit reached, or the session entered overload state"
+      - "Hello/hold timer or authentication mismatch with the peer"
+    commands:
+      - {cmd: "show network-instance {ni} protocols ldp neighbor", intent: mpls.ldp.neighbors, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols ldp session", intent: mpls.ldp.sessions, params: [ni]}
+      - {cmd: "show network-instance {ni} protocols ldp ipv4 fec", intent: mpls.ldp.fec, params: [ni]}
+      - {cmd: "show network-instance {ni} tunnel-table all", intent: tunnel.table, params: [ni]}
+      - {cmd: "show network-instance {ni} route-table mpls", intent: mpls.route-table, params: [ni]}
+      - {cmd: "show mpls-aft network-instance {ni}", intent: mpls.aft, params: [ni]}
+      - {cmd: "show network-instance {ni} route-table ipv4-unicast prefix {prefix} detail", intent: route.prefix, params: [ni, prefix]}
+    tac_first_look: "TAC walks discovery to session to FEC in that order: `ldp neighbor` shows whether hellos are being exchanged at all, `ldp session` whether the TCP session came up, and `ldp ipv4 fec` whether label bindings exist for the prefix - then checks the tunnel table to confirm the LSP is actually usable by services."
+    sources:
+      - "https://learn.srlinux.dev/tutorials/mpls/mpls-ldp/ldp/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ldp.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+
+  # ---------------------------------------------------------- IP-VRF / VPN ---
+  - id: srl-ip-vrf-route-missing
+    class: ip-vrf-routing
+    proposed_class: true
+    title: "Route missing in an IP-VRF / route leaking between network-instances not working"
+    symptoms:
+      - "Prefix present in the default instance but absent from the tenant VRF (or vice versa)"
+      - "Tenant hosts cannot reach a shared service subnet"
+      - "VRF route table counts do not match the expected number of prefixes"
+    log_signatures:
+      - "networkInstanceStateDown"
+      - "networkInstanceInterfaceDown"
+      - "evpnIpPrefixRouteNotImportedDueToUnexpectedVni"
+    likely_causes:
+      - "Table-connection / route-leaking policy not matching the prefix"
+      - "Import or export route-target mismatch on the bgp-vpn instance"
+      - "Network-instance administratively down or with no operational interfaces"
+      - "Network-instance route limit reached, so further routes are rejected"
+      - "Next hop for the leaked route unresolvable inside the target VRF"
+    commands:
+      - {cmd: "show network-instance summary", intent: vrf.summary, params: []}
+      - {cmd: "show network-instance {vrf} route-table", intent: route.table, params: [vrf]}
+      - {cmd: "show network-instance {vrf} route-table summary", intent: route.table.summary, params: [vrf]}
+      - {cmd: "show network-instance {vrf} interfaces", intent: vrf.interfaces, params: [vrf]}
+      - {cmd: "show network-instance {vrf} protocols bgp-vpn bgp-instance {bgp-instance}", intent: evpn.bgp-vpn.instance, params: [vrf, bgp-instance]}
+      - {cmd: "show network-instance {vrf} ipv4 route", intent: route.table.ipv4, params: [vrf]}
+      - {cmd: "info with-context network-instance {vrf}", intent: vrf.config, params: [vrf]}
+    tac_first_look: "TAC confirms the network-instance is up with the expected interfaces, then compares the route-table summary counts (active / ECMP / failed) between source and target instance - a non-zero 'failed' count usually means unresolvable next hops rather than a policy problem."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/network-instance/"
+      - "https://learn.srlinux.dev/tutorials/l3evpn/rt5-only/l3evpn/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-netinst.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+
+  # -------------------------------------------------------- CONFIG / CHANGE --
+  - id: srl-config-change-or-apply-failure
+    class: config-change
+    title: "Configuration change failed, was reverted, or drifted from the intended baseline"
+    symptoms:
+      - "A change was applied but the feature behaves as if it were not"
+      - "Configuration session refused because another session owns the candidate"
+      - "Behaviour changed after a maintenance window and nobody knows what changed"
+    log_signatures:
+      - "commitFailed"
+      - "commitSucceeded"
+      - "checkpointGenerated"
+      - "checkpointRevertRequestReceived"
+      - "exclusiveConfigSessionError"
+      - "exclusiveConfigSessionBlockedByOtherSessionError"
+      - "privateConfigSessionError"
+      - "privateSharedMismatch"
+      - "sharedConfigSessionBlockedByOtherSessionError"
+    likely_causes:
+      - "Validation error left the candidate uncommitted"
+      - "Another user holds an exclusive or private candidate"
+      - "An automation client changed the running configuration out of band"
+      - "The node was reverted to an older checkpoint"
+    commands:
+      - {cmd: "info", intent: config.running, params: []}
+      - {cmd: "info flat", intent: config.running.flat, params: []}
+      - {cmd: "info detail", intent: config.running.detail, params: []}
+      - {cmd: "diff", intent: config.candidate.diff, params: []}
+      - {cmd: "info with-context system configuration", intent: config.system.settings, params: []}
+      - {cmd: "info from state system configuration checkpoint 0", intent: config.checkpoint.state, params: []}
+      - {cmd: "file ls /etc/opt/srlinux/checkpoint", intent: config.checkpoints.list, params: []}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "TAC takes `diff` to see whether an uncommitted candidate is masking the operator's mental model, then reads the checkpoint state and the commitSucceeded/commitFailed log lines with their usernames and session ids to reconstruct exactly who changed what and when."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-mgmt.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html"
+      - "https://learn.srlinux.dev/get-started/cli/"
+
+  # -------------------------------------------------------------- NTP/CLOCK --
+  - id: srl-clock-not-synchronized
+    class: ntp-sync
+    proposed_class: true
+    title: "System clock not synchronized / timestamps inconsistent across the fabric"
+    symptoms:
+      - "Log timestamps on this device do not line up with its neighbours"
+      - "Certificate or authentication failures caused by clock skew"
+      - "Correlating an incident across devices is impossible"
+    log_signatures:
+      - "syncFreqClockStateChange"
+      - "syncFreqClockQLChange"
+      - "syncFreqInstanceAlarmChange"
+      - "syncPTPParentChangeIP"
+      - "syncPTPTimeRecoveryState"
+    likely_causes:
+      - "NTP admin-state disabled, or configured in a network-instance that cannot reach the server"
+      - "NTP server address unreachable from the mgmt network-instance"
+      - "DNS resolution failing for a hostname-based NTP server"
+      - "For frequency/PTP deployments: reference lost or quality level degraded"
+    commands:
+      - {cmd: "info with-context system ntp", intent: ntp.config, params: []}
+      - {cmd: "info from state /system information", intent: platform.system-info, params: []}
+      - {cmd: "show version", intent: platform.version, params: []}
+      - {cmd: "show system alarms", intent: system.alarms, params: []}
+      - {cmd: "show network-instance {ni} interfaces", intent: vrf.interfaces, params: [ni]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "TAC reads the NTP block to confirm admin-state, the network-instance it runs in and the configured servers, then checks that the chosen network-instance actually has a usable interface and route to those servers; `/system information` carries the current date-time and last-booted values used to quantify the skew."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/system-management.html"
+      - "https://learn.srlinux.dev/get-started/cli/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-sync.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+
+  # ------------------------------------------------------------------ AAA ----
+  - id: srl-aaa-server-unreachable
+    class: aaa-auth
+    proposed_class: true
+    title: "TACACS+/RADIUS server unreachable - logins falling back to local or failing"
+    symptoms:
+      - "Login attempts hang then fall back to local authentication"
+      - "Whole server group reported down"
+      - "Authorization roles from the AAA server not applied"
+    log_signatures:
+      - "serverDown"
+      - "serverGroupDown"
+      - "serverGroupUp"
+      - "serverTimeout"
+      - "serverRouteUnavailable"
+      - "serverUp"
+      - "tacacsRoleInvalid"
+    likely_causes:
+      - "No route to the AAA server from the configured network-instance"
+      - "Shared secret mismatch, so the server never answers acceptably"
+      - "Server-side ACL not permitting the device's source address"
+      - "Server group ordering / timeout too short for a slow WAN path"
+      - "Server returning a VSA value the device does not recognise as a valid role"
+    commands:
+      - {cmd: "show system aaa authentication session", intent: aaa.sessions, params: []}
+      - {cmd: "info with-context system aaa", intent: aaa.config, params: []}
+      - {cmd: "show network-instance {ni} interfaces", intent: vrf.interfaces, params: [ni]}
+      - {cmd: "show network-instance {ni} route-table ipv4-unicast prefix {prefix} detail", intent: route.prefix, params: [ni, prefix]}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "The serverRouteUnavailable event distinguishes a routing problem from a protocol problem immediately; if routing is fine TAC reads the AAA configuration for the network-instance and server group ordering, then the authentication session table to see which method (tacacs vs local) sessions actually used."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/tacacs/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-aaa.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+
+  - id: srl-user-login-failures
+    class: aaa-auth
+    proposed_class: true
+    title: "User authentication failures or account lockout"
+    symptoms:
+      - "A user cannot log in although the credentials are believed correct"
+      - "Account reported locked out after repeated attempts"
+      - "Sessions disconnected by idle timeout unexpectedly"
+    log_signatures:
+      - "userAuthenticationFailed"
+      - "userAuthenticationSucceeded"
+      - "userLockoutSet"
+      - "userLockoutReset"
+      - "userPasswordExpired"
+      - "userPasswordChanged"
+      - "sessionOpened"
+      - "sessionClosed"
+      - "sessionIdleDisconnected"
+      - "sessionDisconnected"
+    likely_causes:
+      - "Lockout policy triggered by repeated bad passwords (often an automation client with stale credentials)"
+      - "Password expired under the configured password policy"
+      - "User exists on the AAA server but has no valid local role mapping"
+      - "SSH server not enabled in the network-instance the user connects from"
+    commands:
+      - {cmd: "show system aaa authentication session", intent: aaa.sessions, params: []}
+      - {cmd: "info with-context system aaa", intent: aaa.config, params: []}
+      - {cmd: "info with-context system ssh-server", intent: ssh-server.config, params: []}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+      - {cmd: "show system logging buffer messages", intent: logging.buffer, params: []}
+    tac_first_look: "TAC pairs userAuthenticationFailed lines (which carry the username, remote host and network-instance) with the active session table; a burst of failures from one remote host immediately before userLockoutSet almost always identifies a script holding an old password."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-aaa.html"
+      - "https://learn.srlinux.dev/cli/show-commands/tacacs/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/system-management.html"
+
+  # ------------------------------------------------- MANAGEMENT / TELEMETRY --
+  - id: srl-mgmt-server-client-issue
+    class: netconf-gnmi
+    proposed_class: true
+    title: "gNMI/gRPC, NETCONF or JSON-RPC management session failing or misbehaving"
+    symptoms:
+      - "Telemetry collector stops receiving updates from this device"
+      - "Automation client cannot connect or its RPCs are rejected"
+      - "TLS handshake failures against the management server"
+    log_signatures:
+      - "userAuthenticationFailed"
+      - "cpuUsageHigh"
+      - "commitFailed"
+    likely_causes:
+      - "Management server not enabled in the network-instance the client reaches the device on"
+      - "TLS profile certificate expired or not trusted by the client"
+      - "Client authenticated but its role lacks authorization for the requested paths"
+      - "Subscription load driving control-plane CPU high enough to starve the server"
+      - "The management application itself is not running"
+    commands:
+      - {cmd: "info from state system grpc-server {name}", intent: mgmt.grpc-server.state, params: [name]}
+      - {cmd: "info from state system grpc-server {name} client {id}", intent: mgmt.grpc-client, params: [name, id]}
+      - {cmd: "info from state system grpc-server {name} client {id} rpc", intent: mgmt.grpc-client.rpc, params: [name, id]}
+      - {cmd: "info from state with-context system tls profile {profile}", intent: mgmt.tls-profile.state, params: [profile]}
+      - {cmd: "show system application", intent: system.processes, params: []}
+      - {cmd: "show system aaa authentication session", intent: aaa.sessions, params: []}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "TAC reads the gRPC server state and its per-client list (which reports remote host/port, user, user-agent, start time and the RPCs in use) to confirm the client actually reached the device, then checks the TLS profile's expiration/valid-after/expired fields before blaming the collector."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/management-servers.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+      - "https://learn.srlinux.dev/cli/show-commands/tacacs/"
+
+  # ----------------------------------------------------------- DHCP RELAY ----
+  - id: srl-dhcp-relay-servers-unreachable
+    class: dhcp-relay
+    proposed_class: true
+    title: "DHCP relay down or all configured DHCP servers unreachable"
+    symptoms:
+      - "Hosts on a subinterface never obtain an address"
+      - "DHCP relay reported operationally down on the subinterface"
+      - "Only some VLANs are affected"
+    log_signatures:
+      - "dhcpv4RelayAllDhcpv4ServersUnreachable"
+      - "dhcpv6RelayAllDhcpv6ServersUnreachable"
+      - "dhcpv4RelayOperDown"
+      - "dhcpv6RelayOperDown"
+      - "dhcpv4RelayAdminDisable"
+      - "dhcpv6RelayAdminDisable"
+    likely_causes:
+      - "No route from the relay's network-instance to the DHCP server addresses"
+      - "Gateway (giaddr) source address not configured or not reachable from the server"
+      - "Relay administratively disabled on the subinterface"
+      - "Server-side scope missing for the relayed subnet"
+      - "ACL blocking DHCP between the relay and the server"
+    commands:
+      - {cmd: "info from state interface {intf} subinterface {subif} ipv4 dhcp-relay", intent: dhcp.relay.state, params: [intf, subif]}
+      - {cmd: "show network-instance {ni} interfaces", intent: vrf.interfaces, params: [ni]}
+      - {cmd: "show network-instance {ni} route-table ipv4-unicast prefix {prefix} detail", intent: route.prefix, params: [ni, prefix]}
+      - {cmd: "show interface {intf} detail", intent: interface.detail, params: [intf]}
+      - {cmd: "show acl summary", intent: acl.summary, params: []}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+    tac_first_look: "The dhcp-relay state on the subinterface gives admin-state, oper-state, the gateway IP address and the configured server list in one output; TAC then does a route-table lookup for each server address from the relay's network-instance before escalating to the DHCP server team."
+    sources:
+      - "https://learn.srlinux.dev/cli/show-commands/dhcp-relay/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-dhcp.html"
+      - "https://learn.srlinux.dev/cli/show-commands/network-instance/"
+      - "https://learn.srlinux.dev/cli/show-commands/acl/"
+
+  # -------------------------------------------------------------- LOGGING ----
+  - id: srl-logging-not-collected
+    class: logging
+    proposed_class: true
+    title: "Log events missing locally or not reaching the remote syslog collector"
+    symptoms:
+      - "An event known to have happened has no corresponding log entry"
+      - "The remote collector stops receiving messages from this device"
+      - "Log files rotate away faster than expected"
+    log_signatures:
+      - "partitionUsageWarning"
+      - "partitionUsageFull"
+      - "systemResourceHighUtilization"
+    likely_causes:
+      - "Subsystem/severity filter excluding the events of interest"
+      - "Remote server destination configured in a network-instance with no route to the collector"
+      - "Log partition full so new records cannot be written"
+      - "Buffer-based destination too small, so events roll over before they are read"
+      - "The collector itself dropping the messages"
+    commands:
+      - {cmd: "show system logging", intent: logging.files, params: []}
+      - {cmd: "show system logging file", intent: logging.file.list, params: []}
+      - {cmd: "show system logging file messages", intent: logging.recent, params: []}
+      - {cmd: "show system logging buffer", intent: logging.buffer.list, params: []}
+      - {cmd: "show system logging buffer messages", intent: logging.buffer, params: []}
+      - {cmd: "info system logging file {logfile}", intent: logging.file.config, params: [logfile]}
+      - {cmd: "show platform resource-monitoring", intent: platform.resource-monitoring, params: []}
+    tac_first_look: "TAC lists the configured log files and buffers first to see which destinations exist and what each one subscribes to; the SR Linux subsystem names (bgp_mgr, aaa_mgr, chassis_mgr, acl, grpc_server, ...) in that configuration are what decide whether an event was ever eligible to be written. Log files live under /var/log/srlinux/file/ and buffers under /var/log/srlinux/buffer/."
+    sources:
+      - "https://documentation.nokia.com/srlinux/26-7/books/config-basics/logg.html"
+      - "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html"
+      - "https://learn.srlinux.dev/cli/show-commands/acl/"
+      - "https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html"

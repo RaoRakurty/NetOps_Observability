@@ -154,6 +154,7 @@ json_str() { printf '%s' "$1" | tr -d '\042\134' | tr -s '[:cntrl:]' ' ' | cut -
 
 # shellcheck disable=SC2329  # invoked indirectly by `trap cleanup EXIT` below
 cleanup() {
+  # shellcheck disable=SC2317  # reached only through the EXIT trap; newer shellcheck reports the body unreachable
   local rc=$?
   # Scratch containers ALWAYS go, even with --keep off the table for the tree:
   # a leaked container holds a port, a name and a few hundred MB of RAM.

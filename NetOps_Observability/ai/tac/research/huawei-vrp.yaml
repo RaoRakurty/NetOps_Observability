@@ -1,0 +1,1413 @@
+vendor: huawei-vrp
+sources:
+  - {title: "NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"}
+  - {title: "NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00"}
+  - {title: "NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance"}
+  - {title: "NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations"}
+  - {title: "CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands"}
+  - {title: "CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands"}
+  - {title: "NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established"}
+  - {title: "NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established"}
+  - {title: "NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down"}
+  - {title: "CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails"}
+  - {title: "CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal"}
+  - {title: "CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces"}
+  - {title: "NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails"}
+  - {title: "NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down"}
+  - {title: "CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure", url: "https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure"}
+
+tac_baseline:
+  commands:
+    - {cmd: "display version", intent: platform.version, params: []}
+    - {cmd: "display startup", intent: platform.boot-config, params: []}
+    - {cmd: "display patch-information", intent: platform.patch, params: []}
+    - {cmd: "display clock", intent: platform.clock, params: []}
+    - {cmd: "display health", intent: platform.environment, params: []}
+    - {cmd: "display health verbose", intent: platform.environment.detail, params: []}
+    - {cmd: "display device", intent: platform.inventory, params: []}
+    - {cmd: "display device pic-status", intent: platform.inventory.subcards, params: []}
+    - {cmd: "display device elabel", intent: platform.inventory.serial, params: []}
+    - {cmd: "display board-reset all", intent: platform.board-reset-history, params: []}
+    - {cmd: "display board-reset card all", intent: platform.board-reset-history.cards, params: []}
+    - {cmd: "display switchover state", intent: platform.redundancy, params: []}
+    - {cmd: "display cpu-usage", intent: system.cpu, params: []}
+    - {cmd: "display memory-usage", intent: system.memory, params: []}
+    - {cmd: "display interface brief main", intent: interface.summary, params: []}
+    - {cmd: "display interface", intent: interface.detail, params: []}
+    - {cmd: "display alarm hardware", intent: alarms.hardware, params: []}
+    - {cmd: "display alarm hardware history all", intent: alarms.hardware.history, params: []}
+    - {cmd: "display alarm active", intent: alarms.active, params: []}
+    - {cmd: "display alarm history", intent: alarms.history, params: []}
+    - {cmd: "display logbuffer", intent: logging.recent, params: []}
+    - {cmd: "display trapbuffer", intent: logging.traps, params: []}
+    - {cmd: "display current-configuration", intent: config.running, params: []}
+    - {cmd: "display saved-configuration", intent: config.startup, params: []}
+    - {cmd: "display configuration recover-result", intent: config.restore-result, params: []}
+    - {cmd: "display configuration commit changes", intent: config.commit.diff, params: []}
+    - {cmd: "display configuration commit list", intent: config.commit.history, params: []}
+    - {cmd: "display license", intent: platform.license, params: []}
+    - {cmd: "dir", intent: filesystem.list, params: []}
+    - {cmd: "display diagnostic-information", intent: support.techsupport.terminal, params: []}
+    - {cmd: "display diagnostic-information {file-name}", intent: support.techsupport, params: [file-name], writes_file: true}
+  notes: >-
+    Huawei TAC's universal ask is the one-click diagnostic bundle plus the buffers. Verified syntax
+    (NE8000 F8 one-click page and CloudEngine V300 spanning-tree page): `display diagnostic-information`
+    is run in the USER view. With the optional file-name argument
+    (`display diagnostic-information dia-info.txt`) the output is written straight to that .txt file —
+    on CE switches it lands in `flash:/` by default, on NE routers in the default storage device
+    (`cfcard:/`); confirm with `dir`, then export by FTP/SFTP/SCP. WITHOUT the argument the whole dump
+    goes to the terminal and can be interrupted with Ctrl+C. Huawei's own caveats, verbatim in
+    substance: do not run it over the console port; it consumes CPU, so if CPU usage is already high
+    collect only the specific commands instead, and do not run it while the system is healthy; and
+    NEVER run it on several terminals at once — the CPU usage rises sharply and system performance
+    deteriorates. It takes a long time to execute. Companion (non-display) collection steps Huawei
+    lists but which WRITE to the device and are therefore excluded from this catalogue: `save logfile`,
+    `save logfile diagnose-log`, `save kpi file`, and `collect diagnostic information [slot <slot-id>]`
+    (diagnose view; produces `cfcard:/diagnostic_information.zip`). The log/KPI/PADS artefacts live in
+    `cfcard:/logfile/`, `cfcard:/logfile/security/`, `cfcard:/logfile/pads/` and `cfcard:/KPISTAT/`;
+    after an active/standby switchover or a restart, TAC needs both main control boards' copies.
+    Personal data caveat: Huawei's own declaration notes diagnostic collection may include user
+    personal data, so the bundle should be handled under the operator's privacy policy.
+    NE vs CE differences: `display device pic-status`, `display board-reset all|card all`,
+    `display configuration commit changes|list`, `display configuration recover-result` and
+    `display license` are the NE/NetEngine baseline; `display health`, `display device elabel`,
+    `display cpu-usage slot <slot-id>` and `display memory-usage slot <slot-id>` are the CE
+    (CloudEngine) baseline. `display health` is documented on both. Chassis-wide `display power`,
+    `display temperature`, `display voltage` come from the NE routine-maintenance command table.
+  sources:
+    - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+    - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00"
+    - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance"
+    - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands"
+    - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs"
+
+issues:
+  - id: vrp-bgp-peer-not-established
+    class: bgp-session
+    title: "BGP peer relationship cannot be established (session stuck in Idle/Connect/Active)"
+    symptoms:
+      - "`display bgp peer` shows State Connect/Idle/Active instead of Established, Peers in established state : 0"
+      - "PrefRcv is 0 and the Up/Down timer keeps resetting"
+      - "Peer shows as 'No neg' when only one side has the address family enabled"
+    log_signatures:
+      - "BGP/2/bgpBackwardTransition_active"
+      - "BGP/2/hwBgpBackwardTransition_active"
+      - "BGP_1.3.6.1.2.1.15.7.2 BACKWARD"
+      - "BGP_1.3.6.1.4.1.2011.5.25.177.1.3.10 hwBgpPeerBackwardTransition"
+    likely_causes:
+      - "BGP messages are not forwarded end to end (link/route to the peer address missing)"
+      - "An ACL filters packets carrying TCP port 179"
+      - "Router IDs of the two peers conflict"
+      - "Configured peer AS number is wrong"
+      - "peer connect-interface / peer ebgp-max-hop missing when loopbacks are used"
+      - "peer valid-ttl-hops (GTSM) mismatched between the ends"
+      - "peer route-limit exceeded by the routes received from the peer"
+      - "peer ignore configured on the remote end"
+      - "Address families of the two ends do not match"
+      - "BGP packets discarded by CPCAR / cpu-defend policy"
+    commands:
+      - {cmd: "display bgp peer", intent: bgp.summary, params: []}
+      - {cmd: "display bgp troubleshooting", intent: bgp.troubleshooting, params: []}
+      - {cmd: "display bgp peer {peer} log-info", intent: bgp.neighbor.log, params: [peer]}
+      - {cmd: "display bgp ipv6 peer", intent: bgp.summary.ipv6, params: []}
+      - {cmd: "display bgp vpnv4 all peer", intent: bgp.summary.vpnv4, params: []}
+      - {cmd: "display bgp vpnv6 all peer", intent: bgp.summary.vpnv6, params: []}
+      - {cmd: "display bgp evpn peer", intent: bgp.summary.evpn, params: []}
+      - {cmd: "display ip routing-table {peer} verbose", intent: route.prefix.detail, params: [peer]}
+      - {cmd: "display acl all", intent: acl.all, params: []}
+      - {cmd: "display current-configuration configuration bgp", intent: config.protocol.bgp, params: []}
+    tac_first_look: "Open `display bgp peer` for State and the Up/Down timer, then `display bgp troubleshooting` and `display bgp peer <ip> log-info` — the Error Code/Subcode there names the cause before anything else is checked. Huawei's own step 2 uses `ping -a <source> -s <size> <peer>` as a diagnostic to prove reachability and MTU on the path, so ping is an allowed step here."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-bgp-peer-down-after-recursion
+    class: bgp-instability
+    title: "BGP peer flaps or goes down after route recursion changes"
+    symptoms:
+      - "`display bgp peer` Up/Down timestamp resets repeatedly within the last hours"
+      - "Peer goes down whenever the recursive next hop of the peer address changes"
+    log_signatures:
+      - "BGP/2/hwBgpBackwardTransition_active"
+      - "BGP_1.3.6.1.4.1.2011.5.25.177.1.3.10 hwBgpPeerBackwardTransition"
+    likely_causes:
+      - "The route the BGP session recurses to is unstable or points at a wrong next hop"
+      - "Overlapping/conflicting static routes to the peer address"
+      - "Underlying IGP or physical interface flapping"
+    commands:
+      - {cmd: "display bgp peer", intent: bgp.summary, params: []}
+      - {cmd: "display bgp troubleshooting", intent: bgp.troubleshooting, params: []}
+      - {cmd: "display bgp peer {peer} log-info", intent: bgp.neighbor.log, params: [peer]}
+      - {cmd: "display ip routing-table {prefix}", intent: route.prefix, params: [prefix]}
+      - {cmd: "display ip routing-table {prefix} verbose", intent: route.prefix.detail, params: [prefix]}
+    tac_first_look: "Compare the peer's Up/Down history from `display bgp peer` and `display bgp peer <ip> log-info` against `display ip routing-table <peer> verbose` — TAC is looking for the recursion next hop changing at the same instants as the session drops."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/94161d4d/case-study-bgp-peer-relationship-goes-down-after-route-recursion"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-bgp-route-not-advertised
+    class: bgp-route-missing
+    title: "A BGP route is not advertised to, or not received from, a peer"
+    symptoms:
+      - "The prefix is present locally but absent from the peer's routing table"
+      - "`display bgp ... routing-table peer <ip> advertised-routes` does not list the prefix"
+      - "The route is present in BGP but marked inactive"
+    log_signatures:
+      - "BGP_1.3.6.1.4.1.2011.5.25.177.1.3.6 hwBgpPeerRouteExceed"
+    likely_causes:
+      - "The route is inactive, so BGP will not advertise it"
+      - "An export or import route-policy filters it out"
+      - "VPN target import/export mismatch in the VPN instance"
+      - "peer route-limit reached, so newly received routes are dropped"
+    commands:
+      - {cmd: "display bgp routing-table {prefix} {prefix-length}", intent: bgp.route.detail, params: [prefix, prefix-length]}
+      - {cmd: "display bgp vpnv4 all routing-table {prefix}", intent: bgp.route.vpnv4, params: [prefix]}
+      - {cmd: "display bgp vpnv4 vpn-instance {vrf} routing-table {prefix}", intent: bgp.route.vrf, params: [vrf, prefix]}
+      - {cmd: "display bgp vpnv4 all routing-table peer {peer} received-routes", intent: bgp.neighbor.received, params: [peer]}
+      - {cmd: "display bgp vpnv4 all routing-table peer {peer} advertised-routes", intent: bgp.neighbor.advertised, params: [peer]}
+      - {cmd: "display ip routing-table vpn-instance {vrf} {prefix} verbose", intent: route.prefix.vrf.detail, params: [vrf, prefix]}
+      - {cmd: "display current-configuration configuration route-policy", intent: config.route-policy, params: []}
+      - {cmd: "display current-configuration configuration vpn-instance {vrf}", intent: config.vrf, params: [vrf]}
+    tac_first_look: "TAC diffs the sender's `... peer <ip> advertised-routes` against the receiver's `... peer <ip> received-routes`; if the sender does not even advertise it, the next look is whether the route is active and what the export route-policy does to it."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised"
+
+  - id: vrp-bgp-public-traffic-interrupted
+    class: bgp-route-missing
+    title: "BGP public-network traffic is interrupted because routes are inactive or filtered"
+    symptoms:
+      - "Prefix present in `display bgp routing-table` but not installed in the IP routing table"
+      - "Routes disappear after a peer or policy change; traffic blackholes"
+    log_signatures:
+      - "BGP_1.3.6.1.4.1.2011.5.25.177.1.3.6 hwBgpPeerRouteExceed"
+    likely_causes:
+      - "Routes are inactive because their next hops are unreachable"
+      - "Routing policies on the peer are misconfigured, so routes are not advertised/received"
+      - "Received routes are dropped because the route limit on the device is reached"
+    commands:
+      - {cmd: "display bgp routing-table {prefix} {prefix-length}", intent: bgp.route.detail, params: [prefix, prefix-length]}
+      - {cmd: "display bgp ipv6 routing-table {prefix} {prefix-length}", intent: bgp.route.detail.ipv6, params: [prefix, prefix-length]}
+      - {cmd: "display current-configuration configuration bgp", intent: config.protocol.bgp, params: []}
+      - {cmd: "display current-configuration configuration bgp | include peer {peer}", intent: config.protocol.bgp.peer, params: [peer]}
+      - {cmd: "display ip routing-table {prefix} verbose", intent: route.prefix.detail, params: [prefix]}
+    tac_first_look: "Start at `display bgp routing-table <prefix> <len>`: if the route is there but not selected, the next hop is unreachable — verify with `display ip routing-table <nexthop> verbose` before touching any policy."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/419852c8/case-study-bgp-public-network-traffic-is-interrupted"
+
+  - id: vrp-ospf-neighbor-down
+    class: ospf-adjacency
+    title: "OSPF neighbor relationship goes Down / will not come up"
+    symptoms:
+      - "`display ospf peer` shows the neighbor absent or stuck below Full"
+      - "`display ospf peer last-nbr-down` records a recent down event"
+      - "Interface is up but no OSPF neighbor forms on it"
+    log_signatures:
+      - "OSPF/6/NBR_CHANGE"
+      - "OSPF_1.3.6.1.2.1.14.16.2.2 ospfNbrStateChange"
+    likely_causes:
+      - "The peer device is faulty or the link is faulty"
+      - "CPU usage is too high to process Hello packets"
+      - "The interface is not Up"
+      - "IP addresses of the two ends are not in the same network segment"
+      - "Router IDs conflict"
+      - "Area types configured on the two ends are inconsistent"
+      - "OSPF parameter settings (timers, network type, authentication) differ between the ends"
+    commands:
+      - {cmd: "display ospf peer", intent: ospf.neighbors, params: []}
+      - {cmd: "display ospf peer last-nbr-down", intent: ospf.neighbors.last-down, params: []}
+      - {cmd: "display ospf troubleshooting", intent: ospf.troubleshooting, params: []}
+      - {cmd: "display ospf interface", intent: ospf.interfaces, params: []}
+      - {cmd: "display ospf brief", intent: ospf.summary, params: []}
+      - {cmd: "display ospf error", intent: ospf.errors, params: []}
+      - {cmd: "display ospf cumulative", intent: ospf.statistics, params: []}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display cpu-usage", intent: system.cpu, params: []}
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+      - {cmd: "display current-configuration configuration ospf", intent: config.protocol.ospf, params: []}
+    tac_first_look: "`display ospf peer last-nbr-down` first — it names the last neighbour that dropped and why; then `display ospf interface` on both ends to compare area, network type, timers and MTU, and `display cpu-usage` to rule out Hello starvation."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-ospf-neighbor-not-full
+    class: ospf-adjacency
+    title: "OSPF neighbor cannot reach the Full state (stuck in ExStart/Exchange/Loading)"
+    symptoms:
+      - "`display ospf peer` shows ExStart, Exchange or Loading and never advances"
+      - "Peer reports the received MTU as 0 (MTU negotiation with a non-Huawei device)"
+      - "State remains at Loading when the Router-LSA approaches 65535 bytes"
+    log_signatures:
+      - "OSPF/6/NBR_CHANGE"
+      - "OSPF_1.3.6.1.2.1.14.16.2.2 ospfNbrStateChange"
+    likely_causes:
+      - "The link drops large packets, so DD/LSU exchange never completes"
+      - "An OSPF neighbor state-related configuration (MTU, network type, DR priority) is incorrect"
+      - "The Router-LSA generated by the device is close to the 65535-byte IP packet limit"
+    commands:
+      - {cmd: "display ospf peer", intent: ospf.neighbors, params: []}
+      - {cmd: "display ospf interface", intent: ospf.interfaces, params: []}
+      - {cmd: "display ospf lsdb", intent: ospf.database, params: []}
+      - {cmd: "display current-configuration configuration ospf", intent: config.protocol.ospf, params: []}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+    tac_first_look: "Huawei's procedure uses `ping -s 1500 <neighbor-address>` at this step to prove the link carries full-size packets — do that alongside `display ospf interface` on both ends, comparing the MTU and DR priority fields."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8d7c113f/case-study-an-ospf-neighbor-relationship-cannot-reach-the-full-state"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/7a694152/case-study-an-ospf-neighbor-relationship-fails-to-be-established-due-to-a-link-fault"
+
+  - id: vrp-ospf-error-packets-increasing
+    class: ospf-database
+    title: "OSPF error-packet counters keep increasing / LSDB inconsistency"
+    symptoms:
+      - "The counters in `display ospf error` grow between two samples five minutes apart"
+      - "Routes calculated from the LSDB do not match the topology"
+    log_signatures:
+      - "OSPF/6/NBR_CHANGE"
+    likely_causes:
+      - "Authentication type or key mismatch on a link"
+      - "Area ID / netmask / Hello-Dead timer mismatch"
+      - "Two LSAs with the same LS ID from different originators"
+      - "Corrupted packets on a degraded link"
+    commands:
+      - {cmd: "display ospf error", intent: ospf.errors, params: []}
+      - {cmd: "display ospf cumulative", intent: ospf.statistics, params: []}
+      - {cmd: "display ospf lsdb", intent: ospf.database, params: []}
+      - {cmd: "display ospf brief", intent: ospf.summary, params: []}
+      - {cmd: "display ospf routing", intent: ospf.routes, params: []}
+      - {cmd: "display current-configuration configuration ospf", intent: config.protocol.ospf, params: []}
+    tac_first_look: "Huawei's routine-maintenance rule is to run `display ospf error`, wait five minutes, run it again and compare — a non-increasing counter clears OSPF as the source; an increasing one points at the mismatched parameter named by the counter."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down"
+
+  - id: vrp-ospf-router-id-conflict
+    class: ospf-database
+    title: "OSPF router ID conflict causes LSA churn and routing loops"
+    symptoms:
+      - "Two devices advertise LSAs with the same router ID; the sequence number rises constantly"
+      - "Default/summary routes in the neighbour's routing table keep changing; irregular packet loss"
+    log_signatures:
+      - "OSPF/6/NBR_CHANGE"
+    likely_causes:
+      - "Two PEs auto-select the same largest interface address as the OSPF router ID (multi-instance/VPN case)"
+      - "Router ID not pinned to a unique loopback address"
+    commands:
+      - {cmd: "display router id", intent: platform.router-id, params: []}
+      - {cmd: "display ospf brief", intent: ospf.summary, params: []}
+      - {cmd: "display ospf lsdb", intent: ospf.database, params: []}
+      - {cmd: "display current-configuration configuration ospf", intent: config.protocol.ospf, params: []}
+    tac_first_look: "TAC compares `display router id` / `display ospf brief` across the pair of devices in the same area or VPN instance, then looks in `display ospf lsdb` for one LS ID whose sequence number is advancing far faster than its neighbours."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/e36010e8/case-study-ospf-routing-loops-caused-by-router-id-conflicts"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations"
+
+  - id: vrp-ospfv3-neighbor-down
+    class: ospf-adjacency
+    title: "OSPFv3 neighbor relationship is Down"
+    symptoms:
+      - "`display ospfv3 peer` does not list the neighbour, or it drops repeatedly"
+      - "`display ospf peer last-nbr-down` / `display ospfv3 troubleshooting` record recent down events"
+    log_signatures:
+      - "OSPFV3/6/OSPFV3_NBR_CHANGE"
+      - "OSPFv3_1.3.6.1.2.1.191.0.2 ospfv3NbrStateChange"
+    likely_causes:
+      - "Link fault or the interface is not Up"
+      - "High CPU usage preventing Hello processing"
+      - "OSPFv3 interface parameters inconsistent between the ends"
+    commands:
+      - {cmd: "display ospfv3 peer", intent: ospf.neighbors.v3, params: []}
+      - {cmd: "display ospfv3 peer last-nbr-down", intent: ospf.neighbors.v3.last-down, params: []}
+      - {cmd: "display ospfv3 troubleshooting", intent: ospf.troubleshooting.v3, params: []}
+      - {cmd: "display ospfv3 interface", intent: ospf.interfaces.v3, params: []}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display cpu-usage", intent: system.cpu, params: []}
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+    tac_first_look: "Same shape as the IPv4 case: `display ospfv3 peer last-nbr-down` for the reason, then `display ospfv3 interface` on both ends for a parameter diff, then `display interface` for physical health."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3abb5715/case-study-an-ospfv3-neighbor-relationship-is-down"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-ospfv3-neighbor-not-full
+    class: ospf-adjacency
+    title: "OSPFv3 neighbor cannot reach the Full state"
+    symptoms:
+      - "OSPFv3 adjacency stalls below Full while the interface stays up"
+    log_signatures:
+      - "OSPFV3/6/OSPFV3_NBR_CHANGE"
+      - "OSPFv3_1.3.6.1.2.1.191.0.2 ospfv3NbrStateChange"
+    likely_causes:
+      - "The link is faulty and drops large packets"
+      - "OSPFv3 neighbour configuration (MTU, instance ID, timers) is incorrect"
+    commands:
+      - {cmd: "display ospfv3 peer", intent: ospf.neighbors.v3, params: []}
+      - {cmd: "display ospfv3 interface", intent: ospf.interfaces.v3, params: []}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+    tac_first_look: "Huawei's procedure runs `ping -s 1500 <neighbor-address>` to prove the link carries full-size packets, then compares `display ospfv3 interface` on both ends."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/4ad1a39a/case-study-an-ospfv3-neighbor-relationship-cannot-reach-the-full-state"
+
+  - id: vrp-isis-adjacency-not-established
+    class: isis-adjacency
+    title: "IS-IS neighbor relationship cannot be established"
+    symptoms:
+      - "`display isis peer` does not list the neighbour, or it stays in Init/Down"
+      - "`display isis error interface <if>` counters increase"
+      - "`display isis last-peer-change` shows repeated churn"
+    log_signatures:
+      - "ISIS/5/IS_ADJ_CHANGE"
+      - "ISIS/5/IS_CIRC_STATE_SET"
+      - "ISIS/3/ISIS_REJECTED_ADJACENCY"
+      - "ISIS/3/ISIS_AREA_MISMATCH"
+      - "ISIS/3/ISIS_AUTHENTICATION_FAILURE"
+      - "ISIS/3/ISIS_AUTHENTICATION_TYPE_FAILURE"
+      - "ISIS/2/ISIS_ID_LEN_MISMATCH"
+      - "ISIS/6/ISIS_SYS_ID_CONFLICT"
+      - "ISIS/6/IS_REMOTE_SYS_ID_CONFLICT"
+      - "ISIS/4/IS_RECV_ERR_PKT"
+      - "ISIS_1.3.6.1.3.37.2.0.17 isisAdjacencyChange"
+      - "ISIS_1.3.6.1.4.1.2011.5.25.24.2.4.49 hwIsisSystemIdCfgConflict"
+    likely_causes:
+      - "Hello packets cannot be sent/received because of a device or link fault"
+      - "The same system ID is configured at both ends"
+      - "Interface MTUs differ, or the MTU is smaller than the Hello packet — classic with non-Huawei neighbours"
+      - "Link types (broadcast vs P2P) at the two ends are inconsistent"
+      - "Interface IP addresses are on different network segments"
+      - "IS-IS authentication modes differ"
+      - "IS-IS levels mismatch, or Level-1 area addresses do not match"
+      - "Multicast connectivity on the link is abnormal"
+    commands:
+      - {cmd: "display isis peer", intent: isis.adjacency, params: []}
+      - {cmd: "display isis peer verbose", intent: isis.adjacency.detail, params: []}
+      - {cmd: "display isis last-peer-change", intent: isis.adjacency.last-change, params: []}
+      - {cmd: "display isis troubleshooting", intent: isis.troubleshooting, params: []}
+      - {cmd: "display isis error interface {interface}", intent: isis.errors.interface, params: [interface]}
+      - {cmd: "display isis brief", intent: isis.summary, params: []}
+      - {cmd: "display default-parameter isis", intent: isis.defaults, params: []}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display current-configuration interface {interface}", intent: config.interface, params: [interface]}
+      - {cmd: "display current-configuration configuration isis", intent: config.protocol.isis, params: []}
+    tac_first_look: "`display isis error interface <if>` is the fastest discriminator — it counts the exact rejection reason (area mismatch, auth, MTU, system-ID) — cross-checked against `display isis last-peer-change` and an MTU diff from `display interface` on both ends."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-isis-routes-not-learned
+    class: isis-lsp
+    title: "Device fails to learn IS-IS routes although the adjacency is up"
+    symptoms:
+      - "Prefix is absent from `display isis route` and from `display ip routing-table <prefix>`"
+      - "The originating LSP is missing or truncated in `display isis lsdb verbose`"
+    log_signatures:
+      - "ISIS/5/IS_ADJ_CHANGE"
+      - "ISIS/4/IS_RECV_ERR_PKT"
+      - "ISIS_1.3.6.1.3.37.2.0.17 isisAdjacencyChange"
+    likely_causes:
+      - "Another protocol advertises the same prefix with a better preference"
+      - "The imported external route has a low priority and is not selected"
+      - "The IS-IS neighbor relationship is not actually established"
+      - "Cost styles (narrow/wide) or authentication types do not match, or a route-policy filters the route"
+      - "Lower-layer/link faults cause LSPs to be lost"
+      - "Route import type differs from the non-Huawei peer's (internal vs external metric)"
+    commands:
+      - {cmd: "display isis route", intent: isis.routes, params: []}
+      - {cmd: "display isis peer", intent: isis.adjacency, params: []}
+      - {cmd: "display isis lsdb", intent: isis.database, params: []}
+      - {cmd: "display isis lsdb verbose", intent: isis.database.detail, params: []}
+      - {cmd: "display isis lsdb verbose local", intent: isis.database.local, params: []}
+      - {cmd: "display ip routing-table {prefix}", intent: route.prefix, params: [prefix]}
+      - {cmd: "display ip routing-table {prefix} verbose", intent: route.prefix.detail, params: [prefix]}
+      - {cmd: "display current-configuration configuration isis", intent: config.protocol.isis, params: []}
+    tac_first_look: "Walk it backwards: is the prefix in `display ip routing-table`, then in `display isis route`, then in the originator's `display isis lsdb verbose local`? The first hop where it disappears names the layer at fault."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/6af66187/case-study-a-device-fails-to-learn-is-is-routes"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/bf782e02/case-study-upper-layer-device-fails-to-learn-is-is-routes-because-the-is-is-route-import-type-is-different-from-that-on-the-non-huawei-device"
+
+  - id: vrp-isis-route-flapping
+    class: isis-lsp
+    title: "IS-IS route flapping"
+    symptoms:
+      - "Routes repeatedly appear and disappear from `display isis route` / `display ip routing-table`"
+      - "LSP sequence numbers advance abnormally fast in `display isis lsdb verbose`"
+    log_signatures:
+      - "ISIS/6/ISIS_PEER_FLAP_SUPPRESS_STATUS"
+      - "ISIS/5/IS_ADJ_CHANGE"
+    likely_causes:
+      - "The IS-IS neighbor relationship itself flaps"
+      - "The MPLS LSP flaps underneath"
+      - "IS-IS imports the same external route on two devices with a preference lower than an IS-IS route"
+      - "Two devices on the network share the same system ID"
+    commands:
+      - {cmd: "display isis brief", intent: isis.summary, params: []}
+      - {cmd: "display isis last-peer-change", intent: isis.adjacency.last-change, params: []}
+      - {cmd: "display isis lsdb verbose", intent: isis.database.detail, params: []}
+      - {cmd: "display mpls lsp", intent: mpls.lsp, params: []}
+      - {cmd: "display ip routing-table {prefix} verbose", intent: route.prefix.detail, params: [prefix]}
+    tac_first_look: "TAC lines up `display isis last-peer-change` against `display mpls lsp` — if the adjacency is stable but the LSP is not, the flap is MPLS-side; a duplicated system ID shows up as two originators for one LSP ID in `display isis lsdb verbose`."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/4ea6050/case-study-is-is-route-flapping-occurs"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-interface-crc-errors
+    class: interface-errors
+    title: "CRC / error packets increasing on an interface"
+    symptoms:
+      - "`CRC` counter in the interface statistics keeps increasing"
+      - "Input error counters (shortpacket, longpacket, CRC, lostpacket) rise between samples"
+      - "Intermittent application errors on an otherwise 'up' link"
+    log_signatures: []
+    likely_causes:
+      - "Faulty or aged network cable / fibre degrading link quality"
+      - "Dirty or damaged optical connectors"
+      - "Duplex or clocking mismatch on the segment"
+    commands:
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display interface brief", intent: interface.summary, params: []}
+      - {cmd: "display interface brief main", intent: interface.summary.main, params: []}
+      - {cmd: "display interface {interface} transceiver verbose", intent: optics.dom, params: [interface]}
+    tac_first_look: "Sample `display interface <if>` twice a few minutes apart and compare the CRC/Giants/Runts block; a rising CRC count with normal optical power in `... transceiver verbose` points at the cable, not the module."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/e1bbef8/case-study-crc-error-packets-are-generated-on-an-interface-due-to-a-network-cable-fault"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations"
+
+  - id: vrp-interface-link-flap
+    class: link-flap
+    title: "Interface (often optical) frequently alternates between Up and Down"
+    symptoms:
+      - "Repeated IF_STATE up/down log entries for the same interface within minutes"
+      - "Intermittent service interruption on the attached users"
+    log_signatures:
+      - "IFPDT/4/IF_STATE"
+      - "IFNET/4/IF_STATE"
+      - "IFNET/4/LINKNO_STATE"
+    likely_causes:
+      - "Wrong fibre grade for the distance (e.g. non-OM4 fibre on a 210 m multimode run) causing marginal optical budget"
+      - "Optical module not seated properly or failing"
+      - "Dirty connectors / excessive attenuation"
+    commands:
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+      - {cmd: "display trapbuffer", intent: logging.traps, params: []}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display interface {interface} transceiver verbose", intent: optics.dom, params: [interface]}
+    tac_first_look: "Timestamp the flaps from `display logbuffer`, then read `display interface <if> transceiver verbose` for Rx/Tx power against the module's own high/low thresholds — a receive power near the low threshold with a long multimode run is the classic fibre-grade fault."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/e9a393ff/case-study-optical-interfaces-connecting-devices-frequently-alternates-between-up-and-down"
+
+  - id: vrp-interface-physically-down
+    class: interface-errors
+    title: "Ethernet interface is physically Down (connection-medium or module fault)"
+    symptoms:
+      - "`display interface brief` shows PHY down while the configuration is intact"
+      - "Peer interface is also down, or shows no received light"
+    log_signatures:
+      - "IFPDT/4/IF_STATE"
+      - "IFNET/4/IF_STATE"
+    likely_causes:
+      - "Transmission medium is aged or damaged"
+      - "The optical module fails to receive or transmit optical signals"
+      - "Wrong medium for the port type (low-speed cable, wrong module)"
+      - "Device hardware fault on the port/board"
+    commands:
+      - {cmd: "display interface brief", intent: interface.summary, params: []}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display interface {interface} transceiver verbose", intent: optics.dom, params: [interface]}
+      - {cmd: "display alarm active", intent: alarms.active, params: []}
+      - {cmd: "display device", intent: platform.inventory, params: []}
+    tac_first_look: "`display interface <if> transceiver verbose` decides it in one look: a Tx power of -40 dBm means the local laser is dead, a normal Tx with no Rx means the far end or the fibre; only then does the board itself come under suspicion."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/ac92c1eb/an-interface-is-physically-down-due-to-a-connection-medium-fault"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces"
+
+  - id: vrp-optics-no-transmit-light
+    class: optics
+    title: "Optical module does not send optical signals (Tx power -40 dBm)"
+    symptoms:
+      - "`display interface <if> transceiver verbose` reports Current TX Power (dBm) of -40.00 on all lanes"
+      - "Far-end interface reports loss of signal"
+    log_signatures: []
+    likely_causes:
+      - "The optical module is faulty or not securely installed"
+      - "Device management or driver software defect"
+    commands:
+      - {cmd: "display interface {interface} transceiver verbose", intent: optics.dom, params: [interface]}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display alarm active", intent: alarms.active, params: []}
+      - {cmd: "display version", intent: platform.version, params: []}
+      - {cmd: "display patch-information", intent: platform.patch, params: []}
+    tac_first_look: "Read the Diagnostic information block of `display interface <if> transceiver verbose`: -40 dBm Tx on every lane with a healthy bias current and temperature is a module/driver fault, and TAC will want the version and patch state alongside it."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/3c2ddc7a/an-optical-module-does-not-send-optical-signals"
+
+  - id: vrp-optics-low-tx-power
+    class: optics
+    title: "Transmit optical power of an optical module is out of the standard range"
+    symptoms:
+      - "Tx power in `display interface <if> transceiver verbose` is below the module's low threshold but above -40 dBm"
+      - "Errored frames or link instability on a long span"
+    log_signatures: []
+    likely_causes:
+      - "Optical bores of the module are contaminated"
+      - "The laser transmission circuit of the module is degrading"
+    commands:
+      - {cmd: "display interface {interface} transceiver verbose", intent: optics.dom, params: [interface]}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+    tac_first_look: "Compare Current TX Power against the module's own Default TX Power High/Low Threshold lines in the same output — TAC treats a value below the low threshold with rising CRC counts as a module-replacement case."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/5cea559f/the-transmit-optical-power-of-an-optical-module-is-too-low"
+
+  - id: vrp-ethtrunk-lacp-not-up
+    class: lag-lacp
+    proposed_class: true
+    title: "Eth-Trunk in LACP mode does not go Up (often against a third-party switch)"
+    symptoms:
+      - "`display eth-trunk <id>` shows Operating Status: down, Number Of Up Ports In Trunk: 0"
+      - "Member ports are physically up but every ActorPortName shows Status Unselect"
+      - "Partner block shows SysPri 0 / SystemID all-zero — no LACPDUs from the far end"
+    log_signatures:
+      - "TRUNK/4/TRUNKDOWN"
+      - "TRUNK/4/TRUNKUP"
+    likely_causes:
+      - "Far end is in static/manual mode while the local end is LACP"
+      - "LACP selection standards differ between vendors"
+      - "Member interfaces cross-connected to the wrong far-end ports"
+      - "LACPDUs dropped or malformed on the link"
+    commands:
+      - {cmd: "display eth-trunk {trunk-id}", intent: lag.detail, params: [trunk-id]}
+      - {cmd: "display lacp statistics eth-trunk {trunk-id}", intent: lag.lacp.statistics, params: [trunk-id]}
+      - {cmd: "display lacp error packet eth-trunk {trunk-id}", intent: lag.lacp.errors, params: [trunk-id]}
+      - {cmd: "display interface brief", intent: interface.summary, params: []}
+    tac_first_look: "`display eth-trunk <id>` and read the Partner block first: an all-zero partner SystemID means no LACPDUs are arriving at all, which `display lacp statistics eth-trunk <id>` confirms by a flat received counter."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/776eef23/case-study-an-eth-trunk-interface-in-lacp-mode-cannot-go-up-when-a-device-connects-to-a-switch-of-another-vendor-through-the-eth-trunk-interface"
+
+  - id: vrp-ethtrunk-lacp-flap
+    class: lag-lacp
+    proposed_class: true
+    title: "Eth-Trunk in LACP mode frequently alternates between Up and Down"
+    symptoms:
+      - "Repeated TRUNKUP/TRUNKDOWN traps for the same Eth-Trunk within seconds"
+      - "Attached Vlanif interfaces and default routes churn at the same timestamps"
+    log_signatures:
+      - "TRUNK/4/TRUNKDOWN"
+      - "TRUNK/4/TRUNKUP"
+      - "IFNET/4/IF_STATE"
+      - "IFNET/4/LINKNO_STATE"
+      - "RM/4/IPV4_DEFT_RT_CHG"
+    likely_causes:
+      - "LACPDU receive timeout set to fast mode, so brief control-plane delays tear the bundle down"
+      - "LACPDUs discarded by CPCAR when the control plane is under load"
+    commands:
+      - {cmd: "display trapbuffer", intent: logging.traps, params: []}
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+      - {cmd: "display eth-trunk {trunk-id}", intent: lag.detail, params: [trunk-id]}
+      - {cmd: "display lacp statistics eth-trunk {trunk-id}", intent: lag.lacp.statistics, params: [trunk-id]}
+      - {cmd: "display cpu-defend statistics all", intent: cpp.statistics, params: []}
+    tac_first_look: "Correlate the TRUNKDOWN timestamps in `display trapbuffer` with the Timeout Period field of `display eth-trunk <id>`; if it reads Fast, TAC then checks `display cpu-defend statistics all` for LACP drops before blaming the link."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/67b5e314/case-study-an-eth-trunk-interface-in-lacp-mode-frequently-alternates-between-up-and-down-states"
+
+  - id: vrp-board-registration-failure
+    class: hardware-fault
+    title: "Interface board / subcard fails to register"
+    symptoms:
+      - "`display device` shows the slot as not registered or Abnormal"
+      - "`display device pic-status` shows the subcard missing"
+      - "Board reset history shows a recent unexpected reset"
+    log_signatures: []
+    likely_causes:
+      - "The board has not completed startup yet"
+      - "The board type is not supported by the running system software"
+      - "The board cannot be powered on"
+      - "The board is not securely inserted"
+      - "Standby MPU: system software package differs from the active MPU, or memory / CF card is faulty"
+    commands:
+      - {cmd: "display device", intent: platform.inventory, params: []}
+      - {cmd: "display device pic-status", intent: platform.inventory.subcards, params: []}
+      - {cmd: "display board-reset {slot-id}", intent: platform.board-reset-history.slot, params: [slot-id]}
+      - {cmd: "display board-reset all", intent: platform.board-reset-history, params: []}
+      - {cmd: "display version", intent: platform.version, params: []}
+      - {cmd: "display switchover state", intent: platform.redundancy, params: []}
+      - {cmd: "display alarm hardware", intent: alarms.hardware, params: []}
+      - {cmd: "display power", intent: platform.power, params: []}
+    tac_first_look: "`display device` plus `display board-reset <slot-id>` establish whether the board never came up or came up and reset; `display version` on both MPUs settles the software-mismatch cause for a standby MPU that will not register."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/9cdcba9c/case-study-interface-board-registration-failure"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/7c095382/case-study-standby-main-control-board-registration-failure"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-environment-power-fan-temperature
+    class: hardware-fault
+    title: "Power, fan, voltage or temperature alarm on the chassis"
+    symptoms:
+      - "Hardware alarms present in `display alarm hardware`"
+      - "`display health` reports abnormal temperature, power, fan or storage-medium status"
+    log_signatures: []
+    likely_causes:
+      - "Failed or unseated power module; no redundant PSU installed"
+      - "Fan module failure or blocked/dirty air filter"
+      - "Ambient temperature or airflow problem"
+      - "Voltage sensor out of range on a slot"
+    commands:
+      - {cmd: "display health", intent: platform.environment, params: []}
+      - {cmd: "display health verbose", intent: platform.environment.detail, params: []}
+      - {cmd: "display alarm hardware", intent: alarms.hardware, params: []}
+      - {cmd: "display alarm hardware history all", intent: alarms.hardware.history, params: []}
+      - {cmd: "display power", intent: platform.power, params: []}
+      - {cmd: "display temperature", intent: platform.temperature, params: []}
+      - {cmd: "display voltage", intent: platform.voltage, params: []}
+      - {cmd: "display device", intent: platform.inventory, params: []}
+    tac_first_look: "Huawei's own order: `display alarm hardware` first to see whether a hardware alarm exists at all, then `display alarm active` for software alarms; `display health` gives the temperature/power/fan/CPU/memory snapshot in one screen."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands"
+
+  - id: vrp-high-cpu
+    class: high-cpu
+    title: "High CPU usage on the main control board or an LPU"
+    symptoms:
+      - "`display cpu-usage` above 80% sustained; `display health` flags CPU"
+      - "Protocol adjacencies (OSPF/IS-IS/BGP/LACP) drop while the links stay up"
+      - "Slow CLI response, delayed alarms"
+    log_signatures: []
+    likely_causes:
+      - "Control-plane attack or a broadcast/ARP storm punting packets to the CPU"
+      - "A single process consuming the CPU (visible per-process)"
+      - "STP TC BPDU storm causing repeated recalculation"
+      - "Protocol churn — large-scale route or LSA flapping"
+    commands:
+      - {cmd: "display cpu-usage", intent: system.cpu, params: []}
+      - {cmd: "display cpu-usage slot {slot-id}", intent: system.cpu.slot, params: [slot-id]}
+      - {cmd: "display health", intent: platform.environment, params: []}
+      - {cmd: "display system os-process slot {slot-id}", intent: system.processes, params: [slot-id]}
+      - {cmd: "display cpu-defend statistics all", intent: cpp.statistics, params: []}
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+    tac_first_look: "Compare `display cpu-usage` on the MPU with `display cpu-usage slot <slot-id>` on the line cards to localise it, then `display system os-process slot <slot-id>` to name the process — TAC will not accept a CPU case without both."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/e8e6b765/checking-the-cpu-usage"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-high-memory
+    class: high-memory
+    title: "High memory usage on the main control board or an LPU"
+    symptoms:
+      - "`display memory-usage` above the 80% guidance threshold"
+      - "`display health` flags memory; processes restart or fail to allocate"
+    log_signatures: []
+    likely_causes:
+      - "Very large routing/forwarding tables relative to the platform"
+      - "A leaking process on a specific board"
+      - "Excessive on-box logging or diagnostic collection running concurrently"
+    commands:
+      - {cmd: "display memory-usage", intent: system.memory, params: []}
+      - {cmd: "display memory-usage slot {slot-id}", intent: system.memory.slot, params: [slot-id]}
+      - {cmd: "display health", intent: platform.environment, params: []}
+      - {cmd: "display health verbose", intent: platform.environment.detail, params: []}
+      - {cmd: "display version", intent: platform.version, params: []}
+      - {cmd: "display patch-information", intent: platform.patch, params: []}
+    tac_first_look: "Huawei's mandatory check is that memory and CPU stay under 80% (`display health` / `display health verbose`); if a single slot is high, `display memory-usage slot <slot-id>` isolates it and TAC pairs it with the version/patch state."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands"
+
+  - id: vrp-cpcar-protocol-packet-drops
+    class: control-plane-policing
+    proposed_class: true
+    title: "Protocol packets discarded by CPCAR / cpu-defend (BGP, OSPF, LDP, LACP, ARP)"
+    symptoms:
+      - "Sessions flap although the link and configuration are correct"
+      - "`display cpu-defend statistics all` shows a rising drop count for a protocol"
+      - "`display attack-source-trace slot <slot> brief` records the protocol's own source/port as 'attack' traffic"
+    log_signatures: []
+    likely_causes:
+      - "A cpu-defend policy CAR (e.g. `car bgp cir 20`) set far below the real protocol rate"
+      - "Genuine control-plane attack filling the leaky bucket"
+      - "Whitelist not covering the protocol on that slot"
+    commands:
+      - {cmd: "display cpu-defend policy {policy-id}", intent: cpp.policy, params: [policy-id]}
+      - {cmd: "display cpu-defend all statistics slot {slot-id}", intent: cpp.statistics.slot, params: [slot-id]}
+      - {cmd: "display cpu-defend statistics all", intent: cpp.statistics, params: []}
+      - {cmd: "display cpu-defend rate all", intent: cpp.rate, params: []}
+      - {cmd: "display cpu-defend car", intent: cpp.car, params: []}
+      - {cmd: "display cpu-defend auto-port-defend statistics", intent: cpp.auto-port-defend, params: []}
+      - {cmd: "display attack-source-trace slot {slot-id} brief", intent: cpp.attack-source-trace, params: [slot-id]}
+      - {cmd: "display auto-source-trace record", intent: cpp.auto-source-trace, params: []}
+      - {cmd: "display current-configuration configuration cpu-defend-policy", intent: config.cpu-defend, params: []}
+      - {cmd: "display cpu-usage", intent: system.cpu, params: []}
+    tac_first_look: "Huawei's BGP procedure does exactly this: `display attack-source-trace slot <slot> brief` to see which protocol's own packets are being metered, then `display cpu-defend policy <n>` and `display current-configuration configuration cpu-defend-policy` for the CAR value that is starving it."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/1b3fe2d1/troubleshooting-guidelines-for-attack-defense"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-management-plane-protection
+    class: control-plane-policing
+    proposed_class: true
+    title: "Management-plane protection (MA-defend) drops management traffic"
+    symptoms:
+      - "Telnet/SSH/SNMP/NetConf to the device times out from some sources but not others"
+      - "`display cpu-defend ma-defend statistics` shows drops on the management channel"
+    log_signatures: []
+    likely_causes:
+      - "An incorrect management-plane protection policy (interface, slot or global) rate-limits or blocks legitimate management traffic"
+    commands:
+      - {cmd: "display cpu-defend ma-defend statistics", intent: cpp.ma-defend.statistics, params: []}
+      - {cmd: "display ma-defend global-policy", intent: cpp.ma-defend.policy.global, params: []}
+      - {cmd: "display ma-defend interface-policy {policy-id}", intent: cpp.ma-defend.policy.interface, params: [policy-id]}
+      - {cmd: "display ma-defend slot-policy {policy-id}", intent: cpp.ma-defend.policy.slot, params: [policy-id]}
+    tac_first_look: "`display cpu-defend ma-defend statistics` shows whether management packets are being dropped at all; the three `display ma-defend ...-policy` outputs then show which of the global/slot/interface policies is responsible."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/36510dea/case-study-management-plane-protection-malfunctions"
+
+  - id: vrp-ldp-session-down
+    class: mpls-ldp
+    title: "MPLS LDP session goes Down"
+    symptoms:
+      - "`display mpls ldp session` shows the session absent or not Operational"
+      - "LSPs disappear and MPLS-carried services break while IGP stays up"
+      - "`display mpls ldp event session-down` records the drop"
+    log_signatures: []
+    likely_causes:
+      - "The interface carrying the LDP session is shut down"
+      - "MPLS or MPLS LDP has been disabled on the interface or the remote-peer removed"
+      - "No route to the peer LSR-ID exists"
+      - "The LDP Keepalive timer expired"
+      - "The LDP Hello-hold timer expired"
+    commands:
+      - {cmd: "display mpls ldp session", intent: ldp.session, params: []}
+      - {cmd: "display mpls ldp peer", intent: ldp.peer, params: []}
+      - {cmd: "display mpls ldp interface", intent: ldp.interface, params: []}
+      - {cmd: "display mpls ldp event session-down", intent: ldp.session.down-events, params: []}
+      - {cmd: "display mpls lsp", intent: mpls.lsp, params: []}
+      - {cmd: "display ip routing-table {prefix}", intent: route.prefix, params: [prefix]}
+      - {cmd: "display current-configuration", intent: config.running, params: []}
+    tac_first_look: "`display mpls ldp session` then `display mpls ldp event session-down` for the reason code, and `display ip routing-table <peer-lsr-id>` — a missing /32 to the peer LSR-ID is the single most common cause."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-sr-mpls-be-lsp-down
+    class: segment-routing
+    proposed_class: true
+    title: "SR-MPLS BE LSP goes Down"
+    symptoms:
+      - "`display segment-routing prefix mpls forwarding` has no entry for the destination prefix"
+      - "SR-carried services blackhole although the IGP route is present"
+    log_signatures:
+      - "ISIS/4/IS_PREFIX_SID_CONFLICT"
+      - "ISIS/4/IS_PREFIX_SID_NOT_ELIGIBLE"
+      - "ISIS/4/IS_PREFIX_SID_OVER_RANGE"
+      - "OSPF/4/OSPF_SRGB_OVERLAP"
+      - "OSPF/4/OSPF_PREFIX_SID_NOT_ELIGIBLE"
+      - "OSPF/4/OSPF_PREFIX_SID_OVER_RANGE"
+      - "OSPF/4/OSPF_SR_NODE_UNSUPPORT"
+      - "OSPF/4/OSPF_SR_OUTIF_UNSUPPORT"
+      - "OSPF_1.3.6.1.4.1.2011.5.25.353.2.1 hwSrPrefixSidConflict"
+    likely_causes:
+      - "Forwarding entries fail to be delivered"
+      - "The SR-MPLS BE configuration is incomplete"
+      - "The corresponding IGP route is inactive"
+      - "A prefix or SID conflict exists in the domain"
+      - "The SR next hop does not exist"
+      - "The prefix SID is outside the smallest SRGB among the SR nodes on the primary LSP"
+    commands:
+      - {cmd: "display segment-routing prefix mpls forwarding", intent: sr.prefix.forwarding, params: []}
+      - {cmd: "display segment-routing state ip-prefix {prefix} {prefix-length}", intent: sr.prefix.state, params: [prefix, prefix-length]}
+      - {cmd: "display ip routing-table {prefix}", intent: route.prefix, params: [prefix]}
+      - {cmd: "display mpls lsp", intent: mpls.lsp, params: []}
+      - {cmd: "display current-configuration", intent: config.running, params: []}
+    tac_first_look: "`display segment-routing state ip-prefix <prefix> <len>` names the failure directly (SID conflict, out-of-SRGB, ineligible); the SR log signatures above from `display logbuffer` corroborate which node originated the conflict."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/7c599393/case-study-an-sr-mpls-be-lsp-goes-down"
+
+  - id: vrp-sr-mpls-te-tunnel-down
+    class: segment-routing
+    proposed_class: true
+    title: "SR-MPLS TE tunnel interface goes Down"
+    symptoms:
+      - "`display interface Tunnel {n}` shows current state : DOWN"
+      - "`display mpls te tunnel-interface` shows the tunnel not Up; CSPF finds no path"
+    log_signatures: []
+    likely_causes:
+      - "Explicit path hops unreachable or adjacency SIDs missing"
+      - "CSPF cannot compute a path to the destination"
+      - "Bound MPLS BFD session is down"
+      - "Tunnel interface administratively down"
+    commands:
+      - {cmd: "display interface Tunnel {tunnel-id}", intent: interface.detail.tunnel, params: [tunnel-id]}
+      - {cmd: "display mpls te tunnel-interface", intent: mpls.te.tunnels, params: []}
+      - {cmd: "display mpls te tunnel path", intent: mpls.te.path, params: []}
+      - {cmd: "display explicit-path {path-name}", intent: mpls.te.explicit-path, params: [path-name]}
+      - {cmd: "display mpls bfd session", intent: mpls.bfd.session, params: []}
+      - {cmd: "display segment-routing adjacency mpls forwarding", intent: sr.adjacency.forwarding, params: []}
+      - {cmd: "display segment-routing prefix mpls forwarding", intent: sr.prefix.forwarding, params: []}
+      - {cmd: "display mpls sr-te cspf destination {destination}", intent: sr.te.cspf, params: [destination]}
+    tac_first_look: "`display mpls te tunnel-interface` for the down reason, then `display mpls sr-te cspf destination <ip>` to see whether CSPF has the adjacency SIDs it needs; `display explicit-path <name>` catches a hop that no longer exists."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1ac1d82e/case-study-an-sr-mpls-te-tunnel-goes-down"
+
+  - id: vrp-l3vpn-ce-to-ce-unreachable
+    class: mpls-l3vpn
+    proposed_class: true
+    title: "L3VPN sites cannot reach each other (PE VPNs cannot ping each other)"
+    symptoms:
+      - "CE-to-CE traffic fails while each CE reaches its own PE"
+      - "VPN route absent from the remote PE's `display ip routing-table vpn-instance <vrf>`"
+      - "No public LSP between the PE loopbacks"
+    log_signatures: []
+    likely_causes:
+      - "VPNv4/VPNv6 peer relationship not established between the PEs"
+      - "VPN target import/export mismatch"
+      - "Public tunnel (LDP LSP) between the PE loopbacks is missing"
+      - "Loopback mask not /32, so no host LSP is built"
+      - "Route-policy on an RR filters the VPN routes"
+    commands:
+      - {cmd: "display bgp vpnv4 all peer", intent: bgp.summary.vpnv4, params: []}
+      - {cmd: "display bgp vpnv6 all peer", intent: bgp.summary.vpnv6, params: []}
+      - {cmd: "display bgp vpnv6 vpn-instance {vrf} routing-table {prefix} {prefix-length}", intent: bgp.route.vrf.v6, params: [vrf, prefix, prefix-length]}
+      - {cmd: "display ip routing-table vpn-instance {vrf}", intent: route.table.vrf, params: [vrf]}
+      - {cmd: "display mpls ldp peer", intent: ldp.peer, params: []}
+      - {cmd: "display mpls lsp", intent: mpls.lsp, params: []}
+      - {cmd: "display mpls lsp include {prefix} {prefix-length}", intent: mpls.lsp.filtered, params: [prefix, prefix-length]}
+      - {cmd: "display current-configuration configuration vpn-instance {vrf}", intent: config.vrf, params: [vrf]}
+    tac_first_look: "Three checks in order: is the VPNv4/VPNv6 peer Established, does `display mpls lsp include <pe-loopback> 32` show a public LSP, and does the remote PE's VRF table hold the prefix. The first one that fails is the case."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/9339ba62/case-study-pe-vpns-cannot-ping-each-other"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8d4f4f3a/case-study-the-vpn-routing-table-of-a-pe-does-not-contain-routes-sent-from-the-remote-pe"
+
+  - id: vrp-l3vpn-routes-flap
+    class: mpls-l3vpn
+    proposed_class: true
+    title: "L3VPN routes flap frequently because of physical interface flapping"
+    symptoms:
+      - "VPN routes appear and disappear in step with an interface's up/down cycle"
+      - "LDP session and IGP LSDB churn at the same timestamps"
+    log_signatures:
+      - "IFNET/4/IF_STATE"
+      - "ISIS/5/IS_ADJ_CHANGE"
+    likely_causes:
+      - "A physical interface in the core flapping and taking the IGP route, the LSP and the VPN route with it"
+      - "Optical/cable degradation on that span"
+    commands:
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display ip routing-table {prefix}", intent: route.prefix, params: [prefix]}
+      - {cmd: "display isis lsdb verbose", intent: isis.database.detail, params: []}
+      - {cmd: "display mpls lsp include {prefix} {prefix-length}", intent: mpls.lsp.filtered, params: [prefix, prefix-length]}
+      - {cmd: "display mpls ldp session", intent: ldp.session, params: []}
+      - {cmd: "display mpls ldp peer", intent: ldp.peer, params: []}
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+    tac_first_look: "Anchor on the interface: `display interface <if>` for the flap counters, then check whether the LSP in `display mpls lsp include <loopback> 32` and the LDP session drop at exactly those times."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd25bbb5/case-study-l3vpn-routes-flap-frequently-due-to-physical-interface-flapping"
+
+  - id: vrp-vxlan-tunnel-down
+    class: evpn-vxlan
+    title: "VXLAN tunnel fails to be established / goes down"
+    symptoms:
+      - "`display vxlan tunnel` shows State down for the tunnel"
+      - "`display vxlan troubleshooting` records the tunnel going down with a reason"
+      - "VMs behind different VTEPs cannot communicate through the Layer 3 gateway"
+    log_signatures: []
+    likely_causes:
+      - "The route to the source or destination VTEP address is unreachable, or there is no 32-bit host route to it"
+      - "The BGP EVPN peer relationship is not established"
+    commands:
+      - {cmd: "display vxlan troubleshooting", intent: vxlan.troubleshooting, params: []}
+      - {cmd: "display vxlan tunnel", intent: vxlan.tunnels, params: []}
+      - {cmd: "display bgp evpn peer", intent: bgp.summary.evpn, params: []}
+      - {cmd: "display ip routing-table {prefix}", intent: route.prefix, params: [prefix]}
+    tac_first_look: "`display vxlan troubleshooting` states the cause in the Event Description line (typically 'no 32-bit route was available to the source or destination address'); confirm with `display ip routing-table <vtep-ip>` and `display bgp evpn peer`."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails"
+
+  - id: vrp-evpn-routes-not-learned
+    class: evpn-vxlan
+    title: "EVPN routes for a host cannot be learned on a leaf"
+    symptoms:
+      - "`display ip routing-table vpn-instance <vrf> <host-ip>` returns nothing on the local leaf"
+      - "Remote leaf has the ARP entry but the MAC/IP route never appears in the EVPN table"
+    log_signatures: []
+    likely_causes:
+      - "The remote leaf has not learned the host's ARP entry"
+      - "A route-policy on either leaf filters the route, or VPN targets are inconsistent"
+      - "The remote leaf does not convert ARP entries into EVPN routes for advertisement"
+      - "EVPN route attributes advertised by the remote leaf are incorrect"
+    commands:
+      - {cmd: "display ip routing-table vpn-instance {vrf} {prefix}", intent: route.prefix.vrf, params: [vrf, prefix]}
+      - {cmd: "display arp network {prefix}", intent: arp.network, params: [prefix]}
+      - {cmd: "display bgp instance {vrf} evpn all routing-table | include {prefix}", intent: evpn.routes.filtered, params: [vrf, prefix]}
+      - {cmd: "display bgp evpn peer", intent: bgp.summary.evpn, params: []}
+    tac_first_look: "TAC works from the remote leaf outward: does `display arp network <host-ip>` show the ARP entry there, and does `display bgp instance <vrf> evpn all routing-table | include <host-ip>` show it converted into an EVPN route? Whichever is missing is the fault."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/1fc2211e/case-study-evpn-routes-cannot-be-learned"
+
+  - id: vrp-mac-address-flapping
+    class: evpn-vxlan
+    title: "MAC address flapping alarm; VM or host services unreachable"
+    symptoms:
+      - "MAC address flapping alarm raised on a device"
+      - "`display mac-address flapping` lists the flapping MAC and the two sources it moves between"
+      - "Services behind that MAC are intermittently unreachable"
+    log_signatures: []
+    likely_causes:
+      - "A VM MAC address conflicts with the VXLAN gateway (VBDIF) MAC"
+      - "The same MAC learned from two ports / two VTEPs — a loop or duplicated address"
+    commands:
+      - {cmd: "display mac-address", intent: evpn.mac-table, params: []}
+      - {cmd: "display mac-address flapping", intent: evpn.mac-table.flapping, params: []}
+      - {cmd: "display mac-address flapping aged-table", intent: evpn.mac-table.flapping.aged, params: []}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display trapbuffer", intent: logging.traps, params: []}
+    tac_first_look: "`display mac-address flapping` names the MAC and the two Learned-From sources; TAC then checks that MAC against the gateway's own VBDIF address in `display mac-address` before hunting for a Layer 2 loop."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/f02b7267/case-study-a-mac-address-flapping-alarm-is-generated-on-a-device-and-vm-services-cannot-be-accessed"
+
+  - id: vrp-evpn-srv6-forwarding-fails
+    class: evpn-vxlan
+    title: "EVPN L3VPN over SRv6 BE traffic fails to be forwarded"
+    symptoms:
+      - "EVPN route present but traffic blackholes over the SRv6 underlay"
+      - "The locator address in the Prefix-SID attribute is not reachable in the IPv6 routing table"
+    log_signatures: []
+    likely_causes:
+      - "No BGP EVPN peer relationship established"
+      - "SRv6 BE configuration missing"
+      - "Locator address carried in the route's Prefix-SID attribute is unreachable"
+      - "ESI not configured for single-active in a multi-homing scenario"
+      - "The EVPN route cannot recurse to a tunnel"
+    commands:
+      - {cmd: "display bgp evpn peer", intent: bgp.summary.evpn, params: []}
+      - {cmd: "display bgp evpn all routing-table prefix-route {prefix}", intent: evpn.routes.prefix, params: [prefix]}
+      - {cmd: "display ipv6 routing-table {prefix}", intent: route.prefix.ipv6, params: [prefix]}
+      - {cmd: "display bgp vpnv6 vpn-instance {vrf} routing-table", intent: bgp.route.vrf.v6.table, params: [vrf]}
+    tac_first_look: "Check the EVPN peer first, then take the locator out of the prefix route in `display bgp evpn all routing-table prefix-route <prefix>` and test it against `display ipv6 routing-table <locator>` — an unreachable locator is the usual answer."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/c4666fc4/case-study-evpn-l3vpn-over-srv6-be-traffic-fails-to-be-forwarded"
+
+  - id: vrp-mlag-interface-traffic-abnormal
+    class: mlag-vpc-peer
+    title: "Traffic forwarding on an M-LAG member interface is abnormal"
+    symptoms:
+      - "M-LAG interface in error-down state, or up but not forwarding"
+      - "`display dfs-group consistency-check` reports inconsistencies between the two M-LAG devices"
+      - "Traffic rate exceeds the interface bandwidth"
+    log_signatures: []
+    likely_causes:
+      - "The M-LAG interface is set to the error-down state"
+      - "LACP negotiation on the member Eth-Trunk fails"
+      - "Access gateway configurations on the two M-LAG devices are inconsistent"
+      - "The traffic rate exceeds the available bandwidth"
+    commands:
+      - {cmd: "display error-down recovery", intent: interface.error-down, params: []}
+      - {cmd: "display dfs-group", intent: mlag.dfs-group, params: []}
+      - {cmd: "display dfs-group consistency-check global", intent: mlag.consistency.global, params: []}
+      - {cmd: "display dfs-group consistency-check interface m-lag {m-lag-id}", intent: mlag.consistency.interface, params: [m-lag-id]}
+      - {cmd: "display eth-trunk {trunk-id}", intent: lag.detail, params: [trunk-id]}
+      - {cmd: "display interface brief", intent: interface.summary, params: []}
+    tac_first_look: "`display error-down recovery` tells you immediately whether the interface was shut by the system; if not, `display dfs-group consistency-check global` and the per-M-LAG variant expose the configuration divergence between the pair."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal"
+
+  - id: vrp-mlag-interfaces-down
+    class: mlag-vpc-peer
+    title: "Some interfaces on an M-LAG device are Down (peer-link or consistency-check failure)"
+    symptoms:
+      - "Interfaces on one M-LAG device go down while the other stays up"
+      - "`display dfs-group <id> peer-link` shows the peer-link not up"
+      - "M-LAG consistency check fails"
+    log_signatures: []
+    likely_causes:
+      - "The peer-link has failed"
+      - "The M-LAG consistency check failed, so the backup device shuts its member interfaces"
+      - "M-LAG up-delay timer still running after a restart"
+    commands:
+      - {cmd: "display dfs-group", intent: mlag.dfs-group, params: []}
+      - {cmd: "display dfs-group {dfs-group-id} peer-link", intent: mlag.peer-link, params: [dfs-group-id]}
+      - {cmd: "display dfs-group {dfs-group-id} m-lag up-delay", intent: mlag.up-delay, params: [dfs-group-id]}
+      - {cmd: "display dfs-group consistency-check", intent: mlag.consistency, params: []}
+      - {cmd: "display error-down recovery", intent: interface.error-down, params: []}
+      - {cmd: "display interface brief", intent: interface.summary, params: []}
+    tac_first_look: "Peer-link first (`display dfs-group <id> peer-link`) — if it is down every member interface on the backup goes down by design; only then look at the consistency check and the up-delay timer."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/ba6bccca/some-interfaces-on-a-device-in-an-m-lag-are-down"
+
+  - id: vrp-mlag-peer-link-traffic-abnormal
+    class: mlag-vpc-peer
+    title: "Traffic forwarding on the M-LAG peer-link interface is abnormal"
+    symptoms:
+      - "Peer-link Eth-Trunk up but dropping traffic, or member ports not selected"
+      - "Alarms present relating to the peer-link bundle"
+    log_signatures: []
+    likely_causes:
+      - "LACP negotiation on the peer-link Eth-Trunk fails"
+      - "The traffic rate on the peer-link exceeds its bandwidth"
+    commands:
+      - {cmd: "display eth-trunk {trunk-id}", intent: lag.detail, params: [trunk-id]}
+      - {cmd: "display interface brief", intent: interface.summary, params: []}
+      - {cmd: "display alarm active", intent: alarms.active, params: []}
+      - {cmd: "display dfs-group", intent: mlag.dfs-group, params: []}
+    tac_first_look: "`display eth-trunk <peer-link-id>` for selected/unselected member state and `display interface brief` for the utilisation columns — an over-subscribed peer-link is a capacity case, not a bug."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/dd623ff2/traffic-forwarding-on-a-peer-link-interface-is-abnormal"
+
+  - id: vrp-stack-css-setup-failure
+    class: stack-css
+    proposed_class: true
+    title: "Stack (iStack) or CSS fails to be set up"
+    symptoms:
+      - "Member switches do not merge into one logical device"
+      - "`display stack troubleshooting` / `display css troubleshooting` records the reject reason (e.g. different stack domain IDs)"
+      - "Stack/CSS ports show link down"
+    log_signatures: []
+    likely_causes:
+      - "Incorrect configuration (different domain IDs, mismatched member IDs, wrong port members)"
+      - "Faulty stack/CSS cables or links"
+      - "Software version mismatch between members"
+    commands:
+      - {cmd: "display stack troubleshooting", intent: stack.troubleshooting, params: []}
+      - {cmd: "display css troubleshooting", intent: stack.troubleshooting.css, params: []}
+      - {cmd: "display stack configuration", intent: stack.config, params: []}
+      - {cmd: "display css configuration", intent: stack.config.css, params: []}
+      - {cmd: "display stack-port link-state last-down-reason", intent: stack.port.last-down, params: []}
+      - {cmd: "display device", intent: platform.inventory, params: []}
+      - {cmd: "display interface brief", intent: interface.summary, params: []}
+      - {cmd: "display version", intent: platform.version, params: []}
+    tac_first_look: "`display stack troubleshooting` (or `display css troubleshooting` on a CSS) prints the exact rejection event with the member/domain IDs involved; `display stack-port link-state last-down-reason` separates a config reject from a cable fault."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1000060766/e9dd7d04/how-do-i-troubleshoot-a-stack-setup-failure"
+
+  - id: vrp-bfd-session-not-up
+    class: bfd
+    proposed_class: true
+    title: "BFD session cannot go Up, or flaps"
+    symptoms:
+      - "`display bfd session all` shows the session Down or AdminDown"
+      - "Protocols bound to BFD (BGP/IS-IS/OSPF/static) drop with it"
+    log_signatures: []
+    likely_causes:
+      - "The link carrying the BFD session is faulty, so BFD packets are not exchanged"
+      - "Local/remote discriminator or timer mismatch"
+      - "The session flaps between up and down rather than staying down"
+    commands:
+      - {cmd: "display bfd session all", intent: bfd.sessions, params: []}
+      - {cmd: "display bfd statistics session all", intent: bfd.statistics, params: []}
+      - {cmd: "display bfd troubleshooting", intent: bfd.troubleshooting, params: []}
+      - {cmd: "display current-configuration configuration bfd", intent: config.protocol.bfd, params: []}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+    tac_first_look: "`display bfd session all` for the state and `display bfd troubleshooting` for the recorded down reason; Huawei's routine check is to locate BFD Down events there before looking at the protocols that ride on the session."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/c6cd9790/a-bfd-session-cannot-go-up"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-stp-loop-or-port-blocked
+    class: stp-topology
+    proposed_class: true
+    title: "Spanning-tree fault: loop persists, or a port stays Discarding / is shut down"
+    symptoms:
+      - "A loop remains after STP is enabled, or traffic stops after STP is configured"
+      - "`display stp brief` shows a port permanently in DISCARDING"
+      - "`display stp abnormal-interface` lists ports in an abnormal state"
+    log_signatures: []
+    likely_causes:
+      - "Devices on the network run different STP modes"
+      - "MSTP devices are not in the same MST region"
+      - "An edge port frequently receives TC BPDUs"
+      - "Port status abnormal (root/loop protection, error-down)"
+      - "TC BPDUs sent frequently across the network"
+    commands:
+      - {cmd: "display stp brief", intent: stp.brief, params: []}
+      - {cmd: "display stp interface {interface}", intent: stp.interface, params: [interface]}
+      - {cmd: "display stp region-configuration", intent: stp.region, params: []}
+      - {cmd: "display stp abnormal-interface", intent: stp.abnormal-interfaces, params: []}
+      - {cmd: "display stp tc-bpdu statistics", intent: stp.tc.statistics, params: []}
+      - {cmd: "display stp topology-change", intent: stp.topology-change, params: []}
+      - {cmd: "display error-down recovery", intent: interface.error-down, params: []}
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+    tac_first_look: "`display stp region-configuration` on every device — one mismatched region name/revision explains most 'MSTP does not converge' cases; `display stp abnormal-interface` and `display error-down recovery` explain a single stuck port."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs"
+
+  - id: vrp-mstp-topology-change-service-interruption
+    class: stp-topology
+    proposed_class: true
+    title: "Services interrupted by repeated MSTP topology changes (TC storms)"
+    symptoms:
+      - "MAC/ARP tables flush repeatedly; brief traffic loss every few seconds"
+      - "`display stp tc-bpdu statistics` counter rises steadily"
+    log_signatures: []
+    likely_causes:
+      - "Incorrect MSTP configuration (region mismatch, missing edge-port config)"
+      - "Physical link flapping triggering a stream of TC BPDUs"
+      - "An MSTP-enabled device receiving TC BPDUs from a client or transparently transmitted TC BPDUs"
+    commands:
+      - {cmd: "display stp brief", intent: stp.brief, params: []}
+      - {cmd: "display stp region-configuration", intent: stp.region, params: []}
+      - {cmd: "display stp tc-bpdu statistics", intent: stp.tc.statistics, params: []}
+      - {cmd: "display stp topology-change", intent: stp.topology-change, params: []}
+      - {cmd: "display current-configuration", intent: config.running, params: []}
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+    tac_first_look: "Find the port with the growing TC counter in `display stp tc-bpdu statistics`, then decide from `display stp topology-change` and `display logbuffer` whether the trigger is a flapping link or a downstream device injecting TCs."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/5c72531e/services-are-interrupted-due-to-an-mstp-topology-change"
+
+  - id: vrp-ping-fails-packet-loss
+    class: generic
+    title: "Ping fails or shows packet loss between two endpoints"
+    symptoms:
+      - "Ping times out entirely, or loses a fraction of packets"
+      - "Large packets fail while small ones succeed"
+      - "Failure only inside a VPN instance"
+    log_signatures: []
+    likely_causes:
+      - "No route to the destination, or the route is inactive"
+      - "ARP entry missing for the next hop"
+      - "A traffic policy / ACL discards the ICMP packets"
+      - "CPCAR (cpu-defend) rate-limits ICMP to the control plane"
+      - "MTU on the path is smaller than the packet size"
+      - "Interface errors on an intermediate link"
+    commands:
+      - {cmd: "display ip routing-table {destination}", intent: route.prefix, params: [destination]}
+      - {cmd: "display ip routing-table vpn-instance {vrf} {destination}", intent: route.prefix.vrf, params: [vrf, destination]}
+      - {cmd: "display arp", intent: arp.table, params: []}
+      - {cmd: "display arp interface {interface}", intent: arp.interface, params: [interface]}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display icmp statistics", intent: icmp.statistics, params: []}
+      - {cmd: "display ip statistics", intent: ip.statistics, params: []}
+      - {cmd: "display traffic policy statistics interface {interface} inbound", intent: qos.policy.statistics, params: [interface]}
+      - {cmd: "display current-configuration | include cpu-defend", intent: config.cpu-defend.grep, params: []}
+      - {cmd: "display cpu-defend policy {policy-id}", intent: cpp.policy, params: [policy-id]}
+      - {cmd: "display cpu-defend car", intent: cpp.car, params: []}
+    tac_first_look: "Huawei's own procedure uses the diagnostics themselves: `ping -v -t 1 <dest>`, `ping -f` and `tracert <dest>` (also `tracert -vpn-instance <vrf> <dest>`) to localise the hop, then `display ip routing-table <dest>`, `display arp` and `display icmp statistics` at that hop; a traffic policy or cpu-defend CAR is checked last."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails"
+
+  - id: vrp-mtu-mismatch
+    class: interface-errors
+    title: "MTU mismatch between the two ends of a link"
+    symptoms:
+      - "Small packets pass, large packets are dropped"
+      - "OSPF sticks in ExStart/Exchange; IS-IS adjacency never forms"
+      - "The Maximum Transmit Unit values differ between `display interface` on the two ends"
+    log_signatures:
+      - "ISIS/2/ISIS_ID_LEN_MISMATCH"
+      - "OSPF/6/NBR_CHANGE"
+    likely_causes:
+      - "Interface MTU configured differently on the two ends"
+      - "Interface MTU smaller than the protocol's Hello/DD packet"
+      - "MTU changed during a service cutover without matching the peer"
+    commands:
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display current-configuration interface {interface}", intent: config.interface, params: [interface]}
+      - {cmd: "display isis error interface {interface}", intent: isis.errors.interface, params: [interface]}
+      - {cmd: "display ospf interface", intent: ospf.interfaces, params: []}
+    tac_first_look: "Huawei's routine-maintenance rule is blunt: the MTU value of the local interface must equal the peer's — read 'The Maximum Transmit Unit is ...' from `display interface` on both ends, and confirm with `ping -s 1500 <peer>` from the OSPF procedure."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8d7c113f/case-study-an-ospf-neighbor-relationship-cannot-reach-the-full-state"
+
+  - id: vrp-arp-entries-not-learned
+    class: arp-nd
+    proposed_class: true
+    title: "ARP entries on the local device are not learned by the peer"
+    symptoms:
+      - "The peer has no ARP entry for the local interface address"
+      - "ARP entries age out and are relearned repeatedly"
+      - "`display arp statistics slot <slot>` shows abnormal counts"
+    log_signatures: []
+    likely_causes:
+      - "The connecting interface is not physically Up"
+      - "Interface IP addresses on the two ends are in different network segments"
+      - "The device is under an ARP attack (CPCAR discarding ARP)"
+      - "Link transmission is unstable or optical power is insufficient"
+      - "Device software fault"
+    commands:
+      - {cmd: "display arp", intent: arp.table, params: []}
+      - {cmd: "display arp interface {interface}", intent: arp.interface, params: [interface]}
+      - {cmd: "display arp statistics slot {slot-id}", intent: arp.statistics.slot, params: [slot-id]}
+      - {cmd: "display arp history", intent: arp.history, params: []}
+      - {cmd: "display arp ip-conflict track", intent: arp.conflicts, params: []}
+      - {cmd: "display ipv6 neighbors history", intent: nd.history, params: []}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display cpu-defend statistics all", intent: cpp.statistics, params: []}
+    tac_first_look: "`display arp history` and `display arp ip-conflict track` are Huawei's own flap-detection pair — they show whether entries were repeatedly deleted; `display arp statistics slot <slot>` then says whether the ARP packets ever reached the CPU."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+
+  - id: vrp-ntp-clock-not-synchronized
+    class: ntp-sync
+    proposed_class: true
+    title: "Device clock is not synchronized to the NTP source"
+    symptoms:
+      - "`display ntp-service status` shows clock status unsynchronized"
+      - "`display ntp-service sessions` shows no reachable/selected server"
+      - "`display clock` drifts from the reference"
+    log_signatures: []
+    likely_causes:
+      - "The link to the NTP server flaps or is faulty"
+      - "No route to the NTP server / server unreachable"
+      - "NTP configuration error (wrong source interface, authentication)"
+    commands:
+      - {cmd: "display ntp-service status", intent: ntp.status, params: []}
+      - {cmd: "display ntp-service sessions", intent: ntp.sessions, params: []}
+      - {cmd: "display clock", intent: platform.clock, params: []}
+      - {cmd: "display current-configuration", intent: config.running, params: []}
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+    tac_first_look: "`display ntp-service status` for the sync state and stratum, `display ntp-service sessions` for reachability of each configured server; Huawei's case then uses `ping <ntp-server>` to prove the path before touching the config."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5ac6d103/case-study-the-clock-is-not-synchronized"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a4c44c0e/case-study-clocks-are-not-synchronized"
+
+  - id: vrp-snmp-connection-fails
+    class: snmp
+    proposed_class: true
+    title: "SNMP connection between the NMS and the device cannot be established"
+    symptoms:
+      - "NMS cannot poll the device; authentication failure logs on the device"
+      - "Community/USM user configured on the device does not match the NMS"
+    log_signatures:
+      - "AUTHENTICATION_FAILURE"
+      - "SNMP_AUTHEN_FAILED"
+    likely_causes:
+      - "Packets cannot be exchanged between the host and the NMS (route/ACL)"
+      - "SNMP configuration is incorrect (community, USM user, version mismatch)"
+      - "An ACL on the SNMP agent blocks the NMS address"
+    commands:
+      - {cmd: "display snmp-agent sys-info version", intent: snmp.version, params: []}
+      - {cmd: "display snmp-agent community", intent: snmp.community, params: []}
+      - {cmd: "display snmp-agent usm-user", intent: snmp.usm-user, params: []}
+      - {cmd: "display acl all", intent: acl.all, params: []}
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+      - {cmd: "display current-configuration", intent: config.running, params: []}
+    tac_first_look: "`display snmp-agent sys-info version` first — a v2c NMS against a v3-only agent is the commonest cause; then the community/USM lists and any ACL bound to the agent, with `ping <nms-ip>` to prove reachability."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/b62ef2c2/case-study-snmp-connection-fails-to-be-established"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/c644064d/case-study-the-nms-cannot-receive-trap-messages-from-the-host"
+
+  - id: vrp-hwtacacs-auth-fails
+    class: aaa-auth
+    proposed_class: true
+    title: "Administrator fails HWTACACS authentication"
+    symptoms:
+      - "Login rejected or times out when HWTACACS is the authentication method"
+      - "`display hwtacacs current-status` shows the server down or unreachable"
+    log_signatures: []
+    likely_causes:
+      - "Route to the server is unreachable, so no connection can be established"
+      - "The HWTACACS service is not enabled"
+      - "HWTACACS authentication is not configured in the AAA authentication scheme"
+      - "Server IP address or source interface configured incorrectly"
+      - "Shared key mismatch"
+    commands:
+      - {cmd: "display hwtacacs current-status", intent: aaa.hwtacacs.status, params: []}
+      - {cmd: "display hwtacacs-server template {template}", intent: aaa.hwtacacs.template, params: [template]}
+      - {cmd: "display authentication-scheme", intent: aaa.authentication-scheme, params: []}
+      - {cmd: "display aaa configuration", intent: aaa.config, params: []}
+      - {cmd: "display domain name {domain}", intent: aaa.domain, params: [domain]}
+      - {cmd: "display aaa online-fail-record all", intent: aaa.online-fail-record, params: []}
+    tac_first_look: "`display hwtacacs current-status` shows whether the device ever reached the server; if it did, `display authentication-scheme` and `display domain name <domain>` show whether the admin domain actually uses HWTACACS."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/79b22ef0/case-study-a-user-fails-to-be-authenticated-by-the-hwtacacs-server"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cd23eec7/checking-the-aaa-authentication-method-and-server-used-for-administrators"
+
+  - id: vrp-radius-auth-fails
+    class: aaa-auth
+    proposed_class: true
+    title: "Administrator fails RADIUS authentication / RADIUS server does not respond"
+    symptoms:
+      - "`display aaa online-fail-record all` shows 'The radius server is not reachable' or 'The radius server is up but has no reply'"
+      - "Login falls back to local authentication or is rejected"
+    log_signatures: []
+    likely_causes:
+      - "Route to the server is unreachable, so no UDP connection can be established"
+      - "The RADIUS service is not enabled"
+      - "RADIUS authentication is not configured in the AAA authentication scheme"
+      - "Server IP address, port or source interface configured incorrectly"
+      - "Shared key mismatch between the device and the RADIUS server"
+    commands:
+      - {cmd: "display aaa online-fail-record all", intent: aaa.online-fail-record, params: []}
+      - {cmd: "display radius-server configuration template {template}", intent: aaa.radius.template, params: [template]}
+      - {cmd: "display authentication-scheme", intent: aaa.authentication-scheme, params: []}
+      - {cmd: "display aaa configuration", intent: aaa.config, params: []}
+      - {cmd: "display domain name {domain}", intent: aaa.domain, params: [domain]}
+    tac_first_look: "`display aaa online-fail-record all` names the failure verbatim ('not reachable' vs 'up but has no reply'); a server that is up but silent is almost always a shared-key mismatch, which `display radius-server configuration template <name>` and the server-side log confirm."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/ac1f64c4/case-study-the-radius-server-does-not-respond"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8fd28fbb/case-study-a-user-fails-to-be-authenticated-by-the-radius-server"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cd23eec7/checking-the-aaa-authentication-method-and-server-used-for-administrators"
+
+  - id: vrp-recent-config-change
+    class: config-change
+    title: "Fault correlates with a recent configuration change or a failed configuration restore"
+    symptoms:
+      - "Symptom onset matches the last commit time"
+      - "`display configuration recover-result` reports a partial or failed restore after a reboot"
+      - "Running and saved configurations diverge"
+    log_signatures:
+      - "CLI/5/CMDRECORD"
+    likely_causes:
+      - "A commit within the last 12 hours changed protocol or interface configuration"
+      - "Configuration restore after a restart partially failed"
+      - "Running configuration was never saved, so a reload reverted it"
+    commands:
+      - {cmd: "display configuration commit list", intent: config.commit.history, params: []}
+      - {cmd: "display configuration commit changes", intent: config.commit.diff, params: []}
+      - {cmd: "display configuration recover-result", intent: config.restore-result, params: []}
+      - {cmd: "display current-configuration", intent: config.running, params: []}
+      - {cmd: "display saved-configuration", intent: config.startup, params: []}
+      - {cmd: "display startup", intent: platform.boot-config, params: []}
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+    tac_first_look: "Huawei's mandatory check is whether the last configuration change happened within the last 12 hours — `display configuration commit list` then `display configuration commit changes`; `display configuration recover-result` catches the post-reboot partial-restore case."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands"
+
+  - id: vrp-traffic-policy-drops
+    class: qos-drops
+    title: "Packets discarded by a traffic policy / interface drop counters rising"
+    symptoms:
+      - "`display traffic policy statistics interface <if> inbound` shows a rising discard count"
+      - "Interface DropEvents / lostpacket counters rise while the link stays up"
+      - "Only some flows are affected"
+    log_signatures: []
+    likely_causes:
+      - "A traffic policy (MQC) classifier matches and denies or rate-limits the flow"
+      - "Interface-level rate limiting or congestion"
+      - "Control-plane traffic metered by cpu-defend rather than the data path"
+    commands:
+      - {cmd: "display traffic policy statistics interface {interface} inbound", intent: qos.policy.statistics, params: [interface]}
+      - {cmd: "display interface {interface}", intent: interface.detail, params: [interface]}
+      - {cmd: "display interface brief", intent: interface.summary, params: []}
+      - {cmd: "display current-configuration", intent: config.running, params: []}
+      - {cmd: "display cpu-defend statistics all", intent: cpp.statistics, params: []}
+    tac_first_look: "Decide first whether the drops are in the data path or the control path: `display traffic policy statistics interface <if> inbound` accounts for policy matches, while `display cpu-defend statistics all` accounts for punted-packet drops — Huawei's ping-failure procedure uses exactly this split."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100313446/e1bbef8/case-study-crc-error-packets-are-generated-on-an-interface-due-to-a-network-cable-fault"
+
+  - id: vrp-logbuffer-trapbuffer-triage
+    class: logging
+    proposed_class: true
+    title: "Log and trap buffer triage around the fault window"
+    symptoms:
+      - "A fault is reported but no obvious component is at fault"
+      - "Need to establish what the device recorded minutes before and after the event"
+    log_signatures: []
+    likely_causes:
+      - "Any event that leaves a log or trap: interface state change, protocol adjacency change, board reset, alarm"
+    commands:
+      - {cmd: "display logbuffer", intent: logging.recent, params: []}
+      - {cmd: "display logbuffer size {buffersize}", intent: logging.recent.sized, params: [buffersize]}
+      - {cmd: "display trapbuffer", intent: logging.traps, params: []}
+      - {cmd: "display alarm active", intent: alarms.active, params: []}
+      - {cmd: "display alarm history", intent: alarms.history, params: []}
+      - {cmd: "display alarm statistics", intent: alarms.statistics, params: []}
+      - {cmd: "display alarm information", intent: alarms.detail, params: []}
+      - {cmd: "display clock", intent: platform.clock, params: []}
+    tac_first_look: "Huawei's mandatory check item is 'suspicious logs generated several minutes before and after the fault' — pull `display logbuffer` and `display trapbuffer` around that window and anchor them with `display clock` so the timestamps can be correlated against the NMS."
+    sources:
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance"
+      - "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down"

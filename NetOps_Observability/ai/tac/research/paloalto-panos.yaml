@@ -1,0 +1,1244 @@
+# Palo Alto Networks PAN-OS (PA-series / VM-series) — TAC escalation pack
+# READ-ONLY command catalogue. Every command below appears verbatim (modulo
+# placeholder renaming) in one of the cited docs.paloaltonetworks.com pages.
+vendor: paloalto-panos
+
+sources:
+  - {title: "PAN-OS CLI Quick Start — CLI Cheat Sheet: Networking", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"}
+  - {title: "PAN-OS CLI Quick Start — CLI Cheat Sheet: Device Management", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"}
+  - {title: "PAN-OS CLI Quick Start — CLI Cheat Sheet: Virtual Systems (Vsys)", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys"}
+  - {title: "PAN-OS CLI Quick Start — CLI Cheat Sheet: Panorama", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama"}
+  - {title: "PAN-OS CLI Quick Start — CLI Cheat Sheet: HA", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha"}
+  - {title: "PAN-OS CLI Quick Start — CLI Cheat Sheet: User-ID", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id"}
+  - {title: "PAN-OS CLI Quick Start — CLI Cheat Sheet: Content-ID", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-content-id"}
+  - {title: "PAN-OS CLI Quick Start — Test the Configuration", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration"}
+  - {title: "PAN-OS CLI Quick Start — View Settings and Statistics", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics"}
+  - {title: "PAN-OS CLI Quick Start — Use Secure Copy to Import and Export Files", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/use-secure-copy-to-import-and-export-files"}
+  - {title: "SD-WAN Administration — Troubleshooting (View or Clear SD-WAN Information, global counters, VPN, BGP)", url: "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"}
+  - {title: "PAN-OS Networking — Monitor and Troubleshoot DHCP", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dhcp/monitor-and-troubleshoot-dhcp"}
+  - {title: "PAN-OS Networking — Configure a DNS Proxy Object", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dns/configure-a-dns-proxy-object"}
+  - {title: "PAN-OS Networking — Dataplane NAT Memory Statistics", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/nat/dataplane-nat-memory-statistics"}
+  - {title: "PAN-OS Administration — HA Firewall States", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/high-availability/ha-firewall-states"}
+  - {title: "NGFW Administration — Failover (heartbeat, link and path monitoring)", url: "https://docs.paloaltonetworks.com/ngfw/administration/high-availability/failover"}
+  - {title: "NGFW Administration — Set Up Active/Passive HA", url: "https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha"}
+  - {title: "Decryption Administration — Decryption Log Errors and Error Indexes", url: "https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-log-errors"}
+  - {title: "Decryption Administration — Investigate Reasons for Decryption Failure", url: "https://docs.paloaltonetworks.com/network-security/decryption/administration/troubleshooting-decryption/investigate-decryption-failures"}
+  - {title: "Decryption Administration — Local SSL Decryption Exclusion Cache", url: "https://docs.paloaltonetworks.com/network-security/decryption/administration/decryption-exclusions/local-ssl-decryption-exclusion-cache"}
+  - {title: "PAN-OS Administration — Troubleshoot and Monitor Decryption", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/decryption/troubleshoot-and-monitor-decryption"}
+  - {title: "PAN-OS Administration — Configure Packet Buffer Protection", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/zone-protection-and-dos-protection/configure-zone-protection-to-increase-network-security/configure-packet-buffer-protection"}
+  - {title: "IPsec VPN Administration — Monitor Your IPSec VPN Tunnel (tunnel monitoring, IKEv2 liveness)", url: "https://docs.paloaltonetworks.com/network-security/ipsec-vpn/administration/set-up-tunnel-monitoring"}
+  - {title: "PAN-OS Web Interface Help — Device > Support (Generate Tech Support File)", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-web-interface-help/device/device-support"}
+  - {title: "Panorama Administration — Generate Diagnostic Files for Panorama", url: "https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/generate-diagnostic-files-for-panorama"}
+  - {title: "Panorama Administration — Diagnose Panorama Suspended State", url: "https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/diagnose-panorama-suspended-state"}
+  - {title: "Panorama Administration — Troubleshoot Panorama System Issues", url: "https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues"}
+  - {title: "PAN-OS Networking — Verify ECMP", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/ecmp/verify-ecmp"}
+  - {title: "PAN-OS Administration — Monitoring / View and Manage Logs", url: "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/monitoring/view-and-manage-logs"}
+
+tac_baseline:
+  commands:
+    - {cmd: "show system info", intent: platform.version, params: []}
+    - {cmd: "show system info | match vsys", intent: platform.vsys.mode, params: []}
+    - {cmd: "show system resources", intent: system.resources, params: []}
+    - {cmd: "show running resource-monitor", intent: dataplane.resources, params: []}
+    - {cmd: "show system software status", intent: system.processes, params: []}
+    - {cmd: "show system disk-space files", intent: system.disk, params: []}
+    - {cmd: "show system logdb-quota", intent: logging.quota, params: []}
+    - {cmd: "request license info", intent: license.status, params: []}
+    - {cmd: "show jobs processed", intent: jobs.status, params: []}
+    - {cmd: "show session info", intent: session.stats, params: []}
+    - {cmd: "show running security-policy", intent: policy.list, params: []}
+    - {cmd: "show admins all", intent: admin.sessions, params: []}
+    - {cmd: "show high-availability cluster state", intent: ha.cluster.status, params: []}
+    - {cmd: "show counter global", intent: dataplane.counters, params: []}
+    - {cmd: "scp export configuration from {config-file} to {user}@{host}:{path}", intent: support.config.export, params: [config-file, user, host, path], writes_file: true}
+    - {cmd: "scp export logdb to {user}@{host}:{path}", intent: support.logdb.export, params: [user, host, path], writes_file: true}
+  notes: >-
+    What PAN TAC opens on essentially every case: `show system info` (model, serial, PAN-OS
+    version, App-ID/Threat/AV/WildFire/URL content versions, uptime), `show system resources`
+    (management-plane top-equivalent), `show running resource-monitor` (dataplane CPU by core
+    and by function), `show session info` (session-table capacity, utilisation percentage,
+    packet rate, CPS, timeouts), `request license info`, `show jobs processed` (commit /
+    content-download / upgrade outcomes) and the tech support file.
+    TECH SUPPORT FILE — CLI FORM UNVERIFIED. The only form Palo Alto documents publicly on the
+    pages reachable here is the web UI: Device > Support > "Generate Tech Support File", then
+    "Download Tech Support File" and attach it to the support case
+    (https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-web-interface-help/device/device-support);
+    Panorama is the same flow at Panorama > Support
+    (https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/generate-diagnostic-files-for-panorama).
+    Neither page documents a `scp export tech-support` / `tftp export tech-support` /
+    `request tech-support dump` syntax, so NO tech-support CLI command is asserted in this file.
+    Generation does write a bundle on the device before it is downloaded, and it is heavy on a
+    loaded box — treat it as a maintenance-window action. The verified CLI export forms that DO
+    exist are `scp export configuration from <named-config-file> to <username@host:path>` and
+    `scp export logdb to <username@host:path>`
+    (https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/use-secure-copy-to-import-and-export-files);
+    both land a file on the SCP destination, and the configuration form presumes a named config
+    file already saved on the device. logdb export is not supported on Panorama virtual
+    appliances, M-Series appliances, or PA-7000 Series firewalls.
+    MULTI-VSYS CAVEAT: on a multi-vsys firewall (`show system info | match vsys` reports
+    multi-vsys on/off) many operational reads are scoped to the current vsys — notably
+    `show session meter` and `show user ip-user-mapping all`. PAN-OS scopes the session by
+    `set system setting target-vsys <vsys-name>`, which is a session-scope CHANGE, not a read,
+    so it is deliberately EXCLUDED from this catalogue. Collect per-vsys data by logging in as
+    a vsys-scoped administrator, or have the on-console engineer set the target vsys manually
+    and re-run the read commands; record which vsys each capture came from.
+  sources:
+    - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+    - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys"
+    - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics"
+    - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/use-secure-copy-to-import-and-export-files"
+    - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-web-interface-help/device/device-support"
+    - "https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/generate-diagnostic-files-for-panorama"
+    - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha"
+
+issues:
+
+  # ---------------- sessions / dataplane ----------------
+  - id: pan-session-table-full
+    class: session-table
+    proposed_class: true
+    title: "Session table full / session-table utilisation at or near capacity"
+    symptoms:
+      - "New connections fail intermittently while established flows keep working"
+      - "show session info reports session table utilisation approaching 100%"
+      - "Connection-establishment rate (CPS) pinned at the platform maximum"
+      - "Throughput plateaus well below the licensed/rated figure"
+    log_signatures: []
+    likely_causes:
+      - "Genuine session growth beyond the platform's supported session count"
+      - "A scanner, backup job or misbehaving application opening sessions faster than they age out"
+      - "Session timeouts (TCP time-wait / half-closed / UDP) left too long for the traffic mix"
+      - "DoS or flood traffic creating sessions that are never completed"
+      - "Session table consumed by one vsys on a multi-vsys box"
+    commands:
+      - {cmd: "show session info", intent: session.stats, params: []}
+      - {cmd: "show session meter", intent: session.meter, params: []}
+      - {cmd: "show running resource-monitor", intent: dataplane.resources, params: []}
+      - {cmd: "show counter global", intent: dataplane.counters, params: []}
+      - {cmd: "show system resources", intent: system.resources, params: []}
+    tac_first_look: "TAC opens `show session info` first — the supported session count, the active count by protocol, the utilisation percentage and the CPS rate are all on one screen — then `show session meter` to see whether one vsys is consuming the table, and `show counter global` for the drop reasons that accompany table pressure."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+
+  - id: pan-session-not-created
+    class: session-table
+    proposed_class: true
+    title: "Session is never created for a flow the customer expects to pass"
+    symptoms:
+      - "No traffic log entry at all for the flow (not even a deny)"
+      - "Application times out; the firewall shows no matching session"
+      - "Return traffic arrives but the firewall has no state for it"
+    log_signatures: []
+    likely_causes:
+      - "Traffic never reaches the ingress interface (upstream routing/ARP)"
+      - "No route back to the source, so the firewall drops at flow lookup"
+      - "Zone/interface mis-assignment: the packet lands in a zone no rule covers"
+      - "NAT policy rewrites the flow to somewhere unreachable"
+      - "Non-SYN first packet on a firewall that rejects non-SYN TCP"
+    commands:
+      - {cmd: "show session info", intent: session.stats, params: []}
+      - {cmd: "show counter global", intent: dataplane.counters, params: []}
+      - {cmd: "show counter global filter delta yes {counter}", intent: dataplane.counters, params: [counter]}
+      - {cmd: "show routing route", intent: route.table, params: []}
+      - {cmd: "show routing fib virtual-router {virtual-router} | match {prefix}", intent: route.fib.lookup, params: [virtual-router, prefix]}
+      - {cmd: "test security-policy-match application {app} source-user {user} destination {dst} destination-port {dport} source {src} protocol {protocol}", intent: policy.match, params: [app, user, dst, dport, src, protocol]}
+      - {cmd: "test nat-policy-match", intent: nat.policy.match, params: []}
+      - {cmd: "ping source {src} host {dst}", intent: connectivity.ping, params: [src, dst]}
+    tac_first_look: "TAC proves the flow should exist before it looks for it: `test security-policy-match` and `test nat-policy-match` say which rules would apply, `show routing fib virtual-router ... | match <prefix>` proves the return path, then `show counter global filter delta yes <counter>` over a repro window shows which global drop counter is incrementing."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration"
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+
+  - id: pan-asymmetric-tcp-out-of-sync
+    class: session-table
+    proposed_class: true
+    title: "Asymmetric routing / TCP out-of-sync drops"
+    symptoms:
+      - "TCP connections hang or reset mid-transfer while ICMP and UDP work"
+      - "Only one direction of a TCP flow traverses the firewall"
+      - "Global counters for TCP out-of-sync / non-SYN-first-packet incrementing"
+      - "Problem appears only after an ECMP, HA or upstream routing change"
+    log_signatures: []
+    likely_causes:
+      - "Return path bypasses the firewall (true asymmetric routing)"
+      - "ECMP on the virtual router sending forward and return traffic out different members"
+      - "Active/active HA where the session owner and the packet-receiving peer differ"
+      - "Upstream load balancer rehashing an established flow"
+      - "MTU/fragmentation interacting with a partially seen TCP stream"
+    commands:
+      - {cmd: "show counter global filter delta yes {counter}", intent: dataplane.counters, params: [counter]}
+      - {cmd: "show counter global", intent: dataplane.counters, params: []}
+      - {cmd: "show session id {session-id}", intent: session.detail, params: [session-id]}
+      - {cmd: "show routing route", intent: route.table, params: []}
+      - {cmd: "show routing fib", intent: route.fib, params: []}
+      - {cmd: "show advanced-routing fib", intent: route.fib, params: []}
+      - {cmd: "show high-availability cluster session-synchronization", intent: ha.session.sync, params: []}
+    tac_first_look: "TAC watches the delta counters (`show counter global filter delta yes <counter>`) while the customer reproduces, then compares the FIB to the actual return path; on ECMP or active/active HA it checks whether both directions can even land on the same session owner."
+    sources:
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/ecmp/verify-ecmp"
+
+  - id: pan-session-aged-out-early
+    class: session-table
+    proposed_class: true
+    title: "Long-lived sessions torn down early (session timeout / accelerated aging)"
+    symptoms:
+      - "Idle-but-important sessions (SSH, database, SCADA) drop after a fixed interval"
+      - "Application reconnects on a predictable cadence"
+      - "Behaviour worsens as session-table utilisation rises"
+    log_signatures: []
+    likely_causes:
+      - "Default per-application or global TCP/UDP idle timeout shorter than the app's keepalive"
+      - "Accelerated aging kicking in as the session table fills"
+      - "TCP half-closed / time-wait timers tuned down for capacity"
+      - "HA failover discarding a session that was never synchronised"
+    commands:
+      - {cmd: "show session info", intent: session.stats, params: []}
+      - {cmd: "show session id {session-id}", intent: session.detail, params: [session-id]}
+      - {cmd: "show session meter", intent: session.meter, params: []}
+      - {cmd: "show high-availability cluster session-synchronization", intent: ha.session.sync, params: []}
+    tac_first_look: "`show session info` prints the configured session timeouts alongside utilisation; TAC compares the observed teardown interval against those timeouts and against the accelerated-aging threshold, then pulls one live session with `show session id <session-id>` to read its remaining timeout."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha"
+
+  # ---------------- security policy ----------------
+  - id: pan-traffic-denied-by-policy
+    class: firewall-policy
+    proposed_class: true
+    title: "Traffic denied — customer expects it to be allowed"
+    symptoms:
+      - "Traffic log shows the flow hitting a deny rule or the interzone/intrazone default"
+      - "Application fails only through the firewall"
+      - "Started after a policy push or a rule reorder"
+    log_signatures: []
+    likely_causes:
+      - "Rule ordering — a broader deny sits above the intended allow"
+      - "Zone, source-user or service mismatch on the intended rule"
+      - "Rule disabled, or scoped to a different vsys / device group"
+      - "Application dependency not permitted (parent app allowed, dependency not)"
+      - "Panorama-pushed shared policy overriding the local expectation"
+    commands:
+      - {cmd: "test security-policy-match application {app} source-user {user} destination {dst} destination-port {dport} source {src} protocol {protocol}", intent: policy.match, params: [app, user, dst, dport, src, protocol]}
+      - {cmd: "show running security-policy", intent: policy.list, params: []}
+      - {cmd: "show config pushed-shared-policy", intent: config.pushed, params: []}
+      - {cmd: "show session id {session-id}", intent: session.detail, params: [session-id]}
+      - {cmd: "show user ip-user-mapping ip {ip}", intent: user.mapping.byip, params: [ip]}
+    tac_first_look: "`test security-policy-match` with the exact 6-tuple names the rule that actually wins; TAC then reads that rule out of `show running security-policy` (the effective, post-push rulebase) and, if the rule is user-based, confirms the source IP is mapped."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id"
+
+  - id: pan-wrong-security-rule-matched
+    class: firewall-policy
+    proposed_class: true
+    title: "Wrong security rule matched (shadowed rule / unexpected hit)"
+    symptoms:
+      - "Traffic log names a rule the customer did not expect"
+      - "A newly added rule shows zero hits"
+      - "Behaviour differs between two firewalls that share a device group"
+    log_signatures: []
+    likely_causes:
+      - "A more general rule above shadows the specific one"
+      - "Pre-rules pushed from Panorama evaluated before local rules"
+      - "Address/service group membership wider than assumed"
+      - "Rule is in the wrong rulebase (pre vs post) or wrong device group"
+    commands:
+      - {cmd: "test security-policy-match application {app} source-user {user} destination {dst} destination-port {dport} source {src} protocol {protocol}", intent: policy.match, params: [app, user, dst, dport, src, protocol]}
+      - {cmd: "show running security-policy", intent: policy.list, params: []}
+      - {cmd: "show config pushed-shared-policy", intent: config.pushed, params: []}
+      - {cmd: "show devicegroups name {device-group}", intent: panorama.devicegroups, params: [device-group]}
+    tac_first_look: "TAC runs `test security-policy-match` for the tuple, then diffs the winning rule's position against `show running security-policy` and `show config pushed-shared-policy` to see whether a Panorama pre-rule is shadowing the local rule."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+
+  - id: pan-appid-shift-policy-miss
+    class: firewall-policy
+    proposed_class: true
+    title: "App-ID shift after a content update makes an allow rule stop matching"
+    symptoms:
+      - "Traffic that worked yesterday is denied today with no config change"
+      - "Traffic log shows a different application name than the rule permits"
+      - "Onset coincides with an Applications-and-Threats content install"
+    log_signatures: []
+    likely_causes:
+      - "A content release split, renamed or re-parented the App-ID"
+      - "Rule permits the parent application but not the new dependency"
+      - "Application shifts mid-session (incomplete/unknown then resolved)"
+      - "Decryption state changes what App-ID can see"
+    commands:
+      - {cmd: "show system info", intent: platform.version, params: []}
+      - {cmd: "show jobs processed", intent: jobs.status, params: []}
+      - {cmd: "test security-policy-match application {app} source-user {user} destination {dst} destination-port {dport} source {src} protocol {protocol}", intent: policy.match, params: [app, user, dst, dport, src, protocol]}
+      - {cmd: "show running security-policy", intent: policy.list, params: []}
+      - {cmd: "show session id {session-id}", intent: session.detail, params: [session-id]}
+    tac_first_look: "TAC reads the installed Applications-and-Threats version out of `show system info` and correlates it with the content-install job in `show jobs processed`; then it re-runs `test security-policy-match` with the OLD and the NEW application name to show the shift."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration"
+
+  # ---------------- NAT ----------------
+  - id: pan-dipp-port-pool-exhaustion
+    class: nat
+    proposed_class: true
+    title: "Source NAT DIPP port/pool exhaustion"
+    symptoms:
+      - "New outbound connections fail for some users while others are fine"
+      - "Failures cluster around peak hours and clear on their own"
+      - "NAT pool utilisation at or near 100% for one rule"
+      - "Symptoms follow one translated public IP"
+    log_signatures: []
+    likely_causes:
+      - "Too few translated addresses for the number of concurrent sessions"
+      - "Oversubscription ratio too low for the session-per-host ratio"
+      - "A single host (scanner, proxy, NAT'd sub-network) consuming the pool"
+      - "Sessions holding ports open because of long idle timeouts"
+    commands:
+      - {cmd: "show running ippool", intent: nat.pool, params: []}
+      - {cmd: "show running global-ippool", intent: nat.pool, params: []}
+      - {cmd: "show running nat-policy", intent: nat.policy.list, params: []}
+      - {cmd: "test nat-policy-match", intent: nat.policy.match, params: []}
+      - {cmd: "show session info", intent: session.stats, params: []}
+      - {cmd: "show counter global", intent: dataplane.counters, params: []}
+    tac_first_look: "`show running ippool` (per-vsys) and `show running global-ippool` give per-rule pool utilisation and, for DIPP rules, the oversubscription ratio — TAC reads the busiest rule first and cross-checks it against the rule that `test nat-policy-match` says the failing flow hits."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/nat/dataplane-nat-memory-statistics"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+
+  - id: pan-destination-nat-uturn-broken
+    class: nat
+    proposed_class: true
+    title: "Destination NAT / U-turn (hairpin) NAT not working"
+    symptoms:
+      - "Published service reachable from the internet but not from inside"
+      - "Inbound flow reaches the firewall and is dropped without a security-policy deny"
+      - "Session shows the pre-NAT destination, never the post-NAT server"
+    log_signatures: []
+    likely_causes:
+      - "Security rule written against the post-NAT zone/address instead of pre-NAT address with post-NAT zone"
+      - "Missing source NAT on the U-turn leg, so the server replies directly and the flow goes asymmetric"
+      - "NAT rule ordering — a broader rule translates first"
+      - "No route to the translated destination in the ingress virtual router"
+    commands:
+      - {cmd: "show running nat-policy", intent: nat.policy.list, params: []}
+      - {cmd: "test nat-policy-match", intent: nat.policy.match, params: []}
+      - {cmd: "test security-policy-match application {app} source-user {user} destination {dst} destination-port {dport} source {src} protocol {protocol}", intent: policy.match, params: [app, user, dst, dport, src, protocol]}
+      - {cmd: "show routing fib virtual-router {virtual-router} | match {prefix}", intent: route.fib.lookup, params: [virtual-router, prefix]}
+      - {cmd: "show session id {session-id}", intent: session.detail, params: [session-id]}
+    tac_first_look: "TAC runs `test nat-policy-match` and `test security-policy-match` for the SAME tuple: the classic finding is that the security rule was written with the post-NAT address, or that the U-turn leg has no matching source NAT, which `show running nat-policy` makes obvious."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+
+  - id: pan-ipsec-ike-p1-down
+    class: ipsec-vpn
+    proposed_class: true
+    title: "IKE phase-1 does not establish"
+    symptoms:
+      - "No IKE SA for the gateway; tunnel interface stays down"
+      - "Peer reports no proposal chosen / authentication failure"
+      - "Tunnel was up and stopped after a peer-side change or a rekey"
+    log_signatures: []
+    likely_causes:
+      - "IKE crypto profile mismatch (DH group, encryption, hash, lifetime)"
+      - "Pre-shared key mismatch, or certificate/ID mismatch on the IKE gateway"
+      - "Peer identification type/value mismatch (IP vs FQDN vs KeyID)"
+      - "IKEv1 vs IKEv2 mismatch, or NAT-T not enabled behind a NAT device"
+      - "UDP/500 and UDP/4500 blocked upstream, or the wrong local interface/IP bound to the gateway"
+    commands:
+      - {cmd: "show vpn ike-sa", intent: vpn.ipsec.ike.sa, params: []}
+      - {cmd: "show vpn ike-sa gateway {gateway}", intent: vpn.ipsec.ike.sa, params: [gateway]}
+      - {cmd: "show vpn gateway", intent: vpn.ipsec.gateways, params: []}
+      - {cmd: "show vpn flow", intent: vpn.ipsec.flow, params: []}
+      - {cmd: "test vpn ike-sa gateway {gateway}", intent: vpn.ipsec.test, params: [gateway]}
+      - {cmd: "show counter global filter delta yes {counter}", intent: dataplane.counters, params: [counter]}
+    tac_first_look: "TAC opens `show vpn ike-sa gateway <gateway>` to confirm there is no phase-1 SA at all, reads the configured proposal from `show vpn gateway`, and then triggers one negotiation with `test vpn ike-sa gateway <gateway>` while watching the delta counters, so the failure point is captured on a single attempt."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+
+  - id: pan-ipsec-ike-p2-proxyid-mismatch
+    class: ipsec-vpn
+    proposed_class: true
+    title: "IKE phase-2 fails / proxy-ID mismatch — phase-1 up, no IPSec SA"
+    symptoms:
+      - "IKE SA present but no IPSec SA for the tunnel"
+      - "Peer (often a policy-based non-PAN device) reports invalid ID information"
+      - "Only some of several interesting-traffic selectors come up"
+    log_signatures: []
+    likely_causes:
+      - "Proxy-ID local/remote networks do not mirror the peer's selectors"
+      - "Route-based PAN tunnel against a policy-based peer with no proxy-IDs configured"
+      - "IPSec crypto profile mismatch (ESP/AH, encryption, auth, PFS DH group, lifetime/lifesize)"
+      - "Tunnel interface not bound to the tunnel, or no zone/virtual-router assignment"
+    commands:
+      - {cmd: "show vpn ipsec-sa", intent: vpn.ipsec.sa, params: []}
+      - {cmd: "show vpn tunnel", intent: vpn.ipsec.tunnel.list, params: []}
+      - {cmd: "show vpn flow", intent: vpn.ipsec.flow, params: []}
+      - {cmd: "show vpn flow name {tunnel}", intent: vpn.ipsec.tunnel.detail, params: [tunnel]}
+      - {cmd: "show vpn ike-sa gateway {gateway}", intent: vpn.ipsec.ike.sa, params: [gateway]}
+      - {cmd: "test vpn ipsec-sa tunnel {tunnel}", intent: vpn.ipsec.test, params: [tunnel]}
+    tac_first_look: "With phase-1 up, TAC compares `show vpn tunnel` (the configured proxy-IDs and crypto profile) against `show vpn ipsec-sa` (what actually came up) — a proxy-ID that does not exactly mirror the peer's selector is the single most common cause."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+
+  - id: pan-ipsec-tunnel-monitor-failover
+    class: ipsec-vpn
+    proposed_class: true
+    title: "Tunnel monitor marks the tunnel down / repeated tunnel failover or rekey churn"
+    symptoms:
+      - "System log alerts on tunnel failure with the SAs otherwise negotiating fine"
+      - "Traffic fails over to a backup tunnel and back repeatedly"
+      - "Tunnel drops roughly every 7 minutes under IKEv2 liveness retries"
+    log_signatures: []
+    likely_causes:
+      - "Tunnel-monitor destination IP unreachable or not responding to ICMP inside the tunnel"
+      - "Monitor profile action set to fail-over with too aggressive a polling interval"
+      - "IKEv2 liveness check exhausting its 10 retransmissions (~7m15s) because the peer is silent"
+      - "Asymmetric or MTU-limited path dropping the monitor probes"
+      - "Rekey lifetime mismatch causing periodic renegotiation"
+    commands:
+      - {cmd: "show vpn flow", intent: vpn.ipsec.flow, params: []}
+      - {cmd: "show vpn flow name {tunnel}", intent: vpn.ipsec.tunnel.detail, params: [tunnel]}
+      - {cmd: "show vpn flow tunnel-id {tunnel-id}", intent: vpn.ipsec.tunnel.detail, params: [tunnel-id]}
+      - {cmd: "show vpn tunnel", intent: vpn.ipsec.tunnel.list, params: []}
+      - {cmd: "show vpn ike-sa gateway {gateway}", intent: vpn.ipsec.ike.sa, params: [gateway]}
+      - {cmd: "ping source {src} host {dst}", intent: connectivity.ping, params: [src, dst]}
+    tac_first_look: "TAC reads the per-tunnel encap/decap and error counters from `show vpn flow name <tunnel>` — decap counters at zero with encap climbing means the far side never answered — then checks whether the monitor destination answers a dataplane-sourced ping."
+    sources:
+      - "https://docs.paloaltonetworks.com/network-security/ipsec-vpn/administration/set-up-tunnel-monitoring"
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+
+  # ---------------- GlobalProtect / LSVPN ----------------
+  - id: pan-gp-portal-gateway-login-failure
+    class: ssl-vpn
+    proposed_class: true
+    title: "GlobalProtect portal or gateway login failure"
+    symptoms:
+      - "Agent reports invalid username or password, or authentication timeout"
+      - "Portal page loads but credentials are rejected"
+      - "Only some users or only one authentication method fails"
+    log_signatures: []
+    likely_causes:
+      - "Authentication profile/sequence pointing at an unreachable or misconfigured LDAP/RADIUS/SAML server"
+      - "Allow-list group in the authentication profile not matching the user's groups"
+      - "Group mapping stale, so group-based portal/gateway config never applies"
+      - "Certificate profile requiring a client certificate the endpoint does not present"
+      - "Account lockout / password policy on the identity source"
+    commands:
+      - {cmd: "test authentication authentication-profile {profile} username {user} password", intent: auth.test, params: [profile, user]}
+      - {cmd: "less mp-log authd.log", intent: log.authd, params: []}
+      - {cmd: "show user group-mapping state all", intent: user.groupmapping.status, params: []}
+      - {cmd: "show user group name {group}", intent: user.groups, params: [group]}
+      - {cmd: "show user ip-user-mapping all", intent: user.mapping.list, params: []}
+      - {cmd: "show system info", intent: platform.version, params: []}
+    tac_first_look: "TAC reproduces the failure server-side with `test authentication authentication-profile <profile> username <user>` and reads the reason out of `less mp-log authd.log`; if authentication succeeds there but the agent still fails, the next suspect is group mapping or the certificate profile."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id"
+
+  - id: pan-gp-tunnel-not-established
+    class: ssl-vpn
+    proposed_class: true
+    title: "GlobalProtect agent authenticates but the tunnel does not come up"
+    symptoms:
+      - "Agent shows Connecting then falls back or disconnects"
+      - "Authentication succeeds (portal config downloads) but no gateway tunnel"
+      - "IPSec fails and SSL fallback also fails, or works only on some networks"
+    log_signatures: []
+    likely_causes:
+      - "Gateway certificate not trusted by the client, or CN/SAN mismatch with the connect address"
+      - "IPSec (UDP/4500) blocked upstream and SSL fallback disabled"
+      - "IP pool exhausted, so no tunnel address can be assigned"
+      - "Client config / split-tunnel routes conflicting with the local network"
+      - "Gateway licence or session capacity reached"
+    commands:
+      - {cmd: "show session info", intent: session.stats, params: []}
+      - {cmd: "request license info", intent: license.status, params: []}
+      - {cmd: "show user ip-user-mapping all", intent: user.mapping.list, params: []}
+      - {cmd: "less mp-log authd.log", intent: log.authd, params: []}
+      - {cmd: "show counter global filter delta yes {counter}", intent: dataplane.counters, params: [counter]}
+      - {cmd: "show running resource-monitor", intent: dataplane.resources, params: []}
+    tac_first_look: "TAC separates authentication from tunnel setup: authd.log proves the login landed, then `request license info` (GlobalProtect subscription state) and the session/counter reads show whether the gateway is refusing the tunnel for capacity or dropping the IPSec/SSL setup packets."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id"
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+
+  - id: pan-ha-peer-non-functional-or-suspended
+    class: ha-cluster
+    proposed_class: true
+    title: "HA peer in non-functional or suspended state"
+    symptoms:
+      - "Peer reports Non-functional: an error state caused by a dataplane failure or a configuration mismatch"
+      - "Peer reports Suspended: the device is disabled so it will not pass data traffic, though HA communications persist"
+      - "Active/active peer stuck in Tentative after a device or monitored-object failure"
+      - "No failover protection — the pair is effectively standalone"
+    log_signatures:
+      - "Non-functional"
+      - "Suspended"
+      - "Tentative"
+      - "Initial"
+    likely_causes:
+      - "Firewalls are not the same hardware or VM model, or run different PAN-OS versions"
+      - "Multi-vsys capability enabled on one peer and disabled on the other"
+      - "HA interface types or link configuration do not match between peers"
+      - "Dataplane failure on one peer (internal health check on FPGA/CPU)"
+      - "Peer manually suspended and never re-enabled"
+    commands:
+      - {cmd: "show high-availability cluster state", intent: ha.cluster.status, params: []}
+      - {cmd: "show high-availability cluster all", intent: ha.cluster.status, params: []}
+      - {cmd: "show high-availability cluster statistics", intent: ha.cluster.stats, params: []}
+      - {cmd: "show system info", intent: platform.version, params: []}
+      - {cmd: "show system info | match vsys", intent: platform.vsys.mode, params: []}
+      - {cmd: "show jobs processed", intent: jobs.status, params: []}
+      - {cmd: "show running resource-monitor", intent: dataplane.resources, params: []}
+    tac_first_look: "TAC collects `show high-availability cluster state` from BOTH peers plus `show system info` from both — model, PAN-OS version and multi-vsys mode must match exactly, and a mismatch on any of the three is the documented cause of a Non-functional peer."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/high-availability/ha-firewall-states"
+      - "https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+
+  - id: pan-ha-link-or-path-monitor-failover
+    class: ha-cluster
+    proposed_class: true
+    title: "Unexpected HA failover from link monitoring, path monitoring or heartbeat loss"
+    symptoms:
+      - "Firewalls swap roles with no operator action, sometimes repeatedly"
+      - "Failover coincides with an upstream switch event or a WAN blip"
+      - "HA flap statistics climbing"
+    log_signatures: []
+    likely_causes:
+      - "Link group member down — Any link down or All links down in the group constitutes a link group failure"
+      - "Path monitoring: an IP address is considered unreachable when 10 consecutive pings (the default) fail"
+      - "Heartbeat loss — a ping every 1,000 ms and three consecutive heartbeat losses trigger a failover"
+      - "HA control link congested or shared with data traffic"
+      - "Internal health check failure on a critical component (FPGA, CPU)"
+    commands:
+      - {cmd: "show high-availability cluster state", intent: ha.cluster.status, params: []}
+      - {cmd: "show high-availability cluster flap-statistics", intent: ha.cluster.flap, params: []}
+      - {cmd: "show high-availability cluster statistics", intent: ha.cluster.stats, params: []}
+      - {cmd: "show high-availability cluster ha4-status", intent: ha.link.status, params: []}
+      - {cmd: "show high-availability cluster ha4-backup-status", intent: ha.link.status, params: []}
+      - {cmd: "show counter global", intent: dataplane.counters, params: []}
+      - {cmd: "ping host {dst}", intent: connectivity.ping, params: [dst]}
+    tac_first_look: "`show high-availability cluster flap-statistics` tells TAC how often the pair has moved between suspended and functional; it then pins the trigger by testing each path-monitor destination and checking the HA link status, since the counters reset only when the device changes state."
+    sources:
+      - "https://docs.paloaltonetworks.com/ngfw/administration/high-availability/failover"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+
+  - id: pan-ha-config-sync-failure
+    class: ha-cluster
+    proposed_class: true
+    title: "HA configuration sync failure / peers out of sync"
+    symptoms:
+      - "Dashboard or HA widget reports config not synchronised"
+      - "A commit succeeds on the active peer but the passive keeps the old config"
+      - "Behaviour differs after failover"
+    log_signatures: []
+    likely_causes:
+      - "PAN-OS version mismatch between peers"
+      - "Multi-vsys capability mismatch"
+      - "Commit job failing on the peer (validation error in a pushed template)"
+      - "HA1 control link degraded so the sync never completes"
+      - "Panorama template/device-group push landing on only one peer"
+    commands:
+      - {cmd: "show high-availability cluster all", intent: ha.cluster.status, params: []}
+      - {cmd: "show high-availability cluster state", intent: ha.cluster.status, params: []}
+      - {cmd: "show jobs processed", intent: jobs.status, params: []}
+      - {cmd: "show system info", intent: platform.version, params: []}
+      - {cmd: "show config pushed-template", intent: config.pushed, params: []}
+      - {cmd: "show config pushed-shared-policy", intent: config.pushed, params: []}
+    tac_first_look: "TAC pulls `show jobs processed` from BOTH peers — a sync failure almost always leaves a failed commit job on one side — and confirms with `show system info` that the software versions match, since a version mismatch blocks sync by design."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama"
+      - "https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+
+  - id: pan-ha-split-brain
+    class: ha-cluster
+    proposed_class: true
+    title: "HA split brain — both peers believe they are active"
+    symptoms:
+      - "Duplicate IP / duplicate MAC complaints upstream"
+      - "Both firewalls report an active state simultaneously"
+      - "Intermittent connectivity as flows land on the wrong owner"
+      - "On Panorama HA, both peers primary after a link outage"
+    log_signatures: []
+    likely_causes:
+      - "HA1 control link (and its backup) both down, so neither peer sees the other's heartbeat"
+      - "No heartbeat backup path configured, leaving a single point of failure"
+      - "Both HA peers configured with the same priority instead of primary/secondary"
+      - "Duplicate serial numbers on virtual appliances"
+    commands:
+      - {cmd: "show high-availability cluster state", intent: ha.cluster.status, params: []}
+      - {cmd: "show high-availability cluster all", intent: ha.cluster.status, params: []}
+      - {cmd: "show high-availability cluster statistics", intent: ha.cluster.stats, params: []}
+      - {cmd: "show high-availability cluster session-synchronization", intent: ha.session.sync, params: []}
+      - {cmd: "show system info", intent: platform.version, params: []}
+      - {cmd: "show netstat statistics yes", intent: network.netstat, params: []}
+    tac_first_look: "TAC captures the HA state from both peers at the same moment and then works backwards to the control-link outage; on Panorama HA the documented checks are unique serial numbers, matching modes, distinct primary/secondary priority, and matching software versions."
+    sources:
+      - "https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/diagnose-panorama-suspended-state"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha"
+      - "https://docs.paloaltonetworks.com/ngfw/administration/high-availability/failover"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+
+  # ---------------- routing ----------------
+  - id: pan-bgp-peer-down
+    class: bgp-session
+    proposed_class: false
+    title: "BGP peer will not establish (idle / active / connect)"
+    symptoms:
+      - "Peer never reaches Established"
+      - "Session flaps on a regular cadence"
+      - "Routes withdrawn from the FIB when the peer drops"
+    log_signatures: []
+    likely_causes:
+      - "Peer IP unreachable, or the update-source/local address does not match what the neighbour expects"
+      - "AS number mismatch, or eBGP multihop needed and not configured"
+      - "MD5/authentication mismatch"
+      - "Peer group or peer administratively disabled"
+      - "BFD session for the peer bouncing and tearing BGP down with it"
+    commands:
+      - {cmd: "show advanced-routing bgp summary logical-router {logical-router}", intent: bgp.summary, params: [logical-router]}
+      - {cmd: "show advanced-routing bgp peer status peer-name {peer} logical-router {logical-router}", intent: bgp.peer.detail, params: [peer, logical-router]}
+      - {cmd: "show advanced-routing bgp peer detail peer-name {peer} logical-router {logical-router}", intent: bgp.peer.detail, params: [peer, logical-router]}
+      - {cmd: "show routing protocol bgp summary virtual-router {virtual-router}", intent: bgp.summary, params: [virtual-router]}
+      - {cmd: "show routing protocol bgp peer peer-name {peer} virtual-router {virtual-router}", intent: bgp.peer.detail, params: [peer, virtual-router]}
+      - {cmd: "ping source {src} host {dst}", intent: connectivity.ping, params: [src, dst]}
+      - {cmd: "show routing bfd details", intent: bfd.sessions, params: []}
+    tac_first_look: "TAC needs to know first whether the firewall uses legacy virtual routers or Advanced Routing logical routers — the command families differ (`show routing protocol bgp ...` vs `show advanced-routing bgp ...`) — then reads the peer state and the last error out of the peer detail output."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+
+  - id: pan-bgp-prefix-not-received-or-advertised
+    class: bgp-route-missing
+    proposed_class: false
+    title: "BGP prefix missing — not received from, or not advertised to, the peer"
+    symptoms:
+      - "Peer is Established but an expected prefix is absent from the routing table"
+      - "The neighbour insists it is advertising the prefix"
+      - "Only some prefixes from a peer arrive"
+    log_signatures: []
+    likely_causes:
+      - "Inbound route-map / prefix-list / access-list filtering the prefix out"
+      - "Outbound filter or export rule suppressing the advertisement"
+      - "Prefix received but not selected as best, so it never reaches the FIB"
+      - "Maximum-prefix limit tripped on the peer"
+      - "Route dampened after repeated flaps"
+    commands:
+      - {cmd: "show advanced-routing bgp peer received-routes peer-name {peer} afi {afi} logical-router {logical-router}", intent: bgp.peer.routes.received, params: [peer, afi, logical-router]}
+      - {cmd: "show advanced-routing bgp peer filtered-routes peer-name {peer} afi {afi} logical-router {logical-router}", intent: bgp.peer.routes.filtered, params: [peer, afi, logical-router]}
+      - {cmd: "show advanced-routing bgp peer advertised-routes peer-name {peer} afi {afi} logical-router {logical-router}", intent: bgp.peer.routes.advertised, params: [peer, afi, logical-router]}
+      - {cmd: "show advanced-routing bgp peer dampened-routes peer-name {peer} afi {afi} logical-router {logical-router}", intent: bgp.peer.routes.dampened, params: [peer, afi, logical-router]}
+      - {cmd: "show advanced-routing bgp route afi {afi} logical-router {logical-router}", intent: bgp.routes, params: [afi, logical-router]}
+      - {cmd: "show advanced-routing bgp filters prefix-list logical-router {logical-router} name {prefix-list}", intent: bgp.filters, params: [logical-router, prefix-list]}
+      - {cmd: "show advanced-routing bgp filters route-map logical-router {logical-router} name {route-map}", intent: bgp.filters, params: [logical-router, route-map]}
+      - {cmd: "show routing protocol bgp loc-rib", intent: bgp.routes, params: []}
+    tac_first_look: "TAC walks received → filtered → local RIB → advertised in that order: if the prefix appears in filtered-routes the answer is an inbound policy, if it is in the local RIB but not advertised the answer is an outbound one."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+
+  - id: pan-ospf-neighbor-stuck
+    class: ospf-adjacency
+    proposed_class: false
+    title: "OSPF neighbour stuck (init / 2-way / exstart) or adjacency missing"
+    symptoms:
+      - "Neighbour never reaches Full"
+      - "Adjacency forms on one interface and not another"
+      - "LSDB incomplete; expected OSPF routes missing"
+    log_signatures: []
+    likely_causes:
+      - "Hello/dead interval, area ID, or area type (stub/NSSA) mismatch"
+      - "MTU mismatch holding the adjacency in ExStart"
+      - "Authentication type or key mismatch"
+      - "Interface is passive, or in the wrong area / wrong virtual router"
+      - "Duplicate router IDs"
+    commands:
+      - {cmd: "show advanced-routing ospf neighbor", intent: ospf.neighbors, params: []}
+      - {cmd: "show advanced-routing ospf interface", intent: ospf.interfaces, params: []}
+      - {cmd: "show advanced-routing ospf area", intent: ospf.areas, params: []}
+      - {cmd: "show advanced-routing ospf lsdb", intent: ospf.database, params: []}
+      - {cmd: "show advanced-routing ospf summary", intent: ospf.summary, params: []}
+      - {cmd: "show advanced-routing ospf virt-neighbor", intent: ospf.neighbors, params: []}
+      - {cmd: "show advanced-routing ospfv3 neighbor", intent: ospf.neighbors, params: []}
+      - {cmd: "show advanced-routing route type ospf", intent: route.table, params: []}
+    tac_first_look: "`show advanced-routing ospf interface` is opened first because it prints the per-interface timers, area and MTU that must match — the stuck state (2-way vs ExStart) then tells TAC whether to chase DR election or MTU."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+
+  - id: pan-route-not-in-fib
+    class: routing-table
+    proposed_class: true
+    title: "Route present in the RIB but not installed in the FIB / wrong virtual router or logical router"
+    symptoms:
+      - "Traffic takes an unexpected egress interface"
+      - "A static or learned route does not appear in the forwarding table"
+      - "Only one of several ECMP members carries traffic"
+      - "Route disappears when a monitored path goes down"
+    log_signatures: []
+    likely_causes:
+      - "Route lives in a different virtual router / logical router than the ingress zone"
+      - "Static-route path monitoring has withdrawn the route"
+      - "Administrative distance or metric loses to another source"
+      - "ECMP enabled but the flows hash to one member; ECMP routes carry the E flag with an asterisk marking the preferred path"
+      - "Next hop not resolvable (recursive lookup fails)"
+    commands:
+      - {cmd: "show routing route", intent: route.table, params: []}
+      - {cmd: "show routing fib", intent: route.fib, params: []}
+      - {cmd: "show routing fib virtual-router {virtual-router} | match {prefix}", intent: route.fib.lookup, params: [virtual-router, prefix]}
+      - {cmd: "show advanced-routing route destination {prefix}", intent: route.table, params: [prefix]}
+      - {cmd: "show advanced-routing route logical-router {logical-router}", intent: route.table, params: [logical-router]}
+      - {cmd: "show advanced-routing fib", intent: route.fib, params: []}
+      - {cmd: "show advanced-routing fib ecmp yes", intent: route.fib, params: []}
+      - {cmd: "show advanced-routing static-route-path-monitor", intent: route.pathmonitor, params: []}
+      - {cmd: "show advanced-routing logical-router {logical-router}", intent: route.logicalrouter, params: [logical-router]}
+    tac_first_look: "TAC compares the RIB (`show advanced-routing route destination <prefix>`) with the FIB for the SAME router instance — a prefix in the RIB but absent from the FIB is almost always a path-monitor withdrawal or the wrong virtual/logical router."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/ecmp/verify-ecmp"
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+
+  - id: pan-interface-drops-and-errors
+    class: interface-errors
+    proposed_class: false
+    title: "Interface drops, errors or unexplained packet loss on a dataplane interface"
+    symptoms:
+      - "Retransmissions and slow transfers through one interface"
+      - "Global drop counters climbing without a matching policy deny"
+      - "Loss visible on large frames only (MTU/fragmentation)"
+      - "Management-plane connectivity degraded alongside dataplane"
+    log_signatures: []
+    likely_causes:
+      - "Duplex/speed mismatch or a failing optic on the peer switch port"
+      - "MTU mismatch causing fragmentation or PMTUD black holes"
+      - "Dataplane buffer pressure spilling into drops"
+      - "Fragmented-packet handling on AE interfaces on PA-7050/PA-7080"
+    commands:
+      - {cmd: "show counter global", intent: dataplane.counters, params: []}
+      - {cmd: "show counter global filter delta yes {counter}", intent: dataplane.counters, params: [counter]}
+      - {cmd: "show netstat statistics yes", intent: network.netstat, params: []}
+      - {cmd: "show running resource-monitor", intent: dataplane.resources, params: []}
+      - {cmd: "ping source {src} host {dst}", intent: connectivity.ping, params: [src, dst]}
+      - {cmd: "ping host {dst}", intent: connectivity.ping, params: [dst]}
+      - {cmd: "show system setting arp-cache-timeout", intent: arp.settings, params: []}
+    tac_first_look: "TAC baselines `show counter global`, has the customer reproduce, then re-reads with `show counter global filter delta yes <counter>` so only the counters that moved during the repro are in the evidence; a dataplane-sourced ping isolates firewall-vs-network."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+
+  - id: pan-mgmt-plane-high-cpu
+    class: high-cpu
+    proposed_class: false
+    title: "Management-plane high CPU (slow web UI, slow commits, API timeouts)"
+    symptoms:
+      - "Web UI and CLI sluggish while traffic forwarding is unaffected"
+      - "Commits take far longer than usual or time out"
+      - "Log queries and reports slow or fail"
+      - "XML API callers time out"
+    log_signatures: []
+    likely_causes:
+      - "A management process (log receiver, report generator, User-ID, device telemetry) consuming CPU"
+      - "Very large log query or scheduled report running during business hours"
+      - "Heavy XML API polling from an external system"
+      - "Log forwarding backlog on the management plane"
+    commands:
+      - {cmd: "show system resources", intent: system.resources, params: []}
+      - {cmd: "show system software status", intent: system.processes, params: []}
+      - {cmd: "show jobs processed", intent: jobs.status, params: []}
+      - {cmd: "show admins", intent: admin.sessions, params: []}
+      - {cmd: "show admins all", intent: admin.sessions, params: []}
+      - {cmd: "show system disk-space files", intent: system.disk, params: []}
+    tac_first_look: "`show system resources` is the management-plane top: TAC names the top process, then correlates it with running jobs and logged-in administrators or API sessions before touching anything on the dataplane."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+
+  - id: pan-dataplane-high-cpu
+    class: high-cpu
+    proposed_class: false
+    title: "Dataplane high CPU (throughput loss, latency, drops)"
+    symptoms:
+      - "Latency and packet loss through the firewall under load"
+      - "Throughput below the platform's rated figure"
+      - "Web UI responsive while traffic suffers"
+      - "Per-core utilisation uneven across dataplane cores"
+    log_signatures: []
+    likely_causes:
+      - "Traffic mix requiring more inspection than the platform is sized for (decryption, threat, URL)"
+      - "A single elephant flow pinned to one core"
+      - "Session-setup rate (CPS) at the platform limit"
+      - "Decryption enabled on a model without the headroom for it"
+      - "Excessive logging per session"
+    commands:
+      - {cmd: "show running resource-monitor", intent: dataplane.resources, params: []}
+      - {cmd: "show session info", intent: session.stats, params: []}
+      - {cmd: "show session meter", intent: session.meter, params: []}
+      - {cmd: "show counter global", intent: dataplane.counters, params: []}
+      - {cmd: "show system resources", intent: system.resources, params: []}
+      - {cmd: "show system info", intent: platform.version, params: []}
+    tac_first_look: "`show running resource-monitor` is the dataplane's own utilisation view — per-core and per-function — and TAC reads it alongside `show session info` so the CPU figure is interpreted against the actual CPS and session count rather than in isolation."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys"
+
+  - id: pan-packet-buffer-exhaustion
+    class: resource-exhaustion
+    proposed_class: true
+    title: "Packet-buffer / dataplane resource exhaustion (packet buffer protection engaging)"
+    symptoms:
+      - "System log records packet-buffer-protection alert events"
+      - "Threat log records dropped traffic, discarded sessions and blocked IP addresses"
+      - "Broad, source-IP-shaped outages behind a NAT address"
+      - "Alert events repeating once per minute while the condition persists"
+    log_signatures:
+      - "packet buffer protection"
+    likely_causes:
+      - "A flood or an abusive session filling the packet buffers"
+      - "Per-zone packet buffer protection blocking a shared, translated NAT source so innocent users behind it are blocked too"
+      - "Dataplane already at capacity, so normal bursts breach the alert threshold"
+      - "Session-table pressure compounding buffer pressure"
+    commands:
+      - {cmd: "show running resource-monitor", intent: dataplane.resources, params: []}
+      - {cmd: "show session info", intent: session.stats, params: []}
+      - {cmd: "show counter global", intent: dataplane.counters, params: []}
+      - {cmd: "show counter global filter delta yes {counter}", intent: dataplane.counters, params: [counter]}
+      - {cmd: "show system resources", intent: system.resources, params: []}
+    tac_first_look: "Packet buffer protection logs an alert to the System log when utilisation exceeds the alert threshold for more than 10 seconds and then one event per minute; TAC anchors on that timeline and reads `show running resource-monitor` for the buffer/CPU state around it."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/zone-protection-and-dos-protection/configure-zone-protection-to-increase-network-security/configure-packet-buffer-protection"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting"
+
+  - id: pan-mgmt-disk-and-log-quota-full
+    class: resource-exhaustion
+    proposed_class: true
+    title: "Management disk full or log quota exhausted (logs rolling too fast, upgrades failing)"
+    symptoms:
+      - "Content or software downloads fail for lack of space"
+      - "Log retention far shorter than expected"
+      - "Reports empty for older date ranges"
+      - "A partition at or near 100% in disk-space output"
+    log_signatures: []
+    likely_causes:
+      - "Log storage quota for one log type sized too small for the volume"
+      - "Old software/content images never removed filling the partition"
+      - "Debug or tech-support artefacts left on the device"
+      - "Log forwarding stalled so logs accumulate locally"
+      - "Inode exhaustion rather than byte exhaustion"
+    commands:
+      - {cmd: "show system disk-space files", intent: system.disk, params: []}
+      - {cmd: "show system logdb-quota", intent: logging.quota, params: []}
+      - {cmd: "show jobs processed", intent: jobs.status, params: []}
+      - {cmd: "show system resources", intent: system.resources, params: []}
+      - {cmd: "show logging-status device {serial}", intent: logging.status, params: [serial]}
+    tac_first_look: "`show system disk-space files` gives both partition usage and inode usage — TAC checks inodes as well as bytes — and `show system logdb-quota` shows the per-log-type maximum that is driving the expiry the customer is complaining about."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/monitoring/view-and-manage-logs"
+
+  # ---------------- licensing / content ----------------
+  - id: pan-license-expired
+    class: licensing
+    proposed_class: true
+    title: "Subscription licence expired or not installed (Threat, URL, WildFire, GlobalProtect, support)"
+    symptoms:
+      - "A security profile stops taking effect, or URL categories resolve as not-resolved"
+      - "Content updates refuse to download"
+      - "GlobalProtect features unavailable"
+      - "Feature works on one HA peer and not the other"
+    log_signatures: []
+    likely_causes:
+      - "Subscription expired and not renewed"
+      - "Licence installed on only one HA peer — licences are unique to each firewall and cannot be shared between the firewalls"
+      - "Device not registered / no connectivity to the update server"
+      - "Licence applied to the wrong serial number"
+    commands:
+      - {cmd: "request license info", intent: license.status, params: []}
+      - {cmd: "show system info", intent: platform.version, params: []}
+      - {cmd: "show jobs processed", intent: jobs.status, params: []}
+      - {cmd: "show devicegroups name {device-group}", intent: panorama.devicegroups, params: [device-group]}
+    tac_first_look: "`request license info` on BOTH HA peers is the first read — licences are per-serial and never shared across an HA pair, so a one-sided expiry is a routine finding after a failover."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama"
+
+  - id: pan-content-update-failure
+    class: content-update
+    proposed_class: true
+    title: "Applications-and-Threats / antivirus content update fails or is far behind"
+    symptoms:
+      - "Content version in show system info months old"
+      - "Scheduled download or install jobs failing"
+      - "Firewalls in a device group on inconsistent content versions"
+      - "Install job succeeds but the version does not change"
+    log_signatures: []
+    likely_causes:
+      - "No route or no DNS to the update server from the management interface"
+      - "Expired support/threat subscription blocking the download"
+      - "Insufficient disk space for the content image"
+      - "Proxy or TLS interception breaking the update fetch"
+      - "Content push from Panorama not reaching the firewall"
+    commands:
+      - {cmd: "show system info", intent: platform.version, params: []}
+      - {cmd: "show jobs processed", intent: jobs.status, params: []}
+      - {cmd: "request license info", intent: license.status, params: []}
+      - {cmd: "show system disk-space files", intent: system.disk, params: []}
+      - {cmd: "ping host {dst}", intent: connectivity.ping, params: [dst]}
+      - {cmd: "show devicegroups name {device-group}", intent: panorama.devicegroups, params: [device-group]}
+    tac_first_look: "TAC reads the installed content versions from `show system info`, then finds the failing download/install in `show jobs processed`; the three usual causes — expired subscription, no path to the update server, no disk — are each one command away."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama"
+
+  # ---------------- logging ----------------
+  - id: pan-logs-not-reaching-panorama
+    class: logging-pipeline
+    proposed_class: true
+    title: "Firewall logs not arriving at Panorama or a Dedicated Log Collector"
+    symptoms:
+      - "Panorama shows no recent logs for one firewall while others are fine"
+      - "Gap in the log timeline that matches a network or upgrade event"
+      - "Log forwarding backlog on the firewall"
+      - "Logs present locally on the firewall but absent on Panorama"
+    log_signatures: []
+    likely_causes:
+      - "Firewall-to-Panorama connection down or the firewall not committed to the right Panorama server"
+      - "Log forwarding profile not attached to the security rules"
+      - "Collector Group / managed collector misconfiguration"
+      - "Incoming log rate above what the collector can absorb"
+      - "Certificate or connectivity failure on the log path"
+    commands:
+      - {cmd: "show logging-status device {serial}", intent: logging.status, params: [serial]}
+      - {cmd: "debug log-collector log-collection-stats show incoming-logs", intent: logging.rate, params: []}
+      - {cmd: "debug log-collector log-collection-stats show log-forwarding-stats", intent: logging.rate, params: []}
+      - {cmd: "show devicegroups name {device-group}", intent: panorama.devicegroups, params: [device-group]}
+      - {cmd: "show templates name {template}", intent: panorama.templates, params: [template]}
+      - {cmd: "show system info | match system-mode", intent: platform.mode, params: []}
+      - {cmd: "show system disk-space files", intent: system.disk, params: []}
+    tac_first_look: "`show logging-status device <serial>` on Panorama shows the last log sequence numbers received per log type from that firewall — a stalled sequence number localises the break instantly — and the log-collection-stats reads say whether the collector is simply saturated."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+
+  - id: pan-decryption-breaks-site
+    class: ssl-inspection
+    proposed_class: true
+    title: "SSL decryption breaks a site or application"
+    symptoms:
+      - "Browser certificate warnings, or the site simply fails to load through the firewall"
+      - "Application works when decryption is bypassed"
+      - "Pinned-certificate apps (banking, MDM, some mobile apps) fail"
+      - "Only some clients affected"
+    log_signatures:
+      - "Unsupported cipher"
+      - "TLS Handshake Failure"
+      - "Client and decrypt profile version mismatch"
+      - "General TLS protocol error"
+    likely_causes:
+      - "Certificate pinning on the client or a mutual-TLS server requiring an unsupported client certificate"
+      - "Cipher or TLS version the firewall or the decryption profile will not negotiate"
+      - "Incomplete or untrusted certificate chain on the origin server"
+      - "Forward-trust CA not installed on the endpoint"
+      - "Server auto-added to the local SSL decryption exclusion cache, so behaviour differs by host"
+    commands:
+      - {cmd: "test decryption-policy-match category {category} from {src-zone} source {src} destination {dst}", intent: decryption.policy.match, params: [category, src-zone, src, dst]}
+      - {cmd: "show session id {session-id}", intent: session.detail, params: [session-id]}
+      - {cmd: "show counter global filter delta yes {counter}", intent: dataplane.counters, params: [counter]}
+      - {cmd: "show running resource-monitor", intent: dataplane.resources, params: []}
+      - {cmd: "show system info", intent: platform.version, params: []}
+    tac_first_look: "TAC filters the Decryption log by error index — for example (err_index eq Certificate) — to name the failure class, then confirms with `test decryption-policy-match` that the flow was even supposed to be decrypted; the local exclusion cache (up to 1,024 entries, 12-hour expiry) explains hosts that behave inconsistently."
+    sources:
+      - "https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-log-errors"
+      - "https://docs.paloaltonetworks.com/network-security/decryption/administration/troubleshooting-decryption/investigate-decryption-failures"
+      - "https://docs.paloaltonetworks.com/network-security/decryption/administration/decryption-exclusions/local-ssl-decryption-exclusion-cache"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration"
+
+  - id: pan-userid-ip-not-mapped
+    class: user-auth-fsso
+    proposed_class: true
+    title: "User-ID: user not mapped to an IP, so user-based policy does not match"
+    symptoms:
+      - "Traffic log shows no source user for a known user"
+      - "User-based allow rule never matches; traffic falls through to a broader rule"
+      - "Works for some subnets and not others"
+      - "Mapping appears then disappears"
+    log_signatures: []
+    likely_causes:
+      - "Domain controller not being monitored, or the agent lost its connection to it"
+      - "User-ID not enabled on the source zone"
+      - "Mapping timed out before the user re-authenticated"
+      - "Client behind a NAT or terminal server sharing one IP among many users"
+      - "Username format mismatch (domain\\\\user vs UPN) between mapping and policy"
+    commands:
+      - {cmd: "show user ip-user-mapping all", intent: user.mapping.list, params: []}
+      - {cmd: "show user ip-user-mapping ip {ip}", intent: user.mapping.byip, params: [ip]}
+      - {cmd: "show user ip-user-mapping all | match {domain}\\\\{user}", intent: user.mapping.list, params: [domain, user]}
+      - {cmd: "show user user-ids", intent: user.list, params: []}
+      - {cmd: "show user server-monitor statistics", intent: user.agent.stats, params: []}
+      - {cmd: "show log userid datasourcename equal {agent} direction equal backward", intent: user.logs, params: [agent]}
+    tac_first_look: "TAC looks the client IP up directly with `show user ip-user-mapping ip <ip>` — the output names the data source, so an absent or stale mapping immediately points at either the agent or the source-zone User-ID setting."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys"
+
+  - id: pan-userid-group-mapping-empty
+    class: user-auth-fsso
+    proposed_class: true
+    title: "User-ID group mapping empty or stale, so group-based rules do not match"
+    symptoms:
+      - "A group referenced in policy resolves to no members"
+      - "Newly added AD users are not covered by their group's rule"
+      - "Group list missing groups that exist in the directory"
+    log_signatures: []
+    likely_causes:
+      - "LDAP server profile credentials expired or the bind DN lost rights"
+      - "Group include-list not covering the group's OU"
+      - "Group mapping refresh interval too long for the rate of change"
+      - "Nested groups not expanded"
+      - "LDAP over TLS failing after a certificate change"
+    commands:
+      - {cmd: "show user group-mapping state all", intent: user.groupmapping.status, params: []}
+      - {cmd: "show user group-mapping statistics", intent: user.groupmapping.stats, params: []}
+      - {cmd: "show user group list", intent: user.groups, params: []}
+      - {cmd: "show user group name {group}", intent: user.groups, params: [group]}
+      - {cmd: "show user user-ids", intent: user.list, params: []}
+      - {cmd: "less mp-log authd.log", intent: log.authd, params: []}
+    tac_first_look: "`show user group-mapping state all` gives the last successful refresh per LDAP profile; `show user group name <group>` then proves whether the group the policy references has any members at all on this firewall."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+
+  - id: pan-userid-agent-disconnected
+    class: user-auth-fsso
+    proposed_class: true
+    title: "User-ID agent or integrated server monitor disconnected from its data sources"
+    symptoms:
+      - "All mappings age out at once across a site"
+      - "Agent state shows not connected"
+      - "Log messages received count flat while the DCs are clearly logging"
+      - "Only mappings from one data source are missing"
+    log_signatures: []
+    likely_causes:
+      - "Windows-based User-ID agent service stopped, or its host unreachable"
+      - "Service account lost the rights needed to read the security event log"
+      - "Firewall's PAN-OS-integrated agent not configured for that server"
+      - "WMI/WinRM path blocked between firewall and domain controller"
+      - "Syslog-based data source no longer sending, or its parse profile stopped matching"
+    commands:
+      - {cmd: "show user user-id-agent state all", intent: user.agent.status, params: []}
+      - {cmd: "show user user-id-agent config name {agent}", intent: user.agent.config, params: [agent]}
+      - {cmd: "show user server-monitor state all", intent: user.agent.status, params: []}
+      - {cmd: "show user server-monitor statistics", intent: user.agent.stats, params: []}
+      - {cmd: "show log userid datasource equal {datasource}", intent: user.logs, params: [datasource]}
+      - {cmd: "show log userid datasourcetype equal {datasourcetype}", intent: user.logs, params: [datasourcetype]}
+    tac_first_look: "TAC reads `show user user-id-agent state all` and `show user server-monitor state all` together — one covers the Windows agents, the other the PAN-OS-integrated agent — then uses `show user server-monitor statistics` to see whether log messages are being received but not mapped."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id"
+
+  # ---------------- DNS / DHCP ----------------
+  - id: pan-dns-proxy-failure
+    class: dns-resolution
+    proposed_class: true
+    title: "DNS proxy not resolving / clients using the firewall as DNS fail"
+    symptoms:
+      - "Clients pointed at the firewall's DNS proxy cannot resolve"
+      - "FQDN address objects stop refreshing"
+      - "Resolution works for some domains via a proxy rule and not others"
+      - "Intermittent failures under TCP-based DNS"
+    log_signatures: []
+    likely_causes:
+      - "Upstream DNS servers unreachable from the firewall"
+      - "DNS proxy object not enabled on the interface the clients use"
+      - "Proxy rule / FQDN match sending queries to the wrong upstream"
+      - "Cache disabled or poisoned with stale entries"
+      - "TCP failover timers too aggressive for a slow upstream"
+    commands:
+      - {cmd: "show dns-proxy all", intent: dns.proxy.status, params: []}
+      - {cmd: "show dns-proxy settings all", intent: dns.proxy.config, params: []}
+      - {cmd: "show dns-proxy statistics all", intent: dns.proxy.stats, params: []}
+      - {cmd: "debug dnsproxyd show sys-statistics", intent: dns.proxy.stats, params: []}
+      - {cmd: "ping host {dst}", intent: connectivity.ping, params: [dst]}
+      - {cmd: "show netstat statistics yes", intent: network.netstat, params: []}
+    tac_first_look: "`show dns-proxy all` names the configured upstream servers and the proxy's state; `show dns-proxy statistics all` then shows whether queries are arriving and being answered, which separates a client-side problem from an upstream one."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dns/configure-a-dns-proxy-object"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+
+  - id: pan-dhcp-pool-exhaustion
+    class: dhcp
+    proposed_class: true
+    title: "DHCP server pool exhausted or clients not receiving the expected options"
+    symptoms:
+      - "Clients on one segment fail to get an address"
+      - "Pool shows 100% allocated"
+      - "Clients get an address but no DNS/gateway, or the wrong ones"
+      - "Reserved addresses not honoured"
+    log_signatures: []
+    likely_causes:
+      - "IP pool too small for the number of clients, or lease time too long"
+      - "Stale leases held by devices that have left"
+      - "DHCP options (DNS, gateway, subnet mask, domain suffix) not configured or inherited from the wrong source"
+      - "MAC-bound reservation conflicting with a dynamic allocation"
+      - "DHCP mode set to auto or disabled rather than enabled on the interface"
+    commands:
+      - {cmd: "show dhcp server lease interface all", intent: dhcp.leases, params: []}
+      - {cmd: "show dhcp server settings all", intent: dhcp.server.settings, params: []}
+      - {cmd: "show counter global", intent: dataplane.counters, params: []}
+      - {cmd: "show netstat statistics yes", intent: network.netstat, params: []}
+    tac_first_look: "`show dhcp server lease interface all` gives the allocated count, the pool size, the percentage used and every lease's IP, MAC, state, duration and start time; `show dhcp server settings all` then shows which options the server is actually handing out."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dhcp/monitor-and-troubleshoot-dhcp"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+
+  # ---------------- management / Panorama / certificates ----------------
+  - id: pan-admin-access-failure
+    class: management-access
+    proposed_class: true
+    title: "Administrator cannot log in to the web UI or CLI"
+    symptoms:
+      - "Admin login rejected with correct credentials"
+      - "Only remote (RADIUS/TACACS+/LDAP/SAML) admins affected; local admin works"
+      - "Admin logs in but sees no permitted tabs"
+      - "Management access works from one subnet only"
+    log_signatures: []
+    likely_causes:
+      - "Authentication server unreachable from the management interface"
+      - "Admin role profile granting no access, or the vendor-specific attribute not returned"
+      - "Permitted-IP list on the management interface excluding the client"
+      - "Interface management profile blocking HTTPS/SSH on a dataplane interface"
+      - "Password profile expiry or lockout"
+    commands:
+      - {cmd: "show admins", intent: admin.sessions, params: []}
+      - {cmd: "show admins all", intent: admin.sessions, params: []}
+      - {cmd: "less mp-log authd.log", intent: log.authd, params: []}
+      - {cmd: "test authentication authentication-profile {profile} username {user} password", intent: auth.test, params: [profile, user]}
+      - {cmd: "test authentication-policy-match from {src-zone} to {dst-zone} source {src} destination {dst}", intent: auth.policy.match, params: [src-zone, dst-zone, src, dst]}
+      - {cmd: "show system info", intent: platform.version, params: []}
+      - {cmd: "ping host {dst}", intent: connectivity.ping, params: [dst]}
+    tac_first_look: "`show admins all` lists every administrator and their access rights, which settles role questions immediately; `less mp-log authd.log` plus a server-side `test authentication` settles credential and reachability questions."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+
+  - id: pan-panorama-device-disconnected
+    class: panorama-connectivity
+    proposed_class: true
+    title: "Firewall disconnected from Panorama / pushes not landing"
+    symptoms:
+      - "Firewall shows as disconnected in Panorama's managed-device list"
+      - "Commit-and-push reports success but the firewall's config is unchanged"
+      - "Device group or template shows a stale last-commit time for that firewall"
+      - "Logs stop arriving at the same moment"
+    log_signatures: []
+    likely_causes:
+      - "Panorama connection disabled on the firewall, or the wrong Panorama server address configured"
+      - "Firewall not added to the device group / template stack"
+      - "Certificate or connectivity failure on TCP/3978"
+      - "Panorama or firewall software version incompatibility"
+      - "Panorama in the wrong system mode (Log Collector or PAN-DB rather than Panorama mode)"
+    commands:
+      - {cmd: "show devicegroups name {device-group}", intent: panorama.devicegroups, params: [device-group]}
+      - {cmd: "show templates name {template}", intent: panorama.templates, params: [template]}
+      - {cmd: "show config pushed-shared-policy", intent: config.pushed, params: []}
+      - {cmd: "show config pushed-template", intent: config.pushed, params: []}
+      - {cmd: "show logging-status device {serial}", intent: logging.status, params: [serial]}
+      - {cmd: "show system info | match system-mode", intent: platform.mode, params: []}
+      - {cmd: "show system info", intent: platform.version, params: []}
+      - {cmd: "show jobs processed", intent: jobs.status, params: []}
+    tac_first_look: "From Panorama, `show devicegroups name <device-group>` and `show templates name <template>` give the commit history and connection status per firewall; from the firewall, `show config pushed-shared-policy` and `show config pushed-template` prove what actually arrived."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama"
+      - "https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+
+  - id: pan-certificate-expiry
+    class: certificate
+    proposed_class: true
+    title: "Certificate expired or untrusted (management UI, GlobalProtect, decryption, LDAP/syslog TLS)"
+    symptoms:
+      - "Browser or agent certificate warnings against the firewall"
+      - "GlobalProtect agents refuse to connect after a fixed date"
+      - "Decryption starts failing with certificate errors"
+      - "LDAP or syslog-over-TLS connections stop after a CA rotation"
+    log_signatures:
+      - "Certificate"
+      - "General TLS protocol error"
+    likely_causes:
+      - "Server certificate or its issuing CA expired"
+      - "Certificate CN/SAN does not match the name clients connect to"
+      - "Revocation check (CRL/OCSP) failing or unreachable"
+      - "Forward-trust CA not distributed to endpoints"
+      - "Certificate present on one HA peer only"
+    commands:
+      - {cmd: "show system info", intent: platform.version, params: []}
+      - {cmd: "less mp-log authd.log", intent: log.authd, params: []}
+      - {cmd: "test decryption-policy-match category {category} from {src-zone} source {src} destination {dst}", intent: decryption.policy.match, params: [category, src-zone, src, dst]}
+      - {cmd: "request license info", intent: license.status, params: []}
+      - {cmd: "show high-availability cluster state", intent: ha.cluster.status, params: []}
+    tac_first_look: "The Decryption log's Certificate error index (invalid, expired, unsupported client certificate, revocation failure) is the fastest classifier for inspection-side certificate problems; for management/GlobalProtect certificates TAC works from authd.log and confirms the certificate exists on both HA peers."
+    sources:
+      - "https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-log-errors"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha"
+
+  # ---------------- QoS / SD-WAN ----------------
+  - id: pan-qos-not-shaping
+    class: traffic-shaping
+    proposed_class: true
+    title: "QoS not shaping as configured / unexpected drops on a QoS-enabled interface"
+    symptoms:
+      - "Priority traffic still starved during congestion"
+      - "Egress rate limited below the configured maximum"
+      - "QoS behaviour changes after enabling or disabling lockless QoS"
+      - "Only some ports show the expected shaping"
+    log_signatures: []
+    likely_causes:
+      - "QoS policy not matching the traffic (application/user/service mismatch)"
+      - "QoS enabled on the wrong (ingress rather than egress) interface"
+      - "Clear-text vs tunnelled traffic accounted differently"
+      - "Lockless QoS enabled/disabled unexpectedly, changing per-port core allocation"
+      - "Platform does not support QoS on the interface in question"
+    commands:
+      - {cmd: "show lockless-qos enable", intent: qos.lockless.status, params: []}
+      - {cmd: "show lockless-qos if-core-mapping", intent: qos.lockless.mapping, params: []}
+      - {cmd: "show lockless-qos core-num", intent: qos.lockless.cores, params: []}
+      - {cmd: "show running resource-monitor", intent: dataplane.resources, params: []}
+      - {cmd: "show counter global", intent: dataplane.counters, params: []}
+      - {cmd: "show session id {session-id}", intent: session.detail, params: [session-id]}
+    tac_first_look: "TAC first confirms whether lockless QoS is on and which ports have cores allocated to the QoS process, because that changes both the shaping behaviour and the dataplane accounting the customer is reading."
+    sources:
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
+      - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management"
