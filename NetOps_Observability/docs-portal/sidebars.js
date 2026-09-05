@@ -42,6 +42,8 @@ const sidebars = {
         'deploy/verify-deployment',
         'deploy/upgrade',
         'deploy/back-up-and-restore',
+        'deploy/manage-snapshots',
+        'deploy/third-party-components',
       ],
     },
 
@@ -83,6 +85,7 @@ const sidebars = {
             'send-data/syslog',
             'send-data/traps',
             'send-data/flows',
+            'send-data/debug-the-pipeline',
           ],
         },
         {
@@ -248,6 +251,7 @@ const sidebars = {
         'administration/processors',
         'administration/sensitive-data-access',
         'administration/telemetry-coverage',
+        'administration/licence',
       ],
     },
 
@@ -256,6 +260,7 @@ const sidebars = {
       label: 'Reference',
       collapsed: false,
       items: [
+        'reference/licensing',
         'reference/api',
         'reference/feature-flags',
         'reference/alert-rules',

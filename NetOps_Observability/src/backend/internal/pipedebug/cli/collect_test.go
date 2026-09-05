@@ -149,17 +149,41 @@ func TestRouterStageTapsTheRemapNotTheRouteTransform(t *testing.T) {
 	}
 }
 
-func TestEveryHostStageHasATapComponentForEveryKind(t *testing.T) {
+// Every (kind, host-stage) pair must resolve to EITHER a legal tap OR a stated
+// reason there is none. The middle case — no tap and no reason — is the one
+// that produces a silently missing stage row, which reads to an operator as a
+// hop that was fine.
+func TestEveryHostStageResolvesToATapOrAStatedReason(t *testing.T) {
 	for _, kind := range pipedebug.Kinds {
 		for _, stage := range []pipedebug.Stage{pipedebug.StageIngress, pipedebug.StageParser, pipedebug.StageRouter} {
 			svc, comp, ok := TapComponents(kind, stage)
-			if !ok || svc == "" || comp == "" {
-				t.Errorf("%s/%s has no tap component", kind, stage)
+			if ok {
+				if svc == "" || comp == "" {
+					t.Errorf("%s/%s claimed a tap with an empty service or component", kind, stage)
+				}
+				if !validComponent(comp) || !validComposeService(svc) {
+					t.Errorf("%s/%s produced a value its own grammar rejects: %s/%s", kind, stage, svc, comp)
+				}
+				continue
 			}
-			if !validComponent(comp) || !validComposeService(svc) {
-				t.Errorf("%s/%s produced a value its own grammar rejects: %s/%s", kind, stage, svc, comp)
+			reason := TapMissingReason(kind, stage)
+			if len(reason) < 40 {
+				t.Errorf("%s/%s has no tap and no usable reason (got %q)", kind, stage, reason)
 			}
 		}
+	}
+	// The flow lane's Vector work is one ROUTER stage, deliberately: mapping it
+	// onto the parser slot would put stage 2 later in wall-clock time than
+	// stage 3 and render a negative latency on every healthy flow trace.
+	svc, comp, ok := TapComponents(pipedebug.KindFlow, pipedebug.StageRouter)
+	if !ok || svc != "vector-router" || comp != "flows_decoded" {
+		t.Errorf("flow router tap = %s/%s (ok=%v), want vector-router/flows_decoded", svc, comp, ok)
+	}
+	if _, _, ok := TapComponents(pipedebug.KindFlow, pipedebug.StageParser); ok {
+		t.Error("the flow lane claims a Vector parser tap — goflow2 is the flow parser and is not a Vector component")
+	}
+	if _, _, ok := TapComponents(pipedebug.KindGNMI, pipedebug.StageRouter); ok {
+		t.Error("the gNMI lane claims a vector-router tap — it never crosses vector-router")
 	}
 	// Server-side stages must NOT claim a tap.
 	if _, _, ok := TapComponents(pipedebug.KindSyslog, pipedebug.StageOpenSearch); ok {

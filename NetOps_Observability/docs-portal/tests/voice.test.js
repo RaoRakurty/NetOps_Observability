@@ -346,7 +346,7 @@ const TASK_VERBS = [
   // stop noun-phrase titles on task pages, not to narrow the English a
   // technical writer may use.
   'Acknowledge', 'Adjust', 'Analyse', 'Analyze', 'Apply', 'Assess', 'Compare',
-  'Compose', 'Correct', 'Edit', 'Escalate', 'Follow', 'Inspect', 'Keep',
+  'Compose', 'Correct', 'Debug', 'Edit', 'Escalate', 'Follow', 'Inspect', 'Keep',
   'Manage', 'Map', 'Measure', 'Mute', 'Narrow', 'Pause', 'Place', 'Point',
   'Promote', 'Receive', 'Save', 'Shape', 'Silence', 'Split', 'Suppress',
   'Trigger', 'Tune', 'Use', 'Wire',

@@ -1,0 +1,229 @@
+# parse-trace.yaml — `vector test` proof of the W2 pipeline-debugger ROUTER
+# DECISION HOOK (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §2 stage 4).
+# Hand-written; nothing here is generated.
+#
+# Like the aggregator suite, this file declares NO transforms: it is run
+# together with the real deployment/docker/vector-router/vector.yaml (plus the
+# checked-in processors-default.yaml the router loads as its second --config,
+# without which the base config cannot boot), so `insert_at: syslog_tagged`
+# exercises the shared &log_lane anchor the router actually runs. A fixture
+# that re-declared the VRL would go green over a broken shipped config.
+#
+# Three claims, one per requirement:
+#   1. a record carrying `cx_debug=<ulid>` gets `.cx_parse_trace`, naming the
+#      branch that matched (attribution outcome, doc-id source, ts, admission);
+#   2. an ordinary record does NOT get the field at all;
+#   3. the miss / refusal / drop branches name the REASON.
+#
+# Run (from the repo root). Keep every dollar sign out of this file: Vector
+# interpolates environment variables in the raw config TEXT, comments included.
+#   docker run --rm --entrypoint vector \
+#     -e CLICKHOUSE_USER=x -e CLICKHOUSE_PASSWORD=x \
+#     -v ./deployment/docker/vector-router/vector.yaml:/etc/vector/vector.yaml:ro \
+#     -v ./deployment/docker/vector-router/processors-default.yaml:/etc/vector/processors/processors.yaml:ro \
+#     -v ./deployment/docker/vector-router/tests:/etc/vector/tests:ro \
+#     -v ./deployment/docker/vector/tests/fixtures:/etc/vector/enrichment:ro \
+#     timberio/vector:0.40.0-alpine \
+#     test /etc/vector/vector.yaml /etc/vector/processors/processors.yaml \
+#          /etc/vector/tests/parse-trace.yaml
+#
+# tests/test_pipeline_debug_vrl.py runs exactly that. The enrichment fixture is
+# shared with the aggregator suite (../../vector/tests/fixtures/device_tenant.csv):
+# spine1 -> lab, and nothing else, so hit and miss are both reachable.
+
+tests:
+  # ── 1. the marked record gets the field, and it names the matched branch ──
+  - name: "log lane: a marked syslog record is stamped with the router decision path"
+    inputs:
+      - insert_at: syslog_tagged
+        type: log
+        log_fields:
+          message: "cx_synthetic=true cx_debug=01j9x4m2q7v8b3n5k6r0t1y2z3 correlix pipeline debug probe"
+          hostname: "spine1"
+          tenant_id: "lab"
+          tenant_registry: "hit"
+          topic: "netops.syslog"
+          partition: 2
+          offset: 41
+          timestamp: "2026-09-04T11:05:07Z"
+    outputs:
+      - extract_from: syslog_tagged
+        conditions:
+          - type: vrl
+            source: |
+              assert!(exists(.cx_parse_trace), "a marked record must carry .cx_parse_trace")
+              assert!(is_string(.cx_parse_trace), "the trace must be ONE FLAT STRING, never an array or an object")
+              t = string!(.cx_parse_trace)
+              assert!(contains(t, "component=log_lane"), t)
+              assert!(contains(t, "topic=netops.syslog"), t)
+              assert!(contains(t, "tenant_seg=lab"), t)
+              assert!(contains(t, "tenant_attribution=enriched"), t)
+              assert!(contains(t, "attribution_reason=upstream device_tenant registry hit"), t)
+              assert!(contains(t, "doc_id=cxk:netops.syslog:2:41"), t)
+              assert!(contains(t, "ts_reason=present, source=timestamp"), t)
+              assert!(contains(t, "quarantine_mark=stripped-at-lane-head"), t)
+
+  - name: "log lane: the admission VERDICT from the generated aggregator screen is reported here"
+    inputs:
+      - insert_at: syslog_tagged
+        type: log
+        log_fields:
+          message: "cx_synthetic=true cx_debug=01j9x4m2q7v8b3n5k6r0t1y2z3 correlix pipeline debug probe"
+          tenant_id: "lab"
+          tenant_registry: "hit"
+          topic: "netops.syslog"
+          # log_fields keys are event PATHS, so the dotted form builds the
+          # nested `.cx_admission` object the aggregator's generated stamp
+          # writes (the harness rejects an inline mapping here).
+          cx_admission.by: "marker"
+          cx_admission.v: "0538afc1b47c"
+    outputs:
+      - extract_from: syslog_tagged
+        conditions:
+          - type: vrl
+            source: |
+              t = string!(.cx_parse_trace)
+              assert!(contains(t, "admission=ADMITTED by=marker v=0538afc1b47c"), t)
+
+  # ── 2. the guard is CLOSED for ordinary traffic ───────────────────────────
+  - name: "log lane: an ordinary record is not stamped at all"
+    inputs:
+      - insert_at: syslog_tagged
+        type: log
+        log_fields:
+          message: "%BGP-5-ADJCHANGE: neighbor 10.0.0.1 Up"
+          tenant_id: "lab"
+          tenant_registry: "hit"
+          topic: "netops.syslog"
+    outputs:
+      - extract_from: syslog_tagged
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.cx_parse_trace),
+                "an unmarked record must not be stamped — the hook is one contains() and nothing else")
+
+  # ── 3. the miss / drop / refusal branches NAME THE REASON ─────────────────
+  - name: "log lane: unattributed, unadmitted and time-less are each traced with their reason"
+    inputs:
+      - insert_at: syslog_tagged
+        type: log
+        log_fields:
+          message: "cx_synthetic=true cx_debug=01j9x4m2q7v8b3n5k6r0t1y2z3 correlix pipeline debug probe"
+          tenant_id: ""
+          tenant_registry: "miss"
+          topic: "netops.syslog"
+          ts: "not-a-timestamp-at-all"
+    outputs:
+      - extract_from: syslog_tagged
+        conditions:
+          - type: vrl
+            source: |
+              t = string!(.cx_parse_trace)
+              assert!(contains(t, "tenant_seg=untagged"), t)
+              assert!(contains(t, "UNATTRIBUTED:tenant_id is empty so this doc goes to the SHARED -untagged- index"), t)
+              assert!(contains(t, "upstream device_tenant registry said miss"), t)
+              # the record has no kafka coordinate: the AUTO id is the F-18
+              # duplicate-on-retry case and must be NAMED, not inferred
+              assert!(contains(t, "doc_id=AUTO(no kafka coordinate"), t)
+              # an unparseable ts is moved aside and REMOVED — the trace says so
+              assert!(contains(t, "ts_reason=DROPPED:unparseable ts preserved as .ts_invalid=not-a-timestamp-at-all"), t)
+              # ...and the aggregator's generated screen refused this line
+              assert!(contains(t, "admission=NOT-ADMITTED("), t)
+
+  - name: "log lane: the trace is APPENDED, so one field carries the whole path"
+    inputs:
+      - insert_at: syslog_tagged
+        type: log
+        log_fields:
+          message: "cx_synthetic=true cx_debug=01j9x4m2q7v8b3n5k6r0t1y2z3 correlix pipeline debug probe"
+          tenant_id: "lab"
+          tenant_registry: "hit"
+          topic: "netops.syslog"
+          cx_parse_trace: "component=syslog_normalized vendor=cisco tenant_registry=hit"
+    outputs:
+      - extract_from: syslog_tagged
+        conditions:
+          - type: vrl
+            source: |
+              t = string!(.cx_parse_trace)
+              assert!(starts_with(t, "component=syslog_normalized vendor=cisco tenant_registry=hit | component=log_lane"), t)
+
+  # ── 4. flows: the lane with no free text, so the marker is a FLOW TUPLE ──
+  #
+  # The probe's source address is in RFC 5737 TEST-NET-1 (192.0.2.0/24), which
+  # carries no production traffic — that prefix IS the marker's carrier, and the
+  # guard is one starts_with() on a field every flow already has.
+  - name: "flows: a marked flow is stamped and every refusal is named"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          tenant_id: "victim-tenant"
+          src_addr: "192.0.2.10"
+          dst_addr: "192.0.2.20"
+          proto: "TCP"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert!(exists(.cx_parse_trace), "a marked flow must carry .cx_parse_trace")
+              assert!(is_string(.cx_parse_trace), "the trace must be ONE FLAT STRING")
+              t = string!(.cx_parse_trace)
+              assert!(contains(t, "component=flows_decoded"), t)
+              assert!(contains(t, "proto=6"), t)
+              # exporter unknown to inventory -> unattributed, with the reason
+              assert!(contains(t, "tenant_registry=miss"), t)
+              assert!(contains(t, "UNATTRIBUTED:device_tenant-registry-MISS on 198.51.100.7"), t)
+              # a self-declared tenant on the bus is REFUSED, and said so
+              assert!(contains(t, "REFUSED-CLAIM:the record asserted tenant_id=victim-tenant"), t)
+              assert!(contains(t, "tenant_attribution=claim_rejected"), t)
+              # no receive stamp -> no .ts, and ClickHouse would fall back to
+              # the insert-time DEFAULT: named, not silent
+              assert!(contains(t, "ts_reason=DROPPED:time_received_ns absent or zero"), t)
+              assert!(contains(t, "UNRECOGNISED:goflow2 type="), t)
+
+  - name: "flows: an ordinary flow is not stamped at all"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.40.0.10"
+          dst_addr: "10.40.0.20"
+          proto: "UDP"
+          type: "IPFIX"
+          time_received_ns: 1788888888000000000
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.cx_parse_trace),
+                "an unmarked flow must not be stamped — the guard is one starts_with() on the RFC 5737 documentation prefix")
+              assert_eq!(.flow_type, "ipfix", "the unmarked path must behave exactly as before")
+              assert_eq!(.proto, 17, "the unmarked path must behave exactly as before")
+
+  - name: "flows: a known exporter traces as a registry hit"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "spine1"
+          src_addr: "192.0.2.117"
+          dst_addr: "198.51.100.197"
+          type: "NETFLOW_V9"
+          time_received_ns: 1788888888000000000
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              t = string!(.cx_parse_trace)
+              assert!(contains(t, "tenant_registry=hit"), t)
+              assert!(contains(t, "tenant_id=lab"), t)
+              assert!(contains(t, "tenant_reason=registry-hit"), t)
+              assert!(contains(t, "flow_type=netflow"), t)
+              assert!(contains(t, "ts_reason=derived from time_received_ns"), t)

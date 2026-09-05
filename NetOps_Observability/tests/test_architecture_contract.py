@@ -453,6 +453,20 @@ def test_transport_is_deny_by_default():
         # and every record is tagged cx_synthetic=true. Dormant unless an
         # operator runs `correlix-debug trace`.
         "api-syslog-ng-debug",
+        # …and its W2 flow twin. Same argument, one lane over: it writes to the
+        # SAME goflow2 :2055 socket device-goflow2 already describes — no second
+        # listener, no new exposure — and NetFlow/IPFIX/sFlow have no in-protocol
+        # transport security at all, so closing it means closing device-goflow2.
+        # Authorization is at the api (requirePlatformAdmin + audit) before the
+        # datagram exists; the packet carries no credential, its addresses are
+        # RFC 5737 documentation space that no production traffic uses, and its
+        # counters are one byte and one packet. Dormant unless an operator runs
+        # `correlix-debug trace --kind flow`.
+        #
+        # There is deliberately NO api→device gNMI row: gNMI is passive-only
+        # because the debugger never writes to a device, so no such hop exists
+        # to register.
+        "api-goflow2-debug",
         # gnmic dials devices with skip-verify:true — tls-UNVERIFIED, i.e.
         # plaintext-equivalent against an active MITM, so it registers here
         # like plaintext until SEC-016 (phase 2+) makes prod refuse insecure.

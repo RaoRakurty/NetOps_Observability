@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"netops/backend/internal/pipedebug"
@@ -101,9 +102,21 @@ func (ExecRunner) Stream(ctx context.Context, name string, args []string, onLine
 }
 
 // Collector reads container logs and Vector taps for one compose project.
+//
+// CONCURRENCY. `trace` attaches every host-side tap in PARALLEL — that is not
+// an optimisation, it is required: a tap is a live subscription, so all of them
+// must be attached before the record is injected. Two of those taps resolve the
+// SAME compose service (ingress and parser both live on vector-aggregator), so
+// the resolution cache is written from several goroutines at once. It was an
+// unsynchronised map until 2026-09-04, which is a `fatal error: concurrent map
+// writes` — a crash of the debugger, mid-incident, at the exact moment someone
+// is using it. The mutex is the fix; the cache is deliberately kept (docker ps
+// per tap would triple the attach latency the taps are racing against).
 type Collector struct {
 	run     Runner
 	project string
+	// mu guards resolved.
+	mu sync.Mutex
 	// resolved caches service → container name for the run.
 	resolved map[string]string
 }
@@ -120,7 +133,10 @@ func NewCollector(run Runner, project string) *Collector {
 // LABEL, never by guessing a name pattern. A `--scale`d service resolves to its
 // first replica, and the caller is told which.
 func (c *Collector) ContainerFor(ctx context.Context, service string) (string, error) {
-	if name, ok := c.resolved[service]; ok {
+	c.mu.Lock()
+	name, cached := c.resolved[service]
+	c.mu.Unlock()
+	if cached {
 		return name, nil
 	}
 	if !validComposeService(service) {
@@ -136,9 +152,11 @@ func (c *Collector) ContainerFor(ctx context.Context, service string) (string, e
 		return "", fmt.Errorf("docker ps for service %s: %w (%s)", service, err, strings.TrimSpace(errOut))
 	}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if name := strings.TrimSpace(line); name != "" {
-			c.resolved[service] = name
-			return name, nil
+		if found := strings.TrimSpace(line); found != "" {
+			c.mu.Lock()
+			c.resolved[service] = found
+			c.mu.Unlock()
+			return found, nil
 		}
 	}
 	return "", fmt.Errorf("no running container for compose service %q in project %q", service, c.project)
@@ -223,6 +241,18 @@ func (c *Collector) VectorTap(ctx context.Context, service, component string, wi
 // TapComponents names the Vector components that carry a kind at each host-side
 // stage. The table is here, in one place, so the CLI never interpolates a
 // component id from anything an operator typed.
+//
+// THE FLOW LANE HAS A DIFFERENT SHAPE, and the table reflects the shape rather
+// than forcing the lane into the syslog one. goflow2 — not Vector — is the flow
+// ingress AND the flow parser: it decodes the binary NetFlow/IPFIX/sFlow into
+// JSON in its own process and produces straight to Kafka. So stages 1 and 2
+// have no tap at all (TapMissingReason says so, and the timeline carries
+// not_observable with that reason rather than an absent row), the bus is the
+// first observable hop, and the Vector-side work — the tenant re-key and the
+// VRL normalisation — is one router stage tapped at `flows_decoded`. Mapping
+// flows_decoded onto the PARSER slot instead would have put stage 2 later in
+// wall-clock time than stage 3, which BuildTimeline would render as a negative
+// latency: a cosmetic-looking bug that would make every flow trace read wrong.
 func TapComponents(kind pipedebug.Kind, stage pipedebug.Stage) (service, component string, ok bool) {
 	switch stage {
 	case pipedebug.StageIngress:
@@ -240,6 +270,12 @@ func TapComponents(kind pipedebug.Kind, stage pipedebug.Stage) (service, compone
 			return "vector-aggregator", "snmptrap_normalized", true
 		}
 	case pipedebug.StageRouter:
+		if kind == pipedebug.KindFlow {
+			// The remap that consumes netops.flows and does the lane's decode +
+			// tenant work. A record only reaches it if flows_rekey already
+			// republished it, so this one tap covers the whole router path.
+			return "vector-router", "flows_decoded", true
+		}
 		// The `*_tagged` remap, not the `*_store_route` route transform: a
 		// Vector `route` exposes only its NAMED outputs to the tap (here just
 		// `quarantine`), so tapping it would show an empty router stage for
@@ -255,3 +291,37 @@ func TapComponents(kind pipedebug.Kind, stage pipedebug.Stage) (service, compone
 	}
 	return "", "", false
 }
+
+// TapMissingReason explains why a host-side stage has no Vector tap for a kind.
+//
+// It exists so that "no tap" produces an honest not_observable row instead of a
+// silently absent stage. A stage that simply vanishes from the timeline is the
+// same defect as an empty log file: the reader concludes nothing happened
+// there, when in fact nothing was looked at.
+func TapMissingReason(kind pipedebug.Kind, stage pipedebug.Stage) string {
+	switch kind {
+	case pipedebug.KindFlow:
+		switch stage {
+		case pipedebug.StageIngress:
+			return "goflow2 is the flow ingress and is not a Vector component, so there is no tap to attach; with the kafka:// transport it writes no per-record log line either. The flow lane's first OBSERVABLE hop is the bus (kafka.log)"
+		case pipedebug.StageParser:
+			return "the flow PARSER is goflow2 itself — it decodes the binary NetFlow/IPFIX/sFlow into JSON in its own process and exposes no per-record parse trace. The Vector-side normalisation that follows runs in vector-router and is reported, with its `cx_parse_trace` decision line, at the ROUTER stage (router.log)"
+		}
+	case pipedebug.KindGNMI:
+		switch stage {
+		case pipedebug.StageParser:
+			return "gnmic decodes gNMI protobuf in its own process and emits no per-update parse line; the gNMI lane crosses no Vector transform, so there is nothing to tap"
+		case pipedebug.StageRouter:
+			return "the gNMI lane does not cross vector-router: gnmic writes straight to VictoriaMetrics over prometheus_write (victoria.log is this kind's evidence)"
+		}
+	}
+	return fmt.Sprintf("no Vector component carries a %s record at the %s stage in this deployment", kind, stage)
+}
+
+// GNMIIngressService is the container whose logs stand in for the gNMI ingress
+// stage. gnmic logs TARGET LIFECYCLE (dial, subscribe, retry), not per-update
+// lines, so a match proves the collector is talking about this device inside
+// the window — which is the honest limit of what this stage can claim, and the
+// reason victoria.log rather than ingress.log is a passive gNMI trace's
+// load-bearing evidence.
+const GNMIIngressService = "gnmic"

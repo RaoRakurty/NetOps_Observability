@@ -10,12 +10,12 @@ import (
 // into a query, a container argv or a file name AFTER passing one of them.
 
 func TestParseKindIsAClosedSet(t *testing.T) {
-	for _, ok := range []string{"syslog", "TRAP", " trap "} {
+	for _, ok := range []string{"syslog", "TRAP", " trap ", "flow", "gnmi"} {
 		if _, err := ParseKind(ok); err != nil {
 			t.Errorf("ParseKind(%q) rejected a legal kind: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "flow", "gnmi", "syslog;rm -rf /", "../etc"} {
+	for _, bad := range []string{"", "netconf", "syslog;rm -rf /", "../etc"} {
 		if _, err := ParseKind(bad); err == nil {
 			t.Errorf("ParseKind(%q) accepted an illegal kind", bad)
 		}
@@ -31,8 +31,18 @@ func TestParseStageAndServerStageSplit(t *testing.T) {
 	}
 	// The host-side stages must NOT be servable by the API: the API has no
 	// docker socket, so claiming them would be a fabricated answer.
-	for _, host := range []Stage{StageIngress, StageParser, StageRouter, StageUI} {
-		if IsServerStage(host) {
+	// StageParser and StageUI are HYBRID (the API answers them on demand but
+	// does not poll them); ingress and router are purely host-side.
+	for _, hybrid := range []Stage{StageParser, StageUI} {
+		if !IsHybridStage(hybrid) {
+			t.Errorf("%s should be answerable on demand by the API", hybrid)
+		}
+		if IsServerStage(hybrid) {
+			t.Errorf("%s must not be polled by the async follow", hybrid)
+		}
+	}
+	for _, host := range []Stage{StageIngress, StageRouter} {
+		if IsServerStage(host) || IsHybridStage(host) {
 			t.Errorf("%s is host-collected but claimed as a server stage", host)
 		}
 	}

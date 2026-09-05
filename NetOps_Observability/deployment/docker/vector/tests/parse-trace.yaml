@@ -1,0 +1,186 @@
+# parse-trace.yaml — `vector test` proof of the W2 pipeline-debugger PARSER
+# DECISION HOOK in the aggregator (docs/design/PIPELINE_DEBUGGER_2026-09-04.md
+# §2 stage 2). Hand-written; nothing here is generated.
+#
+# WHAT IT PROVES, and why it is shaped this way. The suite carries NO transform
+# definitions of its own: it is run TOGETHER WITH the real
+# deployment/docker/vector/vector.yaml, so `insert_at: syslog_normalized`
+# exercises the transform the aggregator actually loads. A fixture that
+# re-declared the VRL would pass while the shipped config was broken — the
+# exact "green test, dead pipeline" shape this repo keeps removing.
+#
+# Three claims, one per requirement:
+#   1. a record carrying `cx_debug=<ulid>` gets `.cx_parse_trace`, and the
+#      string names the branch that matched (vendor, registry, body parser);
+#   2. an ordinary record does NOT get the field at all — the guard is one
+#      substring compare and it is closed for every production record;
+#   3. a record that lands in a miss / no-parse / no-key branch gets a trace
+#      that names the REASON, not merely the outcome.
+#
+# Run (from the repo root). Keep every dollar sign out of this file: Vector
+# interpolates environment variables in the raw config TEXT, comments included,
+# and an unset one is a hard load error. The env stubs and the enrichment table
+# below are the same idiom scripts/preflight-configs.sh uses — they make the
+# committed config LOAD, they are not deployment values.
+#   docker run --rm --entrypoint vector \
+#     -e INGEST_TOKEN_TRAPS=t -e INGEST_TOKEN_PROBES=t -e INGEST_TOKEN_METRICS=t \
+#     -e INGEST_TOKEN_BUS=t -e CLICKHOUSE_USER=x -e CLICKHOUSE_PASSWORD=x \
+#     -v ./deployment/docker/vector/vector.yaml:/etc/vector/vector.yaml:ro \
+#     -v ./deployment/docker/vector/tests:/etc/vector/tests:ro \
+#     -v ./deployment/docker/vector/tests/fixtures:/etc/vector/enrichment:ro \
+#     timberio/vector:0.40.0-alpine \
+#     test /etc/vector/vector.yaml /etc/vector/tests/parse-trace.yaml
+#
+# tests/test_pipeline_debug_vrl.py runs exactly that.
+#
+# The enrichment fixture (tests/fixtures/device_tenant.csv) maps spine1 -> lab
+# and nothing else, so "registry hit" and "registry miss" are both reachable.
+
+tests:
+  # ── 1. the marked record gets the field, and it names the matched branch ──
+  - name: "syslog: a marked record is stamped with the decision path"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          message: "%SYS-6-LOGGINGHOST_STARTSTOP: cx_synthetic=true cx_debug=01j9x4m2q7v8b3n5k6r0t1y2z3 correlix pipeline debug probe"
+          appname: "correlix-debug"
+          hostname: "spine1"
+          severity: "info"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(exists(.cx_parse_trace), "a marked record must carry .cx_parse_trace")
+              t = string!(.cx_parse_trace)
+              assert!(is_string(.cx_parse_trace), "the trace must be ONE FLAT STRING, never an array or an object")
+              assert!(contains(t, "component=syslog_normalized"), t)
+              assert!(contains(t, "vendor=cisco"), t)
+              assert!(contains(t, "tenant_registry=hit"), t)
+              assert!(contains(t, "tenant_id=lab"), t)
+              assert!(contains(t, "tenant_reason=registry-hit"), t)
+              assert!(contains(t, "parser_status=parsed"), t)
+              assert!(contains(t, "parser_reason=matched ios_style.v1"), t)
+              assert!(contains(t, "normalized_severity="), t)
+              assert!(contains(t, "partition_key=lab"), t)
+
+  # ── 2. the guard is CLOSED for ordinary traffic ───────────────────────────
+  - name: "syslog: an ordinary record is not stamped at all"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          message: "%BGP-5-ADJCHANGE: neighbor 10.0.0.1 Up"
+          appname: "bgp"
+          hostname: "spine1"
+          severity: "notice"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.cx_parse_trace),
+                "an unmarked record must not be stamped — the hook is one contains() and nothing else")
+
+  # ── 3. the drop / miss branches NAME THE REASON ───────────────────────────
+  - name: "syslog: a registry MISS is traced with the reason, not just the outcome"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          message: "cx_synthetic=true cx_debug=01j9x4m2q7v8b3n5k6r0t1y2z3 correlix pipeline debug probe"
+          appname: "correlix-debug"
+          hostname: "not-in-inventory-9"
+          severity: "info"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              t = string!(.cx_parse_trace)
+              assert!(contains(t, "tenant_registry=miss"), t)
+              assert!(contains(t, "DROPPED-ATTRIBUTION:device_tenant-registry-MISS"), t)
+              assert!(contains(t, "TENANT_UNATTRIBUTABLE"), t)
+              assert!(contains(t, "tenant_id=(none)"), t)
+              # the same record also missed every body parser — that reason is
+              # named too, so "unparsed" is never left as a bare label
+              assert!(contains(t, "parser_status=unparsed"), t)
+              assert!(contains(t, "NO-PARSE:neither"), t)
+              assert!(contains(t, "vendor=unknown"), t)
+
+  - name: "syslog: a frame with no hostname says the lookup was never attempted"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          message: "cx_synthetic=true cx_debug=01j9x4m2q7v8b3n5k6r0t1y2z3 correlix pipeline debug probe"
+          appname: "correlix-debug"
+          severity: "info"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              t = string!(.cx_parse_trace)
+              assert!(contains(t, "hostname=unknown"), t)
+              assert!(contains(t, "DROPPED-ATTRIBUTION:no-hostname-in-frame"), t)
+
+  # ── 4. the same three claims on the trap lane ─────────────────────────────
+  - name: "trap: a marked trap is stamped with the decision path"
+    inputs:
+      - insert_at: snmptrap_normalized
+        type: log
+        log_fields:
+          message: "linkDown 1.3.6.1.6.3.1.1.5.3 cx_synthetic=true cx_debug=01j9x4m2q7v8b3n5k6r0t1y2z3 correlix pipeline debug probe"
+          device: "spine1"
+          host: "10.70.245.11"
+          severity: "warning"
+          trap_oid: "1.3.6.1.3.9999.1.0"
+          trap_name: "correlixDebugProbe"
+    outputs:
+      - extract_from: snmptrap_normalized
+        conditions:
+          - type: vrl
+            source: |
+              t = string!(.cx_parse_trace)
+              assert!(is_string(.cx_parse_trace), "the trace must be ONE FLAT STRING")
+              assert!(contains(t, "component=snmptrap_normalized"), t)
+              assert!(contains(t, "lookup_key=spine1"), t)
+              assert!(contains(t, "tenant_registry=hit"), t)
+              assert!(contains(t, "tenant_id=lab"), t)
+              assert!(contains(t, "trap_oid=1.3.6.1.3.9999.1.0"), t)
+              assert!(contains(t, "partition_key=lab"), t)
+
+  - name: "trap: an ordinary trap is not stamped at all"
+    inputs:
+      - insert_at: snmptrap_normalized
+        type: log
+        log_fields:
+          message: "linkDown 1.3.6.1.6.3.1.1.5.3 ifIndex=3"
+          device: "spine1"
+          host: "10.70.245.11"
+          severity: "warning"
+    outputs:
+      - extract_from: snmptrap_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.cx_parse_trace), "an unmarked trap must not be stamped")
+
+  - name: "trap: no device and no source host says there is nothing to look up"
+    inputs:
+      - insert_at: snmptrap_normalized
+        type: log
+        log_fields:
+          message: "cx_synthetic=true cx_debug=01j9x4m2q7v8b3n5k6r0t1y2z3 correlix pipeline debug probe"
+          severity: "notice"
+    outputs:
+      - extract_from: snmptrap_normalized
+        conditions:
+          - type: vrl
+            source: |
+              t = string!(.cx_parse_trace)
+              assert!(contains(t, "lookup_key=(none)"), t)
+              assert!(contains(t, "there is no key to look up"), t)
+              assert!(contains(t, "tenant_id=(none)"), t)

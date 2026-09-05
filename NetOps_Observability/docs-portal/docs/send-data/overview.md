@@ -19,6 +19,7 @@ arrives on and the rule that ties each record back to a device.
 | [Send syslog](/send-data/syslog) | Point a device's syslog at Correlix, choose a severity threshold, and get attribution right. |
 | [Send SNMP traps](/send-data/traps) | Enable the receiver, set the trap destination, and read what v3 authentication buys you. |
 | [Send flow records](/send-data/flows) | Choose NetFlow, IPFIX or sFlow, configure the exporter, and set a sampling rate. |
+| [Debug the pipeline](/send-data/debug-the-pipeline) | Trace one marked record from the ingress socket to the query the console issues, and read the per-hop verdict. |
 
 ## The four planes
 

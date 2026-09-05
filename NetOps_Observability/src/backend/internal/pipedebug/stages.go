@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -31,21 +32,43 @@ const maxStoreResponse = 8 << 20
 // minutes old at most; a wider window only adds cost and false neighbours.
 const stageWindow = 30 * time.Minute
 
-// SignalFor maps a trace kind onto the log signal its record is stored under.
+// SignalFor maps a trace kind onto the log signal its record is stored under,
+// or "" when the kind has no OpenSearch signal at all.
 func SignalFor(k Kind) string {
 	switch k {
 	case KindTrap:
 		return "snmptrap"
+	case KindFlow:
+		return "flows"
+	case KindGNMI:
+		// gNMI is metrics. It never reaches the search tier, and naming a
+		// signal it does not have would send the OpenSearch stage looking in an
+		// index that cannot contain the record — an "absence" that means
+		// nothing but reads like a loss.
+		return ""
 	default:
 		return "syslog"
 	}
 }
 
-// TopicFor maps a trace kind onto the Kafka topic its record crosses.
+// TopicFor maps a trace kind onto the Kafka topic its record crosses first, or
+// "" when the kind does not cross the bus at all in this deployment.
 func TopicFor(k Kind) string {
 	switch k {
 	case KindTrap:
 		return "netops.snmptrap"
+	case KindFlow:
+		// goflow2 produces the RAW topic; vector-router re-keys each record by
+		// tenant onto netops.flows (compose: `-transport.kafka.topic
+		// netops.flows.raw`). The raw topic is the FIRST bus hop, so it is the
+		// one that answers "did the collector put it on the bus".
+		return "netops.flows.raw"
+	case KindGNMI:
+		// gnmic writes straight to VictoriaMetrics over prometheus_write on the
+		// default config; only the opt-in correlation lane
+		// (GNMIC_CONFIG_FILE=gnmic-correlation.yaml) adds a bus output. The
+		// GNMIKafkaTopic helper below answers that honestly per deployment.
+		return ""
 	default:
 		return "netops.syslog"
 	}
@@ -77,13 +100,47 @@ func markerQuery(marker string) map[string]any {
 	return map[string]any{"match_phrase": map[string]any{"message": MarkerTag(marker)}}
 }
 
+// markerQueryFor picks the clause for a kind. A flow document has no message
+// field to carry the marker, so it is matched on the fingerprint tuple instead
+// (flow.go). `match` rather than `term` on every field: the flows mapping is
+// dynamic, and a `term` against a field that happened to be mapped as `text`
+// silently matches nothing — a zero-hit answer that is a MAPPING fault dressed
+// up as a missing record, which is the exact inversion this package refuses.
+func markerQueryFor(kind Kind, marker string) map[string]any {
+	if kind != KindFlow {
+		return markerQuery(marker)
+	}
+	f := NewFlowFingerprint(marker)
+	return map[string]any{"bool": map[string]any{"filter": []any{
+		map[string]any{"match": map[string]any{"src_addr": f.SrcAddr}},
+		map[string]any{"match": map[string]any{"dst_addr": f.DstAddr}},
+		map[string]any{"match": map[string]any{"src_port": f.SrcPort}},
+		map[string]any{"match": map[string]any{"dst_port": f.DstPort}},
+	}}}
+}
+
+// OSSampledKinds names the kinds whose OpenSearch lane is a SAMPLE, not the
+// stream. A miss on a sampled lane is not evidence of loss and must never be
+// rendered as `not_seen`.
+func osSampleReason(kind Kind) string {
+	if kind != KindFlow {
+		return ""
+	}
+	return "OpenSearch receives a 1-in-50 SAMPLE of the flow lane (vector-router `flows_os_sample`), so ~98% of healthy flow records are legitimately absent here. ClickHouse is the canonical flow store and the clickhouse stage below is the authoritative one for this kind"
+}
+
 // OpenSearchStage looks for the marker in the tenant's log index.
 func (a *API) OpenSearchStage(ctx context.Context, p Principal, kind Kind, marker string, tenant string) Entry {
 	e := Entry{Stage: StageOpenSearch, Module: string(StageOpenSearch)}
+	signal := SignalFor(kind)
+	if signal == "" {
+		e.Query = "(none)"
+		return notObservable(e, fmt.Sprintf(
+			"a %s record never reaches the search tier — it is metric telemetry, and the victoria stage is where it is looked for", kind))
+	}
 	if a.deps.Search == nil || a.deps.OSIndexPattern == nil {
 		return notObservable(e, "no OpenSearch client is wired into this API build")
 	}
-	signal := SignalFor(kind)
 	index := a.deps.OSIndexPattern(signal, tenant, p.Cross && tenant == "")
 	now := a.deps.now()
 	body := map[string]any{
@@ -92,7 +149,7 @@ func (a *API) OpenSearchStage(ctx context.Context, p Principal, kind Kind, marke
 		"sort":             []any{map[string]any{"timestamp": map[string]string{"order": "asc", "unmapped_type": "date"}}},
 		"query": map[string]any{"bool": map[string]any{
 			"filter": []any{
-				markerQuery(marker),
+				markerQueryFor(kind, marker),
 				map[string]any{"range": map[string]any{"timestamp": map[string]string{
 					"gte": now.Add(-stageWindow).Format(time.RFC3339),
 					"lte": now.Add(time.Minute).Format(time.RFC3339),
@@ -133,6 +190,13 @@ func (a *API) OpenSearchStage(ctx context.Context, p Principal, kind Kind, marke
 		return notObservable(e, "OpenSearch response was not decodable JSON: "+err.Error())
 	}
 	if len(parsed.Hits.Hits) == 0 {
+		if why := osSampleReason(kind); why != "" {
+			// A SAMPLED lane cannot answer "was this record here" at all. The
+			// third verdict exists for precisely this: reporting a 98%-expected
+			// absence as `not_seen` would send an operator hunting a hop that
+			// never lost anything.
+			return notObservable(e, why)
+		}
 		e.Verdict = VerdictNotSeen
 		e.Reason = fmt.Sprintf("no document carrying the marker in %s over the last %s", index, stageWindow)
 		return e
@@ -153,23 +217,45 @@ func (a *API) OpenSearchStage(ctx context.Context, p Principal, kind Kind, marke
 func (a *API) KafkaStage(ctx context.Context, kind Kind, marker string) Entry {
 	e := Entry{Stage: StageKafka, Module: string(StageKafka)}
 	topic := TopicFor(kind)
-	e.Query = fmt.Sprintf("correlation sidecar POST /debug/kafka-peek {topic=%s, marker=%s}", topic, marker)
+	if topic == "" {
+		e.Query = "(none)"
+		return notObservable(e, fmt.Sprintf(
+			"a %s update does not cross the bus in this deployment: gnmic writes straight to VictoriaMetrics over prometheus_write, and only the opt-in correlation lane (GNMIC_CONFIG_FILE=gnmic-correlation.yaml) adds a Kafka output", kind))
+	}
+	// A flow record carries no text marker, so the bus needle is the probe's
+	// RFC 5737 source address — a closed, 256-value grammar the sidecar
+	// validates independently. It is a LOOSE needle by design; every record it
+	// returns is then verified against the full fingerprint here, so a loose
+	// bus scan can never promote another probe's record into this trace.
+	req := PeekRequest{Topic: topic, Marker: marker, MaxSeconds: 10, MaxRecords: 5, LookbackSeconds: 900}
+	if kind == KindFlow {
+		req.ProbeSrc = NewFlowFingerprint(marker).SrcAddr
+		e.Query = fmt.Sprintf("correlation sidecar POST /debug/kafka-peek {topic=%s, marker=%s, probe_src=%s} (records then verified against %s)",
+			topic, marker, req.ProbeSrc, NewFlowFingerprint(marker))
+	} else {
+		e.Query = fmt.Sprintf("correlation sidecar POST /debug/kafka-peek {topic=%s, marker=%s}", topic, marker)
+	}
 	if a.deps.KafkaPeek == nil {
 		return notObservable(e, "the Kafka peek is not wired into this API build")
 	}
-	res, err := a.deps.KafkaPeek(ctx, PeekRequest{
-		Topic: topic, Marker: marker,
-		MaxSeconds: 10, MaxRecords: 5, LookbackSeconds: 900,
-	})
+	res, err := a.deps.KafkaPeek(ctx, req)
 	if err != nil {
 		return notObservable(e, "Kafka peek unavailable: "+err.Error())
 	}
-	if len(res.Records) == 0 {
+	matched := res.Records
+	if kind == KindFlow {
+		matched = verifyFlowRecords(marker, res.Records)
+	}
+	if len(matched) == 0 {
 		e.Verdict = VerdictNotSeen
 		e.Reason = fmt.Sprintf("scanned %d records on %s in %.1fs without the marker", res.Scanned, topic, res.ElapsedS)
+		if kind == KindFlow && len(res.Records) > 0 {
+			e.Reason = fmt.Sprintf("scanned %d records on %s in %.1fs; %d carried the probe's source address but none matched the full fingerprint %s",
+				res.Scanned, topic, res.ElapsedS, len(res.Records), NewFlowFingerprint(marker))
+		}
 		return e
 	}
-	rec := res.Records[0]
+	rec := matched[0]
 	e.Verdict = VerdictSeen
 	e.FirstSeen = time.UnixMilli(rec.Timestamp).UTC()
 	e.EvidenceRef = fmt.Sprintf("%s[%d]@%d", rec.Topic, rec.Partition, rec.Offset)
@@ -178,7 +264,35 @@ func (a *API) KafkaStage(ctx context.Context, kind Kind, marker string) Entry {
 		"scanned": res.Scanned, "elapsed_s": res.ElapsedS, "truncated": res.Truncated,
 		"excerpt": RedactString(rec.Excerpt),
 	}
+	if kind == KindFlow {
+		e.Detail["fingerprint"] = NewFlowFingerprint(marker).Fields()
+	}
 	return e
+}
+
+// verifyFlowRecords keeps only the peeked records whose payload carries EVERY
+// field of the marker's fingerprint. The bus needle is deliberately loose (one
+// documentation-prefix address); this is where the claim is made exact.
+func verifyFlowRecords(marker string, recs []PeekRecord) []PeekRecord {
+	f := NewFlowFingerprint(marker)
+	want := []string{
+		f.SrcAddr, f.DstAddr,
+		strconv.Itoa(int(f.SrcPort)), strconv.Itoa(int(f.DstPort)),
+	}
+	out := make([]PeekRecord, 0, len(recs))
+	for _, rec := range recs {
+		ok := true
+		for _, w := range want {
+			if !strings.Contains(rec.Excerpt, w) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, rec)
+		}
+	}
+	return out
 }
 
 // VictoriaStage answers the metric store's half of stage 5.
@@ -194,8 +308,7 @@ func (a *API) VictoriaStage(ctx context.Context, kind Kind, marker string) Entry
 	sel := MarkerSeriesSelector(kind, marker)
 	if sel == "" {
 		e.Query = "(none)"
-		return notObservable(e, fmt.Sprintf(
-			"a %s record produces no per-record metric series; VictoriaMetrics holds pipeline counters, which move for every record and cannot be attributed to one marker", kind))
+		return notObservable(e, victoriaReason(kind))
 	}
 	now := a.deps.now()
 	e.Query = fmt.Sprintf("GET /api/v1/export?match[]=%s&start=%d&end=%d", sel, now.Add(-stageWindow).Unix(), now.Unix())
@@ -219,13 +332,32 @@ func (a *API) VictoriaStage(ctx context.Context, kind Kind, marker string) Entry
 
 // MarkerSeriesSelector returns the VictoriaMetrics selector that would carry
 // the marker for a kind, or "" when the kind mints no per-record series.
+//
+// EVERY KIND RETURNS "" TODAY, and that is a finding rather than a stub. None
+// of syslog, trap or flow mints a per-record time series: VictoriaMetrics holds
+// pipeline COUNTERS, which move for every record and cannot be attributed to
+// one marker. gNMI is the one kind that IS metric telemetry — and it is
+// passive-only, so it is followed by device+path over a window
+// (PassiveSeriesSelector), never by a marker that no device would ever emit.
 func MarkerSeriesSelector(kind Kind, marker string) string {
 	_ = marker
 	switch kind {
-	case KindSyslog, KindTrap:
+	case KindSyslog, KindTrap, KindFlow, KindGNMI:
 		return ""
 	default:
 		return ""
+	}
+}
+
+// victoriaReason explains, per kind, why there is no marker series to export.
+func victoriaReason(kind Kind) string {
+	switch kind {
+	case KindGNMI:
+		return "a gNMI trace is PASSIVE (no record is ever written to a device), so it is followed by device and path over a window rather than by a marker — run `correlix-debug trace --kind gnmi --passive --device <id> --since <window>`"
+	case KindFlow:
+		return "a flow record produces no per-record metric series; VictoriaMetrics holds pipeline counters, which move for every record and cannot be attributed to one probe. ClickHouse is this kind's authoritative store"
+	default:
+		return fmt.Sprintf("a %s record produces no per-record metric series; VictoriaMetrics holds pipeline counters, which move for every record and cannot be attributed to one marker", kind)
 	}
 }
 
@@ -247,9 +379,14 @@ func (a *API) ClickHouseStage(ctx context.Context, p Principal, kind Kind, marke
 	if a.deps.CHSelect == nil || a.deps.CHScopeFor == nil {
 		return notObservable(e, "no ClickHouse client is wired into this API build")
 	}
+	// The predicate is built from the marker's derived fingerprint (flow.go):
+	// one address string from a fixed RFC 5737 prefix and five integers, none
+	// of which is caller text. The marker itself passed ValidMarker before it
+	// reached here, which is what makes the interpolation safe (§3).
 	sql := fmt.Sprintf(
-		"SELECT * FROM %s WHERE positionCaseInsensitive(toString(raw), '%s') > 0 AND ts >= now() - INTERVAL 30 MINUTE LIMIT 5 FORMAT JSON",
-		table, MarkerTag(marker))
+		"SELECT ts, src_addr, dst_addr, src_port, dst_port, proto, bytes, packets, sampler_address, flow_type, tenant_id "+
+			"FROM %s WHERE %s AND ts >= now() - INTERVAL 30 MINUTE ORDER BY ts ASC LIMIT 5 FORMAT JSON",
+		table, FlowMarkerCH(marker))
 	e.Query = sql
 	rows, err := a.deps.CHSelect(ctx, a.deps.CHScopeFor(p), sql, "api:/api/debug/stage/clickhouse")
 	if err != nil {
@@ -257,11 +394,17 @@ func (a *API) ClickHouseStage(ctx context.Context, p Principal, kind Kind, marke
 	}
 	if len(rows) == 0 {
 		e.Verdict = VerdictNotSeen
-		e.Reason = "no row carrying the marker in " + table
+		e.Reason = fmt.Sprintf("no row matching %s in %s over the last 30 minutes", NewFlowFingerprint(marker), table)
 		return e
 	}
 	e.Verdict = VerdictSeen
-	e.Detail = map[string]any{"rows": len(rows), "table": table}
+	e.FirstSeen = timeField(rows[0], "ts")
+	e.EvidenceRef = table
+	e.Detail = map[string]any{
+		"rows": len(rows), "table": table,
+		"fingerprint": NewFlowFingerprint(marker).Fields(),
+		"row":         RedactFields(rows[0]),
+	}
 	return e
 }
 
@@ -269,8 +412,11 @@ func (a *API) ClickHouseStage(ctx context.Context, p Principal, kind Kind, marke
 // none.
 func RawCHTable(kind Kind) string {
 	switch kind {
-	case KindSyslog, KindTrap:
-		return ""
+	case KindFlow:
+		// The CANONICAL flow store (deployment/docker/clickhouse/init.sql).
+		// OpenSearch gets a 1-in-50 sample of the same lane, which is why the
+		// OpenSearch stage below refuses to read a flow miss as a loss.
+		return "netops.flows"
 	default:
 		return ""
 	}
@@ -280,8 +426,17 @@ func RawCHTable(kind Kind) string {
 // row it grounded (netops.corr_evidence.note carries the marker when the record
 // was admitted), plus the DEAD-LETTER check, so "the engine dropped it" and
 // "the engine failed to persist it" are distinguishable.
-func (a *API) CorrelationStage(ctx context.Context, p Principal, marker string) Entry {
+func (a *API) CorrelationStage(ctx context.Context, p Principal, kind Kind, marker string) Entry {
 	e := Entry{Stage: StageCorrelation, Module: string(StageCorrelation)}
+	// corr_evidence.note is TEXT, and the marker only reaches it when the
+	// record carried the marker as text. A flow probe never can (flow.go), so
+	// claiming "not seen" here would assert that the engine dropped something
+	// this query could never have found in the first place.
+	if kind == KindFlow || kind == KindGNMI {
+		e.Query = "(none)"
+		return notObservable(e, fmt.Sprintf(
+			"a %s record carries no free-text field, so no corr_evidence note can cite the marker. The %s lane reaches correlation as derived SIGNALS, not as a per-record citation — grounding for this kind is proved by the signal counters in the engine's health snapshot, not by a marker lookup", kind, kind))
+	}
 	if a.deps.CHSelect == nil || a.deps.CHScopeFor == nil {
 		return notObservable(e, "no ClickHouse client is wired into this API build")
 	}

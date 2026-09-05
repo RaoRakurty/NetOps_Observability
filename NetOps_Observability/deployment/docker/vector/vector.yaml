@@ -669,6 +669,103 @@ transforms:
       .__key = "global"
       if .tenant_id != "" { .__key = .tenant_id }
 
+      # ── W2 pipeline-debugger — PARSER DECISION HOOK (marked records only) ─
+      #
+      # `correlix-debug trace` collects this stage with
+      # `vector tap --outputs-of syslog_normalized` (docs/runbooks/pipeline-debug.md
+      # §5). A tap shows the EVENT, never the DECISION PATH: which vendor branch
+      # matched, whether the tenant registry answered, which body parser ran —
+      # and, the part the debugger exists for, the REASON a record ends up
+      # unattributed or unparsed. This hook writes that path down.
+      #
+      # THE GUARD, and why it costs nothing. Every record the debugger injects
+      # carries the literal token `cx_debug=<26-char ulid>` inside its free-text
+      # field (internal/pipedebug — MarkerField / MarkerTag / MarkerPayload). No
+      # production record ever carries it, so the price for real traffic is ONE
+      # substring compare against `msg`, a string this transform already built
+      # above. Nothing below runs, and nothing about an unmarked record changes.
+      # It also needs no config reload — which matters, because Vector reads
+      # VECTOR_LOG once at process start and has NO runtime log-level switch
+      # (pipedebug's VectorLevelReason says so on the record), so a reload-based
+      # debug flag would be a promise this stack cannot keep.
+      if contains(msg, "cx_debug=") {
+        # ── the tenant decision, with the reason named ─────────────────────
+        # F-11: the two ways to end up with tenant_id="" are NOT the same
+        # thing, and a trace that printed only the empty value would hide the
+        # distinction the whole discriminator exists to make.
+        cx_tid = .tenant_id
+        if cx_tid == "" { cx_tid = "(none)" }
+        cx_tenant_reason = "registry-hit"
+        if .hostname == "unknown" {
+          cx_tenant_reason = "DROPPED-ATTRIBUTION:no-hostname-in-frame(the lookup is not even attempted; the record stays untagged)"
+        } else if .tenant_registry == "miss" {
+          cx_tenant_reason = "DROPPED-ATTRIBUTION:device_tenant-registry-MISS(no inventory row for this hostname; TENANT_UNATTRIBUTABLE — the router quarantines it when sealing is on)"
+        } else if tenant_resolved == "" {
+          cx_tenant_reason = "registry-hit-maps-to-platform-global(untagged by design, not a miss)"
+        }
+        # ── the body-parser decision, with the reason a parse did NOT happen ─
+        cx_parse_reason = "NO-PARSE:neither %FAC-SEV-MNEMONIC nor the SR-Linux pipe format matched the body"
+        if vendor == "fortinet" {
+          cx_parse_reason = "NO-PARSE:fortinet-kv branch, parse_key_value FAILED — body left raw"
+          if exists(.fgt) {
+            cx_parse_reason = "fortinet-kv branch, parsed into .fgt (the structured-body parsers are skipped for this vendor by design)"
+          }
+        } else if .parser_status == "parsed" {
+          cx_parse_reason = "matched " + (string(.parser_id) ?? "?")
+        }
+        cx_line = "component=syslog_normalized" +
+          " hostname=" + .hostname +
+          " vendor=" + vendor +
+          " tenant_registry=" + .tenant_registry +
+          " tenant_id=" + cx_tid +
+          " tenant_reason=" + cx_tenant_reason +
+          " parser_status=" + .parser_status +
+          " parser_reason=" + cx_parse_reason +
+          # `string()` not `to_string()`: to_string(null) renders "", which
+          # would print `facility=` and read as "the parser produced an empty
+          # facility" rather than "there is no facility field at all".
+          " facility=" + (string(.facility) ?? "-") +
+          " event_type=" + (string(.event_type) ?? "-") +
+          " severity_in=" + .severity +
+          " embedded_sev=" + to_string(embedded_sev) +
+          " normalized_severity=" + .normalized_severity +
+          " appname=" + .appname +
+          " partition_key=" + .__key +
+          " clock_skew_s=" + to_string(skew_s) +
+          # The admission screen is the GENERATED syslog_admission_stamp, one
+          # hop downstream, and hand-editing between its markers is forbidden
+          # (scripts/gen-syslog-admission.py owns that block and a drift test
+          # fails on a stale copy); splicing a component in after it would
+          # break the topology tests/test_syslog_admission.py pins. So this
+          # stage reports the INPUTS the screen will read and the router lane's
+          # hook reports the verdict it produced, off `.cx_admission`.
+          " admission=downstream(generated syslog_admission_stamp; verdict reported by the router lane)"
+        # (i) STAMP — ONE FLAT STRING field, no dots in the key name, never an
+        # array and never an object. The CLAUDE.md dotted-key gotcha (Docker's
+        # `.label` map, whose com.docker.compose.* keys OpenSearch read as
+        # object paths) silently dropped EVERY app log once; a debug field must
+        # not be able to do that again. Appended rather than replaced so one
+        # field carries the whole path (this stage, then the router's), bounded
+        # so it can never grow without limit.
+        cx_prev = string(.cx_parse_trace) ?? ""
+        if cx_prev != "" && length(cx_prev) < 2000 {
+          .cx_parse_trace = cx_prev + " | " + cx_line
+        } else {
+          .cx_parse_trace = cx_line
+        }
+        # (ii) LOG — level "info", DELIBERATELY, not "debug". Vector reads
+        # VECTOR_LOG at process start, docker-compose.yml does not set it, and
+        # there is no runtime switch, so the aggregator runs at `info`: a
+        # "debug" line here would NEVER be emitted and the operator would be
+        # told nothing while believing they had been told something. That is
+        # the defect this feature exists to remove, so the honest level for a
+        # line that must actually appear in `docker logs vector-aggregator` is
+        # info. rate_limit_secs: 0 for the same reason — log() de-duplicates by
+        # default, and a silently suppressed line during a burst of probes is
+        # the same silence in a different costume.
+        log(cx_line, level: "info", rate_limit_secs: 0)
+      }
+
   # ── A4 Phase 1: syslog ADMISSION SPLIT (built, default OFF) ───────────────
   #
   # The correlation engine admits ~6 % of the syslog firehose as evidence
@@ -825,6 +922,60 @@ transforms:
       # Scale P0: tenant partition key — see the syslog lane's note.
       .__key = "global"
       if .tenant_id != "" { .__key = .tenant_id }
+
+      # ── W2 pipeline-debugger — PARSER DECISION HOOK (marked records only) ─
+      # Same contract, same guard and the same level reasoning as the syslog
+      # lane above: `correlix-debug trace` taps this transform's output for
+      # parser.log, the marker `cx_debug=<ulid>` rides in the trap's free text
+      # (the receiver folds every varbind VALUE into .message, and the probe's
+      # marker varbind carries pipedebug.MarkerPayload), and no production trap
+      # ever carries the token — so unmarked traffic pays one substring compare.
+      cx_msg = string(.message) ?? ""
+      if contains(cx_msg, "cx_debug=") {
+        cx_tid = .tenant_id
+        if cx_tid == "" { cx_tid = "(none)" }
+        cx_dev = dev
+        if cx_dev == "" { cx_dev = "(none)" }
+        cx_host = host
+        if cx_host == "" { cx_host = "(none)" }
+        cx_key = key
+        if cx_key == "" { cx_key = "(none)" }
+        cx_tenant_reason = "registry-hit"
+        if key == "" {
+          cx_tenant_reason = "DROPPED-ATTRIBUTION:the trap carries neither a device id nor a source host — there is no key to look up"
+        } else if .tenant_registry == "miss" {
+          cx_tenant_reason = "DROPPED-ATTRIBUTION:device_tenant-registry-MISS on " + key + " (no inventory row; TENANT_UNATTRIBUTABLE — the router quarantines it when sealing is on)"
+        } else if .tenant_id == "" {
+          cx_tenant_reason = "registry-hit-maps-to-platform-global(untagged by design, not a miss)"
+        }
+        cx_line = "component=snmptrap_normalized" +
+          " hostname=" + .hostname +
+          " device=" + cx_dev +
+          " source_host=" + cx_host +
+          " lookup_key=" + cx_key +
+          " tenant_registry=" + .tenant_registry +
+          " tenant_id=" + cx_tid +
+          " tenant_reason=" + cx_tenant_reason +
+          " trap_oid=" + (string(.trap_oid) ?? "-") +
+          " trap_name=" + (string(.trap_name) ?? "-") +
+          " parser_status=" + (string(.parser_status) ?? "-") +
+          " event_type=" + (string(.event_type) ?? "-") +
+          " severity=" + .severity +
+          " partition_key=" + .__key
+        # (i) STAMP — one flat string, appended; see the syslog lane for why
+        # the shape (and the key name) may never become nested or dotted.
+        cx_prev = string(.cx_parse_trace) ?? ""
+        if cx_prev != "" && length(cx_prev) < 2000 {
+          .cx_parse_trace = cx_prev + " | " + cx_line
+        } else {
+          .cx_parse_trace = cx_line
+        }
+        # (ii) LOG at info, rate_limit_secs: 0 — see the syslog lane's note:
+        # `debug` is unreachable in this process (VECTOR_LOG is start-time only
+        # and unset), so info is the only honest level for a line that must be
+        # visible in `docker logs vector-aggregator`.
+        log(cx_line, level: "info", rate_limit_secs: 0)
+      }
 
   # Probe events: stamp the tenant when the target matches a device identity.
   # Most probe targets are external hosts → "" (global/platform); the

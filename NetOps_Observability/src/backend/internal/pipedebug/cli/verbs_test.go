@@ -28,6 +28,9 @@ type fakeAPI struct {
 	// notSwitchable names modules the fake refuses to raise, the way vector and
 	// syslog-ng really do.
 	notSwitchable map[string]string
+
+	tracePost []map[string]any
+	stageGets []string
 }
 
 func newFakeAPI(t *testing.T, stages []pipedebug.Entry) *fakeAPI {
@@ -39,10 +42,38 @@ func newFakeAPI(t *testing.T, stages []pipedebug.Entry) *fakeAPI {
 	mux.HandleFunc("/api/auth/login", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"token":"tok"}`))
 	})
-	mux.HandleFunc("/api/debug/trace", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/api/debug/trace", func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		f.mu.Lock()
+		f.tracePost = append(f.tracePost, req)
+		f.mu.Unlock()
+		kind, _ := req["kind"].(string)
+		if kind == "" {
+			kind = "syslog"
+		}
+		passive, _ := req["passive"].(bool)
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = fmt.Fprintf(w,
-			`{"marker":%q,"kind":"syslog","device":"spine1","tenant":"t1","injected":true,"ttl_seconds":5,"synthetic":true}`, vMarker)
+			`{"marker":%q,"kind":%q,"device":"spine1","tenant":"t1","injected":%v,"ttl_seconds":5,"synthetic":%v,"passive":%v}`,
+			vMarker, kind, !passive, !passive, passive)
+	})
+	mux.HandleFunc("/api/debug/stage/", func(w http.ResponseWriter, r *http.Request) {
+		stage := strings.TrimPrefix(r.URL.Path, "/api/debug/stage/")
+		f.mu.Lock()
+		f.stageGets = append(f.stageGets, stage+"?"+r.URL.RawQuery)
+		f.mu.Unlock()
+		e := pipedebug.Entry{
+			Stage: pipedebug.Stage(stage), Module: stage,
+			Verdict: pipedebug.VerdictNotObservable,
+			Reason:  "fake api: no evidence source in this test",
+		}
+		body, err := json.Marshal(e)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		_, _ = w.Write(body)
 	})
 	mux.HandleFunc("/api/debug/trace/", func(w http.ResponseWriter, _ *http.Request) {
 		body, err := json.Marshal(pipedebug.TraceStatus{
@@ -242,28 +273,31 @@ func TestRunTraceExitsNonZeroWhenTheRecordNeverReachesTheAPI(t *testing.T) {
 	}
 }
 
-// --passive is W2. It must REFUSE, not quietly inject a synthetic record the
-// operator explicitly declined.
-func TestPassiveRefusesRatherThanSilentlyInjecting(t *testing.T) {
-	f := newFakeAPI(t, nil)
-	root := filepath.Join(t.TempDir(), "debug")
-	var out strings.Builder
-	code, err := RunTrace(context.Background(), TraceOptions{
-		Kind: pipedebug.KindSyslog, Device: "spine1", Passive: true, TTL: time.Second, Root: root,
-	}, f.client(t), NewCollector(&tapRunner{}, "netops"), &out)
-	if err == nil || code == 0 {
-		t.Fatal("--passive was accepted and silently degraded into an injection")
+// THE ONE UNACCEPTABLE OUTCOME of the passive mode is an injection the operator
+// explicitly declined. Both directions are refused BEFORE anything is dialled:
+// --passive on an injectable kind, and an injectable-looking run of a kind that
+// can only be followed passively.
+func TestPassiveModeIsRefusedInBothDirectionsBeforeAnythingIsDialled(t *testing.T) {
+	var out, errOut strings.Builder
+	if code := RunTraceCLI(context.Background(),
+		[]string{"--kind", "syslog", "--device", "spine1", "--passive"}, &out, &errOut); code == 0 {
+		t.Fatal("--passive on syslog was accepted; it must refuse rather than inject")
 	}
-	sessions, _ := pipedebug.ListSessions(root)
-	if len(sessions) != 1 {
-		t.Fatalf("no session recorded the refusal: %v", sessions)
+	if !strings.Contains(errOut.String(), "passive is supported for gnmi only") {
+		t.Errorf("the refusal does not explain itself:\n%s", errOut.String())
 	}
-	data, err := os.ReadFile(filepath.Join(sessions[0], "ingress.log")) // #nosec G304 -- test temp dir
-	if err != nil {
-		t.Fatal(err)
+
+	out.Reset()
+	errOut.Reset()
+	if code := RunTraceCLI(context.Background(),
+		[]string{"--kind", "gnmi", "--device", "spine1"}, &out, &errOut); code == 0 {
+		t.Fatal("--kind gnmi without --passive was accepted; a gNMI update cannot be injected without writing to a device")
 	}
-	if !strings.Contains(string(data), "W2") {
-		t.Errorf("the refusal is not explained in the session: %s", data)
+	if !strings.Contains(errOut.String(), "passive-only") {
+		t.Errorf("the gnmi refusal does not explain itself:\n%s", errOut.String())
+	}
+	if strings.Contains(errOut.String(), "inject") && !strings.Contains(errOut.String(), "never writes to a device") {
+		t.Errorf("the gnmi refusal does not name the read-only rule:\n%s", errOut.String())
 	}
 }
 
@@ -436,4 +470,116 @@ func TestDebugRootIsUnderTheDeploymentDataDirectory(t *testing.T) {
 	if got := DebugRoot("/opt/correlix"); got != filepath.Join("/opt/correlix", "data", "debug") {
 		t.Errorf("DebugRoot = %q", got)
 	}
+}
+
+// ── W2: flow and passive gNMI through the whole verb ────────────────────────
+
+// A flow trace has NO tap at ingress or parser (goflow2 is both, and it is not
+// a Vector component). Those stages must still APPEAR in the timeline with the
+// third verdict and the reason — a stage that silently vanishes reads to an
+// operator as a hop that was fine.
+func TestFlowTraceRecordsTheUntappableStagesInsteadOfDroppingThem(t *testing.T) {
+	f := newFakeAPI(t, nil)
+	root := filepath.Join(t.TempDir(), "debug")
+	var out strings.Builder
+	if _, err := RunTrace(context.Background(), TraceOptions{
+		Kind: pipedebug.KindFlow, Device: "spine1", TTL: time.Second, Root: root,
+	}, f.client(t), NewCollector(&tapRunner{}, "netops"), &out); err != nil {
+		t.Fatal(err)
+	}
+	sessions, _ := pipedebug.ListSessions(root)
+	if len(sessions) != 1 {
+		t.Fatalf("sessions: %v", sessions)
+	}
+	raw, err := os.ReadFile(filepath.Join(sessions[0], "timeline.json")) // #nosec G304 -- test temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tl pipedebug.Timeline
+	if err := json.Unmarshal(raw, &tl); err != nil {
+		t.Fatal(err)
+	}
+	byStage := map[pipedebug.Stage]pipedebug.Entry{}
+	for _, e := range tl.Entries {
+		byStage[e.Stage] = e
+	}
+	for _, st := range []pipedebug.Stage{pipedebug.StageIngress, pipedebug.StageParser} {
+		e, ok := byStage[st]
+		if !ok {
+			t.Fatalf("%s is absent from a flow timeline — an absent row reads as a hop that was fine", st)
+		}
+		if e.Verdict != pipedebug.VerdictNotObservable {
+			t.Errorf("%s verdict %s, want not_observable", st, e.Verdict)
+		}
+		if len(e.Reason) < 40 {
+			t.Errorf("%s has no usable reason: %q", st, e.Reason)
+		}
+	}
+	if e := byStage[pipedebug.StageIngress]; !strings.Contains(e.Reason, "goflow2") {
+		t.Errorf("the flow ingress reason does not name goflow2: %q", e.Reason)
+	}
+	if e := byStage[pipedebug.StageParser]; !strings.Contains(e.Reason, "ROUTER") {
+		t.Errorf("the flow parser reason does not point at where the decision path actually is: %q", e.Reason)
+	}
+	// Stage 10 is fetched from the api, not stubbed as W1 did.
+	f.mu.Lock()
+	gets := append([]string(nil), f.stageGets...)
+	f.mu.Unlock()
+	if !containsPrefix(gets, "ui?") {
+		t.Errorf("the UI-query stage was never fetched: %v", gets)
+	}
+}
+
+// A passive run must send passive:true and must never present the result as
+// synthetic — there is no injected record to be synthetic about.
+func TestPassiveTraceSendsPassiveAndInjectsNothing(t *testing.T) {
+	f := newFakeAPI(t, nil)
+	root := filepath.Join(t.TempDir(), "debug")
+	var out strings.Builder
+	if _, err := RunTrace(context.Background(), TraceOptions{
+		Kind: pipedebug.KindGNMI, Device: "spine1", Passive: true,
+		Since: 10 * time.Minute, TTL: time.Second, Root: root,
+	}, f.client(t), NewCollector(&tapRunner{}, "netops"), &out); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	posts := append([]map[string]any(nil), f.tracePost...)
+	f.mu.Unlock()
+	if len(posts) != 1 {
+		t.Fatalf("trace posts: %v", posts)
+	}
+	if posts[0]["passive"] != true {
+		t.Fatalf("the CLI did not ask for a passive follow: %v", posts[0])
+	}
+	if posts[0]["kind"] != "gnmi" {
+		t.Fatalf("kind: %v", posts[0]["kind"])
+	}
+	if !strings.Contains(out.String(), "NOTHING was injected") {
+		t.Errorf("the operator is not told that nothing was injected:\n%s", out.String())
+	}
+	sessions, _ := pipedebug.ListSessions(root)
+	if len(sessions) != 1 {
+		t.Fatalf("sessions: %v", sessions)
+	}
+	// Every one of the ten module files exists, including the ones a passive
+	// gNMI follow cannot observe.
+	for _, st := range pipedebug.Stages {
+		info, err := os.Stat(filepath.Join(sessions[0], st.LogFile()))
+		if err != nil {
+			t.Errorf("%s: %v", st.LogFile(), err)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("%s is EMPTY — an empty module file reads as 'nothing happened'", st.LogFile())
+		}
+	}
+}
+
+func containsPrefix(items []string, prefix string) bool {
+	for _, s := range items {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
 }

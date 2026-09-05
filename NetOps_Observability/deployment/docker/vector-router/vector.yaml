@@ -461,6 +461,97 @@ transforms:
         }
       }
 
+      # ── W2 pipeline-debugger — ROUTER DECISION HOOK (marked records only) ─
+      #
+      # `correlix-debug trace` collects the router stage with
+      # `vector tap --outputs-of syslog_tagged` / `snmptrap_tagged`
+      # (docs/runbooks/pipeline-debug.md §5). The tap shows the event; this
+      # writes down WHY it looks like that — which attribution outcome the
+      # anchor reached and why, where the document _id came from, what happened
+      # to `ts`, and (on the syslog lane) the verdict the generated admission
+      # screen returned upstream.
+      #
+      # THE GUARD. Every record the debugger injects carries the literal token
+      # `cx_debug=<26-char ulid>` in its free text (internal/pipedebug —
+      # MarkerField / MarkerTag / MarkerPayload); no production record does. So
+      # unmarked traffic — which is all of it — pays one substring compare and
+      # nothing else, on every lane that shares this anchor.
+      cx_msg = string(.message) ?? ""
+      if contains(cx_msg, "cx_debug=") {
+        cx_topic = to_string(.topic) ?? "(unknown)"
+        # Attribution outcome WITH the reason. "untagged" is the answer that
+        # needs one: it is either a genuine platform-owned record or a broken
+        # device→tenant table, and F-11 exists precisely because those two look
+        # identical from the document alone.
+        cx_attr_reason = "tenant came from an AUTHENTICATED producer (no registry stamp on this lane); the device may be unknown to inventory and that is legitimate"
+        if seg == "untagged" {
+          cx_attr_reason = "UNATTRIBUTED:tenant_id is empty so this doc goes to the SHARED -untagged- index"
+          if exists(.tenant_registry) {
+            cx_attr_reason = cx_attr_reason + ", upstream device_tenant registry said " + (to_string(.tenant_registry) ?? "?")
+          } else {
+            cx_attr_reason = cx_attr_reason + ", and no upstream registry stamp either"
+          }
+        } else if exists(.tenant_registry) {
+          cx_attr_reason = "upstream device_tenant registry hit"
+        }
+        # Document identity — an AUTO id is the F-18 duplicate-on-retry case
+        # and must be named, not inferred from the absence of a field.
+        cx_id = "AUTO(no kafka coordinate on this record — a bulk retry can index it twice)"
+        if exists(.cx_event_id) { cx_id = to_string(.cx_event_id) ?? "?" }
+        # `ts` outcome — including the DROP: an unparseable value is moved to
+        # .ts_invalid and removed, which is the difference between "no data in
+        # that window" and "this producer is sending garbage".
+        cx_ts_reason = "ABSENT:no ts and no parseable timestamp — every date-range query and time picker will miss this doc"
+        if exists(.ts_invalid) {
+          cx_ts_reason = "DROPPED:unparseable ts preserved as .ts_invalid=" + (to_string(.ts_invalid) ?? "?") + " and removed from .ts"
+        } else if exists(.ts) {
+          cx_ts_reason = "present, source=" + (to_string(.ts_source) ?? "producer")
+        }
+        # The admission verdict the GENERATED aggregator screen reached. It is
+        # reported here and not at syslog_normalized because that screen is the
+        # generated syslog_admission_stamp block, which may not be hand-edited
+        # and whose surrounding topology is pinned by
+        # tests/test_syslog_admission.py — so this is the first traced stage
+        # that can see `.cx_admission` at all.
+        cx_adm = "n/a(this lane carries no admission stamp)"
+        if exists(.cx_admission) {
+          cx_adm = "ADMITTED by=" + (to_string(.cx_admission.by) ?? "?") + " v=" + (to_string(.cx_admission.v) ?? "?")
+        } else if cx_topic == "netops.syslog" {
+          cx_adm = "NOT-ADMITTED(the generated syslog_admission_stamp set no .cx_admission: neither the severity floor nor a symptom marker matched, so this line is not correlation-evidence material)"
+        }
+        cx_line = "component=log_lane" +
+          " topic=" + cx_topic +
+          " tenant_seg=" + seg +
+          " tenant_attribution=" + .tenant_attribution +
+          " attribution_reason=" + cx_attr_reason +
+          " index_segment=netops-<signal>-" + seg + "-<date>" +
+          " doc_id=" + cx_id +
+          " ts_reason=" + cx_ts_reason +
+          " admission=" + cx_adm +
+          " quarantine_mark=stripped-at-lane-head(only the generated <lane>_quarantine stage, downstream of here, may mint .cx_quarantine)"
+        # (i) STAMP — ONE FLAT STRING, appended to whatever the aggregator's
+        # parser hook already wrote, so a single field carries the whole
+        # decision path. Flat and dot-free on purpose: the CLAUDE.md `.label`
+        # gotcha (dotted keys read as object paths) once dropped every app log,
+        # and a debug field must never be able to repeat it. Bounded so it
+        # cannot grow without limit across stages.
+        cx_prev = string(.cx_parse_trace) ?? ""
+        if cx_prev != "" && length(cx_prev) < 2000 {
+          .cx_parse_trace = cx_prev + " | " + cx_line
+        } else {
+          .cx_parse_trace = cx_line
+        }
+        # (ii) LOG at level "info", deliberately, and NOT "debug": Vector reads
+        # VECTOR_LOG once at process start and offers no runtime log-level
+        # switch (pipedebug's VectorLevelReason), and docker-compose.yml does
+        # not set it — so vector-router runs at `info` and a "debug" line here
+        # would NEVER be emitted. Claiming to log at a level that cannot be
+        # reached is the silent failure this feature exists to remove.
+        # rate_limit_secs: 0 because log() de-duplicates by default and a
+        # suppressed line during a burst of probes is that same silence.
+        log(cx_line, level: "info", rate_limit_secs: 0)
+      }
+
   syslog_tagged:
     type: remap
     inputs: [kafka_syslog]
@@ -668,6 +759,82 @@ transforms:
         .tenant_attribution = "claim_rejected"
       }
 
+
+      # ── W2 pipeline-debugger — FLOW DECISION HOOK (marked records only) ───
+      #
+      # THE GUARD, and why it is shaped differently from the log lanes. A
+      # goflow2 flow record has NO free-text field (see the netops-flows index
+      # template: every property is an ip/int/keyword), and NetFlow v5 — the
+      # wire form the probe uses, because v9/IPFIX would need a template packet
+      # first — has no vendor-extension space either. So the `cx_debug=<ulid>`
+      # token the log lanes carry inside `.message` has nowhere to ride, and a
+      # field the injector cannot set would be an inert hook that reads like
+      # coverage.
+      #
+      # The marker therefore travels as a deterministic FLOW FINGERPRINT in RFC
+      # 5737 documentation address space (internal/pipedebug/flow.go:
+      # src 192.0.2.0/24 TEST-NET-1, dst 198.51.100.0/24 TEST-NET-2, ephemeral
+      # ports, RFC 6996 private ASNs, one byte, one packet). TEST-NET-1 is
+      # reserved for documentation and carries no production traffic, so the
+      # guard below is ONE prefix compare on a field every flow already has and
+      # no real flow ever matches. The full tuple is printed in the trace line;
+      # the api verifies it exactly before filing a record as a trace's
+      # evidence (verifyFlowRecords).
+      cx_src = string(.src_addr) ?? ""
+      if starts_with(cx_src, "192.0.2.") {
+        cx_tid = tenant_resolved
+        if cx_tid == "" { cx_tid = "(none)" }
+        cx_sampler = sampler
+        if cx_sampler == "" { cx_sampler = "(none)" }
+        # Attribution outcome with the reason — the three cases are genuinely
+        # different and the trace must not collapse them.
+        cx_tenant_reason = "registry-hit"
+        if sampler == "" {
+          cx_tenant_reason = "UNATTRIBUTED:the flow carries no sampler_address, so the exporter cannot be identified and no lookup is attempted"
+        } else if .tenant_registry == "miss" {
+          cx_tenant_reason = "UNATTRIBUTED:device_tenant-registry-MISS on " + sampler + " (unknown exporter; the generated flows_quarantine stage diverts this when sealing is on)"
+        } else if tenant_resolved == "" {
+          cx_tenant_reason = "registry-hit-maps-to-platform-global(untagged by design, not a miss)"
+        }
+        if claimed_tenant != "" && claimed_tenant != tenant_resolved {
+          cx_tenant_reason = cx_tenant_reason + " | REFUSED-CLAIM:the record asserted tenant_id=" + claimed_tenant + " on the bus and the registry disagrees; the claim was discarded (a tenanted flow on netops.flows is a security event, not an enrichment gap)"
+        }
+        cx_ts_reason = "derived from time_received_ns"
+        if trcv <= 0 {
+          cx_ts_reason = "DROPPED:time_received_ns absent or zero — no .ts is set and ClickHouse falls back to the insert-time column DEFAULT, which misplaces the flow on the timeline"
+        }
+        cx_ft_reason = "goflow2 type=" + ft
+        if .flow_type == "unknown" {
+          cx_ft_reason = "UNRECOGNISED:goflow2 type=" + ft + " matched none of NETFLOW*/IPFIX/SFLOW*"
+        }
+        cx_line = "component=flows_decoded" +
+          " flow_type=" + .flow_type +
+          " flow_type_reason=" + cx_ft_reason +
+          " proto=" + to_string(.proto) +
+          " sampler_address=" + cx_sampler +
+          " tenant_registry=" + .tenant_registry +
+          " tenant_id=" + cx_tid +
+          " tenant_seg=" + seg +
+          " tenant_attribution=" + .tenant_attribution +
+          " tenant_reason=" + cx_tenant_reason +
+          " ts_reason=" + cx_ts_reason
+        # (i) STAMP — one flat string. SAFE FOR BOTH FLOW STORES, checked
+        # rather than assumed: the ClickHouse sink `clickhouse_flows` sets
+        # `skip_unknown_fields: true`, so a column that does not exist is
+        # dropped instead of 400-ing the whole insert batch (the .proto lesson);
+        # and the netops-flows index template is `dynamic: false`, so an
+        # undeclared field is kept in _source and simply not indexed — no
+        # mapping conflict, no rejected document.
+        cx_prev = string(.cx_parse_trace) ?? ""
+        if cx_prev != "" && length(cx_prev) < 2000 {
+          .cx_parse_trace = cx_prev + " | " + cx_line
+        } else {
+          .cx_parse_trace = cx_line
+        }
+        # (ii) LOG at info, rate_limit_secs: 0 — see the log-lane anchor above
+        # for why "debug" would be a line that is never emitted.
+        log(cx_line, level: "info", rate_limit_secs: 0)
+      }
   # Scale P0 — re-key the raw goflow2 feed by tenant (see kafka_flows_raw).
   # PASS-THROUGH on purpose: the payload the correlation consumer sees on
   # netops.flows must stay byte-equivalent to what goflow2 produced (its
@@ -698,6 +865,29 @@ transforms:
       }
       if k == "" { k = "global" }
       .__key = k
+      # ── W2 pipeline-debugger — LOG-ONLY DECISION HOOK ─────────────────────
+      # This lane is a declared PASS-THROUGH: the payload on netops.flows must
+      # stay byte-equivalent to what goflow2 produced, so this hook must NOT
+      # stamp `.cx_parse_trace` (or any other field) the way the others do —
+      # adding one would break the very contract the comment above states. It
+      # logs the keying decision and nothing else. Guard and level: identical
+      # to flows_decoded (the RFC 5737 documentation source prefix, because a
+      # flow record has no free text to carry a token; info because Vector's
+      # level is start-time only and `debug` would never be emitted;
+      # rate_limit_secs: 0 so a burst of probes is not silently de-duplicated).
+      cx_src = string(.src_addr) ?? ""
+      if starts_with(cx_src, "192.0.2.") {
+        cx_reason = "device_tenant registry hit on sampler_address " + sampler
+        if sampler == "" {
+          cx_reason = "UNATTRIBUTED:no sampler_address on the record — no lookup attempted"
+        } else if k == "global" {
+          cx_reason = "UNATTRIBUTED:device_tenant registry miss (or a hit mapping to platform/global) for sampler_address " + sampler + " — canon_tenant folds both to the 'global' partition key"
+        }
+        log("component=flows_rekey partition_key=" + k + " sampler_address=" + sampler +
+            " key_reason=" + cx_reason +
+            " note=pass-through lane, no .cx_parse_trace stamped (the netops.flows payload must stay byte-equivalent to goflow2's)",
+            level: "info", rate_limit_secs: 0)
+      }
 
   # Cloud cost records → the ClickHouse cloud_costs schema. Zero-trust gate on
   # the bus payload: only kind=cloud_cost with a well-formed day passes; the

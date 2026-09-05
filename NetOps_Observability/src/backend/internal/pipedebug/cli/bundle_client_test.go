@@ -261,7 +261,7 @@ func TestClientSendsTheBearerAndNeverLogsIt(t *testing.T) {
 	if cl.User() != "admin" {
 		t.Errorf("User() = %q", cl.User())
 	}
-	rec, err := cl.StartTrace(context.Background(), pipedebug.KindSyslog, "spine1", "t1", time.Minute)
+	rec, err := cl.StartTrace(context.Background(), TraceRequest{Kind: pipedebug.KindSyslog, Device: "spine1", Tenant: "t1", TTL: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}

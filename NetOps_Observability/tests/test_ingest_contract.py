@@ -790,6 +790,15 @@ def test_every_field_the_pipeline_stamps_is_declared_or_deliberately_not():
         "kind", "metric_name", "value", "attrs", "entity_tokens", "app",
         "amount", "day",                         # netops.cloud / cloud_costs (ClickHouse)
         "parser_id", "parser_status",            # declared on syslog only; see below
+        # W2 pipeline-debugger decision trace. DELIBERATELY UNDECLARED: it is
+        # stamped ONLY on a record carrying the debugger's `cx_debug=<ulid>`
+        # marker (pipedebug.MarkerTag), so it is absent from every production
+        # document, and it is read out of _source by `correlix-debug` /
+        # `docker logs`, never queried. Declaring it would advertise a
+        # searchable field that no real document has. Under `dynamic: false` an
+        # undeclared field is stored and not indexed — no mapping conflict, no
+        # rejected doc; tests/test_pipeline_debug_vrl.py pins both halves.
+        "cx_parse_trace",
         "vendor", "hostname", "appname", "severity", "facility", "summary",
         "subsystem", "event_type", "normalized_severity", "clock_skew_s",
         "fgt", "app_id", "app_vendor", "app_src", "app_dst", "app_dport",

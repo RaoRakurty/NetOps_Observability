@@ -209,14 +209,32 @@ type TraceReceipt struct {
 	Started   time.Time `json:"started"`
 	Synthetic bool      `json:"synthetic"`
 	StatusURL string    `json:"status_url"`
+	Passive   bool      `json:"passive"`
+	Since     string    `json:"since"`
+	Path      string    `json:"path"`
 }
 
-// StartTrace injects one marked synthetic record and starts the server-side
-// follow.
-func (c *Client) StartTrace(ctx context.Context, kind pipedebug.Kind, device, tenant string, ttl time.Duration) (TraceReceipt, error) {
+// TraceRequest is one `trace` invocation as it goes on the wire.
+type TraceRequest struct {
+	Kind    pipedebug.Kind
+	Device  string
+	Tenant  string
+	TTL     time.Duration
+	Passive bool
+	Since   time.Duration
+	Path    string
+}
+
+// StartTrace starts a follow. With Passive set it injects NOTHING — the flag
+// travels to the api, which owns the exclusive branch; the CLI never decides to
+// inject on the server's behalf.
+func (c *Client) StartTrace(ctx context.Context, req TraceRequest) (TraceReceipt, error) {
 	body, err := json.Marshal(map[string]any{
-		"kind": string(kind), "device": device, "tenant": tenant,
-		"ttl_seconds": int(ttl.Seconds()),
+		"kind": string(req.Kind), "device": req.Device, "tenant": req.Tenant,
+		"ttl_seconds":   int(req.TTL.Seconds()),
+		"passive":       req.Passive,
+		"since_seconds": int(req.Since.Seconds()),
+		"path":          req.Path,
 	})
 	if err != nil {
 		return TraceReceipt{}, err
@@ -254,21 +272,32 @@ func (c *Client) TraceStatus(ctx context.Context, marker string) (pipedebug.Trac
 	return out, nil
 }
 
-// Stage fetches one server-side stage's evidence on demand.
-func (c *Client) Stage(ctx context.Context, stage pipedebug.Stage, kind pipedebug.Kind, marker, tenant string) (pipedebug.Entry, error) {
+// Stage fetches one server-side or hybrid stage's evidence on demand.
+//
+// `device` and `path` are only meaningful for the stages that describe a
+// PASSIVE follow (the UI-query contract for gNMI renders the device's own
+// selector); they are omitted rather than sent empty so the api's closed
+// grammars never see a blank value to reason about.
+func (c *Client) Stage(ctx context.Context, stage pipedebug.Stage, kind pipedebug.Kind, marker, tenant, device, path string) (pipedebug.Entry, error) {
 	q := url.Values{}
 	q.Set("marker", marker)
 	q.Set("kind", string(kind))
 	if tenant != "" {
 		q.Set("tenant", tenant)
 	}
-	path := "/api/debug/stage/" + string(stage) + "?" + q.Encode()
-	raw, status, err := c.do(ctx, http.MethodGet, path, nil, true)
+	if device != "" {
+		q.Set("device", device)
+	}
+	if path != "" {
+		q.Set("path", path)
+	}
+	route := "/api/debug/stage/" + string(stage) + "?" + q.Encode()
+	raw, status, err := c.do(ctx, http.MethodGet, route, nil, true)
 	if err != nil {
 		return pipedebug.Entry{}, err
 	}
 	if status/100 != 2 {
-		return pipedebug.Entry{}, apiError(path, status, raw)
+		return pipedebug.Entry{}, apiError(route, status, raw)
 	}
 	var out pipedebug.Entry
 	if err := json.Unmarshal(raw, &out); err != nil {

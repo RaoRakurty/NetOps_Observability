@@ -54,6 +54,15 @@ type traceRequest struct {
 	Device string `json:"device"`
 	Tenant string `json:"tenant"`
 	TTLSec int    `json:"ttl_seconds"`
+	// Passive follows REAL traffic and injects NOTHING. It is not a hint: a
+	// passive request that fell back to injecting would put a synthetic record
+	// into a customer's pipeline that the operator explicitly declined, so the
+	// branch below is exclusive and the receipt reports Injected=false.
+	Passive bool `json:"passive"`
+	// SinceSec is the passive lookback, clamped to MaxPassiveSince.
+	SinceSec int `json:"since_seconds"`
+	// Path narrows a passive gNMI follow to one path family.
+	Path string `json:"path"`
 }
 
 type traceReceipt struct {
@@ -63,6 +72,9 @@ type traceReceipt struct {
 	Tenant    string    `json:"tenant"`
 	Injected  bool      `json:"injected"`
 	InjectErr string    `json:"inject_error,omitempty"`
+	Passive   bool      `json:"passive"`
+	Since     string    `json:"since,omitempty"`
+	Path      string    `json:"path,omitempty"`
 	TTLSec    int       `json:"ttl_seconds"`
 	Started   time.Time `json:"started"`
 	Synthetic bool      `json:"synthetic"`
@@ -102,6 +114,20 @@ func (a *API) HandleTrace(w http.ResponseWriter, r *http.Request) {
 	}
 	ttl := ClampTraceTTL(time.Duration(req.TTLSec) * time.Second)
 
+	// THE MODE IS DECIDED HERE, ONCE, AND THE TWO BRANCHES NEVER MEET.
+	// A kind that cannot be injected must not fall through to an injection,
+	// and a caller who asked for passive must not receive one either. Both
+	// refusals name the reason instead of degrading quietly.
+	if PassiveOnly(kind) && !req.Passive {
+		a.deps.WriteError(w, http.StatusBadRequest, fmt.Errorf(
+			"a %s update originates on the DEVICE, and this tool never writes to a device (design §5) — %s is followed passively: add \"passive\": true with a device and a window", kind, kind))
+		return
+	}
+	if req.Passive && !PassiveOnly(kind) {
+		a.deps.WriteError(w, http.StatusBadRequest, PassiveRefusal(kind))
+		return
+	}
+
 	now := a.deps.now()
 	marker := NewMarker(now)
 
@@ -109,6 +135,34 @@ func (a *API) HandleTrace(w http.ResponseWriter, r *http.Request) {
 		Marker: marker, Kind: kind, Device: device, Tenant: tenant,
 		TTLSec: int(ttl.Seconds()), Started: now, Synthetic: true,
 		StatusURL: "/api/debug/trace/" + marker,
+	}
+
+	if req.Passive {
+		spec := PassiveSpec{Kind: kind, Device: device, Since: ClampSince(time.Duration(req.SinceSec) * time.Second)}
+		path, perr := NormalizePathFilter(req.Path)
+		if perr != nil {
+			a.deps.WriteError(w, http.StatusBadRequest, perr)
+			return
+		}
+		spec.Path = path
+		// A passive follow creates NOTHING, so nothing about it is synthetic.
+		// Saying `synthetic: true` here would be a small lie that a reader of
+		// the receipt would reasonably act on.
+		receipt.Synthetic = false
+		receipt.Passive = true
+		receipt.Since = spec.Since.String()
+		receipt.Path = spec.Path
+		a.ring(marker, "trace", "passive follow started — nothing was injected", map[string]any{
+			"kind": string(kind), "device": device, "tenant": tenant,
+			"since": spec.Since.String(), "path": spec.Path, "injected": false,
+		})
+		a.audit(r, tenant, "debug.trace", map[string]any{
+			"marker": marker, "kind": string(kind), "device": device,
+			"injected": false, "passive": true, "since_seconds": int(spec.Since.Seconds()),
+		})
+		a.traces.startPassive(a, marker, spec, tenant, p, ttl)
+		a.deps.WriteJSON(w, http.StatusAccepted, receipt)
+		return
 	}
 
 	// The injection is the ONE write this feature performs, and it goes to the
@@ -152,6 +206,18 @@ func (a *API) inject(r *http.Request, kind Kind, marker, device string) error {
 			return err
 		}
 		return a.deps.InjectTrap(ctx, pdu)
+	case KindFlow:
+		if a.deps.InjectFlow == nil {
+			return errors.New("flow injection is not wired into this API build")
+		}
+		// uptime is derived from the wall clock rather than from a real
+		// exporter's boot time — a probe has no boot time, and a fabricated
+		// plausible-looking one would be worse than an obviously derived one.
+		pkt, err := BuildNetFlowV5(marker, now, time.Duration(now.Unix()%86400)*time.Second)
+		if err != nil {
+			return err
+		}
+		return a.deps.InjectFlow(ctx, pkt)
 	default:
 		return fmt.Errorf("kind %q cannot be injected", kind)
 	}
@@ -318,7 +384,7 @@ func (a *API) HandleStage(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteError(w, http.StatusBadRequest, err)
 		return
 	}
-	if !IsServerStage(stage) {
+	if !IsServerStage(stage) && !IsHybridStage(stage) {
 		a.deps.WriteError(w, http.StatusBadRequest, fmt.Errorf(
 			"stage %q is collected on the host by correlix-debug (docker logs / Vector API tap), not by the API", stage))
 		return
@@ -340,14 +406,29 @@ func (a *API) HandleStage(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteError(w, http.StatusBadRequest, err)
 		return
 	}
-	entry := a.stage(r, p, stage, kind, marker, tenant)
+	spec := PassiveSpec{Kind: kind, Device: strings.TrimSpace(r.URL.Query().Get("device"))}
+	if spec.Device != "" {
+		if err := ValidDeviceKey(spec.Device); err != nil {
+			a.deps.WriteError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	if spec.Path, err = NormalizePathFilter(r.URL.Query().Get("path")); err != nil {
+		a.deps.WriteError(w, http.StatusBadRequest, err)
+		return
+	}
+	entry := a.stage(r, p, stage, kind, marker, tenant, spec)
 	a.deps.WriteJSON(w, http.StatusOK, entry)
 }
 
-// stage dispatches one server-side stage query.
-func (a *API) stage(r *http.Request, p Principal, stage Stage, kind Kind, marker, tenant string) Entry {
+// stage dispatches one server-side or hybrid stage query.
+func (a *API) stage(r *http.Request, p Principal, stage Stage, kind Kind, marker, tenant string, spec PassiveSpec) Entry {
 	ctx := r.Context()
 	switch stage {
+	case StageParser:
+		return a.ParserStage(kind, marker)
+	case StageUI:
+		return a.UIStage(r, kind, marker, spec, tenant)
 	case StageKafka:
 		return a.KafkaStage(ctx, kind, marker)
 	case StageOpenSearch:
@@ -357,7 +438,7 @@ func (a *API) stage(r *http.Request, p Principal, stage Stage, kind Kind, marker
 	case StageClickHouse:
 		return a.ClickHouseStage(ctx, p, kind, marker)
 	case StageCorrelation:
-		return a.CorrelationStage(ctx, p, marker)
+		return a.CorrelationStage(ctx, p, kind, marker)
 	case StageAPI:
 		return a.APIStage(marker)
 	default:

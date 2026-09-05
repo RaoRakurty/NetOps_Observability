@@ -1143,8 +1143,73 @@ if [ -n "$os_cid" ]; then
           [ "$snap_age_h" -gt "$snap_max_age_h" ] &&
             problems+=("OpenSearch backup STALE: newest snapshot is ${snap_age_h}h old (>${snap_max_age_h}h) — the daily snapshot policy has stopped")
         fi
+        # -------------------------------------------------------------------
+        # Tracker 225(b): say WHY it is partial (2026-09-03).
+        #
+        # This used to report the fact and nothing else, which is how the
+        # 2026-08-26 repository damage stayed a mystery for a week: PARTIAL was
+        # visible every night and looked like a capacity hiccup. The shard
+        # failure REASON is the whole diagnosis — the live one read
+        #   java.nio.file.NoSuchFileException:
+        #     /usr/share/opensearch/snapshots/indices/<id>/0/index-<gen>
+        # which names a deleted blob tree and nothing else. Fetch it so the
+        # NEXT occurrence is self-describing at 03:00.
+        #
+        # Bounded (os_fetch carries max-time=8) and, when it cannot be read,
+        # the message says "reason unavailable" — never implies there is none.
         if printf '%s' "$snap_json" | grep -q '"PARTIAL"'; then
-          problems+=("OpenSearch snapshot is PARTIAL — some shards were NOT captured; a restore from it would be incomplete")
+          # Newest PARTIAL snapshot by end_epoch. `_cat` returns a flat JSON
+          # array; split it into one line per entry (no jq in this container's
+          # world, and the caller runs on the host) and pick the latest.
+          snap_p_id=""; snap_p_epoch=0
+          # Split OUTSIDE the here-document. A `\<newline>` inside an UNQUOTED
+          # heredoc is a line continuation and is removed before sed ever sees
+          # it, so the obvious inline form silently produced no split at all —
+          # every entry stayed on one line, the greedy `.*"id"` picked the last
+          # one and the multi-value end_epoch failed the numeric guard, leaving
+          # the reason permanently "unavailable". Caught by the unit test, not
+          # by review.
+          snap_rows=$(printf '%s' "$snap_json" | sed 's/},[[:space:]]*{/}\n{/g')
+          while IFS= read -r snap_line; do
+            case "$snap_line" in *'"PARTIAL"'*) ;; *) continue ;; esac
+            snap_l_id=$(printf '%s' "$snap_line" |
+              sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+            snap_l_ep=$(printf '%s' "$snap_line" |
+              grep -oE '"end_epoch"[[:space:]]*:[[:space:]]*"?[0-9]+' | grep -oE '[0-9]+$')
+            [ -n "$snap_l_id" ] || continue
+            case "${snap_l_ep:-}" in
+              ''|*[!0-9]*) continue ;;
+            esac
+            if [ "$snap_l_ep" -ge "$snap_p_epoch" ]; then
+              snap_p_epoch="$snap_l_ep"; snap_p_id="$snap_l_id"
+            fi
+          done <<EOF
+$snap_rows
+EOF
+          snap_reason="reason unavailable"
+          if [ -n "$snap_p_id" ]; then
+            snap_detail=$(os_fetch svc_api "$OS_API_PW" "/_snapshot/netops-fs/${snap_p_id}")
+            # "reason" appears only inside failures[] in this response. Take the
+            # FIRST one: on a damaged repository every shard carries the same
+            # cause, and one line is what fits a phone push.
+            snap_r=$(printf '%s' "$snap_detail" |
+              grep -oE '"reason"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -1 |
+              sed -e 's/^"reason"[[:space:]]*:[[:space:]]*"//' -e 's/"$//')
+            if [ -n "$snap_r" ]; then
+              # §8: single line, bounded, and never a credential — the same
+              # redaction os_probe_diag applies to curl's own output.
+              for snap_pw in "$OS_API_PW" "$OS_MON_PW"; do
+                [ -n "$snap_pw" ] && snap_r=${snap_r//"$snap_pw"/***}
+              done
+              snap_reason=$(printf '%s' "$snap_r" | tr '\n\r\t' '   ' | cut -c1-200)
+            fi
+          fi
+          # The stable sentence comes FIRST and is longer than the 160
+          # characters problem_key hashes, so a reason that varies by shard or
+          # by generation cannot mint a new problem class (and a new push)
+          # every minute — same discipline as API_UNRESPONSIVE.
+          problems+=("OpenSearch snapshot is PARTIAL — some shards were NOT captured, so a restore from it would be INCOMPLETE. This is the state that reads like success in _cat/snapshots and hid seven days of unrestorable backups; it does not clear by taking another snapshot. Snapshot ${snap_p_id:-unknown}, first shard failure: ${snap_reason}")
+          logerr "watchdog: PARTIAL snapshot ${snap_p_id:-unknown} — first shard failure reason: ${snap_reason}"
         fi
         ;;
       # No reply / unrecognized reply: the backup-freshness sentinel is blind,
@@ -1343,47 +1408,71 @@ drift_check nginx             deployment/docker/nginx/nginx.conf          /etc/n
 # PromQL braces/quotes at runtime in bash is a bug farm. The readable form is
 # in the comment above each one; keep the two in step.
 # -----------------------------------------------------------------------------
-if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
+# --- shared VictoriaMetrics query seam ---------------------------------------
+# Hoisted out of the engine block (2026-09-03) so the snapshot-restorability
+# probe further down uses the SAME query mechanism rather than a second copy of
+# it. One definition means one place where the "a probe that cannot run must
+# never read as a pass" discipline lives; two copies is how one of them quietly
+# grows a `|| true`. The container lookup is still only paid for when at least
+# one of the probes that needs it is enabled.
+eng_cid=""
+eng_err=""
+if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ] || [ "${SNAPSHOT_RESTORABLE_CHECK:-1}" = "1" ] ||
+   [ "${DEBUG_LEVEL_CHECK:-1}" = "1" ]; then
   eng_cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
                       --filter "label=com.docker.compose.service=victoria" 2>/dev/null | head -1)
+fi
+
+# Query VictoriaMetrics for ONE scalar. Sets eng_val (the first sample value,
+# empty when there is no series) and returns 0; on any failure sets eng_err and
+# returns non-zero. A probe that cannot run must never read as a pass (§16.1) —
+# that swallow is what this whole section exists to make impossible.
+#
+# THE RESULT COMES BACK IN A GLOBAL, NOT ON STDOUT (fixed 2026-09-03).
+# It used to print the value, and every caller wrote `v=$(eng_query ...)`.
+# Command substitution runs the function in a SUBSHELL, so the eng_err it set
+# died with that subshell and the caller's `if [ -n "$eng_err" ]` branch could
+# NEVER be taken. A failed or refused VictoriaMetrics query therefore fell
+# through to the "no series at all" branch: on a base install (no
+# kafka-exporter) that is a quiet logerr, and for the alert-delivery heartbeat
+# it is a quiet "not checked" — i.e. a broken probe read as a quiet stack,
+# which is precisely the failure mode this whole section was written to make
+# impossible. Proven with `f(){ x=set; }; y=$(f)` leaving x empty, and caught
+# by the unit test, not by review.
+eng_val=""
+eng_query() {  # $1 = url-encoded promql -> eng_val + status
+  local out rc
+  eng_err=""; eng_val=""
+  # rc is captured on its OWN line: inside `if ! cmd; then`, $? is the
+  # status of the negated test (always 0), so reporting $? there would
+  # print a confident, wrong "rc=0" for every real failure.
+  out=$(dkr exec "$eng_cid" wget -qO- --timeout=5 \
+          "http://127.0.0.1:8428/api/v1/query?query=$1" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    eng_err="victoria query failed (rc=$rc): $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-140)"
+    return 1
+  fi
+  case "$out" in
+    *'"status":"success"'*) : ;;
+    *) eng_err="victoria returned a non-success body: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-140)"
+       return 1 ;;
+  esac
+  eng_val=$(printf '%s\n' "$out" | sed -n 's/.*"value":\[[^,]*,"\([-0-9.e+]*\)".*/\1/p' | head -1)
+  return 0
+}
+
+if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
   if [ -z "$eng_cid" ]; then
     # Advisory, not critical: a missing victoria container is ALREADY reported
     # as a critical by the service loop above, and a second page for one fault
     # is noise. What must not happen is silence about the probe not running.
     problems+=("engine-consuming probe SKIPPED: no running victoria container in project '$PROJECT' — the consumer-group and alert-delivery checks did NOT run this minute")
   else
-    eng_err=""
-
-    # Query VictoriaMetrics for ONE scalar. Prints the value and returns 0; on
-    # any failure prints nothing, returns non-zero, and leaves the diagnostic
-    # in $eng_err for the caller to REPORT. A probe that cannot run must never
-    # read as a pass (§16.1) — that swallow is what this whole section exists
-    # to make impossible.
-    eng_query() {  # $1 = url-encoded promql -> stdout: first sample value
-      local out rc
-      eng_err=""
-      # rc is captured on its OWN line: inside `if ! cmd; then`, $? is the
-      # status of the negated test (always 0), so reporting $? there would
-      # print a confident, wrong "rc=0" for every real failure.
-      out=$(dkr exec "$eng_cid" wget -qO- --timeout=5 \
-              "http://127.0.0.1:8428/api/v1/query?query=$1" 2>&1)
-      rc=$?
-      if [ "$rc" -ne 0 ]; then
-        eng_err="victoria query failed (rc=$rc): $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-140)"
-        return 1
-      fi
-      case "$out" in
-        *'"status":"success"'*) : ;;
-        *) eng_err="victoria returned a non-success body: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-140)"
-           return 1 ;;
-      esac
-      printf '%s\n' "$out" | sed -n 's/.*"value":\[[^,]*,"\([-0-9.e+]*\)".*/\1/p' | head -1
-      return 0
-    }
-
     # -- 1/2. Consumer-group membership -------------------------------------
     # min(kafka_consumergroup_members{consumergroup="netops-correlation"})
-    eng_corr=$(eng_query 'min%28kafka_consumergroup_members%7Bconsumergroup%3D%22netops-correlation%22%7D%29') || true
+    eng_query 'min%28kafka_consumergroup_members%7Bconsumergroup%3D%22netops-correlation%22%7D%29'
+    eng_corr="$eng_val"
     if [ -n "$eng_err" ]; then
       problems+=("engine-consuming probe SKIPPED: $eng_err")
     elif [ -z "$eng_corr" ]; then
@@ -1407,7 +1496,8 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
       if ! printf '%s' "$eng_corr_i" | grep -qE '^-?[0-9]+$'; then
         problems+=("engine-consuming probe SKIPPED: correlation member count is not a number (got '${eng_corr}') — treating as UNKNOWN, not as healthy")
       elif [ "$eng_corr_i" -le 0 ]; then
-        eng_lag=$(eng_query 'sum%28kafka_consumergroup_lag_sum%7Bconsumergroup%3D%22netops-correlation%22%7D%29') || true
+        eng_query 'sum%28kafka_consumergroup_lag_sum%7Bconsumergroup%3D%22netops-correlation%22%7D%29'
+        eng_lag="$eng_val"
         problems+=("ENGINE_NOT_CONSUMING: correlation consumer group has ZERO members (bus backlog ${eng_lag:-unknown}) — RCA has stopped; containers will still read healthy. Runbook: docs/runbooks/engine-not-consuming.md")
       fi
 
@@ -1439,7 +1529,8 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
     # channel, is the only check that survives the delivery path being the
     # thing that is broken.
     # max(netops_alert_webhook_enabled)
-    eng_hb_on=$(eng_query 'max%28netops_alert_webhook_enabled%29') || true
+    eng_query 'max%28netops_alert_webhook_enabled%29'
+    eng_hb_on="$eng_val"
     if [ -n "$eng_err" ]; then
       problems+=("alert-delivery probe SKIPPED: $eng_err")
     elif [ -z "$eng_hb_on" ]; then
@@ -1451,7 +1542,8 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
       problems+=("alert delivery is DISABLED: VMALERT_WEBHOOK_TOKEN is unset, so vmalert's alerts are not delivered to the platform. Only this watchdog can page. Set it in deployment/docker/.env (see docs/runbooks/engine-not-consuming.md)")
     else
       # max(time() - netops_alert_webhook_heartbeat_timestamp_seconds)
-      eng_hb_age=$(eng_query 'max%28time%28%29%20-%20netops_alert_webhook_heartbeat_timestamp_seconds%29') || true
+      eng_query 'max%28time%28%29%20-%20netops_alert_webhook_heartbeat_timestamp_seconds%29'
+      eng_hb_age="$eng_val"
       if [ -n "$eng_err" ]; then
         problems+=("alert-delivery probe SKIPPED: $eng_err")
       elif [ -z "$eng_hb_age" ]; then
@@ -1464,6 +1556,270 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
         elif [ "$eng_hb_age_i" -gt "$eng_hb_max" ]; then
           problems+=("ALERT_DELIVERY_BROKEN: no alert has reached the platform for $(( eng_hb_age_i / 60 ))m (limit $(( eng_hb_max / 60 ))m) — vmalert is evaluating into a void and every 'quiet' alert is unproven. Runbook: docs/runbooks/engine-not-consuming.md")
         fi
+      fi
+    fi
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# SNAPSHOT RESTORABILITY (2026-09-03) — "a backup that has never been restored
+# is not a backup."
+#
+# THE GAP THIS CLOSES. The netops-fs repository was UNRESTORABLE for seven days
+# (2026-08-26 -> 2026-09-03) and every control read green. A manual
+# `rm -rf data/opensearch-snapshots/indices` during the 08-26 disk crunch
+# deleted the blob tree while the repository stayed registered; OpenSearch
+# re-created the empty directory at 2026-08-27T01:30:46Z (the instant the next
+# scheduled snapshot began) and from then on every shard failed with
+# NoSuchFileException. The SM policy kept "succeeding" into PARTIAL,
+# `_cat/snapshots` kept listing rows, and the backup-FRESHNESS block above kept
+# reading a recent newest-snapshot timestamp — because freshness is not
+# restorability. Not one layer had ever attempted a restore.
+#
+# The api now runs a real restore probe and exports the verdict as
+# netops_opensearch_snapshot_restorable{repo="netops-fs"}. This reads it over
+# the SAME VictoriaMetrics seam as the consumer-group and alert-heartbeat
+# probes above, for the same reason they live here: the stack's own alerting
+# cannot report the failure of the stack's own last line of defence. vmalert
+# carries OpenSearchSnapshotNotRestorable in parallel (rules-scale-slo.yaml,
+# engine-liveness); this is the copy that survives that path being dead.
+#
+# ABSENCE IS NOT HEALTH. The same os_blind discipline the OpenSearch block uses:
+# a missing series is reported as UNVERIFIED, never skipped silently and never
+# treated as a pass — but only when the api is actually up and scraped, because
+# an api that is down is already a critical from the service loop and a second
+# push for one fault is noise.
+#
+# Set SNAPSHOT_RESTORABLE_CHECK=0 to disable (same style as
+# ENGINE_CONSUMER_CHECK). Turning it off means nothing on this host is proving
+# a restore.
+# -----------------------------------------------------------------------------
+if [ "${SNAPSHOT_RESTORABLE_CHECK:-1}" = "1" ]; then
+  if [ -z "$eng_cid" ]; then
+    # Advisory, like the engine probe's equivalent: a missing victoria container
+    # is ALREADY a critical from the service loop above.
+    problems+=("snapshot-restorability probe SKIPPED: no running victoria container in project '$PROJECT' — nothing proved this minute that the search tier's backups can be restored")
+  else
+    # max(netops_opensearch_snapshot_restorable{repo="netops-fs"})
+    eng_query 'max%28netops_opensearch_snapshot_restorable%7Brepo%3D%22netops-fs%22%7D%29'
+    snap_restorable="$eng_val"
+    if [ -n "$eng_err" ]; then
+      problems+=("snapshot-restorability probe SKIPPED: $eng_err")
+    elif [ -z "$snap_restorable" ]; then
+      # ABSENT. Two very different causes, and only one of them is ours:
+      #   * the api is down or not scraped -> already a critical elsewhere;
+      #     say it once in the log and do not mint a second problem class.
+      #   * the api is UP and exports no such series -> either an api build
+      #     that predates the restore probe, or a probe that has never once
+      #     produced a verdict. Either way restorability is UNPROVEN, which is
+      #     exactly the state that lasted seven days, so it is a NAMED problem.
+      # max(up{job="netops-api"})
+      eng_query 'max%28up%7Bjob%3D%22netops-api%22%7D%29'
+      snap_api_up="$eng_val"
+      if [ -n "$eng_err" ] || [ -z "${snap_api_up:-}" ]; then
+        snap_why="${eng_err:-}"
+        [ -n "$snap_why" ] || snap_why="the api scrape target exports no up series"
+        logerr "watchdog: snapshot restorability not checked — netops_opensearch_snapshot_restorable is absent and the api's own scrape target could not be read ($snap_why). Restorability is UNPROVEN on this deployment."
+      elif [ "${snap_api_up%%.*}" = "0" ]; then
+        logerr "watchdog: snapshot restorability not checked — the api scrape target is DOWN, which the service loop already reports. Restorability is UNPROVEN while it stays down."
+      else
+        problems+=("SNAPSHOT_RESTORABILITY_UNPROVEN: the api is up and scraped but exports NO netops_opensearch_snapshot_restorable series, so nothing has ever tested a RESTORE from the netops-fs repository. Snapshots can keep succeeding while every one of them is unrestorable — that state lasted seven days to 2026-09-03 and no layer saw it. Runbook: docs/runbooks/storage-and-volume-operations.md#managing-snapshots")
+      fi
+    else
+      # Validate the SHAPE before comparing: `[ x -le 0 ]` on a non-numeric
+      # value errors, and suppressing that error would report a malformed reply
+      # as healthy — the §16.1 swallow this whole section exists to prevent.
+      snap_restorable_i=${snap_restorable%%.*}
+      if ! printf '%s' "$snap_restorable_i" | grep -qE '^-?[0-9]+$'; then
+        problems+=("snapshot-restorability probe SKIPPED: the restorable gauge is not a number (got '${snap_restorable}') — treating as UNKNOWN, not as healthy")
+      elif [ "$snap_restorable_i" -le 0 ]; then
+        # Keep the first 160 characters (what problem_key hashes) free of
+        # run-varying text; the verified-timestamp detail rides the tail and
+        # the log, so a changing timestamp cannot mint a new class every minute.
+        # max(netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs"})
+        eng_query 'max%28netops_opensearch_snapshot_restorable_verified_timestamp_seconds%7Brepo%3D%22netops-fs%22%7D%29'
+        snap_verified="$eng_val"
+        snap_verified_i=${snap_verified%%.*}
+        case "${snap_verified_i:-}" in
+          ''|*[!0-9-]*) snap_when="verified-timestamp unreadable" ;;
+          0)            snap_when="the probe has NEVER returned a verdict (verified timestamp 0), so this is UNPROVEN rather than proven-bad" ;;
+          *)            snap_when="the probe RAN and the restore FAILED (last verdict $(( ($(date +%s) - snap_verified_i) / 3600 ))h ago)" ;;
+        esac
+        problems+=("SNAPSHOT_NOT_RESTORABLE: the netops-fs snapshot repository cannot be restored from. Taking another snapshot does NOT fix this; every restore point that references the missing blobs is already lost. Detail: ${snap_when}. Runbook: docs/runbooks/storage-and-volume-operations.md#managing-snapshots")
+      fi
+    fi
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# DEBUG LEVEL STUCK (pipeline debugger — docs/design/PIPELINE_DEBUGGER_2026-09-04.md
+# §5, runbook docs/runbooks/pipeline-debug.md §6).
+#
+# `correlix-debug logs` raises a module's runtime log level to debug for a
+# BOUNDED window. THREE reverts are supposed to bring it back down: the CLI when
+# the window ends, the CLI on Ctrl-C, and — the one that survives the CLI being
+# SIGKILLed — the timer the module arms inside its own process
+# (src/backend/internal/pipedebug/levelswitch.go). All three live INSIDE the
+# stack. This is the fourth and the only EXTERNAL one, and it is the only layer
+# that still works when the api is itself the thing that is wedged — which is
+# exactly the case in which the in-process timer did not fire.
+#
+# WHY IT IS A PROBLEM CLASS AT ALL. A module left at debug is not cosmetic: it
+# fills the disk (the 2026-08-26 crunch that cost the snapshot repository began
+# as disk), costs ingest throughput, and writes tenant payloads into logs that
+# ship in support bundles. It is an incident of its own, so it is NAMED, not
+# left to whoever next reads a log.
+#
+# ABSENCE IS NOT HEALTH. Both gauges are exported ALWAYS, including when they
+# read 0, precisely so that "no series" cannot be confused with "nothing is
+# raised". A missing series therefore means this api predates the debug routes
+# or is not being scraped — i.e. a stuck level would NOT be detected here at
+# all. That is a named gap in the log, never a pass and never a page: the same
+# discipline the alert-delivery heartbeat above uses for
+# netops_alert_webhook_enabled.
+#
+# Set DEBUG_LEVEL_CHECK=0 to disable. DEBUG_LEVEL_STUCK_GRACE_SEC (default 300)
+# is the slack allowed past the armed revert time before this complains: the
+# scrape interval, the revert timer's own scheduling and this cron's one-minute
+# granularity all have to fit inside it.
+#
+# Queries are PRE-URL-ENCODED constants for the same reason as the block above
+# (the victoria image has wget only and does not resolve "localhost"); the
+# readable PromQL is in the comment over each one — keep the two in step.
+# -----------------------------------------------------------------------------
+
+# Normalise ONE VictoriaMetrics sample value to an integer, or refuse it.
+#
+# WHY THIS EXISTS RATHER THAN `${v%%.*}` + a shape check. VictoriaMetrics
+# renders sample values in Go's %g, so a LARGE one comes back in exponential
+# form ("1.7569e+09"). `${v%%.*}` on that yields "1", which then passes a naive
+# ^-?[0-9]+$ check and compares as ONE SECOND — a module stuck with no revert
+# armed at all would read as "well inside its window", i.e. as healthy. That is
+# the §16.1 swallow this whole section exists to prevent, so anything that is
+# not a finite decimal (or exponential) number, and anything that cannot be
+# normalised, is refused and reported as UNKNOWN by the caller.
+deb_num=""
+deb_num_err=""
+deb_to_int() {  # $1 = raw VM sample value -> deb_num (integer) | deb_num_err
+  deb_num=""; deb_num_err=""
+  if ! printf '%s' "$1" | grep -qE '^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$'; then
+    deb_num_err="not a number (got '$1')"
+    return 1
+  fi
+  case "$1" in
+    *[eE]*)
+      # Exponential form needs real arithmetic; bash has none for floats.
+      # §16.2: name the missing tool rather than guessing a value from it.
+      if ! command -v awk >/dev/null 2>&1; then
+        deb_num_err="in exponential form ('$1') and awk is not on PATH to normalise it"
+        return 1
+      fi
+      deb_num=$(printf '%s' "$1" | awk '{printf "%d", $1}')
+      ;;
+    *) deb_num=${1%%.*} ;;
+  esac
+  if ! printf '%s' "$deb_num" | grep -qE '^-?[0-9]+$'; then
+    deb_num_err="not normalisable to a whole number (got '$1' -> '$deb_num')"
+    deb_num=""
+    return 1
+  fi
+  return 0
+}
+
+if [ "${DEBUG_LEVEL_CHECK:-1}" = "1" ]; then
+  if [ -z "$eng_cid" ]; then
+    # Advisory, like the two probes above: a missing victoria container is
+    # ALREADY a critical from the service loop, and a second push for one fault
+    # is noise. What must not happen is silence about the probe not running.
+    problems+=("debug-level probe SKIPPED: no running victoria container in project '$PROJECT' — nothing checked this minute whether a module was left at debug")
+  elif ! printf '%s' "${DEBUG_LEVEL_STUCK_GRACE_SEC:-300}" | grep -qE '^[0-9]+$'; then
+    problems+=("debug-level probe SKIPPED: DEBUG_LEVEL_STUCK_GRACE_SEC is not a whole number of seconds (got '${DEBUG_LEVEL_STUCK_GRACE_SEC:-}') — the window comparison cannot run, and a probe that cannot run is UNKNOWN, not healthy")
+  else
+    deb_grace="${DEBUG_LEVEL_STUCK_GRACE_SEC:-300}"
+    # revert_at is 0 when NO auto-revert is armed at all, so `time() - revert_at`
+    # evaluates to unix-now (~1.7e9). Any "age" older than this floor cannot be
+    # a real armed deadline — it IS the unset value — and that is the MORE
+    # serious condition, reported as such instead of as a nonsense 55-year
+    # duration.
+    deb_no_revert_floor=$(( $(date +%s) - 315360000 ))   # now - 10 years
+
+    # -- 1/2. Module log levels ---------------------------------------------
+    # max(netops_debug_level_active)
+    eng_query 'max%28netops_debug_level_active%29'
+    deb_active="$eng_val"
+    if [ -n "$eng_err" ]; then
+      problems+=("debug-level probe SKIPPED: $eng_err")
+    elif [ -z "$deb_active" ]; then
+      logerr "watchdog: debug log levels NOT checked — netops_debug_level_active is absent (this api predates the pipeline-debugger debug routes, or is not being scraped). The gauge is exported even when it reads 0, so absence is not 'nothing is raised': a module left at debug would go undetected on this deployment. See docs/runbooks/pipeline-debug.md §6."
+    elif ! deb_to_int "$deb_active"; then
+      problems+=("debug-level probe SKIPPED: the debug-level gauge is ${deb_num_err} — treating as UNKNOWN, not as healthy")
+    elif [ "$deb_num" -gt 0 ]; then
+      # Name the module(s). A scalar cannot carry labels, which is why this one
+      # does not ride eng_query — same idiom as the router-lane check above.
+      # netops_debug_level_active == 1
+      deb_mods=""
+      deb_mod_raw=$(dkr exec "$eng_cid" wget -qO- --timeout=5 \
+        'http://127.0.0.1:8428/api/v1/query?query=netops_debug_level_active%20%3D%3D%201' 2>&1)
+      case "$deb_mod_raw" in
+        *'"status":"success"'*)
+          deb_mods=$(printf '%s' "$deb_mod_raw" | grep -oE '"module":"[^"]+"' | cut -d'"' -f4 | sort -u | tr '\n' ' ')
+          ;;
+        *)
+          logerr "watchdog: the debug-level module-label query returned no usable body: $(printf '%s' "$deb_mod_raw" | tr '\n' ' ' | cut -c1-140)"
+          ;;
+      esac
+      deb_mods="${deb_mods% }"
+      # Never let an unnamed module read as no module: the raise is real either
+      # way, only the name is missing.
+      [ -n "${deb_mods// /}" ] || deb_mods="(names UNAVAILABLE — the module-label query returned no usable body)"
+
+      # max(netops_debug_level_active * (time() - netops_debug_level_revert_at_seconds))
+      eng_query 'max%28netops_debug_level_active%20%2A%20%28time%28%29%20-%20netops_debug_level_revert_at_seconds%29%29'
+      deb_past="$eng_val"
+      if [ -n "$eng_err" ]; then
+        logerr "watchdog: the debug-level revert-window query failed: $eng_err"
+        problems+=("debug-level probe SKIPPED: module(s) are at debug (${deb_mods}) but the revert-window query failed, so whether the raise is past its window is UNKNOWN, not healthy — detail in the watchdog log. Runbook: docs/runbooks/pipeline-debug.md §6")
+      elif [ -z "$deb_past" ]; then
+        problems+=("DEBUG_LEVEL_STUCK: module(s) at debug but NO revert timestamp is exported: ${deb_mods} — netops_debug_level_revert_at_seconds is absent while the level gauge reads raised, so NOTHING proves the level will ever come back down. Force it down now: PUT /api/debug/loglevel {\"module\":\"<one of the above>\",\"level\":\"info\"} (platform admin). \`correlix-debug logs\` reverts on exit and the module's own in-process timer reverts on its own — neither can be verified here. Runbook: docs/runbooks/pipeline-debug.md §6")
+      elif ! deb_to_int "$deb_past"; then
+        problems+=("debug-level probe SKIPPED: the debug-level revert window is ${deb_num_err} — treating as UNKNOWN, not as healthy")
+      elif [ "$deb_num" -ge "$deb_no_revert_floor" ]; then
+        problems+=("DEBUG_LEVEL_STUCK: module(s) at debug with NO auto-revert armed: ${deb_mods} — netops_debug_level_revert_at_seconds is 0, so this raise NEVER expires on its own. Debug logging fills the disk, costs ingest throughput and writes tenant payloads into logs that ship in support bundles. Force it down now: PUT /api/debug/loglevel {\"module\":\"<one of the above>\",\"level\":\"info\"} (platform admin). \`correlix-debug logs\` reverts on exit and the module's own in-process timer reverts on its own — neither armed anything here. Runbook: docs/runbooks/pipeline-debug.md §6")
+      elif [ "$deb_num" -gt "$deb_grace" ]; then
+        problems+=("DEBUG_LEVEL_STUCK: module(s) still at debug PAST the auto-revert window: ${deb_mods} — $(( deb_num / 60 ))m past the armed revert time (grace ${deb_grace}s). All three in-stack reverts (the CLI on exit, the CLI on Ctrl-C, the module's own in-process timer) should have fired and did not. Force it down now: PUT /api/debug/loglevel {\"module\":\"<one of the above>\",\"level\":\"info\"} (platform admin); running \`correlix-debug logs\` again also reverts on exit. Runbook: docs/runbooks/pipeline-debug.md §6")
+      fi
+    fi
+
+    # -- 2/2. The parser decision-trace marker filter ------------------------
+    # Same contract, no module label: DEBUG_PARSE_MARKER is ONE process-wide
+    # filter, and while it is armed the parsers write their decision path —
+    # matched profile, extracted field values, drop reasons — for every record
+    # that matches it. Folded into the same DEBUG_LEVEL_STUCK class as the
+    # levels above, with its own wording, because the remedy differs.
+    # max(netops_debug_parse_marker_active)
+    eng_query 'max%28netops_debug_parse_marker_active%29'
+    deb_pm="$eng_val"
+    if [ -n "$eng_err" ]; then
+      problems+=("parse-marker probe SKIPPED: $eng_err")
+    elif [ -z "$deb_pm" ]; then
+      logerr "watchdog: the parser decision-trace marker is NOT checked — netops_debug_parse_marker_active is absent (this api predates the parser debug hook, or is not being scraped). The gauge is exported even when it reads 0, so absence is not 'the filter is off': a marker left armed would go undetected on this deployment. See docs/runbooks/pipeline-debug.md §6."
+    elif ! deb_to_int "$deb_pm"; then
+      problems+=("parse-marker probe SKIPPED: the parse-marker gauge is ${deb_num_err} — treating as UNKNOWN, not as healthy")
+    elif [ "$deb_num" -gt 0 ]; then
+      # max(netops_debug_parse_marker_active * (time() - netops_debug_parse_marker_revert_at_seconds))
+      eng_query 'max%28netops_debug_parse_marker_active%20%2A%20%28time%28%29%20-%20netops_debug_parse_marker_revert_at_seconds%29%29'
+      deb_pm_past="$eng_val"
+      if [ -n "$eng_err" ]; then
+        logerr "watchdog: the parse-marker disarm-window query failed: $eng_err"
+        problems+=("parse-marker probe SKIPPED: the parser decision-trace marker filter is ON but the disarm-window query failed, so whether it is past its window is UNKNOWN, not healthy — detail in the watchdog log. Runbook: docs/runbooks/pipeline-debug.md §6")
+      elif [ -z "$deb_pm_past" ]; then
+        problems+=("DEBUG_LEVEL_STUCK: the parser decision-trace marker filter is ON but NO disarm timestamp is exported — netops_debug_parse_marker_revert_at_seconds is absent while the filter gauge reads armed, so NOTHING proves it will ever disarm; every matching record keeps writing its decision path, extracted field values included. \`correlix-debug logs\` disarms it on exit and the api's own in-process timer disarms it — neither can be verified here. Force the api's level back down with PUT /api/debug/loglevel {\"module\":\"api\",\"level\":\"info\"} (platform admin). Runbook: docs/runbooks/pipeline-debug.md §6")
+      elif ! deb_to_int "$deb_pm_past"; then
+        problems+=("parse-marker probe SKIPPED: the parse-marker disarm window is ${deb_num_err} — treating as UNKNOWN, not as healthy")
+      elif [ "$deb_num" -ge "$deb_no_revert_floor" ]; then
+        problems+=("DEBUG_LEVEL_STUCK: the parser decision-trace marker filter is ON with NO auto-revert armed — netops_debug_parse_marker_revert_at_seconds is 0, so the filter NEVER disarms on its own and every matching record keeps writing its decision path, extracted field values included. \`correlix-debug logs\` disarms it on exit and the api's own in-process timer disarms it — neither armed anything here. Force the api's level back down with PUT /api/debug/loglevel {\"module\":\"api\",\"level\":\"info\"} (platform admin). Runbook: docs/runbooks/pipeline-debug.md §6")
+      elif [ "$deb_num" -gt "$deb_grace" ]; then
+        problems+=("DEBUG_LEVEL_STUCK: the parser decision-trace marker filter is still ON PAST its auto-disarm window — $(( deb_num / 60 ))m past the armed disarm time (grace ${deb_grace}s), so the parsers are still writing their decision paths. \`correlix-debug logs\` disarms it on exit, the api's own in-process timer disarms it, and PUT /api/debug/loglevel {\"module\":\"api\",\"level\":\"info\"} (platform admin) forces it down now. Runbook: docs/runbooks/pipeline-debug.md §6")
       fi
     fi
   fi

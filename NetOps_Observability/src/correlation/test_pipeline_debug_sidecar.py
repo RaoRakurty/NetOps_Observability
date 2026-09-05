@@ -33,7 +33,6 @@ import pytest
 
 import main
 
-
 MARKER = "01j9abcdefghjkmnpqrstvwxyz"
 
 

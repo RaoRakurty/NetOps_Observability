@@ -1189,6 +1189,13 @@ func (r *trapReceiver) forwardLoop(ctx context.Context) {
 
 func (r *trapReceiver) forward(ctx context.Context, client *http.Client, ev *TrapEvent) {
 	deriveEnvelope(ev) // fill the NormalizedEvent envelope (#32) just before emit
+	// Pipeline-debugger parser decision trace (parsehook.go). Deliberately HERE
+	// and not inside finalizeTrap: the decision path an operator needs includes
+	// the normalisation deriveEnvelope performs (event_type, category, family,
+	// parser_status), and finalizeTrap runs before any of it exists. No-op
+	// unless the record carries a cx_debug marker or an operator armed the
+	// filter — one strings.Index on the message otherwise.
+	traceTrapDecision(ev)
 	body, err := json.Marshal(ev)
 	if err != nil {
 		return

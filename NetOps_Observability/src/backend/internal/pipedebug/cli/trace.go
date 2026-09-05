@@ -39,6 +39,7 @@ type TraceOptions struct {
 	TTL     time.Duration
 	Passive bool
 	Since   time.Duration
+	Path    string // gNMI path filter for a passive follow
 	Root    string // data/debug
 	Project string // compose project
 }
@@ -62,6 +63,7 @@ func RunTrace(ctx context.Context, opts TraceOptions, cl *Client, coll *Collecto
 		Flags: map[string]string{
 			"kind": string(opts.Kind), "device": opts.Device, "tenant": opts.Tenant,
 			"ttl": opts.TTL.String(), "passive": fmt.Sprint(opts.Passive),
+			"since": opts.Since.String(), "path": opts.Path,
 		},
 	})
 	if err != nil {
@@ -70,15 +72,12 @@ func RunTrace(ctx context.Context, opts TraceOptions, cl *Client, coll *Collecto
 	fmt.Fprintf(out, "session: %s\n", sess.Dir())
 
 	if opts.Passive {
-		// W1 ships ACTIVE tracing only. Saying so and stopping is the honest
-		// answer; a "passive" mode that silently degraded into an active
-		// injection would put a synthetic record into a customer's pipeline
-		// that the operator did not ask for.
-		note(sess, sess.EnsureAllModules(func(pipedebug.Stage) string {
-			return "passive tracing (--passive) is W2; this build injects a marked synthetic record instead, which --passive explicitly declines"
-		}))
-		note(sess, sess.Close(time.Now().UTC()))
-		return 2, fmt.Errorf("--passive is not implemented in this build (W2); run without it to inject a marked synthetic record")
+		// PASSIVE NEVER INJECTS. The whole branch is separate — it does not
+		// share a line of code with the injection path below — because the one
+		// unacceptable outcome is a `--passive` run that puts a synthetic
+		// record into a customer's pipeline. The api enforces the same split on
+		// its side; this is the second lock, not the only one.
+		return runPassive(ctx, opts, sess, cl, coll, now, out)
 	}
 
 	// 2. Taps first (see the file comment).
@@ -88,9 +87,20 @@ func RunTrace(ctx context.Context, opts TraceOptions, cl *Client, coll *Collecto
 
 	var wg sync.WaitGroup
 	results := make([]*tapResult, 0, 3)
+	untapped := make([]pipedebug.Entry, 0, 2)
 	for _, stage := range []pipedebug.Stage{pipedebug.StageIngress, pipedebug.StageParser, pipedebug.StageRouter} {
 		service, component, ok := TapComponents(opts.Kind, stage)
 		if !ok {
+			// NOT a `continue`. A stage with no tap must appear in the timeline
+			// with the third verdict and the reason; dropping the row would
+			// leave a reader to conclude the hop was fine.
+			reason := TapMissingReason(opts.Kind, stage)
+			note(sess, sess.NotObservable(stage, reason))
+			untapped = append(untapped, pipedebug.Entry{
+				Stage: stage, Module: string(stage),
+				Verdict: pipedebug.VerdictNotObservable, Reason: reason,
+				Query: "(no Vector tap exists for this lane)",
+			})
 			continue
 		}
 		res := &tapResult{stage: stage, service: service, component: component}
@@ -122,7 +132,9 @@ func RunTrace(ctx context.Context, opts TraceOptions, cl *Client, coll *Collecto
 	}
 
 	// 3. Inject.
-	receipt, err := cl.StartTrace(ctx, opts.Kind, opts.Device, opts.Tenant, opts.TTL)
+	receipt, err := cl.StartTrace(ctx, TraceRequest{
+		Kind: opts.Kind, Device: opts.Device, Tenant: opts.Tenant, TTL: opts.TTL,
+	})
 	if err != nil {
 		cancelTaps()
 		wg.Wait()
@@ -148,14 +160,19 @@ func RunTrace(ctx context.Context, opts TraceOptions, cl *Client, coll *Collecto
 	wg.Wait()
 
 	entries := make([]pipedebug.Entry, 0, len(pipedebug.Stages))
+	entries = append(entries, untapped...)
 	for _, res := range results {
-		entries = append(entries, writeTapStage(sess, res, receipt.Marker, tapWindow))
+		e := writeTapStage(sess, res, receipt.Marker, tapWindow)
+		if e.Stage == pipedebug.StageParser {
+			e = mergeGoParser(ctx, sess, cl, opts, receipt.Marker, e)
+		}
+		entries = append(entries, e)
 	}
 	for _, e := range status.Stages {
 		writeServerStage(sess, e)
 		entries = append(entries, e)
 	}
-	entries = append(entries, uiStage(sess))
+	entries = append(entries, uiStage(ctx, sess, cl, opts, receipt.Marker, receipt.Tenant))
 
 	timeline := pipedebug.BuildTimeline(receipt.Marker, opts.Kind, opts.Device, receipt.Tenant, now, entries)
 	if err := sess.WriteTimeline(timeline); err != nil {
@@ -255,17 +272,60 @@ func writeServerStage(sess *pipedebug.Session, e pipedebug.Entry) {
 	}
 }
 
-// uiStage is stage 8. W1 does not implement the UI-query contract, and it says
-// so — a stage that quietly reported "seen" because the API answered would be
-// claiming a UI check that never ran.
-func uiStage(sess *pipedebug.Session) pipedebug.Entry {
-	const reason = "the UI-query contract (which route and query the SPA would issue for this record) is W2; the api stage above is the closest proven point"
-	note(sess, sess.NotObservable(pipedebug.StageUI, reason))
-	return pipedebug.Entry{
-		Stage: pipedebug.StageUI, Module: string(pipedebug.StageUI),
-		Verdict: pipedebug.VerdictNotObservable, Reason: reason,
-		Query: "(none — the UI-query contract is W2)",
+// uiStage is stage 10: the api runs the query the SPA ITSELF issues for this
+// record and reports whether the record came back.
+//
+// A failure to REACH the api is not a UI verdict, so it lands as
+// not_observable with the transport error rather than as "the UI cannot see
+// it" — the distinction the whole verdict vocabulary exists for.
+func uiStage(ctx context.Context, sess *pipedebug.Session, cl *Client, opts TraceOptions, marker, tenant string) pipedebug.Entry {
+	how := "GET /api/debug/stage/ui — the api runs the SPA's own query for this record (contract table: internal/pipedebug/uiquery.go)"
+	note(sess, sess.Header(pipedebug.StageUI, string(pipedebug.StageUI), how, 0))
+	e, err := cl.Stage(ctx, pipedebug.StageUI, opts.Kind, marker, tenant, opts.Device, opts.Path)
+	if err != nil {
+		reason := "the UI-query stage could not be fetched from the api: " + err.Error()
+		note(sess, sess.Line(pipedebug.StageUI, "warn", "stage unavailable", map[string]any{"reason": reason}))
+		return pipedebug.Entry{
+			Stage: pipedebug.StageUI, Module: string(pipedebug.StageUI),
+			Verdict: pipedebug.VerdictNotObservable, Reason: reason,
+		}
 	}
+	note(sess, sess.Line(pipedebug.StageUI, verdictLevel(e.Verdict), "stage evidence", map[string]any{
+		"verdict": string(e.Verdict), "reason": e.Reason, "query": e.Query,
+	}))
+	if e.Detail != nil {
+		note(sess, sess.Line(pipedebug.StageUI, "info", "ui-query contract", e.Detail))
+	}
+	return e
+}
+
+// mergeGoParser folds the GO collectors' decision path into the parser stage.
+//
+// Stage 2 has two halves — the Vector tap (with the transforms' own
+// `cx_parse_trace` decision string) and the in-process Go decoder — and the
+// operator reads ONE parser.log. A Go-side miss never DOWNGRADES a tap that saw
+// the record: for a syslog probe there is no Go parser at all, so treating its
+// silence as evidence would turn every healthy syslog trace into a parser
+// failure.
+func mergeGoParser(ctx context.Context, sess *pipedebug.Session, cl *Client, opts TraceOptions, marker string, tapped pipedebug.Entry) pipedebug.Entry {
+	e, err := cl.Stage(ctx, pipedebug.StageParser, opts.Kind, marker, opts.Tenant, "", "")
+	if err != nil {
+		note(sess, sess.Line(pipedebug.StageParser, "warn", "the Go-collector decision path could not be fetched", map[string]any{"reason": err.Error()}))
+		return tapped
+	}
+	note(sess, sess.Line(pipedebug.StageParser, verdictLevel(e.Verdict), "go parser decision path", map[string]any{
+		"verdict": string(e.Verdict), "reason": e.Reason, "query": e.Query,
+	}))
+	if e.Detail != nil {
+		note(sess, sess.Line(pipedebug.StageParser, "info", "go parser decisions", e.Detail))
+	}
+	if tapped.Verdict == pipedebug.VerdictSeen {
+		return tapped
+	}
+	if e.Verdict == pipedebug.VerdictSeen {
+		return e
+	}
+	return tapped
 }
 
 // note records a session-write failure on the manifest instead of dropping it.

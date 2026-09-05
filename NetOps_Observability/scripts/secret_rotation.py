@@ -107,6 +107,16 @@ POLICY: dict[str, Policy] = {
     # — loud, self-healing on the second recreate, and never silent.
     "VMALERT_WEBHOOK_TOKEN": Policy(
         FREE, "", "", ""),
+    # Pipeline debugger sidecar secret. FREE: both ends read it from their
+    # environment at process start — the api into internal/pipedebug's
+    # transport, the correlation container into its own CORR_DEBUG_TOKEN
+    # module global. No live store holds it, so a reset-env plus a recreate of
+    # `api` and `correlation` completes the rotation. Until BOTH are recreated
+    # the halves disagree and the sidecar answers 401, which a trace reports as
+    # the bus stage being "not observable" with the reason — degraded and
+    # loud, never a silent wrong answer, and it heals on the second recreate.
+    "CORR_DEBUG_TOKEN": Policy(
+        FREE, "", "", ""),
     "NETBOX_SECRET_KEY": Policy(
         FREE, "", "", ""),
     # SEC-010 vmauth per-service credentials: vmauth expands them from env at

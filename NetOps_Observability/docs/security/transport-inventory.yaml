@@ -591,6 +591,34 @@
       ]
     },
     {
+      "id": "api-goflow2-debug",
+      "source": "api",
+      "destination": "goflow2",
+      "channel": "flow",
+      "protocol": "udp",
+      "port": 2055,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "platform-admin-at-the-api",
+        "notes": "DEBUG-ROUTES (docs/design/PIPELINE_DEBUGGER_2026-09-04.md \u00a72/\u00a75), W2 `--kind flow`. The pipeline debugger sends ONE 72-byte NetFlow v5 export into the stack's OWN goflow2 listener so the flow path is exercised end to end; DEBUG_FLOW_TARGET (default goflow2:2055) names it. SAME wire as device-goflow2 \u2014 no second listener, no new exposure, and it inherits that lane's posture exactly. Authorization happens at the api (requirePlatformAdmin + audit) before the datagram is built and the packet carries no credential. A flow record has no free-text field, so the probe is identified by a deterministic tuple in RFC 5737 documentation address space (src 192.0.2.0/24, dst 198.51.100.0/24, RFC 6996 private ASNs, 1 byte / 1 packet) \u2014 address space that carries no production traffic and counters that cannot move a ranking. Dormant unless an operator runs a trace. There is deliberately NO api\u2192device gNMI counterpart: gNMI is passive-only because the debugger never writes to a device."
+      },
+      "target": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "platform-admin-at-the-api",
+        "notes": "Follows device-goflow2: NetFlow/IPFIX/sFlow have no in-protocol transport security, so this hop is whatever that lane is"
+      },
+      "trust_domain": "internal",
+      "owning_epic": "SEC-014",
+      "priority": "P0-deferred-phase2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml",
+        "src/backend/internal/pipedebug/flow.go",
+        "src/backend/internal/pipedebug/http.go"
+      ]
+    },
+    {
       "id": "device-goflow2",
       "source": "device",
       "destination": "goflow2",

@@ -23,7 +23,8 @@ import (
 const Usage = `correlix-debug — trace one record through the Correlix pipeline
 
 USAGE
-  correlix-debug trace  --kind syslog|trap --device <id> [--tenant <id>] [--ttl 60s]
+  correlix-debug trace  --kind syslog|trap|flow --device <id> [--tenant <id>] [--ttl 60s]
+  correlix-debug trace  --kind gnmi --passive --device <id> [--since 10m] [--path <gnmi path>]
   correlix-debug logs   --modules api,correlation,vector [--for 5m]
   correlix-debug bundle [--session <dir> | --last N]
 
@@ -40,6 +41,9 @@ WHAT IT DOES
           log file per module into data/debug/<UTC>-trace-<id>/ (the marker is
           recorded in summary.txt, timeline.json and manifest.json).
           Exit 0 only if the record reached the UI-facing API.
+          --kind gnmi is PASSIVE-ONLY: a gNMI update originates on the device
+          and this tool never writes to a device, so it follows REAL traffic by
+          device and window and injects nothing.
   logs    raises the chosen modules to debug for a BOUNDED window (hard cap
           30m) and tails each into its own file. Every raise auto-reverts, in
           the module's own process, even if this command is killed.
@@ -147,12 +151,13 @@ func RunTraceCLI(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	fs := flag.NewFlagSet("trace", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	common := bindCommon(fs)
-	kind := fs.String("kind", "syslog", "record kind: syslog|trap")
-	device := fs.String("device", "", "device the synthetic record claims to come from (required)")
+	kind := fs.String("kind", "syslog", "record kind: syslog|trap|flow|gnmi")
+	device := fs.String("device", "", "device the record claims to come from, or (with --passive) the device to follow (required)")
 	tenant := fs.String("tenant", "", "tenant to trace within (narrows a platform admin's scope)")
 	ttl := fs.Duration("ttl", pipedebug.DefaultTraceTTL, "how long to follow the marker")
-	passive := fs.Bool("passive", false, "follow real traffic instead of injecting (W2, not implemented)")
-	since := fs.Duration("since", 10*time.Minute, "how far back --passive looks (W2)")
+	passive := fs.Bool("passive", false, "follow REAL traffic and inject nothing (required for --kind gnmi)")
+	since := fs.Duration("since", 10*time.Minute, "how far back --passive looks (cap 24h)")
+	path := fs.String("path", "", "gNMI path family to narrow a --passive follow to")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -161,8 +166,23 @@ func RunTraceCLI(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		fmt.Fprintf(stderr, "correlix-debug: %v\n", err)
 		return 2
 	}
+	// The mode is settled BEFORE anything is dialled, so an impossible
+	// combination costs an operator a message and not a live injection they did
+	// not want. The api enforces the same two rules independently.
+	if pipedebug.PassiveOnly(k) && !*passive {
+		fmt.Fprintf(stderr, "correlix-debug: --kind %s is passive-only (a %s update originates on the device, and this tool never writes to a device). Re-run with --passive --device <id> [--since 10m]\n", k, k)
+		return 2
+	}
+	if *passive && !pipedebug.PassiveOnly(k) {
+		fmt.Fprintf(stderr, "correlix-debug: %v\n", pipedebug.PassiveRefusal(k))
+		return 2
+	}
 	if err := pipedebug.ValidDeviceKey(*device); err != nil {
 		fmt.Fprintf(stderr, "correlix-debug: --device: %v\n", err)
+		return 2
+	}
+	if _, err := pipedebug.NormalizePathFilter(*path); err != nil {
+		fmt.Fprintf(stderr, "correlix-debug: --path: %v\n", err)
 		return 2
 	}
 	cl, coll, err := connect(ctx, common)
@@ -172,7 +192,7 @@ func RunTraceCLI(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	}
 	code, err := RunTrace(ctx, TraceOptions{
 		Kind: k, Device: *device, Tenant: *tenant,
-		TTL: pipedebug.ClampTraceTTL(*ttl), Passive: *passive, Since: *since,
+		TTL: pipedebug.ClampTraceTTL(*ttl), Passive: *passive, Since: *since, Path: *path,
 		Root: DebugRoot(*common.root), Project: *common.project,
 	}, cl, coll, stdout)
 	if err != nil {

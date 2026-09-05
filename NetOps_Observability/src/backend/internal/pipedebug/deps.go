@@ -38,6 +38,12 @@ type PeekRequest struct {
 	MaxRecords int
 	// LookbackSeconds is how far back the consumer seeks before reading.
 	LookbackSeconds int
+	// ProbeSrc is the alternative needle for a kind whose record carries no
+	// text marker (today: flow). It is an RFC 5737 documentation address, a
+	// 512-value closed grammar the sidecar re-validates independently — it can
+	// never be used to scan the bus for arbitrary content, and the API verifies
+	// every returned record against the full fingerprint before believing it.
+	ProbeSrc string
 }
 
 // PeekRecord is one matching record's address plus a bounded payload excerpt.
@@ -118,8 +124,27 @@ type Deps struct {
 	// ingress. Never a device (design §5).
 	InjectSyslog func(ctx context.Context, frame string) error
 	InjectTrap   func(ctx context.Context, pdu []byte) error
+	// InjectFlow sends ONE NetFlow v5 datagram to the stack's own goflow2
+	// listener. There is deliberately NO InjectGNMI: a gNMI update originates
+	// on the device, so the only way to mint one would be to configure a
+	// router, and the absence of the seam is what makes that impossible rather
+	// than merely discouraged.
+	InjectFlow func(ctx context.Context, packet []byte) error
 
-	// Ring is the API's bounded per-marker debug line buffer (stage 7).
+	// UIQueryRun runs the query the SPA ITSELF issues for a record (the
+	// UIQueries contract) and reports what came back — stage 10. It takes the
+	// *http.Request because the UI's log query resolves through logsScope, the
+	// same tenant/visibility chokepoint the real handler uses: re-deriving that
+	// scope from anything else would make this stage test a query the UI does
+	// not send.
+	UIQueryRun func(r *http.Request, kind Kind, marker string, spec PassiveSpec, tenant string) (UIProbe, error)
+
+	// ParseFilter is the runtime parser decision-trace switch (internal/
+	// parsetrace) exposed for the arm/disarm route and the /metrics gauges.
+	// Nil = the build has no parser hook, which the route reports honestly.
+	ParseFilter ParseSwitch
+
+	// Ring is the API's bounded per-marker debug line buffer (stages 2 and 7).
 	Ring *Ring
 
 	// Audit records an accepted debug action. Optional (nil = no sink); never

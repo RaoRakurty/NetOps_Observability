@@ -41,6 +41,10 @@ type TraceStatus struct {
 	Started  time.Time `json:"started"`
 	Deadline time.Time `json:"deadline"`
 	Done     bool      `json:"done"`
+	// Passive marks a follow that injected nothing. It is on the status, not
+	// only on the receipt, so a reader who polls a status they did not start
+	// still knows whether a synthetic record exists for this marker.
+	Passive bool `json:"passive,omitempty"`
 	// Stages carries every server-side stage's current entry, in pipeline order.
 	Stages []Entry `json:"stages"`
 }
@@ -112,6 +116,34 @@ func (s *traceStore) forget(marker string) {
 		}
 	}
 	s.seen = kept
+}
+
+// startPassive registers a PASSIVE follow. It shares the store, the bound and
+// the retention of an active trace — a debug facility must not grow a second,
+// differently-bounded lifecycle — and differs only in what it runs: no
+// injection happened, so there is nothing to wait for and passiveFollow queries
+// each stage once.
+func (s *traceStore) startPassive(a *API, marker string, spec PassiveSpec, tenant string, p Principal, ttl time.Duration) {
+	now := a.deps.now()
+	st := &TraceStatus{
+		Marker: marker, Kind: spec.Kind, Device: spec.Device, Tenant: tenant,
+		Started: now, Deadline: now.Add(ttl), Passive: true,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ttl)
+	s.put(st, cancel)
+
+	safego.Go("pipedebug-passive", func() {
+		defer cancel()
+		entries := a.passiveFollow(ctx, p, spec, marker)
+		s.update(marker, entries, true)
+		t := time.NewTimer(retention)
+		defer t.Stop()
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+		}
+		s.forget(marker)
+	})
 }
 
 // start registers a trace and launches its bounded follow goroutine.
@@ -194,7 +226,7 @@ func (a *API) stageCtx(ctx context.Context, p Principal, stage Stage, kind Kind,
 	case StageClickHouse:
 		return a.ClickHouseStage(ctx, p, kind, marker)
 	case StageCorrelation:
-		return a.CorrelationStage(ctx, p, marker)
+		return a.CorrelationStage(ctx, p, kind, marker)
 	case StageAPI:
 		return a.APIStage(marker)
 	default:

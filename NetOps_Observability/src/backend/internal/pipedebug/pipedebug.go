@@ -32,18 +32,61 @@ import (
 
 // ── kinds ───────────────────────────────────────────────────────────────────
 
-// Kind is the telemetry class a trace injects and follows. W1 ships syslog and
-// trap; flow and gNMI are W2 (gNMI is passive-only by the read-only rule — the
-// debugger never writes to a device).
+// Kind is the telemetry class a trace injects and follows.
+//
+// THREE OF THE FOUR ARE INJECTABLE and one is not, and the difference is a
+// SAFETY rule rather than an implementation gap: syslog, trap and flow all have
+// a wire form that can be sent to the STACK's own ingress socket, while gNMI is
+// a dial-IN subscription served by the DEVICE. The only way to "inject" a gNMI
+// update would be to write a leaf on a real router, so gNMI is passive-only
+// (design §2) and PassiveOnly below is what enforces it in code.
 type Kind string
 
 const (
 	KindSyslog Kind = "syslog"
 	KindTrap   Kind = "trap"
+	// KindFlow is a NetFlow v5 record sent to the stack's own goflow2 listener.
+	// A flow record has NO free-text field, so the marker cannot travel inside
+	// it as a string the way it does for syslog and trap; it travels instead as
+	// a deterministic FLOW FINGERPRINT in RFC 5737 documentation address space
+	// (see FlowFingerprint). That is a real difference in evidence quality and
+	// the stage reasons say so rather than papering over it.
+	KindFlow Kind = "flow"
+	// KindGNMI follows REAL gNMI updates. It is never injected.
+	KindGNMI Kind = "gnmi"
 )
 
 // Kinds is the CLOSED set of kinds this build accepts.
-var Kinds = []Kind{KindSyslog, KindTrap}
+var Kinds = []Kind{KindSyslog, KindTrap, KindFlow, KindGNMI}
+
+// PassiveOnly reports whether a kind can ONLY be followed passively.
+//
+// gNMI is the one such kind: a gNMI update originates on the device, so the
+// only way to mint one would be to CONFIGURE a device — which the debugger
+// never does (design §5, "no device is written to"). A `--passive` follow of
+// real traffic is therefore not a degraded fallback for gNMI, it is the only
+// correct mode, and the reverse (silently injecting when the caller asked for
+// passive) is the failure this pair of predicates exists to make impossible.
+func PassiveOnly(k Kind) bool { return k == KindGNMI }
+
+// Injectable reports whether a kind has a wire form the debugger may send into
+// the stack's own ingress.
+func Injectable(k Kind) bool {
+	switch k {
+	case KindSyslog, KindTrap, KindFlow:
+		return true
+	default:
+		return false
+	}
+}
+
+// PassiveReason explains, for a kind that does NOT support passive following,
+// why an exact marker is better evidence than passive matching would be.
+func PassiveReason(k Kind) string {
+	return fmt.Sprintf(
+		"--passive is supported for gnmi only. A %s record carries an exact per-record marker, and matching real %s traffic by device alone could never prove that ONE record crossed a hop — it would prove only that SOME record did, which is a weaker claim reported in the same words. Run without --passive to follow a marked record end to end",
+		k, k)
+}
 
 // ParseKind validates an untrusted kind string against the closed set.
 func ParseKind(s string) (Kind, error) {
@@ -112,9 +155,32 @@ func ParseStage(s string) (Stage, error) {
 	return "", fmt.Errorf("unknown stage %q", s)
 }
 
+// HybridStages are served by the API on DEMAND but are not polled by the async
+// follow, because each one is only half the story:
+//
+//   - `parser` — the API holds the GO collectors' decision lines; the Vector
+//     half comes from the host-side tap, and the CLI merges the two into one
+//     parser.log and one timeline entry.
+//   - `ui` — the UI-query contract needs the caller's *http.Request to resolve
+//     the SAME tenant/visibility scope the real handler resolves (logsScope),
+//     and the follow goroutine has no request. Running it on demand is not a
+//     limitation: unlike a store write, the UI query answers the moment the
+//     record is in the store, so there is nothing to poll for.
+var HybridStages = []Stage{StageParser, StageUI}
+
 // IsServerStage reports whether the API serves this stage's evidence.
 func IsServerStage(s Stage) bool {
 	for _, want := range ServerStages {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// IsHybridStage reports whether the API answers this stage on demand.
+func IsHybridStage(s Stage) bool {
+	for _, want := range HybridStages {
 		if s == want {
 			return true
 		}

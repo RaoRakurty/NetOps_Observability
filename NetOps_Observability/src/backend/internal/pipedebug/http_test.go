@@ -37,6 +37,15 @@ type fakeBackend struct {
 	corrLevel LevelChange
 	audits    []map[string]any
 	ring      *Ring
+
+	injectedFlow [][]byte
+	vmBody       []byte
+	vmErr        error
+	vmMatch      string
+	uiProbe      UIProbe
+	uiErr        error
+	uiCalls      []Kind
+	parseFilter  ParseSwitch
 }
 
 func newFakeBackend() *fakeBackend {
@@ -107,7 +116,23 @@ func (f *fakeBackend) deps() Deps {
 			f.injectedTrap = append(f.injectedTrap, pdu)
 			return nil
 		},
-		Ring: f.ring,
+		InjectFlow: func(_ context.Context, pkt []byte) error {
+			if f.injectErr != nil {
+				return f.injectErr
+			}
+			f.injectedFlow = append(f.injectedFlow, pkt)
+			return nil
+		},
+		VictoriaExport: func(_ context.Context, match string, _, _ time.Time) ([]byte, error) {
+			f.vmMatch = match
+			return f.vmBody, f.vmErr
+		},
+		UIQueryRun: func(_ *http.Request, kind Kind, _ string, _ PassiveSpec, _ string) (UIProbe, error) {
+			f.uiCalls = append(f.uiCalls, kind)
+			return f.uiProbe, f.uiErr
+		},
+		ParseFilter: f.parseFilter,
+		Ring:        f.ring,
 		Audit: func(_ *http.Request, tenant, action string, detail map[string]any) {
 			f.audits = append(f.audits, map[string]any{"tenant": tenant, "action": action, "detail": detail})
 		},
@@ -256,7 +281,12 @@ func TestAFailedInjectionIsReportedAndNoFollowIsStarted(t *testing.T) {
 func TestTraceRejectsMalformedInput(t *testing.T) {
 	api := New(newFakeBackend().deps())
 	for _, body := range []string{
-		`{"kind":"flow","device":"spine1"}`,
+		`{"kind":"netconf","device":"spine1"}`,
+		// gNMI is passive-only: an injectable-shaped request for it must be
+		// refused, never quietly turned into a write toward a device.
+		`{"kind":"gnmi","device":"spine1"}`,
+		// …and the mirror image: --passive on a kind that carries a real marker.
+		`{"kind":"syslog","device":"spine1","passive":true}`,
 		`{"kind":"syslog","device":""}`,
 		`{"kind":"syslog","device":"spine 1; rm -rf /"}`,
 		`not json`,
@@ -427,11 +457,21 @@ func TestLogLevelIsAudited(t *testing.T) {
 
 func TestStageRouteRefusesHostCollectedStages(t *testing.T) {
 	api := New(newFakeBackend().deps())
-	for _, st := range []string{"ingress", "parser", "router", "ui"} {
-		w := call(t, api.HandleStage, http.MethodGet,
-			"/api/debug/stage/"+st+"?marker=01j9abcdefghjkmnpqrstvwxyz", "")
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("stage %s got %d, want 400 (the API has no docker socket — claiming it would be fabricated)", st, w.Code)
+	// ingress and router are collected by `vector tap` on the HOST. The API has
+	// no docker socket, so claiming them would be a fabricated answer.
+	for _, stage := range []Stage{StageIngress, StageRouter} {
+		path := "/api/debug/stage/" + string(stage) + "?marker=01j9abcdefghjkmnpqrstvwxyz"
+		if w := call(t, api.HandleStage, http.MethodGet, path, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("stage %s got %d, want 400 (the API has no docker socket — claiming it would be fabricated)", stage, w.Code)
+		}
+	}
+	// parser and ui ARE answerable: the API holds the Go collectors' decision
+	// lines and can run the SPA's own query. They are answered on demand and
+	// never polled by the follow.
+	for _, stage := range []Stage{StageParser, StageUI} {
+		path := "/api/debug/stage/" + string(stage) + "?marker=01j9abcdefghjkmnpqrstvwxyz"
+		if w := call(t, api.HandleStage, http.MethodGet, path, ""); w.Code != http.StatusOK {
+			t.Errorf("stage %s got %d, want 200", stage, w.Code)
 		}
 	}
 }
@@ -442,7 +482,8 @@ func TestStageRouteValidatesStageAndMarker(t *testing.T) {
 		"/api/debug/stage/../../etc?marker=01j9abcdefghjkmnpqrstvwxyz",
 		"/api/debug/stage/opensearch?marker=short",
 		"/api/debug/stage/opensearch",
-		"/api/debug/stage/opensearch?marker=01j9abcdefghjkmnpqrstvwxyz&kind=flow",
+		"/api/debug/stage/opensearch?marker=01j9abcdefghjkmnpqrstvwxyz&kind=netconf",
+		"/api/debug/stage/ingress?marker=01j9abcdefghjkmnpqrstvwxyz",
 	}
 	for _, path := range bad {
 		if w := call(t, api.HandleStage, http.MethodGet, path, ""); w.Code != http.StatusBadRequest {
