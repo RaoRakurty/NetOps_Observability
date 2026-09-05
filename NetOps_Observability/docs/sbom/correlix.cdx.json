@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:5421382a-8bdc-5a3a-9707-1648d699eb06",
+  "serialNumber": "urn:uuid:fc37de0b-6b34-5f3b-88c2-65ccb1021913",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-03T07:28:26+00:00",
+    "timestamp": "2026-09-05T10:06:22+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.03-gffbb1e5a#correlix",
+      "bom-ref": "correlix@2026.09.05-g5a3c9711#correlix",
       "name": "correlix",
-      "version": "2026.09.03-gffbb1e5a",
+      "version": "2026.09.05-g5a3c9711",
       "description": "Correlix \u2014 correlix dependency inventory"
     },
     "properties": [
@@ -29,6 +29,76 @@
     ]
   },
   "components": [
+    {
+      "type": "container",
+      "bom-ref": "container:alpine:3.20@sha256:0a4eaa0eecf5f8c050e5bba433f58c052be7587ee8af3e8b3910ef9ab5fbe9f5",
+      "name": "alpine",
+      "version": "sha256:0a4eaa0eecf5f8c050e5bba433f58c052be7587ee8af3e8b3910ef9ab5fbe9f5",
+      "purl": "pkg:oci/alpine@sha256%3A0a4eaa0eecf5f8c050e5bba433f58c052be7587ee8af3e8b3910ef9ab5fbe9f5?tag=3.20",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "container-images"
+        },
+        {
+          "name": "correlix:image:ref",
+          "value": "alpine:3.20@sha256:0a4eaa0eecf5f8c050e5bba433f58c052be7587ee8af3e8b3910ef9ab5fbe9f5"
+        },
+        {
+          "name": "correlix:image:tag",
+          "value": "3.20"
+        },
+        {
+          "name": "correlix:image:digest-pinned",
+          "value": "true"
+        },
+        {
+          "name": "correlix:origin",
+          "value": "tests/fixtures/oci-regression/Dockerfile.inherited-other-version"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0a4eaa0eecf5f8c050e5bba433f58c052be7587ee8af3e8b3910ef9ab5fbe9f5"
+        }
+      ]
+    },
+    {
+      "type": "container",
+      "bom-ref": "container:alpine:3.21@sha256:b6a6be0ff92ab6db8acd94f5d1b7a6c2f0f5d10ce3c24af348d333ac6da80685",
+      "name": "alpine",
+      "version": "sha256:b6a6be0ff92ab6db8acd94f5d1b7a6c2f0f5d10ce3c24af348d333ac6da80685",
+      "purl": "pkg:oci/alpine@sha256%3Ab6a6be0ff92ab6db8acd94f5d1b7a6c2f0f5d10ce3c24af348d333ac6da80685?tag=3.21",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "container-images"
+        },
+        {
+          "name": "correlix:image:ref",
+          "value": "alpine:3.21@sha256:b6a6be0ff92ab6db8acd94f5d1b7a6c2f0f5d10ce3c24af348d333ac6da80685"
+        },
+        {
+          "name": "correlix:image:tag",
+          "value": "3.21"
+        },
+        {
+          "name": "correlix:image:digest-pinned",
+          "value": "true"
+        },
+        {
+          "name": "correlix:origin",
+          "value": "tests/fixtures/oci-regression/Dockerfile.inherited"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b6a6be0ff92ab6db8acd94f5d1b7a6c2f0f5d10ce3c24af348d333ac6da80685"
+        }
+      ]
+    },
     {
       "type": "container",
       "bom-ref": "container:apache/kafka:4.1.1@sha256:0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40",

@@ -221,6 +221,8 @@ Repackaged third-party images, deliberately unlabelled:
 - `deployment/docker/vector-router/Dockerfile` — Adds curl to the pinned stock Vector image. The content is Vector (MPL-2.0), not Correlix; labelling it Apache-2.0 would be false.
 - `deployment/docker/vm-image-builder/Dockerfile` — An Ubuntu toolchain container used to build VM images. Contains no Correlix source and is never shipped.
 - `scripts/lab/twin/docker/Dockerfile` — A stock python image with pip requirements for the lab twin. Contains no Correlix source and is never shipped.
+- `tests/fixtures/oci-regression/Dockerfile.inherited` — Tracker 238 regression fixture: a pinned Alpine base plus one COPY, deliberately declaring nothing, so the OCI compliance scan can be proved to find INHERITED software (BusyBox) that no manifest of ours names. Contains no Correlix source, is never built for deployment and is never shipped.
+- `tests/fixtures/oci-regression/Dockerfile.inherited-other-version` — The same fixture on Alpine 3.20, whose BusyBox is a different version from the one Correlix retains source for — it must FAIL the compliance gate. Contains no Correlix source and is never shipped.
 
 ## Third-party components
 
