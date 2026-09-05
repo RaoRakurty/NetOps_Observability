@@ -4844,7 +4844,7 @@ func (s *server) licenceUsage(ctx context.Context) licence.Usage {
 		u[entitlement.CeilingDevices] = len(s.discovery.Devices()) + s.discovery.WithheldCount()
 	}
 	if s.bgpWatch != nil {
-		if n, err := s.watchedPrefixCount(ctx); err == nil {
+		if n, err := s.watchedPrefixCount(ctx, TenantGlobal, true); err == nil {
 			u[entitlement.CeilingWatchedPrefixes] = n
 		}
 		// On error the key is simply absent — "we could not measure this" and
@@ -4977,24 +4977,32 @@ func (s *server) licenceDialectAllowed(v hardening.Vendor) bool {
 
 // SECURITY-LANE-END
 
-// watchedPrefixCount is the PLATFORM-WIDE count of watched PREFIXES — the unit
-// the Community ceiling of 5 is expressed in.
+// watchedPrefixCount counts watched PREFIXES in one scope — the unit the
+// Community ceiling of 5 is expressed in.
 //
-// Two things it deliberately is not:
+// The SCOPE is the caller's to choose, and the two callers choose differently
+// for the same reason:
 //
-//   - not per-tenant: a licence covers the deployment, and counting through one
-//     tenant's view would let a second tenant's prefixes escape the ceiling;
-//   - not "watchlist entries": a WatchEntry is a prefix OR an ASN, and counting
-//     ASNs against a PREFIX ceiling would silently make the free tier smaller
-//     than the number on the pricing page.
-func (s *server) watchedPrefixCount(ctx context.Context) (int, error) {
+//   - ENFORCEMENT and the provider's usage bar pass (TenantGlobal, true). A
+//     licence covers the deployment, so counting through one tenant's view
+//     would let a second tenant's prefixes escape the ceiling.
+//   - The TENANT PROJECTION passes the caller's own tenant with cross=false, so
+//     the store's own filter — not this function — keeps that number to that
+//     tenant's rows (§3a rule 4).
+//
+// What it deliberately does NOT count, in either scope, is "watchlist entries":
+// a WatchEntry is a prefix OR an ASN, and counting ASNs against a PREFIX
+// ceiling would silently make the free tier smaller than the number on the
+// pricing page.
+//
+// Nothing here is returned to a caller either way: the rows are counted and
+// discarded, so the platform-wide read crosses no boundary in the direction
+// that matters.
+func (s *server) watchedPrefixCount(ctx context.Context, tenant string, cross bool) (int, error) {
 	if s.bgpWatch == nil {
 		return 0, errors.New("bgp watchlist unavailable")
 	}
-	// cross=true is the platform-wide view. Nothing here is returned to a
-	// caller — the rows are counted and discarded — so no tenant boundary is
-	// crossed in the direction that matters (§3a).
-	rows, err := s.bgpWatch.List(ctx, TenantGlobal, true)
+	rows, err := s.bgpWatch.List(ctx, tenant, cross)
 	if err != nil {
 		return 0, err
 	}
