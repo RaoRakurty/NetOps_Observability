@@ -20,7 +20,7 @@ import (
 func present(pattern, absentNote string) func(*Config) DetectResult {
 	re := regexp.MustCompile(pattern)
 	return func(c *Config) DetectResult {
-		if line, ok := c.firstMatch(re); ok {
+		if line, ok := c.FirstMatch(re); ok {
 			return DetectResult{Tripped: true, Evidence: line}
 		}
 		return DetectResult{Tripped: false, Evidence: absentNote}
@@ -34,7 +34,7 @@ func present(pattern, absentNote string) func(*Config) DetectResult {
 func absent(pattern, missingNote, presentNote string) func(*Config) DetectResult {
 	re := regexp.MustCompile(pattern)
 	return func(c *Config) DetectResult {
-		if _, ok := c.firstMatch(re); ok {
+		if _, ok := c.FirstMatch(re); ok {
 			return DetectResult{Tripped: false, Evidence: presentNote}
 		}
 		return DetectResult{Tripped: true, Evidence: missingNote}
@@ -47,14 +47,14 @@ func bothPresentAbsent(needle, guard, note string) func(*Config) DetectResult {
 	needleRe := regexp.MustCompile(needle)
 	guardRe := regexp.MustCompile(guard)
 	return func(c *Config) DetectResult {
-		if c.has(needleRe) && !c.has(guardRe) {
+		if c.Has(needleRe) && !c.Has(guardRe) {
 			return DetectResult{Tripped: true, Evidence: note}
 		}
 		return DetectResult{Tripped: false, Evidence: "guarded or not configured"}
 	}
 }
 
-// ─── IOS VTY-stanza aware detections (multi-line context) ────────────────────
+// ─── IOS VTY-Stanza aware detections (multi-line context) ────────────────────
 
 var (
 	reIOSVTYHeader     = regexp.MustCompile(`^line vty\b`)
@@ -71,7 +71,7 @@ var (
 	reIOSSNMPEnabled = regexp.MustCompile(`^snmp-server (community|host|user|group)\b`)
 )
 
-// Note: the regexps above are compile-once matchers used by the IOS stanza and
+// Note: the regexps above are compile-once matchers used by the IOS Stanza and
 // exposure detections below. They are unexported, immutable *regexp.Regexp
 // values (regexp objects are safe for concurrent use) — matcher constants, not
 // mutable program state; the no-globals rule targets shared MUTABLE state.
@@ -80,16 +80,16 @@ var (
 // "transport input telnet/all", or a VTY block with NO "transport input" line at
 // all (IOS default permits Telnet). SSH-only VTYs do not trip.
 func iosVTYTelnet(c *Config) DetectResult {
-	for _, st := range c.iosStanzas(reIOSVTYHeader) {
-		if st.childHas(reIOSTransTelnet) {
-			for _, ch := range st.children {
+	for _, st := range c.IOSStanzas(reIOSVTYHeader) {
+		if st.ChildHas(reIOSTransTelnet) {
+			for _, ch := range st.Children {
 				if reIOSTransTelnet.MatchString(ch) {
-					return DetectResult{Tripped: true, Evidence: st.header + " / " + ch}
+					return DetectResult{Tripped: true, Evidence: st.Header + " / " + ch}
 				}
 			}
 		}
-		if !st.childHas(reIOSTransIn) {
-			return DetectResult{Tripped: true, Evidence: st.header + " (no `transport input` — IOS default permits Telnet)"}
+		if !st.ChildHas(reIOSTransIn) {
+			return DetectResult{Tripped: true, Evidence: st.Header + " (no `transport input` — IOS default permits Telnet)"}
 		}
 	}
 	return DetectResult{Tripped: false, Evidence: "all VTY lines restricted to SSH"}
@@ -98,9 +98,9 @@ func iosVTYTelnet(c *Config) DetectResult {
 // iosVTYNoAccessClass trips when any VTY line lacks an inbound access-class ACL
 // (the management plane is reachable with no source restriction).
 func iosVTYNoAccessClass(c *Config) DetectResult {
-	for _, st := range c.iosStanzas(reIOSVTYHeader) {
-		if !st.childHas(reIOSAccessClassIn) {
-			return DetectResult{Tripped: true, Evidence: st.header + " (no `access-class <acl> in`)"}
+	for _, st := range c.IOSStanzas(reIOSVTYHeader) {
+		if !st.ChildHas(reIOSAccessClassIn) {
+			return DetectResult{Tripped: true, Evidence: st.Header + " (no `access-class <acl> in`)"}
 		}
 	}
 	return DetectResult{Tripped: false, Evidence: "all VTY lines carry an inbound access-class"}
@@ -134,7 +134,7 @@ var (
 )
 
 func iosHTTPNoACL(c *Config) DetectResult {
-	if c.has(reIOSHTTPServer) && !c.has(reIOSHTTPACL) {
+	if c.Has(reIOSHTTPServer) && !c.Has(reIOSHTTPACL) {
 		return DetectResult{Tripped: true, Evidence: "ip http server enabled with no `ip http access-class`"}
 	}
 	return DetectResult{Tripped: false, Evidence: "HTTP server off or ACL-restricted"}
@@ -162,7 +162,15 @@ func iosHTTPNoACL(c *Config) DetectResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // DefaultCatalog builds the shipped hardening catalog fresh (no global state).
-func DefaultCatalog() *Catalog {
+//
+// The rules and probes below are the vendor-neutral CONCEPTS plus the CORE
+// dialect (Cisco IOS-XE), which every tier gets. Additional dialects arrive as
+// DialectPack data from outside this package (see dialect.go): the assembly
+// layer passes them in, core never names their source, and a rule with no
+// binding for the device's vendor is reported NotApplicable — never a false
+// Pass. Calling it with no packs yields the core-dialect catalogue, which is
+// what an Apache-2.0-only build runs.
+func DefaultCatalog(packs ...DialectPack) *Catalog {
 	rules := []Rule{
 		// ── Insecure management services ──────────────────────────────────────
 		{
@@ -174,15 +182,6 @@ func DefaultCatalog() *Catalog {
 			bindings: map[Vendor]VendorBinding{
 				VendorCiscoIOSXE: {Detect: iosVTYTelnet,
 					Remediation: "line vty 0 4\n transport input ssh\nline vty 5 15\n transport input ssh"},
-				VendorJuniper: {Detect: present(`^set system services telnet\b`, "telnet service not enabled"),
-					Remediation: "delete system services telnet\nset system services ssh protocol-version v2"},
-				VendorNokia: {Detect: present(`(?i)\btelnet-server\b.*\b(enable|admin-state enable)\b`, "telnet-server not enabled"),
-					Remediation: "configure system management-interface telnet-server admin-state disable\nconfigure system management-interface ssh-server admin-state enable"},
-				VendorArista: {Detect: eosTelnetEnabled,
-					Remediation: "management telnet\n   shutdown"},
-				VendorSRLinux: {Detect: notApplicable(
-					"SR Linux implements no telnet server anywhere in its management model — the control cannot be violated on this platform"),
-					Remediation: "no action: SR Linux offers only SSH, gNMI, JSON-RPC and NETCONF for remote management"},
 			},
 		},
 		{
@@ -213,12 +212,6 @@ func DefaultCatalog() *Catalog {
 			bindings: map[Vendor]VendorBinding{
 				VendorCiscoIOSXE: {Detect: present(`^ip http server\b`, "non-TLS HTTP server not enabled"),
 					Remediation: "no ip http server\nip http secure-server"},
-				VendorJuniper: {Detect: present(`^set system services web-management http\b`, "http web-management not enabled"),
-					Remediation: "delete system services web-management http\nset system services web-management https"},
-				VendorArista: {Detect: eosEAPIPlaintext,
-					Remediation: "management api http-commands\n   no protocol http\n   protocol https"},
-				VendorSRLinux: {Detect: srlJSONRPCPlaintext,
-					Remediation: "set / system json-rpc-server network-instance mgmt http admin-state disable\nset / system json-rpc-server network-instance mgmt https admin-state enable"},
 			},
 		},
 		{
@@ -231,12 +224,6 @@ func DefaultCatalog() *Catalog {
 					"`ip ssh version 2` absent — SSHv1 fallback permitted",
 					"SSH pinned to version 2"),
 					Remediation: "ip ssh version 2"},
-				VendorArista: {Detect: notApplicable(
-					"EOS implements SSHv2 only — there is no SSHv1 to fall back to and no version knob to set"),
-					Remediation: "no action: EOS ships no SSHv1 implementation"},
-				VendorSRLinux: {Detect: notApplicable(
-					"SR Linux implements SSHv2 only — there is no SSHv1 to fall back to and no version knob to set"),
-					Remediation: "no action: SR Linux ships no SSHv1 implementation"},
 			},
 		},
 		{
@@ -247,12 +234,6 @@ func DefaultCatalog() *Catalog {
 			bindings: map[Vendor]VendorBinding{
 				VendorCiscoIOSXE: {Detect: present(`^snmp-server community\b`, "no v1/v2c community configured"),
 					Remediation: "no snmp-server community <name>\nsnmp-server group SECURE v3 priv\nsnmp-server user <u> SECURE v3 auth sha <k> priv aes 128 <k>"},
-				VendorJuniper: {Detect: present(`^set snmp community\b`, "no v1/v2c community configured"),
-					Remediation: "delete snmp community\nset snmp v3 usm local-engine user <u> authentication-sha ... privacy-aes128 ..."},
-				VendorArista: {Detect: present(`^snmp-server community\b`, "no v1/v2c community configured"),
-					Remediation: "no snmp-server community <name>\nsnmp-server group SECURE v3 priv\nsnmp-server user <u> SECURE v3 auth sha <k> priv aes <k>"},
-				VendorSRLinux: {Detect: srlSNMPCommunity,
-					Remediation: "delete / system snmp access-group <group> community-entry <name>\nset / system snmp access-group <group> security-level auth-priv"},
 			},
 		},
 		{
@@ -263,12 +244,6 @@ func DefaultCatalog() *Catalog {
 			bindings: map[Vendor]VendorBinding{
 				VendorCiscoIOSXE: {Detect: present(`^snmp-server community\s+(public|private)\b`, "no default community present"),
 					Remediation: "no snmp-server community public\nno snmp-server community private"},
-				VendorJuniper: {Detect: present(`^set snmp community\s+(public|private)\b`, "no default community present"),
-					Remediation: "delete snmp community public\ndelete snmp community private"},
-				VendorArista: {Detect: present(`(?i)^snmp-server community\s+(public|private)\b`, "no default community present"),
-					Remediation: "no snmp-server community public\nno snmp-server community private"},
-				VendorSRLinux: {Detect: present(`(?i)^set / system snmp access-group \S+ community-entry (public|private)\b`, "no default community present"),
-					Remediation: "delete / system snmp access-group <group> community-entry public"},
 			},
 		},
 		{
@@ -352,11 +327,6 @@ func DefaultCatalog() *Catalog {
 					Remediation: "ip access-list standard SNMP-IN\n permit 10.0.0.0 0.0.0.255\nsnmp-server community <name> RO SNMP-IN"},
 				// EOS writes `snmp-server community <name> [ro|rw] [acl]` in the
 				// same grammar IOS does, so the IOS detection reads it as-is.
-				VendorArista: {Detect: iosSNMPNoACL,
-					Remediation: "ip access-list standard SNMP-IN\n permit 10.0.0.0/24\nsnmp-server community <name> ro SNMP-IN"},
-				VendorSRLinux: {Detect: notApplicable(
-					"SR Linux binds no source ACL to a community; SNMP reachability is bounded by the network-instance the server is enabled in, which this control cannot express"),
-					Remediation: "restrict SNMP by network-instance: set / system snmp network-instance mgmt admin-state enable"},
 			},
 		},
 		{
@@ -380,12 +350,6 @@ func DefaultCatalog() *Catalog {
 					"`service password-encryption` absent — passwords stored in cleartext",
 					"service password-encryption enabled"),
 					Remediation: "service password-encryption"},
-				VendorArista: {Detect: notApplicable(
-					"EOS has no global password-encryption switch: stored credentials are always hashed, and the reversible-storage question is scored by local-user-weak-secret instead"),
-					Remediation: "no action: see rule local-user-weak-secret for EOS credential storage"},
-				VendorSRLinux: {Detect: notApplicable(
-					"SR Linux has no global password-encryption switch: stored credentials are always written as a `$scheme$` crypt value, and the storage question is scored by local-user-weak-secret instead"),
-					Remediation: "no action: see rule local-user-weak-secret for SR Linux credential storage"},
 			},
 		},
 		{
@@ -396,11 +360,6 @@ func DefaultCatalog() *Catalog {
 			bindings: map[Vendor]VendorBinding{
 				VendorCiscoIOSXE: {Detect: present(`^enable password\b`, "no reversible enable password"),
 					Remediation: "no enable password\nenable secret <strong-secret>"},
-				VendorArista: {Detect: present(`^enable password\b`, "no reversible enable password"),
-					Remediation: "no enable password\nenable secret sha512 <hash>"},
-				VendorSRLinux: {Detect: notApplicable(
-					"SR Linux has no enable/privileged-exec password: privilege is a role granted through AAA, not a second shared secret"),
-					Remediation: "no action: authorize privilege through `system aaa authorization role`"},
 			},
 		},
 		{
@@ -426,18 +385,6 @@ func DefaultCatalog() *Catalog {
 					"no `logging host` target — audit events not forwarded",
 					"central logging target configured"),
 					Remediation: "logging host 10.0.0.10\nlogging trap informational"},
-				VendorJuniper: {Detect: absent(`^set system syslog host\b`,
-					"no `system syslog host` target configured",
-					"syslog host configured"),
-					Remediation: "set system syslog host 10.0.0.10 any info"},
-				VendorArista: {Detect: absent(`^logging host\s+\S+`,
-					"no `logging host` target — audit events not forwarded",
-					"central logging target configured"),
-					Remediation: "logging host 10.0.0.10\nlogging trap informational"},
-				VendorSRLinux: {Detect: absent(`^set / system logging remote-server \S+`,
-					"no `system logging remote-server` target — audit events not forwarded",
-					"central logging target configured"),
-					Remediation: "set / system logging remote-server 10.0.0.10 transport udp\nset / system logging remote-server 10.0.0.10 remote-port 514"},
 			},
 		},
 		{
@@ -449,9 +396,6 @@ func DefaultCatalog() *Catalog {
 				VendorCiscoIOSXE: {Detect: bothPresentAbsent(`^ntp server\b`, `^ntp authenticate\b`,
 					"NTP server configured but `ntp authenticate` missing"),
 					Remediation: "ntp authenticate\nntp authentication-key 1 md5 <key>\nntp trusted-key 1\nntp server 10.0.0.20 key 1"},
-				VendorArista: {Detect: bothPresentAbsent(`^ntp server\b`, `^ntp authentication-key\b`,
-					"NTP server configured but no `ntp authentication-key` — time source unauthenticated"),
-					Remediation: "ntp authentication-key 1 sha1 <key>\nntp trusted-key 1\nntp authenticate\nntp server 10.0.0.20 key 1"},
 			},
 		},
 		// ── Fabric dialects: controls the IOS-centric set above cannot express ─
@@ -468,64 +412,35 @@ func DefaultCatalog() *Catalog {
 			Concept: "cleartext-remote-mgmt", Severity: secfindings.SeverityHigh,
 			Controls: []string{"SC-8", "AC-17"}, Category: CategoryCrypto,
 			Intended: "Every enabled gNMI/gRPC/JSON-RPC management endpoint binds a TLS profile; no cleartext transport.",
-			bindings: map[Vendor]VendorBinding{
-				VendorArista: {Detect: eosGNMIPlaintext,
-					Remediation: "management security\n   ssl profile MGMT\n      certificate <cert> key <key>\nmanagement api gnmi\n   transport grpc default\n      ssl profile MGMT"},
-				VendorSRLinux: {Detect: srlInsecureGRPC,
-					Remediation: "set / system grpc-server <name> tls-profile <profile>\n! or, if the instance is not needed:\nset / system grpc-server <name> admin-state disable"},
-			},
+			bindings: map[Vendor]VendorBinding{},
 		},
 		{
 			ID: "tls-no-client-auth", Title: "Management TLS profile does not authenticate the client",
 			Concept: "unauthenticated-mgmt-peer", Severity: secfindings.SeverityLow,
 			Controls: []string{"IA-3", "SC-8", "AC-17"}, Category: CategoryCrypto,
 			Intended: "Management TLS profiles require a client certificate, so possession of the management address is not by itself sufficient to connect.",
-			bindings: map[Vendor]VendorBinding{
-				VendorSRLinux: {Detect: srlTLSNoClientAuth,
-					Remediation: "set / system tls profile <name> authenticate-client true\nset / system tls profile <name> trust-anchor <ca-pem>"},
-			},
+			bindings: map[Vendor]VendorBinding{},
 		},
 		{
 			ID: "local-user-weak-secret", Title: "Local account with no password or reversible storage",
 			Concept: "cleartext-stored-credential", Severity: secfindings.SeverityHigh,
 			Controls: []string{"IA-5"}, Category: CategoryCredential,
 			Intended: "Every local account stores an irreversible, salted password hash; no `nopassword` and no legacy reversible type.",
-			bindings: map[Vendor]VendorBinding{
-				VendorArista: {Detect: eosWeakLocalSecret,
-					Remediation: "username <u> privilege 15 role network-admin secret sha512 <hash>\nno username <u> nopassword"},
-				VendorSRLinux: {Detect: srlWeakLocalSecret,
-					Remediation: "set / system aaa authentication <user> password <value>   ! SR Linux hashes on commit; verify the stored value carries a $scheme$ marker"},
-			},
+			bindings: map[Vendor]VendorBinding{},
 		},
 		{
 			ID: "no-remote-aaa", Title: "No remote AAA server group (local-only authentication)",
 			Concept: "no-centralized-auth", Severity: secfindings.SeverityMedium,
 			Controls: []string{"AC-2", "IA-2"}, Category: CategoryCredential,
 			Intended: "Authentication delegated to a TACACS+/RADIUS server group with local credentials as the fallback, so account revocation is central.",
-			bindings: map[Vendor]VendorBinding{
-				VendorArista: {Detect: absent(`^aaa (?:group server (?:tacacs\+|radius)|authentication login default group)`,
-					"no TACACS+/RADIUS server group — device authenticates against local accounts only",
-					"remote AAA server group configured"),
-					Remediation: "aaa group server tacacs+ TAC\n   server 10.0.0.30\naaa authentication login default group TAC local"},
-				VendorSRLinux: {Detect: absent(`^set / system aaa server-group \S+ type (?:tacacs|radius)`,
-					"no TACACS+/RADIUS server-group — device authenticates against local accounts only",
-					"remote AAA server-group configured"),
-					Remediation: "set / system aaa server-group TAC type tacacs\nset / system aaa authentication authentication-method [ TAC local ]"},
-			},
+			bindings: map[Vendor]VendorBinding{},
 		},
 		{
 			ID: "no-ntp-server", Title: "No NTP time source configured",
 			Concept: "unsynchronized-time", Severity: secfindings.SeverityMedium,
 			Controls: []string{"AU-8"}, Category: CategoryPlane,
 			Intended: "At least one NTP server configured and enabled, so device timestamps on logs and findings are trustworthy.",
-			bindings: map[Vendor]VendorBinding{
-				VendorArista: {Detect: absent(`^ntp server\s+\S+`,
-					"no `ntp server` configured — device clock is unsynchronized and every timestamp it stamps is unattributable",
-					"NTP server configured"),
-					Remediation: "ntp server 10.0.0.20 iburst\nntp source Management0"},
-				VendorSRLinux: {Detect: srlNTPUnconfigured,
-					Remediation: "set / system ntp admin-state enable\nset / system ntp network-instance mgmt\nset / system ntp server 10.0.0.20 iburst true"},
-			},
+			bindings: map[Vendor]VendorBinding{},
 		},
 		{
 			ID: "no-control-plane-protection", Title: "No control-plane protection (CoPP)",
@@ -566,7 +481,7 @@ func DefaultCatalog() *Catalog {
 			bindings: map[Vendor]ExposureBinding{
 				VendorCiscoIOSXE: {
 					Enabled: func(c *Config) (bool, string) {
-						if line, ok := c.firstMatch(reIOSSSHEnabled); ok {
+						if line, ok := c.FirstMatch(reIOSSSHEnabled); ok {
 							return true, line
 						}
 						return false, "SSH not configured"
@@ -584,7 +499,7 @@ func DefaultCatalog() *Catalog {
 			bindings: map[Vendor]ExposureBinding{
 				VendorCiscoIOSXE: {
 					Enabled: func(c *Config) (bool, string) {
-						if line, ok := c.firstMatch(reIOSSNMPEnabled); ok {
+						if line, ok := c.FirstMatch(reIOSSNMPEnabled); ok {
 							return true, line
 						}
 						return false, "SNMP not configured"
@@ -602,7 +517,7 @@ func DefaultCatalog() *Catalog {
 			bindings: map[Vendor]ExposureBinding{
 				VendorCiscoIOSXE: {
 					Enabled: func(c *Config) (bool, string) {
-						if line, ok := c.firstMatch(reIOSHTTPServer); ok {
+						if line, ok := c.FirstMatch(reIOSHTTPServer); ok {
 							return true, line
 						}
 						return false, "HTTP(S) server not enabled"
@@ -614,5 +529,5 @@ func DefaultCatalog() *Catalog {
 		},
 	}
 
-	return NewCatalog(rules, probes)
+	return NewCatalog(applyDialects(rules, packs), probes)
 }

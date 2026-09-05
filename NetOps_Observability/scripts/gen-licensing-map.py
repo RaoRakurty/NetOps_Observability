@@ -195,6 +195,18 @@ def render(policy: dict) -> str:
     out += _table(["Directory", "Entitlement", "Tier", "Why it is cleanly commercial"], rows)
     out.append("")
 
+    # ── removing the commercial modules ─────────────────────────────────────
+    rm = policy["enterprise_removal_recipe"]
+    out += [
+        "### Removing them",
+        "",
+        rm["_why"],
+        "",
+    ]
+    out += [f"{step}" if step.startswith(("1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9."))
+            else f"- {step}" for step in rm["steps"]]
+    out += ["", rm["guarantee"], ""]
+
     # ── still mixed ─────────────────────────────────────────────────────────
     md = policy["mixed_directories"]
     out += [
@@ -205,14 +217,14 @@ def render(policy: dict) -> str:
         f"`{md['target_layout']}`: over-claiming commercial on a shared package would wrongly",
         "restrict core code, and the conservative direction is the open one.",
         "",
-        f"Tracked as **TRACKER.md row {md['tracker_row']}** — the `ee/` extraction.",
+        f"Tracked as **TRACKER.md row {md['tracker_row']}** — the `enterprise/` extraction.",
         "",
     ]
     rows = [
         [f"`{e['path']}/`", e["tier"], e["commercial_part"], e["why_not_split_today"]]
         for e in md["entries"]
     ]
-    out += _table(["Directory", "Tier", "What belongs in `ee/`", "Why it has not moved"], rows)
+    out += _table(["Directory", "Tier", "What belongs in `enterprise/`", "Why it has not moved"], rows)
     out.append("")
 
     # ── how a file declares its licence ─────────────────────────────────────

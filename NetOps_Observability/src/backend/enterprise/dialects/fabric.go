@@ -1,18 +1,27 @@
-package hardening
+// SPDX-License-Identifier: LicenseRef-Correlix-Enterprise
+//
+// COMMERCIAL ADD-ON MODULE. This package implements the `security_dialects`
+// entitlement (Enterprise tier) and is NOT Apache-2.0 core. See the LICENSE
+// notice file in this directory, ../../../../LICENSING.md, and
+// LICENSES/Correlix-Enterprise.txt.
+
+package dialects
 
 import (
 	"regexp"
 	"strings"
+
+	"netops/backend/internal/hardening"
 )
 
-// dialect_fabric.go — the detection bindings for the two DATA-CENTRE FABRIC
+// fabric.go — the detection bindings for the two DATA-CENTRE FABRIC
 // dialects: Arista EOS and Nokia SR Linux.
 //
 // WHY THEY ARE THEIR OWN DIALECTS AND NOT REUSED ONES.
 //
 //	EOS speaks the Cisco IOS show-command grammar, which is why its CLI binding
 //	is cisco-iosxe — but it does NOT speak the IOS *configuration* grammar. It
-//	has no `line vty` stanza, no `service password-encryption`, no
+//	has no `line vty` Stanza, no `service password-encryption`, no
 //	`ip http server`; its management plane is `management api http-commands` /
 //	`management api gnmi` / `management ssh`, which IOS has no analogue for.
 //	Binding EOS to the cisco-iosxe rules would have produced confident PASS
@@ -29,12 +38,12 @@ import (
 // CONTROL-CATALOGUE PROVENANCE. Arista publishes a CIS Arista EOS Benchmark
 // (v1.0.0 as of 2026-09-03), so the EOS-side concepts here have an industry
 // catalogue behind them — but its section taxonomy could not be read from a
-// published document, so benchmark.go records the benchmark and cites NO section
+// published document, so internal/hardening/benchmark.go records the benchmark and cites NO section
 // of it. Nokia SR Linux has no CIS benchmark and no equivalent published
 // hardening standard at all. Both therefore map to NIST 800-53 controls ONLY,
 // and that is a statement about the state of the industry, not an omission in
 // this file. (Before 2026-09-03 the shared rules carried invented `CIS-NET-x.y`
-// tags; benchmark.go explains why they are gone.)
+// tags; internal/hardening/benchmark.go explains why they are gone.)
 //
 // WHAT IS DELIBERATELY NOT DETECTED. A default admin password: neither platform
 // exposes anything in the running configuration that distinguishes a shipped
@@ -43,24 +52,10 @@ import (
 // guess, and guessing here means a false clear.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Shared builder
-// ─────────────────────────────────────────────────────────────────────────────
-
-// notApplicable builds a detection that reports the control as structurally
-// inapplicable on this platform, carrying the REASON. Use it only where the
-// operating system cannot express the insecure state at all (see
-// DetectResult.NotApplicable) — never as a placeholder for unwritten detection.
-func notApplicable(reason string) func(*Config) DetectResult {
-	return func(*Config) DetectResult {
-		return DetectResult{NotApplicable: true, Evidence: reason}
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Arista EOS
 //
 // EOS renders its management plane as IOS-style stanzas — a column-0 header
-// with indented children — so Config.iosStanzas reads it directly. What differs
+// with indented children — so Config.IOSStanzas reads it directly. What differs
 // is WHICH stanzas exist and what "enabled" means inside one: an EOS management
 // service block is OFF unless it carries an explicit `no shutdown`, which is
 // why every probe below tests for that line rather than for the block.
@@ -80,16 +75,16 @@ var (
 )
 
 // eosTelnetEnabled trips when the EOS telnet server is administratively up.
-// EOS ships telnet DISABLED and does not write the stanza at all until it is
+// EOS ships telnet DISABLED and does not write the Stanza at all until it is
 // touched, so both "no block" and "block without `no shutdown`" are the secure
 // state — this reports a real assessed Pass for them, not an assumption.
-func eosTelnetEnabled(c *Config) DetectResult {
-	for _, st := range c.iosStanzas(reEOSTelnetHeader) {
-		if st.childHas(reEOSNoShutdown) {
-			return DetectResult{Tripped: true, Evidence: st.header + " / no shutdown"}
+func eosTelnetEnabled(c *hardening.Config) hardening.DetectResult {
+	for _, st := range c.IOSStanzas(reEOSTelnetHeader) {
+		if st.ChildHas(reEOSNoShutdown) {
+			return hardening.DetectResult{Tripped: true, Evidence: st.Header + " / no shutdown"}
 		}
 	}
-	return DetectResult{Tripped: false, Evidence: "no administratively enabled `management telnet` server"}
+	return hardening.DetectResult{Tripped: false, Evidence: "no administratively enabled `management telnet` server"}
 }
 
 // eosEAPIPlaintext trips when the eAPI (`management api http-commands`) is
@@ -101,31 +96,31 @@ func eosTelnetEnabled(c *Config) DetectResult {
 // running, set to use port 443 / HTTP server: shutdown" (verified 2026-09-02).
 // The cleartext listener exists only when `protocol http` is written explicitly,
 // and the evidence line says which of the two cases it saw.
-func eosEAPIPlaintext(c *Config) DetectResult {
-	for _, st := range c.iosStanzas(reEOSAPIHeader) {
-		if !st.childHas(reEOSNoShutdown) {
+func eosEAPIPlaintext(c *hardening.Config) hardening.DetectResult {
+	for _, st := range c.IOSStanzas(reEOSAPIHeader) {
+		if !st.ChildHas(reEOSNoShutdown) {
 			continue
 		}
-		for _, ch := range st.children {
+		for _, ch := range st.Children {
 			if reEOSProtocolHTTP.MatchString(ch) {
-				return DetectResult{Tripped: true, Evidence: st.header + " / " + ch}
+				return hardening.DetectResult{Tripped: true, Evidence: st.Header + " / " + ch}
 			}
 		}
-		if st.childHas(reEOSProtocolHTTPS) {
-			return DetectResult{Tripped: false, Evidence: st.header + " enabled with an explicit HTTPS transport"}
+		if st.ChildHas(reEOSProtocolHTTPS) {
+			return hardening.DetectResult{Tripped: false, Evidence: st.Header + " enabled with an explicit HTTPS transport"}
 		}
-		return DetectResult{Tripped: false, Evidence: st.header + " enabled with no `protocol http` line (HTTPS default)"}
+		return hardening.DetectResult{Tripped: false, Evidence: st.Header + " enabled with no `protocol http` line (HTTPS default)"}
 	}
-	return DetectResult{Tripped: false, Evidence: "eAPI (`management api http-commands`) not enabled"}
+	return hardening.DetectResult{Tripped: false, Evidence: "eAPI (`management api http-commands`) not enabled"}
 }
 
 // eosGNMIPlaintext trips when a gNMI gRPC transport is configured with no TLS
 // profile bound to it — telemetry and, with gNOI, device operations carried in
 // cleartext across the management network.
-func eosGNMIPlaintext(c *Config) DetectResult {
-	for _, st := range c.iosStanzas(reEOSGNMIHeader) {
+func eosGNMIPlaintext(c *hardening.Config) hardening.DetectResult {
+	for _, st := range c.IOSStanzas(reEOSGNMIHeader) {
 		var transports []string
-		for _, ch := range st.children {
+		for _, ch := range st.Children {
 			if reEOSGRPCTransport.MatchString(ch) {
 				transports = append(transports, ch)
 			}
@@ -133,12 +128,12 @@ func eosGNMIPlaintext(c *Config) DetectResult {
 		if len(transports) == 0 {
 			continue
 		}
-		if st.childHas(reEOSSSLProfile) {
-			return DetectResult{Tripped: false, Evidence: st.header + " transports bound to an SSL profile"}
+		if st.ChildHas(reEOSSSLProfile) {
+			return hardening.DetectResult{Tripped: false, Evidence: st.Header + " transports bound to an SSL profile"}
 		}
-		return DetectResult{Tripped: true, Evidence: st.header + " / " + transports[0] + " (no `ssl profile` — gNMI served in cleartext)"}
+		return hardening.DetectResult{Tripped: true, Evidence: st.Header + " / " + transports[0] + " (no `ssl profile` — gNMI served in cleartext)"}
 	}
-	return DetectResult{Tripped: false, Evidence: "no gNMI gRPC transport configured"}
+	return hardening.DetectResult{Tripped: false, Evidence: "no gNMI gRPC transport configured"}
 }
 
 // eosWeakLocalSecret trips when a local user is defined with no password at all
@@ -146,11 +141,11 @@ func eosGNMIPlaintext(c *Config) DetectResult {
 // cleartext and type 5 is unsalted-era MD5.
 var reEOSWeakUser = regexp.MustCompile(`^username\s+\S+.*(\bnopassword\b|\bsecret\s+0\b|\bsecret\s+5\b)`)
 
-func eosWeakLocalSecret(c *Config) DetectResult {
-	if line, ok := c.firstMatch(reEOSWeakUser); ok {
-		return DetectResult{Tripped: true, Evidence: line}
+func eosWeakLocalSecret(c *hardening.Config) hardening.DetectResult {
+	if line, ok := c.FirstMatch(reEOSWeakUser); ok {
+		return hardening.DetectResult{Tripped: true, Evidence: line}
 	}
-	return DetectResult{Tripped: false, Evidence: "no local user with `nopassword` or a reversible secret type"}
+	return hardening.DetectResult{Tripped: false, Evidence: "no local user with `nopassword` or a reversible secret type"}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,21 +177,21 @@ var (
 // srlJSONRPCPlaintext trips when the JSON-RPC management server serves the
 // cleartext HTTP listener. SR Linux exposes HTTP and HTTPS as independent
 // leaves, so an enabled HTTPS listener does NOT excuse an enabled HTTP one.
-func srlJSONRPCPlaintext(c *Config) DetectResult {
-	if line, ok := c.firstMatch(reSRLJSONRPCHTTP); ok {
-		return DetectResult{Tripped: true, Evidence: line}
+func srlJSONRPCPlaintext(c *hardening.Config) hardening.DetectResult {
+	if line, ok := c.FirstMatch(reSRLJSONRPCHTTP); ok {
+		return hardening.DetectResult{Tripped: true, Evidence: line}
 	}
-	if line, ok := c.firstMatch(reSRLJSONRPCHTTPS); ok {
-		return DetectResult{Tripped: false, Evidence: "JSON-RPC server serves HTTPS only: " + line}
+	if line, ok := c.FirstMatch(reSRLJSONRPCHTTPS); ok {
+		return hardening.DetectResult{Tripped: false, Evidence: "JSON-RPC server serves HTTPS only: " + line}
 	}
-	return DetectResult{Tripped: false, Evidence: "JSON-RPC server not enabled"}
+	return hardening.DetectResult{Tripped: false, Evidence: "JSON-RPC server not enabled"}
 }
 
 // srlInsecureGRPC trips when any administratively enabled gRPC server instance
 // (gNMI / gNOI / gNSI / gRIBI / P4RT) has no TLS profile bound — neither its own
 // `tls-profile` nor `default-tls-profile true`. Instances are grouped by NAME
 // because the flat form scatters one server's leaves across many lines.
-func srlInsecureGRPC(c *Config) DetectResult {
+func srlInsecureGRPC(c *hardening.Config) hardening.DetectResult {
 	enabled := make([]string, 0, 4)
 	secured := map[string]bool{}
 	for _, ln := range c.Lines() {
@@ -210,7 +205,7 @@ func srlInsecureGRPC(c *Config) DetectResult {
 		}
 	}
 	if len(enabled) == 0 {
-		return DetectResult{Tripped: false, Evidence: "no gRPC server instance enabled"}
+		return hardening.DetectResult{Tripped: false, Evidence: "no gRPC server instance enabled"}
 	}
 	var bare []string
 	for _, name := range enabled {
@@ -219,9 +214,9 @@ func srlInsecureGRPC(c *Config) DetectResult {
 		}
 	}
 	if len(bare) == 0 {
-		return DetectResult{Tripped: false, Evidence: "every enabled gRPC server instance binds a TLS profile"}
+		return hardening.DetectResult{Tripped: false, Evidence: "every enabled gRPC server instance binds a TLS profile"}
 	}
-	return DetectResult{
+	return hardening.DetectResult{
 		Tripped:  true,
 		Evidence: "gRPC server instance(s) enabled with no TLS profile: " + strings.Join(bare, ", "),
 	}
@@ -230,42 +225,42 @@ func srlInsecureGRPC(c *Config) DetectResult {
 // srlTLSNoClientAuth trips when a TLS profile accepts any client — the server
 // proves its identity but never checks the caller's, so possession of the
 // management address is the whole authentication story for that transport.
-func srlTLSNoClientAuth(c *Config) DetectResult {
-	if line, ok := c.firstMatch(reSRLNoClientAuth); ok {
-		return DetectResult{Tripped: true, Evidence: line}
+func srlTLSNoClientAuth(c *hardening.Config) hardening.DetectResult {
+	if line, ok := c.FirstMatch(reSRLNoClientAuth); ok {
+		return hardening.DetectResult{Tripped: true, Evidence: line}
 	}
-	return DetectResult{Tripped: false, Evidence: "no TLS profile with `authenticate-client false`"}
+	return hardening.DetectResult{Tripped: false, Evidence: "no TLS profile with `authenticate-client false`"}
 }
 
 // srlWeakLocalSecret trips when a locally stored password is NOT an SR Linux
 // crypt value. Every hashed secret this OS writes begins with a `$scheme$`
 // marker (`$y$` yescrypt, `$6$` sha512-crypt, `$aes1$` for reversible key
 // material); a value that starts with anything else was written in the clear.
-func srlWeakLocalSecret(c *Config) DetectResult {
-	if line, ok := c.firstMatch(reSRLWeakPassword); ok {
-		return DetectResult{Tripped: true, Evidence: line}
+func srlWeakLocalSecret(c *hardening.Config) hardening.DetectResult {
+	if line, ok := c.FirstMatch(reSRLWeakPassword); ok {
+		return hardening.DetectResult{Tripped: true, Evidence: line}
 	}
-	return DetectResult{Tripped: false, Evidence: "all locally stored passwords carry a `$scheme$` hash marker"}
+	return hardening.DetectResult{Tripped: false, Evidence: "all locally stored passwords carry a `$scheme$` hash marker"}
 }
 
 // srlSNMPCommunity trips when any SNMP access-group carries a v1/v2c community
 // entry (an unauthenticated, cleartext-on-the-wire credential).
-func srlSNMPCommunity(c *Config) DetectResult {
-	if line, ok := c.firstMatch(reSRLCommunity); ok {
-		return DetectResult{Tripped: true, Evidence: line}
+func srlSNMPCommunity(c *hardening.Config) hardening.DetectResult {
+	if line, ok := c.FirstMatch(reSRLCommunity); ok {
+		return hardening.DetectResult{Tripped: true, Evidence: line}
 	}
-	return DetectResult{Tripped: false, Evidence: "no v1/v2c community entry configured"}
+	return hardening.DetectResult{Tripped: false, Evidence: "no v1/v2c community entry configured"}
 }
 
 // srlNTPUnconfigured trips when no NTP server is configured. Unsynchronized
 // time is an AUDIT control, not a convenience: every finding, log line and
 // correlation window this platform emits is timestamped by the device.
-func srlNTPUnconfigured(c *Config) DetectResult {
-	if line, ok := c.firstMatch(reSRLNTPServer); ok {
-		if c.has(reSRLNTPAdmin) {
-			return DetectResult{Tripped: false, Evidence: line}
+func srlNTPUnconfigured(c *hardening.Config) hardening.DetectResult {
+	if line, ok := c.FirstMatch(reSRLNTPServer); ok {
+		if c.Has(reSRLNTPAdmin) {
+			return hardening.DetectResult{Tripped: false, Evidence: line}
 		}
-		return DetectResult{Tripped: true, Evidence: line + " (NTP server listed but `admin-state enable` absent)"}
+		return hardening.DetectResult{Tripped: true, Evidence: line + " (NTP server listed but `admin-state enable` absent)"}
 	}
-	return DetectResult{Tripped: true, Evidence: "no `system ntp server` configured — device clock is unsynchronized"}
+	return hardening.DetectResult{Tripped: true, Evidence: "no `system ntp server` configured — device clock is unsynchronized"}
 }

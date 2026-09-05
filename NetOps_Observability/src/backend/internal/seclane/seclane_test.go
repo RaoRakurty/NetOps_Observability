@@ -14,8 +14,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -777,6 +776,69 @@ func TestMetricsSnapshotIsNilSafe(t *testing.T) {
 
 // ── the platform token: inventory row → dialect → the device's control set ──
 
+// ─── dialect packs, synthetic ────────────────────────────────────────────────
+//
+// The dialects beyond the core Cisco IOS-XE one are the `security_dialects`
+// commercial entitlement and live in src/backend/enterprise/dialects, which this
+// Apache-2.0 package must never import (licensing-gate.py check E). The lane
+// takes them as DATA through Deps.Dialects, so what belongs HERE is the seam:
+// that a pack handed to the lane reaches the engine, that a device is then
+// scored on ITS OWN control set, and that no foreign dialect leaks in.
+//
+// These packs therefore bind exactly the rule ids the shipped srlinux and arista
+// packs bind — the counts below are load-bearing in the tests — with trivial
+// `set …` / `management …` detections instead of the real crosswalks. The REAL
+// bindings, scored against the real lab captures, are asserted by
+// enterprise/dialects' own tests, which own the fixtures.
+
+// srlinuxTestRules / aristaTestRules are the rule ids each dialect binds.
+var (
+	srlinuxTestRules = []string{
+		"http-server-nontls", "local-user-weak-secret", "mgmt-api-unencrypted",
+		"no-central-logging", "no-ntp-server", "no-remote-aaa",
+		"no-service-password-encryption", "snmp-default-community",
+		"snmp-no-source-acl", "snmp-v1v2c-community", "ssh-not-v2",
+		"telnet-vty-enabled", "tls-no-client-auth", "weak-enable-password",
+	}
+	aristaTestRules = []string{
+		"http-server-nontls", "local-user-weak-secret", "mgmt-api-unencrypted",
+		"no-central-logging", "no-ntp-server", "no-remote-aaa",
+		"no-service-password-encryption", "ntp-no-authentication",
+		"snmp-default-community", "snmp-no-source-acl", "snmp-v1v2c-community",
+		"ssh-not-v2", "telnet-vty-enabled", "weak-enable-password",
+	}
+)
+
+// testDialectPacks builds the synthetic packs. Each binding trips when the
+// config carries the line "TRIP <rule-id>", so a test can choose exactly which
+// controls fail without owning any dialect grammar.
+func testDialectPacks() []hardening.DialectPack {
+	build := func(v hardening.Vendor, ids []string) hardening.DialectPack {
+		bind := make(map[string]hardening.VendorBinding, len(ids))
+		for _, id := range ids {
+			bind[id] = hardening.VendorBinding{
+				Detect:      hardening.DetectPresent(`^TRIP `+regexp.QuoteMeta(id)+`$`, "not tripped"),
+				Remediation: "fix " + id,
+			}
+		}
+		return hardening.DialectPack{Vendor: v, Bindings: bind}
+	}
+	return []hardening.DialectPack{
+		build(hardening.VendorSRLinux, srlinuxTestRules),
+		build(hardening.VendorArista, aristaTestRules),
+	}
+}
+
+// tripConfig renders a config that trips exactly the named rules.
+func tripConfig(ids ...string) string {
+	var b strings.Builder
+	b.WriteString("hostname lab\n")
+	for _, id := range ids {
+		b.WriteString("TRIP " + id + "\n")
+	}
+	return b.String()
+}
+
 // TestDevicePlatformTokenBindsTheRightDialect walks the WHOLE binding chain the
 // lab defect of 2026-09-03 broke, over the inventory shapes that actually exist
 // on this platform:
@@ -790,7 +852,7 @@ func TestMetricsSnapshotIsNilSafe(t *testing.T) {
 // why the rank is data and not code), and the emitted control set must be the
 // srlinux bindings — never the Cisco IOS catalogue.
 func TestDevicePlatformTokenBindsTheRightDialect(t *testing.T) {
-	cat := hardening.DefaultCatalog()
+	cat := hardening.DefaultCatalog(testDialectPacks()...)
 	// A rule id that exists ONLY in the IOS catalogue: its presence on any
 	// non-Cisco device is the exact regression this test guards.
 	const iosOnlyRule = "cdp-run-global"
@@ -916,37 +978,36 @@ func TestDevicePlatformTokenBindsTheRightDialect(t *testing.T) {
 	}
 }
 
-// srlinuxFixture is the REAL spine1 capture that internal/hardening scores its
-// dialect against (testdata provenance is documented in
-// internal/hardening/dialect_fabric_test.go). It is read across the package
-// boundary on purpose: this test's whole point is that the LANE, wired end to
-// end, produces on the bus what the rule engine predicts on that exact file —
-// a second copy would be free to drift from the thing under test.
-func srlinuxFixture(t *testing.T) string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "hardening", "testdata", "srlinux_spine1_running.txt"))
-	if err != nil {
-		t.Fatalf("read SR Linux fixture: %v", err)
-	}
-	return string(b)
-}
-
 func srlinuxDevice(id, tenant string) Device {
 	return Device{ID: id, Name: id, Address: "172.40.40.11",
 		Vendor: "nokia", OS: "SR Linux", TenantID: tenant}
 }
 
-// TestLaneEmitsTheSRLinuxControlSetWithRealVerdicts is the end-to-end shape of
+// TestLaneEmitsTheDeviceOwnControlSetWithRealVerdicts is the end-to-end shape of
 // the 2026-09-03 lab defect, from the inventory row to the bus record.
 //
 // As observed: a lane whose Deps.ConfigSource was nil (main.go constructed the
 // lane ABOVE the config-backup module that assigns it) emitted 32 checks per
 // spine — the whole catalog, Cisco IOS rules included — every one of them
-// Unknown. With the source wired and the binding gate resolved first, one SR
-// Linux spine emits its OWN 14 controls and the six FAILs the fixture predicts.
-func TestLaneEmitsTheSRLinuxControlSetWithRealVerdicts(t *testing.T) {
-	cfg := hardening.MemConfigSource{"spine1": srlinuxFixture(t)}
-	fx := newFixture(t, func(d *Deps) { d.ConfigSource = cfg })
+// Unknown. With the source wired, the packs handed in and the binding gate
+// resolved first, one SR Linux spine emits its OWN 14 controls and exactly the
+// FAILs its config predicts.
+//
+// The dialect here is the synthetic pack (see testDialectPacks): what this test
+// owns is the LANE — packs in through Deps, the device's own control set out on
+// the bus. The same walk over the REAL spine1 capture, against the real
+// bindings, is enterprise/dialects' TestSRLinuxSpineAsFoundVerdicts, which owns
+// that fixture.
+func TestLaneEmitsTheDeviceOwnControlSetWithRealVerdicts(t *testing.T) {
+	wantFail := []string{
+		"http-server-nontls", "mgmt-api-unencrypted", "tls-no-client-auth",
+		"snmp-v1v2c-community", "no-remote-aaa", "no-ntp-server",
+	}
+	cfg := hardening.MemConfigSource{"spine1": tripConfig(wantFail...)}
+	fx := newFixture(t, func(d *Deps) {
+		d.ConfigSource = cfg
+		d.Dialects = testDialectPacks()
+	})
 	fx.devices["acme"] = []Device{srlinuxDevice("spine1", "acme")}
 
 	fx.lane.ScanTenant(context.Background(), "acme", "manual")
@@ -965,10 +1026,6 @@ func TestLaneEmitsTheSRLinuxControlSetWithRealVerdicts(t *testing.T) {
 		}
 	}
 
-	wantFail := []string{
-		"http-server-nontls", "mgmt-api-unencrypted", "tls-no-client-auth",
-		"snmp-v1v2c-community", "no-remote-aaa", "no-ntp-server",
-	}
 	for _, id := range wantFail {
 		if !fails[id] {
 			t.Errorf("spine1 did not FAIL %q (got %q); emitted=%v", id, emitted[id], emitted)
@@ -984,8 +1041,9 @@ func TestLaneEmitsTheSRLinuxControlSetWithRealVerdicts(t *testing.T) {
 			t.Errorf("the Cisco IOS rule %q was evaluated against an SR Linux spine (%s)", iosOnly, st)
 		}
 	}
-	if len(emitted) != 14 {
-		t.Errorf("spine1 emitted %d posture checks, want its 14 srlinux-bound controls: %v", len(emitted), emitted)
+	if len(emitted) != len(srlinuxTestRules) {
+		t.Errorf("spine1 emitted %d posture checks, want its %d srlinux-bound controls: %v",
+			len(emitted), len(srlinuxTestRules), emitted)
 	}
 }
 
@@ -997,7 +1055,9 @@ func TestLaneEmitsTheSRLinuxControlSetWithRealVerdicts(t *testing.T) {
 func TestUnassessedFindingsCarryTheirReasonOnTheBus(t *testing.T) {
 	// Two devices, two DIFFERENT reasons: one SR Linux spine with no config on
 	// file, one device whose platform resolves to no dialect at all.
-	fx := newFixture(t, nil) // ConfigSource nil → nothing captured
+	// ConfigSource nil → nothing captured. The packs are still handed in, so
+	// spine1's own controls are the ones reported unassessed.
+	fx := newFixture(t, func(d *Deps) { d.Dialects = testDialectPacks() })
 	fx.devices["acme"] = []Device{
 		srlinuxDevice("spine1", "acme"),
 		{ID: "mystery", Name: "mystery", Vendor: "acme", OS: "WidgetOS 1.0", TenantID: "acme"},

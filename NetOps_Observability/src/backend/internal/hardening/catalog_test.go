@@ -156,24 +156,59 @@ func TestCatalogShape(t *testing.T) {
 	}
 }
 
-// TestMultiVendorBindingsDeclarative proves adding a vendor is declarative: at
-// least the telnet concept is bound across all three vendors, and each non-Cisco
-// binding both detects its dialect and carries a remediation.
-func TestMultiVendorBindingsDeclarative(t *testing.T) {
-	cat := DefaultCatalog()
-	telnet := ruleByID(t, cat, "telnet-vty-enabled")
-	for _, v := range []Vendor{VendorCiscoIOSXE, VendorJuniper, VendorNokia} {
-		if _, ok := telnet.Binding(v); !ok {
-			t.Errorf("telnet rule missing a binding for %q — multi-vendor seam not declarative", v)
-		}
+// TestDialectPackSeamIsDeclarative proves that adding a dialect is DATA, not a
+// change to this package: a DialectPack merges its bindings into the shipped
+// catalogue, cannot disturb the core dialect, and cannot invent a rule.
+//
+// The dialects Correlix ships beyond the core one are the `security_dialects`
+// entitlement and live in enterprise/dialects — which core must never import,
+// so this test exercises the seam with a synthetic pack. The real packs are
+// asserted against the real catalogue by that package's own tests.
+func TestDialectPackSeamIsDeclarative(t *testing.T) {
+	core := DefaultCatalog()
+	coreTelnet := ruleByID(t, core, "telnet-vty-enabled")
+	if _, ok := coreTelnet.Binding(VendorCiscoIOSXE); !ok {
+		t.Fatal("cisco-iosxe is the CORE dialect and must be bound with no pack at all")
 	}
-	// Juniper set-format detection.
-	jb, _ := telnet.Binding(VendorJuniper)
+	if _, ok := coreTelnet.Binding(VendorJuniper); ok {
+		t.Fatal("a non-core dialect must arrive through a DialectPack, not from this package")
+	}
+
+	pack := DialectPack{Vendor: VendorJuniper, Bindings: map[string]VendorBinding{
+		"telnet-vty-enabled": {
+			Detect:      DetectPresent(`^set system services telnet\b`, "telnet service not enabled"),
+			Remediation: "delete system services telnet",
+		},
+		// A binding for a rule the catalogue does not carry is IGNORED rather
+		// than fatal, so a pack authored against a newer catalogue cannot break
+		// an older engine. The pack's own tests are where that is caught.
+		"not-a-rule-in-this-catalogue": {Detect: DetectPresent(`^x`, "x"), Remediation: "x"},
+	}}
+	merged := DefaultCatalog(pack)
+	telnet := ruleByID(t, merged, "telnet-vty-enabled")
+
+	jb, ok := telnet.Binding(VendorJuniper)
+	if !ok {
+		t.Fatal("the pack's binding did not reach the catalogue")
+	}
 	if !jb.Detect(NewConfig(VendorJuniper, "set system services telnet\n")).Tripped {
-		t.Error("Juniper telnet detection did not trip on `set system services telnet`")
+		t.Error("the pack's detection did not trip on its own dialect")
 	}
 	if jb.Detect(NewConfig(VendorJuniper, "set system services ssh\n")).Tripped {
-		t.Error("Juniper telnet detection falsely tripped without telnet")
+		t.Error("the pack's detection falsely tripped without telnet")
+	}
+	if _, ok := telnet.Binding(VendorCiscoIOSXE); !ok {
+		t.Error("merging a pack must not disturb the core dialect's binding")
+	}
+	for _, r := range merged.Rules() {
+		if r.ID == "not-a-rule-in-this-catalogue" {
+			t.Fatal("a pack must not be able to ADD a rule — it may only bind an existing one")
+		}
+	}
+	// The unmerged catalogue is unchanged: DefaultCatalog builds fresh, so one
+	// caller's packs can never leak into another's (§5 no global state).
+	if _, ok := ruleByID(t, DefaultCatalog(), "telnet-vty-enabled").Binding(VendorJuniper); ok {
+		t.Error("a pack leaked into a catalogue built without it")
 	}
 }
 

@@ -129,9 +129,9 @@ func (c *Config) Lines() []string {
 	return out
 }
 
-// firstMatch returns the first line matching re (trimmed) and whether one
+// FirstMatch returns the first line matching re (trimmed) and whether one
 // existed.
-func (c *Config) firstMatch(re *regexp.Regexp) (string, bool) {
+func (c *Config) FirstMatch(re *regexp.Regexp) (string, bool) {
 	for _, ln := range c.lines {
 		if re.MatchString(ln) {
 			return strings.TrimSpace(ln), true
@@ -140,25 +140,25 @@ func (c *Config) firstMatch(re *regexp.Regexp) (string, bool) {
 	return "", false
 }
 
-// has reports whether any line matches re.
-func (c *Config) has(re *regexp.Regexp) bool {
-	_, ok := c.firstMatch(re)
+// Has reports whether any line matches re.
+func (c *Config) Has(re *regexp.Regexp) bool {
+	_, ok := c.FirstMatch(re)
 	return ok
 }
 
-// stanza is a top-level IOS-style configuration block: a header line at column 0
+// Stanza is a top-level IOS-style configuration block: a header line at column 0
 // plus the indented child lines beneath it, up to the next column-0 line.
-type stanza struct {
-	header   string
-	children []string
+type Stanza struct {
+	Header   string
+	Children []string
 }
 
-// iosStanzas returns the IOS-style blocks whose header line matches headerRe. A
+// IOSStanzas returns the IOS-style blocks whose header line matches headerRe. A
 // header is a line with no leading whitespace; its children are the subsequent
 // leading-whitespace lines until the next column-0 line. Used for VTY/line and
 // control-plane block reasoning where a rule depends on a sub-line's presence.
-func (c *Config) iosStanzas(headerRe *regexp.Regexp) []stanza {
-	var out []stanza
+func (c *Config) IOSStanzas(headerRe *regexp.Regexp) []Stanza {
+	var out []Stanza
 	for i := 0; i < len(c.lines); i++ {
 		ln := c.lines[i]
 		if ln == "" || ln == "!" {
@@ -170,7 +170,7 @@ func (c *Config) iosStanzas(headerRe *regexp.Regexp) []stanza {
 		if !headerRe.MatchString(strings.TrimSpace(ln)) {
 			continue
 		}
-		st := stanza{header: strings.TrimSpace(ln)}
+		st := Stanza{Header: strings.TrimSpace(ln)}
 		for j := i + 1; j < len(c.lines); j++ {
 			child := c.lines[j]
 			if child == "" || child == "!" {
@@ -179,16 +179,16 @@ func (c *Config) iosStanzas(headerRe *regexp.Regexp) []stanza {
 			if !isIndented(child) {
 				break
 			}
-			st.children = append(st.children, strings.TrimSpace(child))
+			st.Children = append(st.Children, strings.TrimSpace(child))
 		}
 		out = append(out, st)
 	}
 	return out
 }
 
-// childHas reports whether any child line of the stanza matches re.
-func (s stanza) childHas(re *regexp.Regexp) bool {
-	for _, ch := range s.children {
+// ChildHas reports whether any child line of the Stanza matches re.
+func (s Stanza) ChildHas(re *regexp.Regexp) bool {
+	for _, ch := range s.Children {
 		if re.MatchString(ch) {
 			return true
 		}

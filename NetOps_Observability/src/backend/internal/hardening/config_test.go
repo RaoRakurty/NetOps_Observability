@@ -35,21 +35,21 @@ line con 0
 interface Gi0/0
  ip address 10.0.0.1 255.255.255.0
 `)
-	sts := cfg.iosStanzas(reIOSVTYHeader)
+	sts := cfg.IOSStanzas(reIOSVTYHeader)
 	if len(sts) != 1 {
-		t.Fatalf("expected 1 vty stanza, got %d", len(sts))
+		t.Fatalf("expected 1 vty Stanza, got %d", len(sts))
 	}
-	if !sts[0].childHas(reIOSAccessClassIn) {
-		t.Error("vty stanza should have an inbound access-class child")
+	if !sts[0].ChildHas(reIOSAccessClassIn) {
+		t.Error("vty Stanza should have an inbound access-class child")
 	}
-	if !sts[0].childHas(reIOSTransIn) {
-		t.Error("vty stanza should have a transport input child")
+	if !sts[0].ChildHas(reIOSTransIn) {
+		t.Error("vty Stanza should have a transport input child")
 	}
-	// A stanza's children must stop at the next column-0 line (no bleed into
+	// A Stanza's children must stop at the next column-0 line (no bleed into
 	// `line con 0` / `interface`).
-	for _, ch := range sts[0].children {
+	for _, ch := range sts[0].Children {
 		if ch == "exec-timeout 5 0" || ch == "ip address 10.0.0.1 255.255.255.0" {
-			t.Errorf("stanza child bled past its block: %q", ch)
+			t.Errorf("Stanza child bled past its block: %q", ch)
 		}
 	}
 }

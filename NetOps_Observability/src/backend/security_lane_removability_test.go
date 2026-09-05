@@ -15,8 +15,15 @@ package backend
 // THE REMOVAL RECIPE (kept in sync with internal/seclane's package doc):
 //
 //	rm -r internal/seclane internal/secbus internal/hardening \
-//	      internal/threatlane internal/advisory internal/configdrift
+//	      internal/threatlane internal/advisory internal/configdrift \
+//	      enterprise/dialects
 //	rm secapi/rules.go secapi/rules_test.go
+//	(enterprise/dialects is the COMMERCIAL half of the same producer — the
+//	 hardening dialects beyond the core one. It imports internal/hardening, so it
+//	 goes with it; the reverse never holds, because core may not import it. It is
+//	 also removable ON ITS OWN, which is the licensing boundary: deleting only
+//	 enterprise/ leaves the lane assessing the core dialect. Both deletions are
+//	 driven by the SAME main.go marker blocks.)
 //	rm security_lane_isolation_test.go security_lane_removability_test.go
 //	rm licence_dialect_gate_test.go  (the licence gate on the dialect registry;
 //	   its subject — main.go's licenceDialectAllowed — carries SECURITY-LANE
@@ -52,6 +59,10 @@ var securityProducerPkgs = []string{
 	"netops/backend/internal/threatlane",
 	"netops/backend/internal/advisory",
 	"netops/backend/internal/seclane",
+	// The commercial dialect packs. Listed here so the removability rule binds
+	// to them too: nothing outside the allowlist may reach for a dialect pack
+	// any more than for the engine it plugs into.
+	"netops/backend/enterprise/dialects",
 }
 
 // securityImportAllowlist is every file (by module-relative path) permitted to
@@ -84,7 +95,7 @@ var securityImportAllowlist = map[string]bool{
 // each other freely.
 var securityAllowedDirs = []string{
 	"internal/secbus/", "internal/hardening/", "internal/threatlane/",
-	"internal/advisory/", "internal/seclane/",
+	"internal/advisory/", "internal/seclane/", "enterprise/dialects/",
 }
 
 func TestSecurityProducerIsImportedOnlyFromTheAllowlistedFiles(t *testing.T) {

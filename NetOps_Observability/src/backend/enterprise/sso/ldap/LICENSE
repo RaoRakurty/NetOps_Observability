@@ -3,12 +3,13 @@ SPDX-License-Identifier: LicenseRef-Correlix-Enterprise
 
 THIS DIRECTORY IS NOT APACHE-2.0.
 
-Every file in src/backend/internal/ldap is a COMMERCIAL ADD-ON MODULE of
+Every file in src/backend/enterprise/sso/ldap is a COMMERCIAL ADD-ON MODULE of
 Correlix. It implements the `ldap` entitlement — LDAP / Active Directory
-directory authentication — which the owner has placed in the Enterprise tier.
+directory authentication: the bind and search client, its TLS posture and its
+configuration domain — which the owner has placed in the Enterprise tier.
 
-The rest of Correlix is Apache-2.0. Local authentication and OIDC single
-sign-on are core, and are unaffected by this notice.
+The rest of Correlix is Apache-2.0. Local authentication and OIDC single sign-
+on are core, and are unaffected by this notice.
 
   Full terms      : LICENSES/Correlix-Enterprise.txt at the repository root
   Directory map   : LICENSING.md

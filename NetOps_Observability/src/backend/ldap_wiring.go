@@ -1,7 +1,7 @@
 package backend
 
 // ldap_wiring.go — what stays in main after the LDAP protocol core moved to
-// internal/ldap (Phase-2 W1.8): the LDAP_* env constructor, the login handler
+// enterprise/sso/ldap (Phase-2 W1.8): the LDAP_* env constructor, the login handler
 // and the source-compat aliases. The config STORE (operator overlay) is in
 // auth_config.go and consumes these aliases.
 
@@ -12,7 +12,13 @@ import (
 	"strconv"
 	"strings"
 
-	"netops/backend/internal/ldap"
+	// ENTERPRISE-ASSEMBLY-BEGIN (ldap)
+	// LDAP directory authentication is a commercial add-on module. package
+	// main is the assembly layer and the only layer permitted to name both
+	// licences; deleting enterprise/ means deleting this block and the code
+	// that uses it (see LICENSING.md).
+	"netops/backend/enterprise/sso/ldap"
+	// ENTERPRISE-ASSEMBLY-END
 )
 
 type (

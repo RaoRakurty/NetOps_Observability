@@ -21,6 +21,13 @@ import (
 	"netops/backend/appid"
 	"netops/backend/cloud"
 	"netops/backend/cloudconn"
+	// SECURITY-LANE-BEGIN
+	// ENTERPRISE-ASSEMBLY-BEGIN (security_dialects)
+	// The commercial hardening dialects. package main is the assembly layer and
+	// the ONLY layer permitted to name both licences (licensing-gate.py check E).
+	"netops/backend/enterprise/dialects"
+	// ENTERPRISE-ASSEMBLY-END
+	// SECURITY-LANE-END
 	"netops/backend/internal/apikey"
 	// VMALERT-WEBHOOK-BEGIN
 	"netops/backend/internal/alertwebhook"
@@ -4381,6 +4388,10 @@ func (s *server) securityAPIDeps() secapi.Deps {
 // A rule contributes at the honest "supports" strength (§5d): one config-audit
 // check evidences a control without fully demonstrating it.
 func securityComplianceInputs() secapi.ComplianceInputs {
+	// No DialectPacks, deliberately: this projects the rule CONCEPTS and their
+	// control/benchmark provenance, all of which are Apache-2.0 core and the
+	// same whichever dialects are installed. Only the per-vendor detection
+	// differs, and nothing here reads it.
 	hc := hardening.DefaultCatalog()
 
 	labels := map[string]string{}
@@ -4456,6 +4467,15 @@ func (s *server) securityLaneDeps() seclane.Deps {
 		// The lane forwards it to the engine and knows nothing about licensing.
 		DialectAllowed: s.licenceDialectAllowed,
 		// LICENCE-END
+		// ENTERPRISE-ASSEMBLY-BEGIN (security_dialects)
+		// The dialects beyond the core one are a commercial add-on module
+		// (enterprise/dialects). This is the ONLY place that names it: the lane
+		// takes the packs as data, and internal/hardening never learns where
+		// they came from. Deleting enterprise/ means deleting this line and the
+		// import — the lane then evaluates the core dialect and reports every
+		// other platform NotApplicable, never a false Pass.
+		Dialects: dialects.Packs(),
+		// ENTERPRISE-ASSEMBLY-END
 		RuleStates: func(ctx context.Context, tenant string) (map[string]bool, error) {
 			if s.secStore == nil {
 				return nil, errors.New("security control-plane store unavailable")

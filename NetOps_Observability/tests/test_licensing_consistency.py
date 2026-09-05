@@ -89,9 +89,15 @@ def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def policy_dict() -> dict:
+    """The policy, read directly. The `policy` fixture is the same thing; this
+    plain function exists so a test that takes no fixture can still read it."""
+    return json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+
+
 @pytest.fixture(scope="module")
 def policy() -> dict:
-    return json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+    return policy_dict()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -289,6 +295,107 @@ def test_nothing_is_gated_outside_the_owners_locked_commercial_set(policy):
                 f"{entry['path']} is gated on {entry['entitlement']!r}, which the owner "
                 f"has not locked as commercial. Locked set: {sorted(locked)}"
             )
+
+
+def test_every_commercial_path_is_under_the_physical_enterprise_boundary(policy):
+    """The owner's 2026-09-04 spec: commercial implementations live under a REAL
+    directory boundary, not scattered by convention. One repository, one binary,
+    one place to look."""
+    for entry in policy["commercial_paths"]["entries"]:
+        assert entry["path"].startswith("src/backend/enterprise/"), (
+            f"{entry['path']} is marked commercial but does not sit under "
+            f"src/backend/enterprise/. The boundary is physical: a reader must be "
+            f"able to tell a file's licence from its path alone."
+        )
+        assert (PROJ / entry["path"]).is_dir(), f"{entry['path']} is not a directory"
+
+
+def test_the_import_checker_actually_catches_a_core_to_enterprise_import(tmp_path):
+    """Check E is the load-bearing half of the boundary: it is what stops an
+    Apache-2.0 file quietly depending on commercially licensed code. A checker
+    nobody has ever seen fail is a checker nobody knows works, so this plants a
+    real violation, proves the gate rejects it, and removes it again.
+
+    The planted file is syntactically valid Go in an existing CORE package, and
+    it is deleted in a finally: a crash here must not leave the tree unbuildable.
+    """
+    core_pkg = PROJ / "src" / "backend" / "internal" / "hardening"
+    assert core_pkg.is_dir(), "the core package this test plants into has moved"
+    commercial = [e["path"] for e in policy_dict()["commercial_paths"]["entries"]]
+    assert commercial, "no commercial paths to violate — the test proves nothing"
+    import_path = "netops/backend/" + commercial[0][len("src/backend/"):]
+
+    planted = core_pkg / "zz_licensing_gate_probe.go"
+    assert not planted.exists(), "a previous run left its probe behind"
+    planted.write_text(
+        "package hardening\n\n"
+        "// Deliberate boundary violation planted by tests/test_licensing_consistency.py.\n"
+        "// If you are reading this in a working tree, delete it.\n"
+        f'import _ "{import_path}"\n',
+        encoding="utf-8",
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(PROJ / "scripts" / "licensing-gate.py")],
+            capture_output=True, text=True, cwd=PROJ, check=False,
+        )
+    finally:
+        planted.unlink()
+
+    assert result.returncode != 0, (
+        "the licensing gate PASSED with an Apache-2.0 core package importing a "
+        f"commercial one ({import_path}) — check E is not enforcing the boundary\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    output = result.stdout + result.stderr
+    assert "E:" in output and planted.name in output, (
+        f"the gate failed, but not on check E for the planted file:\n{output}"
+    )
+
+    # And the tree is clean again: the gate passes with the probe removed.
+    after = subprocess.run(
+        [sys.executable, str(PROJ / "scripts" / "licensing-gate.py")],
+        capture_output=True, text=True, cwd=PROJ, check=False,
+    )
+    assert after.returncode == 0, (
+        f"the gate does not pass after removing the probe:\n{after.stdout}\n{after.stderr}"
+    )
+
+
+def test_assembly_imports_of_enterprise_code_are_marked_for_removal(policy):
+    """The assembly layer is allowed to name both licences — but only inside
+    ENTERPRISE-ASSEMBLY-BEGIN / -END markers, so "delete enterprise/" stays a
+    mechanical recipe rather than a reading exercise."""
+    backend = PROJ / "src" / "backend"
+    commercial_imports = [
+        "netops/backend/" + e["path"][len("src/backend/"):]
+        for e in policy["commercial_paths"]["entries"]
+    ]
+    allowed = {
+        name
+        for allowance in policy["import_boundary"]["assembly_allowances"]
+        for name in allowance["files"]
+    }
+    seen_marked = 0
+    for name in sorted(allowed):
+        path = backend / name
+        if not path.is_file():
+            continue
+        body = path.read_text(encoding="utf-8")
+        if not any(f'"{imp}"' in body for imp in commercial_imports):
+            continue
+        assert "ENTERPRISE-ASSEMBLY-BEGIN" in body, (
+            f"{name} imports a commercial package but carries no "
+            f"ENTERPRISE-ASSEMBLY-BEGIN marker, so the removal recipe cannot find it"
+        )
+        assert body.count("ENTERPRISE-ASSEMBLY-BEGIN") == body.count("ENTERPRISE-ASSEMBLY-END"), (
+            f"{name} has unbalanced ENTERPRISE-ASSEMBLY markers"
+        )
+        seen_marked += 1
+    assert seen_marked, (
+        "no assembly file imports an enterprise package; either the boundary moved "
+        "or the allowance list is stale"
+    )
 
 
 def test_isolation_is_never_commercial(policy):

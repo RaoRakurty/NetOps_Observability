@@ -252,10 +252,12 @@ func TestOnlyBoundRulesAreEvaluated(t *testing.T) {
 		platform string
 		vendor   Vendor
 	}{
-		{"srlinux", "nokia SR Linux", VendorSRLinux},
-		{"arista", "Arista EOS 4.36.0.1F", VendorArista},
+		// The CORE dialect only. The dialects that arrive through a DialectPack
+		// are the `security_dialects` entitlement and live in
+		// enterprise/dialects, which core must never import; that package runs
+		// the SAME invariant over its own packs
+		// (TestOnlyBoundRulesAreEvaluatedForPackDialects).
 		{"cisco", "Cisco IOS-XE 17.9", VendorCiscoIOSXE},
-		{"juniper", "Juniper Junos 21.4", VendorJuniper},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := VendorFromPlatform(tc.platform); got != tc.vendor {

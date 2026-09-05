@@ -9,7 +9,7 @@
 // the correlation engine with ZERO security-specific code.
 //
 // ── REMOVAL RULE (the removable-module constraint) ──────────────────────────
-// The security PRODUCER stays REMOVABLE. Exactly three units in the compiled
+// The security PRODUCER stays REMOVABLE. Exactly four units in the compiled
 // tree depend on internal/{secbus,hardening,threatlane,advisory}:
 //
 //  1. THIS PACKAGE (internal/seclane) — the producer runtime
@@ -17,17 +17,28 @@
 //  3. internal/configdrift          — the config-drift producer: it emits its
 //     verdict as a secfindings.Finding through internal/secbus and adapts the
 //     sealed config store to internal/hardening's ConfigSource
+//  4. enterprise/dialects           — the COMMERCIAL hardening dialects beyond
+//     the core one (the `security_dialects` entitlement). It plugs in as DATA
+//     through hardening.DialectPack and reaches this package only as
+//     Deps.Dialects, which the assembly layer fills in. Core never imports it
 //
 // To remove the security producer feature entirely:
 //
 //	rm -r internal/seclane internal/secbus internal/hardening \
-//	      internal/threatlane internal/advisory internal/configdrift
+//	      internal/threatlane internal/advisory internal/configdrift \
+//	      enterprise/dialects
 //	rm secapi/rules.go secapi/rules_test.go
 //	rm security_lane_isolation_test.go security_lane_removability_test.go
 //	delete every main.go line between a `SECURITY-LANE-BEGIN` marker and its
-//	matching `SECURITY-LANE-END` (five blocks: the import, the server field, the
-//	worker start, the route registration, the metrics write, and the
-//	securityLaneDeps/registerSecurityLaneRoutes wiring)
+//	matching `SECURITY-LANE-END` (the import, the server field, the worker start,
+//	the route registration, the metrics write, and the
+//	securityLaneDeps/registerSecurityLaneRoutes wiring — the enterprise/dialects
+//	import and the Deps.Dialects line sit INSIDE those blocks, so they go with it)
+//
+// enterprise/dialects is ALSO removable on its own, and that is the LICENSING
+// boundary rather than the feature one: delete src/backend/enterprise and the
+// two ENTERPRISE-ASSEMBLY-marked lines that name it, and the lane keeps running
+// on the Apache-2.0 core dialect, reporting every other platform NotApplicable.
 //
 // internal/configdrift is deliberately NOT inside those markers — it is wired to
 // FEATURE_CONFIG_BACKUP, not FEATURE_SECURITY_LANE — so its removal is a named
@@ -244,6 +255,12 @@ type Deps struct {
 	// licensing — it just forwards this to the engine, which reports an
 	// unlicensed dialect honestly rather than skipping the device.
 	DialectAllowed func(hardening.Vendor) bool
+	// Dialects are the hardening DIALECT PACKS this deployment evaluates beyond
+	// the core one. Optional: nil means the core dialect only, which is what an
+	// Apache-2.0-only build (enterprise/ deleted) runs — every other platform is
+	// then reported NotApplicable, never a false Pass. The lane knows nothing
+	// about where a pack comes from; the assembly layer supplies them.
+	Dialects []hardening.DialectPack
 	// LICENCE-END
 
 	// Authz resolves the caller for the HTTP surface. Required.
@@ -660,7 +677,7 @@ func (l *Lane) hardeningFindings(ctx context.Context, tenant, scanID string,
 	seams := l.seamResolver(ctx, tenant)
 	// LICENCE-BEGIN — WithDialectGate is nil-safe: a nil DialectAllowed allows
 	// every dialect, so this call is a no-op unless the integrator wired one.
-	eng := hardening.NewEngine(hardening.DefaultCatalog(), cfgSrc, seams,
+	eng := hardening.NewEngine(hardening.DefaultCatalog(l.deps.Dialects...), cfgSrc, seams,
 		hardening.WithClock(l.deps.Now), hardening.WithDialectGate(l.deps.DialectAllowed))
 	// LICENCE-END
 	for _, d := range devices {

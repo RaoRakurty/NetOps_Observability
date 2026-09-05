@@ -2,12 +2,14 @@ package backend
 
 // ldap_env_test.go — the LDAP_* env constructor stays in main (env reads live
 // in the entrypoint); its tests moved here when the protocol core went to
-// internal/ldap (Phase-2 W1.8).
+// enterprise/sso/ldap (Phase-2 W1.8).
 
 import (
 	"testing"
 
-	"netops/backend/internal/ldap"
+	// ENTERPRISE-ASSEMBLY-BEGIN (ldap)
+	"netops/backend/enterprise/sso/ldap"
+	// ENTERPRISE-ASSEMBLY-END
 )
 
 func TestNewLDAPConfigFromEnv(t *testing.T) {
