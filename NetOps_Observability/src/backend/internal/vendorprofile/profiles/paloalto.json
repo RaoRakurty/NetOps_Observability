@@ -19,7 +19,8 @@
     "vrf_term_keys": [
       "paloalto",
       "panos"
-    ]
+    ],
+    "vrf_scope_keyword": ""
   },
   "snmp_configgen": {
     "v2c_template": "set deviceconfig system snmp-setting access-setting version v2c snmp-community-string <<community>>",

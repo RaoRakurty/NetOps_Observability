@@ -280,6 +280,13 @@ type DialectPlan struct {
 	Baseline []string           `json:"baseline"`
 	Optional []string           `json:"optional,omitempty"`
 	Bindings map[string]Binding `json:"bindings"`
+	// vrfScopeKeyword is the CLI token this dialect's vendor profile authors
+	// ahead of a VRF / routing-instance name (vendorprofile.Dialect
+	// .VRFScopeKeyword), resolved once at load from the `profile:` this plan
+	// declares. Empty = the dialect scopes with the bare name. It is
+	// unexported because it is RESOLVED data, not part of the plan document
+	// the API serves.
+	vrfScopeKeyword string
 }
 
 // Bound reports whether this dialect binds intent.

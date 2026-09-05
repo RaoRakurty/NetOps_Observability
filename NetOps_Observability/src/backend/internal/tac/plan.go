@@ -278,7 +278,7 @@ func (c *Catalog) Plan(classID string, dev Device, opt PlanOptions) (*Plan, erro
 		if mb <= 0 {
 			mb = defaultMaxOutputBytes
 		}
-		cmd := renderCommand(b.Command, dialect, opt.Target)
+		cmd := renderCommand(b.Command, dp.vrfScopeKeyword, opt.Target)
 		// A bounded probe whose destination did not render is NOT run: on several
 		// platforms a bare ping opens an interactive dialog, and an unscoped
 		// probe is meaningless anyway. It is reported as unbound, with the
@@ -324,7 +324,7 @@ func (c *Catalog) Plan(classID string, dev Device, opt PlanOptions) (*Plan, erro
 				st := c.unboundStep(in, SectionDeepDive,
 					"needs your explicit approval — "+b.ConsentNote)
 				st.NeedsConsent = true
-				st.Command = renderCommand(b.Command, dialect, opt.Target)
+				st.Command = renderCommand(b.Command, dp.vrfScopeKeyword, opt.Target)
 				st.Verified = b.Verified
 				st.Sources = b.Sources
 				p.Unbound = append(p.Unbound, st)
@@ -398,7 +398,7 @@ func (p *Plan) displayPlatform() string {
 // is DROPPED (the command renders in its unscoped form) rather than passed
 // through — a malformed argument must never reach a device, and refusing the
 // whole command would lose the unscoped capture that is still useful.
-func renderCommand(tmpl, dialect string, tgt Target) string {
+func renderCommand(tmpl, vrfKeyword string, tgt Target) string {
 	arg := func(s string) string {
 		s = strings.TrimSpace(s)
 		if s == "" || !argTokenRE.MatchString(s) {
@@ -412,27 +412,25 @@ func renderCommand(tmpl, dialect string, tgt Target) string {
 		"{prefix}", arg(tgt.Prefix),
 		"{rid}", arg(tgt.RouterID),
 		"{area}", arg(tgt.Area),
-		"{vrf-scope}", vrfScope(dialect, arg(tgt.VRF)),
+		"{vrf-scope}", vrfScope(vrfKeyword, arg(tgt.VRF)),
 	).Replace(tmpl)
 	return strings.Join(strings.Fields(out), " ")
 }
 
-// vrfScope renders the dialect keyword that scopes a lookup to a VRF /
-// routing-instance. The concept is one; the keyword is dialect-specific.
-func vrfScope(dialect, vrf string) string {
+// vrfScope renders the keyword that scopes a lookup to a VRF / routing-instance
+// ahead of the instance name. The concept is one; the keyword is the dialect's,
+// and it is DATA (vendorprofile.Dialect.VRFScopeKeyword, resolved onto the plan
+// at load) — never a switch here, so a new dialect arrives as profile data
+// rather than a code edit. An empty keyword is the authored "bare name" answer:
+// that dialect's own templates already carry whatever keyword the CLI needs.
+func vrfScope(keyword, vrf string) string {
 	if vrf == "" {
 		return ""
 	}
-	switch {
-	case strings.HasPrefix(dialect, "juniper"):
-		return "instance " + vrf
-	case strings.HasPrefix(dialect, "huawei"):
-		return "vpn-instance " + vrf
-	case strings.HasPrefix(dialect, "nokia"):
+	if keyword == "" {
 		return vrf
-	default:
-		return "vrf " + vrf
 	}
+	return keyword + " " + vrf
 }
 
 // planID is a deterministic, non-secret id for a plan: the same class, device,

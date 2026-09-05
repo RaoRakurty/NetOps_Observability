@@ -23,7 +23,8 @@
     ],
     "vrf_synonyms": [
       "routing-instance"
-    ]
+    ],
+    "vrf_scope_keyword": "instance"
   },
   "verify": {
     "commands": {

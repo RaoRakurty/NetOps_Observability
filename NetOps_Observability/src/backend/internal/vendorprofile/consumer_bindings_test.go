@@ -473,3 +473,53 @@ func TestPcapPlatformRuleOrderIsPinned(t *testing.T) {
 		t.Errorf("the capture-family resolution order changed:\n got %+v\nwant %+v", got, want)
 	}
 }
+
+// ─── dialect: VRF scope keyword (internal/tac) ───────────────────────────────
+
+// TestVRFScopeKeywordsArePinned pins the CLI token each vendor's dialect puts
+// ahead of a VRF / routing-instance name, which internal/tac renders into the
+// `{vrf-scope}` placeholder of its command plans (tracker row 248, where it
+// stopped being a switch in internal/tac/plan.go). These strings go on a wire:
+// a wrong keyword is a command the device rejects, so the row is the contract.
+//
+// An EMPTY keyword is an authored answer, not a gap — that vendor's own command
+// templates already carry the keyword the CLI needs and take the bare instance
+// name after it (SR Linux `show network-instance <name> …`, SR OS
+// `show router <name> …`, PAN-OS `logical-router <name>`).
+func TestVRFScopeKeywordsArePinned(t *testing.T) {
+	want := map[string]string{
+		"arista":   "vrf",          // EOS: show ip ospf vrf <name>
+		"cisco":    "vrf",          // IOS / IOS-XE / IOS-XR / NX-OS: show ip route vrf <name>
+		"huawei":   "vpn-instance", // VRP: display ip routing-table vpn-instance <name>
+		"juniper":  "instance",     // Junos: show ospf neighbor instance <name>
+		"nokia":    "",             // SR Linux / SR OS scope with the bare instance name
+		"paloalto": "",             // PAN-OS scopes with logical-router / virtual-router <name>
+		"fortinet": "",             // no authored FortiOS command is VRF-scoped
+	}
+	reg := Default()
+	for vendor, kw := range want {
+		rec, ok := reg.Vendor(vendor)
+		if !ok {
+			t.Errorf("vendor %q is not in the registry", vendor)
+			continue
+		}
+		if got := rec.Dialect.VRFScopeKeyword; got != kw {
+			t.Errorf("vendor %q vrf_scope_keyword = %q, pinned %q", vendor, got, kw)
+		}
+	}
+	// Every OTHER vendor must leave it unset: an unauthored keyword is the bare
+	// name, and inventing one for a vendor with no command plan would be a
+	// vendor fact nobody checked.
+	for _, id := range reg.VendorIDs() {
+		if _, pinned := want[id]; pinned {
+			continue
+		}
+		rec, ok := reg.Vendor(id)
+		if !ok {
+			t.Fatalf("vendor %q listed but not resolvable", id)
+		}
+		if kw := rec.Dialect.VRFScopeKeyword; kw != "" {
+			t.Errorf("vendor %q authors vrf_scope_keyword %q but is not pinned here", id, kw)
+		}
+	}
+}

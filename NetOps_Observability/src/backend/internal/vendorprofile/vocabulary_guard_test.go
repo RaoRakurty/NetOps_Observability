@@ -50,10 +50,15 @@ package vendorprofile
 // move changed nothing, and a row pin in consumer_bindings_test.go proving the
 // data is the data that moved.
 //
-// ONE entry remains, and it is not a residual: it is a legitimate implementation
-// switch that selects Go code, not a vendor fact. It carries its reason inline,
-// so the exception is reviewable rather than invisible — and adding a second
-// should be an argument, not a reflex.
+// The LAST residual — internal/tac's VRF scope keyword switch — went the same
+// way on tracker row 248: the keyword is now `dialect.vrf_scope_keyword` in the
+// profile data, resolved onto the TAC plan at load, with a pre-move byte-parity
+// golden in internal/tac/testdata/vrf_scope_parity.json.
+//
+// The entries that remain are NOT residuals: each selects Go code or describes
+// the vendor as a support organisation, not a device fact. Each carries its
+// reason inline, so the exception is reviewable rather than invisible — and
+// adding another should be an argument, not a reflex.
 
 import (
 	"go/ast"
@@ -88,12 +93,6 @@ var vocabularyGuardAllowlist = map[string]string{
 	// meaning to the profile data.
 	"internal/ticketing/attach_email.go":    "vendor → TAC attachment mailbox / subject convention (support organisation, not device profile)",
 	"internal/ticketing/caseconn_portal.go": "vendor → case-portal descriptor (URL + form fields the portal asks for), not device profile",
-	// The CLI keyword that scopes a lookup to a VRF ("vrf X" / "instance X" /
-	// "vpn-instance X" / bare name on SR Linux) is dispatched on the DIALECT id
-	// the registry itself resolved (CLIDialectForPlatform); the switch is a
-	// rendering of that dialect, not a second vocabulary. The right long-term
-	// home is a Dialect.VRFScopeKeyword field — tracked, not done here.
-	"internal/tac/plan.go": "VRF scope keyword rendered per registry-resolved dialect id (Dialect.VRFScopeKeyword is the intended home)",
 }
 
 // vocabularyGuardMinHits is how many distinct registry ids one literal must

@@ -162,6 +162,14 @@ func TestLoaderRejectsInvalidDocuments(t *testing.T) {
 			d["dialect"] = map[string]any{"vrf_synonyms": []string{"vrf"}}
 		},
 		"dialect term no keys": func(d map[string]any) { d["dialect"] = map[string]any{"vrf_term": "VRF"} },
+		// The scope keyword is ONE CLI token: a second word would silently widen
+		// every VRF-scoped command the TAC plans render at a device.
+		"dialect scope keyword with a space": func(d map[string]any) {
+			d["dialect"].(map[string]any)["vrf_scope_keyword"] = "vpn instance"
+		},
+		"dialect scope keyword upper case": func(d map[string]any) {
+			d["dialect"].(map[string]any)["vrf_scope_keyword"] = "VRF"
+		},
 		"missing platform": func(d map[string]any) {
 			d["profiles"].([]any)[0].(map[string]any)["platform"] = ""
 		},

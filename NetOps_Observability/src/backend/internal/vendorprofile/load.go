@@ -198,8 +198,20 @@ func validateDialect(name string, dl Dialect) error {
 			return fmt.Errorf("vendorprofile: %s: empty vrf_synonym %q", name, s)
 		}
 	}
+	// The scope keyword is ONE CLI token rendered ahead of an instance name, so
+	// it carries the shape of a token and nothing else: no whitespace (a second
+	// word would silently widen every scoped command), no upper case, no
+	// metacharacter. An empty keyword is the authored "bare name" answer and is
+	// therefore not a shape error.
+	if kw := dl.VRFScopeKeyword; kw != "" && !vrfScopeKeywordRE.MatchString(kw) {
+		return fmt.Errorf("vendorprofile: %s: vrf_scope_keyword %q must be one lower-case CLI token", name, kw)
+	}
 	return nil
 }
+
+// vrfScopeKeywordRE is the shape of a VRF scope keyword: one lower-case CLI
+// token, hyphen-separated at most ("vrf", "instance", "vpn-instance").
+var vrfScopeKeywordRE = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
 // validFidelity is the closed fidelity vocabulary (the telemetry catalog's
 // ladder plus the explicit unassessed rung).

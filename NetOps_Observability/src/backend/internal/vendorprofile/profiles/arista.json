@@ -21,7 +21,8 @@
     ],
     "vrf_synonyms": [
       "vrf"
-    ]
+    ],
+    "vrf_scope_keyword": "vrf"
   },
   "verify": {
     "commands": {

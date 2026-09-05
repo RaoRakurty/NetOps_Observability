@@ -354,7 +354,8 @@ func loadPlan(c *Catalog, slug, src string) (*DialectPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := vendorprofile.Default().Lookup(profile); !ok {
+	prof, ok := vendorprofile.Default().Lookup(profile)
+	if !ok {
 		return nil, fmt.Errorf("`profile: %s` is not a vendorprofile profile id", profile)
 	}
 	if got := DialectSlug(profile); got != dialect {
@@ -382,6 +383,10 @@ func loadPlan(c *Catalog, slug, src string) (*DialectPlan, error) {
 	p := &DialectPlan{
 		Dialect: dialect, Profile: profile, Display: display, Version: version,
 		Sources: planSources, Bindings: map[string]Binding{},
+		// The `{vrf-scope}` keyword is VENDOR DATA, resolved once here from the
+		// profile this plan already names — never a switch on the dialect id.
+		// A profile that authors none scopes with the bare instance name.
+		vrfScopeKeyword: prof.Dialect.VRFScopeKeyword,
 	}
 
 	bn, err := ymap(doc, "bindings")

@@ -18,7 +18,8 @@
     "vrf_term_keys": [
       "fortinet",
       "fortios"
-    ]
+    ],
+    "vrf_scope_keyword": ""
   },
   "snmp_configgen": {
     "v2c_template": "config system snmp sysinfo\n    set status enable\nend\nconfig system snmp community\n    edit 1\n        set name \"<<community>>\"\n        set status enable\n        set query-v2c-status enable\n        config hosts\n            edit 1\n                set ip <<mgmt_subnet>> <<mask>>\n            next\n        end\n    next\nend",

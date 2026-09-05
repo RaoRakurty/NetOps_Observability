@@ -120,6 +120,34 @@ type Dialect struct {
 	// VRFSynonyms are this vendor's spellings of the VRF concept, used to
 	// classify a parser token as ConceptVRF. Canonicalized at load.
 	VRFSynonyms []string `json:"vrf_synonyms,omitempty"`
+	// VRFScopeKeyword is the CLI token this vendor's operator types AHEAD of a
+	// VRF / routing-instance NAME to scope a lookup to it: the command renders
+	// as `<keyword> <name>`. An EMPTY keyword means this vendor scopes with the
+	// bare name (its command templates already carry whatever keyword the CLI
+	// needs, e.g. SR Linux `show network-instance <name> …`), so nothing is
+	// emitted ahead of it.
+	//
+	// It is the DATA behind the `{vrf-scope}` placeholder in the TAC command
+	// plans (internal/tac): the concept is one, the keyword is per-dialect, and
+	// authoring a new dialect must not mean editing a switch in Go. Authored
+	// per vendor from that vendor's own command reference:
+	//
+	//	cisco     "vrf"           — `show ip route vrf <name>` (IOS/IOS-XE/IOS-XR/NX-OS
+	//	                            command references; the ASA plan scopes nothing)
+	//	arista    "vrf"           — `show ip ospf vrf <name>` (EOS command reference)
+	//	juniper   "instance"      — `show ospf neighbor instance <name>` (Junos CLI reference)
+	//	huawei    "vpn-instance"  — `display ip routing-table vpn-instance <name>` (VRP command reference)
+	//	nokia     ""              — SR Linux `show network-instance <name> …` and SR OS
+	//	                            `show router <name> …` carry the keyword in the
+	//	                            template; the scope is the bare instance name
+	//	paloalto  ""              — PAN-OS scopes with `logical-router <name>` /
+	//	                            `virtual-router <name>`, both already in the
+	//	                            templates; there is no separate PAN-OS keyword
+	//	fortinet  ""              — no authored FortiOS command is VRF-scoped, so no
+	//	                            keyword is established for it
+	//
+	// A vendor with no TAC dialect leaves it unset; nothing renders for it.
+	VRFScopeKeyword string `json:"vrf_scope_keyword,omitempty"`
 }
 
 // Capture is the read-only command set a config-capture run issues over the SSH

@@ -22,7 +22,8 @@
     ],
     "vrf_synonyms": [
       "vpn-instance"
-    ]
+    ],
+    "vrf_scope_keyword": "vpn-instance"
   },
   "verify": {
     "commands": {

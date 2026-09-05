@@ -26,7 +26,8 @@
     ],
     "vrf_synonyms": [
       "vprn"
-    ]
+    ],
+    "vrf_scope_keyword": ""
   },
   "verify": {
     "commands": {
