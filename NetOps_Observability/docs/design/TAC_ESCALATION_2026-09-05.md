@@ -66,13 +66,32 @@ the "what TAC looks at first" note. Adding a class is data, reviewed like a skil
   collected outputs the parsers do not recognise (backlog → parser/ binding work).
 
 ## 4. CaseOpener connectors (`internal/tac/`; interface in core, implementations pluggable)
-- **ITSM** (exist as notify connectors, reuse the credentials): ServiceNow (incident +
-  attachment API), Jira (issue + attachment).
-- **Vendor TAC**: Cisco Support Case API (v3, OAuth2 client credentials — customer's CCO
-  app), Juniper Case Manager API, Arista TAC (email-with-attachment or portal text), Nokia
-  (portal text). Each: create case, attach bundle, record id/URL; unsupported vendor →
-  portal-text mode. Tenant-scoped credentials, secrets sealed, never logged.
-- Every action audited; tenant isolation on incident, device, bundle, case record.
+Corrected 2026-09-05 from `TAC_CASE_OPENING_RESEARCH_2026-09-05.md` (cited per vendor):
+- **Tier 1 (W2): ITSM first** — ServiceNow (incident + `/api/now/attachment/file`, 1 GB
+  platform cap) and Jira (issue + attachment, Cloud 1 GB default / Data Center 10 MB) via the
+  existing `internal/ticketing` adapters (per-tenant config, write-only secrets, SSRF
+  validation) which lack only `AttachFile`; then **email with attachment** (≤ 14 MB profile;
+  covers five of seven vendors, fully serves Arista) and **portal text** (pre-filled case
+  description + bundle download) for every vendor.
+- **Tier 2: Cisco** — the Support Case API v3 is READ-ONLY and PSS-partner scoped; create =
+  **Smart Bonding** (`push/call`, staging env available), attach = **CXD** (one `PUT`, Basic
+  auth with SR number + token from SCM, no size limit) — CXD attach-first, then Smart
+  Bonding create (its response carries the CXD host/token). Then **Juniper** (`/createsr`,
+  S3-token `/attachfile` (Beta), status poll 90 d + `publishSR` webhook; `contactEmail`
+  must be a named human).
+- **Tier 3: portal text only** — Fortinet (FortiCare API is asset/licensing only), Palo
+  Alto (CSP key is licensing; TSF mandatory `.tar/.zip/.tgz`), Nokia (no case API in NSP),
+  Huawei enterprise (only Cloud OSM has an API). Never promise an API here.
+- **Credentials:** bring-your-own, per tenant, opt-in, sealed; vendor APIs behind a pinned
+  host allowlist; gate = `requirePerm` + tenant filter (a tenant's own case), NOT platform
+  admin. No shared Correlix identity (Arista domain-matched accounts, Juniper named human).
+- **Bundle profiles:** `full` (API paths) and `email` (≤ 14 MB: clears Cisco 20 MB,
+  ServiceNow 18 MiB, Exchange defaults) plus link-only; no chunking (no ITSM documents
+  resumable upload).
+- **Human-approved always:** case creation is a click by a person with the pre-filled form
+  (severity, contract/serial, contact, problem statement); never an autonomous engine output.
+  Every action audited; case id/URL recorded on the incident; status polled where the
+  API allows.
 
 ## 5. What leaves the page
 The issue × command matrix, the free-form device picker + collect/analyse bench, and the
