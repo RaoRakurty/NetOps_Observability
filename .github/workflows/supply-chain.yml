@@ -7,6 +7,7 @@ name: supply-chain
 # Both BLOCK. Actions are SHA-pinned (SC-002); scanners are version-pinned (SC-010).
 
 on:
+  workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
   push:
   pull_request:
   # Reusable-workflow trigger (release gate). `release-gate.yml` — called by

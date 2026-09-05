@@ -10,6 +10,7 @@ name: telemetry-catalog-ci
 # honest — a normalization change that breaks a validated family fails the merge.
 
 on:
+  workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
   push:
     paths:
       - 'NetOps_Observability/telemetry-catalog/**'

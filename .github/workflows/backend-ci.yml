@@ -15,6 +15,7 @@ name: backend-ci
 # with an older Go refuses to load a go1.26 module.
 
 on:
+  workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
   push:
     paths:
       - 'NetOps_Observability/src/backend/**'

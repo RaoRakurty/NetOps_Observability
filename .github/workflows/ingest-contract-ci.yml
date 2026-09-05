@@ -30,6 +30,7 @@ name: ingest-contract-ci
 # are static and take ~3 seconds.
 
 on:
+  workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
   push:
     paths:
       - 'NetOps_Observability/deployment/docker/vector/**'

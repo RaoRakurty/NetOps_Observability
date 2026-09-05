@@ -9,6 +9,7 @@ name: fresh-install-integrity
 #      fresh load with its real binary (vector topology, nginx -t, promtool, syslog-ng).
 
 on:
+  workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
   push:
     paths:
       - 'NetOps_Observability/deployment/docker/**'

@@ -12,6 +12,7 @@ name: frontend-ci
 # the tooling that's actually present (tsc + vite) rather than inventing config.
 
 on:
+  workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
   push:
     paths:
       - 'NetOps_Observability/src/frontend/**'

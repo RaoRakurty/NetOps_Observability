@@ -9,6 +9,7 @@ name: correlation-ci
 #     govulncheck; SC-005). A new advisory in a pinned dep stops the merge.
 
 on:
+  workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
   push:
     paths:
       - 'NetOps_Observability/src/correlation/**'

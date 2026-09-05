@@ -137,13 +137,13 @@ def snmp_family_owners() -> tuple[dict[str, dict[str, str]], list[str]]:
     """
     problems: list[str] = []
     if not os.path.exists(PROFILES_GO):
-        return {}, [f"profiles.go not found at {PROFILES_GO} — the SNMP ownership "
-                    "half of the single-contract guard cannot be checked"]
+        return {}, [(f"profiles.go not found at {PROFILES_GO} — the SNMP ownership "
+                     "half of the single-contract guard cannot be checked")]
     src = _read(PROFILES_GO)
     block = re.search(r"func builtinProfiles\(\) \[\]SNMPProfile \{(.*?)\n\}\n", src, re.DOTALL)
     if not block:
-        return {}, ["profiles.go: builtinProfiles() not found — the ownership parse "
-                    "went stale and the double-produce guard would pass vacuously"]
+        return {}, [("profiles.go: builtinProfiles() not found — the ownership parse "
+                     "went stale and the double-produce guard would pass vacuously")]
 
     out: dict[str, dict[str, str]] = {}
     profile: str | None = None
