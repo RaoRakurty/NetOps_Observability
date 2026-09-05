@@ -174,3 +174,18 @@
 .tac-intent-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding-bottom: 2px; }
 .tac-intent > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tac-intents { max-height: 320px; border: 1px solid var(--border); border-radius: 6px; }
+
+/* Command review + per-vendor templates (tracker 250). The list is an editable
+   command set; a refused line is marked with the policy family that refused it,
+   so the operator reads WHY rather than "invalid". */
+.tac-review-list { list-style: decimal; margin: 8px 0; padding-left: 22px; }
+.tac-review-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.tac-review-row.bad { border-left: 2px solid var(--danger, #ef4444); padding-left: 6px; }
+.tac-review-cmd { flex: 1 1 320px; min-width: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+.tac-review-actions { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.tac-verdict { flex: 1 1 100%; }
+.tac-family { background: var(--danger, #ef4444); color: #fff; text-transform: uppercase; letter-spacing: .04em; }
+.tac-tpl-row { align-items: flex-end; gap: 12px; }
+.tac-tpl-save { margin-top: 10px; }
+.tac-tpl-save > summary { cursor: pointer; font-weight: 600; }
+.btn.tiny { padding: 1px 6px; font-size: 11px; line-height: 1.4; }

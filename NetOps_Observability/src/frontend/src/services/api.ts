@@ -3065,10 +3065,134 @@ export type TacPlan = {
   topology: TacTopologyNote[];
   estimated_bytes: number;
   estimated_seconds: number;
+  /** Always true: a plan may be edited before it is collected. */
+  editable?: boolean;
+  /** True once a human approved an explicit list and the server re-validated it. */
+  reviewed?: boolean;
+  template?: TacTemplateRef;
+  edits?: TacPlanEdit[];
   redaction_note: string;
   note: string;
   catalog_version: string;
   engine_version: string;
+};
+
+// ── TAC command review + per-vendor templates (tracker 250, owner 2026-09-05)
+// The NOC admin sees the exact command list before collect, edits it, and saves
+// the set per vendor dialect. EVERY command — Correlix's own defaults and any
+// the customer writes — passes the same output-only policy server-side; the
+// client's copy of the rule is a courtesy, never the enforcement.
+
+/** Where an accepted command came from. `custom` is an honesty label, not a
+ *  lesser gate: it passed the output-only policy and the read-only grammar, and
+ *  Correlix has simply never run it on this platform. */
+export type TacCommandOrigin = "catalog" | "custom";
+
+/** One command's verdict. A refusal names the forbidden FAMILY (config |
+ *  restart | daemon) and the RULE that matched — never a bare "invalid". */
+export type TacLineVerdict = {
+  index: number;
+  command: string;
+  ok: boolean;
+  origin?: TacCommandOrigin;
+  family?: string;
+  rule?: string;
+  reason?: string;
+  note?: string;
+  session_scoped?: boolean;
+  intent?: string;
+  title?: string;
+};
+
+/** The three families in the policy's own words. */
+export type TacPolicyFamily = { id: string; title: string; rule: string };
+
+export type TacValidation = {
+  dialect: string;
+  lines: TacLineVerdict[];
+  ok: boolean;
+  refused: number;
+  policy?: TacPolicyFamily[];
+  note?: string;
+};
+
+export type TacTemplateStep = {
+  intent?: string;
+  title: string;
+  command: string;
+  section?: TacSection;
+  note?: string;
+};
+
+/** A saved command set. `correlix-default` sets are generated from the authored
+ *  plans, identical for every tenant, and read-only. */
+export type TacTemplate = {
+  id: string;
+  dialect: string;
+  name: string;
+  description?: string;
+  source: "correlix-default" | "tenant";
+  based_on?: string;
+  steps: TacTemplateStep[];
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+  version: number;
+};
+
+/** GET /api/tac/templates */
+export type TacTemplateListResponse = {
+  templates: TacTemplate[];
+  defaults: TacTemplate[];
+  count: number;
+  limit: number;
+  dialects: string[];
+  policy?: TacPolicyFamily[];
+  note: string;
+};
+
+/** GET /api/tac/templates/defaults */
+export type TacTemplateDefaultsResponse = {
+  defaults: TacTemplate[];
+  version: number;
+  dialects: string[];
+  policy?: TacPolicyFamily[];
+  note?: string;
+};
+
+/** POST|PUT /api/tac/templates[/{id}] — the body carries NO tenant: ownership is
+ *  stamped from the token and a tenant on the wire is a 400. */
+export type TacTemplateWrite = {
+  dialect: string;
+  name: string;
+  description?: string;
+  based_on?: string;
+  steps: { command: string; intent?: string; title?: string; section?: string; note?: string }[];
+};
+
+export type TacTemplateResponse = { template: TacTemplate; validation?: TacValidation };
+export type TacTemplateItemResponse = {
+  template: TacTemplate;
+  editable: boolean;
+  diff_vs_default?: { kind: "added" | "removed" | "reordered"; command: string; intent?: string }[];
+};
+
+/** One difference between the plan Correlix proposed and the list a human
+ *  approved. It is recorded in the bundle MANIFEST. */
+export type TacPlanEdit = {
+  kind: "added" | "removed" | "reordered";
+  command?: string;
+  intent?: string;
+  origin?: TacCommandOrigin;
+  note?: string;
+};
+
+/** Which template a reviewed collection ran from. */
+export type TacTemplateRef = {
+  id?: string;
+  name?: string;
+  source?: "correlix-default" | "tenant";
+  version?: number;
 };
 
 /** One line of live progress from the running collection. */
@@ -3127,6 +3251,9 @@ export type TacCapture = {
   total_bytes: number;
   redacted: boolean;
   stopped?: string;
+  reviewed?: boolean;
+  template?: TacTemplateRef;
+  edits?: TacPlanEdit[];
   catalog_version: string;
   plan_version?: string;
   engine_version: string;
@@ -3240,6 +3367,13 @@ export type TacPlanResponse = { plan: TacPlan; can_collect: boolean; collect_not
 export type TacCollectRequest = {
   outputs?: { intent: string; command: string; output: string }[];
   cancel?: boolean;
+  /** The operator's REVIEWED command list. The server re-validates every line;
+   *  one refusal fails the whole request and names the line — nothing is
+   *  silently dropped. */
+  steps?: { command: string; note?: string }[];
+  /** Only the ID travels: the name, source and version are resolved server-side
+   *  so a client cannot forge the provenance the bundle records. */
+  template_id?: string;
 };
 export type TacCollectResponse = { job: TacJob; state: TacState };
 export type TacCancelResponse = { cancelled: boolean; state: TacState | null };
@@ -5652,6 +5786,44 @@ export const api = {
     }),
   /** Iris → Knowledge: the per-dialect coverage catalogue. Reference data. */
   tacKnowledge: () => request<TacKnowledge>("/api/troubleshoot/tac/knowledge"),
+
+  // ---------- TAC command templates (tracker 250) --------------------------
+  // The command sets a NOC admin saves per vendor dialect and loads into the
+  // review step. Reads need infrastructure:read, writes infrastructure:write.
+  // Per-tenant data: a cross-tenant principal must scope into a tenant first,
+  // and another tenant's id answers the same 404 an absent one does. Correlix's
+  // own defaults are reference data — readable by everyone, immutable.
+  /** This tenant's saved sets plus Correlix's defaults, optionally for one dialect. */
+  tacTemplates: (dialect?: string) =>
+    request<TacTemplateListResponse>(
+      `/api/tac/templates${dialect ? `?dialect=${encodeURIComponent(dialect)}` : ""}`,
+    ),
+  /** Correlix's own sets alone — generated from the authored plans. */
+  tacTemplateDefaults: (dialect?: string) =>
+    request<TacTemplateDefaultsResponse>(
+      `/api/tac/templates/defaults${dialect ? `?dialect=${encodeURIComponent(dialect)}` : ""}`,
+    ),
+  /** One set, with `diff_vs_default` when it was forked from a shipped default. */
+  tacTemplate: (id: string) =>
+    request<TacTemplateItemResponse>(`/api/tac/templates/${encodeURIComponent(id)}`),
+  /** Save a set. The owner is stamped from the token — the body has no tenant. */
+  tacTemplateSave: (body: TacTemplateWrite) =>
+    request<TacTemplateResponse>("/api/tac/templates", { method: "POST", body: JSON.stringify(body) }),
+  /** Replace a set's commands, name or description. Identity is immutable. */
+  tacTemplateUpdate: (id: string, body: TacTemplateWrite) =>
+    request<TacTemplateResponse>(`/api/tac/templates/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  /** Remove one of this tenant's sets. A Correlix default cannot be deleted. */
+  tacTemplateDelete: (id: string) =>
+    request<{ deleted: string }>(`/api/tac/templates/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** Per-line verdicts as the operator types. Reads nothing, stores nothing. */
+  tacTemplateValidate: (dialect: string, commands: string[]) =>
+    request<{ validation: TacValidation }>("/api/tac/templates/validate", {
+      method: "POST",
+      body: JSON.stringify({ dialect, commands }),
+    }),
 
   // ---------- Packet capture (FEATURE_PACKET_CAPTURE) ----------------------
   // Reads need infrastructure:read; start, download and delete need

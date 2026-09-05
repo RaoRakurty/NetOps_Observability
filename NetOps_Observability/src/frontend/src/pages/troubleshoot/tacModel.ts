@@ -21,6 +21,7 @@ import type {
   TacCaseCapability,
   TacClassification,
   TacConnectorInfo,
+  TacLineVerdict,
   TacPlan,
   TacPlanRequest,
   TacProgress,
@@ -28,6 +29,8 @@ import type {
   TacState,
   TacStep,
   TacTarget,
+  TacTemplate,
+  TacTemplateWrite,
   TacVerified,
 } from "../../services/api";
 
@@ -333,6 +336,150 @@ export function evidenceLine(sources: string[], missing: string[]): { on: string
     on: sources.length ? `Classified on: ${sources.join(" · ")}` : "Classified on no stored evidence at all.",
     without: missing.length ? `Classified without: ${missing.join(" · ")}` : "",
   };
+}
+
+// ── command review + templates (tracker 250) ────────────────────────────────
+//
+// The owner's rule, and the reason this step exists at all: the NOC admin sees
+// the exact commands before submit, may change the set, and may save the set as
+// a per-vendor template. The flexibility ends where the output-only policy
+// begins — and it ends SERVER-SIDE. Everything here is presentation: the client
+// shows the verdict the server returned and refuses nothing on its own
+// authority, because a client-side rule is a courtesy and never an enforcement.
+
+export const REVIEW_INTRO =
+  "These are the exact commands Correlix will run, in this order. Remove what you do not want, add your own, reorder them — every line is checked against Correlix's output-only policy as you type, and again on the server before anything runs.";
+
+/** The one sentence that bounds every line, stated where the operator edits. */
+export const REVIEW_POLICY_NOTE =
+  "Output only: nothing that changes configuration, restarts or reboots, or addresses a daemon — on any platform, in any template. A ping or traceroute is allowed with bounded parameters.";
+
+export const REVIEW_REFUSED =
+  "One or more commands were refused. Fix or remove them — Correlix will not run part of a list and drop the rest.";
+
+export const VALIDATE_FAILED = "The commands could not be checked. They are checked again on the server before anything runs.";
+export const TEMPLATES_FAILED = "Your saved command templates could not be read.";
+export const TEMPLATE_SAVE_FAILED = "The command template could not be saved.";
+export const TEMPLATE_NEEDS_NAME = "Give the template a name before saving it.";
+export const REVIEW_EMPTY = "A command set with no commands collects nothing — add at least one.";
+
+/** internal/tac: at most 200 commands in one reviewed list or template. */
+export const MAX_REVIEW_COMMANDS = 200;
+
+/** A custom line's caveat, restated for the UI when the server sent none. */
+export const CUSTOM_COMMAND_NOTE =
+  "written by your team — Correlix has never run this command on this platform";
+
+/** The commands a plan will run, in order, as the review step's starting point.
+ *  Topology rows are model context, not commands, so they never appear. */
+export function planCommands(plan: TacPlan | undefined): string[] {
+  return (plan?.steps ?? [])
+    .filter((s) => s.section !== "topology" && (s.command ?? "").trim() !== "")
+    .map((s) => (s.command ?? "").trim());
+}
+
+/** Move one entry of a list. An out-of-range index leaves the list untouched —
+ *  a reorder must never silently drop a command. */
+export function moveCommand(list: string[], from: number, to: number): string[] {
+  if (from < 0 || from >= list.length || to < 0 || to >= list.length || from === to) return list;
+  const out = list.slice();
+  const [item] = out.splice(from, 1);
+  out.splice(to, 0, item);
+  return out;
+}
+
+/** The verdict shown beside one line. A refusal names the FAMILY and the RULE —
+ *  "invalid" would tell an operator nothing about what Correlix will not do. */
+export function verdictLine(v: TacLineVerdict | undefined): string {
+  if (!v) return "";
+  if (v.ok) return (v.note || "").trim() || (v.origin === "custom" ? CUSTOM_COMMAND_NOTE : "");
+  const reason = (v.reason || "").trim();
+  if (reason) return reason;
+  if (v.family) return `refused by the output-only policy (${v.family})${v.rule ? ` — rule \`${v.rule}\`` : ""}`;
+  return "refused";
+}
+
+/** The short badge on an accepted line. */
+export function originLabel(v: TacLineVerdict | undefined): string {
+  if (!v || !v.ok) return "";
+  return v.origin === "custom" ? "your command" : "Correlix command";
+}
+
+/** How a template is labelled in the picker. A Correlix default says so with its
+ *  version; a tenant template says who owns it and when it last changed. */
+export function templateLabel(t: TacTemplate): string {
+  if (t.source === "correlix-default") return `Correlix default v${t.version}`;
+  const by = (t.created_by || "").trim();
+  const when = (t.updated_at || "").trim();
+  const parts = [by ? `saved by ${by}` : "saved by your team"];
+  if (when) {
+    const d = new Date(when);
+    if (!Number.isNaN(d.getTime())) parts.push(`updated ${d.toLocaleString()}`);
+  }
+  parts.push(`v${t.version}`);
+  return parts.join(" · ");
+}
+
+/** The save/update body. Commands are trimmed and empties dropped; the tenant is
+ *  NOT a field — ownership is stamped from the token server-side. */
+export function buildTemplateWrite(
+  dialect: string,
+  name: string,
+  description: string,
+  basedOn: string,
+  commands: string[],
+): TacTemplateWrite {
+  return {
+    dialect: dialect.trim(),
+    name: name.trim(),
+    description: description.trim(),
+    based_on: basedOn.trim(),
+    steps: commands
+      .map((c) => c.trim())
+      .filter((c) => c !== "")
+      .slice(0, MAX_REVIEW_COMMANDS)
+      .map((command) => ({ command })),
+  };
+}
+
+/** The reviewed list for collect. Same trimming, same cap — and the server
+ *  re-validates every line regardless. */
+export function buildReviewedSteps(commands: string[]): { command: string }[] {
+  return commands
+    .map((c) => c.trim())
+    .filter((c) => c !== "")
+    .slice(0, MAX_REVIEW_COMMANDS)
+    .map((command) => ({ command }));
+}
+
+/** The comparison form of a command — whitespace collapsed, case folded. It
+ *  mirrors internal/tac's normCommandKey exactly: `show ip bgp` and
+ *  `Show  ip  bgp` are the same command, and an edit list that reported them as
+ *  a removal plus an addition would be noise in the bundle's provenance. */
+function commandKey(s: string): string {
+  return s.trim().toLowerCase().split(/\s+/).join(" ");
+}
+
+/** True when the reviewed list differs from what the engine proposed — the
+ *  condition under which collect must send the list rather than the plan. */
+export function reviewChanged(plan: TacPlan | undefined, commands: string[]): boolean {
+  const before = planCommands(plan);
+  const after = commands.map((c) => c.trim()).filter((c) => c !== "");
+  if (before.length !== after.length) return true;
+  return before.some((c, i) => commandKey(c) !== commandKey(after[i]));
+}
+
+/** The one-line summary of the edits a bundle will record. */
+export function editSummary(plan: TacPlan | undefined): string {
+  const edits = plan?.edits ?? [];
+  if (edits.length === 0) return "";
+  const counts = { added: 0, removed: 0, reordered: 0 };
+  for (const e of edits) counts[e.kind] += 1;
+  const parts: string[] = [];
+  if (counts.added) parts.push(`${counts.added} added`);
+  if (counts.removed) parts.push(`${counts.removed} removed`);
+  if (counts.reordered) parts.push("reordered");
+  return parts.length ? `Recorded in the bundle: ${parts.join(" · ")}.` : "";
 }
 
 // ── errors ──────────────────────────────────────────────────────────────────

@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   tacState: vi.fn(), tacClassify: vi.fn(), tacPlan: vi.fn(), tacCollect: vi.fn(),
   tacCancelCollect: vi.fn(), tacDownloadBundle: vi.fn(), tacCaseForm: vi.fn(),
   tacCaseSubmit: vi.fn(), devices: vi.fn(),
+  // The command review (tracker 250).
+  tacTemplates: vi.fn(), tacTemplateValidate: vi.fn(), tacTemplateSave: vi.fn(),
 }));
 vi.mock("../../services/api", () => ({ api: { ...mocks } }));
 
@@ -44,6 +46,8 @@ import {
   NO_CAPTURE_YET,
   PASTE_INVITE,
   PLAN_NEEDS_DEVICE,
+  REVIEW_POLICY_NOTE,
+  REVIEW_REFUSED,
   STATE_READ_FAILED,
   bundleFileName,
   unboundReason,
@@ -186,12 +190,28 @@ const click = async (name: string | RegExp) => {
   await act(async () => { fireEvent.click(screen.getByRole("button", { name })); });
 };
 
+/** Every command accepted, labelled the way the server labels them. */
+const allOK = (commands: string[]) => ({
+  validation: {
+    dialect: "cisco-iosxe",
+    ok: true,
+    refused: 0,
+    lines: commands.map((command, index) => ({
+      index, command, ok: true, origin: "catalog" as const, title: command,
+    })),
+  },
+});
+
 beforeEach(() => {
   Object.values(mocks).forEach((m) => m.mockReset());
   mocks.devices.mockResolvedValue([
     { id: "leaf1", name: "leaf1", address: "10.0.0.1", source: "snmp", last_seen: "2026-09-05T09:00:00Z" },
     { id: "spine1", name: "spine1", address: "10.0.0.2", source: "snmp", last_seen: "2026-09-05T09:00:00Z" },
   ]);
+  mocks.tacTemplates.mockResolvedValue({
+    templates: [], defaults: [], count: 0, limit: 200, dialects: ["cisco-iosxe"], note: "",
+  });
+  mocks.tacTemplateValidate.mockImplementation(async (_d: string, commands: string[]) => allOK(commands));
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
@@ -625,5 +645,156 @@ describe("an unconfigured connector never becomes a case", () => {
     expect(screen.getByTestId("tac-conn-juniper")).toHaveTextContent(CONNECTOR_NOT_CONFIGURED);
     fireEvent.click(screen.getByRole("button", { name: "Juniper" }));
     expect(mocks.tacCaseForm).not.toHaveBeenCalled();
+  });
+});
+
+// ── step 3b: the command review (tracker 250) ────────────────────────────────
+//
+// The owner's requirement, as a test: the NOC admin sees the exact list before
+// submit, removes some, adds one, reorders — every line is checked live, a
+// forbidden line is refused inline WITH its family and the rule text, and the
+// set can be saved as a per-vendor template and loaded back.
+
+describe("the operator reviews the exact commands before anything runs", () => {
+  it("seeds the editable list from the plan and states the output-only rule", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    const list = await screen.findByTestId("tac-review-list");
+    const inputs = within(list).getAllByRole("textbox") as HTMLInputElement[];
+    expect(inputs.map((i) => i.value)).toEqual(["show version", "show ip ospf neighbor detail"]);
+    expect(screen.getByTestId("tac-review-policy")).toHaveTextContent(REVIEW_POLICY_NOTE);
+  });
+
+  it("removes, adds and reorders, then collects EXACTLY the reviewed list", async () => {
+    mocks.tacCollect.mockResolvedValue({ job: { id: "j1", status: "running" }, state: stateWith() });
+    await show(stateResponse({ state: stateWith() }));
+    await screen.findByTestId("tac-review-list");
+
+    // Remove the first command.
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Remove command 1/ })); });
+    // Add one of our own.
+    await act(async () => { fireEvent.click(screen.getByTestId("tac-review-add")); });
+    const inputs = () => within(screen.getByTestId("tac-review-list")).getAllByRole("textbox") as HTMLInputElement[];
+    await act(async () => {
+      fireEvent.change(inputs()[1], { target: { value: "show ip nhrp brief" } });
+    });
+    // Reorder: move the new line up.
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Move command 2 up/ })); });
+    expect(inputs().map((i) => i.value)).toEqual(["show ip nhrp brief", "show ip ospf neighbor detail"]);
+
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Start the collection/ })); });
+    expect(mocks.tacCollect).toHaveBeenCalledWith(INC, {
+      steps: [{ command: "show ip nhrp brief" }, { command: "show ip ospf neighbor detail" }],
+    });
+  });
+
+  it("refuses a forbidden line inline, naming the family and the rule, and will not collect", async () => {
+    mocks.tacTemplateValidate.mockImplementation(async (_d: string, commands: string[]) => ({
+      validation: {
+        dialect: "cisco-iosxe",
+        ok: false,
+        refused: 1,
+        lines: commands.map((command, index) => (
+          command === "configure terminal"
+            ? {
+                index, command, ok: false, family: "config", rule: "configure",
+                reason: "refused by the output-only policy (config): it changes configuration or clears state — rule `configure`",
+              }
+            : { index, command, ok: true, origin: "catalog" as const, title: command }
+        )),
+      },
+    }));
+    await show(stateResponse({ state: stateWith() }));
+    await screen.findByTestId("tac-review-list");
+    const inputs = () => within(screen.getByTestId("tac-review-list")).getAllByRole("textbox") as HTMLInputElement[];
+    await act(async () => {
+      fireEvent.change(inputs()[0], { target: { value: "configure terminal" } });
+    });
+    await waitFor(() => expect(screen.getByTestId("tac-review-refused")).toHaveTextContent(REVIEW_REFUSED));
+    // The line itself carries the family and the rule text, not a bare "invalid".
+    const row = screen.getByTestId("tac-review-list").querySelector(".tac-review-row.bad");
+    expect(row).not.toBeNull();
+    expect(row!.textContent).toContain("config");
+    expect(row!.textContent).toContain("rule `configure`");
+    // And collect is refused outright — Correlix never runs part of a list.
+    expect(screen.getByRole("button", { name: /Start the collection/ })).toBeDisabled();
+    expect(mocks.tacCollect).not.toHaveBeenCalled();
+  });
+
+  it("labels a custom command as unverified rather than hiding the difference", async () => {
+    mocks.tacTemplateValidate.mockResolvedValue({
+      validation: {
+        dialect: "cisco-iosxe", ok: true, refused: 0,
+        lines: [
+          { index: 0, command: "show version", ok: true, origin: "catalog", title: "Software version" },
+          {
+            index: 1, command: "show ip ospf neighbor detail", ok: true, origin: "custom",
+            note: "written by your team; Correlix has never run it on this platform",
+          },
+        ],
+      },
+    });
+    await show(stateResponse({ state: stateWith() }));
+    const list = await screen.findByTestId("tac-review-list");
+    await waitFor(() => expect(list.textContent).toContain("your command"));
+    expect(list.textContent).toContain("never run it on this platform");
+    expect(list.textContent).toContain("Correlix command");
+  });
+
+  it("offers this dialect's templates, labels the defaults, and loads one", async () => {
+    mocks.tacTemplates.mockResolvedValue({
+      templates: [{
+        id: "tpl-1", dialect: "cisco-iosxe", name: "ACME IOS-XE baseline", source: "tenant",
+        steps: [{ title: "", command: "show ip route summary" }], version: 3,
+        created_by: "noc@acme", updated_at: "2026-09-05T09:00:00Z",
+      }],
+      defaults: [{
+        id: "correlix:cisco-iosxe:baseline", dialect: "cisco-iosxe",
+        name: "Cisco IOS-XE — TAC baseline", source: "correlix-default",
+        steps: [{ title: "", command: "show version" }], version: 1,
+      }],
+      count: 1, limit: 200, dialects: ["cisco-iosxe"], note: "",
+    });
+    await show(stateResponse({ state: stateWith() }));
+    const picker = (await screen.findByTestId("tac-template-picker")) as HTMLSelectElement;
+    const options = within(picker).getAllByRole("option").map((o) => o.textContent ?? "");
+    expect(options.some((o) => o.includes("Correlix default v1"))).toBe(true);
+    expect(options.some((o) => o.includes("saved by noc@acme") && o.includes("v3"))).toBe(true);
+    // The tenant's own dialect is what was asked for — never another vendor's.
+    expect(mocks.tacTemplates).toHaveBeenCalledWith("cisco-iosxe");
+
+    await act(async () => { fireEvent.change(picker, { target: { value: "tpl-1" } }); });
+    const inputs = within(screen.getByTestId("tac-review-list")).getAllByRole("textbox") as HTMLInputElement[];
+    expect(inputs.map((i) => i.value)).toEqual(["show ip route summary"]);
+  });
+
+  it("saves the reviewed set as a template for this dialect", async () => {
+    mocks.tacTemplateSave.mockResolvedValue({
+      template: {
+        id: "tpl-9", dialect: "cisco-iosxe", name: "ACME EOS baseline", source: "tenant",
+        steps: [], version: 1,
+      },
+    });
+    await show(stateResponse({ state: stateWith() }));
+    await screen.findByTestId("tac-review-list");
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("tac-template-name"), { target: { value: "ACME EOS baseline" } });
+    });
+    await act(async () => { fireEvent.click(screen.getByTestId("tac-template-save")); });
+    expect(mocks.tacTemplateSave).toHaveBeenCalledWith({
+      dialect: "cisco-iosxe",
+      name: "ACME EOS baseline",
+      description: "",
+      based_on: "",
+      steps: [{ command: "show version" }, { command: "show ip ospf neighbor detail" }],
+    });
+    await waitFor(() => expect(screen.getByTestId("tac-template-note")).toHaveTextContent("Saved"));
+  });
+
+  it("collects the plan unchanged when nothing was edited", async () => {
+    mocks.tacCollect.mockResolvedValue({ job: { id: "j1", status: "running" }, state: stateWith() });
+    await show(stateResponse({ state: stateWith() }));
+    await screen.findByTestId("tac-review-list");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Start the collection/ })); });
+    expect(mocks.tacCollect).toHaveBeenCalledWith(INC, {});
   });
 });

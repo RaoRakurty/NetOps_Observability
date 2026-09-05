@@ -492,6 +492,42 @@ taxonomy is always the merged one.
 
 ---
 
+## 6a. Command templates — where the defaults come from
+
+The per-vendor command templates a NOC admin loads in the review step
+(`docs/design/TAC_ESCALATION_2026-09-05.md` §8, tracker 250) are **not a second
+copy of this data**. Correlix's defaults are GENERATED from the files in this
+directory at build time (`internal/tac/templatedefaults.go`):
+
+    for each dialect with a plan here:
+      correlix:<dialect>:baseline   ← that plan's `baseline:` intent list
+      correlix:<dialect>:<class>    ← baseline + the class's bound intents,
+                                      for every class in classes.yaml that this
+                                      dialect binds at least one intent for
+
+So **editing a plan file changes the default template**, and there is no way for
+the two to drift apart. Generation is deterministic — the same catalog always
+yields the same ids, in the same order — and a test asserts it, because a
+tenant's saved fork records the default it was forked from and is diffed against
+it in Iris → Knowledge.
+
+Four kinds of binding are deliberately EXCLUDED from a default:
+
+| Excluded | Why |
+|---|---|
+| `consent: true` | the vendor says it is not routine; a default carrying one would be Correlix pre-approving what only a human may approve |
+| anything in `optional:` | off by default in the plan for size and time; a default must not turn it on |
+| a command with an unfilled placeholder (`{peer}`, `{if}`, …) | a template has no incident to take an argument from, and dropping the argument silently would make it a different command |
+| a binding with a `teardown:` (session-scoped setter) | it is admitted only as the read PLUS its teardown, which a flat command list cannot express |
+
+A customer may write commands this directory does not carry. They are labelled
+`custom`, they are held to the SAME output-only policy (§4a) and the read-only
+grammar, and both the review UI and the bundle MANIFEST say Correlix has never
+run them on that platform. They never become knowledge here: a custom command
+lives in that tenant's template row, not in this corpus.
+
+---
+
 ## 7. Where the referenced ids live
 
 | Reference | Grep |
@@ -513,7 +549,9 @@ taxonomy is always the merged one.
   merge, the purge, the loader and the gate are the four places it is enforced.
   The two things that are NOT reads and are still allowed are a bounded
   ping/traceroute and the two documented FortiOS session-scoped setters, each
-  with its teardown.
+  with its teardown. **This holds for a customer's own commands too** (§6a): a
+  template is flexibility about WHICH output commands run, never about whether a
+  non-output command may.
 - **No invented commands.** `doc_claimed` is the honest label for "the vendor
   documents it, we have not run it". Guessing is worse than an unbound intent.
 - **No invented ids.** See rule zero.

@@ -94,6 +94,15 @@ type Capture struct {
 	Topology []TopologyNote `json:"topology"`
 	Target   Target         `json:"target"`
 
+	// Reviewed / Template / Edits carry the operator's command review into the
+	// bundle. They are on the CAPTURE, not only on the plan, because the plan is
+	// in-memory state that dies with the api and the capture is what a bundle is
+	// built from — a bundle that could not say which template ran, and what a
+	// human changed, would be exactly the provenance TAC needs and lacks.
+	Reviewed bool        `json:"reviewed"`
+	Template TemplateRef `json:"template,omitzero"`
+	Edits    []PlanEdit  `json:"edits,omitempty"`
+
 	TotalBytes int64 `json:"total_bytes"`
 	// Redacted is always true — it is stated rather than assumed, so a reader
 	// of the JSON never has to wonder.
@@ -246,6 +255,7 @@ func (c *Collector) Collect(ctx context.Context, p *Plan, supplied []SuppliedOut
 		DeviceID: p.DeviceID, Hostname: p.Hostname, Platform: p.Platform,
 		Dialect: p.Dialect, Display: p.DialectDisplay, HasPlan: p.HasPlan,
 		StartedAt: c.now().UTC(), Unbound: p.Unbound, Topology: p.Topology, Target: p.Target,
+		Reviewed: p.Reviewed, Template: p.Template, Edits: p.Edits,
 		Redacted: true, CatalogVersion: p.CatalogVersion, PlanVersion: p.PlanVersion,
 		EngineVersion: Version, Commands: []CollectedCommand{},
 	}

@@ -125,6 +125,24 @@ type Plan struct {
 	EstimatedBytes   int64 `json:"estimated_bytes"`
 	EstimatedSeconds int   `json:"estimated_seconds"`
 
+	// Editable is the standing promise the review step rests on: this plan may
+	// be edited before it is collected. It is a constant `true` on every plan
+	// the engine builds — it is on the wire so the UI never has to infer the
+	// capability from the absence of something.
+	Editable bool `json:"editable"`
+	// Reviewed is true once a human approved an explicit command list and the
+	// server re-validated it (templates.go). A plan that was never reviewed
+	// collects exactly what the engine proposed, which is also a fact a bundle
+	// reader is entitled to.
+	Reviewed bool `json:"reviewed"`
+	// Template names the command template the reviewed list came from, when one
+	// was used. It is stamped into the bundle MANIFEST.
+	Template TemplateRef `json:"template,omitzero"`
+	// Edits are the differences between the plan the engine built and the list
+	// the operator approved. Empty on an unedited collection — and empty is a
+	// statement, not an omission.
+	Edits []PlanEdit `json:"edits,omitempty"`
+
 	// RedactionNote states, in the preview, what the bundle will mask.
 	RedactionNote string `json:"redaction_note"`
 	// Note is the plan-level honest statement (no authored plan, partial
@@ -202,6 +220,7 @@ func (c *Catalog) Plan(classID string, dev Device, opt PlanOptions) (*Plan, erro
 		Dialect: dialect, DialectDisplay: display,
 		ClassID: cl.ID, ClassTitle: cl.Title, TACFirstLook: cl.TACFirstLook,
 		Target: opt.Target, IncludeOptional: opt.IncludeOptional,
+		Editable:       true,
 		Topology:       append([]TopologyNote(nil), opt.Topology...),
 		RedactionNote:  RedactionNoteText,
 		CatalogVersion: c.Version, EngineVersion: Version,

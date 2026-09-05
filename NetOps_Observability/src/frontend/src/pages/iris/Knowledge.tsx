@@ -28,7 +28,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import "../troubleshoot/investigation.css";
-import { api, type TacDialectCoverage, type TacKnowledge } from "../../services/api";
+import {
+  api,
+  type TacDialectCoverage,
+  type TacKnowledge,
+  type TacTemplate,
+  type TacTemplateItemResponse,
+} from "../../services/api";
 import WindowedList from "../../components/WindowedList";
 import {
   BACKLOG_NOT_TRACKED,
@@ -37,7 +43,10 @@ import {
   KNOWLEDGE_FAILED,
   KNOWLEDGE_GROWTH_NOTE,
   NO_UNPLANNED_DIALECTS,
+  REVIEW_POLICY_NOTE,
+  TEMPLATES_FAILED,
   tacError,
+  templateLabel,
   verifiedLabel,
 } from "../troubleshoot/tacModel";
 
@@ -52,12 +61,31 @@ export default function IrisKnowledge() {
   const [data, setData] = useState<TacKnowledge | null>(null);
   const [err, setErr] = useState("");
   const [open, setOpen] = useState("");
+  // The command templates (tracker 250). Defaults are reference data; the
+  // tenant's own sets are its data, and they are listed here beside the
+  // coverage they were built from.
+  const [templates, setTemplates] = useState<TacTemplate[]>([]);
+  const [defaults, setDefaults] = useState<TacTemplate[]>([]);
+  const [tplErr, setTplErr] = useState("");
 
   useEffect(() => {
     let alive = true;
     api.tacKnowledge()
       .then((k) => { if (alive) { setData(k); setErr(""); } })
       .catch((e: unknown) => { if (alive) setErr(tacError(e, KNOWLEDGE_FAILED)); });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    api.tacTemplates()
+      .then((r) => {
+        if (!alive) return;
+        setTemplates(r.templates ?? []);
+        setDefaults(r.defaults ?? []);
+        setTplErr("");
+      })
+      .catch((e: unknown) => { if (alive) setTplErr(tacError(e, TEMPLATES_FAILED)); });
     return () => { alive = false; };
   }, []);
 
@@ -178,6 +206,46 @@ export default function IrisKnowledge() {
         </ul>
       </section>
 
+      <section className="tac-step" aria-labelledby="tac-know-tpl-h">
+        <h2 id="tac-know-tpl-h" className="tac-step-h">Command templates</h2>
+        <p className="mini-meta tac-note">
+          The command sets an escalation can be run from. Correlix&apos;s own are generated from the authored
+          plans above and are read-only; your team&apos;s are saved from the review step on the Investigate page
+          and are visible only to your tenant.
+        </p>
+        <p className="mini-meta tac-note" data-testid="tac-tpl-policy">{REVIEW_POLICY_NOTE}</p>
+        {tplErr && <p className="tac-bad" role="alert">{tplErr}</p>}
+
+        <h3 className="tac-section-h">Correlix defaults</h3>
+        {defaults.length === 0 ? (
+          <p className="mini-meta tac-note">This build ships no default command set.</p>
+        ) : (
+          <ul className="tac-tpl-list" data-testid="tac-tpl-defaults">
+            {defaults.map((t) => (
+              <li key={t.id}>
+                <span className="tac-alt-t">{t.name}</span>{" "}
+                <code className="tac-id">{t.dialect}</code>{" "}
+                <span className="badge">{templateLabel(t)}</span>{" "}
+                <span className="mini-meta">{t.steps.length} commands</span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <h3 className="tac-section-h">Your team&apos;s sets</h3>
+        {templates.length === 0 ? (
+          <p className="mini-meta tac-note" data-testid="tac-tpl-none">
+            Your tenant has saved no command set yet. Build one in the review step of an escalation —
+            Correlix&apos;s default is the starting point, and a saved copy is offered on the next
+            escalation for that vendor.
+          </p>
+        ) : (
+          <ul className="tac-tpl-list" data-testid="tac-tpl-mine">
+            {templates.map((t) => <TenantTemplate key={t.id} t={t} />)}
+          </ul>
+        )}
+      </section>
+
       <section className="tac-step" aria-labelledby="tac-know-grow-h">
         <h2 id="tac-know-grow-h" className="tac-step-h">How this grows</h2>
         <p className="mini-meta tac-note">{KNOWLEDGE_GROWTH_NOTE}</p>
@@ -187,6 +255,67 @@ export default function IrisKnowledge() {
         </p>
       </section>
     </div>
+  );
+}
+
+/** One tenant template, with what it changed about the Correlix default it was
+ *  forked from. The diff is fetched on demand: a listing that eagerly diffed
+ *  every set would read the whole catalogue for a panel nobody opened. */
+function TenantTemplate({ t }: { t: TacTemplate }) {
+  const [detail, setDetail] = useState<TacTemplateItemResponse | null>(null);
+  const [open, setOpen] = useState(false);
+  const [err, setErr] = useState("");
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (!next || detail) return;
+    api.tacTemplate(t.id)
+      .then((r) => { setDetail(r); setErr(""); })
+      .catch((e: unknown) => setErr(tacError(e, TEMPLATES_FAILED)));
+  };
+
+  const diff = detail?.diff_vs_default ?? [];
+  return (
+    <li data-testid={`tac-tpl-${t.id}`}>
+      <button type="button" className="tac-dialect-head" aria-expanded={open} onClick={toggle}>
+        <span className="tac-alt-t">{t.name}</span>{" "}
+        <code className="tac-id">{t.dialect}</code>{" "}
+        <span className="mini-meta">{templateLabel(t)} · {t.steps.length} commands</span>
+      </button>
+      {open && (
+        <div className="tac-dialect-body">
+          {err && <p className="tac-bad" role="alert">{err}</p>}
+          {t.description && <p className="mini-meta tac-note">{t.description}</p>}
+          {!t.based_on ? (
+            <p className="mini-meta tac-note">
+              Written from scratch — there is no Correlix default to compare it with.
+            </p>
+          ) : detail && diff.length === 0 ? (
+            <p className="mini-meta tac-note">
+              Identical to <code className="tac-id">{t.based_on}</code>.
+            </p>
+          ) : (
+            <ul className="tac-steps" data-testid={`tac-tpl-diff-${t.id}`}>
+              {diff.map((d, i) => (
+                <li className="tac-step-row" key={`${d.kind}-${i}`}>
+                  <span className="badge">{d.kind}</span>{" "}
+                  <code className="tac-cmd">{d.command}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+          <ul className="tac-steps">
+            {t.steps.map((st, i) => (
+              <li className="tac-step-row" key={`s-${i}`}>
+                <code className="tac-cmd">{st.command}</code>
+                {st.note ? <span className="mini-meta">{st.note}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </li>
   );
 }
 

@@ -230,6 +230,13 @@ type server struct {
 	// BYO case-connector credentials (write-only, sealed by the store).
 	tacBundles    *tac.Store
 	tacConnectors *ticketing.TACConnectorStore
+	// tacTemplates is the per-tenant COMMAND TEMPLATE surface (tracker 250) and
+	// tacTemplateStore its backing store. Both are built unconditionally: an
+	// operator must be able to review and edit the command list on any
+	// deployment, including one with no live SSH runner where the collection
+	// itself falls back to paste.
+	tacTemplates     *tac.TemplateAPI
+	tacTemplateStore tac.TemplateStore
 	// TAC-ROUTES-END
 	tenants          tenantRepo
 	orgs             *tenant.OrgStore
@@ -2395,6 +2402,17 @@ func (s *server) routes(mux *http.ServeMux) {
 	// The vendor-coverage view behind Iris → Knowledge: version-pinned reference
 	// data, identical for every tenant, revealing no tenant's devices.
 	mux.HandleFunc("/api/troubleshoot/tac/knowledge", s.handleTACKnowledge)
+	// The per-tenant COMMAND TEMPLATES (tracker 250): the sets a NOC admin saves
+	// per vendor dialect and loads into the review step. Registered as LITERALS,
+	// not as the tac.*Path constants, because the route-isolation ledger's
+	// scanner reads these strings out of this file and a route it cannot see is
+	// a route nobody classified. The two literal leaves are registered ahead of
+	// the {id} pattern for the reader's benefit only — net/http already gives a
+	// literal segment precedence over a wildcard.
+	mux.HandleFunc("/api/tac/templates", s.handleTACTemplates)
+	mux.HandleFunc("/api/tac/templates/defaults", s.handleTACTemplateDefaults)
+	mux.HandleFunc("/api/tac/templates/validate", s.handleTACTemplateValidate)
+	mux.HandleFunc("/api/tac/templates/", s.handleTACTemplateItem) // GET|PUT|DELETE {id}
 	// TAC-ROUTES-END
 	// IGP-MONITORING-BEGIN — OSPF/IS-IS advanced monitoring (Project 4 D item
 	// 11, internal/igpmon). READ-ONLY over telemetry the platform already

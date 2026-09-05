@@ -17,7 +17,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, act, within } from "@testing-library/react";
 import type { TacKnowledge } from "../../services/api";
 
-const mocks = vi.hoisted(() => ({ tacKnowledge: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  tacKnowledge: vi.fn(),
+  // The command templates tab (tracker 250).
+  tacTemplates: vi.fn(), tacTemplate: vi.fn(),
+}));
 vi.mock("../../services/api", () => ({ api: { ...mocks } }));
 
 import IrisKnowledge from "./Knowledge";
@@ -98,7 +102,14 @@ async function show(k: TacKnowledge = knowledge()) {
   return utils;
 }
 
-beforeEach(() => { mocks.tacKnowledge.mockReset(); });
+beforeEach(() => {
+  mocks.tacKnowledge.mockReset();
+  mocks.tacTemplates.mockReset();
+  mocks.tacTemplate.mockReset();
+  mocks.tacTemplates.mockResolvedValue({
+    templates: [], defaults: [], count: 0, limit: 200, dialects: [], note: "",
+  });
+});
 afterEach(() => cleanup());
 
 // ── the catalogue header ─────────────────────────────────────────────────────
@@ -237,5 +248,68 @@ describe("the output-only command policy", () => {
   it("shows a dialect's own exclusion count on its row, as a count", async () => {
     await show();
     expect(screen.getByTestId("tac-dialect-cisco-iosxe")).toHaveTextContent("7 excluded by policy");
+  });
+});
+
+// ── command templates (tracker 250) ──────────────────────────────────────────
+//
+// The Knowledge page is where Correlix says what it knows. The command sets an
+// escalation can run from are part of that: its own defaults, generated from the
+// plans above, and the tenant's own — with what each one CHANGED about the
+// default it forked, because a fork whose difference is invisible is a fork
+// nobody can review.
+
+describe("the command templates tab", () => {
+  it("lists Correlix's defaults with their version and the standing policy", async () => {
+    mocks.tacTemplates.mockResolvedValue({
+      templates: [],
+      defaults: [{
+        id: "correlix:cisco-iosxe:baseline", dialect: "cisco-iosxe",
+        name: "Cisco IOS-XE — TAC baseline", source: "correlix-default",
+        steps: [{ title: "", command: "show version" }], version: 1,
+      }],
+      count: 0, limit: 200, dialects: ["cisco-iosxe"], note: "",
+    });
+    await show();
+    const list = await screen.findByTestId("tac-tpl-defaults");
+    expect(list.textContent).toContain("Cisco IOS-XE — TAC baseline");
+    expect(list.textContent).toContain("Correlix default v1");
+    expect(screen.getByTestId("tac-tpl-policy").textContent).toContain("Output only");
+  });
+
+  it("says plainly when the tenant has saved none — never an empty table read as coverage", async () => {
+    await show();
+    expect((await screen.findByTestId("tac-tpl-none")).textContent)
+      .toContain("saved no command set yet");
+  });
+
+  it("shows a tenant set's difference from the default it was forked from", async () => {
+    mocks.tacTemplates.mockResolvedValue({
+      templates: [{
+        id: "tpl-1", dialect: "cisco-iosxe", name: "ACME IOS-XE baseline", source: "tenant",
+        based_on: "correlix:cisco-iosxe:baseline", version: 2, created_by: "noc@acme",
+        steps: [{ title: "", command: "show ip nhrp brief" }],
+      }],
+      defaults: [], count: 1, limit: 200, dialects: ["cisco-iosxe"], note: "",
+    });
+    mocks.tacTemplate.mockResolvedValue({
+      template: {
+        id: "tpl-1", dialect: "cisco-iosxe", name: "ACME IOS-XE baseline", source: "tenant",
+        based_on: "correlix:cisco-iosxe:baseline", version: 2, steps: [],
+      },
+      editable: true,
+      diff_vs_default: [
+        { kind: "added", command: "show ip nhrp brief" },
+        { kind: "removed", command: "show version" },
+      ],
+    });
+    await show();
+    const row = await screen.findByTestId("tac-tpl-tpl-1");
+    await act(async () => { fireEvent.click(within(row).getByRole("button")); });
+    const diff = await screen.findByTestId("tac-tpl-diff-tpl-1");
+    expect(diff.textContent).toContain("added");
+    expect(diff.textContent).toContain("show ip nhrp brief");
+    expect(diff.textContent).toContain("removed");
+    expect(diff.textContent).toContain("show version");
   });
 });

@@ -114,6 +114,39 @@ and never a flood, a sweep or a rapid — plus, on FortiOS, the documented sessi
 filters that narrow what a read prints, which Correlix always clears again before
 it disconnects.
 
+## Review the commands before they run
+
+Between the plan and the collection there is a **Review the commands** step. It
+shows the exact list, in the order it will run, and it is editable: remove a
+command you do not want, add one of your own, reorder them, and give any line a
+note that travels into the bundle. Each line is checked as you type — a command
+that changes configuration, restarts the device or addresses a daemon is refused
+inline, naming the family and the rule that refused it, and the collection cannot
+start while one is refused. Correlix will not run part of a list and drop the
+rest.
+
+An accepted line is labelled. **Correlix command** means it comes from the
+authored, cited plan for that platform. **Your command** means your team wrote
+it: it passed the same output-only policy and the same read-only grammar, and
+Correlix has never run it on that platform — which the bundle says too.
+
+## Save a command set per vendor
+
+A set you have edited can be saved as a **template** for that CLI dialect, and it
+is offered on the next escalation against a device of the same vendor. Correlix
+ships its own defaults, generated from the authored plans — they are read-only,
+labelled `Correlix default v1`, and you fork one by saving a copy. Your team's
+sets are visible only to your tenant, carry the name of whoever saved them and
+their version, and can be edited or deleted from the same step. Iris → Knowledge
+lists both, and shows what a saved set changed about the default it came from.
+
+Every command in a template is checked on the way in, and every command is
+checked again on the server before the collection starts. A template changes
+*which output commands* run; it can never make a non-output command runnable.
+
+The bundle records all of it: which template ran, at which version, and every
+command added, removed or reordered against Correlix's own proposal.
+
 ## Related
 
 - [Diagnose a BGP, OSPF or IS-IS issue](/investigate/protocol-diagnostics)

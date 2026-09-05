@@ -91,6 +91,14 @@ type Service struct {
 	narrator  Narrator
 	openers   []CaseOpener
 	now       func() time.Time
+	// validator guards every command an operator types into the review step and
+	// every command a template holds. It is built from the same catalog, so the
+	// review and the plan cannot disagree about what an output command is.
+	validator *TemplateValidator
+	// reviews is the per-collection allow set the gate consults. It is nil on a
+	// deployment with no live runner (there is nothing to gate), and a nil
+	// registry allows nothing.
+	reviews *ReviewRegistry
 
 	mu     sync.Mutex
 	states map[string]map[string]*State // tenant → incident → state
@@ -118,6 +126,12 @@ func WithOpeners(o ...CaseOpener) ServiceOption {
 	return func(s *Service) { s.openers = append(s.openers, o...) }
 }
 
+// WithReviews injects the per-collection allow set the runner's gate consults.
+// It MUST be the same registry the gate was built with, or an approved custom
+// command will be refused at the wire — which is the safe direction to fail, and
+// is what the service's own test asserts.
+func WithReviews(r *ReviewRegistry) ServiceOption { return func(s *Service) { s.reviews = r } }
+
 // WithServiceClock injects the clock.
 func WithServiceClock(now func() time.Time) ServiceOption {
 	return func(s *Service) {
@@ -132,8 +146,12 @@ func NewService(c *Catalog, opts ...ServiceOption) (*Service, error) {
 	if c == nil {
 		return nil, errors.New("tac: nil catalog")
 	}
+	v, err := NewTemplateValidator(c)
+	if err != nil {
+		return nil, err
+	}
 	s := &Service{
-		catalog: c, now: time.Now,
+		catalog: c, now: time.Now, validator: v,
 		states: map[string]map[string]*State{}, cancel: map[string]context.CancelFunc{},
 	}
 	for _, o := range opts {
@@ -141,6 +159,45 @@ func NewService(c *Catalog, opts ...ServiceOption) (*Service, error) {
 	}
 	s.openers = append(s.openers, NewPortalTextOpener())
 	return s, nil
+}
+
+// Validator exposes the command validator the review step and the template store
+// share. There is exactly one per service, built from the loaded catalog.
+func (s *Service) Validator() *TemplateValidator { return s.validator }
+
+// Review re-validates an operator-approved command list against the escalation's
+// stored plan and REPLACES that plan with the reviewed one.
+//
+// It is the server-side half of the promise the review UI makes: what runs is
+// exactly the list the operator saw, and every line of it was checked here — not
+// in the browser — against the output-only policy and the read-only grammar. A
+// single refused line fails the whole review, naming the line.
+func (s *Service) Review(tenant, incident string, steps []ReviewedStep, ref TemplateRef) (*Plan, ValidationResult, error) {
+	s.mu.Lock()
+	st := s.states[tenant][incident]
+	if st == nil || st.Plan == nil {
+		s.mu.Unlock()
+		return nil, ValidationResult{}, errors.New("tac: no plan has been built for this escalation")
+	}
+	if st.Job != nil && st.Job.Status == JobRunning {
+		s.mu.Unlock()
+		return nil, ValidationResult{}, ErrCollectBusy
+	}
+	plan := st.Plan
+	s.mu.Unlock()
+
+	reviewed, res, err := s.validator.Review(plan, steps, ref)
+	if err != nil {
+		return nil, res, err
+	}
+	reviewed.IncidentID = incident
+	reviewed.TenantID = tenant
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st2 := s.stateLocked(tenant, incident)
+	st2.Plan = reviewed
+	st2.UpdatedAt = s.now().UTC()
+	return reviewed, res, nil
 }
 
 // Catalog exposes the loaded taxonomy (the Knowledge page reads it).
@@ -297,8 +354,39 @@ func (s *Service) StartCollect(tenant, incident string, supplied []SuppliedOutpu
 	s.cancel[key] = cancel
 	s.mu.Unlock()
 
+	// The reviewed allow set opens HERE, from the plan the server holds — never
+	// from a request body — and closes in runCollect's defer. Between those two
+	// points, and only for this device, a custom command the operator approved
+	// may reach the wire; outside them the authored table is the whole world.
+	s.reviews.Register(planDeviceKey(plan), commandsOf(plan))
+
 	go s.runCollect(ctx, cancel, key, tenant, incident, plan, supplied, job)
 	return job, nil
+}
+
+// planDeviceKey is the registry key for a plan's subject device — the same key
+// the collector claims for its one-collection-per-device rule.
+func planDeviceKey(p *Plan) string {
+	if p == nil {
+		return ""
+	}
+	if p.DeviceID != "" {
+		return p.DeviceID
+	}
+	return p.Hostname
+}
+
+// commandsOf lists a plan's step commands (and the teardowns the collector will
+// run), which is exactly what may go on a wire for it.
+func commandsOf(p *Plan) []string {
+	out := make([]string, 0, len(p.Steps)*2)
+	for _, st := range p.Steps {
+		out = append(out, st.Command)
+		if st.Teardown != "" {
+			out = append(out, st.Teardown)
+		}
+	}
+	return out
 }
 
 // collectionDeadline is the whole-collection ceiling: the sum of the plan's own
@@ -314,6 +402,9 @@ func collectionDeadline(p *Plan) time.Duration {
 func (s *Service) runCollect(ctx context.Context, cancel context.CancelFunc, key, tenant, incident string,
 	plan *Plan, supplied []SuppliedOutput, job *Job) {
 	defer cancel()
+	// From a defer, so a panic or an early return cannot leave a reviewed
+	// command allowed after its collection has ended.
+	defer s.reviews.Release(planDeviceKey(plan))
 	defer func() {
 		s.mu.Lock()
 		delete(s.cancel, key)
@@ -485,6 +576,12 @@ type CaptureSummary struct {
 	Unbound  []Step           `json:"unbound"`
 	Topology []TopologyNote   `json:"topology"`
 
+	// Reviewed / Template / Edits mirror the capture's own provenance so the
+	// panel can say which template ran without downloading the bundle.
+	Reviewed bool        `json:"reviewed"`
+	Template TemplateRef `json:"template,omitzero"`
+	Edits    []PlanEdit  `json:"edits,omitempty"`
+
 	TotalBytes int64  `json:"total_bytes"`
 	Redacted   bool   `json:"redacted"`
 	Stopped    string `json:"stopped,omitempty"`
@@ -518,6 +615,7 @@ func (c *Capture) Summary() *CaptureSummary {
 		Dialect: c.Dialect, Display: c.Display, HasPlan: c.HasPlan,
 		StartedAt: c.StartedAt, FinishedAt: c.FinishedAt,
 		Unbound: c.Unbound, Topology: c.Topology,
+		Reviewed: c.Reviewed, Template: c.Template, Edits: c.Edits,
 		TotalBytes: c.TotalBytes, Redacted: c.Redacted, Stopped: c.Stopped,
 		CatalogVersion: c.CatalogVersion, PlanVersion: c.PlanVersion, EngineVersion: c.EngineVersion,
 		Commands: make([]CommandSummary, 0, len(c.Commands)),

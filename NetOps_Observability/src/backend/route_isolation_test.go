@@ -194,6 +194,24 @@ var routeIsolationLedger = map[string]string{
 	// store. Same classification, for the same reason, as the diagnostics
 	// analyze/export routes.
 	"/api/troubleshoot/tac/knowledge": "globalRef",
+	// TAC command templates (tracker 250). The collection and the item routes
+	// are per-tenant DATA: the command sets a tenant saved. Isolation is in the
+	// STORE (a tenant-keyed bucket / PG `tac_templates` with the tenant_iso
+	// FORCE-RLS policy, migration 0045, queried only through WithTenant), the
+	// owner is stamped from the token — the wire type has no tenant field at all
+	// — and another tenant's id answers the same 404 an absent one does. A
+	// cross-tenant principal must scope into one tenant before it may read or
+	// write. Cross-org isolation proven by tac_templates_isolation_test.go.
+	//
+	// /defaults and /validate are globalRef: the defaults are GENERATED from the
+	// authored plans, identical for every tenant, immutable; validate is a pure
+	// computation over the caller's own text that reads and stores nothing.
+	// Both are still authenticated — a command set is product knowledge — and
+	// neither can return a row belonging to anyone.
+	"/api/tac/templates":          "scoped",
+	"/api/tac/templates/":         "scoped",
+	"/api/tac/templates/defaults": "globalRef",
+	"/api/tac/templates/validate": "globalRef",
 	// OSPF / IS-IS advanced monitoring (Project 4 D item 11, internal/igpmon).
 	// All six are per-tenant DATA and read NOTHING that is not already
 	// collected. The chain is the pcap/configstore one: requirePerm

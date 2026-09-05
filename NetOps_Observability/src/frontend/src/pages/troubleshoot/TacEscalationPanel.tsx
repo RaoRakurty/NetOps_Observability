@@ -38,16 +38,20 @@ import {
   type TacCaseResult,
   type TacClassifyResponse,
   type TacConnectorInfo,
+  type TacCollectRequest,
+  type TacLineVerdict,
   type TacPlan,
   type TacState,
   type TacStateResponse,
   type TacStep,
   type TacTarget,
+  type TacTemplate,
 } from "../../services/api";
 import {
   BUNDLE_FAILED,
   BUNDLE_PROFILES,
   CANCEL_FAILED,
+  CUSTOM_COMMAND_NOTE,
   CASE_FORM_FAILED,
   CASE_HUMAN_APPROVED,
   CASE_SUBMIT_FAILED,
@@ -55,6 +59,7 @@ import {
   CONNECTOR_NOT_CONFIGURED,
   DEVICES_FAILED,
   MAX_PASTE_CHARS,
+  MAX_REVIEW_COMMANDS,
   NOT_ESCALATED_NOTE,
   NO_AUTHORED_PLAN_NOTE,
   NO_BUNDLE_YET,
@@ -62,18 +67,29 @@ import {
   PASTE_INVITE,
   PLAN_FAILED,
   PLAN_NEEDS_DEVICE,
+  REVIEW_EMPTY,
+  REVIEW_INTRO,
+  REVIEW_POLICY_NOTE,
+  REVIEW_REFUSED,
   ROW_RENDER_CAP,
   SECTION_ORDER,
   SECTION_TITLE,
   STATE_READ_FAILED,
+  TEMPLATES_FAILED,
+  TEMPLATE_NEEDS_NAME,
+  TEMPLATE_SAVE_FAILED,
+  VALIDATE_FAILED,
   buildPasteOutputs,
   buildPlanRequest,
+  buildReviewedSteps,
+  buildTemplateWrite,
   bundleFileName,
   cappedNote,
   classificationNote,
   collectErrorMessage,
   connectorCapabilityLine,
   connectorNote,
+  editSummary,
   evidenceLine,
   groupSteps,
   hasCapability,
@@ -81,11 +97,17 @@ import {
   humanSeconds,
   isCollecting,
   isMissingField,
+  moveCommand,
+  originLabel,
   pasteIntents,
   phaseLabel,
+  planCommands,
   reasonLine,
+  reviewChanged,
   tacError,
+  templateLabel,
   unboundReason,
+  verdictLine,
   verifiedLabel,
 } from "./tacModel";
 
@@ -127,6 +149,23 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   const [planning, setPlanning] = useState(false);
   const [planErr, setPlanErr] = useState("");
 
+  // ── the command review (tracker 250) ──────────────────────────────────────
+  // reviewCmds is the operator's working list, seeded from the plan and edited
+  // freely. verdicts is what the SERVER said about it — the client renders that
+  // and decides nothing about what may run.
+  const [reviewCmds, setReviewCmds] = useState<string[]>([]);
+  const [verdicts, setVerdicts] = useState<TacLineVerdict[]>([]);
+  const [reviewErr, setReviewErr] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [templates, setTemplates] = useState<TacTemplate[]>([]);
+  const [templatesErr, setTemplatesErr] = useState("");
+  const [templateId, setTemplateId] = useState("");
+  const [saveName, setSaveName] = useState("");
+  const [saveDesc, setSaveDesc] = useState("");
+  const [saveNote, setSaveNote] = useState("");
+  const [saveErr, setSaveErr] = useState("");
+  const [saving, setSaving] = useState(false);
+
   const [collectBusy, setCollectBusy] = useState(false);
   const [collectErr, setCollectErr] = useState("");
   const [paste, setPaste] = useState<Record<string, string>>({});
@@ -167,6 +206,8 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   useEffect(() => {
     setInfo(null); setInfoErr(""); setClassify(null); setClassErr("");
     setDeviceId(""); setPlanErr(""); setCollectErr(""); setPaste({});
+    setReviewCmds([]); setVerdicts([]); setReviewErr(""); setTemplateId("");
+    setSaveName(""); setSaveDesc(""); setSaveNote(""); setSaveErr("");
     setCaseForm(null); setCaseConnector(null); setCaseResult(null); setCaseErr("");
     void readState();
   }, [incidentId, readState]);
@@ -224,13 +265,111 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     }
   };
 
+  // ── the command review ────────────────────────────────────────────────────
+
+  // The working list is SEEDED from the plan the server built and re-seeded
+  // whenever that plan changes (a rebuild, a different device, a different
+  // class). An operator's in-progress edit is deliberately discarded then: it
+  // was a list for a plan that no longer exists.
+  const planKey = plan ? `${plan.id}:${plan.device_id}:${plan.class_id}` : "";
+  useEffect(() => {
+    if (!plan) { setReviewCmds([]); setVerdicts([]); return; }
+    setReviewCmds(planCommands(plan));
+    setSaveErr(""); setSaveNote("");
+  }, [planKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The tenant's saved sets for THIS device's dialect, plus Correlix's own. A
+  // set written for another vendor is never offered: a list of EOS commands is
+  // meaningless at a Junos router.
+  const dialect = plan?.dialect ?? "";
+  useEffect(() => {
+    if (!dialect) { setTemplates([]); return; }
+    api.tacTemplates(dialect)
+      .then((r) => {
+        if (!alive.current) return;
+        setTemplates([...(r.defaults ?? []), ...(r.templates ?? [])]);
+        setTemplatesErr("");
+      })
+      .catch((e: unknown) => {
+        if (alive.current) { setTemplates([]); setTemplatesErr(tacError(e, TEMPLATES_FAILED)); }
+      });
+  }, [dialect]);
+
+  // Live per-line validation. It is DEBOUNCED and it is advisory: the server
+  // re-validates the same list at collect, so a check that failed to run can
+  // never let a refused command through — it only means the operator finds out
+  // one step later.
+  useEffect(() => {
+    if (!dialect || reviewCmds.length === 0) { setVerdicts([]); return; }
+    let cancelled = false;
+    const id = setTimeout(() => {
+      setChecking(true);
+      api.tacTemplateValidate(dialect, reviewCmds)
+        .then((r) => {
+          if (cancelled || !alive.current) return;
+          setVerdicts(r.validation?.lines ?? []);
+          setReviewErr("");
+        })
+        .catch((e: unknown) => {
+          if (cancelled || !alive.current) return;
+          setVerdicts([]);
+          setReviewErr(tacError(e, VALIDATE_FAILED));
+        })
+        .finally(() => { if (!cancelled && alive.current) setChecking(false); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [dialect, reviewCmds]);
+
+  const refused = verdicts.filter((v) => !v.ok).length;
+  const reviewEdited = reviewChanged(plan, reviewCmds);
+
+  const loadTemplate = (id: string) => {
+    setTemplateId(id);
+    if (!id) return;
+    const t = templates.find((x) => x.id === id);
+    if (!t) return;
+    setReviewCmds(t.steps.map((st) => st.command));
+    setSaveNote(`Loaded “${t.name}” — ${templateLabel(t)}.`);
+  };
+
+  const saveTemplate = async () => {
+    setSaveErr(""); setSaveNote("");
+    if (!saveName.trim()) { setSaveErr(TEMPLATE_NEEDS_NAME); return; }
+    if (reviewCmds.filter((c) => c.trim()).length === 0) { setSaveErr(REVIEW_EMPTY); return; }
+    setSaving(true);
+    try {
+      const basedOn = templateId.startsWith("correlix:") ? templateId : "";
+      const r = await api.tacTemplateSave(
+        buildTemplateWrite(dialect, saveName, saveDesc, basedOn, reviewCmds),
+      );
+      if (!alive.current) return;
+      setSaveNote(`Saved “${r.template.name}” for ${dialect} — it will be offered on the next ${dialect} escalation.`);
+      setSaveName(""); setSaveDesc("");
+      const list = await api.tacTemplates(dialect);
+      if (alive.current) setTemplates([...(list.defaults ?? []), ...(list.templates ?? [])]);
+    } catch (e) {
+      if (alive.current) setSaveErr(tacError(e, TEMPLATE_SAVE_FAILED));
+    } finally {
+      if (alive.current) setSaving(false);
+    }
+  };
+
   const pasteSteps = useMemo(() => pasteIntents(plan, state), [plan, state]);
 
   const runCollect = async (withPaste: boolean) => {
     setCollectErr(""); setCollectBusy(true);
     try {
       const outputs = withPaste ? buildPasteOutputs(pasteSteps, paste) : [];
-      await api.tacCollect(incidentId, outputs.length ? { outputs } : {});
+      const body: TacCollectRequest = {};
+      if (outputs.length) body.outputs = outputs;
+      // The reviewed list travels ONLY when it differs from the plan or came
+      // from a template — otherwise the server runs the plan it already holds,
+      // and the bundle honestly records that nothing was edited.
+      if (reviewEdited || templateId) {
+        body.steps = buildReviewedSteps(reviewCmds);
+        if (templateId) body.template_id = templateId;
+      }
+      await api.tacCollect(incidentId, body);
       if (alive.current) await readState();
     } catch (e) {
       if (alive.current) setCollectErr(collectErrorMessage(e, info?.collect_note ?? ""));
@@ -555,6 +694,170 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
         </section>
       )}
 
+      {/* ── step 3b: review the commands (tracker 250) ───────────────────── */}
+      {started && plan && (
+        <section className="tac-step" aria-labelledby="tac-review-h" data-testid="tac-review">
+          <h3 id="tac-review-h" className="tac-step-h">Review the commands</h3>
+          <p className="mini-meta tac-note">{REVIEW_INTRO}</p>
+          <p className="mini-meta tac-note" data-testid="tac-review-policy">{REVIEW_POLICY_NOTE}</p>
+
+          <div className="tac-row tac-tpl-row">
+            <div className="tac-field">
+              <label>
+                <span>Load a command template</span>
+                <select
+                  value={templateId}
+                  onChange={(e) => loadTemplate(e.target.value)}
+                  data-testid="tac-template-picker"
+                >
+                  <option value="">Correlix&apos;s plan for this incident</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name} — {templateLabel(t)}</option>
+                  ))}
+                </select>
+              </label>
+              <span className="mini-meta">
+                {templatesErr
+                  || (templates.length === 0
+                    ? `No saved set for ${plan.dialect_display || plan.dialect} yet — build one below.`
+                    : `Sets written for ${plan.dialect_display || plan.dialect}. Correlix's own are read-only; save a copy to make it yours.`)}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => { setReviewCmds(planCommands(plan)); setTemplateId(""); setSaveNote(""); }}
+              data-testid="tac-review-reset"
+            >
+              Reset to Correlix&apos;s plan
+            </button>
+          </div>
+
+          <ol className="tac-review-list" data-testid="tac-review-list">
+            {reviewCmds.map((cmd, i) => {
+              const v = verdicts[i];
+              const bad = v ? !v.ok : false;
+              return (
+                <li key={`rev-${i}`} className={`tac-review-row${bad ? " bad" : ""}`}>
+                  <input
+                    type="text"
+                    className="tac-review-cmd"
+                    aria-label={`Command ${i + 1}`}
+                    maxLength={512}
+                    value={cmd}
+                    onChange={(e) => setReviewCmds((list) => list.map((c, j) => (j === i ? e.target.value : c)))}
+                  />
+                  <span className="tac-review-actions">
+                    <button
+                      type="button"
+                      className="btn tiny"
+                      aria-label={`Move command ${i + 1} up`}
+                      disabled={i === 0}
+                      onClick={() => setReviewCmds((list) => moveCommand(list, i, i - 1))}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      className="btn tiny"
+                      aria-label={`Move command ${i + 1} down`}
+                      disabled={i === reviewCmds.length - 1}
+                      onClick={() => setReviewCmds((list) => moveCommand(list, i, i + 1))}
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      className="btn tiny"
+                      aria-label={`Remove command ${i + 1}`}
+                      onClick={() => setReviewCmds((list) => list.filter((_, j) => j !== i))}
+                    >
+                      Remove
+                    </button>
+                  </span>
+                  {v && (
+                    <span className={`mini-meta tac-verdict${bad ? " tac-bad" : ""}`} role={bad ? "alert" : undefined}>
+                      {bad && v.family ? <span className="badge tac-family">{v.family}</span> : null}
+                      {!bad ? <span className="badge">{originLabel(v)}</span> : null}{" "}
+                      {verdictLine(v) || (v.origin === "custom" ? CUSTOM_COMMAND_NOTE : "")}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+
+          <div className="tac-actions">
+            <button
+              type="button"
+              className="btn"
+              disabled={reviewCmds.length >= MAX_REVIEW_COMMANDS}
+              onClick={() => setReviewCmds((list) => [...list, ""])}
+              data-testid="tac-review-add"
+            >
+              Add a command
+            </button>
+            <span className="mini-meta">
+              {reviewCmds.length} of {MAX_REVIEW_COMMANDS} commands
+              {checking ? " · checking…" : ""}
+            </span>
+          </div>
+
+          {refused > 0 && (
+            <p className="tac-bad" role="alert" data-testid="tac-review-refused">{REVIEW_REFUSED}</p>
+          )}
+          {reviewCmds.filter((c) => c.trim()).length === 0 && (
+            <p className="tac-bad" role="status">{REVIEW_EMPTY}</p>
+          )}
+          {reviewErr && <p className="mini-meta tac-note" role="status">{reviewErr}</p>}
+          {plan.reviewed && editSummary(plan) && (
+            <p className="mini-meta tac-note" data-testid="tac-review-edits">{editSummary(plan)}</p>
+          )}
+
+          <details className="tac-tpl-save">
+            <summary>Save this set as a template for {plan.dialect_display || plan.dialect}</summary>
+            <div className="tac-form">
+              <label className="tac-field">
+                <span>Template name</span>
+                <input
+                  type="text"
+                  maxLength={120}
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  data-testid="tac-template-name"
+                />
+              </label>
+              <label className="tac-field">
+                <span>What it is for (optional)</span>
+                <input
+                  type="text"
+                  maxLength={800}
+                  value={saveDesc}
+                  onChange={(e) => setSaveDesc(e.target.value)}
+                />
+              </label>
+              <div className="tac-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={saving || refused > 0}
+                  onClick={() => { void saveTemplate(); }}
+                  data-testid="tac-template-save"
+                >
+                  {saving ? "Saving…" : "Save as template"}
+                </button>
+                <span className="mini-meta">
+                  Saved for your tenant only, for {plan.dialect_display || plan.dialect}. Every command is checked
+                  again on the way in.
+                </span>
+              </div>
+              {saveErr && <p className="tac-bad" role="alert" data-testid="tac-template-error">{saveErr}</p>}
+              {saveNote && <p className="mini-meta tac-note" role="status" data-testid="tac-template-note">{saveNote}</p>}
+            </div>
+          </details>
+        </section>
+      )}
+
       {/* ── step 4: collect ──────────────────────────────────────────────── */}
       {started && plan && (
         <section className="tac-step" aria-labelledby="tac-collect-h">
@@ -567,7 +870,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
               type="button"
               className="btn accent"
               onClick={() => { void runCollect(false); }}
-              disabled={collectBusy || running || !info.can_collect}
+              disabled={collectBusy || running || !info.can_collect || refused > 0}
               title={info.can_collect ? undefined : info.collect_note}
             >
               {running ? "Collecting…" : "Start the collection"}

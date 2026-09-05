@@ -41,12 +41,35 @@ type Gate struct {
 	// Keeping both is what makes the rule structural — a hand-edited plan file
 	// widens the table, and the policy still refuses the command.
 	policy *Policy
+	// reviews is the CLOSED TABLE OF THE MOMENT (templates.go): the exact
+	// command strings a human approved and the server re-validated, for one
+	// device, for the length of one collection. It is consulted AFTER the
+	// authored table and never before the policy, so a reviewed line still
+	// cannot be a config/restart/daemon command or an unbounded probe. It is nil
+	// on a build with no review registry wired, and a nil registry allows
+	// nothing — the authored table alone then stands, which is the pre-review
+	// behaviour exactly.
+	reviews *ReviewRegistry
+}
+
+// GateOption configures a Gate.
+type GateOption func(*Gate)
+
+// WithReviewRegistry attaches the per-collection allow set. Without it the gate
+// is the authored table alone; with it, a command a NAMED HUMAN approved and the
+// server re-validated is admitted for that device while its collection runs.
+func WithReviewRegistry(r *ReviewRegistry) GateOption {
+	return func(g *Gate) { g.reviews = r }
 }
 
 // NewGate compiles the closed table from a catalog. It is built once and never
-// mutated, so it is safe to share across goroutines.
-func NewGate(c *Catalog) *Gate {
+// mutated (the review registry it may hold has its own lock), so it is safe to
+// share across goroutines.
+func NewGate(c *Catalog, opts ...GateOption) *Gate {
 	g := &Gate{byDialect: map[string][][]string{}}
+	for _, o := range opts {
+		o(g)
+	}
 	if c == nil {
 		return g
 	}
@@ -82,7 +105,34 @@ func (g *Gate) Allows(dev protocoldiag.Device, command string) bool {
 	if !ok {
 		return false
 	}
-	return g.AllowsDialect(dialect, command)
+	if g.AllowsDialect(dialect, command) {
+		return true
+	}
+	// The reviewed allow set is per DEVICE, so it can only be consulted here —
+	// AllowsDialect has no device to key on, and that is deliberate: a dialect
+	// is not an authorisation subject. The policy and probe bounds have already
+	// been applied by AllowsDialect and are re-applied below, so a reviewed line
+	// is admitted only if it is still an output command at this instant.
+	if g.reviews == nil || !g.reviews.allows(reviewKey(dev), command) {
+		return false
+	}
+	if _, forbidden := g.policy.Match(dialect, command); forbidden {
+		return false
+	}
+	if protocoldiag.IsProbeCommand(command) {
+		return protocoldiag.ValidateBoundedProbe(command) == nil
+	}
+	return protocoldiag.ValidateReadOnly(command) == nil
+}
+
+// reviewKey is the registry key for one device: its id, or its hostname when the
+// inventory row carries no id. It mirrors the collector's own busy key, so the
+// allow set and the one-collection-per-device claim name the same device.
+func reviewKey(dev protocoldiag.Device) string {
+	if dev.ID != "" {
+		return dev.ID
+	}
+	return dev.Hostname
 }
 
 // AllowsDialect is Allows for a dialect slug the caller already resolved.

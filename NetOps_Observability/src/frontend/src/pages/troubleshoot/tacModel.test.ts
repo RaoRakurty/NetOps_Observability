@@ -313,3 +313,153 @@ describe("collectErrorMessage", () => {
     expect(collectErrorMessage(new Error("TypeError: fetch failed"), NOTE)).toBe(COLLECT_FAILED);
   });
 });
+
+// ── the command review + templates (tracker 250) ─────────────────────────────
+
+import type { TacLineVerdict, TacTemplate } from "../../services/api";
+import {
+  CUSTOM_COMMAND_NOTE,
+  MAX_REVIEW_COMMANDS,
+  buildReviewedSteps,
+  buildTemplateWrite,
+  editSummary,
+  moveCommand,
+  originLabel,
+  planCommands,
+  reviewChanged,
+  templateLabel,
+  verdictLine,
+} from "./tacModel";
+
+const reviewPlan = (steps: Partial<TacStep>[]): TacPlan =>
+  ({
+    id: "p", incident_id: "i", device_id: "d", hostname: "h", platform: "p",
+    dialect: "cisco-iosxe", dialect_display: "Cisco IOS-XE", has_plan: true,
+    class_id: "c", class_title: "C", target: {}, include_optional: false,
+    steps: steps.map((s) => ({ intent: "x", title: "X", section: "baseline", bound: true, ...s })) as TacStep[],
+    unbound: [], topology: [], estimated_bytes: 0, estimated_seconds: 0,
+    redaction_note: "", note: "", catalog_version: "v", engine_version: "v",
+  }) as TacPlan;
+
+describe("the review list is exactly the commands that will run", () => {
+  it("takes the plan's commands in order and drops topology rows", () => {
+    const p = reviewPlan([
+      { command: "show version" },
+      { command: "", section: "topology" },
+      { command: "show ip ospf neighbor" },
+    ]);
+    expect(planCommands(p)).toEqual(["show version", "show ip ospf neighbor"]);
+    expect(planCommands(undefined)).toEqual([]);
+  });
+
+  it("reorders without ever losing a command", () => {
+    const list = ["a", "b", "c"];
+    expect(moveCommand(list, 2, 0)).toEqual(["c", "a", "b"]);
+    expect(moveCommand(list, 0, 2)).toEqual(["b", "c", "a"]);
+    // An out-of-range or no-op move leaves the list untouched — a reorder must
+    // never silently drop a line.
+    expect(moveCommand(list, -1, 0)).toBe(list);
+    expect(moveCommand(list, 0, 9)).toBe(list);
+    expect(moveCommand(list, 1, 1)).toBe(list);
+    expect(list).toEqual(["a", "b", "c"]);
+  });
+
+  it("knows whether the operator actually changed anything", () => {
+    const p = reviewPlan([{ command: "show version" }, { command: "show ip route" }]);
+    expect(reviewChanged(p, ["show version", "show ip route"])).toBe(false);
+    expect(reviewChanged(p, ["Show  version", "show ip route"])).toBe(false); // same command
+    expect(reviewChanged(p, ["show ip route", "show version"])).toBe(true);   // reorder
+    expect(reviewChanged(p, ["show version"])).toBe(true);                    // removal
+    expect(reviewChanged(p, ["show version", "show ip route", "show clock"])).toBe(true);
+  });
+});
+
+describe("a refusal names the rule, never just 'invalid'", () => {
+  const refused: TacLineVerdict = {
+    index: 1, command: "configure terminal", ok: false, family: "config", rule: "configure",
+    reason: "refused by the output-only policy (config): it changes configuration or clears state — rule `configure`",
+  };
+
+  it("shows the server's own sentence for a refused line", () => {
+    expect(verdictLine(refused)).toContain("config");
+    expect(verdictLine(refused)).toContain("rule `configure`");
+  });
+
+  it("falls back to the family and the rule when the server sent no sentence", () => {
+    expect(verdictLine({ index: 0, command: "reload", ok: false, family: "restart", rule: "reload" }))
+      .toContain("restart");
+    expect(verdictLine({ index: 0, command: "reload", ok: false, family: "restart", rule: "reload" }))
+      .toContain("rule `reload`");
+    expect(verdictLine({ index: 0, command: "x", ok: false })).toBe("refused");
+    expect(verdictLine(undefined)).toBe("");
+  });
+
+  it("labels an accepted line by origin and never hides an unverified command", () => {
+    expect(originLabel({ index: 0, command: "show version", ok: true, origin: "catalog" }))
+      .toBe("Correlix command");
+    expect(originLabel({ index: 0, command: "show x", ok: true, origin: "custom" })).toBe("your command");
+    expect(originLabel(refused)).toBe("");
+    // A custom line with no server note still says it was never run here.
+    expect(verdictLine({ index: 0, command: "show x", ok: true, origin: "custom" })).toBe(CUSTOM_COMMAND_NOTE);
+  });
+});
+
+describe("templates carry their provenance in the picker", () => {
+  const base: TacTemplate = {
+    id: "t", dialect: "cisco-iosxe", name: "n", source: "tenant", steps: [], version: 3,
+  };
+
+  it("labels a Correlix default by version", () => {
+    expect(templateLabel({ ...base, source: "correlix-default", version: 1 })).toBe("Correlix default v1");
+  });
+
+  it("labels a tenant template by owner and last update", () => {
+    const label = templateLabel({ ...base, created_by: "noc@acme", updated_at: "2026-09-05T10:00:00Z" });
+    expect(label).toContain("saved by noc@acme");
+    expect(label).toContain("updated");
+    expect(label).toContain("v3");
+  });
+
+  it("says the set is the team's even when no author was recorded", () => {
+    expect(templateLabel(base)).toContain("saved by your team");
+  });
+});
+
+describe("the write bodies carry no tenant and no unbounded list", () => {
+  it("trims, drops blanks and caps the command list", () => {
+    const many = Array.from({ length: MAX_REVIEW_COMMANDS + 20 }, (_, i) => `show ${i}`);
+    const body = buildTemplateWrite("cisco-iosxe", "  ACME  ", " ours ", "correlix:cisco-iosxe:baseline", [
+      "  show version  ", "", "   ", ...many,
+    ]);
+    expect(body.name).toBe("ACME");
+    expect(body.description).toBe("ours");
+    expect(body.based_on).toBe("correlix:cisco-iosxe:baseline");
+    expect(body.steps.length).toBe(MAX_REVIEW_COMMANDS);
+    expect(body.steps[0]).toEqual({ command: "show version" });
+    // There is no tenant field to send, by construction.
+    expect(Object.keys(body)).not.toContain("tenant_id");
+  });
+
+  it("builds the reviewed step list the same way", () => {
+    expect(buildReviewedSteps([" show version ", "", "show clock"]))
+      .toEqual([{ command: "show version" }, { command: "show clock" }]);
+  });
+});
+
+describe("the bundle's edit record is summarised for the operator", () => {
+  it("counts what the bundle will say", () => {
+    const p = reviewPlan([{ command: "show version" }]);
+    p.reviewed = true;
+    p.edits = [
+      { kind: "removed", command: "show ip route" },
+      { kind: "removed", command: "show clock" },
+      { kind: "added", command: "show ip nhrp brief", origin: "custom" },
+    ];
+    expect(editSummary(p)).toBe("Recorded in the bundle: 1 added · 2 removed.");
+  });
+
+  it("says nothing when nothing was edited — an empty edit list is a statement", () => {
+    expect(editSummary(reviewPlan([{ command: "show version" }]))).toBe("");
+    expect(editSummary(undefined)).toBe("");
+  });
+});

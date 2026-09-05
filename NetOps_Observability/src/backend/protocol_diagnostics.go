@@ -60,6 +60,7 @@ import (
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/httppage"
 	"netops/backend/internal/incident"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/tac"
 	"netops/backend/internal/ticketing"
@@ -1236,6 +1237,18 @@ type tacCollectRequest struct {
 		Output  string `json:"output"`
 	} `json:"outputs"`
 	Cancel bool `json:"cancel"`
+	// Steps is the operator's REVIEWED command list (tracker 250). It is
+	// UNTRUSTED: internal/tac re-validates every line against the output-only
+	// policy and the read-only grammar before anything runs, and one refusal
+	// fails the whole collection naming the line.
+	Steps []struct {
+		Command string `json:"command"`
+		Note    string `json:"note"`
+	} `json:"steps"`
+	// TemplateID names the template the list was loaded from. Only the ID is
+	// accepted: the name, source and version are looked up server-side, so a
+	// client cannot forge the provenance a bundle records.
+	TemplateID string `json:"template_id"`
 }
 
 func (s *server) handleTACCollect(w http.ResponseWriter, r *http.Request) {
@@ -1261,6 +1274,9 @@ func (s *server) handleTACCollect(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Outputs) > tacMaxSuppliedOutputs {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("at most %d pasted outputs per request", tacMaxSuppliedOutputs))
+		return
+	}
+	if len(req.Steps) > 0 && !s.tacApplyReview(w, r, claims, inc, req) {
 		return
 	}
 	supplied := make([]tac.SuppliedOutput, 0, len(req.Outputs))
@@ -1672,8 +1688,14 @@ func (s *server) buildTACService() error {
 		return fmt.Errorf("tac catalog: %w", err)
 	}
 	opts := []tac.ServiceOption{}
+	// The reviewed allow set (tracker 250): the gate and the service must share
+	// ONE registry, or a command the operator approved would be refused at the
+	// wire. That is the safe direction to fail, and a test asserts it, but the
+	// correct wiring is this — built here, handed to both.
+	reviews := tac.NewReviewRegistry()
+	opts = append(opts, tac.WithReviews(reviews))
 	if protocolDiagCollectEnabled() && s.sshHosts != nil {
-		runner, rerr := protocoldiag.NewSSHGatedRunner(tac.NewGate(cat), s.protocolDiagGateway())
+		runner, rerr := protocoldiag.NewSSHGatedRunner(tac.NewGate(cat, tac.WithReviewRegistry(reviews)), s.protocolDiagGateway())
 		if rerr != nil {
 			return fmt.Errorf("tac runner: %w", rerr)
 		}
@@ -1700,7 +1722,138 @@ func (s *server) buildTACService() error {
 		return err
 	}
 	s.tacService = svc
+	s.tacTemplateStore = newTACTemplateStore()
+	api, aerr := tac.NewTemplateAPI(tac.TemplateAPIDeps{
+		Authz: s.tacTemplateAuthz, Store: s.tacTemplateStore, Validator: svc.Validator(),
+		Catalog: cat, Audit: s.tacTemplateAudit,
+		WriteJSON: writeJSON, WriteError: writeError,
+		Now: func() time.Time { return time.Now().UTC() },
+	})
+	if aerr != nil {
+		return fmt.Errorf("tac templates: %w", aerr)
+	}
+	s.tacTemplates = api
 	return nil
+}
+
+// newTACTemplateStore picks the template backend the way every other per-tenant
+// store does: Postgres (migration 0045, FORCE-RLS) when it is active, the file
+// store otherwise. A corrupt file still SERVES (an empty set) but says so — a
+// template set that failed to load must never look like one a tenant never
+// wrote, because the visible consequence of both is the same empty list.
+func newTACTemplateStore() tac.TemplateStore {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return tac.NewPGTemplateStore(ps.DB())
+	}
+	fs := tac.NewFileTemplateStore(envOr(tac.EnvTemplatesFile, filepath.Join(envOr("DATA_DIR", "/data"), "tac_templates.json")))
+	if err := fs.LoadErr(); err != nil {
+		logError("tac", "the TAC command templates could not be read — they start EMPTY; Correlix's own defaults are unaffected",
+			map[string]any{"err": err.Error()})
+	}
+	return fs
+}
+
+// tacTemplateAuthz maps the module's gates onto the RBAC model. Templates are
+// per-tenant OPERATOR data about the tenant's own escalations — not platform
+// plumbing — so both gates are requirePerm(infrastructure, …) plus the tenant
+// filter, the same gate the escalation routes themselves use (§3a rule 3).
+func (s *server) tacTemplateAuthz(w http.ResponseWriter, r *http.Request, gate tac.TemplateGate) (tac.TemplatePrincipal, bool) {
+	level := LevelRead
+	if gate == tac.TemplateGateWrite {
+		level = LevelWrite
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", level)
+	if !ok {
+		return tac.TemplatePrincipal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	if tenant == TenantGlobal {
+		// The platform tenant is not a customer: treat it as scopeless so the
+		// module's own refusal fires rather than reading a shared bucket.
+		tenant = ""
+	}
+	return tac.TemplatePrincipal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+}
+
+// tacTemplateAudit records a template write. A template decides which commands
+// reach a customer's routers, so no change to one is silent (§10).
+func (s *server) tacTemplateAudit(r *http.Request, p tac.TemplatePrincipal, action string, detail map[string]any) {
+	if s.audit == nil {
+		return
+	}
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["action"] = action
+	detail["sensitive"] = true
+	s.audit.Record(AuditEvent{
+		Actor: p.Subject, Tenant: p.Tenant, Cross: p.Cross,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+		Remote: auditClientIP(r), Detail: detail,
+	})
+}
+
+// The three template route entry points. They resolve s.tacTemplates at REQUEST
+// time (a bound method value would capture a nil surface at registration time),
+// and the module's handlers nil-check their receiver, so an unbuilt surface
+// answers 404 rather than degrading into an unscoped read.
+func (s *server) handleTACTemplates(w http.ResponseWriter, r *http.Request) {
+	s.tacTemplates.HandleTemplates(w, r)
+}
+
+func (s *server) handleTACTemplateItem(w http.ResponseWriter, r *http.Request) {
+	s.tacTemplates.HandleTemplateItem(w, r)
+}
+
+func (s *server) handleTACTemplateDefaults(w http.ResponseWriter, r *http.Request) {
+	s.tacTemplates.HandleDefaults(w, r)
+}
+
+func (s *server) handleTACTemplateValidate(w http.ResponseWriter, r *http.Request) {
+	s.tacTemplates.HandleValidate(w, r)
+}
+
+// tacApplyReview folds the operator's REVIEWED command list into the escalation's
+// stored plan before the collection starts.
+//
+// Everything that matters happens in internal/tac: this resolves the template id
+// in the caller's own scope (so the MANIFEST's provenance is server-derived) and
+// renders the package's refusal. ONE bad line fails the WHOLE request, naming
+// it — a collection that silently dropped the forbidden command and ran the rest
+// would teach an operator that Correlix quietly edits their intent.
+func (s *server) tacApplyReview(w http.ResponseWriter, r *http.Request, claims jwtClaims, inc tacIncident, req tacCollectRequest) bool {
+	steps := make([]tac.ReviewedStep, 0, len(req.Steps))
+	for _, st := range req.Steps {
+		steps = append(steps, tac.ReviewedStep{
+			Command: clampString(strings.TrimSpace(st.Command), 512),
+			Note:    clampString(st.Note, 800),
+		})
+	}
+	ref, rerr := tac.ResolveTemplateRef(r.Context(), s.tacTemplateStore, s.tacSvc().Catalog(),
+		inc.Tenant, strings.TrimSpace(req.TemplateID))
+	if rerr != nil {
+		writeError(w, http.StatusBadRequest, errors.New("unknown command template"))
+		return false
+	}
+	plan, res, err := s.tacSvc().Review(inc.Tenant, inc.ID, steps, ref)
+	switch {
+	case errors.Is(err, tac.ErrTemplateInvalid):
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "the reviewed command list was refused; nothing ran", "validation": res,
+		})
+		return false
+	case errors.Is(err, tac.ErrCollectBusy):
+		writeError(w, http.StatusConflict, err)
+		return false
+	case err != nil:
+		writeError(w, http.StatusBadRequest, err)
+		return false
+	}
+	s.pdAudit(r, claims, inc.Tenant, "tac.collect.review", map[string]any{
+		"incident_id": inc.ID, "commands": len(plan.Steps), "edits": len(plan.Edits),
+		"template_id": ref.ID, "template_version": ref.Version,
+	})
+	return true
 }
 
 // TAC-ROUTES-END

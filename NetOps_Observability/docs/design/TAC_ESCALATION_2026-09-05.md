@@ -184,3 +184,115 @@ Iris → Knowledge states the policy and the census: **"Excluded by policy: N
 (config · restart · daemon)"**, per build and per dialect. Counts only — a
 command in one of the three families is not knowledge Correlix holds, and the
 coverage page is knowledge.
+
+## 8. Command review and templates (owner, 2026-09-05)
+
+The owner's requirement, verbatim:
+
+> "it would be nice for NOC admin to view the commands it is sending before he
+> submit. Also give him an option to modify the set of commands he is sending
+> and also give him an option to templatize the set of commands he can send per
+> vendor. We provide some defaults model. But give flexibility to customer and
+> change how they want to build that."
+
+The plan preview (§1 step b) already showed the commands. What was missing was
+the other three verbs: **modify**, **templatise**, **default**.
+
+### 8.1 The boundary the flexibility ends at
+
+§7 is not relaxed by one line for this feature. An edit CHOOSES AMONG OUTPUT
+COMMANDS; it never widens what may run. Every command — Correlix's own defaults
+and anything a customer writes — passes the same four checks, server-side, in
+this order (`internal/tac/templates.go`):
+
+1. **shape** — non-empty, ≤ 512 bytes, printable ASCII, no control characters.
+2. **policy** — `Policy.Match(dialect, command)`: config / restart / daemon is
+   refused **by name**, with the family and the rule that hit. An operator who
+   is told "invalid" learns nothing; the whole point of showing the commands
+   before submit is that the operator understands what Correlix will not do.
+3. **catalog** — a command that is a rendering of an authored plan template for
+   this dialect is an output command *by construction*: the loader already
+   proved it (a read-only show, a bounded probe, or a documented status read
+   admitted by a **cited** `read_only_exception` — FortiOS spells several pure
+   status prints `diagnose debug …`). This is not a hole: step 2 has already run.
+4. **read-only** — everything else must pass `protocoldiag.ValidateReadOnly`, or
+   `ValidateBoundedProbe` when it is a ping/traceroute.
+
+An accepted line is then labelled by ORIGIN — `catalog` (Correlix's own, cited)
+or `custom` (the customer's; output-only and read-only, **never verified by
+Correlix on this platform**, and it says exactly that in the review UI and in the
+bundle MANIFEST). The label is honesty, not a second gate.
+
+**Session-scoped setters** are the one catalog command a review still refuses on
+its own. `diagnose sys session filter …` is admitted at all only because the
+collector runs its documented teardown immediately afterwards; a flat command
+list cannot express that pair. So a saved template never carries one, and a
+reviewed line carries one only when it came from a plan step that brought its
+teardown with it.
+
+### 8.2 How a custom command reaches a wire without widening the closed table
+
+`gate.go`'s closed table answers "could an AUTHORED plan have produced this?",
+which is the right question for a plan the *engine* built. A reviewed collection
+is a different act: a named human with `infrastructure:write` read the exact list
+and pressed collect. So its allow-set is **closed at collection start**, from the
+list the SERVER re-validated — `ReviewRegistry`, keyed per device, opened in
+`Service.StartCollect` and released from `runCollect`'s defer. Between those two
+points, and only for that device, an approved custom command is admitted; outside
+them the authored table is the whole world. The policy and the probe bounds are
+**re-applied at the wire** even for a registered command, so a forbidden string
+can never be admitted by the registry.
+
+At any instant the set of commands that can reach a device is enumerable, was
+validated, and belongs to one collection. That is the property the closed table
+existed to give, kept.
+
+### 8.3 The templates
+
+`Template{ID, TenantID, Dialect, Name, Description, Source, BasedOn, Steps,
+CreatedBy, CreatedAt, UpdatedAt, Version}`.
+
+- **Correlix defaults are GENERATED, not stored** (`templatedefaults.go`): one
+  baseline set per dialect plus one per issue class that dialect binds commands
+  for, derived from the authored plans so a plan change and its default template
+  cannot drift apart. Ids are stable (`correlix:<dialect>:<class|baseline>`),
+  generation is deterministic (a test asserts it), and they are **immutable** —
+  a PUT/DELETE is a 403 that tells the operator to save a copy. Consent commands,
+  optional captures, targeted commands (an unfilled `{peer}`/`{if}`) and
+  session-scoped setters are deliberately left out.
+- **Tenant sets** live in `tac_templates` (migration 0045, `tenant_iso` FORCE-RLS,
+  queried only through `WithTenant`) with a tenant-keyed file fallback. The owner
+  is stamped from the token — the wire type has **no** tenant field — the source
+  is stamped by the store, identity is immutable across an update, and the
+  version increments so a bundle names the exact revision that ran.
+
+### 8.4 The flow, and what the bundle records
+
+Plan → **Review the commands** → collect. The review step seeds an editable list
+from the plan, validates each line live against `POST /api/tac/templates/validate`
+(advisory — the authoritative check runs again at collect), and offers Load
+template / Save as template for the device's own dialect. Collect sends the
+reviewed list; the server RE-VALIDATES every line and refuses the WHOLE
+collection if any fails, **naming the line** — a collection that silently dropped
+the forbidden command and ran the rest would teach an operator that Correlix
+quietly edits their intent.
+
+`MANIFEST.json` gains `command_review`: `reviewed`, the `template` (id, name,
+source, version — all resolved SERVER-SIDE from the id, so provenance cannot be
+forged), the `edits` array (added / removed / reordered) and the policy sentence.
+A TAC engineer reading the bundle sees what Correlix proposed, what a human
+changed, and which lines were the customer's own.
+
+### 8.5 Routes
+
+| Route | Isolation | Notes |
+|---|---|---|
+| `GET/POST /api/tac/templates` | scoped | the tenant's sets + the defaults; `?dialect=` narrows |
+| `GET/PUT/DELETE /api/tac/templates/{id}` | scoped | foreign id → 404; a `correlix:` id → 403 on write |
+| `GET /api/tac/templates/defaults` | globalRef | generated, identical for every tenant |
+| `POST /api/tac/templates/validate` | globalRef | pure computation; reads and stores nothing |
+
+Cross-org isolation proven by `tac_templates_isolation_test.go` (own-only list,
+cross-tenant get/put/delete → 404, `as_tenant` ignored, owner from the token,
+defaults readable-but-immutable) plus `TestTACTemplateStoreRLSIsolationPG`
+against a real PostgreSQL.

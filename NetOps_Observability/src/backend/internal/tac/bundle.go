@@ -150,6 +150,13 @@ type Manifest struct {
 		Note       string   `json:"note"`
 	} `json:"classification"`
 
+	// CommandReview is the PROVENANCE of the command set that ran: which
+	// template it came from, at which version, and every difference between what
+	// Correlix proposed and what a human approved. It is always present — an
+	// unreviewed collection says `reviewed:false` with no edits, which is itself
+	// the fact a TAC engineer needs.
+	CommandReview ManifestReview `json:"command_review"`
+
 	Commands []ManifestCommand `json:"commands"`
 	// NotCollected names every intent the class wanted and the dialect does not
 	// bind. It is a FIELD, not an omission — the gap is part of the evidence.
@@ -179,6 +186,27 @@ type Manifest struct {
 	MaxBytes int64          `json:"max_bytes,omitempty"`
 	Files    []ManifestFile `json:"files"`
 }
+
+// ManifestReview records the command review (templates.go) in the bundle.
+type ManifestReview struct {
+	// Reviewed says a human approved an explicit command list, which the server
+	// then re-validated line by line before anything ran.
+	Reviewed bool        `json:"reviewed"`
+	Template TemplateRef `json:"template,omitzero"`
+	// Edits are the differences from the plan Correlix proposed. Empty means the
+	// operator ran the engine's plan unchanged.
+	Edits []PlanEdit `json:"edits"`
+	// Policy is the one sentence that bounds every command in this bundle,
+	// stated in the bundle itself so a reader never has to take it on trust.
+	Policy string `json:"policy"`
+}
+
+// ReviewPolicyNote is the sentence every bundle carries about its command set.
+const ReviewPolicyNote = "Every command in this bundle — Correlix's own and any your team added — passed Correlix's " +
+	"OUTPUT-ONLY policy before it ran: nothing that changes configuration, restarts or reboots, or addresses a " +
+	"daemon is carried by this platform at all, and a reachability probe is bounded (count, size, timeout, hops). " +
+	"Commands marked `custom` were written by the operator's own team and have never been verified by Correlix on " +
+	"this platform."
 
 // ManifestCommand is one command's row in the manifest.
 type ManifestCommand struct {
@@ -372,6 +400,12 @@ func buildManifest(in BundleInput, ev []EvidenceItem, st ProblemStatement, profi
 	m.Classification.Note = in.Class.Note
 	m.Redaction = RedactionNoteText
 	m.ProblemStatement = st
+	m.CommandReview = ManifestReview{
+		Reviewed: in.Capture.Reviewed,
+		Template: in.Capture.Template,
+		Edits:    append([]PlanEdit{}, in.Capture.Edits...),
+		Policy:   ReviewPolicyNote,
+	}
 
 	evByRef := map[string]string{}
 	for _, e := range ev {
