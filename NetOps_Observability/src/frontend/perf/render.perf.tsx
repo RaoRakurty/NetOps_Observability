@@ -22,7 +22,64 @@ import Logs from "../src/tabs/Logs";
 import Devices from "../src/pages/Devices";
 import BgpOps from "../src/pages/BgpOps";
 import DataProtection from "../src/pages/DataProtection";
+import Licence from "../src/pages/Licence";
 import { TopologyInventoryPanel } from "../src/features/topology/components/TopologyInventoryPanel";
+
+// ── the Licence page's payload (its contract is a closed vocabulary) ─────────
+
+/** The GET /api/system/licence body, at the size the server always sends. */
+function licenceView() {
+  const ceiling = (
+    name: string, label: string, limit: number, current: number | null,
+    enforced: boolean, reason?: string, over = false,
+  ) => ({ name, label, limit, current, enforced, over, current_reason: reason, lifted_by: "enterprise" });
+  const feature = (name: string, label: string, entitled: boolean, tier: string) =>
+    ({ name, label, entitled, included_in: tier });
+  return {
+    state: {
+      source: "file", tier: "team", licensed_tier: "team",
+      customer: "Acme Networks", licence_id: "lic-2026-0007",
+      issued_at: "2026-01-01T00:00:00Z", expires_at: "2027-01-01T00:00:00Z",
+      grace_days: 30, in_grace: false, degraded: false, key_id: "k-lab-1",
+      features: ["security_findings"],
+      support: { level: "business hours", contact: "support@correlix.example" },
+      ceilings: {
+        devices: 250, tenants: 5, orgs: 1, retention_days: 30,
+        watched_prefixes: 100, skills: 10, provider_tokens_per_day: 0,
+      },
+    },
+    ceilings: [
+      ceiling("devices", "devices", 250, 262, true, undefined, true),
+      ceiling("watched_prefixes", "watched prefixes", 100, 40, true),
+      ceiling("tenants", "tenants", 5, 3, false),
+      ceiling("orgs", "organisations", 1, null, false, "the platform does not count organisations"),
+      ceiling("retention_days", "retention days", 30, null, false, "retention is not counted as a usage"),
+      ceiling("skills", "Iris skills", 10, null, false, "skills are not counted yet"),
+      ceiling("provider_tokens_per_day", "provider tokens per day", 0, null, false, "provider spend is not counted here"),
+    ],
+    features: [
+      feature("security_findings", "security findings", true, "team"),
+      feature("security_dialects", "security dialects", false, "enterprise"),
+      feature("siem_export", "findings export to SIEM", false, "enterprise"),
+      feature("msp_management", "multi-tenant fleet management", false, "enterprise"),
+      feature("saml", "SAML single sign-on", false, "enterprise"),
+      feature("scim", "SCIM provisioning", false, "enterprise"),
+      feature("ldap", "LDAP authentication", false, "enterprise"),
+    ],
+    overages: [{
+      ceiling: "devices", label: "devices", current: 262, limit: 250, over: 12, lifted_by: "enterprise",
+      message: "12 of 262 devices are over the Team ceiling of 250 — they are still here and nothing has been deleted",
+    }],
+    keys: [
+      { id: "k-prod-1", role: "current", note: "production signing key", base64: "Q+PMj3/TNIjbRvopQwXLM5tJfgjzPTsoHIWwiM0apR8=" },
+      { id: "k-lab-1", role: "previous", note: "retired lab key", base64: "AAAAC3NzaC1lZDI1NTE5AAAAIF9Qb2tlbW9uSXNOb3RBS2V5AAAA" },
+    ],
+    path: "/data/licence/licence.json",
+    verify_hint: "Verify a licence offline with: correlix-licence verify <file>",
+    expiry_semantics: "Expiry semantics are an owner decision that is still open. Nothing is ever deleted, and no licence state can affect tenant isolation, data separation, permissions or sign-in.",
+    days_to_expiry: 119,
+  };
+}
 
 // ── payloads, built ONCE (outside every timed region) ────────────────────────
 synth.resetRand();
@@ -51,6 +108,13 @@ const BGP_BOGONS = synth.bgpBogons(20);
 const DP_COVERAGE = synth.backupCoverage();
 const DP_POINTS = synth.snapshotList(500);
 const DP_OPS = synth.backupOperations(200);
+// Licence: the whole page at its real, bounded size — the seven-ceiling closed
+// vocabulary, the seven-capability closed vocabulary, both trusted signing keys
+// and an over-ceiling list. Unlike the other surfaces this one has NO unbounded
+// list, so the budget's job is different: it pins that a fixed-size admin page
+// stays a fixed-size admin page, and catches a per-ceiling panel or a
+// per-capability card being added without anyone noticing the cost.
+const LICENCE_VIEW = licenceView();
 const BGP_RPKI = synth.bgpRpki(BGP_PREFIXES);
 const BGP_GRAPH = synth.bgpAsPathGraph(BGP_SELECTED);
 const BGP_GEOFEED = synth.bgpGeofeed(BGP_SELECTED);
@@ -111,6 +175,9 @@ beforeEach(() => {
   vi.spyOn(api, "bgpBogons").mockResolvedValue(BGP_BOGONS as never);
   vi.spyOn(api, "bgpBmpSessions").mockResolvedValue(BGP_BMP as never);
   vi.spyOn(api, "metricsQuery").mockResolvedValue(BGP_PEER_METRICS as never);
+
+  // Licence page — one read, five sections.
+  vi.spyOn(api, "getLicence").mockResolvedValue(LICENCE_VIEW as never);
 
   // Data Protection console. Its five panels read independently, so all five
   // are stubbed; the volume that matters is the 500-row recovery-point table.
@@ -272,5 +339,34 @@ describe("frontend render budgets (high-EPS payloads)", () => {
       }
     },
     180_000,
+  );
+
+  it(
+    "licence — the whole closed vocabulary on one page, as a platform admin",
+    async () => {
+      // Platform-admin gated like the Data Protection console: the read-only
+      // variant renders no install panel at all and would understate the DOM.
+      setToken("perf-session");
+      vi.spyOn(api, "me").mockResolvedValue({
+        username: "root", role: "admin", platform_admin: true,
+      } as never);
+      try {
+        await scenario(
+          "licence",
+          "7 ceilings · 7 capabilities · 2 keys · 1 overage",
+          () => <Licence />,
+          {
+            update: () => <Licence />,
+            // Proves the whole page assembled rather than five honest empty
+            // states: the licensed headline, a counted ceiling, the honest
+            // uncounted one, and the install panel only an admin sees.
+            verify: showsAll("Team licence", "262 of 250", "not measured —", "Install licence"),
+          },
+        )();
+      } finally {
+        setToken(null);
+      }
+    },
+    120_000,
   );
 });

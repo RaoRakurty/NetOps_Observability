@@ -52,6 +52,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   SearchDashboardsTab: () => import("./tabs/SearchDashboards"),
   Settings: () => import("./tabs/Settings"),
   DataProtection: () => import("./pages/DataProtection"),
+  Licence: () => import("./pages/Licence"),
   SourceOfTruth: () => import("./tabs/SourceOfTruth"),
   StackHealth: () => import("./tabs/StackHealth"),
   AuditLog: () => import("./tabs/AuditLog"),
@@ -116,6 +117,7 @@ const GrafanaTab = lazy(ROUTE_CHUNKS["GrafanaTab"] as () => Promise<{ default: R
 const SearchDashboardsTab = lazy(ROUTE_CHUNKS["SearchDashboardsTab"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Settings = lazy(ROUTE_CHUNKS["Settings"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DataProtection = lazy(ROUTE_CHUNKS["DataProtection"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Licence = lazy(ROUTE_CHUNKS["Licence"] as () => Promise<{ default: React.ComponentType<any> }>);
 const SourceOfTruth = lazy(ROUTE_CHUNKS["SourceOfTruth"] as () => Promise<{ default: React.ComponentType<any> }>);
 const StackHealth = lazy(ROUTE_CHUNKS["StackHealth"] as () => Promise<{ default: React.ComponentType<any> }>);
 const AuditLog = lazy(ROUTE_CHUNKS["AuditLog"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -444,6 +446,12 @@ export const NAV: NavSection[] = [
       // its own, not a row in a settings list. Platform-global, and every route
       // behind it is requirePlatformAdmin-gated on the server.
       { id: "data-protection", label: "Data Protection", group: "Platform", platformOnly: true, render: () => <DataProtection /> },
+      // Licence — what this platform is licensed to run, where it stands against
+      // every ceiling, and where a licence is installed or removed. Platform-
+      // GLOBAL: one licence covers every tenant, so the route behind it is
+      // requirePlatformAdmin-gated on the server (a tenant/org admin holds full
+      // administration:admin and must NOT reach it).
+      { id: "licence", label: "Licence", group: "Platform", platformOnly: true, render: () => <Licence /> },
       { id: "grafana", label: "Self-Monitoring", group: "Platform", platformOnly: true, requiresGrafana: true, render: () => <GrafanaTab /> },
       { id: "opensearch", label: "Search Dashboards", group: "Platform", platformOnly: true, render: () => <SearchDashboardsTab /> },
       { id: "graphql", label: "GraphQL Explorer", group: "Platform", platformOnly: true, render: () => <GraphQLExplorer /> },

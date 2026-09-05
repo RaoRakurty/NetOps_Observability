@@ -224,6 +224,17 @@ EXPECTED = {
     # Byte-identical to the docker-compose default and to
     # alertwebhook.DefaultCooldown.
     "VMALERT_WEBHOOK_COOLDOWN":      "30m",
+    # Pipeline debugger (correlix-debug) sidecar secret. Like the vmalert
+    # token, the compose default is EMPTY and empty is fail-closed: the
+    # correlation sidecar's bounded bus peek and log-level switch answer 503,
+    # so an upgraded install would ship a debugger that goes blind at the bus —
+    # the one hop the 2026-09-02 outage turned on. Minted here instead, ONCE:
+    # this loop only fills keys the .env does not already have, so an
+    # operator-set value is never overwritten (overwriting would desynchronise
+    # the api from the correlation container, which must hold the SAME value).
+    # __URLSAFE__, not __RANDOM__: it travels as an Authorization: Bearer
+    # credential, so randpw's @ # % ^ & + = have no business in it.
+    "CORR_DEBUG_TOKEN":              "__URLSAFE__",
     # Platform self-health alerts -> the HOST-MONITORING ntfy topic
     # (internal/alertwebhook hostroute.go). EMPTY is the intended default and is
     # byte-identical to compose: empty topic means "use WATCHDOG_NTFY_TOPIC",

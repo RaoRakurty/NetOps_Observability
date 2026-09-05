@@ -711,6 +711,111 @@ groups:
           summary: "the api rejected {{ $value | printf \"%.0f\" }} mTLS peer(s) in 30m whose chain was TRUSTED but whose identity is not allowed — a valid mesh credential is knocking from the wrong workload; investigate before widening any allowlist"
 
   # ----------------------------------------------------------------------------
+  # Licence / entitlement (Correlix licence mechanism).
+  #
+  # Two gauges, both emitted by internal/licence.Service.WriteMetrics on the
+  # api's OWN /metrics, and both present from the first scrape on EVERY
+  # deployment — including a Community one that has no licence file at all.
+  # That is the whole design: "no licence" is a VALUE, never a missing series,
+  # so these rules can tell "this customer is on the free tier" apart from "the
+  # api stopped reporting". A state that is only visible by its absence is the
+  # 2026-09-02 ambiguity that turned a 5-minute incident into a 3-hour one.
+  #
+  #   netops_licence_days_to_expiry
+  #       whole days until the installed licence expires; NEGATIVE once it has
+  #       expired; the sentinel 36500 (100 years — licence.NoExpirySentinel)
+  #       means "no licence installed, nothing to expire".
+  #
+  #   netops_licence_state{tier,degraded,in_grace}
+  #       1 on the combination in force, 0 on every other one. tier is
+  #       community|team|enterprise; degraded and in_grace are the STRINGS
+  #       "true"/"false". Every combination is emitted on every scrape, so a
+  #       series that vanishes is a scrape failure, not a state change.
+  #
+  # A COMMUNITY DEPLOYMENT MUST NEVER FIRE ANY RULE IN THIS GROUP. How each
+  # expression guarantees that is written on the rule itself; read that note
+  # before touching a threshold or a matcher.
+  #
+  # NOT A PAGE — EVER. The page tier is fixed at four conditions by owner ruling
+  # (CLAUDE.md "Monitoring"), and a licence is none of them. A lapsed licence
+  # drops the commercial CEILINGS back to Community: nothing is deleted, nothing
+  # is hidden, and isolation, permissions and sign-in are unaffected. That is a
+  # commercial problem to fix in office hours, not a reason to wake anyone at
+  # 3am. severity stays `warning` for the same reason — the host route pushes
+  # the page tier straight to a phone and digests everything else.
+  #
+  # LABEL COLLISION, ON PURPOSE. netops_licence_state carries its own `tier`
+  # label (the LICENCE tier) and the routing label is also called `tier`. Rule
+  # labels win over sample labels in Prometheus, so the explicit
+  # `tier: warning` below overwrites community|team|enterprise on the fired
+  # alert — which is exactly what we want: a licence tier can never end up
+  # being read as a routing tier. The consequence is that {{ $labels.tier }} in
+  # an annotation here would print "warning", so these summaries deliberately
+  # do not name the tier; the tier in force is on the admin licence page and in
+  # the gauge itself.
+  # ----------------------------------------------------------------------------
+  - name: licence
+    interval: 60s
+    rules:
+      # Renewal runway. 14 days is the lead time a purchase order realistically
+      # needs, and it opens as a warning so the operator meets it in the digest
+      # long before anything about the product changes.
+      #
+      # The expression is a CLOSED RANGE and both ends carry weight:
+      #   >= 0  an already-expired licence is not "expiring soon" — that is what
+      #         LicenceInGrace and LicenceDegraded below say, accurately. Without
+      #         this bound a lapsed deployment would fire this rule forever
+      #         alongside the rule that actually describes its situation.
+      #   < 14  this is ALSO the Community guard. A deployment with no licence
+      #         reports the 36500 sentinel and 36500 < 14 is false, so the series
+      #         never enters the range at all. The exclusion is STRUCTURAL — it
+      #         needs no `!= 36500` clause that a later edit could quietly drop —
+      #         but it only holds while the threshold stays far below 36500. Any
+      #         future widening must be checked against the sentinel first.
+      # for: 1h — the gauge steps once a day, so an hour costs no real warning
+      # time and suppresses a value seen through a single bad scrape.
+      - alert: LicenceExpiringSoon
+        expr: netops_licence_days_to_expiry >= 0 and netops_licence_days_to_expiry < 14
+        for: 1h
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "the installed Correlix licence expires in {{ $value }} day(s) — renew it before then; on expiry the commercial ceilings fall back to Community, nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected"
+
+      # Grace: the licence has expired but its ceilings are still being honoured
+      # for a fixed window. Nothing has changed for the user YET — this is the
+      # last quiet moment to install a renewal before LicenceDegraded is the
+      # rule that fires and the ceilings really have moved.
+      #
+      # Community guard: this matches on the LABEL and on the VALUE. A Community
+      # deployment does publish netops_licence_state{...,in_grace="true"} —
+      # every combination is emitted every scrape — but publishes it as 0, so
+      # `== 1` cannot select it. Matching the value rather than the presence of
+      # the series is what makes that true; `netops_licence_state{in_grace="true"}`
+      # on its own would fire on every install in the world.
+      - alert: LicenceInGrace
+        expr: netops_licence_state{in_grace="true"} == 1
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "the Correlix licence has expired and the deployment is running on its grace period — the commercial ceilings are still honoured for now, but when grace ends they fall back to Community; nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected; install a renewed licence before grace runs out"
+
+      # Degraded: grace is over. evaluate() has emptied the granted feature set,
+      # so the commercial ceilings ARE Community ceilings from this moment on.
+      # Loud, because the operator's experience changes here (writes start
+      # meeting ceilings they have never met), but still not a page: the data is
+      # intact and the platform is serving.
+      #
+      # Community guard: identical to LicenceInGrace — the degraded="true"
+      # series exists on a free-tier install but sits at 0, and `== 1` skips it.
+      # Community is the un-degraded resting state, not a degradation of itself.
+      - alert: LicenceDegraded
+        expr: netops_licence_state{degraded="true"} == 1
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "the Correlix licence has lapsed past its grace period and the deployment is DEGRADED — the commercial ceilings have fallen back to Community and writes above them will now be refused; nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected; install a renewed licence to lift the ceilings again"
+
+  # ----------------------------------------------------------------------------
   # Stack self-health
   # ----------------------------------------------------------------------------
   - name: noc-self-health

@@ -586,25 +586,48 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/ingest/source-status": "platform", // poller error reports (Wave 2 #4) — same service credential
 	"/api/system/network":             "platform",
 	"/api/system/backup":              "platform", // DR config + status; requirePlatformAdmin
-	"/api/system/backup/snapshots":    "platform", // #150 SM policy view/control; requirePlatformAdmin (gate test: system_backup_snapshots_test.go)
-	"/api/system/network/test":        "platform",
-	"/api/automation/netbox":          "platform",
-	"/api/automation/netbox/sync":     "platform",
-	"/api/discovery/config":           "platform", // subnet-scan scope: directs the platform prober (#91)
-	"/api/notify/smtp":                "platform",
-	"/api/notify/smtp/test":           "platform",
-	"/api/notify/slack":               "platform",
-	"/api/notify/slack/test":          "platform",
-	"/api/notify/twilio":              "platform",
-	"/api/notify/twilio/test":         "platform",
-	"/api/notify/ntfy":                "platform",
-	"/api/notify/ntfy/test":           "platform",
-	"/api/notify/pagerduty":           "platform",
-	"/api/notify/pagerduty/test":      "platform",
-	"/api/notify/teams":               "platform",
-	"/api/notify/teams/test":          "platform",
-	"/api/notify/sns":                 "platform",
-	"/api/notify/sns/test":            "platform",
+	"/api/system/backup/snapshots":    "platform", // #150 SM policy view/control; requirePlatformAdmin (gate test: data_protection_routes_test.go)
+	// Data Protection rebuild (2026-09-03). Platform-GLOBAL backup plumbing, NOT
+	// tenant data: every route is gated by requirePlatformAdmin and every write
+	// is audited on both outcomes. A tenant/org admin holds full
+	// administration:admin, so a scope-blind requireAdmin here would hand every
+	// tenant the platform's backup posture and the ability to DELETE its restore
+	// points (§3a rule 3). There is deliberately no org-isolation test: no
+	// tenant rows cross these routes at all.
+	// Gate + mux tests: data_protection_routes_test.go (TestSystemBackupOpsGate
+	// covers every route below); the domain itself lives in
+	// internal/dataprotect and is tested there.
+	"/api/system/backup/coverage":    "platform", // per-engine coverage table; requirePlatformAdmin
+	"/api/system/backup/snapshots/":  "platform", // list/create/delete/restore/verify subtree; requirePlatformAdmin
+	"/api/system/backup/operations":  "platform", // async operation ring; requirePlatformAdmin
+	"/api/system/backup/operations/": "platform", // one operation by id; requirePlatformAdmin
+	// Licence (2026-09-04). Platform-GLOBAL commercial plumbing, NOT tenant
+	// data: a tenant/org admin holds full administration:admin, so a
+	// scope-blind requireAdmin here would let any tenant read the customer's
+	// commercial terms AND install a licence for the whole platform (§3a rule
+	// 3). requirePlatformAdmin on every verb; PUT and DELETE audited on both
+	// outcomes. No tenant rows cross this route at all, so there is
+	// deliberately no org-isolation test.
+	// Gate + grammar tests: licence_routes_test.go.
+	"/api/system/licence":         "platform", // read/install/remove the signed licence; requirePlatformAdmin
+	"/api/system/network/test":    "platform",
+	"/api/automation/netbox":      "platform",
+	"/api/automation/netbox/sync": "platform",
+	"/api/discovery/config":       "platform", // subnet-scan scope: directs the platform prober (#91)
+	"/api/notify/smtp":            "platform",
+	"/api/notify/smtp/test":       "platform",
+	"/api/notify/slack":           "platform",
+	"/api/notify/slack/test":      "platform",
+	"/api/notify/twilio":          "platform",
+	"/api/notify/twilio/test":     "platform",
+	"/api/notify/ntfy":            "platform",
+	"/api/notify/ntfy/test":       "platform",
+	"/api/notify/pagerduty":       "platform",
+	"/api/notify/pagerduty/test":  "platform",
+	"/api/notify/teams":           "platform",
+	"/api/notify/teams/test":      "platform",
+	"/api/notify/sns":             "platform",
+	"/api/notify/sns/test":        "platform",
 	// The channel enumeration is over the SAME platform-global notify integrations
 	// as /api/notify/* — a tenant admin must not enumerate operator channel names
 	// (requirePlatformAdmin; report_scheduler.go handleReportChannels).
@@ -691,7 +714,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/config/drift": "scoped",
 	"/api/openapi.json": "public",
 	// Pipeline debugger (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §4). All
-	// four are PLATFORM plumbing, requirePlatformAdmin (s.debugAuthz), NOT
+	// five are PLATFORM plumbing, requirePlatformAdmin (s.debugAuthz), NOT
 	// requireAdmin: a trace injects a marked synthetic record into the stack's
 	// own ingress and reads it back out of the SHARED stores, and a log-level
 	// change alters every tenant's service. A tenant/org admin holds full
@@ -708,6 +731,17 @@ var routeIsolationLedger = map[string]string{
 	"/api/debug/trace/":   "platform",
 	"/api/debug/loglevel": "platform",
 	"/api/debug/stage/":   "platform",
+	// The parser decision-trace switch is platform for a second, stronger
+	// reason than the gate: the filter it arms is ONE process-global needle
+	// inside the traced services (internal/parsetrace), so an armed marker
+	// records the parse decisions of EVERY tenant's records that match it.
+	// There is no per-tenant instance of it to scope, and inventing one would
+	// be a lie about what the switch does. Hence platform-admin-only, bounded
+	// (30-minute hard cap) and auto-disarming, and the audit trail records the
+	// needle's LENGTH rather than the needle (a message fragment is a
+	// customer's log line, §8). Gate + grammar + PII tests:
+	// internal/pipedebug/w2_test.go.
+	"/api/debug/parsemarker": "platform",
 }
 
 var validRouteCategories = map[string]bool{

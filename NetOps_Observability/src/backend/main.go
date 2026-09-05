@@ -44,12 +44,24 @@ import (
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
 	// CONFIG-BACKUP-END
+	// DATA-PROTECTION-BEGIN
+	"netops/backend/internal/dataprotect"
+	// DATA-PROTECTION-END
 	"netops/backend/internal/discovery"
 	// CONFIG-BACKUP-BEGIN
 	"netops/backend/internal/hardening"
 	// CONFIG-BACKUP-END
 	"netops/backend/internal/igpmon"
 	"netops/backend/internal/keycloak"
+	// LICENCE-BEGIN — the central entitlement service (internal/entitlement,
+	// the semantic vocabulary business code gates on) and its licence-file
+	// implementation (internal/licence). Deleting this marker block, the
+	// others in this file and the two packages removes the licence mechanism
+	// and leaves every gate answering Community — which is the fail-closed
+	// direction, not an outage.
+	"netops/backend/internal/entitlement"
+	"netops/backend/internal/licence"
+	// LICENCE-END
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
 	// PACKET-CAPTURE-BEGIN
@@ -57,6 +69,7 @@ import (
 	// PACKET-CAPTURE-END
 	// DEBUG-ROUTES-BEGIN
 	"netops/backend/internal/oslog"
+	"netops/backend/internal/parsetrace"
 	"netops/backend/internal/pipedebug"
 	// DEBUG-ROUTES-END
 	"netops/backend/internal/platformdb"
@@ -196,11 +209,31 @@ type server struct {
 	notifyCfg         *notifyConfigStore
 	contactPoints     *contactPointStore
 	deviceLocations   *deviceLocationStore
-	sites             *sitesStore        // internal SoT sites (default provider)
-	deviceSites       *deviceSiteStore   // operator device→site bindings (intent)
-	wanPolicy         *wanPolicyStore    // WAN measurement policy (operator intent) #wan-path-metrics
-	systemNet         *systemNetStore    // platform DNS + NTP system settings (clock sync + URL resolution)
-	backupCfg         *backupConfigStore // platform data-protection settings + DR status
+	sites             *sitesStore      // internal SoT sites (default provider)
+	deviceSites       *deviceSiteStore // operator device→site bindings (intent)
+	wanPolicy         *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
+	systemNet         *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
+	// DATA-PROTECTION-BEGIN — the whole Data Protection domain lives in
+	// internal/dataprotect: the backup intent store + live DR status, the
+	// netops-daily SM policy control plane, the snapshot inventory/management
+	// surface, the restorability probe, the bounded operation ring and the
+	// per-engine coverage table. main.go keeps only this field, the Deps
+	// assembly below, the route registrations, the probe worker and the
+	// /metrics delegation — no domain logic (§2).
+	dataProtect *dataprotect.Service
+	// DATA-PROTECTION-END
+	// LICENCE-BEGIN — the licence mechanism. `entitlements` is the CENTRAL
+	// entitlement service every commercial gate asks (entitlement.Service);
+	// `licenceStore` owns the signed document at /data/api/licence.json;
+	// `licenceAPI` is the platform-admin route. No safety control reads any of
+	// them — isolation, RLS, authorization and core authentication (OIDC
+	// included) cannot consult the entitlement service at all, which is what
+	// makes "a licence problem can never weaken a safety property" a structural
+	// fact rather than a promise (internal/entitlement/safety_invariant_test.go).
+	licenceStore licence.Store
+	entitlements *licence.Service
+	licenceAPI   *licence.API
+	// LICENCE-END
 	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
 	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
@@ -334,6 +367,11 @@ type server struct {
 	// debugAPILevel owns this process's runtime log level with the auto-revert
 	// armed HERE, so a module never stays at debug because a caller died.
 	debugAPILevel *pipedebug.LevelSwitch
+	// debugParseFilter is the runtime PARSER decision-trace switch
+	// (internal/parsetrace). It is the collectors' process-wide default, joined
+	// to the debug ring at boot: a record carrying a cx_debug marker is traced
+	// unconditionally, and an operator arms it by needle for a REAL record.
+	debugParseFilter *parsetrace.Filter
 	// DEBUG-ROUTES-END
 	// SECURITY-LANE-BEGIN — P3-EMIT removable module; see internal/seclane's
 	// package doc, "REMOVAL RULE". nil unless FEATURE_SECURITY_LANE=true.
@@ -803,7 +841,7 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("system network store: %v", err)
 	}
-	backupCfg, err := newBackupConfigStore(envOr("SYSTEM_BACKUP_FILE", "/data/system_backup.json"))
+	backupCfg, err := dataprotect.NewFileConfigStore(envOr("SYSTEM_BACKUP_FILE", "/data/system_backup.json"))
 	if err != nil {
 		log.Fatalf("backup config store: %v", err)
 	}
@@ -841,7 +879,6 @@ func newServer() *server {
 		deviceSites:      deviceSites,
 		wanPolicy:        wanPolicy,
 		systemNet:        systemNet,
-		backupCfg:        backupCfg,
 		hub:              NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
@@ -849,6 +886,29 @@ func newServer() *server {
 			func(msg string, fields map[string]any) { logWarn("vulns", msg, fields) },
 			func(msg string, fields map[string]any) { logInfo("vulns", msg, fields) }),
 	}
+	// DATA-PROTECTION-BEGIN — the Data Protection domain (internal/dataprotect).
+	// Built here, after srv exists, because every seam it takes is a method on
+	// *server (the platform-admin gate, the audit sink, the OpenSearch caller).
+	srv.dataProtect = dataprotect.New(srv.dataProtectDeps(backupCfg))
+	// DATA-PROTECTION-END
+	// LICENCE-BEGIN — built here, after srv exists, because the gate, the audit
+	// sink and the usage counters are all methods on *server.
+	//
+	// Construction NEVER fails and never touches the disk: a missing licence is
+	// the supported Community state, and an unreadable one must not be able to
+	// stop the api. The first State() call loads and, if the file is corrupt,
+	// reports Community plus a loud reason.
+	srv.licenceStore = licence.NewFileStore(envOr("LICENCE_FILE", licence.DefaultPath), licence.FileStoreOptions{})
+	srv.entitlements = licence.NewService(srv.licenceStore)
+	srv.licenceAPI = licence.New(srv.licenceDeps())
+	// The discovery half of the device ceiling (design §4: "discovery admission
+	// + manual device create"). Injected rather than read by the aggregator, so
+	// internal/discovery keeps knowing nothing about licensing.
+	srv.discovery.SetAdmissionGate(func(current int) error {
+		return entitlement.CheckCeiling(srv.entitlements, entitlement.CeilingDevices, current)
+	})
+	srv.logLicenceState()
+	// LICENCE-END
 	// ITSM config store — seeds from env on first run, then admin-UI editable;
 	// builds + swaps the ServiceNow/Jira connectors into srv + the notifier.
 	srv.itsmCfg = newITSMConfigStore(srv, envOr("ITSM_CONFIG_FILE", "/data/itsm_config.json"))
@@ -1109,6 +1169,19 @@ func newServer() *server {
 	srv.debugAPILevel = pipedebug.NewLevelSwitch(pipedebug.ModuleAPI, func(l pipedebug.Level) error {
 		applog.SetLevel(string(l))
 		return nil
+	})
+	// The collectors' parse hook and the debug ring are joined HERE, and only
+	// here: internal/parsetrace knows nothing about the debugger's HTTP surface
+	// and internal/pipedebug knows nothing about the SNMP decoder, so neither
+	// imports the other (§2 — no hidden coupling). A decision line lands in the
+	// ring under the record's marker AND in the structured application log, so
+	// it survives whether the reader is `correlix-debug` or `docker logs api`.
+	srv.debugParseFilter = parsetrace.Default()
+	srv.debugParseFilter.SetSink(func(marker, component, msg string, fields map[string]any) {
+		srv.debugRing.Append(marker, pipedebug.RingLine{
+			Level: "debug", Component: component, Msg: msg, Fields: fields,
+		})
+		applog.Debug(component, msg, fields)
 	})
 	srv.debugAPI = pipedebug.New(srv.debugDeps()) // handlers over injected seams (§5)
 	// DEBUG-ROUTES-END
@@ -1737,6 +1810,16 @@ func Run() {
 		}
 	}
 	// PACKET-CAPTURE-END
+	// SNAPSHOT-RESTORABILITY-BEGIN — the nightly restorability probe. It
+	// RESTORES the smallest index out of the newest SUCCESS snapshot into a
+	// disposable probe-* index and compares doc counts, then deletes it. This is
+	// the only thing in the platform that can distinguish "a snapshot exists"
+	// from "a snapshot can be restored" — the distinction the 2026-08-27
+	// incident turned on. Bounded, jittered off the 01:30 snapshot window, and
+	// killable with SNAPSHOT_PROBE_ENABLED=false (in which case the metric says
+	// so rather than reporting a fake pass).
+	workers.start("snapshot-restorability-probe", func() { srv.dataProtect.StartRestorabilityProbe(ctx) })
+	// SNAPSHOT-RESTORABILITY-END
 	// BMP-BEGIN — BGP Monitoring Protocol receiver (internal/bmp): a TCP
 	// listener a router pushes its Adj-RIB-In to. READ-ONLY toward the network —
 	// it accepts a feed and configures nothing on any device. Opt-in and
@@ -2093,8 +2176,16 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/notify/itsm", s.handleITSMConfig)   // ServiceNow/Jira config (platform-owner)
 	mux.HandleFunc("/api/auth/methods", s.handleAuthMethods)
 	mux.HandleFunc("/api/auth/ldap/login", s.handleLDAPLogin)
-	mux.HandleFunc("/api/auth/ldap/config", s.handleLDAPConfig)
-	mux.HandleFunc("/api/auth/ldap/test", s.handleLDAPTest)
+	// LICENCE-BEGIN — LDAP is in the owner's LOCKED Enterprise set. Only the
+	// CONFIGURATION routes are gated, never /api/auth/ldap/login: core
+	// authentication must stay reachable at every licence state, and gating a
+	// login path would mean a lapsed licence could lock people out. An
+	// unlicensed deployment cannot ENABLE or CHANGE LDAP; one that already has
+	// it configured keeps signing in while the operator sorts the licence out.
+	// Local accounts and OIDC are core and are never gated at all.
+	mux.HandleFunc("/api/auth/ldap/config", s.licenceFeature(entitlement.FeatureLDAP, s.handleLDAPConfig))
+	mux.HandleFunc("/api/auth/ldap/test", s.licenceFeature(entitlement.FeatureLDAP, s.handleLDAPTest))
+	// LICENCE-END
 	mux.HandleFunc("/api/auth/tacacs/login", s.handleTACACSLogin)
 	mux.HandleFunc("/api/auth/tacacs/config", s.handleTACACSConfig)
 	mux.HandleFunc("/api/auth/tacacs/test", s.handleTACACSTest)
@@ -2304,10 +2395,24 @@ func (s *server) routes(mux *http.ServeMux) {
 	// prefers the longest registered pattern, and an exact path beats a prefix).
 	// Every route is tenant-scoped through secapi's oslog.TenantIndexPattern +
 	// oslog.TenantFilter chokepoint pair; see security_findings_isolation_test.go.
-	mux.HandleFunc("/api/security/findings", s.secAPI.HandleFindings)
-	mux.HandleFunc("/api/security/findings/facets", s.secAPI.HandleFacets)
-	mux.HandleFunc("/api/security/findings/trend", s.secAPI.HandleTrend)
-	mux.HandleFunc("/api/security/findings/", s.secAPI.HandleFindingByID)
+	// LICENCE-BEGIN — the findings LANE is the Team capability in the owner's
+	// LOCKED commercial set (2026-09-04). Gated at the mux, not inside secapi,
+	// for two reasons: the gate is a commercial concern and secapi is a read
+	// API that must not learn about licensing, and the tenant-isolation tests
+	// call these handlers DIRECTLY — so isolation keeps being tested at full
+	// strength, licensed or not.
+	//
+	// Refusal is the structured 402 the SPA renders as an upgrade card, never a
+	// broken page and never an empty list that reads as "you are clean".
+	// Everything else on the security surface — posture, exposure stories,
+	// hardening rules, frameworks, compliance, views — is UNGATED: the owner
+	// locked "security findings", and the rest of the tiering plan is a
+	// proposal, not a decision.
+	mux.HandleFunc("/api/security/findings", s.licenceFeature(entitlement.FeatureSecurityFindings, s.secAPI.HandleFindings))
+	mux.HandleFunc("/api/security/findings/facets", s.licenceFeature(entitlement.FeatureSecurityFindings, s.secAPI.HandleFacets))
+	mux.HandleFunc("/api/security/findings/trend", s.licenceFeature(entitlement.FeatureSecurityFindings, s.secAPI.HandleTrend))
+	mux.HandleFunc("/api/security/findings/", s.licenceFeature(entitlement.FeatureSecurityFindings, s.secAPI.HandleFindingByID))
+	// LICENCE-END
 	mux.HandleFunc("/api/security/posture", s.secAPI.HandlePosture)
 	mux.HandleFunc("/api/security/exposure-stories", s.secAPI.HandleExposureStories)
 	mux.HandleFunc("/api/security/exposure-stories/", s.handleSecurityExposureStory)
@@ -2332,6 +2437,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/debug/trace", s.debugAPI.HandleTrace)
 	mux.HandleFunc("/api/debug/trace/", s.debugAPI.HandleTraceStatus)
 	mux.HandleFunc("/api/debug/loglevel", s.debugAPI.HandleLogLevel)
+	mux.HandleFunc("/api/debug/parsemarker", s.debugAPI.HandleParseMarker)
 	mux.HandleFunc("/api/debug/stage/", s.debugAPI.HandleStage)
 	// DEBUG-ROUTES-END
 	// SECURITY-LANE-BEGIN
@@ -2478,8 +2584,30 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings/verification", s.handleVerificationSettings) // spec #8: active-verification opt-in + read-only SSH credential
 	mux.HandleFunc("/api/settings/required-tags", s.handleRequiredTagsSettings)
 	mux.HandleFunc("/api/settings/rca-window", s.handleRcaWindowSettings)
-	mux.HandleFunc("/api/system/backup", s.handleSystemBackup)                    // platform data-protection config + DR status
-	mux.HandleFunc("/api/system/backup/snapshots", s.handleSystemBackupSnapshots) // #150: SM policy view/control (platform admin)
+	mux.HandleFunc("/api/system/backup", s.dataProtect.HandleConfig)           // platform data-protection config + DR status
+	mux.HandleFunc("/api/system/backup/snapshots", s.dataProtect.HandlePolicy) // #150: SM policy view/control (platform admin)
+	// DATA-PROTECTION-BEGIN — the enterprise Data Protection surface
+	// (internal/dataprotect). All platform-GLOBAL: requirePlatformAdmin,
+	// writes audited on BOTH outcomes, category "platform" in
+	// route_isolation_test.go.
+	//
+	// The subtree pattern is load-bearing: "/api/system/backup/snapshots" stays
+	// the EXACT policy route above, and the trailing-slash pattern below owns
+	// list/create/delete/restore/verify beneath it. ServeMux prefers the exact
+	// match, so the #150 policy GET/PUT is untouched.
+	mux.HandleFunc("/api/system/backup/coverage", s.dataProtect.HandleCoverage)
+	mux.HandleFunc("/api/system/backup/snapshots/", s.dataProtect.HandleSnapshotOps)
+	mux.HandleFunc("/api/system/backup/operations", s.dataProtect.HandleOperations)
+	mux.HandleFunc("/api/system/backup/operations/", s.dataProtect.HandleOperationByID)
+	// DATA-PROTECTION-END
+	// LICENCE-BEGIN — the platform-admin Licence surface. Platform-GLOBAL:
+	// requirePlatformAdmin (a tenant/org admin holds full administration:admin,
+	// so a scope-blind requireAdmin here would let any tenant read the
+	// customer's commercial terms and install a licence for the whole platform —
+	// CLAUDE.md 3a rule 3), writes audited on BOTH outcomes, category "platform"
+	// in route_isolation_test.go.
+	mux.HandleFunc("/api/system/licence", s.licenceAPI.Handle)
+	// LICENCE-END
 	mux.HandleFunc("/api/settings/attribution-precedence", s.handleAttributionPrecedenceSettings)
 	mux.HandleFunc("/api/settings/seam-owners", s.handleSeamOwnersSettings) // #113: owner class → tenant's actual responsible party
 	mux.HandleFunc("/api/settings/governance-audit", s.handleGovernanceAudit)
@@ -2980,6 +3108,29 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		// The merge itself is right (same IP usually is the same device). What
 		// changes is that the caller is TOLD, and always receives the identity
 		// that actually survived.
+		// LICENCE-BEGIN — device admission is the first of the two ENFORCED
+		// ceilings (Community: 25 devices). The device is the priced unit, so this
+		// is the gate the whole per-device pricing model rests on.
+		//
+		// Placed HERE, immediately before the write, and asked only when the id is
+		// genuinely new: a re-POST of a device that already exists writes no new
+		// row and must never be refused, or re-onboarding a fleet at the ceiling
+		// would fail for no reason. The residual case — a create that cross-source
+		// dedupe would have ABSORBED under a different id, arriving at exactly the
+		// ceiling — is refused, because whether it absorbs is only known after
+		// CreateOrResolve has already written. That is the conservative direction
+		// and the refusal says exactly what to do about it.
+		//
+		// The count is the deduplicated platform-wide fleet — the same number
+		// netops_devices_total reports and the Licence page's bar shows, so an
+		// operator can never be refused by a number they cannot see.
+		if _, exists := s.discovery.Get(d.ID); !exists {
+			if err := entitlement.CheckCeiling(s.entitlements, entitlement.CeilingDevices, len(s.discovery.Devices())); err != nil {
+				entitlement.WriteRefusal(w, err)
+				return
+			}
+		}
+		// LICENCE-END
 		canonical, kept, err := s.discovery.CreateOrResolve(d)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, errors.New("device was not saved"))
@@ -3228,6 +3379,15 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	if s.secFindMetrics != nil {
 		s.secFindMetrics.Write(w)
 	}
+	// SNAPSHOT-RESTORABILITY-BEGIN — the DR proof series. Rendered from CACHED
+	// state only: the metrics handler never makes a blocking OpenSearch call
+	// (the nightly probe worker refreshes the cache). 0 on
+	// netops_opensearch_snapshot_restorable means NOT PROVEN restorable, and
+	// "never probed" is deliberately the same 0 as "the probe failed" — an
+	// unproven backup and a disproven one are the same operational state, which
+	// is the whole lesson of 2026-08-27.
+	s.dataProtect.Metrics().Write(w)
+	// SNAPSHOT-RESTORABILITY-END
 	// SECURITY-LANE-BEGIN
 	if s.securityLane != nil {
 		s.securityLane.Metrics().Write(w)
@@ -3246,6 +3406,11 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 		s.packetCapture.Metrics().Write(w)
 	}
 	// PACKET-CAPTURE-END
+	// LICENCE-BEGIN — emitted on every deployment including Community, so
+	// "no licence" is a VALUE (the 36500-day sentinel) and never a gap in the
+	// series. A vanished series must mean a scrape failure, not a state change.
+	s.entitlements.WriteMetrics(w, time.Now().UTC())
+	// LICENCE-END
 	// IGP-MONITORING-BEGIN
 	s.igpAPI.Metrics().Write(w) // nil-safe on both the API and the counter set
 	// IGP-MONITORING-END
@@ -3257,6 +3422,18 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	// delivery path was never wired".
 	s.vmalertWebhookMetrics.Write(w) // nil-safe
 	// VMALERT-WEBHOOK-END
+	// DEBUG-ROUTES-BEGIN — ALWAYS written, with zeros when nothing is raised.
+	// scripts/stack-watchdog.sh's DEBUG_LEVEL_STUCK class is the only layer that
+	// survives this process being wedged, and it can see nothing but /metrics.
+	// If these gauges were omitted while nothing was raised, "the check could
+	// not run" and "the check passed" would look identical to it — the exact
+	// inversion the 2026-09-02 post-mortem is about.
+	if s.debugAPILevel != nil {
+		fmt.Fprint(w, pipedebug.RenderMetrics(
+			map[pipedebug.Module]pipedebug.LevelReader{pipedebug.ModuleAPI: s.debugAPILevel},
+			s.debugParseFilter))
+	}
+	// DEBUG-ROUTES-END
 	// BGP-WATCH-BEGIN
 	if s.bgpWatchEval != nil {
 		s.bgpWatchEval.Metrics().Write(w)
@@ -3901,6 +4078,37 @@ func (s *server) debugAuthz(w http.ResponseWriter, r *http.Request) (pipedebug.P
 	return pipedebug.Principal{Subject: claims.Sub, Tenant: tenant, Cross: cross}, true
 }
 
+// debugUIHost adapts *server to pipedebug.UIQueryHost — the seam stage 10 runs
+// the SPA's own queries over.
+//
+// It is an ADAPTER, not logic: every method forwards to the api surface the SPA
+// itself calls, so the tenant clause, the visibility policy and the ClickHouse
+// row policy exercised by a trace are the production ones. Re-implementing any
+// of them here is the drift this seam exists to prevent.
+type debugUIHost struct{ s *server }
+
+func (h debugUIHost) LogsScope(r *http.Request, signal string) (string, []any, []any, bool, bool) {
+	return h.s.logsScope(r, signal)
+}
+
+func (h debugUIHost) SyntheticExclusion() map[string]any { return syntheticDebugExclusion() }
+
+func (h debugUIHost) SearchOpenSearch(method, path string, body any) (*http.Response, error) {
+	return openSearch(method, path, body)
+}
+
+func (h debugUIHost) IndexPatternFor(signal, tenant string, cross bool) string {
+	return oslog.TenantIndexPattern(signal, tenant, cross)
+}
+
+func (h debugUIHost) ServeFlowsTopTalkers(w http.ResponseWriter, r *http.Request) {
+	h.s.handleFlowsTopTalkers(w, r)
+}
+
+func (h debugUIHost) ServeMetricsQueryRange(w http.ResponseWriter, r *http.Request) {
+	h.s.handleMetricsQueryRange(w, r)
+}
+
 // debugDeps assembles the injected collaborators.
 func (s *server) debugDeps() pipedebug.Deps {
 	client := backendHTTPClient(20 * time.Second)
@@ -3952,11 +4160,19 @@ func (s *server) debugDeps() pipedebug.Deps {
 		},
 		InjectTrap: pipedebug.NewUDPInjector(
 			envOr(pipedebug.EnvTrapTarget, pipedebug.DefaultTrapTarget), 5*time.Second),
-		Ring:       s.debugRing,
-		Audit:      s.debugAudit,
-		WriteJSON:  writeJSON,
-		WriteError: writeError,
-		Now:        func() time.Time { return time.Now().UTC() },
+		// The flow probe goes to the STACK's own goflow2 listener, exactly as
+		// the syslog and trap probes go to the stack's own receivers. There is
+		// deliberately no gNMI counterpart: a gNMI update originates on the
+		// device, so the seam that would be needed to fake one does not exist.
+		InjectFlow: pipedebug.NewUDPInjector(
+			envOr(pipedebug.EnvFlowTarget, pipedebug.DefaultFlowTarget), 5*time.Second),
+		ParseFilter: s.debugParseFilter,
+		UIQueryRun:  pipedebug.NewUIQueryRun(debugUIHost{s: s}),
+		Ring:        s.debugRing,
+		Audit:       s.debugAudit,
+		WriteJSON:   writeJSON,
+		WriteError:  writeError,
+		Now:         func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -4216,6 +4432,10 @@ func (s *server) securityLaneDeps() seclane.Deps {
 
 		Tenants: s.securityLaneTenants,
 		Devices: s.securityLaneDevices,
+		// LICENCE-BEGIN — the hardening dialect gate (§4 "dialect registry").
+		// The lane forwards it to the engine and knows nothing about licensing.
+		DialectAllowed: s.licenceDialectAllowed,
+		// LICENCE-END
 		RuleStates: func(ctx context.Context, tenant string) (map[string]bool, error) {
 			if s.secStore == nil {
 				return nil, errors.New("security control-plane store unavailable")
@@ -4334,6 +4554,369 @@ func (s *server) securityLaneSeams(ctx context.Context, tenant string) ([]seclan
 }
 
 // SECURITY-LANE-END
+
+// DATA-PROTECTION-BEGIN — the internal/dataprotect wiring.
+//
+// The module owns the whole domain; what stays here is the Deps assembly plus
+// the four adapters that need the *server receiver to reach platform plumbing:
+// the platform-admin gate, the audit repo, the shared OpenSearch client and the
+// structured loggers. Every concrete value the module needs is resolved from
+// the environment HERE, once, so nothing inside the package reads os.Getenv
+// (and the documented-env-switch guard still sees every literal).
+
+// dataProtectDeps assembles the Data Protection module's dependencies.
+func (s *server) dataProtectDeps(cfg dataprotect.ConfigStore) dataprotect.Deps {
+	return dataprotect.Deps{
+		Search:    dataProtectSearch{s: s},
+		Audit:     dataProtectAudit{s: s},
+		Authz:     s.dataProtectGate,
+		Log:       dataProtectLog{},
+		Config:    cfg,
+		WriteJSON: writeJSON,
+		Go:        safeGo,
+		// Read lazily through the *server: the config-backup module is built
+		// AFTER newServer returns (main() gates it on FEATURE_CONFIG_BACKUP),
+		// so a value captured here would always report the module off.
+		DeviceConfigs: dataProtectDeviceConfigs{s: s},
+
+		Repository:             dataprotect.DefaultRepository,
+		OpsFile:                envOr("SNAPSHOT_OPS_FILE", "/data/snapshot_operations.json"),
+		VerifyFile:             envOr("SNAPSHOT_VERIFY_FILE", "/data/snapshot_verify.json"),
+		BackupReportPath:       envOr("BACKUP_REPORT", "/data/backup-report.json"),
+		RestoreDrillReportPath: envOr("RESTORE_DRILL_REPORT", "/data/restore-drill.report.json"),
+		// Default ON: a platform that silently stops proving its backups is the
+		// failure the probe closes, so only an explicit "false" disables it.
+		ProbeEnabled:  envOr("SNAPSHOT_PROBE_ENABLED", "true") == "true",
+		ProbeInterval: snapshotProbeInterval(),
+	}
+}
+
+// snapshotProbeInterval is the minimum spacing between restorability probes.
+// An unparseable value falls back to the shipped 24h and SAYS SO — a silently
+// ignored cadence is the class of switch the env-docs guard exists to catch.
+func snapshotProbeInterval() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("SNAPSHOT_PROBE_INTERVAL")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		logWarn("backup.probe", "SNAPSHOT_PROBE_INTERVAL unparseable — falling back to 24h",
+			map[string]any{"value": v})
+	}
+	return dataprotect.DefaultProbeInterval
+}
+
+// dataProtectGate binds the PLATFORM-admin gate (§3a rule 3): a tenant/org
+// admin holds full administration:admin, so a scope-blind requireAdmin here
+// would hand every tenant the platform's backup posture and the ability to
+// delete its restore points.
+func (s *server) dataProtectGate(w http.ResponseWriter, r *http.Request) (dataprotect.Principal, bool) {
+	claims, ok := s.requirePlatformAdmin(w, r)
+	if !ok {
+		return dataprotect.Principal{}, false
+	}
+	return dataprotect.Principal{Subject: claims.Sub}, true
+}
+
+// dataProtectSearch adapts the shared OpenSearch client (backend_client.go) to
+// dataprotect.OpenSearch — the module's ONLY route to the cluster.
+type dataProtectSearch struct{ s *server }
+
+func (a dataProtectSearch) Do(ctx context.Context, method, path string, body []byte, out any, timeout time.Duration) error {
+	return a.s.osDo(ctx, method, path, body, out, timeout)
+}
+
+// dataProtectAudit adapts the platform audit repo. The request envelope
+// (method, path, client IP) is filled HERE so the module never has to know how
+// this platform derives a client address behind its proxy.
+type dataProtectAudit struct{ s *server }
+
+func (a dataProtectAudit) Record(r *http.Request, ev dataprotect.AuditRecord) {
+	a.s.audit.Record(AuditEvent{
+		Actor: ev.Actor, Method: r.Method, Path: r.URL.Path,
+		Status: ev.Status, Decision: ev.Decision, Remote: auditClientIP(r),
+		Detail: ev.Detail,
+	})
+}
+
+// dataProtectLog adapts the structured loggers (§10).
+type dataProtectLog struct{}
+
+func (dataProtectLog) Info(component, msg string, fields map[string]any) {
+	logInfo(component, msg, fields)
+}
+func (dataProtectLog) Warn(component, msg string, fields map[string]any) {
+	logWarn(component, msg, fields)
+}
+func (dataProtectLog) Error(component, msg string, fields map[string]any) {
+	logError(component, msg, fields)
+}
+
+// dataProtectDeviceConfigs reports the config-backup module's coverage facts.
+// ok=false means the module is OFF, which the coverage table renders as
+// "not_applicable" with a reason — never as a measurement failure.
+type dataProtectDeviceConfigs struct{ s *server }
+
+func (a dataProtectDeviceConfigs) Facts() (dataprotect.DeviceConfigFacts, bool) {
+	facts := dataprotect.DeviceConfigFacts{
+		FeatureFlagEnv:  configstore.EnvFeatureFlag,
+		IntervalEnv:     configstore.EnvInterval,
+		KeepVersionsEnv: configstore.EnvKeepVersions,
+		KeepVersions:    configBackupKeepVersions(),
+	}
+	if a.s == nil || a.s.configBackup == nil {
+		return facts, false
+	}
+	facts.Interval = a.s.configBackup.Interval()
+	if m := a.s.configBackup.Metrics(); m != nil {
+		snap := m.Snapshot()
+		facts.Versions, facts.Failed, facts.Pruned = snap["versions_total"], snap["runs_failed"], snap["pruned_total"]
+		facts.HasCounters = true
+	}
+	return facts, true
+}
+
+// configBackupKeepVersions mirrors the config-backup module's own clamp so the
+// number the coverage table shows is the number that applies.
+func configBackupKeepVersions() int {
+	keep := configstore.DefaultKeepVersions
+	if v := strings.TrimSpace(os.Getenv(configstore.EnvKeepVersions)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			keep = n
+		}
+	}
+	switch {
+	case keep < 2:
+		keep = 2
+	case keep > 500:
+		keep = 500
+	}
+	return keep
+}
+
+// DATA-PROTECTION-END
+
+// LICENCE-BEGIN — the internal/licence + internal/entitlement wiring.
+//
+// Deleting this block, the other LICENCE marker blocks in this file and in
+// bgp_ops.go / identity_handlers.go / oidc_config.go / org_handlers.go, and the
+// two packages, removes the licence mechanism entirely. That is a SUPPORTED
+// state, and a deliberately boring one: every gate then answers Community —
+// 25 devices, 5 watched prefixes, no commercial feature — because the gates
+// are nil-safe and fail CLOSED. Nothing breaks, nothing opens up.
+//
+// Nothing here is reachable from a safety control. Isolation, RLS,
+// authorization, integrity and core authentication (OIDC included) do not
+// consult the entitlement service, and a test asserts they cannot
+// (internal/entitlement/safety_invariant_test.go). The worst outcome of a bug
+// in this wiring is a customer who paid for a capability not getting it — a
+// support ticket, never a breach.
+
+// licenceDeps assembles the platform-admin Licence route's injected
+// collaborators. internal/licence holds NO ambient authority: it reads no
+// environment and reaches nothing it was not handed (the internal/dataprotect
+// precedent).
+func (s *server) licenceDeps() licence.Deps {
+	return licence.Deps{
+		Store:      s.licenceStore,
+		Service:    s.entitlements,
+		Gate:       s.licenceGate,
+		Audit:      licenceAudit{s},
+		Usage:      s.licenceUsage,
+		UsageNotes: s.licenceUsageNotes,
+		Now:        func() time.Time { return time.Now().UTC() },
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+	}
+}
+
+// licenceGate binds the PLATFORM-admin gate (§3a rule 3). The licence is
+// platform-global commercial plumbing: a tenant/org admin holds full
+// administration:admin, so a scope-blind requireAdmin here would let any tenant
+// read the customer's commercial terms — and install a licence for the whole
+// platform.
+func (s *server) licenceGate(w http.ResponseWriter, r *http.Request) (licence.Principal, bool) {
+	claims, ok := s.requirePlatformAdmin(w, r)
+	if !ok {
+		return licence.Principal{}, false
+	}
+	return licence.Principal{Subject: claims.Sub}, true
+}
+
+// licenceAudit adapts the platform audit repo. The request envelope (method,
+// path, client IP) is filled HERE so the module never has to know how this
+// platform derives a client address behind its proxy.
+type licenceAudit struct{ s *server }
+
+func (a licenceAudit) Record(r *http.Request, ev licence.AuditRecord) {
+	if a.s == nil || a.s.audit == nil {
+		return
+	}
+	a.s.audit.Record(AuditEvent{
+		Actor: ev.Actor, Method: r.Method, Path: r.URL.Path,
+		Status: ev.Status, Decision: ev.Decision, Remote: auditClientIP(r),
+		Detail: ev.Detail,
+	})
+}
+
+// licenceUsage measures the ENFORCED ceilings for the admin page's usage bars.
+//
+// A ceiling this function omits is NOT MEASURED and the page says exactly that
+// — it is never rendered as a reassuring zero. Only the two decided ceilings
+// are measured, because those are the only two anything enforces; showing a bar
+// for a limit that does not bite would be theatre (licenceUsageNotes says so on
+// the page).
+//
+// Both counts are PLATFORM-WIDE, deliberately: a licence covers the deployment,
+// not a tenant's view of it, and counting through the caller's tenant filter
+// would let a second tenant's devices escape the ceiling.
+func (s *server) licenceUsage(ctx context.Context) licence.Usage {
+	u := licence.Usage{}
+	if s.discovery != nil {
+		// Admitted fleet PLUS the devices discovery found and withheld at the
+		// ceiling. Counting only the admitted ones would pin the bar exactly at
+		// the limit and report "25 of 25" forever — technically true and
+		// completely dishonest about a network that has forty devices in it.
+		// The excess is what State.Overages turns into the "not monitored:
+		// licence ceiling" list.
+		u[entitlement.CeilingDevices] = len(s.discovery.Devices()) + s.discovery.WithheldCount()
+	}
+	if s.bgpWatch != nil {
+		if n, err := s.watchedPrefixCount(ctx); err == nil {
+			u[entitlement.CeilingWatchedPrefixes] = n
+		}
+		// On error the key is simply absent — "we could not measure this" and
+		// "there are none" are different facts and only one of them is
+		// reassuring.
+	}
+	return u
+}
+
+// licenceUsageNotes explains, per ceiling, why the page shows no number.
+func (s *server) licenceUsageNotes(_ context.Context) map[string]string {
+	notes := map[string]string{}
+	for _, n := range entitlement.CeilingNames() {
+		if !entitlement.Enforced(n) {
+			notes[n] = "carried in the licence but not enforced by this build"
+		}
+	}
+	if s.discovery == nil {
+		notes[entitlement.CeilingDevices] = "the device registry is not available"
+	}
+	if s.bgpWatch == nil {
+		notes[entitlement.CeilingWatchedPrefixes] = "the BGP watchlist is not available"
+	}
+	return notes
+}
+
+// licenceFeature wraps a handler in the central entitlement gate.
+//
+// This is the `requireFeature("...")` of the design's §4 table. It asks the
+// SEMANTIC question — Entitled(FeatureX) — and never compares a tier, so a
+// licence that grants a capability outside its usual bundle (a trial, a
+// contractual exception) works with no special case.
+//
+// Order matters: the licence check runs BEFORE the handler, so an unlicensed
+// caller never reaches the domain code, and AFTER nothing — in particular it
+// does not replace the handler's own authorization. A 402 means "your licence
+// does not include this"; a 401/403 still means "you may not do this", and the
+// two are different answers to different questions. Wrapping never removes a
+// permission check; it only ever adds a commercial one on top.
+func (s *server) licenceFeature(f entitlement.Feature, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := entitlement.Require(s.entitlements, f); err != nil {
+			entitlement.WriteRefusal(w, err)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// SECURITY-LANE-BEGIN — this function alone, inside the LICENCE block, carries
+// BOTH markers. It is licence policy (which dialects this deployment may
+// evaluate) expressed in the security producer's vocabulary, so it must come
+// out with EITHER module: delete the security lane and this goes with it
+// (leaving seclane.Deps.DialectAllowed unset, which allows every dialect and is
+// a supported state); delete the licence mechanism and it goes too (the gate
+// simply stops being applied). Its test lives in licence_dialect_gate_test.go,
+// which the removal recipe in security_lane_removability_test.go names.
+//
+// licenceDialectAllowed is the hardening dialect gate (§4 "dialect registry").
+//
+// The CORE set is cisco-iosxe — the primary, fully-bound dialect that
+// internal/hardening documents as such — and it is available at every tier.
+// Everything beyond it (juniper, nokia, arista, srlinux) is the "multi-vendor
+// dialects" line in the owner's LOCKED Enterprise set.
+//
+// Degradation is honest and is the ENGINE's job, not this function's: a device
+// on an unlicensed dialect gets one coverage finding saying so
+// (hardening.RuleDialectNotLicensed), never an empty result that would read as
+// "this device is clean".
+func (s *server) licenceDialectAllowed(v hardening.Vendor) bool {
+	if v == hardening.VendorCiscoIOSXE || v == hardening.VendorUnknown {
+		return true
+	}
+	return entitlement.Entitled(s.entitlements, entitlement.FeatureSecurityDialects)
+}
+
+// SECURITY-LANE-END
+
+// watchedPrefixCount is the PLATFORM-WIDE count of watched PREFIXES — the unit
+// the Community ceiling of 5 is expressed in.
+//
+// Two things it deliberately is not:
+//
+//   - not per-tenant: a licence covers the deployment, and counting through one
+//     tenant's view would let a second tenant's prefixes escape the ceiling;
+//   - not "watchlist entries": a WatchEntry is a prefix OR an ASN, and counting
+//     ASNs against a PREFIX ceiling would silently make the free tier smaller
+//     than the number on the pricing page.
+func (s *server) watchedPrefixCount(ctx context.Context) (int, error) {
+	if s.bgpWatch == nil {
+		return 0, errors.New("bgp watchlist unavailable")
+	}
+	// cross=true is the platform-wide view. Nothing here is returned to a
+	// caller — the rows are counted and discarded — so no tenant boundary is
+	// crossed in the direction that matters (§3a).
+	rows, err := s.bgpWatch.List(ctx, TenantGlobal, true)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range rows {
+		if e.Kind == "prefix" {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// logLicenceState writes the boot line.
+//
+// With no licence this is INFO, not a warning: Community is the free tier and
+// the funnel, a normal supported state, and a platform that scolds an operator
+// for not having paid yet is a platform nobody evaluates twice. A licence that
+// is installed but REFUSED is a different matter and goes out as a warning,
+// because that operator has lost a tier they are paying for and needs to know.
+func (s *server) logLicenceState() {
+	st := s.licenceStore.State()
+	switch {
+	case st.LoadError != "":
+		logWarn("licence", "licence: "+st.Summary(), map[string]any{
+			"source": string(st.Source), "path": s.licenceStore.Path(), "error": st.LoadError,
+		})
+	case st.Degraded:
+		logWarn("licence", "licence: "+st.Summary(), map[string]any{
+			"source": string(st.Source), "tier": string(st.Tier),
+			"licensed_tier": string(st.LicensedTier), "degraded": true,
+		})
+	default:
+		logInfo("licence", "licence: "+st.Summary(), map[string]any{
+			"source": string(st.Source), "tier": string(st.Tier), "in_grace": st.InGrace,
+		})
+	}
+}
+
+// LICENCE-END
 
 // CONFIG-BACKUP-BEGIN
 

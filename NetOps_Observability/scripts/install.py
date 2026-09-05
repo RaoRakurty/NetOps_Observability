@@ -612,6 +612,18 @@ def generate_secrets() -> dict[str, str]:
         # would leave vmalert with nothing to present and silently restore the
         # "13 alerts firing, none delivered" state this credential exists to end.
         "VMALERT_WEBHOOK_TOKEN":     generate_token(32),
+        # Pipeline debugger (correlix-debug) — the shared secret the api
+        # presents to the correlation container's debug sidecar for the bounded
+        # bus PEEK and the correlation log-level switch
+        # (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §4). BOTH services read
+        # the same value from this file; unset means the routes answer 503 and
+        # a trace honestly reports the bus stage as "not observable", which is
+        # a debugger that goes blind on exactly the install that needs it.
+        # PLAINTEXT in .env, not vault-sealed: compose has to interpolate it
+        # into two containers (same reasoning as INGEST_TOKEN). URL-safe by
+        # construction, so it is safe in a bearer header and in any future
+        # userinfo use.
+        "CORR_DEBUG_TOKEN":          generate_token(32),
         # SEC-010: per-service credentials for the vmauth metrics front
         # (profile `vmauth`; src/config/vmauth.yml expands them via %{ENV}).
         # URL-safe: every consumer embeds them in URL userinfo
@@ -698,6 +710,15 @@ def write_env(env_path: Path, port: int, *, force: bool,
             # Byte-identical to the docker-compose default and to
             # alertwebhook.DefaultCooldown.
             additions.append("VMALERT_WEBHOOK_COOLDOWN=30m")
+        # Migration (pipeline debugger): a pre-debugger .env has no sidecar
+        # secret, so the bus peek and the correlation log-level switch stay
+        # default-closed forever on an upgraded install — `correlix-debug
+        # trace` would report the bus stage "not observable" on the very host
+        # where someone is trying to find a lost record. Seeded, never
+        # overwritten: an operator-set value is authoritative, and rewriting it
+        # here would desynchronise the api from the correlation sidecar.
+        if "CORR_DEBUG_TOKEN" not in env:
+            additions.append(f"CORR_DEBUG_TOKEN={generate_token(32)}")
         # Migration (F-07/F-59): search-tier durability posture.
         if "OPENSEARCH_REPLICAS" not in env:
             additions.append("OPENSEARCH_REPLICAS=0")
@@ -834,6 +855,21 @@ INGEST_TOKEN={secrets_map["INGEST_TOKEN"]}
 #                            alert. Must match the compose default (30m).
 VMALERT_WEBHOOK_TOKEN={secrets_map["VMALERT_WEBHOOK_TOKEN"]}
 VMALERT_WEBHOOK_COOLDOWN=30m
+
+# Pipeline debugger (correlix-debug — docs/runbooks/pipeline-debug.md).
+#   CORR_DEBUG_TOKEN   the shared secret the api presents to the correlation
+#                      container's debug sidecar. It gates exactly two
+#                      default-closed routes on that sidecar: a BOUNDED,
+#                      group-less bus PEEK (it cannot move the engine's
+#                      offsets) and a self-reverting log-level switch. The
+#                      SAME value must be set for both services — compose
+#                      passes this one variable to each. EMPTY means both
+#                      routes answer 503 and a trace reports the bus stage as
+#                      "not observable" WITH that reason (never as a lost
+#                      record). PLAINTEXT on purpose, like INGEST_TOKEN: two
+#                      containers have to receive it via compose
+#                      interpolation, so it cannot be vault-sealed.
+CORR_DEBUG_TOKEN={secrets_map["CORR_DEBUG_TOKEN"]}
 
 # Search-tier durability posture.
 #   OPENSEARCH_REPLICAS      F-07 — 0 is correct for the single-node appliance
@@ -1680,6 +1716,51 @@ def ensure_data_dirs(root: Path) -> None:
                          f"    sudo chmod {mode:04o} {d}")
         if uid_gid is not None:
             chown_tree(d, uid_gid[0], uid_gid[1], f"data/{name}")
+
+    # ------------------------------------------------------------------
+    # A SIGN ON THE DOOR for data/opensearch-snapshots (2026-09-03).
+    #
+    # The seven-day unrestorable-backup incident had no code root cause: a
+    # human ran `rm -rf data/opensearch-snapshots/indices` from a shell during
+    # a disk crunch while the repository was still registered. OpenSearch
+    # re-created the empty tree at the next scheduled snapshot and every shard
+    # from then on failed with NoSuchFileException, while `_cat/snapshots`
+    # kept listing SUCCESS rows. No guard inside the process can stop that
+    # command; a README next to the directory can at least make the operator
+    # who is about to run it stop and read.
+    #
+    # WHY HERE AND NOT IN opensearch/apply-ism.sh (where the repository is
+    # registered, and where this was first proposed): the opensearch-init
+    # container mounts ONLY `./opensearch:/opensearch-init:ro`. It has no
+    # mount of the snapshot repository at all, so it physically cannot write
+    # this file anywhere the operator would ever see it — and it must not be
+    # given one, because handing the bootstrap a writable mount of the blob
+    # tree is a new way to damage the blob tree. The installer already owns
+    # the data/ layout, runs on the host, and is the only component that can
+    # place a SIBLING of the repository directory (deliberately a sibling: a
+    # stray file INSIDE a repository is something `_cleanup` may remove and
+    # something a future reader may mistake for a blob).
+    #
+    # The text is versioned in the repo — data/ is gitignored, so the copy
+    # next to the repository is an artefact, never the source.
+    snap_readme = root / "data" / "opensearch-snapshots.DO-NOT-DELETE-README.txt"
+    if not snap_readme.exists():
+        snap_src = (root / "deployment" / "docker" / "opensearch" /
+                    "SNAPSHOTS-DO-NOT-DELETE-README.txt")
+        try:
+            snap_readme.write_text(snap_src.read_text(encoding="utf-8"),
+                                   encoding="utf-8")
+        except OSError as e:
+            # §16.1: named, never swallowed. NOT fatal — a stack that installed
+            # correctly must not be reported as a failed install because a
+            # warning notice could not be written, and escalating here would
+            # replace a real install error with this one. The operator is told
+            # exactly which protection they do not have.
+            warn(f"could not write {snap_readme}: {e} — the snapshot repository "
+                 f"will have NO 'do not delete' notice beside it. The stack is "
+                 f"unaffected; see docs/runbooks/storage-and-volume-operations.md"
+                 f"#managing-snapshots for why deleting inside a registered "
+                 f"repository silently destroys every restore point.")
 
     # #20: device→tenant enrichment dir. The api exports the CSV here; the
     # Vector aggregator + correlation mount it read-only. Seed a header-only

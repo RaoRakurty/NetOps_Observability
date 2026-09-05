@@ -425,7 +425,48 @@ import (
 //	                  what makes the whole evaluator unit-testable offline.
 //	                  Net effect on §2: the whole feature is in
 //	                  internal/bgpwatch; ~440 lines of adapter stay.
-const rootPackageCeiling = 209
+//	2026-09-03  208  -4: the whole Data Protection domain EXTRACTED to
+//	                  internal/dataprotect. system_backup.go (the intent store,
+//	                  the netops-daily SM policy control plane, the live DR
+//	                  status), system_backup_ops.go (snapshot management, the
+//	                  restorability probe, the async operation ring),
+//	                  system_backup_coverage.go (the per-engine coverage table)
+//	                  and system_backup_contract.go (the frozen wire contract)
+//	                  all moved; ZERO system_backup*.go non-test files remain in
+//	                  the root package. The domain was extracted rather than
+//	                  parked as debt: the seam turned out to be narrow — an
+//	                  OpenSearch caller, a clock, an audit sink, a
+//	                  platform-admin gate, a logger and a config store, all
+//	                  injected through internal/dataprotect/deps.go — and every
+//	                  env switch it reads is now resolved ONCE in main.go and
+//	                  travels in Deps as a value, so the package reads no
+//	                  environment at all. Following internal/configstore, there
+//	                  is NO root wiring file: main.go keeps the typed field, the
+//	                  Deps assembly with its four small adapters
+//	                  (gate/audit/OpenSearch/logger), the route registrations,
+//	                  the probe worker and the /metrics delegation. The shared
+//	                  OpenSearch request path (osBase/osDo/osJSON) moved to
+//	                  backend_client.go, which is where this platform's
+//	                  internal-backend HTTP client already lives and which the
+//	                  quarantine restore loop also calls. Net effect on §2: the
+//	                  whole domain (~3.7k lines) is in internal/dataprotect;
+//	                  ~150 lines of adapter stay.
+//	2026-09-05  208  ±0: the pipeline debugger's UI-query stage (stage 10) was
+//	                  briefly a root file (pipedebug_uiquery.go, W2) and is now
+//	                  internal/pipedebug/uiprobe.go. The runner needs the api's
+//	                  OWN surfaces — logsScope (the tenant/visibility log
+//	                  chokepoint), the cx_synthetic must_not clause, the
+//	                  credentialed OpenSearch client and the real
+//	                  handleFlowsTopTalkers / handleMetricsQueryRange handlers —
+//	                  which is precisely why it must NOT re-implement them; it
+//	                  reaches them through the pipedebug.UIQueryHost interface,
+//	                  whose ~30-line adapter (debugUIHost) lives in main.go
+//	                  inside the DEBUG-ROUTES markers with the rest of the
+//	                  debugger's wiring. Net effect on §2: no new root file, the
+//	                  ~330-line stage is behind a compiler-enforced boundary,
+//	                  and the removal rule is unchanged (drop the markers and
+//	                  the package).
+const rootPackageCeiling = 208
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

@@ -185,10 +185,12 @@ var apiRoutes = []apiRoute{
 	// Pipeline debugger (design PIPELINE_DEBUGGER_2026-09-04). Platform admin
 	// only; every trace record is tagged synthetic and excluded from the
 	// customer-facing log search.
-	{"POST", "/api/debug/trace", "Telemetry", "Inject ONE marked synthetic record (kind=syslog|trap) into the stack's own ingress — never a device — and start the async follow; returns the marker and an injection receipt (platform admin)"},
+	{"POST", "/api/debug/trace", "Telemetry", "Inject ONE marked synthetic record (kind=syslog|trap|flow) into the stack's own ingress — never a device — and start the async follow; kind=gnmi is PASSIVE-ONLY (passive:true, device, since_seconds) and injects nothing, because a gNMI update originates on the device; returns the marker and a receipt (platform admin)"},
 	{"GET", "/api/debug/trace/{marker}", "Telemetry", "Poll a trace's per-stage status: seen | not_seen | not_observable (with the reason) for the bus, the three stores, correlation and the api (platform admin)"},
 	{"PUT", "/api/debug/loglevel", "Telemetry", "Raise one module to debug for a BOUNDED window (hard cap 30 minutes) with an auto-revert armed in the module's own process; a module with no runtime switch answers applied:false and says why, never a faked success (platform admin)"},
-	{"GET", "/api/debug/stage/{stage}", "Telemetry", "One stage's evidence for a marker (kafka|opensearch|victoria|clickhouse|correlation|api), with the exact query used (platform admin)"},
+	{"GET", "/api/debug/stage/{stage}", "Telemetry", "One stage's evidence for a marker (kafka|opensearch|victoria|clickhouse|correlation|api, plus parser and ui on demand), with the exact query used (platform admin)"},
+	{"PUT", "/api/debug/parsemarker", "Telemetry", "Arm the parser decision-trace filter on a needle for a BOUNDED window (hard cap 30 minutes) so a REAL, unmarked record's parse decisions are recorded; default-off and auto-disarming inside the traced process. An injected record carrying its own cx_debug marker is traced without this (platform admin)"},
+	{"GET", "/api/debug/parsemarker", "Telemetry", "Report whether the parser decision-trace filter is armed and when it auto-disarms (platform admin)"},
 	{"GET", "/api/admin/parser/stats", "Telemetry", "Parser rule corpus, per-rule hit counts, promotion rate and ingest pre-filter split, summed across the correlation replicas (platform admin)"},
 	{"GET", "/api/telemetry/unrecognized", "Telemetry", "Mined templates of the caller's log lines the parser would not admit (days, limit, lane)"},
 	{"POST", "/api/telemetry/unrecognized/{template_id}/propose", "Telemetry", "Draft a telemetry-catalog rule row and fixture for one unrecognized template — returned as text, applied nowhere (alerts:write)"},
@@ -211,6 +213,57 @@ var apiRoutes = []apiRoute{
 	{"POST", "/api/policy/validate", "Security Policy", "Dry-run a proposed override against the write gate (administration:admin)"},
 	{"GET", "/api/itsm/servicenow", "ITSM", "ServiceNow connector status + open tickets"},
 	{"GET", "/api/itsm/jira", "ITSM", "Jira connector status + open issues"},
+	// Data Protection — platform-GLOBAL backup plumbing, every route gated by
+	// requirePlatformAdmin and every write audited (CLAUDE.md §3a rule 3: a
+	// tenant/org admin holds administration:admin, so a scope-blind requireAdmin
+	// on the platform's backup posture would be a privilege leak). Ledger
+	// category "platform" in route_isolation_test.go.
+	//
+	// The whole group exists because of the 2026-08-27 incident: the snapshot
+	// repository's blob tree was deleted out from under a registered repository
+	// and NOTHING noticed for seven days — the GUI showed a policy, the policy
+	// showed runs, and every restore point was silently unrestorable. So the
+	// contract here is: the page can SEE the truth (per-engine coverage,
+	// per-snapshot restorable-verified), and it can ACT on it (take, delete,
+	// restore, verify, schedule) without an operator ever needing the admin
+	// certificate or raw OpenSearch. The api proxies with the service identity;
+	// the browser never talks to OpenSearch.
+	//
+	// Every long operation is ASYNC: the POST validates, enqueues and returns
+	// 202 with an Operation, and the caller polls /api/system/backup/operations
+	// /{id}. Nothing here blocks an HTTP handler on a multi-GiB restore.
+	//
+	// Honesty contract on every payload: a field we do not measure is `null`
+	// with a sibling `*_detail` saying why. Never a fabricated zero, never a
+	// blank that reads as "fine".
+	{"GET", "/api/system/backup", "Data Protection", "Data-protection intent + live DR status (platform admin)"},
+	{"PUT", "/api/system/backup", "Data Protection", "Update the off-host destination, transport and full-backup schedule (platform admin, audited)"},
+	{"GET", "/api/system/backup/coverage", "Data Protection", "Per-engine backup coverage: OpenSearch snapshots, the Correlix system bundle, ClickHouse, Postgres, VictoriaMetrics, sealed secrets/TLS material and device config backups. Each engine reports covered yes|no|not_applicable|unknown WITH a reason, schedule + whether the GUI governs it, last attempt and last SUCCESS, last restorability verification, size, retention, target (local|remote|offsite|none) with immutable/encrypted flags, and the achieved RPO (age of the last good copy). Anything not measured is null plus a *_detail explaining why — never a zero"},
+	{"GET", "/api/system/backup/snapshots", "Data Protection", "The netops-daily Snapshot Management policy as the GUI renders it — enabled, schedule cron, retention (max_count / max_age_days), last run and next trigger — plus the repository's registration/verification state and, when the schedule is off, who turned it off and when"},
+	{"PUT", "/api/system/backup/snapshots", "Data Protection", "Partial update of the snapshot schedule: enabled (rides the SM plugin's _start/_stop), schedule_cron (5 fields), retention_max_count (1..365), retention_max_age_days (0..3650, 0 = count-only). The stored GUI intent is authoritative — the opensearch-init bootstrap no longer re-enables a deliberately disabled policy (platform admin, audited)"},
+	{"GET", "/api/system/backup/snapshots/list", "Data Protection", "Inventory of the repository's snapshots, newest first: name, state, indices, shard totals/failures with reasons, started/ended, duration, size, and the restorability verdict (verified true|false|null with when and why)"},
+	{"POST", "/api/system/backup/snapshots/create", "Data Protection", "Take one snapshot now. The name is generated server-side against a closed grammar — never client-supplied. Returns 202 + an Operation to poll (platform admin, audited)"},
+	{"POST", "/api/system/backup/snapshots/delete", "Data Protection", "Delete one snapshot. Type-to-confirm: `confirm` must equal `snapshot` exactly, the same guard the tenant delete uses. Returns 202 + an Operation (platform admin, audited)"},
+	{"POST", "/api/system/backup/snapshots/restore", "Data Protection", "Restore a snapshot, or named indices from it. mode=renamed (default) restores under rename_prefix so nothing live is touched; mode=in_place overwrites the live indices and therefore REQUIRES the type-to-confirm token. Returns 202 + an Operation (platform admin, audited)"},
+	{"POST", "/api/system/backup/snapshots/verify", "Data Protection", "Run the restorability probe on demand: restore the smallest index of the snapshot under a temporary name, compare doc counts against the source, delete the temporary index. Omit `snapshot` to probe the newest SUCCESS. Returns 202 + an Operation (platform admin, audited)"},
+	{"GET", "/api/system/backup/operations", "Data Protection", "Recent snapshot operations (bounded ring, newest first) — kind, state, actor, target, progress, result, error"},
+	{"GET", "/api/system/backup/operations/{id}", "Data Protection", "One operation's status; the poll target for every 202 above"},
+
+	// ── Licence ──────────────────────────────────────────────────────────────
+	// The signed licence file (ed25519, verified offline, no activation server
+	// and no phone-home) that sets this deployment's commercial ceilings and
+	// feature switches. Platform-global: requirePlatformAdmin on every verb,
+	// PUT/DELETE audited on both outcomes.
+	//
+	// Everywhere ELSE in this API, a capability the licence does not include
+	// answers 402 with {error, ceiling|feature, current, limit, tier,
+	// lifted_by, message} — never 403 (authorization is a different question)
+	// and never a silently empty body. Ceilings that are carried in the file
+	// but not enforced by this build say so in the payload rather than being
+	// displayed as limits that bite.
+	{"GET", "/api/system/licence", "Licence", "The licence in force: customer, tier, ceilings with CURRENT USAGE, the closed feature vocabulary with what is entitled, expiry, grace and degraded state with the over-ceiling items LISTED, the trusted public keys and the offline verification recipe. No licence installed is a normal state and reports the Community ceilings, not an error (platform admin)"},
+	{"PUT", "/api/system/licence", "Licence", "Install a licence document. The signature is verified BEFORE anything is written, so a refused upload never displaces a working licence and the exact reason is returned verbatim — an unknown signing key, a modified file and a malformed one are three different answers (platform admin, audited on both outcomes)"},
+	{"DELETE", "/api/system/licence", "Licence", "Remove the installed licence and return to the Community ceilings. Nothing is deleted from the platform itself; devices and data over a Community ceiling are listed as not covered, never removed (platform admin, audited)"},
 	{"POST", "/api/graphql", "Query", "GraphQL endpoint (devices/alerts/findings/health)"},
 	{"POST", "/api/internal/vmalert/api/v2/alerts", "Internal", "Alertmanager-v2 webhook receiver for the vmalert evaluator (shared-secret; platform-global, not a tenant surface)"},
 }

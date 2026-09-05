@@ -1176,12 +1176,16 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
       GF_AUTH_ANONYMOUS_ORG_NAME: "Main Org."
-      # Correlix white-label: hide the Grafana name/login chrome so the embedded
-      # console reads as part of the platform (visual re-skin is injected by nginx).
+      # Auth-proxy hygiene, NOT branding (licence audit D1, 2026-09-04): with
+      # X-WEBAUTH-USER auto-sign-in on, Grafana's own login form and sign-out
+      # menu are dead ends that would sign the operator out of a session nginx
+      # immediately re-establishes. These are Grafana's OWN configuration knobs.
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_AUTH_DISABLE_SIGNOUT_MENU: "true"
-      # Correlix is a light-canvas product — make Grafana light by default so the
-      # embed matches (nginx then tints the canvas to the Correlix grey + indigo).
+      # Correlix is a light-canvas product — Grafana's own theme setting makes
+      # the embed match. This is the ONLY visual alignment applied: the nginx
+      # /grafana/ route no longer rewrites Grafana's HTML (AGPL-3.0 "unmodified"
+      # posture — see deployment/docker/nginx/default.conf).
       GF_USERS_DEFAULT_THEME: "light"
       GF_NEWS_NEWS_FEED_ENABLED: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
@@ -1653,11 +1657,18 @@ services:
       CORR_DEBUG_TOKEN: ${CORR_DEBUG_TOKEN:-}
       CORR_DEBUG_SIDECAR_URL: ${CORR_DEBUG_SIDECAR_URL:-}
       CORR_HEALTH_SIDECAR_PORT: ${CORR_HEALTH_SIDECAR_PORT:-8094}
-      # Where a trace injects its ONE marked synthetic record. Both are the
+      # Where a trace injects its ONE marked synthetic record. All three are the
       # STACK's own ingress, never a device (design §5): the syslog collector,
-      # and this container's own SNMP trap receiver.
+      # this container's own SNMP trap receiver, and the flow collector.
+      #
+      # There is deliberately no gNMI entry. A gNMI update originates on the
+      # DEVICE, so the only way to mint one would be to write a leaf on a live
+      # router — which this tool never does. `--kind gnmi` is passive-only, and
+      # the absence of a target here is what makes that a property of the
+      # deployment rather than a convention someone could drift away from.
       DEBUG_SYSLOG_TARGET: ${DEBUG_SYSLOG_TARGET:-syslog-ng:514}
       DEBUG_TRAP_TARGET: ${DEBUG_TRAP_TARGET:-127.0.0.1:1162}
+      DEBUG_FLOW_TARGET: ${DEBUG_FLOW_TARGET:-goflow2:2055}
       # DEBUG-ROUTES-END
       # #20: export the device→tenant map (under the api's /data volume) so the
       # Vector aggregator + correlation can stamp tenant_id onto telemetry.

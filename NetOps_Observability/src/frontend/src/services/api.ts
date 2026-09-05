@@ -3810,6 +3810,27 @@ export const api = {
   backupOperation: (id: string) =>
     request<BackupOperation>(`/api/system/backup/operations/${encodeURIComponent(id)}`),
 
+  // ── Licence (platform-global; requirePlatformAdmin) ───────────────────────
+  // Contract: src/backend/internal/licence/api.go. One route, three verbs, and
+  // every one of them answers the SAME View, so the page never has to reconcile
+  // two reads of the licence taken a moment apart.
+
+  // contract: openapi.go GET /api/system/licence
+  getLicence: () => request<LicenceView>(`/api/system/licence`),
+
+  // contract: openapi.go PUT /api/system/licence
+  // The body is the licence document itself, byte for byte — NOT a JSON
+  // envelope around it. The server verifies the signature before anything
+  // touches the disk, so a refusal (400) never displaces a working licence; its
+  // `error` is the exact reason and the page shows it verbatim.
+  putLicence: (document: string) =>
+    request<LicenceView>(`/api/system/licence`, { method: "PUT", body: document }),
+
+  // contract: openapi.go DELETE /api/system/licence
+  // Removes the installed licence. Nothing is deleted but the licence itself:
+  // the platform falls back to Community ceilings and lists what is over them.
+  deleteLicence: () => request<LicenceView>(`/api/system/licence`, { method: "DELETE" }),
+
   testSystemNetwork: (host?: string) =>
     request<SystemNetworkStatus>(`/api/system/network/test${host ? `?host=${encodeURIComponent(host)}` : ""}`, { method: "POST" }),
   findings: (limit = 100, severity?: string) => {
@@ -6382,4 +6403,129 @@ export type AiAnswer = {
   provider_note?: string; // single small provider-fallback footer (spec §1)
   title?: string; // card heading (spec §2)
   counts?: AiIncidentCounts; // normalized counts (spec §6)
+};
+
+// ── Licence (platform-global) ────────────────────────────────────────────────
+//
+// These mirror src/backend/internal/licence/api.go and state.go one-for-one,
+// plus the 402 refusal body from internal/entitlement/entitlement.go.
+//
+// The governing rule, which the Licence page depends on absolutely: A CEILING
+// THE PLATFORM DOES NOT COUNT IS `current: null` WITH A SIBLING
+// `current_reason` SAYING WHY. Never coerce that null to 0 on the way in — the
+// whole point is that the screen can tell "nobody counted" from "none in use".
+// A `limit` of -1 is the "no limit" sentinel and is never a number on screen.
+
+/** The commercial packaging label. Display only — nothing in the SPA gates on it. */
+export type LicenceTier = "community" | "team" | "enterprise";
+
+/** Where the state came from. "community" is the free tier, not a fault. */
+export type LicenceSource = "community" | "file";
+
+/** The numeric limits, in the licence signature's canonical field order. */
+export type LicenceCeilings = {
+  devices: number;
+  tenants: number;
+  orgs: number;
+  retention_days: number;
+  watched_prefixes: number;
+  skills: number;
+  provider_tokens_per_day: number;
+};
+
+/** The support entitlement recorded in the licence. Informational only. */
+export type LicenceSupport = { level?: string; contact?: string };
+
+/** The evaluated licence: what is permitted right now. */
+export type LicenceState = {
+  source: LicenceSource;
+  tier: LicenceTier;
+  ceilings: LicenceCeilings;
+  /** The feature names granted right now; absent/empty means none. */
+  features?: string[];
+  expires_at?: string;
+  in_grace: boolean;
+  degraded: boolean;
+  reason?: string;
+  /** The tier the FILE names — differs from `tier` only once a licence degraded. */
+  licensed_tier?: LicenceTier;
+  customer?: string;
+  licence_id?: string;
+  issued_at?: string;
+  grace_days?: number;
+  support?: LicenceSupport;
+  key_id?: string;
+  /** Why an INSTALLED licence is not in force (corrupt, unverifiable, untrusted key). */
+  load_error?: string;
+};
+
+/** One row of the usage table. */
+export type LicenceCeiling = {
+  name: string;
+  label: string;
+  /** -1 = no limit. */
+  limit: number;
+  /** null = NOT COUNTED on this platform; `current_reason` says why. */
+  current: number | null;
+  current_reason?: string;
+  /** false = the limit is carried in the licence but nothing gates on it. */
+  enforced: boolean;
+  over: boolean;
+  lifted_by?: LicenceTier;
+};
+
+/** One row of the feature table. */
+export type LicenceFeature = {
+  name: string;
+  label: string;
+  entitled: boolean;
+  /** The lowest tier that grants it. */
+  included_in: LicenceTier;
+};
+
+/** One ceiling the current usage exceeds. Listed, never hidden, never pruned. */
+export type LicenceOverage = {
+  ceiling: string;
+  label: string;
+  current: number;
+  limit: number;
+  over: number;
+  lifted_by?: LicenceTier;
+  message: string;
+};
+
+/** A trusted public signing key, as the page displays and offers it. */
+export type LicenceKey = { id: string; role: string; note?: string; base64: string };
+
+/** GET/PUT/DELETE /api/system/licence all answer this. */
+export type LicenceView = {
+  state: LicenceState;
+  ceilings: LicenceCeiling[];
+  features: LicenceFeature[];
+  overages: LicenceOverage[];
+  keys: LicenceKey[];
+  /** Where an operator may drop a licence by hand. */
+  path: string;
+  /** The offline verification recipe, shown verbatim. */
+  verify_hint: string;
+  /** The standing statement that expiry policy is still an owner decision. */
+  expiry_semantics: string;
+  /** null when there is nothing to expire. */
+  days_to_expiry: number | null;
+};
+
+/**
+ * The 402 body every licence gate answers with
+ * (internal/entitlement.RefusalBody). `error` is a stable machine token the SPA
+ * switches on — it is never rendered; `message` is the operator sentence.
+ */
+export type LicenceRefusalBody = {
+  error: "licence_ceiling" | "licence_feature" | string;
+  ceiling?: string;
+  feature?: string;
+  current?: number;
+  limit?: number;
+  tier?: string;
+  lifted_by?: string;
+  message?: string;
 };

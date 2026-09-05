@@ -6328,3 +6328,206 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 }
 .dp-feed-t { color: var(--muted); white-space: nowrap; }
 .dp-feed-a { font-weight: 600; }
+
+/* ── Licence (pages/Licence.tsx + components/licence/UpgradeCard.tsx) ────────
+   The platform's commercial surface: what this deployment is licensed to run,
+   where it stands against every ceiling, the capabilities each tier carries,
+   and the install/verify controls. Three conventions carry the meaning:
+
+   1. ABSENCE IS STYLED AS ABSENCE, NOT AS FAILURE. `.lic-absent` is muted and
+      italic — never red. A ceiling nobody counts is silence, not a fault, and
+      colouring the two alike trains an operator to ignore both.
+   2. A BAR IS DRAWN ONLY WHERE A PERCENTAGE IS REAL. `.lic-bar` keeps its track
+      on every row so the list never jumps, and `.lic-bar-fill` exists only for
+      a counted value against a finite limit. An unlimited or uncounted row has
+      a track and no fill — visibly not a full bar and visibly not an empty one.
+   3. NO LAYOUT SHIFT. The headline's fact grid and each usage row reserve their
+      box before the read lands, so a slow page does not move a control out from
+      under the cursor.
+
+   Tokens only (theme-safe in light and dark); density matches the dense admin
+   surfaces, and the tone ramp is the same one the Data Protection console uses
+   so "warn" means one thing across the platform pages. */
+.lic-page { display: flex; flex-direction: column; gap: var(--sp-3, 12px); font-size: 12.5px; }
+
+/* section frame */
+.lic-sec {
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: var(--r-4, 12px); padding: 10px 12px; min-width: 0;
+}
+.lic-sec-hd {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; margin-bottom: 8px;
+}
+.lic-sec-hd h2 {
+  margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--fg);
+}
+.lic-sec-note { font-size: 11px; color: var(--muted); }
+.lic-sp { flex: 1 1 auto; }
+.lic-sec-bd { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+/* tone ramp — one place, so a pill, a banner and a bar agree on what warn means */
+.lic-good  { --lic-tone: var(--ok); }
+.lic-warn  { --lic-tone: var(--warn); }
+.lic-bad   { --lic-tone: var(--crit); }
+.lic-muted { --lic-tone: var(--fg-subtle); }
+
+.lic-pill {
+  display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+  font-weight: 600; color: var(--lic-tone, var(--fg-subtle));
+  border: 1px solid color-mix(in srgb, var(--lic-tone, var(--fg-subtle)) 45%, transparent);
+  background: color-mix(in srgb, var(--lic-tone, var(--fg-subtle)) 12%, transparent);
+  white-space: nowrap;
+}
+.lic-sub { font-size: 11px; color: var(--muted); }
+.lic-block { display: block; }
+/* absence, not failure */
+.lic-absent { font-size: 11px; color: var(--fg-subtle); font-style: italic; }
+.lic-loading { color: var(--muted); padding: 10px 2px; }
+.lic-msg { margin: 0; font-size: 12px; color: var(--lic-tone, var(--fg)); }
+.lic-more {
+  border: 0; background: transparent; color: var(--accent); font-size: 11px;
+  cursor: pointer; padding: 4px 2px; align-self: flex-start;
+}
+.lic-more:hover { text-decoration: underline; }
+.lic-more:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+
+/* 1 — the licence headline */
+.lic-hero {
+  display: flex; flex-direction: column; gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--lic-tone, var(--border)) 40%, var(--panel-border));
+  border-left: 4px solid var(--lic-tone, var(--border));
+  border-radius: var(--r-2, 8px); padding: 10px 12px; background: var(--surface);
+}
+.lic-hero-head { display: flex; align-items: center; gap: 10px; color: var(--lic-tone, var(--fg)); }
+.lic-hero-verdict { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lic-hero-state { font-size: 18px; font-weight: 700; color: var(--lic-tone, var(--fg)); }
+.lic-hero-reason { font-size: 12px; color: var(--fg); }
+
+.lic-facts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px; margin: 0;
+}
+.lic-fact {
+  border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px);
+  padding: 6px 9px; min-height: 52px;   /* reserved: no shift when the value lands */
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
+}
+.lic-fact dt { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.lic-fact dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+
+/* honest states — what is true, and what to do about it */
+.lic-honest {
+  display: flex; flex-direction: column; gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--lic-tone, var(--border)) 35%, var(--panel-border));
+  border-left: 3px solid var(--lic-tone, var(--border));
+  border-radius: var(--r-1, 6px); padding: 8px 10px; background: var(--surface);
+  font-size: 12px; line-height: 1.5;
+}
+.lic-honest strong { color: var(--lic-tone, var(--fg)); font-weight: 650; }
+/* the server's own refusal, unchanged — set apart so it reads as a quotation */
+.lic-verbatim {
+  white-space: pre-wrap; word-break: break-word; font-size: 11.5px;
+  border-left: 2px solid color-mix(in srgb, var(--crit) 45%, transparent);
+  padding: 2px 0 2px 8px; color: var(--fg);
+}
+
+/* over-ceiling list — listed, never pruned */
+.lic-over {
+  display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--crit) 35%, var(--panel-border));
+  border-left: 3px solid var(--crit); border-radius: var(--r-1, 6px);
+  padding: 8px 10px; background: var(--surface); font-size: 12px; line-height: 1.5;
+}
+.lic-over > strong { color: var(--crit); font-weight: 650; }
+.lic-over-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.lic-over-list > li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+
+/* 2 — current usage */
+.lic-usage { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.lic-usage-row {
+  border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px);
+  padding: 7px 10px; display: flex; flex-direction: column; gap: 5px; min-width: 0;
+}
+.lic-usage-hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lic-usage-name { font-size: 12.5px; font-weight: 600; color: var(--fg); }
+.lic-usage-num { font-size: 12px; font-variant-numeric: tabular-nums; }
+.lic-usage-ft { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* the track is always present; only a real percentage gets a fill */
+.lic-bar {
+  height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--fg-subtle) 18%, transparent);
+  overflow: hidden;
+}
+.lic-bar-fill {
+  display: block; height: 100%; border-radius: 999px;
+  background: var(--lic-tone, var(--fg-subtle));
+}
+
+/* 3 — features */
+.lic-tblwrap { overflow-x: auto; }
+.lic-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.lic-tbl th, .lic-tbl td {
+  padding: 5px 8px; text-align: left; vertical-align: top;
+  border-bottom: 1px solid var(--panel-border);
+}
+.lic-tbl thead th {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); font-weight: 600;
+}
+.lic-tbl tbody th { font-weight: 650; color: var(--fg); }
+
+/* 4 — install */
+.lic-install { display: flex; flex-direction: column; gap: 10px; }
+.lic-field { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; min-width: 0; }
+.lic-field > span:first-child { font-weight: 600; color: var(--muted); }
+.lic-input, .lic-textarea {
+  background: var(--surface); border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px);
+  color: var(--fg); font: inherit; font-size: 12.5px; padding: 6px 9px; width: 100%;
+}
+.lic-textarea { min-height: 96px; resize: vertical; line-height: 1.45; }
+.lic-input:focus-visible, .lic-textarea:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+.lic-file { font-size: 12px; color: var(--fg); }
+.lic-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
+/* 5 — verification */
+.lic-cmdwrap { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+.lic-cmd {
+  flex: 1 1 320px; margin: 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-word;
+  border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px);
+  background: var(--bg); color: var(--fg); font-size: 11.5px; line-height: 1.45;
+  font-family: var(--font-mono, ui-monospace, "IBM Plex Mono", monospace);
+}
+.lic-keys { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.lic-keys > li {
+  border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px);
+  padding: 7px 10px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
+}
+.lic-key-hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lic-key-id { font-size: 12px; font-weight: 600; }
+.lic-key-b64 {
+  font-family: var(--font-mono, ui-monospace, "IBM Plex Mono", monospace);
+  font-size: 11px; color: var(--muted); word-break: break-all;
+}
+
+/* the shared 402 card — information, never an error */
+.lic-upgrade {
+  display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--panel-border));
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-2, 8px); padding: 10px 12px; background: var(--surface);
+  font-size: 12.5px; line-height: 1.5;
+}
+.lic-upgrade-hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lic-upgrade-title { font-weight: 700; color: var(--fg); }
+.lic-upgrade-msg { margin: 0; color: var(--fg); }
+.lic-upgrade-facts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin: 0;
+}
+.lic-upgrade-facts > div {
+  border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px);
+  padding: 5px 8px; min-height: 44px; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.lic-upgrade-facts dt { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.lic-upgrade-facts dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.lic-upgrade-safe { margin: 0; font-size: 11px; color: var(--muted); }
