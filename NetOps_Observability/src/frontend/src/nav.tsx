@@ -76,6 +76,9 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   TelemetryCoverage: () => import("./pages/telemetry/TelemetryCoverage"),
   // Configuration backup & drift (Project 3, FEATURE_CONFIG_BACKUP).
   ConfigDrift: () => import("./pages/config/ConfigDrift"),
+  // Pipeline debugger GUI (Platform → Tools) — the in-console view over the
+  // same /api/debug/* routes correlix-debug drives from the CLI.
+  PipelineDebugger: () => import("./pages/platform/PipelineDebugger"),
 };
 
 const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -156,6 +159,8 @@ const LogsExplore = lazy(ROUTE_CHUNKS["LogsExplore"] as () => Promise<{ default:
 const TelemetryCoverage = lazy(ROUTE_CHUNKS["TelemetryCoverage"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Fleet configuration drift — Infrastructure → Config Drift.
 const ConfigDrift = lazy(ROUTE_CHUNKS["ConfigDrift"] as () => Promise<{ default: React.ComponentType<any> }>);
+// Pipeline debugger GUI — Platform → Tools.
+const PipelineDebugger = lazy(ROUTE_CHUNKS["PipelineDebugger"] as () => Promise<{ default: React.ComponentType<any> }>);
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -197,7 +202,11 @@ export type NavSection = {
 //   Explore       — the raw telemetry planes (metrics · logs · flows · events)
 //   Security      — tenant-facing security posture
 //   Analytics     — trends, boards and management views
-// with Iris AI pinned to the foot and Administration anchored beneath it.
+// with Iris AI pinned to the foot and, anchored beneath it, the two governance
+// sections: Administration (tenant-level — every route behind it is
+// requirePerm/requireAdmin and tenant-filtered) and Platform (provider-only —
+// every route behind it is requirePlatformAdmin/requireCrossTenant). The split
+// is by BACKEND GATE, not by topic; see docs/design/ADMIN_IA_2026-09-05.md.
 // Section/leaf ids ARE the URL space — every pre-redesign hash resolves via the
 // alias tables below (see canonicalHash / LEGACY_ROUTE_ALIAS).
 export const NAV: NavSection[] = [
@@ -400,61 +409,54 @@ export const NAV: NavSection[] = [
       { id: "integrations", label: "Integrations", group: "Incident Response", render: () => <IntegrationsAdmin /> },
       { id: "notifications", label: "Notifications", group: "Incident Response", render: () => <NotificationsAdmin /> },
       { id: "ticketing", label: "Ticketing & Automation", group: "Incident Response", render: () => <IncidentPoliciesAdmin /> },
-      // Data Collection — the sources + the poller plumbing that feed telemetry.
-      // Data Collection order (owner, 2026-08-25): discovery pair first
-      // (SNMP profiles beside the Sensors/subnet-discovery controls), then the
-      // shaping/handling pair (Processors beside Sensitive Data Access).
-      { id: "datasources", label: "Data Sources", group: "Data Collection", render: () => <DataSources /> },
-      { id: "snmp", label: "SNMP Profiles", group: "Data Collection", render: () => <SnmpProfileManager /> },
-      // The collector/poller controls ("Sensors" in the owner tree) — platform
-      // plumbing; its subnet-discovery card also surfaces under
+      // Data sources — the sources + the poller plumbing that feed telemetry
+      // (owner IA, 2026-09-05: Sensors sits under Data sources; the shaping
+      // pair moved to its own "Data handling" group below).
+      { id: "datasources", label: "Data Sources", group: "Data sources", render: () => <DataSources /> },
+      { id: "snmp", label: "SNMP Profiles", group: "Data sources", render: () => <SnmpProfileManager /> },
+      // The collector/poller controls ("Sensors" in the owner tree). The list
+      // and the subnet-scan scope are requireCrossTenant on the server
+      // (main.go handleCollectors / snmp_discovery.go handleDiscoveryConfig),
+      // so the leaf stays platform-stamped even though it lives in the
+      // tenant-level section; its subnet-discovery card also surfaces under
       // Infrastructure → Discovery & NMS for the same platform principals.
-      { id: "sensors", label: "Sensors", group: "Data Collection", platformOnly: true, render: () => <Collectors /> },
-      // Item 121: per-tenant processor editor (redact/drop/set shaping compiled
-      // into the ingest router). Admin-gated server-side.
-      { id: "processors", label: "Processors", group: "Data Collection", render: () => <ProcessorsAdmin /> },
-      // Sealed Fields (#129): who revealed protected data, when, and why.
-      // Server-gated on sensitive_data:admin.
-      { id: "sensitive-data-access", label: "Sensitive Data Access", group: "Data Collection", render: () => <SensitiveDataAccess /> },
+      { id: "sensors", label: "Sensors", group: "Data sources", platformOnly: true, render: () => <Collectors /> },
       // Parser programme A6: what the parser recognizes (platform-global stats,
       // 403 → "platform-admin only" card) beside the TENANT's own unrecognized
-      // message shapes. NOT platformOnly — a tenant admin needs the second half.
-      { id: "telemetry-coverage", label: "Telemetry Coverage", group: "Data Collection", render: () => <TelemetryCoverage /> },
+      // message shapes. NOT platformOnly — /api/telemetry/unrecognized is
+      // requirePerm(infrastructure, read) and tenant-filtered, so the second
+      // half is per-tenant data and the page belongs to the tenant section.
+      { id: "telemetry-coverage", label: "Telemetry Coverage", group: "Data sources", render: () => <TelemetryCoverage /> },
+      // Data handling — how a record is reshaped on the way in, and who was
+      // allowed to look at what it hid. Owner IA (2026-09-05): Processors and
+      // Sensitive Data Access are ONE group; both are tenant-scoped on the
+      // server (requireAdmin + tenant filter · sensitive_data:admin).
+      { id: "processors", label: "Processors", group: "Data handling", render: () => <ProcessorsAdmin /> },
+      { id: "sensitive-data-access", label: "Sensitive Data Access", group: "Data handling", render: () => <SensitiveDataAccess /> },
       // Identity & Access — consolidates Users · Roles · Security Settings.
       // Sub-items deep-link its internal views via the #/admin/identity/<sub>
       // suffix (read by IdentityAccess, same mechanism as admin/api).
       { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
-      // Platform Security — authentication providers, access reasoning, live
-      // sessions, the audit trail and the TLS posture inventory.
-      // Authentication providers (OIDC/LDAP/TACACS) are platform-GLOBAL config:
-      // every endpoint behind this page is requirePlatformAdmin-gated, so for a
-      // tenant admin the leaf is only dead "Loading…" tiles and 403'd saves.
-      { id: "auth", label: "Authentication", group: "Platform Security", platformOnly: true, render: () => <AuthenticationAdmin /> },
-      { id: "access", label: "Access Explorer", group: "Platform Security", render: () => <AccessExplorer /> },
-      { id: "sessions", label: "Sessions", group: "Platform Security", platformOnly: true, render: () => <SessionsAdmin /> },
-      { id: "audit", label: "Audit Log", group: "Platform Security", render: () => <AuditLog /> },
-      // SEC-021.1: read-only TLS posture inventory. NOT platformOnly — tenant
-      // admins get their scoped device-lane view; the backend enforces scope.
-      { id: "transport", label: "Transport Security", group: "Platform Security", render: () => <TransportSecurity /> },
-      // Platform — the platform's OWN infra plumbing + raw-backend tools.
-      // Platform-owner only, leaf-stamped; the backend enforces it independently
-      // (/api/stack/health 403, nginx auth_request on /search, etc.).
-      { id: "regions", label: "Regions", group: "Platform", platformOnly: true, render: () => <RegionsAdmin /> },
-      { id: "health", label: "Stack Health", group: "Platform", platformOnly: true, render: () => <StackHealth /> },
-      // Data Protection — the backup & recovery console. It used to be one card
-      // inside Settings; a surface that restores and deletes data is a page of
-      // its own, not a row in a settings list. Platform-global, and every route
-      // behind it is requirePlatformAdmin-gated on the server.
-      { id: "data-protection", label: "Data Protection", group: "Platform", platformOnly: true, render: () => <DataProtection /> },
-      // Licence — what this platform is licensed to run, where it stands against
-      // every ceiling, and where a licence is installed or removed. Platform-
-      // GLOBAL: one licence covers every tenant, so the route behind it is
-      // requirePlatformAdmin-gated on the server (a tenant/org admin holds full
-      // administration:admin and must NOT reach it).
-      { id: "licence", label: "Licence", group: "Platform", platformOnly: true, render: () => <Licence /> },
-      { id: "grafana", label: "Self-Monitoring", group: "Platform", platformOnly: true, requiresGrafana: true, render: () => <GrafanaTab /> },
-      { id: "opensearch", label: "Search Dashboards", group: "Platform", platformOnly: true, render: () => <SearchDashboardsTab /> },
-      { id: "graphql", label: "GraphQL Explorer", group: "Platform", platformOnly: true, render: () => <GraphQLExplorer /> },
+      // Access & Audit — who can reach what, who is signed in right now, what
+      // was done, and how the transport carrying it is secured. Every route
+      // behind this group is requireAdmin + tenant-filtered on the server, so
+      // the whole group is tenant-level and none of it is platform-stamped:
+      //   access    → access_explain.go handleAccessExplain, requireAdmin
+      //   sessions  → session_handlers.go handleSessions, requireAdmin +
+      //               sameTenant() filter (a tenant admin sees only its own
+      //               tenant's sessions — 2026-09-05 IA: the leaf stops being
+      //               platform-stamped, because the data already is scoped)
+      //   audit     → audit.go handleAudit, requireAdmin
+      //   transport → main.go /api/security/transport-posture, requireAdmin
+      //               (only the EXPORT is requirePlatformAdmin; the page hides
+      //               that control for a tenant admin rather than 403ing it)
+      // Authentication providers moved OUT of this group to Platform → Security
+      // in the same change: OIDC/LDAP/TACACS/token-policy are all
+      // requirePlatformAdmin, i.e. provider-level plumbing.
+      { id: "access", label: "Access Explorer", group: "Access & Audit", render: () => <AccessExplorer /> },
+      { id: "sessions", label: "Sessions", group: "Access & Audit", render: () => <SessionsAdmin /> },
+      { id: "audit", label: "Audit Log", group: "Access & Audit", render: () => <AuditLog /> },
+      { id: "transport", label: "Transport Security", group: "Access & Audit", render: () => <TransportSecurity /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,
         subItems: [
@@ -464,6 +466,64 @@ export const NAV: NavSection[] = [
         ],
       },
       { id: "settings", label: "Settings", render: () => <Settings /> },
+    ],
+  },
+  // ── Platform — the PROVIDER's own section (owner IA, 2026-09-05) ────────────
+  // ONE section, provider-only. `platformOnly` on the SECTION means a tenant or
+  // org administrator never sees it at all — not the leaf-by-leaf stamping the
+  // old "Platform"/"Platform Security" groups inside Administration used.
+  //
+  // The membership rule is the backend ROUTE GATE, not the topic: an item lives
+  // here only when every route behind it is requirePlatformAdmin or
+  // requireCrossTenant (CLAUDE.md §3a rule 3 — platform-GLOBAL plumbing). A
+  // page whose gate is requirePerm/requireAdmin + a tenant filter is per-tenant
+  // data and stays in Administration, however "infrastructural" it reads.
+  // The gate for each leaf below is named beside it; the full inventory, and
+  // the three places the gate disagrees with the owner's spoken placement, are
+  // in docs/design/ADMIN_IA_2026-09-05.md.
+  {
+    id: "platform",
+    label: "Platform",
+    icon: "stack",
+    footer: true,
+    platformOnly: true,
+    children: [
+      // Licence — what this installation is licensed to run, where it stands
+      // against every ceiling, and where a licence is installed or removed.
+      // There is ONE licence file per installation, so it is not a per-tenant
+      // surface: /api/system/licence runs licenceGate → requirePlatformAdmin
+      // ONCE, before the GET/PUT/DELETE switch (internal/licence/api.go), so a
+      // tenant admin cannot even read it. Ungrouped and first: it is the
+      // question a provider opens this section to answer.
+      { id: "licence", label: "Licence", render: () => <Licence /> },
+      // Security — the provider-level security plumbing.
+      // auth            → oidc_config.go / auth_config.go / token_policy.go,
+      //                   every route requirePlatformAdmin
+      // data-protection → internal/dataprotect via dataProtectGate →
+      //                   requirePlatformAdmin, uniformly on all six routes
+      { id: "auth", label: "Authentication", group: "Security", render: () => <AuthenticationAdmin /> },
+      { id: "data-protection", label: "Data Protection", group: "Security", render: () => <DataProtection /> },
+      // Tools — the provider's operational instruments and the raw-backend
+      // escape hatches.
+      // health     → stack_health.go, requireCrossTenant
+      // grafana    → nginx auth_request → handleOSDGate, isPlatformOwner
+      // opensearch → nginx auth_request → handleOSDGate, isPlatformOwner
+      // regions    → region_router.go handleRegionTopology, requireCrossTenant
+      // graphql    → /api/graphql is requirePerm(infrastructure, read); the UI
+      //              keeps it provider-only, which is STRICTER than the route,
+      //              i.e. fail-closed. Unhiding it would be a new exposure and
+      //              is not part of this change.
+      { id: "health", label: "Stack Health", group: "Tools", render: () => <StackHealth /> },
+      { id: "grafana", label: "Self-Monitoring", group: "Tools", requiresGrafana: true, render: () => <GrafanaTab /> },
+      { id: "opensearch", label: "Search Dashboards", group: "Tools", render: () => <SearchDashboardsTab /> },
+      // pipeline-debugger → internal/pipedebug via debugAuthz →
+      // requirePlatformAdmin on all five /api/debug/* routes. The agreed route
+      // id names the group as well as the leaf; the two-part router has no room
+      // for that, so "platform/tools/pipeline-debugger" is aliased onto this
+      // leaf below (LEGACY_ROUTE_ALIAS) and resolves to the same page.
+      { id: "pipeline-debugger", label: "Pipeline Debugger", group: "Tools", render: () => <PipelineDebugger /> },
+      { id: "regions", label: "Regions", group: "Tools", render: () => <RegionsAdmin /> },
+      { id: "graphql", label: "GraphQL Explorer", group: "Tools", render: () => <GraphQLExplorer /> },
     ],
   },
 ];
@@ -588,10 +648,28 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "logs/saved": "explore/saved",
   // Admin renames (collectors → sensors; everything else kept its id)
   "admin/collectors": "admin/sensors",
+  // ── Administration → Platform split (owner IA, 2026-09-05) ────────────────
+  // The provider-level leaves left Administration for the new, provider-only
+  // Platform section. Leaf ids were preserved, so every saved bookmark and
+  // configured landing keeps resolving to the SAME page at its new address.
+  "admin/auth": "platform/auth",
+  "admin/data-protection": "platform/data-protection",
+  "admin/licence": "platform/licence",
+  "admin/health": "platform/health",
+  "admin/grafana": "platform/grafana",
+  "admin/opensearch": "platform/opensearch",
+  "admin/regions": "platform/regions",
+  "admin/graphql": "platform/graphql",
+  // The debugger GUI's agreed route id carries a "tools" segment the two-part
+  // section/leaf router has no room for, so it is aliased onto the real leaf
+  // rather than left to fall back to the section's first page.
+  "platform/tools/pipeline-debugger": "platform/pipeline-debugger",
+  "platform/tools": "platform/health",
   // Explain + Stack rail sections dissolved into Administration (2026-07-10);
-  // bare hashes land on their old first page.
+  // bare hashes land on their old first page. Stack's four leaves have since
+  // moved on to the Platform section, so the bare hash follows them.
   "explain": "admin/access",
-  "stack": "admin/health",
+  "stack": "platform/health",
   // panels.tsx ghost drill routes (never existed as sections — they silently
   // fell back to Home before the redesign; now they land where they meant to)
   "alerts/active": "operations/alerts",
@@ -604,7 +682,9 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
 // when table 1 has no exact entry.
 const LEGACY_SECTION_ALIAS: Record<string, string> = {
   explain: "admin",
-  stack: "admin",
+  // Every leaf the old Stack section carried (health · grafana · opensearch ·
+  // graphql) now lives in Platform, so the leaf-preserving rename points there.
+  stack: "platform",
   dashboards: "overview",
   monitoring: "operations",
   incident: "overview",
@@ -618,6 +698,15 @@ const LEGACY_SECTION_ALIAS: Record<string, string> = {
 // null when the path is already canonical (or unknown — resolveRoute then
 // applies its usual first-section/first-leaf fallback).
 function aliasSegs(segs: string[]): string[] | null {
+  // A three-segment key is tried FIRST, so a route that names a group as well
+  // as a leaf ("platform/tools/pipeline-debugger") maps onto the real
+  // section/leaf pair instead of being read as leaf "tools" plus an in-page
+  // sub-item. Only the three consumed segments are replaced; anything deeper
+  // (a genuine sub-item suffix) is preserved.
+  if (segs.length >= 3) {
+    const exact3 = LEGACY_ROUTE_ALIAS[`${segs[0]}/${segs[1]}/${segs[2]}`];
+    if (exact3) return [...exact3.split("/"), ...segs.slice(3)];
+  }
   const key = segs.length >= 2 ? `${segs[0]}/${segs[1]}` : segs[0];
   const exact = LEGACY_ROUTE_ALIAS[key];
   if (exact) return [...exact.split("/"), ...segs.slice(2)];

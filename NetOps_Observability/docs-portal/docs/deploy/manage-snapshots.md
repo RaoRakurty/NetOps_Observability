@@ -23,7 +23,7 @@ Read [Back up and restore](/deploy/back-up-and-restore) first for how the search
 
 **To read the snapshot inventory:**
 
-1. Go to **Administration → Settings** and open the **Data Protection** card.
+1. Go to **Platform → Security → Data Protection**.
 2. Read **Disaster-recovery status**. It is computed live at request time, so an unregistered repository or a missing off-host copy reads as a problem rather than as a blank.
 3. Read the same state from the command line:
 

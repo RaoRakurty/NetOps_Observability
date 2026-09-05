@@ -34,7 +34,7 @@ polled and does not speak gNMI contributes only what it reports through
 ## Steps
 
 1. Store the credential in
-   **Administration → Data Collection → SNMP Profiles → Credentials**.
+   **Administration → Data sources → SNMP Profiles → Credentials**.
 2. Set the device record's `credential_ref` to that profile's id or name. A
    device with no reference falls back to the deployment-wide `SNMP_COMMUNITY`,
    which defaults to `public`.
@@ -108,7 +108,7 @@ families gNMI serves are BGP state, IS-IS state and Nokia SR Linux memory.
 
 | Symptom | Cause | What to do |
 |---|---|---|
-| No series at all for a device | The credential does not match, or UDP 161 is blocked | Check the collector's `last_error` on **Administration → Data Collection → Sensors** |
+| No series at all for a device | The credential does not match, or UDP 161 is blocked | Check the collector's `last_error` on **Administration → Data sources → Sensors** |
 | Reachable but no samples | `ENABLE_SNMP_METRICS` is off, or no profile OID answered | Check the flag, then the vendor profile |
 | Some panels populated, others empty | Those series are not in the device's profile, or the platform does not expose them | Extend the profile with the OID. An empty panel is a per-series statement of no data |
 | A streaming device still shows 60-second data | The gNMI subscription is not established | Check the `gnmi` collector's target count. SNMP continues as the floor, so you lose resolution rather than coverage |

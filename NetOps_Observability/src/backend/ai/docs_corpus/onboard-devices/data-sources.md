@@ -25,7 +25,7 @@ push.
 
 ## Steps
 
-1. Go to **Administration → Data Collection → Data Sources**.
+1. Go to **Administration → Data sources → Data Sources**.
 2. Read the header counters: **Devices**, **SNMP metrics**, **Flows**,
    **Syslog**, **Nothing arriving**, and **Unknown** when it is non-zero.
 3. Work down the table. It sorts by **Coverage** ascending, so the least covered
@@ -146,7 +146,7 @@ visible one page over: the SNMP collectors report
 | The whole row | The device's status on **Infrastructure → Devices** first |
 
 For the collector side of the same question, platform administrators can read
-**Administration → Data Collection → Sensors**, which shows the collection
+**Administration → Data sources → Sensors**, which shows the collection
 engines with target counts, reachability and poll timings. That separates "this
 device is not answering" from "this collector is not running".
 

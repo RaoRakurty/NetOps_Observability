@@ -25,7 +25,6 @@ sidebar_position: 9
 | **Time display** | Whether timestamps render in the local zone or UTC, for the whole tenant | All administrators |
 | **DNS** | The resolvers Correlix uses for outbound names | Platform administrator only |
 | **NTP** | The time sources Correlix measures its clock against | Platform administrator only |
-| **Data Protection** | Backup destination and disaster-recovery status | Platform administrator only |
 | **Log export limits** | Anti-exfiltration guardrails on log exports | Platform administrator only |
 
 ## Steps

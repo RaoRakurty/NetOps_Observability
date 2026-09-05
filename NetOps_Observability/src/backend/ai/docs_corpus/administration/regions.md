@@ -13,7 +13,7 @@ A region records where a tenant's telemetry is meant to live. One global control
 ## Before you begin
 
 - **Permission:** `administration:admin` to read the region catalog at `GET /api/regions`. The catalog is a fixed list and carries no tenant data.
-- **Permission:** platform administrator for everything else. `GET /api/regions/topology` calls `requireCrossTenant`, and assigning a region means creating or patching an organization or tenant, which is platform-global. The console hides **Administration → Platform → Regions** from a tenant administrator.
+- **Permission:** platform administrator for everything else. `GET /api/regions/topology` calls `requireCrossTenant`, and assigning a region means creating or patching an organization or tenant, which is platform-global. The console hides the whole Platform section, **Platform → Tools → Regions** with it, from a tenant administrator.
 - Know which organization the tenant belongs to. A tenant inherits its organization's home region unless you override it.
 
 ## What a region does in this build
@@ -66,7 +66,7 @@ Region assignment composes with tenant isolation. A tenant stays fully isolated 
 
 ### Read the region topology
 
-**Administration → Platform → Regions** is an inventory of the deployment's region topology, not a control panel.
+**Platform → Tools → Regions** is an inventory of the deployment's region topology, not a control panel.
 
 - The stat strip shows the control plane, the regions in use, and the tenant and organization counts.
 - The diagram shows the global control plane routing to a card per region, each with a **Local** or **Dedicated** data-plane badge and its tenant and organization counts.

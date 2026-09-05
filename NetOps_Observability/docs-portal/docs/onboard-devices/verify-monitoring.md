@@ -40,7 +40,7 @@ heartbeat is fresh.
 
 ### Step 2 — The collector that should reach it is running and reaching it
 
-Go to **Administration → Data Collection → Sensors**, or read the pool directly.
+Go to **Administration → Data sources → Sensors**, or read the pool directly.
 Note that the console tab lists the protocol and trap collectors only; the API
 returns all sixteen.
 
@@ -129,7 +129,7 @@ credential.
 
 ### Step 3 — The planes are delivering
 
-Go to **Administration → Data Collection → Data Sources** and read the device's
+Go to **Administration → Data sources → Data Sources** and read the device's
 row. See
 [Check the data-source coverage matrix](/onboard-devices/data-sources) for what
 each cell claims and what it does not.

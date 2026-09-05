@@ -54,32 +54,49 @@ Organization isolation is derived from tenant isolation: an organization is its 
 
 ## The console map
 
-The labels below are the ones the console shows. A leaf marked platform-only is hidden from a tenant administrator, and the backend refuses it independently, so calling the route directly still returns `403`.
+The console carries two governance sections, and the line between them is the
+permission the backend enforces, not the subject of the page.
+
+**Administration** holds every page whose routes are scoped to your tenant.
+**Platform** holds every page whose routes are platform-global, and a tenant or
+organization administrator does not see the section at all. One leaf is the
+exception in each direction, and both are marked below.
+
+The labels are the ones the console shows. A row marked platform-only is hidden
+from a tenant administrator, and the backend refuses it independently, so
+calling the route directly still returns `403`.
 
 | Console path | Plane | Who sees it |
 | --- | --- | --- |
 | **Administration → Incident Response → Integrations** | Per-tenant | All administrators |
-| **Administration → Incident Response → Notifications** | Platform-global | Platform administrator only |
+| **Administration → Incident Response → Notifications** | Mixed | All administrators; the channel configuration itself is platform-only |
 | **Administration → Incident Response → Ticketing & Automation** | Per-tenant | All administrators |
-| **Administration → Data Collection → Data Sources** | Per-tenant | All administrators |
-| **Administration → Data Collection → SNMP Profiles** | Per-tenant | All administrators |
-| **Administration → Data Collection → Sensors** | Platform-global | Platform administrator only |
-| **Administration → Data Collection → Processors** | Per-tenant | All administrators |
-| **Administration → Data Collection → Sensitive Data Access** | Per-tenant | Holders of `sensitive_data:admin` |
-| **Administration → Data Collection → Telemetry Coverage** | Both halves on one page | All administrators, parser statistics are platform-only |
+| **Administration → Data sources → Data Sources** | Per-tenant | All administrators |
+| **Administration → Data sources → SNMP Profiles** | Mixed | All administrators; profile writes are platform-only |
+| **Administration → Data sources → Sensors** | Platform-global | Platform administrator only |
+| **Administration → Data sources → Telemetry Coverage** | Both halves on one page | All administrators, parser statistics are platform-only |
+| **Administration → Data handling → Processors** | Per-tenant | All administrators |
+| **Administration → Data handling → Sensitive Data Access** | Per-tenant | Holders of `sensitive_data:admin` |
 | **Administration → Identity & Access** | Per-tenant | All administrators, scoped to what they own |
-| **Administration → Platform Security → Authentication** | Platform-global | Platform administrator only |
-| **Administration → Platform Security → Access Explorer** | Per-tenant | All administrators |
-| **Administration → Platform Security → Sessions** | Platform-global | Platform administrator only |
-| **Administration → Platform Security → Audit Log** | Per-tenant | All administrators |
-| **Administration → Platform Security → Transport Security** | Per-tenant | All administrators |
-| **Administration → Platform → Regions · Stack Health · Self-Monitoring · Search Dashboards · GraphQL Explorer** | Platform-global | Platform administrator only |
+| **Administration → Access & Audit → Access Explorer** | Per-tenant | All administrators |
+| **Administration → Access & Audit → Sessions** | Per-tenant | All administrators; you see your own tenant's sessions |
+| **Administration → Access & Audit → Audit Log** | Per-tenant | All administrators |
+| **Administration → Access & Audit → Transport Security** | Per-tenant | All administrators; the export is platform-only |
 | **Administration → API Access** | Mixed | All administrators, token policy is platform-only |
 | **Administration → Settings** | Mixed | All administrators, DNS and NTP are platform-only |
+| **Platform → Licence** | Platform-global | Platform administrator only |
+| **Platform → Security → Authentication** | Platform-global | Platform administrator only |
+| **Platform → Security → Data Protection** | Platform-global | Platform administrator only |
+| **Platform → Tools → Stack Health · Self-Monitoring · Search Dashboards · Pipeline Debugger · Regions · GraphQL Explorer** | Platform-global | Platform administrator only |
+
+There is one licence file per installation, which is why **Platform → Licence**
+sits with the platform and not with a tenant: the same file sets the ceilings
+every tenant on the installation runs under, and installing or replacing it is a
+platform administrator's action.
 
 ## Which administrator am I?
 
-Open **Administration → Identity & Access**. A platform administrator sees the Organizations tree with the Provider realm as a clickable root row. A tenant administrator sees one page headed "Users, roles and security settings for your tenant", with no tree and no picker. The second check is the icon rail: the **Platform** group under Administration appears only for the platform administrator.
+Open **Administration → Identity & Access**. A platform administrator sees the Organizations tree with the Provider realm as a clickable root row. A tenant administrator sees one page headed "Users, roles and security settings for your tenant", with no tree and no picker. The second check is the icon rail: a **Platform** section sits under Administration at the foot of the rail, and it appears only for the platform administrator.
 
 ## Related
 

@@ -339,6 +339,8 @@ passes nor pages on it.
 
 ## Related
 
+- [Debug the pipeline from the CLI](/administration/debug-the-pipeline-cli) for
+  the three verbs, the session directory and the per-module file table.
 - [Send flow records](/send-data/flows)
 - [Send syslog](/send-data/syslog)
 - [Send SNMP traps](/send-data/traps)

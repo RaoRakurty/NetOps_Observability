@@ -49,7 +49,7 @@ icon rail on the left. If sign-in fails or the account reports as locked, see
 
 Correlix needs a credential before it can read anything from the device.
 
-1. Go to **Administration → Data Collection → SNMP Profiles**.
+1. Go to **Administration → Data sources → SNMP Profiles**.
 2. Select the **Credentials** pane. Its hint line reads *Per-device community /
    SNMPv3 USM secrets*.
 3. Enter the credential. For **v2c**, enter the read-only community string. For
@@ -114,7 +114,7 @@ Two surfaces answer this, and they answer different questions.
 1. Stay on **Infrastructure → Devices**. Within about one poll cycle the status
    dot turns green and the row fills with facts read over SNMP: vendor, model,
    uptime.
-2. Go to **Administration → Data Collection → Data Sources**. Find the device's
+2. Go to **Administration → Data sources → Data Sources**. Find the device's
    row in the coverage matrix: one row per device, one column per source (SNMP
    metrics, Flows, Syslog, Traps) and a Coverage count out of four.
 3. Hover the **SNMP metrics** cell. It reads *receiving* when the source
@@ -219,7 +219,7 @@ happened, and it is the highest-value source to add next.
    [Send syslog](/send-data/syslog).
 2. Cause a loggable event, such as bouncing a lab interface or leaving
    configuration mode.
-3. In the console, go to **Administration → Data Collection → Data Sources** and
+3. In the console, go to **Administration → Data sources → Data Sources** and
    check that the device's **Syslog** cell reads *receiving*.
 4. Go to **Explore → Logs**, set the source selector to **Syslog (devices)**,
    set the range to **Last 1h**, and search for the device:

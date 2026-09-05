@@ -34,9 +34,20 @@
 //   - Nothing on this page can delete anything. What is over a ceiling is
 //     LISTED, and the page says so beside the list.
 //
-// GATING. The route behind this page is platform-global and requirePlatformAdmin
-// on the server. A tenant admin sees the licence read-only and is told why the
-// controls are absent, rather than being shown buttons that 403.
+// GATING — and the gap the page cannot close on its own. There is ONE licence
+// file per installation, so the licence is platform-GLOBAL: /api/system/licence
+// runs licenceGate → requirePlatformAdmin ONCE, before the GET/PUT/DELETE
+// switch (internal/licence/api.go), and licence_routes_test.go asserts all
+// three verbs answer 403 to a tenant admin. That is why the page lives under
+// Platform, not Administration.
+//
+// The read-only branch below (`canEdit=false`) is therefore currently dead in
+// the product: nobody who can load the page is denied the controls. It is kept,
+// and its wording sharpened, because the owner's 2026-09-05 IA asks for a
+// tenant-level view of entitlements/usage/ceilings with the install action
+// reserved to the provider — which needs the backend to split GET onto
+// requireAdmin with a tenant projection first. Recorded in
+// docs/design/ADMIN_IA_2026-09-05.md; no frontend change can grant that read.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, type LicenceCeiling, type LicenceKey, type LicenceView } from "../services/api";
@@ -429,7 +440,7 @@ function InstallPanel({ view, canEdit, onInstalled }: {
       <HonestState
         tone="muted"
         headline="You are seeing this licence read-only."
-        remedy="A licence covers the whole platform, not one tenant, so installing or removing one requires a platform administrator. Everything above is what is in force for every tenant on this platform."
+        remedy="There is one licence file per installation, and it covers every tenant on it, so installing or replacing one is a platform administrator's action. Everything above is what that single file puts in force for you."
       />
     );
   }
@@ -669,7 +680,11 @@ export default function Licence() {
         {body("the capabilities", (v) => <Features view={v} />)}
       </Section>
 
-      <Section id="install" title="Install a licence" note="Verified before it is written">
+      <Section
+        id="install"
+        title="Install a licence"
+        note="One licence file per installation — verified before it is written"
+      >
         {body("the licence", (v) => (
           <InstallPanel view={v} canEdit={platformAdmin} onInstalled={put} />
         ))}

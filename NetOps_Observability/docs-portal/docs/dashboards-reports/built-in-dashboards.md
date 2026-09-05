@@ -68,7 +68,7 @@ Answers whether each WAN circuit is meeting its SLA. The card opens **Investigat
 | Card | Opens | What it answers |
 |---|---|---|
 | Troubleshooting | **Investigate → Troubleshooting** | The platform watching its own collection: flow sources seen in the last hour by protocol and exporter, fleet counts, collector reachability and poll timings, SNMP reachable versus configured, the flow pipeline, and traps received. Open this first when a monitoring board looks empty, because it says whether data is arriving at all. |
-| Data Sources | **Administration → Data Collection → Data Sources** | The ingestion inventory. See [Data sources](/onboard-devices/data-sources). |
+| Data Sources | **Administration → Data sources → Data Sources** | The ingestion inventory. See [Data sources](/onboard-devices/data-sources). |
 | Events | **Explore → Events** | The merged event timeline. See [Review the event feed](/explore/events). |
 | Threat Detection | **Security → Threat Detection** | Security findings and critical alerts. |
 

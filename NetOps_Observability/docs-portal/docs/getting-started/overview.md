@@ -76,10 +76,10 @@ The order is the same for one device and for a fleet.
 
 | Move | Where | Page |
 |---|---|---|
-| Store a credential | **Administration → Data Collection → SNMP Profiles** | [SNMP profiles and credentials](/onboard-devices/snmp-profiles) |
+| Store a credential | **Administration → Data sources → SNMP Profiles** | [SNMP profiles and credentials](/onboard-devices/snmp-profiles) |
 | Add or discover devices | **Infrastructure → Devices** | [Add devices manually](/onboard-devices/add-devices-manually), [Discover devices](/onboard-devices/snmp-discovery) |
 | Point pushed telemetry at Correlix | Device CLI | [Syslog](/send-data/syslog), [Traps](/send-data/traps), [Flows](/send-data/flows) |
-| Confirm collection | **Administration → Data Collection → Data Sources** | [Data sources and coverage](/onboard-devices/data-sources) |
+| Confirm collection | **Administration → Data sources → Data Sources** | [Data sources and coverage](/onboard-devices/data-sources) |
 
 Nothing downstream needs enabling. Dashboards, monitors, anomaly detection,
 topology and correlation all run on whatever has been onboarded.

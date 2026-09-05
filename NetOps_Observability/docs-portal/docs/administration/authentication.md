@@ -12,7 +12,7 @@ Correlix authenticates locally and against your existing identity infrastructure
 
 ## Before you begin
 
-- **Permission, provider configuration:** platform administrator. Authentication providers are platform-global plumbing. `GET` and `PUT` on `/api/auth/oidc/config`, `/api/auth/ldap/config`, `/api/auth/tacacs/config` and `/api/auth/token-policy` all call `requirePlatformAdmin`, and the console hides **Administration → Platform Security → Authentication** from a tenant administrator for the same reason.
+- **Permission, provider configuration:** platform administrator. Authentication providers are platform-global plumbing. `GET` and `PUT` on `/api/auth/oidc/config`, `/api/auth/ldap/config`, `/api/auth/tacacs/config` and `/api/auth/token-policy` all call `requirePlatformAdmin`, and for the same reason the console puts the page under Platform, a section a tenant administrator does not see.
 - **Permission, security policy:** `administration:admin` plus reach over the scope you are editing. `/api/security-settings?scope=<tenant>` accepts the platform administrator or an administrator who reaches that tenant. The `provider` scope is platform administrator only.
 - Keep one local administrator account that is never federated. It is the way back in when single sign-on breaks.
 - For OIDC, have the issuer URL, client id and client secret ready. Correlix appends `/.well-known/openid-configuration` to the issuer, so register the base URL.
@@ -69,7 +69,7 @@ From then on, sign-in returns `{"mfa_required": true, "mfa_token": "…"}` inste
 ### Connect an OIDC identity provider
 
 1. At the identity provider, create an OIDC web application using the authorization-code flow, and register the redirect URI `https://<your-host>/api/auth/sso/callback`.
-2. In Correlix, open **Administration → Platform Security → Authentication**, open the **Single Sign-On** tile and tick **Enabled**.
+2. In Correlix, open **Platform → Security → Authentication**, open the **Single Sign-On** tile and tick **Enabled**.
 3. Complete the connection fields:
 
    | Field | Required | Notes |

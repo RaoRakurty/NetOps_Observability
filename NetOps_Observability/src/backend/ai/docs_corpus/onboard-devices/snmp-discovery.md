@@ -43,7 +43,7 @@ it with your actual management subnets before enabling discovery.
 
 1. Go to **Infrastructure → Discovery & NMS**.
 2. Select **Subnet Discovery**. The same card also appears under
-   **Administration → Data Collection → Sensors**.
+   **Administration → Data sources → Sensors**.
 3. In **Scan ranges — CIDR, comma-separated**, enter the subnets to sweep, for
    example `10.20.0.0/24, 10.30.5.0/26`. The meter under the field counts the
    addresses against the 4,096 cap and **Save changes** stays disabled while

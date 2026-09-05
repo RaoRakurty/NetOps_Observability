@@ -20,7 +20,7 @@ That default is deliberate. A nightly full backup on the same disk fills the vol
 
 ## Steps
 
-1. Go to **Administration → Settings** and find the **Data Protection** card.
+1. Go to **Platform → Security → Data Protection**.
 
 2. Read **Disaster-recovery status** before changing anything. It is computed live, never stored, so an unregistered repository or an absent remote reads as a problem rather than as a blank.
 
@@ -162,4 +162,4 @@ The backend stores your intent in its own state, and a host-side applier enforce
 
 - [Upgrade a deployment](/deploy/upgrade) - the pre-upgrade snapshot, and the rollback that uses it.
 - [Verify a deployment is doing work](/deploy/verify-deployment) - run it after a restore.
-- [Administration](/administration/overview) - where the Data Protection page lives.
+- [Administration](/administration/overview) - the console map, including where the Data Protection page lives.

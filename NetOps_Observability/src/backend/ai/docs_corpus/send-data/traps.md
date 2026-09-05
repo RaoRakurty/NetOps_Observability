@@ -119,7 +119,7 @@ variable bindings rendered by object name rather than raw OID, for example
 `ifOperStatus=down(2)`. The **Traps** column for that device turns green on
 [the coverage matrix](/onboard-devices/data-sources) within 15 minutes.
 
-On **Administration → Data Collection → Sensors** the `snmptrap` row counts
+On **Administration → Data sources → Sensors** the `snmptrap` row counts
 traps received as `targets` and traps decoded as `reachable`.
 
 ## What the receiver accepts

@@ -26,6 +26,7 @@ const MOD_HUE: Record<string, string> = {
   analytics: "#EAB308", // Analytics — vivid amber/gold
   copilot: "#8B5CF6", // Iris AI — violet (kept)
   admin: "#94A3B8", // Admin — slate (utility)
+  platform: "#64748B", // Platform (provider-only) — deeper slate than Admin
 };
 const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
 
@@ -44,10 +45,12 @@ const GROUPS: { label: string; ids: string[] }[] = [
   { label: "Manage", ids: ["infrastructure", "security"] },
   { label: "Analyze", ids: ["analytics"] },
 ];
-// Governance zone anchored at the foot: Administration alone (Explain + Stack
-// dissolved into it, 2026-07-10), above a thin-line-separated Support/Help
-// zone, then the account. Excluded from the top groups.
-const FOOT_ADMIN_IDS = ["admin"];
+// Governance zone anchored at the foot: Administration (tenant-level) and,
+// beneath it, Platform (provider-only — filteredNav drops the whole section for
+// a tenant/org admin, so this array simply yields one item for them). Above a
+// thin-line-separated Support/Help zone, then the account. Excluded from the
+// top groups; a section id missing from `nav` is filtered out below.
+const FOOT_ADMIN_IDS = ["admin", "platform"];
 
 type Props = {
   nav: NavSection[];

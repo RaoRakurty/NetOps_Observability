@@ -38,46 +38,66 @@ describe("landingResolves", () => {
 });
 
 // The Explain + Stack rail sections were dissolved into Administration
-// (2026-07-10). Old bookmarks/deep links + saved landings must keep resolving
-// to the moved pages, and the platform-only Stack pages must stay invisible to
-// tenant-scoped users after losing their section-level gate.
-describe("Explain/Stack → Administration move", () => {
+// (2026-07-10), and on 2026-09-05 the provider-level half of Administration
+// moved on again into the new, provider-only Platform section. Old
+// bookmarks/deep links + saved landings must keep resolving to the moved pages
+// through BOTH hops, and the platform pages must stay invisible to
+// tenant-scoped users now that the whole section — not each leaf — carries the
+// gate.
+describe("Explain/Stack → Administration → Platform moves", () => {
   const adminNav = filteredNav(true);
 
-  it("aliases legacy explain/stack routes to the moved admin leaves", () => {
+  it("aliases legacy explain routes to the moved admin leaf", () => {
     expect(resolveRoute("#/explain/access", adminNav)).toMatchObject({
       section: { id: "admin" },
       leaf: { id: "access" },
     });
+    expect(resolveRoute("#/explain", adminNav).leaf?.id).toBe("access");
+  });
+
+  it("aliases legacy stack routes through Administration into Platform", () => {
     for (const leaf of ["health", "grafana", "opensearch", "graphql"]) {
       expect(resolveRoute(`#/stack/${leaf}`, adminNav)).toMatchObject({
-        section: { id: "admin" },
+        section: { id: "platform" },
+        leaf: { id: leaf },
+      });
+      // …and the one-hop-newer bookmark (the 2026-07-10 → 2026-09-05 address)
+      expect(resolveRoute(`#/admin/${leaf}`, adminNav)).toMatchObject({
+        section: { id: "platform" },
         leaf: { id: leaf },
       });
     }
     // Bare legacy section hashes land on their old first page, not admin's.
-    expect(resolveRoute("#/explain", adminNav).leaf?.id).toBe("access");
-    expect(resolveRoute("#/stack", adminNav).leaf?.id).toBe("health");
+    expect(resolveRoute("#/stack", adminNav)).toMatchObject({
+      section: { id: "platform" },
+      leaf: { id: "health" },
+    });
   });
 
   it("keeps a saved legacy landing valid instead of falling back home", () => {
     expect(landingResolves("#/stack/health", adminNav)).toBe(true);
+    expect(landingResolves("#/admin/health", adminNav)).toBe(true);
     expect(landingResolves("#/explain/access", adminNav)).toBe(true);
   });
 
-  it("hides every Stack page from tenant-scoped users (isolation gate)", () => {
+  it("hides the whole Platform section from tenant-scoped users (isolation gate)", () => {
     const tenantNav = filteredNav(false);
+    expect(tenantNav.find((s) => s.id === "platform")).toBeUndefined();
     const admin = tenantNav.find((s) => s.id === "admin");
     expect(admin).toBeDefined();
     const ids = (admin?.children ?? []).map((l) => l.id);
-    for (const gated of ["health", "grafana", "opensearch", "graphql"]) {
+    for (const gated of ["health", "grafana", "opensearch", "graphql", "auth", "licence", "data-protection", "regions"]) {
       expect(ids).not.toContain(gated);
     }
-    // And the legacy deep link must NOT resolve onto a gated page for them —
-    // resolveRoute falls back to admin's first visible leaf instead.
+    // And the legacy deep links to them cannot resolve onto the gated page —
+    // resolveRoute falls back to the first VISIBLE section instead.
     expect(resolveRoute("#/stack/health", tenantNav).leaf?.id).not.toBe("health");
-    // Access Explorer is per-tenant (not platform-only) — still reachable.
-    expect(ids).toContain("access");
+    expect(resolveRoute("#/admin/licence", tenantNav).section.id).not.toBe("platform");
+    // Access Explorer, Sessions, Audit Log and Transport Security are
+    // per-tenant (requireAdmin + tenant filter on the server) — still reachable.
+    for (const kept of ["access", "sessions", "audit", "transport"]) {
+      expect(ids).toContain(kept);
+    }
   });
 
   it("dropped the old top-level sections entirely", () => {

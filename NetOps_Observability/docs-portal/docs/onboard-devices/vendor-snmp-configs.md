@@ -22,7 +22,7 @@ template; every other vendor gets a real credential and generic guidance.
 
 ## Generate a block
 
-**Administration → Data Collection → SNMP Profiles → Generate Config**. Choose
+**Administration → Data sources → SNMP Profiles → Generate Config**. Choose
 a **Vendor** and a **Version**, then select **Generate**. For Fortinet with
 `v2c` the form also asks for **Mgmt subnet** and **Mask**, which fill the host
 restriction in that template.
@@ -277,7 +277,7 @@ CLI block for a platform it has not validated.
 
 The credential sentinel re-checks each device's active credential every two
 minutes, so a correct paste shows up within about that long. Confirm on
-**Administration → Data Collection → Sensors** that the device's collector
+**Administration → Data sources → Sensors** that the device's collector
 reports it reachable, or on
 [the coverage matrix](/onboard-devices/data-sources) that **SNMP metrics**
 turned green.

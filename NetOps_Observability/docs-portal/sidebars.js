@@ -252,6 +252,7 @@ const sidebars = {
         'administration/sensitive-data-access',
         'administration/telemetry-coverage',
         'administration/licence',
+    'administration/debug-the-pipeline-cli',
       ],
     },
 

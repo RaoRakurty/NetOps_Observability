@@ -10,11 +10,11 @@ sidebar_position: 13
 
 A Correlix licence is one signed JSON file. Correlix verifies it offline, against a public key built into the product, so installing a licence needs no connection to Correlix and no activation server. A deployment with no licence file runs at the Community ceilings, which is a supported state rather than a fault.
 
-**Administration → Platform → Licence** shows the licence in force, where the deployment stands against every ceiling, and the controls that install or remove one.
+**Platform → Licence** shows the licence in force, where the deployment stands against every ceiling, and the controls that install or remove one.
 
 ## Before you begin
 
-- **Permission:** platform administrator. `GET`, `PUT` and `DELETE` on `/api/system/licence` all call `requirePlatformAdmin`. A licence is platform-global configuration: one licence covers every tenant on the deployment. A tenant or organization administrator holds full `administration:admin` and still sees the page read-only, and the route refuses their writes.
+- **Permission:** platform administrator. `GET`, `PUT` and `DELETE` on `/api/system/licence` all call `requirePlatformAdmin`, and the gate runs before the method is looked at, so the read is refused on the same terms as the write. There is one licence file per installation and it covers every tenant on it, which is why the page sits under Platform rather than under a tenant's Administration. A tenant or organization administrator holds full `administration:admin` and still receives `403`; they do not see the Platform section and cannot read the licence.
 - Have the licence file Correlix issued you. It is a `.json` file of about one kilobyte.
 - To place the file by hand instead of uploading it, have shell access to the deployment host and write access to the api data volume.
 - To verify the file before installing it, have the `correlix-licence` command. Build it from the Correlix source tree with `go build -o correlix-licence ./src/backend/cmd/correlix-licence`. The installer bundle does not carry it.
@@ -29,7 +29,7 @@ A trial is the same mechanism: a Team or Enterprise file with a short expiry dat
 
 ### Install the licence on the Licence page {#install-on-the-page}
 
-1. Open **Administration → Platform → Licence**.
+1. Open **Platform → Licence**.
 2. Go to **Install a licence**.
 3. Select the file under **Licence file**, or paste the document into **Or paste the licence document**.
 4. Select **Install licence**.

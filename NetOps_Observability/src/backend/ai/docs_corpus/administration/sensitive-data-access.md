@@ -8,7 +8,7 @@ sidebar_position: 11
 
 # Review sensitive-data access
 
-Sealed Fields is reversible masking. A `seal` processor encrypts a value at the edge under the tenant's own key, so what lands in storage is a token rather than the value, and an operator who genuinely needs the value asks for it through an audited reveal. **Administration → Data Collection → Sensitive Data Access** is the read-back: who asked, for what, why, and what happened.
+Sealed Fields is reversible masking. A `seal` processor encrypts a value at the edge under the tenant's own key, so what lands in storage is a token rather than the value, and an operator who genuinely needs the value asks for it through an audited reveal. **Administration → Data handling → Sensitive Data Access** is the read-back: who asked, for what, why, and what happened.
 
 ## Before you begin
 
@@ -29,7 +29,7 @@ Sealed Fields is reversible masking. A `seal` processor encrypts a value at the 
 
 ### Read the access trail
 
-1. Open **Administration → Data Collection → Sensitive Data Access**.
+1. Open **Administration → Data handling → Sensitive Data Access**.
 2. Read the columns:
 
    | Column | What it holds |

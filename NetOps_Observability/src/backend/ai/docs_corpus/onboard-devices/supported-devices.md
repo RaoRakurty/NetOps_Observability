@@ -110,7 +110,7 @@ Nokia, HP, Linux and Net-SNMP are recognized as vendors but have no SNMP metric
 pack at all. Those devices get the generic profile only.
 
 To add an OID for a platform, extend a profile from
-**Administration → Data Collection → SNMP Profiles → Profiles**, or supply a
+**Administration → Data sources → SNMP Profiles → Profiles**, or supply a
 JSON file at `SNMP_PROFILES_FILE`. A file profile whose name matches a built-in
 replaces it.
 

@@ -35,7 +35,7 @@ import Icon from "./Icon";
  *  redesign sections (overview · operations · investigate · infrastructure ·
  *  explore · security · analytics) are ALL tenant data and deliberately absent
  *  from this allowlist. */
-const PLATFORM_SECTIONS = new Set(["admin", "copilot"]);
+const PLATFORM_SECTIONS = new Set(["admin", "copilot", "platform"]);
 
 export function isTenantScopedSection(sectionId: string): boolean {
   return !PLATFORM_SECTIONS.has(sectionId);

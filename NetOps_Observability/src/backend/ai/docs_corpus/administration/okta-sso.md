@@ -18,7 +18,7 @@ The tile experience is a Correlix-initiated bookmark launch. Correlix deliberate
 
 ## Before you begin
 
-- **Permission:** platform administrator. Authentication providers are platform-global plumbing, and every route behind **Administration → Platform Security → Authentication** calls `requirePlatformAdmin`. A tenant administrator cannot configure this.
+- **Permission:** platform administrator. Authentication providers are platform-global plumbing, and every route behind **Platform → Security → Authentication** calls `requirePlatformAdmin`. A tenant administrator cannot configure this.
 - **Okta administrator access** to your organization, because you will create two or three app integrations.
 - **Correlix reachable over HTTPS.** Browsers reject Keycloak's cross-site sign-on cookies over plain HTTP. A plain-HTTP lab works in a normal browser window only, and a strict or private window requires HTTPS. See [Enable TLS](/deploy/enable-tls).
 - **A local administrator account you will never federate.** If single sign-on breaks, that account is the way back in.
@@ -118,7 +118,7 @@ The role names must appear in the Correlix **Admin roles** or **Operator roles**
 
 ### Step 6 — Configure Correlix
 
-Sign in to Correlix as the platform administrator and open **Administration → Platform Security → Authentication → Single Sign-On**. Tick **Enabled** and complete the form:
+Sign in to Correlix as the platform administrator and open **Platform → Security → Authentication → Single Sign-On**. Tick **Enabled** and complete the form:
 
 | Field | Required | Value |
 | --- | --- | --- |
@@ -173,7 +173,7 @@ Every entry below comes from a real bring-up.
 | Keycloak shows **User already exists** mid-login | The same email arrives from a second identity provider, and Keycloak wants explicit account linking | Complete the link once per user, enable an auto-link first-login flow for trusted providers, or use one provider per user population |
 | Okta sign-in works, then Keycloak times out on the OIDC variant with a socket timeout | No Keycloak-to-Okta back-channel egress | Allow outbound 443 to your Okta organization from the Keycloak container, or use the SAML variant |
 | Selecting the SAML app's own tile errors with `invalid_redirect_uri` | That is unsolicited identity-provider-initiated SAML, which Correlix refuses by design | Use the bookmark tile from step 7, and hide the SAML app's tile as step 2 describes |
-| `OIDC_*` was edited in `.env` and nothing changed | A saved configuration overrides the environment | Change it at **Administration → Platform Security → Authentication** |
+| `OIDC_*` was edited in `.env` and nothing changed | A saved configuration overrides the environment | Change it at **Platform → Security → Authentication** |
 
 ## Related
 

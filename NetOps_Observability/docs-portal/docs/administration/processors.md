@@ -14,7 +14,7 @@ A processor shapes telemetry on its way in. It runs at the edge, before the even
 
 - **Permission:** `administration:admin`. Processors are per-tenant data. The list, the preview and every write are filtered to your tenant, another tenant's processor id answers `404`, and the owning tenant is stamped from your token rather than from the request body.
 - **Flag:** `FEATURE_PROCESSORS`, default `true`. It is reported by `GET /api/features`. The routes are served whether or not it is set, because the rules persist regardless; the flag does not disable the API.
-- Console path: **Administration → Data Collection → Processors**. The panel is titled **Pipeline processors**.
+- Console path: **Administration → Data handling → Processors**. The panel is titled **Pipeline processors**.
 - Have a real event to preview against. A preview with an invented event proves nothing.
 
 ## What a processor is made of
@@ -59,7 +59,7 @@ A tenant holds at most 200 processors. Replacement tokens are at most 64 charact
 
 ### Write and preview a rule
 
-1. Open **Administration → Data Collection → Processors**.
+1. Open **Administration → Data handling → Processors**.
 2. Create a processor and pick the **lane**, the **action** and the **field**.
 3. For a pattern action, choose a managed detector or write your own pattern.
 4. For a `drop_event`, add the **match** condition it requires.

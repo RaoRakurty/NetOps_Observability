@@ -177,7 +177,7 @@ Rules for task pages:
 - **Numbered steps, one action each.** A step that contains "and then" is two
   steps. Bold the UI control exactly as it is labelled: **Add device**.
 - **Navigation paths use the arrow form** and the labels the product actually
-  shows: **Administration → Data Collection → SNMP Profiles**.
+  shows: **Administration → Data sources → SNMP Profiles**.
 - **`## Result` may be titled `## What you see`** when the outcome is a screen
   or a response rather than a state change. Nothing else.
 - **A long procedure may use `### Step 1 — …` subheadings** under `## Steps`

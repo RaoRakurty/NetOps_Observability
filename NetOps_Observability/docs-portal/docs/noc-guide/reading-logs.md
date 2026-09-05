@@ -22,7 +22,7 @@ to the case. For the search syntax and export options, see
 - **A time to search around.** A reported symptom time, an alert's fired-at
   time, or an RCA case's window.
 - **Syslog arriving from that device.** Check the device's **Syslog** cell on
-  **Administration → Data Collection → Data Sources**. If it does not read
+  **Administration → Data sources → Data Sources**. If it does not read
   *receiving*, the absence of log lines says nothing about the device. See
   [Send syslog](/send-data/syslog).
 
@@ -144,7 +144,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 Every shard answered and none held a matching record. That separates
 *queried and empty* from *could not be queried*, which is a different fact. It still does not distinguish a healthy quiet device from a device
 whose logging path is broken, and neither does the console. Resolve it on
-**Administration → Data Collection → Data Sources**: a device whose Syslog cell
+**Administration → Data sources → Data Sources**: a device whose Syslog cell
 reads *no data* is not sending, and silence from a device that normally reports
 steadily is itself worth investigating.
 
@@ -157,7 +157,7 @@ steadily is itself worth investigating.
    still searchable, and it contributes less to correlation, because the fields
    that grounding depends on were never extracted. The shapes arriving from your
    tenant that no rule recognises are listed on **Administration → Data
-   Collection → Telemetry Coverage**, which is where a recurring blind spot gets
+   sources → Telemetry Coverage**, which is where a recurring blind spot gets
    fixed rather than worked around.
 2. Note the device and the timestamp, then go outward:
    - **Investigate → Findings** for a baseline deviation on that device around

@@ -69,7 +69,7 @@ Causes and solutions, in order of likelihood.
 
 1. **Reachability.** Confirm the deployment host can reach the management subnet on UDP 161. A firewall or ACL on the path is the most common cause. See [Connectivity requirements](/reference/connectivity-requirements).
 2. **Range.** Confirm the devices are inside the scanned CIDR ranges. Discovery reports only hosts that are both in range and answering SNMP.
-3. **Credential.** Confirm a stored credential works across the range, under **Administration → Data Collection → SNMP Profiles**. A v2c community does not onboard a v3-only device.
+3. **Credential.** Confirm a stored credential works across the range, under **Administration → Data sources → SNMP Profiles**. A v2c community does not onboard a v3-only device.
 4. **Device side.** Confirm the SNMP agent is enabled and its ACL permits the deployment host's source address.
 5. Re-run the scan after each fix. The full procedure is [Discover devices](/onboard-devices/snmp-discovery).
 
@@ -87,7 +87,7 @@ Causes and solutions.
 
 ## No SNMP metrics {#no-snmp-metrics}
 
-Condition. The device is listed, and its SNMP metrics cell under **Administration → Data Collection → Data Sources** reads no data.
+Condition. The device is listed, and its SNMP metrics cell under **Administration → Data sources → Data Sources** reads no data.
 
 Causes and solutions.
 

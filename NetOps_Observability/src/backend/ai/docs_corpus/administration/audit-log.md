@@ -14,13 +14,13 @@ The audit log is the scoped, append-only trail of every mutating request and eve
 
 - **Permission:** `administration:admin`. The trail is per-tenant data. A tenant administrator sees only their own tenant's events, an organization administrator sees every tenant in the organizations they administer, and the platform administrator sees everything.
 - The `auditor` role is built for this page: `read` on every module including `administration`, and write on nothing.
-- Console path: **Administration → Platform Security → Audit Log**.
+- Console path: **Administration → Access & Audit → Audit Log**.
 
 ## Steps
 
 ### Read the trail in the console
 
-1. Open **Administration → Platform Security → Audit Log**.
+1. Open **Administration → Access & Audit → Audit Log**.
 2. Read the columns:
 
    | Column | What it holds |

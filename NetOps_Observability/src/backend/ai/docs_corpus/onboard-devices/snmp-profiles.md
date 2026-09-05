@@ -31,7 +31,7 @@ appears, and a device with no working credential produces no metrics at all.
 
 ## Steps
 
-1. Go to **Administration → Data Collection → SNMP Profiles**.
+1. Go to **Administration → Data sources → SNMP Profiles**.
 2. Select the **Credentials** pane.
 3. Select **+ New profile**.
 4. Enter a **Name**. It becomes the profile id after slug conversion, and it is

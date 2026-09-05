@@ -26,7 +26,7 @@ that the deployment's encryption posture is what you think it is.
 
 ## Steps
 
-1. Go to **Administration → Platform Security → Transport Security**.
+1. Go to **Administration → Access & Audit → Transport Security**.
 2. Read the summary strip: **Paths**, **Drifting**, **Exceptions**, **Critical
    problems**, **Warnings**.
 3. Read the table, one row per path.

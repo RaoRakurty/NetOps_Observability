@@ -8,7 +8,7 @@ sidebar_position: 12
 
 # Check telemetry parser coverage
 
-**Administration → Data Collection → Telemetry Coverage** answers two different questions on one page. The top half is the parser itself: which revision is running, which rules exist, and how much of what it admits becomes a typed observation. The bottom half is your own tenant's traffic: the message shapes arriving that the parser would not admit, with a way to draft a catalog row for one.
+**Administration → Data sources → Telemetry Coverage** answers two different questions on one page. The top half is the parser itself: which revision is running, which rules exist, and how much of what it admits becomes a typed observation. The bottom half is your own tenant's traffic: the message shapes arriving that the parser would not admit, with a way to draft a catalog row for one.
 
 ## Before you begin
 
