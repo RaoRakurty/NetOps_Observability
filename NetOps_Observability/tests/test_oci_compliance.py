@@ -82,7 +82,10 @@ def pins() -> dict:
 
 def evaluate_sbom(sbom_path: str, pins: dict, *, base_layers: str | None = None,
                   source_dir: str | None = None, image: str = "test-image"):
-    raw, _meta = oci.parse_sbom(sbom_path)
+    """The same chain `main()` runs: parse → split file entries → normalize →
+    evaluate. The split is part of the path under test, not a helper shortcut."""
+    raw, _meta, deps = oci.parse_sbom(sbom_path)
+    raw, _files = oci.split_file_entries(raw, deps)
     layers = oci.load_base_layers(base_layers)
     norm = [oci.normalize_component(c, image=image, image_digest=DIGEST,
                                     base_layers=layers) for c in raw]
@@ -323,6 +326,163 @@ def test_two_versions_are_two_inventory_rows():
     }]
     inv = oci.merge_inventory(manifests)
     assert len([c for c in inv["components"] if c["name"] == "busybox"]) == 2
+
+
+# ── a scanner that lists FILES must not become a compliance finding ──────────
+# `sbom-a321-files.cdx.json` is a REAL scan of the SAME regression image by the
+# Syft version CI runs (v1.42.3), which reports 82 file entries — "/etc/securetty",
+# "/lib/ld-musl-x86_64.so.1", "/lib/apk/db/installed" — alongside the same 16
+# packages the v1.18.1 fixture reports. Those files have no purl, no version and
+# no licence, because a file does not carry a licence of its own: each one lives
+# inside a package this same document already inventories. Evaluating them as
+# components produced 82 "no licence recorded" violations on an image that had
+# not changed by one byte (CI red, 2026-09-05).
+
+FILES_SBOM = os.path.join(FIXTURES, "sbom-a321-files.cdx.json")
+
+
+def test_the_file_entry_fixture_is_a_real_scan_that_contains_file_components():
+    """Guards the fixture itself: if it ever loses its file entries, every test
+    below would keep passing while testing nothing."""
+    doc = read_json(FILES_SBOM)
+    assert doc.get("bomFormat") == "CycloneDX"
+    files = [c for c in doc["components"] if c.get("type") == "file"]
+    assert len(files) > 50, "the fixture no longer exercises file entries"
+    for c in files:
+        assert c["name"].startswith("/")
+        assert not c.get("purl") and not c.get("version") and not c.get("licenses")
+    tools = (doc["metadata"]["tools"]["components"])
+    assert tools[0]["name"] == "syft" and tools[0]["version"] == "1.42.3", (
+        "the fixture must stay a real scan by the Syft version CI runs")
+
+
+def test_file_entries_are_skipped_and_counted_never_dropped_silently():
+    raw, _meta, deps = oci.parse_sbom(FILES_SBOM)
+    packages, skipped = oci.split_file_entries(raw, deps)
+    assert len(raw) == len(packages) + len(skipped), "an entry went missing"
+    assert len(skipped) == 82
+    assert {e["component_kind"] for e in skipped} == {"file"}
+    names = {e["name"] for e in skipped}
+    assert "/etc/securetty" in names and "/lib/apk/db/installed" in names
+    assert all(n.startswith("/") for n in names)
+    # Still visible, with the reason stated per entry.
+    assert all(e["reason"] for e in skipped)
+    assert {c["name"] for c in packages} >= {"busybox", "busybox-binsh",
+                                             "ssl_client", "musl"}
+
+
+def test_a_file_listing_scan_reaches_the_same_verdict_as_one_without(pins):
+    """THE CI regression. Two real scans of the same image by two Syft versions
+    must produce the same compliance answer: the inventory of DISTRIBUTED WORKS
+    is a property of the image, not of the scanner's cataloger set."""
+    def verdicts(path: str) -> set:
+        recs = evaluate_sbom(path, pins,
+                             base_layers=os.path.join(FIXTURES, "base-layers-a321.txt"))
+        return {(r["name"], r["version"], r["license"], r["source_status"])
+                for r in recs}
+
+    assert verdicts(FILES_SBOM) == verdicts(os.path.join(FIXTURES,
+                                                         "sbom-a321.cdx.json"))
+
+
+def test_busybox_is_still_discovered_when_the_scan_also_lists_files(pins):
+    recs = evaluate_sbom(FILES_SBOM, pins,
+                         base_layers=os.path.join(FIXTURES, "base-layers-a321.txt"))
+    bb = by_name(recs, "busybox")
+    assert bb["version"] == "1.37.0-r12"
+    assert bb["license"] == "GPL-2.0-only"
+    assert bb["source_required"] is True
+    assert bb["origin"] == "inherited-base-layer"
+    assert not any(r["name"].startswith("/") for r in recs), (
+        "a file path must never appear as an evaluated component")
+
+
+def test_a_package_with_no_licence_still_fails_closed():
+    """The skip is for FILES only. A package whose licence nobody recorded is
+    the exact case the policy exists for and must stay manual-review + FAIL."""
+    comp = {"type": "library", "name": "mystery", "version": "1.0",
+            "purl": "pkg:apk/alpine/mystery@1.0"}
+    packages, skipped = oci.split_file_entries([comp], [])
+    assert packages == [comp] and skipped == []
+    norm = oci.normalize_component(comp, image="i", image_digest=DIGEST,
+                                   base_layers=None)
+    rec = oci.evaluate([norm], {"components": [], "deferred": []},
+                       source_dir=None)[0]
+    assert rec["source_required"] is True
+    assert rec["source_status"] == "manual-review"
+    assert oci.failures([rec], release=False)
+
+
+def test_a_versionless_purl_less_package_is_not_mistaken_for_a_file():
+    """The skip rule is narrow on purpose: only `type: file`, or an absolute-path
+    name with no purl AND no version. A named package with neither is still a
+    package claim and is evaluated as one."""
+    assert oci.is_file_entry({"type": "file", "name": "/etc/securetty"}) is True
+    assert oci.is_file_entry({"name": "/lib/ld-musl-x86_64.so.1"}) is True
+    assert oci.is_file_entry({"name": "openssl"}) is False
+    assert oci.is_file_entry({"name": "/opt/vendor/thing", "version": "1.0"}) is False
+    assert oci.is_file_entry({"name": "/opt/vendor/thing",
+                              "purl": "pkg:generic/thing"}) is False
+
+
+def test_the_owning_package_is_reported_when_the_sbom_states_it():
+    """Syft records containment as a relationship. When the document carries the
+    edge, the skipped entry names its owner; when it does not, the owner is left
+    empty rather than guessed from the path."""
+    components = [
+        {"bom-ref": "p1", "type": "library", "name": "busybox",
+         "version": "1.37.0-r12", "purl": "pkg:apk/alpine/busybox@1.37.0-r12"},
+        {"bom-ref": "f1", "type": "file", "name": "/bin/busybox"},
+        {"bom-ref": "f2", "type": "file", "name": "/etc/securetty"},
+    ]
+    _pkgs, skipped = oci.split_file_entries(
+        components, [{"ref": "p1", "dependsOn": ["f1"]}])
+    owners = {e["name"]: e["owner_package"] for e in skipped}
+    assert owners["/bin/busybox"] == "busybox 1.37.0-r12"
+    assert owners["/etc/securetty"] == ""
+
+
+def test_an_sbom_of_only_file_entries_cannot_be_evaluated(tmp_path):
+    """Fail closed: files with no package inventory is a scan that found no
+    packages, never an image with nothing to declare."""
+    doc = {"bomFormat": "CycloneDX", "components": [
+        {"type": "file", "name": "/etc/securetty"}]}
+    p = tmp_path / "files-only.cdx.json"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    raw, _meta, deps = oci.parse_sbom(str(p))
+    with pytest.raises(oci.ComplianceError, match="no package"):
+        oci.split_file_entries(raw, deps)
+
+
+def test_the_manifest_lists_every_skipped_file_entry(tmp_path, capsys):
+    """§10: an exclusion nobody can see is indistinguishable from a scanner that
+    lost them. The manifest carries the count and the names."""
+    out = tmp_path / "manifest.json"
+    rc = oci.main(["--sbom", FILES_SBOM, "--image", "correlix-oci-regression",
+                   "--digest", DIGEST,
+                   "--base-layers", os.path.join(FIXTURES, "base-layers-a321.txt"),
+                   "--manifest", str(out)])
+    assert rc == 0, "the recorded postures do not fail a non-release run"
+    m = read_json(str(out))
+    assert m["file_entry_count"] == 82
+    assert len(m["skipped_file_entries"]) == 82
+    assert "/etc/securetty" in {e["name"] for e in m["skipped_file_entries"]}
+    assert not any(c["name"].startswith("/") for c in m["components"])
+    printed = capsys.readouterr().out
+    assert "files=82" in printed, "the verdict line must state the count"
+
+
+def test_the_verdict_names_the_first_violation_on_stdout_too(capsys):
+    """A red job has to be diagnosable from one line, and a caller that captures
+    only stdout must still see WHY it went red."""
+    rc = oci.main(["--sbom", os.path.join(FIXTURES, "sbom-a320.cdx.json"),
+                   "--image", "x", "--digest", DIGEST])
+    assert rc == 1
+    out = capsys.readouterr()
+    assert "VIOLATION(S)" in out.out and "VIOLATION(S)" in out.err
+    assert "first-violation=" in out.out
+    assert "OCI compliance failure" in out.out, (
+        "the findings themselves must reach stdout, not only stderr")
 
 
 # ── licence determination must never fail open ───────────────────────────────

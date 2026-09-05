@@ -27,6 +27,18 @@ published and never shipped — they exist to be scanned.
 the regression suite runs offline — no Docker daemon, no network, no scanner.
 `image-id-*.txt` records which image each scan came from.
 
+`sbom-a321-files.cdx.json` is a REAL scan of the **same** image by the Syft
+version CI runs (`anchore/syft:v1.42.3`, the version `anchore/sbom-action` v0.24.0
+defaults to and `supply-chain.yml` now pins). It reports the same 16 packages
+plus **82 file entries** — `/etc/securetty`, `/lib/ld-musl-x86_64.so.1`,
+`/lib/apk/db/installed` — each with no purl, no version and no licence, because a
+file does not carry a licence of its own. Evaluating those as components turned a
+clean gate into 82 violations on an image that had not changed by one byte
+(CI red, 2026-09-05); the tool now excludes file entries from the obligation
+evaluation and reports them instead. Keeping BOTH scans of the same image is the
+point: the compliance verdict must be a property of the image, not of the
+scanner's cataloger set. `image-id-a321-files.txt` records the image it came from.
+
 `.github/workflows/supply-chain.yml` additionally builds and scans
 `Dockerfile.inherited` live on every PR, so the fixtures cannot quietly drift
 away from what the tool would see today.

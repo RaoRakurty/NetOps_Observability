@@ -36,6 +36,12 @@ and runs the chain the compliance posture actually needs:
   Correlix-retained source artifact → verify its checksum → compliance
   manifest → PASS / FAIL
 
+What is EVALUATED is the packages the SBOM inventories. A CycloneDX FILE entry
+("/etc/securetty", "/lib/ld-musl-x86_64.so.1") is one file inside such a package,
+not an independently licensed work, so it is excluded from the obligation
+evaluation — counted in the verdict line and listed in the manifest's
+`skipped_file_entries`, never silently dropped. See `is_file_entry`.
+
 Nothing here is BusyBox-specific. The obligation comes from the normalized
 LICENCE (the GPL/LGPL/AGPL family), and artifacts are located by normalized
 SOURCE-PACKAGE IDENTITY, so the same code covers the next copyleft component
@@ -592,8 +598,13 @@ def is_first_party(component: dict, prefixes: list[str]) -> bool:
 
 
 # ── SBOM ingestion ───────────────────────────────────────────────────────────
-def parse_sbom(path: str) -> tuple[list[dict], dict]:
+def parse_sbom(path: str) -> tuple[list[dict], dict, list[dict]]:
     """Read a CycloneDX document produced from a final OCI image.
+
+    Returns its components, its metadata and its `dependencies` edges — the
+    edges are what name the package that OWNS a file entry (see
+    `file_entry_owners`), so they are read here rather than re-opening the
+    document later.
 
     Fail-closed on every shape that would understate the inventory: a missing
     file, a non-CycloneDX document, or zero components. A scanner that produced
@@ -614,7 +625,140 @@ def parse_sbom(path: str) -> tuple[list[dict], dict]:
             f"nothing is a scanner failure, not an empty image — refusing to "
             f"report zero affected packages.")
     meta = doc.get("metadata") or {}
-    return comps, meta
+    deps = doc.get("dependencies")
+    return comps, meta, deps if isinstance(deps, list) else []
+
+
+# ── file entries are not independently licensed components ───────────────────
+# A CycloneDX document taken from an image carries two very different kinds of
+# entry:
+#
+#   PACKAGE entry  "busybox 1.37.0-r12", pkg:apk/alpine/busybox@…  — a
+#                  distributed work with its own licence and its own
+#                  corresponding-source obligation.
+#   FILE entry     "/etc/securetty", "/lib/ld-musl-x86_64.so.1" — ONE FILE
+#                  INSIDE such a package. Syft's file catalogers list it with a
+#                  name and a digest and nothing else: no purl, no version and
+#                  no licence, because a file does not carry a licence of its
+#                  own. Its licence is its owning package's, and that package is
+#                  already inventoried in the same document.
+#
+# Which of them a scan contains is a property of the SCANNER, not of the image.
+# Syft v1.18.1 (the checked-in fixtures) reported 16 package entries and no file
+# entries for the regression image; v1.42.3 (what CI runs) reports the same 16
+# packages plus 82 file entries for the byte-identical image. Evaluating those
+# 82 as components produced 82 "no licence recorded" violations without a single
+# extra byte being shipped — a scanner-shape difference reported as a compliance
+# finding, which is exactly the kind of false verdict that teaches people to
+# switch a gate off.
+#
+# So file entries are EXCLUDED from the obligation evaluation — and never
+# silently dropped (§10): they are counted in the verdict line and listed in the
+# manifest under `skipped_file_entries`, with the owning package whenever the
+# document's own relationships name one. Nothing about how a PACKAGE with an
+# unknown or absent licence is treated changes: those still land in
+# manual-review and fail closed.
+_ABSOLUTE_PATH = re.compile(r"/\S*")
+
+
+def is_file_entry(comp: dict) -> bool:
+    """True when this CycloneDX component describes a FILE, not a package.
+
+    Deliberately narrow, because every entry this excludes is an entry the
+    licence policy stops looking at:
+
+      * `type: "file"` — the emitter said so itself; or
+      * no `purl` AND no `version` AND an absolute-path name — the shape a file
+        listing has when the emitter does not set the type.
+
+    An entry that carries a purl or a version is a PACKAGE claim even when its
+    name looks like a path, and is evaluated as one (fail closed).
+    """
+    if str(comp.get("type") or "") == "file":
+        return True
+    if comp.get("purl") or str(comp.get("version") or ""):
+        return False
+    return bool(_ABSOLUTE_PATH.fullmatch(str(comp.get("name") or "")))
+
+
+def file_entry_owners(components: list[dict],
+                      dependencies: list[dict] | None) -> dict[str, str]:
+    """bom-ref of a file entry → the package entry that CONTAINS it.
+
+    Syft records containment as a relationship, and its CycloneDX encoder writes
+    the edges it maps into `dependencies[].dependsOn`; an owner is therefore read
+    as "a package entry that depends on this file entry". Not every Syft version
+    emits those edges — v1.42.3 emits none for file entries — so the owner is
+    reported when the document STATES one and left empty when it does not. It is
+    never guessed from the path: a plausible owner would be an invented fact.
+    """
+    files = {str(c.get("bom-ref")) for c in components
+             if c.get("bom-ref") and is_file_entry(c)}
+    if not files:
+        return {}
+    packages: dict[str, str] = {}
+    for c in components:
+        ref = c.get("bom-ref")
+        if not ref or is_file_entry(c):
+            continue
+        packages[str(ref)] = " ".join(
+            x for x in (str(c.get("name") or ""), str(c.get("version") or "")) if x)
+    owners: dict[str, str] = {}
+    for dep in dependencies or []:
+        if not isinstance(dep, dict):
+            continue
+        owner = packages.get(str(dep.get("ref")))
+        if not owner:
+            continue
+        for child in dep.get("dependsOn") or []:
+            owners.setdefault(str(child), owner)
+    return {ref: owner for ref, owner in owners.items() if ref in files}
+
+
+def split_file_entries(components: list[dict],
+                       dependencies: list[dict] | None = None
+                       ) -> tuple[list[dict], list[dict]]:
+    """Components → (package entries to evaluate, file entries recorded as skipped).
+
+    Fail-closed: a document that contains file entries and NO package entry is a
+    scan with no package inventory at all, which cannot be evaluated and must
+    never read as "nothing to declare".
+    """
+    owners = file_entry_owners(components, dependencies)
+    packages: list[dict] = []
+    skipped: list[dict] = []
+    for c in components:
+        if not is_file_entry(c):
+            packages.append(c)
+            continue
+        declared: list[str] = []
+        for entry in c.get("licenses") or []:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("expression"):
+                declared.append(str(entry["expression"]))
+                continue
+            lic = entry.get("license") or {}
+            val = lic.get("id") or lic.get("name")
+            if val:
+                declared.append(str(val))
+        ref = str(c.get("bom-ref") or "")
+        skipped.append({
+            "name": str(c.get("name") or ""),
+            "bom_ref": ref,
+            "component_kind": str(c.get("type") or ""),
+            "owner_package": owners.get(ref, ""),
+            "declared_licenses": declared,
+            "reason": ("a file inside an inventoried package, not an "
+                       "independently licensed component"),
+        })
+    if skipped and not packages:
+        raise ComplianceError(
+            "the SBOM lists file entries and no package entries. A scan with no "
+            "package inventory cannot be evaluated for source obligations — "
+            "refusing to report zero affected packages.")
+    skipped.sort(key=lambda e: e["name"])
+    return packages, skipped
 
 
 def load_base_layers(path: str | None) -> set[str] | None:
@@ -915,15 +1059,29 @@ def evaluate(components: list[dict], pins: dict, *, source_dir: str | None,
     return records
 
 
-def failures(records: list[dict], *, release: bool) -> list[str]:
-    """Violations. Empty list = PASS.
+def violations(records: list[dict], *, release: bool) -> list[dict]:
+    """Violations, each as {kind, component, status, text}. Empty list = PASS.
 
     `missing` and `invalid` fail everywhere. A RECORDED posture (`deferred`) is
     reported on every run and fails only a production release, which is the
     existing project convention for an acknowledged, owner-owned finding: failing
     daily builds on it teaches people to switch the gate off.
+
+    The `kind` is a short, stable classification so the verdict LINE can name
+    what went wrong. A red job whose one-line summary says only "82 VIOLATION(S)"
+    forces a reader into the full log to learn whether the finding is a bad
+    checksum or a scanner artefact.
     """
-    out: list[str] = []
+    out: list[dict] = []
+
+    def add(r: dict, kind: str, reason: str) -> None:
+        out.append({
+            "kind": kind,
+            "component": f"{r['name']} {r['version']}".strip(),
+            "status": r["source_status"],
+            "text": _failure_text(r, reason),
+        })
+
     for r in records:
         if not r.get("source_required"):
             continue
@@ -933,30 +1091,35 @@ def failures(records: list[dict], *, release: bool) -> list[str]:
         recorded = r.get("deferred")
         if status == STATUS_PINNED:
             if release:
-                out.append(_failure_text(
-                    r, "A corresponding-source artifact is pinned for this "
-                       "component but was not materialised for this evaluation, "
-                       "so its checksum could not be verified. A production "
-                       "release must verify the bytes it ships."))
+                add(r, "pinned-not-materialised",
+                    "A corresponding-source artifact is pinned for this "
+                    "component but was not materialised for this evaluation, "
+                    "so its checksum could not be verified. A production "
+                    "release must verify the bytes it ships.")
             continue
         if recorded and not release:
             continue
         if recorded:
-            out.append(_failure_text(
-                r, "Corresponding source is required. Correlix has RECORDED a "
-                   "posture for this component (scripts/source-mirror.json "
-                   f"`deferred`, tracker {r.get('deferred_tracker', '238')}) but "
-                   "has NOT produced a retained source artifact. A recorded "
-                   "posture is not a verified artifact and does not satisfy a "
-                   "production release."))
+            add(r, "recorded-posture-unretained",
+                "Corresponding source is required. Correlix has RECORDED a "
+                "posture for this component (scripts/source-mirror.json "
+                f"`deferred`, tracker {r.get('deferred_tracker', '238')}) but "
+                "has NOT produced a retained source artifact. A recorded "
+                "posture is not a verified artifact and does not satisfy a "
+                "production release.")
             continue
-        out.append(_failure_text(
-            r, "Corresponding source is required but no verified Correlix source "
-               "artifact exists, and no reviewed posture is recorded for it. "
-               "Upstream availability alone does not satisfy Correlix release "
-               "policy. Add a `components` entry (with `provides`) to "
-               "scripts/source-mirror.json, or record the posture in `deferred`."))
+        add(r, f"no-artifact:{status}",
+            "Corresponding source is required but no verified Correlix source "
+            "artifact exists, and no reviewed posture is recorded for it. "
+            "Upstream availability alone does not satisfy Correlix release "
+            "policy. Add a `components` entry (with `provides`) to "
+            "scripts/source-mirror.json, or record the posture in `deferred`.")
     return out
+
+
+def failures(records: list[dict], *, release: bool) -> list[str]:
+    """The violation TEXTS. Empty list = PASS. See `violations`."""
+    return [v["text"] for v in violations(records, release=release)]
 
 
 def _failure_text(r: dict, reason: str) -> str:
@@ -975,7 +1138,8 @@ def _failure_text(r: dict, reason: str) -> str:
 # ── manifest ─────────────────────────────────────────────────────────────────
 def build_manifest(image: str, digest: str, records: list[dict], *,
                    sbom_path: str, sbom_meta: dict, base_layers: set[str] | None,
-                   source_dir: str | None) -> dict:
+                   source_dir: str | None,
+                   file_entries: list[dict] | None = None) -> dict:
     tools = []
     for t in ((sbom_meta.get("tools") or {}).get("components")
               if isinstance(sbom_meta.get("tools"), dict) else sbom_meta.get("tools")) or []:
@@ -998,6 +1162,12 @@ def build_manifest(image: str, digest: str, records: list[dict], *,
         "retained_source_dir": source_dir or "",
         "component_count": len(records),
         "status_counts": dict(sorted(counts.items())),
+        # File entries are excluded from the evaluation (see `is_file_entry`) and
+        # listed here rather than dropped: an exclusion nobody can see is
+        # indistinguishable from a scanner that lost them.
+        "file_entry_count": len(file_entries or []),
+        "skipped_file_entries": sorted(file_entries or [],
+                                       key=lambda e: e.get("name", "")),
         "components": sorted(
             records, key=lambda r: (r["name"].lower(), r["version"])),
     }
@@ -1123,8 +1293,11 @@ def propose_deferred(records: list[dict], today: str) -> list[dict]:
 # ── selftest ─────────────────────────────────────────────────────────────────
 def selftest() -> int:
     fails: list[str] = []
+    ran = 0
 
     def check(label: str, got: Any, want: Any) -> None:
+        nonlocal ran
+        ran += 1
         if got != want:
             fails.append(f"{label}: got {got!r}, want {want!r}")
 
@@ -1204,11 +1377,59 @@ def selftest() -> int:
     check("no prefixes claims nothing",
           is_first_party({"name": "netops/backend"}, []), False)
 
+    # File entries: a scanner-shape difference must not read as a compliance
+    # finding, and must not hide a package either.
+    file_comp = {"bom-ref": "f1", "type": "file", "name": "/etc/securetty"}
+    untyped_file = {"bom-ref": "f2", "name": "/lib/ld-musl-x86_64.so.1"}
+    pkg = {"bom-ref": "p1", "type": "library", "name": "busybox",
+           "version": "1.37.0-r12",
+           "purl": "pkg:apk/alpine/busybox@1.37.0-r12"}
+    versionless_pkg = {"bom-ref": "p2", "type": "library", "name": "openssl"}
+    check("typed file entry is a file", is_file_entry(file_comp), True)
+    check("untyped absolute path is a file", is_file_entry(untyped_file), True)
+    check("a package is not a file", is_file_entry(pkg), False)
+    check("a versionless PACKAGE is still a package",
+          is_file_entry(versionless_pkg), False)
+    check("a path-named entry WITH a version is a package claim",
+          is_file_entry({"name": "/opt/vendor/thing", "version": "1.0"}), False)
+    pkgs, skipped = split_file_entries(
+        [pkg, file_comp, untyped_file, versionless_pkg],
+        [{"ref": "p1", "dependsOn": ["f1"]}])
+    check("packages survive the split", [c["name"] for c in pkgs],
+          ["busybox", "openssl"])
+    check("file entries are counted, not dropped", len(skipped), 2)
+    check("the SBOM's own relationship names the owner",
+          [e["owner_package"] for e in skipped if e["name"] == "/etc/securetty"],
+          ["busybox 1.37.0-r12"])
+    check("an unstated owner is left empty, never guessed",
+          [e["owner_package"] for e in skipped
+           if e["name"] == "/lib/ld-musl-x86_64.so.1"], [""])
+    try:
+        split_file_entries([file_comp], [])
+    except ComplianceError:
+        check("files with no package inventory cannot be evaluated", True, True)
+    else:
+        check("files with no package inventory cannot be evaluated", False, True)
+
+    # A package with NO licence still fails closed — the file-entry skip must not
+    # become a way for an unlicensed package to slip through.
+    unlicensed = normalize_component(
+        {"type": "library", "name": "mystery", "version": "1.0",
+         "purl": "pkg:apk/alpine/mystery@1.0"},
+        image="i", image_digest="sha256:" + "0" * 64, base_layers=None)
+    rec = evaluate([unlicensed], {"components": [], "deferred": []},
+                   source_dir=None)[0]
+    check("a package with no licence still requires source",
+          rec["source_required"], True)
+    check("a package with no licence is a violation",
+          [v["kind"] for v in violations([rec], release=False)],
+          ["no-artifact:manual-review"])
+
     if fails:
         for f in fails:
             print(f"selftest FAIL: {f}", file=sys.stderr)
         return 1
-    print("oci-compliance: selftest OK (31 checks)")
+    print(f"oci-compliance: selftest OK ({ran} checks)")
     return 0
 
 
@@ -1268,7 +1489,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"metadata, never identity.")
 
         pins = load_pin_table(args.pins)
-        raw, meta = parse_sbom(args.sbom)
+        raw, meta, deps = parse_sbom(args.sbom)
+        # Which entries a scan contains is a property of the scanner: a file
+        # entry is a file inside a package this same document already
+        # inventories, not an independently licensed work. Split them out here
+        # (they are reported, never dropped) so the policy evaluates packages.
+        raw, file_entries = split_file_entries(raw, deps)
         base_layers = load_base_layers(args.base_layers)
         norm = [normalize_component(c, image=args.image, image_digest=args.digest,
                                     base_layers=base_layers) for c in raw]
@@ -1283,7 +1509,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_manifest(args.image, args.digest, records,
                                   sbom_path=args.sbom, sbom_meta=meta,
                                   base_layers=base_layers,
-                                  source_dir=args.source_dir)
+                                  source_dir=args.source_dir,
+                                  file_entries=file_entries)
         if args.manifest:
             write_manifest(manifest, args.manifest)
     except ComplianceError as exc:
@@ -1294,11 +1521,32 @@ def main(argv: list[str] | None = None) -> int:
         today = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
         print(json.dumps(propose_deferred(records, today), indent=2))
 
+    problems = violations(records, release=args.release)
+
     if not args.quiet:
         counts = manifest["status_counts"]
         print(f"oci-compliance: {args.image}@{args.digest}")
-        print(f"  {manifest['component_count']} components  "
-              + "  ".join(f"{k}={v}" for k, v in counts.items()))
+        # One line a red job is diagnosable from: the counts, how many entries
+        # were file entries rather than packages, and WHAT the first violation
+        # is — not just how many there are.
+        summary = (f"  {manifest['component_count']} components  "
+                   + "  ".join(f"{k}={v}" for k, v in counts.items())
+                   + f"  files={manifest['file_entry_count']}")
+        if problems:
+            summary += (f"  first-violation={problems[0]['kind']}"
+                        f" ({problems[0]['component']})")
+        print(summary)
+        if file_entries:
+            print(f"  {len(file_entries)} file entr"
+                  f"{'y' if len(file_entries) == 1 else 'ies'} skipped: a file "
+                  f"inside an inventoried package is not an independently "
+                  f"licensed component (listed in the manifest under "
+                  f"`skipped_file_entries`)")
+            for e in file_entries[:10]:
+                owner = e["owner_package"] or "owning package not stated by the SBOM"
+                print(f"    - {e['name']}  [{owner}]")
+            if len(file_entries) > 10:
+                print(f"    … and {len(file_entries) - 10} more")
         if base_layers is None:
             print("  ! base-image layer set not supplied — component origin is "
                   "reported as `unknown` rather than guessed")
@@ -1311,7 +1559,6 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    - {r['name']} {r['version']} [{r['license']}] "
                       f"→ {r['source_status']}")
 
-    problems = failures(records, release=args.release)
     recorded = [r for r in records if r.get("deferred")]
     if recorded and not args.release:
         print(f"\noci-compliance: {len(recorded)} RECORDED source obligation(s) "
@@ -1323,10 +1570,17 @@ def main(argv: list[str] | None = None) -> int:
         print("  see docs/compliance/OCI_SOURCE_COMPLIANCE.md\n")
 
     if problems:
-        print(f"\noci-compliance: {len(problems)} VIOLATION(S)", file=sys.stderr)
-        for p in problems:
-            print(p, file=sys.stderr)
-            print(file=sys.stderr)
+        # BOTH streams. The GitHub log interleaves them, but a caller that
+        # captures only stdout (a wrapper, a report, a pipe) used to see the
+        # verdict with none of the findings — a violation nobody can read is a
+        # silent failure with extra steps (scripts/CLAUDE.md §16.1).
+        headline = (f"\noci-compliance: {len(problems)} VIOLATION(S) "
+                    f"(first: {problems[0]['kind']} — {problems[0]['component']})")
+        for stream in (sys.stdout, sys.stderr):
+            print(headline, file=stream)
+            for p in problems:
+                print(p["text"], file=stream)
+                print(file=stream)
         return 1
     print("oci-compliance: PASS — every corresponding-source obligation in this "
           "image is satisfied by a retained artifact or a recorded posture")

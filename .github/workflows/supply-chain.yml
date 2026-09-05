@@ -159,6 +159,18 @@ jobs:
           format: cyclonedx-json
           output-file: ${{ runner.temp }}/regression.cdx.json
           upload-artifact: false
+          # Pinned like every other scanner in this file (SC-010). Immutable
+          # identity is this policy's spine, and it applies to the tool as much
+          # as to the image: WHICH entries a scan contains is a property of the
+          # scanner (v1.18.1 lists packages only; v1.42.3 also lists 82 files),
+          # so an unpinned Syft can change a gate's shape with no change of
+          # evidence. This is the version v0.24.0 defaults to today, frozen.
+          # The gate does NOT depend on it: oci-compliance.py excludes file
+          # entries whatever the scanner emits (`is_file_entry`), and
+          # tests/test_oci_compliance.py proves both shapes reach the same
+          # verdict. Cataloger selection is deliberately NOT used to make the
+          # policy pass.
+          syft-version: v1.42.3
 
       # The RETAINED source, produced by the mechanism that already ships it in
       # every release bundle (owner decision 2026-09-04, licence audit D2). No

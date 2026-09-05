@@ -117,6 +117,28 @@ question needs:
 | `syft:location:*:layerID` | layer provenance → origin |
 | `syft:metadata:gitCommitOfApkPort` | Alpine's aports commit → exact source |
 
+**Package entries vs FILE entries.** A CycloneDX document from an image can
+contain both. A *package* entry (`busybox 1.37.0-r12`, `pkg:apk/alpine/busybox@…`)
+is a distributed work with its own licence and its own obligation. A *file* entry
+(`/etc/securetty`, `/lib/ld-musl-x86_64.so.1`, `/lib/apk/db/installed`) is one
+file **inside** such a package: Syft's file catalogers list it with a name and a
+digest and nothing else — no purl, no version, no licence, because a file does
+not carry a licence of its own. Its licence is its owning package's, and that
+package is inventoried in the same document.
+
+Which of them a scan contains is a property of the **scanner**, not of the image:
+Syft v1.18.1 reports 16 packages and no file entries for the regression image;
+v1.42.3 reports the same 16 packages plus 82 file entries for the byte-identical
+image. So file entries are **excluded from the obligation evaluation** — and
+never silently dropped: they are counted in the verdict line (`files=N`) and
+listed in the manifest under `skipped_file_entries`, with the owning package
+whenever the document's own relationships name one (an owner is never inferred
+from the path). An entry is a file entry only when its `type` is `file`, or when
+it has no purl, no version **and** an absolute-path name; anything carrying a
+purl or a version is a package claim and is evaluated as one. Nothing changes for
+a PACKAGE whose licence is unknown or absent — that is still `manual-review` and
+still fails closed.
+
 **Origin.** A component is `inherited-base-layer` when every layer holding it
 belongs to the pinned base image, `correlix-layer` when it appears in a layer our
 Dockerfile added, `first-party` when it is a Correlix module (derived from
@@ -371,7 +393,7 @@ docker image inspect nginx:1.27-alpine@sha256:6564… \
 
 # 2. scan the FINAL image (the scanner publish-images.yml already uses)
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-  anchore/syft:v1.18.1 docker:netops-frontend:latest -o cyclonedx-json > fe.cdx.json
+  anchore/syft:v1.42.3 docker:netops-frontend:latest -o cyclonedx-json > fe.cdx.json
 
 # 3. materialise the retained source (the existing generic mechanism)
 bash scripts/make-installer.sh --source-offer-only
@@ -401,7 +423,13 @@ python3 -m pytest tests/test_oci_compliance.py -v
 
 Regenerate the regression fixtures (`tests/fixtures/oci-regression/`) only when
 the pinned Alpine bases change; the checked-in SBOMs are real Syft output and
-keep the test suite offline.
+keep the test suite offline. Two of them scan the SAME image with different Syft
+versions on purpose — `sbom-a321.cdx.json` (v1.18.1, packages only) and
+`sbom-a321-files.cdx.json` (v1.42.3, packages **plus** 82 file entries, the shape
+CI produces) — so the suite proves the verdict is a property of the image and not
+of the scanner's cataloger set. `.github/workflows/supply-chain.yml` pins the
+Syft version it runs (`syft-version`), because a scanner that changes shape under
+a gate is a gate that changes verdict without a change of evidence.
 
 ---
 
