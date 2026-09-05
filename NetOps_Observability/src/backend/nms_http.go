@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/entitlement"
 	"netops/backend/nms"
 )
 
@@ -161,6 +162,20 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 			AuthType:    in.AuthType,
 		}
 		applyNMSInput(&c, in, conn.Spec())
+		// LICENCE-BEGIN (tracker 256) — an integration that polls wireless
+		// inventory brings controllers and access points into the monitored
+		// fleet, one entitlement each. A new integration starts from "off", so
+		// creating it already enabled IS the activation transition and takes
+		// the same ceiling question the switch below takes.
+		if c.Enabled {
+			if err := s.nmsWirelessActivationCeiling(conn.Spec()); err != nil {
+				if !entitlement.WriteRefusal(w, err) {
+					writeError(w, http.StatusInternalServerError, errors.New("integration was not saved"))
+				}
+				return
+			}
+		}
+		// LICENCE-END
 		if conn.Spec().Webhook {
 			c.WebhookToken = randHex(24)
 		}
@@ -356,7 +371,21 @@ func (s *server) nmsIntegrationCRUD(w http.ResponseWriter, r *http.Request, id s
 			return
 		}
 		conn, _ := s.nms.Registry().Get(c.Vendor)
+		wasEnabled := c.Enabled
 		applyNMSInput(&c, in, conn.Spec())
+		// LICENCE-BEGIN (tracker 256) — the wireless activation transition. The
+		// ceiling is asked ONLY on off→on: re-saving an integration that is
+		// already enabled changes nothing about what is collected, and turning
+		// one OFF can only free capacity.
+		if c.Enabled && !wasEnabled {
+			if err := s.nmsWirelessActivationCeiling(conn.Spec()); err != nil {
+				if !entitlement.WriteRefusal(w, err) {
+					writeError(w, http.StatusInternalServerError, errors.New("integration was not enabled"))
+				}
+				return
+			}
+		}
+		// LICENCE-END
 		// F-76: same refusal as the create path — check before the config write.
 		if len(in.Credentials) > 0 && !nms.StoreDurable(s.nms.Store()) {
 			writeError(w, http.StatusNotImplemented, nms.ErrStorageNotDurable)

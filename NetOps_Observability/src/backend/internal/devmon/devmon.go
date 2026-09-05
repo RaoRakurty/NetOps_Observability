@@ -84,6 +84,17 @@ const (
 	SourceStatic = "static"
 	// SourceManual is a device created through the API/UI.
 	SourceManual = "manual"
+	// SourceWireless is a wireless controller or access point reported by the
+	// wireless canonical inventory (wireless.DeviceSource). An operator
+	// configured an integration and enabled it, and that integration is polling
+	// the controller right now — so the entity is DECLARED, not a candidate,
+	// and it counts (owner decision, tracker 256, 2026-09-05: a controller is
+	// one device and each of its access points is one device).
+	//
+	// Only the entities an ENABLED integration polls are reported under this
+	// source; the rest never reach the registry and are shown by the api's
+	// read-time projection as not monitored (ReasonWirelessNotPolled).
+	SourceWireless = "wireless"
 )
 
 // Reasons — the operator sentence attached to every decision. They are stated
@@ -95,6 +106,10 @@ const (
 		"discovery is free and costs no licence allowance; enable monitoring to start collecting"
 	ReasonDeclared = "monitoring is on: this device was declared in the inventory " +
 		"(added by an operator, an operator-authored file, or the source of truth)"
+	ReasonWireless          = "monitoring is on: this device is polled through its wireless controller integration"
+	ReasonWirelessNotPolled = "monitoring is off: no enabled wireless integration is polling this device — " +
+		"it stays in the inventory, nothing has been deleted or hidden, and it costs no licence allowance; " +
+		"enable its controller integration to start collecting"
 	ReasonEnabled  = "monitoring was enabled for this device by an operator"
 	ReasonDisabled = "monitoring was turned off for this device by an operator — " +
 		"the device, its history and its topology stay exactly where they are"
@@ -133,8 +148,14 @@ func Default(d models.Device) (bool, string) {
 	if !HasAddress(d) {
 		return false, ReasonNoAddress
 	}
-	if strings.EqualFold(strings.TrimSpace(d.Source), SourceSubnetScan) {
+	switch {
+	case strings.EqualFold(strings.TrimSpace(d.Source), SourceSubnetScan):
 		return false, ReasonDiscovered
+	case strings.EqualFold(strings.TrimSpace(d.Source), SourceWireless):
+		// Declared, like any other, but say WHY in the operator's own terms:
+		// "declared in the inventory" would send them looking for a device file
+		// or a SoT entry that does not exist.
+		return true, ReasonWireless
 	}
 	return true, ReasonDeclared
 }

@@ -76,7 +76,9 @@ Three states are kept apart there, because a single blank table would collapse t
 
 ### Step 5 - Find the same devices in the fleet
 
-Open **Infrastructure → Devices**. Controllers appear with type `wlc` and access points with type `ap`, both with source `wireless`. The projection is read-time only: the wireless store stays the single source of truth, and a controller that SNMP discovery already found keeps its discovery row, because the projection de-duplicates by management address.
+Open **Infrastructure → Devices**. Controllers appear with type `wlc` and access points with type `ap`, both with source `wireless`. The wireless store stays the single source of truth for what a controller reports; the fleet row is how the rest of Correlix sees the same box. A controller that SNMP discovery already found is one row, not two, because the fleet de-duplicates on the management address.
+
+Controllers and access points an enabled integration is polling carry **Monitored** with the reason *polled through its wireless controller integration*, and **each of them counts as one monitored device against your licence** — one controller with fifty access points is fifty-one. Rows left behind by an integration you switched off stay in the list, marked not monitored with the reason, and cost no allowance; nothing is deleted when an integration is disabled. See [Install and read a licence](/administration/licence) for what the ceiling counts.
 
 ## What you see
 

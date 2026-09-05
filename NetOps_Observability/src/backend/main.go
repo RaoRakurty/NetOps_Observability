@@ -1303,6 +1303,19 @@ func newServer() *server {
 		}
 		srv.nms.SetWirelessStore(srv.wireless) // #128: wireless-inventory sink
 	}
+	// TRACKER 256 — wireless controllers and access points are DEVICES, and one
+	// entitlement each when Correlix is collecting from them. Registering them
+	// as an ordinary discovery source is the whole mechanism: from here the
+	// single monitored-device definition (internal/devmon) decides, the same
+	// dedupe collapses a controller SNMP also found into one device, and the
+	// same ceiling gate is asked at the transition — no second counter exists.
+	//
+	// Registered here rather than beside the other sources because it needs the
+	// wireless store and the NMS integration list, both built above; still
+	// before discovery.Start(), which copies the source set once.
+	if srv.wireless != nil {
+		srv.discovery.Register(wireless.NewDeviceSource(srv.wireless, srv.wirelessActiveTenants, 0))
+	}
 	srv.intMetrics = &integrationMetrics{}
 	srv.vault = vault
 	srv.exportPolicy = newExportPolicyStore(envOr("EXPORT_POLICY_FILE", "/data/export_policy.json"))
