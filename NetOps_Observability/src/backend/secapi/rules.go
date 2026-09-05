@@ -103,6 +103,10 @@ func fidelityForVerdict(v secfindings.StatusID) string {
 func Catalog() []Rule {
 	out := make([]Rule, 0, 64)
 
+	// No DialectPacks: this reads the vendor-neutral CONCEPTS (id, family,
+	// fidelity), which are Apache-2.0 core and identical whichever dialects are
+	// installed. A pack only supplies per-vendor DETECTION, which nothing here
+	// looks at — so secapi never needs to know a commercial package exists.
 	hc := hardening.DefaultCatalog()
 	for _, r := range hc.Rules() {
 		out = append(out, Rule{

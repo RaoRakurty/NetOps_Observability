@@ -373,7 +373,10 @@ func TestNavIndexExtractorSanity(t *testing.T) {
 	// Anchors from docs/design/ADMIN_IA_2026-09-05.md: the two governance
 	// sections and one leaf of each, plus a leaf that MOVED in that change.
 	for _, want := range [][2]string{
-		{"admin", "identity"}, {"admin", "snmp"}, {"platform", "licence"}, {"platform", "auth"},
+		// Licence moved BACK to Administration on 2026-09-05 with the licence
+		// read split (GET → requireAdmin + a tenant projection), so it is the
+		// anchor for a leaf that moved in BOTH directions in one day.
+		{"admin", "identity"}, {"admin", "snmp"}, {"admin", "licence"}, {"platform", "auth"},
 		{"investigate", "rca"}, {"analytics", "reports"}, {"overview", "home"},
 	} {
 		if !idx.leaves[want[0]][want[1]] {

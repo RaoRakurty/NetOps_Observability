@@ -80,6 +80,20 @@ var vocabularyGuardAllowlist = map[string]string{
 	// table for one vendor's private MIB; it is code, and moving the selector
 	// into the registry would only add indirection to reach the same two types.
 	"collectors/dom_adapters.go": "vendor → domAdapter implementation selection (code, not data)",
+	// NOT DEVICE VOCABULARY — these tables are keyed by the vendor as a SUPPORT
+	// ORGANISATION (its TAC mailbox, its case portal URL and the fields that
+	// portal asks for), which is knowledge about the vendor's support system, not
+	// about its devices. The registry describes platforms and dialects; a
+	// support-portal descriptor has no home there and would only add a second
+	// meaning to the profile data.
+	"internal/ticketing/attach_email.go":    "vendor → TAC attachment mailbox / subject convention (support organisation, not device profile)",
+	"internal/ticketing/caseconn_portal.go": "vendor → case-portal descriptor (URL + form fields the portal asks for), not device profile",
+	// The CLI keyword that scopes a lookup to a VRF ("vrf X" / "instance X" /
+	// "vpn-instance X" / bare name on SR Linux) is dispatched on the DIALECT id
+	// the registry itself resolved (CLIDialectForPlatform); the switch is a
+	// rendering of that dialect, not a second vocabulary. The right long-term
+	// home is a Dialect.VRFScopeKeyword field — tracked, not done here.
+	"internal/tac/plan.go": "VRF scope keyword rendered per registry-resolved dialect id (Dialect.VRFScopeKeyword is the intended home)",
 }
 
 // vocabularyGuardMinHits is how many distinct registry ids one literal must

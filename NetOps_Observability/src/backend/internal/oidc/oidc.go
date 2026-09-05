@@ -1,5 +1,5 @@
 // Package oidc is the OIDC/SSO provider domain (Phase-2 W4.4, extracted from
-// package main's oidc.go + oidc_config.go, the internal/ldap pattern): the
+// package main's oidc.go + oidc_config.go, the enterprise/sso/ldap pattern): the
 // provider model over the jwks verifier, MFA amr/acr satisfaction, realm-role
 // mapping, the code exchange, provider-button parsing, and the config domain
 // (Normalize/Validate/Public). The kv store, env constructors, state cookie

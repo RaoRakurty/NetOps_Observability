@@ -45,7 +45,6 @@ import argparse
 import os
 import re
 import sys
-from typing import Any
 
 # ── locations ────────────────────────────────────────────────────────────────
 
@@ -127,12 +126,12 @@ def _unquote(value: str, line: int) -> str:
     if value[0] == "'":
         end = value.rfind("'")
         if end == 0:
-            raise Refusal("line %d: unterminated single-quoted scalar" % line)
+            raise Refusal(f"line {line}: unterminated single-quoted scalar")
         return value[1:end].replace("''", "'")
     if value[0] == '"':
         end = value.rfind('"')
         if end == 0:
-            raise Refusal("line %d: unterminated double-quoted scalar" % line)
+            raise Refusal(f"line {line}: unterminated double-quoted scalar")
         body = value[1:end]
         if "\\" in body:
             try:
@@ -200,14 +199,14 @@ def _scan(src: str) -> list:
     for n, raw in enumerate(src.replace("\r\n", "\n").split("\n"), start=1):
         indent = len(raw) - len(raw.lstrip(" "))
         if "\t" in raw[:indent]:
-            raise Refusal("line %d: tab in indentation" % n)
+            raise Refusal(f"line {n}: tab in indentation")
         body = raw[indent:]
         if not body or body.startswith("#"):
             continue
-        if body.startswith("---") or body.startswith("..."):
+        if body.startswith(("---", "...")):
             if body.strip() == "---" and not lines:
                 continue
-            raise Refusal("line %d: multiple documents are not supported" % n)
+            raise Refusal(f"line {n}: multiple documents are not supported")
         lines.append((indent, body, n))
     return lines
 
@@ -216,19 +215,19 @@ def _inline(value: str, line: int):
     value = value.strip()
     if value.startswith("["):
         if not value.endswith("]"):
-            raise Refusal("line %d: unterminated flow sequence" % line)
+            raise Refusal(f"line {line}: unterminated flow sequence")
         out = []
         for part in _split_flow(value[1:-1]):
             part = part.strip()
             if not part:
                 continue
-            if part.startswith("{") or part.startswith("["):
-                raise Refusal("line %d: nested flow collections are not supported" % line)
+            if part.startswith(("{", "[")):
+                raise Refusal(f"line {line}: nested flow collections are not supported")
             out.append(_unquote(part, line))
         return out
     if value.startswith("{"):
         if not value.endswith("}"):
-            raise Refusal("line %d: unterminated flow mapping" % line)
+            raise Refusal(f"line {line}: unterminated flow mapping")
         out = {}
         for part in _split_flow(value[1:-1]):
             part = part.strip()
@@ -236,16 +235,16 @@ def _inline(value: str, line: int):
                 continue
             kv = _split_key(part)
             if kv is None:
-                raise Refusal("line %d: flow entry %r is not `key: value`" % (line, part))
+                raise Refusal(f"line {line}: flow entry {part!r} is not `key: value`")
             k, v = kv
             v = v.strip()
             if v.startswith("["):
                 if not v.endswith("]"):
-                    raise Refusal("line %d: unterminated flow sequence" % line)
+                    raise Refusal(f"line {line}: unterminated flow sequence")
                 out[k] = [_unquote(x, line) for x in _split_flow(v[1:-1]) if x.strip()]
                 continue
             if v.startswith("{"):
-                raise Refusal("line %d: nested flow collections are not supported" % line)
+                raise Refusal(f"line {line}: nested flow collections are not supported")
             out[k] = _unquote(v, line)
         return out
     return _unquote(value, line)
@@ -289,15 +288,15 @@ def _parse_map(lines: list, pos: int, indent: int):
         if cur_indent < indent:
             break
         if cur_indent > indent:
-            raise Refusal("line %d: unexpected indentation in mapping" % num)
+            raise Refusal(f"line {num}: unexpected indentation in mapping")
         if body.startswith("- ") or body == "-":
             break
         kv = _split_key(body)
         if kv is None:
-            raise Refusal("line %d: expected `key: value`, got %r" % (num, body))
+            raise Refusal(f"line {num}: expected `key: value`, got {body!r}")
         key, rest = kv
         if key in out:
-            raise Refusal("line %d: duplicate key %r" % (num, key))
+            raise Refusal(f"line {num}: duplicate key {key!r}")
         pos += 1
         out[key], pos = _parse_value(rest, lines, pos, indent, num)
     return out, pos
@@ -310,7 +309,7 @@ def _parse_seq(lines: list, pos: int, indent: int):
         if cur_indent < indent:
             break
         if cur_indent > indent:
-            raise Refusal("line %d: unexpected indentation in sequence" % num)
+            raise Refusal(f"line {num}: unexpected indentation in sequence")
         if not (body.startswith("- ") or body == "-"):
             break
         item_body = "" if body == "-" else body[2:].strip()
@@ -326,9 +325,9 @@ def _parse_seq(lines: list, pos: int, indent: int):
             ):
                 k2 = _split_key(lines[pos][1])
                 if k2 is None:
-                    raise Refusal("line %d: expected `key: value`" % lines[pos][2])
+                    raise Refusal(f"line {lines[pos][2]}: expected `key: value`")
                 if k2[0] in item:
-                    raise Refusal("line %d: duplicate key %r" % (lines[pos][2], k2[0]))
+                    raise Refusal(f"line {lines[pos][2]}: duplicate key {k2[0]!r}")
                 n2 = lines[pos][2]
                 pos += 1
                 item[k2[0]], pos = _parse_value(k2[1], lines, pos, item_indent, n2)
@@ -336,7 +335,7 @@ def _parse_seq(lines: list, pos: int, indent: int):
             continue
         if item_body == "":
             if pos >= len(lines) or lines[pos][0] <= cur_indent:
-                raise Refusal("line %d: empty sequence item" % num)
+                raise Refusal(f"line {num}: empty sequence item")
             sub, pos = _parse_block(lines, pos, lines[pos][0])
             out.append(sub)
             continue
@@ -350,7 +349,7 @@ def parse_yaml(src: str):
         return {}
     doc, pos = _parse_block(lines, 0, lines[0][0])
     if pos != len(lines):
-        raise Refusal("line %d: unexpected indentation" % lines[pos][2])
+        raise Refusal(f"line {lines[pos][2]}: unexpected indentation")
     return doc
 
 
@@ -393,7 +392,7 @@ def _read(path: str) -> str:
     except OSError as err:
         # An unreadable fact source is NOT "assume the id is fine": it is a hard
         # stop, because merging on an empty allowlist would drop every cue.
-        raise Refusal("cannot read %s: %s" % (path, err)) from err
+        raise Refusal(f"cannot read {path}: {err}") from err
 
 
 def repo_facts() -> dict:
@@ -419,29 +418,27 @@ def repo_facts() -> dict:
 def only_fields(record: dict, allowed: set, what: str) -> None:
     unknown = sorted(set(record) - allowed)
     if unknown:
-        raise Refusal("%s: unknown field(s) %s (allowed: %s)"
-                      % (what, ", ".join(unknown), ", ".join(sorted(allowed))))
+        raise Refusal("{}: unknown field(s) {} (allowed: {})".format(what, ", ".join(unknown), ", ".join(sorted(allowed))))
 
 
 def validate_command(command: str, what: str) -> str:
     """The read-only grammar, byte-for-byte the one internal/tac applies."""
     cmd = " ".join(command.split())
     if not cmd:
-        raise Refusal("%s: empty command" % what)
+        raise Refusal(f"{what}: empty command")
     for bad in FORBIDDEN_CHARS:
         if bad in cmd:
-            raise Refusal("%s: command contains the disallowed metacharacter %r" % (what, bad))
+            raise Refusal(f"{what}: command contains the disallowed metacharacter {bad!r}")
     segments = cmd.split("|")
     lead = segments[0].split()
     if not lead or lead[0].lower() not in READ_ONLY_LEAD:
-        raise Refusal("%s: %r does not lead with a read-only verb (%s)"
-                      % (what, cmd, "/".join(sorted(READ_ONLY_LEAD))))
+        raise Refusal("{}: {!r} does not lead with a read-only verb ({})".format(what, cmd, "/".join(sorted(READ_ONLY_LEAD))))
     for seg in segments[1:]:
         toks = seg.split()
         if not toks:
-            raise Refusal("%s: empty pipe segment in %r" % (what, cmd))
+            raise Refusal(f"{what}: empty pipe segment in {cmd!r}")
         if toks[0].lower() not in READ_ONLY_FILTER:
-            raise Refusal("%s: pipe filter %r is not a display-only filter" % (what, toks[0]))
+            raise Refusal(f"{what}: pipe filter {toks[0]!r} is not a display-only filter")
     return cmd
 
 
@@ -506,7 +503,7 @@ def render_classes(doc: dict) -> str:
         out.append("    protocol: " + cls.get("protocol", "generic"))
         for key in ("summary", "tac_first_look"):
             if cls.get(key):
-                out.append("    %s: >-" % key)
+                out.append(f"    {key}: >-")
                 out += emit_block(cls[key], "      ")
         detect = cls.get("detect") or {}
         if detect:
@@ -515,7 +512,7 @@ def render_classes(doc: dict) -> str:
                 values = detect.get(key) or []
                 if not values:
                     continue
-                out.append("      %s:" % key)
+                out.append(f"      {key}:")
                 for value in values:
                     out.append("        - " + emit_scalar(value))
         intents = cls.get("intents") or []
@@ -538,8 +535,7 @@ def render_classes(doc: dict) -> str:
 
 def render_plan(doc: dict) -> str:
     out = []
-    out.append("# plans/%s.yaml — the %s command plan for the TAC escalation pack."
-               % (doc["dialect"], doc.get("display", doc["dialect"])))
+    out.append("# plans/{}.yaml — the {} command plan for the TAC escalation pack.".format(doc["dialect"], doc.get("display", doc["dialect"])))
     out.append("#")
     out.append("# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven")
     out.append("# by the loader (protocoldiag.ValidateReadOnly) and again by the runner. An")
@@ -584,7 +580,7 @@ def render_plan(doc: dict) -> str:
     out.append("bindings:")
     for intent in doc["bindings"]:
         binding = doc["bindings"][intent]
-        out.append("  %s:" % intent)
+        out.append(f"  {intent}:")
         out.append("    command: " + emit_scalar(binding["command"]))
         out.append("    verified: " + binding.get("verified", "doc_claimed"))
         if binding.get("consent") == "true":
@@ -603,7 +599,7 @@ def render_plan(doc: dict) -> str:
                     out.append("        retrieved: " + src["retrieved"])
         for key in ("max_bytes", "timeout_s"):
             if binding.get(key):
-                out.append("    %s: %s" % (key, binding[key]))
+                out.append(f"    {key}: {binding[key]}")
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -754,29 +750,29 @@ EXCEPTION_SOURCE = {
 # point of the report is that an operator can see what Correlix decided not to
 # do and why.
 EXPLICIT_REFUSALS = [
-    (re.compile(r"^\s*test\s+authentication\b.*\bpassword\b", re.I),
-     "takes a cleartext credential on the command line; an evidence collector must never "
-     "put a password on a device's command line or in an audit record"),
-    (re.compile(r"^\s*(scp|tftp|ftp)\s+export\b", re.I),
-     "pushes a file to an arbitrary external host instead of returning output over Correlix's "
-     "own SSH channel; that is a different trust model from a read"),
-    (re.compile(r"^\s*diagnose\s+sniffer\s+packet\b", re.I),
-     "is a live packet capture with an operator-supplied BPF; it belongs behind the Packet "
-     "Capture module's existing closed BPF grammar, not the read-only command table"),
-    (re.compile(r"^\s*diagnose\s+test\s+application\b", re.I),
-     "selects a daemon debug LEVEL, and some levels restart the daemon; it needs a per-daemon, "
-     "per-level allowlist, not a prefix match"),
-    (re.compile(r"^\s*diagnose\s+test\s+authserver\b", re.I),
+    (re.compile(r"^\s*test\s+authentication\b.*\bpassword\b", re.IGNORECASE),
+     ("takes a cleartext credential on the command line; an evidence collector must never "
+     "put a password on a device's command line or in an audit record")),
+    (re.compile(r"^\s*(scp|tftp|ftp)\s+export\b", re.IGNORECASE),
+     ("pushes a file to an arbitrary external host instead of returning output over Correlix's "
+     "own SSH channel; that is a different trust model from a read")),
+    (re.compile(r"^\s*diagnose\s+sniffer\s+packet\b", re.IGNORECASE),
+     ("is a live packet capture with an operator-supplied BPF; it belongs behind the Packet "
+     "Capture module's existing closed BPF grammar, not the read-only command table")),
+    (re.compile(r"^\s*diagnose\s+test\s+application\b", re.IGNORECASE),
+     ("selects a daemon debug LEVEL, and some levels restart the daemon; it needs a per-daemon, "
+     "per-level allowlist, not a prefix match")),
+    (re.compile(r"^\s*diagnose\s+test\s+authserver\b", re.IGNORECASE),
      "takes a cleartext credential on the command line"),
-    (re.compile(r"^\s*diagnose\s+sys\s+session\s+filter\b", re.I),
-     "sets daemon-side read scope; it changes no configuration and clears nothing, but it does "
-     "leave state behind on the device — pending a product decision on scope-setters"),
-    (re.compile(r"^\s*execute\s+log\s+filter\b", re.I),
+    (re.compile(r"^\s*diagnose\s+sys\s+session\s+filter\b", re.IGNORECASE),
+     ("sets daemon-side read scope; it changes no configuration and clears nothing, but it does "
+     "leave state behind on the device — pending a product decision on scope-setters")),
+    (re.compile(r"^\s*execute\s+log\s+filter\b", re.IGNORECASE),
      "sets daemon-side read scope; pending the same product decision as the session filter"),
-    (re.compile(r"^\s*(ping|traceroute|tracert|tracepath)\b", re.I),
-     "transmits from the device rather than reading it. W1's collector reads state; an active "
-     "probe is a different act with a different blast radius and needs its own consent path"),
-    (re.compile(r"^\s*(clear|reload|reset|restart|write|copy|delete|erase|configure|conf)\b", re.I),
+    (re.compile(r"^\s*(ping|traceroute|tracert|tracepath)\b", re.IGNORECASE),
+     ("transmits from the device rather than reading it. W1's collector reads state; an active "
+     "probe is a different act with a different blast radius and needs its own consent path")),
+    (re.compile(r"^\s*(clear|reload|reset|restart|write|copy|delete|erase|configure|conf)\b", re.IGNORECASE),
      "is a state-changing command; it can never be part of a read-only collection"),
 ]
 
@@ -785,19 +781,19 @@ EXPLICIT_REFUSALS = [
 # baseline. `writes_file: true` in the research is the primary signal; these
 # patterns catch the ones whose caveat is about load or authorisation instead.
 CONSENT_PATTERNS = [
-    (re.compile(r"^\s*admin\s+tech-support\b", re.I),
-     "Nokia's own reference says this creates a system CORE DUMP and should only be used with "
-     "authorised direction of Nokia support. It is not a routine collector."),
-    (re.compile(r"^\s*display\s+diagnostic-information\b", re.I),
-     "Huawei warns that this markedly raises CPU and degrades device performance, and that its "
-     "output contains personal data (MAC addresses) that must be deleted after use."),
-    (re.compile(r"^\s*tech-support\b", re.I),
-     "SR Linux pauses while every application dumps its report and WRITES A ZIP on the device "
-     "under /tmp."),
-    (re.compile(r"^\s*show\s+tech-support\b", re.I),
-     "The vendor's full support bundle: output can be tens of megabytes and take minutes on a "
-     "loaded box."),
-    (re.compile(r"^\s*execute\s+tac\s+report\b", re.I),
+    (re.compile(r"^\s*admin\s+tech-support\b", re.IGNORECASE),
+     ("Nokia's own reference says this creates a system CORE DUMP and should only be used with "
+     "authorised direction of Nokia support. It is not a routine collector.")),
+    (re.compile(r"^\s*display\s+diagnostic-information\b", re.IGNORECASE),
+     ("Huawei warns that this markedly raises CPU and degrades device performance, and that its "
+     "output contains personal data (MAC addresses) that must be deleted after use.")),
+    (re.compile(r"^\s*tech-support\b", re.IGNORECASE),
+     ("SR Linux pauses while every application dumps its report and WRITES A ZIP on the device "
+     "under /tmp.")),
+    (re.compile(r"^\s*show\s+tech-support\b", re.IGNORECASE),
+     ("The vendor's full support bundle: output can be tens of megabytes and take minutes on a "
+     "loaded box.")),
+    (re.compile(r"^\s*execute\s+tac\s+report\b", re.IGNORECASE),
      "Fortinet documents this as running the whole diagnostic battery; the output is very large."),
 ]
 
@@ -828,24 +824,24 @@ class Report:
         return sum(len(v) for v in self.refused.values())
 
     def render(self, verbose: bool = False) -> str:
-        lines = ["  %-22s dialect %s%s" % (self.name, self.dialect or "(none)",
-                                           "  [plan file created]" if self.plan_created else ""),
-                 "    issues            : %d merged of %d" % (self.issues_merged, self.issues_seen),
-                 "    classes added     : %s" % (", ".join(self.classes_added) or "none"),
-                 "    classes normalised: %s" % (", ".join(sorted(set(self.classes_normalised))) or "none"),
-                 "    intents added     : %d" % self.intents_added,
-                 "    bindings added    : %d" % len(self.bindings_added),
-                 "    consent bindings  : %d" % len(self.consent_bindings),
-                 "    cited exceptions  : %d" % len(self.exception_bindings),
-                 "    binding conflicts : %d (existing binding kept)" % self.bindings_conflicted,
-                 "    commands refused  : %d" % self.refused_count()]
+        created = "  [plan file created]" if self.plan_created else ""
+        lines = [f"  {self.name:<22} dialect {self.dialect or '(none)'}{created}",
+                 f"    issues            : {self.issues_merged} merged of {self.issues_seen}",
+                 f"    classes added     : {', '.join(self.classes_added) or 'none'}",
+                 f"    classes normalised: {', '.join(sorted(set(self.classes_normalised))) or 'none'}",
+                 f"    intents added     : {self.intents_added}",
+                 f"    bindings added    : {len(self.bindings_added)}",
+                 f"    consent bindings  : {len(self.consent_bindings)}",
+                 f"    cited exceptions  : {len(self.exception_bindings)}",
+                 f"    binding conflicts : {self.bindings_conflicted} (existing binding kept)",
+                 f"    commands refused  : {self.refused_count()}"]
         for reason in sorted(self.refused):
             examples = self.refused[reason]
             shown = ", ".join(sorted(set(examples))[:4])
-            lines.append("      · %d × %s" % (len(examples), reason))
-            lines.append("        e.g. %s" % shown)
+            lines.append(f"      · {len(examples)} × {reason}")
+            lines.append(f"        e.g. {shown}")
         if self.dropped_cues:
-            lines.append("    detection cues dropped (no such id in this repo): %d" % len(self.dropped_cues))
+            lines.append(f"    detection cues dropped (no such id in this repo): {len(self.dropped_cues)}")
             for d in sorted(set(self.dropped_cues))[:6]:
                 lines.append("      - " + d)
         return "\n".join(lines)
@@ -859,49 +855,47 @@ def normalise_command(raw: str, params, what: str) -> str:
     """
     cmd = " ".join(str(raw).split())
     if not cmd:
-        raise Refusal("%s: empty command" % what)
+        raise Refusal(f"{what}: empty command")
     if len(cmd) > 512:
-        raise Refusal("%s: command longer than 512 characters" % what)
+        raise Refusal(f"{what}: command longer than 512 characters")
 
     def sub(m):
         name = m.group(1).lower()
         token = PLACEHOLDER_ALIASES.get(name)
         if token is None:
-            raise Refusal("%s: placeholder <%s> is a value Correlix cannot supply from an "
-                          "incident, so the command could only be run unscoped" % (what, name))
+            raise Refusal(f"{what}: placeholder <{name}> is a value Correlix cannot supply from an "
+                          "incident, so the command could only be run unscoped")
         return token
     cmd = re.sub(r"<([A-Za-z0-9_.-]+)>", sub, cmd)
     # Some research files already write `{peer}`; the same alias table applies,
     # so a vendor's own name for a concept lands on the token Correlix fills.
     def sub_brace(m):
         raw = m.group(1)
-        token = "{%s}" % raw.lower()
+        token = f"{{{raw.lower()}}}"
         if token in PLACEHOLDERS:
             return token
         mapped = PLACEHOLDER_ALIASES.get(raw.lower())
         if mapped is None:
-            raise Refusal("%s: placeholder {%s} is a value Correlix cannot supply from an "
-                          "incident, so the command could only be run unscoped" % (what, raw))
+            raise Refusal(f"{what}: placeholder {{{raw}}} is a value Correlix cannot supply from an "
+                          "incident, so the command could only be run unscoped")
         return mapped
     cmd = re.sub(r"\{([A-Za-z0-9_.-]+)\}", sub_brace, cmd)
     if "<" in cmd or ">" in cmd:
-        raise Refusal("%s: unbalanced or unsupported placeholder syntax" % what)
+        raise Refusal(f"{what}: unbalanced or unsupported placeholder syntax")
     # Any {token} that survived must be in the closed set.
     for tok in cmd.split():
         if tok.startswith("{"):
             if not tok.endswith("}"):
-                raise Refusal("%s: malformed placeholder %r" % (what, tok))
+                raise Refusal(f"{what}: malformed placeholder {tok!r}")
             if tok not in PLACEHOLDERS:
-                raise Refusal("%s: placeholder %r is outside the closed substitution grammar"
-                              % (what, tok))
+                raise Refusal(f"{what}: placeholder {tok!r} is outside the closed substitution grammar")
     if params:
         declared = {PLACEHOLDER_ALIASES.get(str(p).lower()) for p in params}
         present = {t for t in cmd.split() if t.startswith("{")}
         if None not in declared and declared != present and present:
             # A params list that disagrees with the command is a research bug, not
             # something to guess at.
-            raise Refusal("%s: `params` %s does not match the placeholders in the command %s"
-                          % (what, sorted(x for x in declared if x), sorted(present)))
+            raise Refusal(f"{what}: `params` {sorted(x for x in declared if x)} does not match the placeholders in the command {sorted(present)}")
     return cmd
 
 
@@ -937,18 +931,18 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
     name = os.path.basename(path)
     doc = parse_yaml(_read(path))
     if not isinstance(doc, dict):
-        raise Refusal("%s: document must be a mapping" % name)
+        raise Refusal(f"{name}: document must be a mapping")
     only_fields(doc, RESEARCH_TOP_FIELDS, name)
     dialect = str(doc.get("dialect") or doc.get("vendor") or "").strip()
     rep = Report(name, dialect)
     if dialect not in plans:
         profile = DIALECT_PROFILES.get(dialect)
         if profile is None:
-            raise Refusal("%s: `%s` is not a dialect this platform recognises — add it to "
-                          "DIALECT_PROFILES and to internal/vendorprofile first" % (name, dialect))
+            raise Refusal(f"{name}: `{dialect}` is not a dialect this platform recognises — add it to "
+                          "DIALECT_PROFILES and to internal/vendorprofile first")
         plans[dialect] = {
             "dialect": dialect, "profile": profile[0], "display": profile[1],
-            "version": "correlix-tac-plan-%s-2026-09-05" % dialect,
+            "version": f"correlix-tac-plan-{dialect}-2026-09-05",
             "sources": [], "baseline": [], "bindings": {},
         }
         rep.plan_created = True
@@ -967,8 +961,8 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
             return False
         area = intent_id.split(".")[0]
         if area not in intent_areas:
-            rep.refuse("intent area %r is outside the closed area set (adding an area is a "
-                       "reviewed code change)" % area, intent_id)
+            rep.refuse(f"intent area {area!r} is outside the closed area set (adding an area is a "
+                       "reviewed code change)", intent_id)
             return False
         record = {"id": intent_id, "area": area, "title": intent_title(intent_id)}
         classes_doc["intents"].append(record)
@@ -1001,7 +995,7 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
             return
         rep.bindings_conflicted += 1
         rep.refuse("intent already bound to a different command on this dialect; the existing "
-                   "binding is kept", "%s (%r vs %r)" % (intent_id, existing.get("command"), cmd))
+                   "binding is kept", "{} ({!r} vs {!r})".format(intent_id, existing.get("command"), cmd))
 
     def handle_commands(entries, cls, what_prefix):
         """Fold one issue's (or the baseline's) command list into the data."""
@@ -1016,13 +1010,13 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
                 rep.refuse("command entry is neither a string nor a mapping", str(entry)[:60])
                 continue
             try:
-                only_fields(entry, COMMAND_FIELDS, "%s command" % what_prefix)
+                only_fields(entry, COMMAND_FIELDS, f"{what_prefix} command")
             except Refusal as err:
                 rep.refuse("unknown field in a command entry", str(err))
                 continue
             raw = entry.get("cmd") or entry.get("command") or ""
             intent_id = str(entry.get("intent", "")).strip()
-            what = "%s %s" % (what_prefix, intent_id or raw)
+            what = f"{what_prefix} {intent_id or raw}"
             if not intent_id:
                 rep.refuse("command carries no intent", str(raw)[:70])
                 continue
@@ -1051,7 +1045,7 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
     baseline = doc.get("tac_baseline")
     if isinstance(baseline, dict):
         try:
-            only_fields(baseline, BASELINE_FIELDS, "%s tac_baseline" % name)
+            only_fields(baseline, BASELINE_FIELDS, f"{name} tac_baseline")
         except Refusal as err:
             rep.refuse("unknown field in tac_baseline", str(err))
         bound = handle_commands(baseline.get("commands"), None, "baseline")
@@ -1082,7 +1076,7 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
             continue
         class_id = CANONICAL_CLASS.get(raw_class, raw_class)
         if class_id != raw_class:
-            rep.classes_normalised.append("%s → %s" % (raw_class, class_id))
+            rep.classes_normalised.append(f"{raw_class} → {class_id}")
         if not SLUG_RE.match(class_id):
             rep.refuse("class id is not a kebab slug", raw_class)
             continue
@@ -1160,20 +1154,20 @@ def normalise_sources(raw, what: str) -> list[dict]:
     if not raw:
         return []
     if not isinstance(raw, list):
-        raise Refusal("%s: `sources` must be a list" % what)
+        raise Refusal(f"{what}: `sources` must be a list")
     out = []
     for src in raw:
         if isinstance(src, str):
             url = src.strip()
             title = url
         elif isinstance(src, dict):
-            only_fields(src, SOURCE_FIELDS, "%s source" % what)
+            only_fields(src, SOURCE_FIELDS, f"{what} source")
             url = str(src.get("url", "")).strip()
             title = str(src.get("title", "")).strip() or url
         else:
-            raise Refusal("%s: a source must be a url or a {title, url} mapping" % what)
+            raise Refusal(f"{what}: a source must be a url or a {{title, url}} mapping")
         if not url.startswith("https://"):
-            raise Refusal("%s: source url %r must be https" % (what, url))
+            raise Refusal(f"{what}: source url {url!r} must be https")
         out.append({"title": title, "url": url, "retrieved": ""})
     return out
 
@@ -1218,14 +1212,14 @@ def main() -> int:
     args = ap.parse_args()
 
     if not os.path.isdir(RESEARCH_DIR):
-        print("no research directory at %s — nothing to merge" % RESEARCH_DIR)
+        print(f"no research directory at {RESEARCH_DIR} — nothing to merge")
         return 0
     files = sorted(f for f in os.listdir(RESEARCH_DIR) if f.endswith(".yaml"))
     if args.vendor:
         wanted = {v + ".yaml" for v in args.vendor}
         files = [f for f in files if f in wanted]
     if not files:
-        print("no research files to merge (%s)" % RESEARCH_DIR)
+        print(f"no research files to merge ({RESEARCH_DIR})")
         return 0
 
     try:
@@ -1234,7 +1228,7 @@ def main() -> int:
         plan_slugs = sorted(f[:-5] for f in os.listdir(PLANS_DIR) if f.endswith(".yaml"))
         plans = {slug: load_plan(slug) for slug in plan_slugs}
     except Refusal as err:
-        print("REFUSED: %s" % err, file=sys.stderr)
+        print(f"REFUSED: {err}", file=sys.stderr)
         return 2
 
     before = {CLASSES: render_classes(classes_doc)}
@@ -1248,7 +1242,7 @@ def main() -> int:
         try:
             reports.append(merge_vendor(path, classes_doc, plans, facts))
         except Refusal as err:
-            print("REFUSED %s: %s" % (name, err), file=sys.stderr)
+            print(f"REFUSED {name}: {err}", file=sys.stderr)
             failed = True
 
     # A class every one of whose commands was refused would be dead data: it can
@@ -1272,14 +1266,13 @@ def main() -> int:
 
     changed = [p for p in after if after[p] != before.get(p)]
 
-    print("tac-merge-research: %d research file(s)" % len(files))
+    print(f"tac-merge-research: {len(files)} research file(s)")
     for rep in reports:
         print(rep.render())
     if pruned:
-        print("  classes pruned (every command refused, so nothing to collect): %s"
-              % ", ".join(sorted(pruned)))
+        print("  classes pruned (every command refused, so nothing to collect): {}".format(", ".join(sorted(pruned))))
     if changed:
-        print("  files changed: %s" % ", ".join(os.path.relpath(p, REPO) for p in sorted(changed)))
+        print("  files changed: {}".format(", ".join(os.path.relpath(p, REPO) for p in sorted(changed))))
     else:
         print("  files changed: none (already merged)")
 
@@ -1289,8 +1282,8 @@ def main() -> int:
         # Refusals are REPORTED, not fatal: a research file may legitimately
         # carry a command a vendor documents that is not a read-only show, and
         # that record must simply never land. Silence would be the bug.
-        print("  %d record(s) refused and %d detection cue(s) dropped — they will NEVER merge; "
-              "fix or remove them in the research file." % (refused, dropped))
+        print(f"  {refused} record(s) refused and {dropped} detection cue(s) dropped — they will NEVER merge; "
+              "fix or remove them in the research file.")
 
     if args.check:
         if changed:

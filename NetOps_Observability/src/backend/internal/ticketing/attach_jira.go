@@ -160,8 +160,14 @@ func (a *JiraAdapter) AttachFileWithConfig(ctx context.Context, cfg SystemConfig
 		Size     int64  `json:"size"`
 		Content  string `json:"content"`
 	}
-	if err := json.Unmarshal(raw, &out); err != nil || len(out) == 0 {
-		return AttachResult{}, fmt.Errorf("jira: attachment response was not the documented array of attachments")
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return AttachResult{}, fmt.Errorf("jira: attachment response was not the documented array of attachments: %w", err)
+	}
+	if len(out) == 0 {
+		// Parsed fine but empty: Jira accepted the request and created nothing —
+		// a distinct condition from a malformed reply, and the caller must not
+		// mistake it for a successful attach.
+		return AttachResult{}, fmt.Errorf("jira: attachment response carried no attachment for %q", name)
 	}
 	return AttachResult{
 		ID:        out[0].ID,

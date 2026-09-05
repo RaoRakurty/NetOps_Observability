@@ -26,6 +26,7 @@ package tac
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -68,7 +69,19 @@ type Store struct {
 	maxPerIncident int
 	maxAge         time.Duration
 	now            func() time.Time
+	warn           func(msg string, fields map[string]any)
 	mu             sync.Mutex
+}
+
+// WithWarn routes the store's non-fatal problems (a stale bundle that could not
+// be pruned) to the caller's structured log. The default writes to the process
+// log, so a prune failure is never silent (CLAUDE.md §10).
+func WithWarn(fn func(msg string, fields map[string]any)) StoreOption {
+	return func(s *Store) {
+		if fn != nil {
+			s.warn = fn
+		}
+	}
 }
 
 // StoreOption configures a Store.
@@ -111,7 +124,8 @@ func NewStore(root string, opts ...StoreOption) (*Store, error) {
 	if root == "" {
 		return nil, errors.New("tac: bundle store needs a root directory")
 	}
-	s := &Store{root: root, maxPerIncident: maxBundlesPerIncident, maxAge: maxBundleAge, now: time.Now}
+	s := &Store{root: root, maxPerIncident: maxBundlesPerIncident, maxAge: maxBundleAge, now: time.Now,
+		warn: func(msg string, fields map[string]any) { log.Printf("tac: %s %v", msg, fields) }}
 	for _, o := range opts {
 		o(s)
 	}
@@ -157,7 +171,8 @@ func (s *Store) Put(tenant, incident string, b *Bundle) (StoredBundle, error) {
 		return StoredBundle{}, fmt.Errorf("tac: bundle store: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op after a successful rename
+	// best-effort: no-op after the rename below; a leftover .part from a crashed write never matches nameRE
+	defer func() { _ = os.Remove(tmpName) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return StoredBundle{}, fmt.Errorf("tac: bundle store: %w", err)
@@ -216,9 +231,13 @@ func (s *Store) Get(tenant, incident, name string) ([]byte, StoredBundle, error)
 	meta := StoredBundle{Name: name, Bytes: int64(len(data)), IncidentID: incident}
 	// #nosec G304 -- same validated path as the read above, plus a fixed suffix.
 	if raw, rerr := os.ReadFile(path + ".json"); rerr == nil {
-		// A missing or malformed sidecar is not an error: the bundle itself is
-		// the artifact, and the metadata is a convenience for the listing.
-		_ = jsonUnmarshal(raw, &meta)
+		// A missing sidecar is not an error: the bundle itself is the artifact,
+		// and the metadata is a convenience for the listing. A MALFORMED one is
+		// reported — it means a partial write or tampering, and the listing
+		// then shows defaults for that bundle.
+		if uerr := jsonUnmarshal(raw, &meta); uerr != nil {
+			s.warn("TAC bundle sidecar is malformed — listing shows defaults for it", map[string]any{"path": path + ".json", "error": uerr.Error()})
+		}
 	}
 	return data, meta, nil
 }
@@ -250,7 +269,9 @@ func (s *Store) List(tenant, incident string) ([]StoredBundle, error) {
 		// came from ReadDir on that directory and was matched against nameRE
 		// above; it is a file this store wrote, not caller input.
 		if raw, rerr := os.ReadFile(filepath.Join(dir, e.Name()+".json")); rerr == nil {
-			_ = jsonUnmarshal(raw, &meta)
+			if uerr := jsonUnmarshal(raw, &meta); uerr != nil {
+				s.warn("TAC bundle sidecar is malformed — listing shows defaults for it", map[string]any{"path": filepath.Join(dir, e.Name()+".json"), "error": uerr.Error()})
+			}
 		}
 		out = append(out, meta)
 	}
@@ -259,8 +280,8 @@ func (s *Store) List(tenant, incident string) ([]StoredBundle, error) {
 }
 
 // pruneLocked enforces retention in one incident directory. It is best-effort:
-// a file it cannot remove is logged by the caller, never a reason to fail a
-// write the operator is waiting on.
+// a file it cannot remove is reported through the store's warn hook, never a
+// reason to fail a write the operator is waiting on.
 func (s *Store) pruneLocked(dir string) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -296,6 +317,11 @@ func (s *Store) pruneLocked(dir string) {
 }
 
 func (s *Store) removeBundle(dir, name string) {
-	_ = os.Remove(filepath.Join(dir, name))
-	_ = os.Remove(filepath.Join(dir, name+".json"))
+	for _, p := range []string{filepath.Join(dir, name), filepath.Join(dir, name+".json")} {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// Retention still holds for everything else; the leftover is
+			// reported so a full or read-only disk shows up in the log.
+			s.warn("stale TAC bundle could not be pruned", map[string]any{"path": p, "error": err.Error()})
+		}
+	}
 }

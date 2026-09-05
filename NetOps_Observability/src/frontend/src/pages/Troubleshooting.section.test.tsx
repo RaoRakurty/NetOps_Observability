@@ -1,22 +1,25 @@
-// Troubleshooting.section.test.tsx — the THREE-section Troubleshooting page.
+// Troubleshooting.section.test.tsx — the TWO-section Troubleshooting page.
 //
 // What is pinned here:
 //  · the section switch is a toggle-button group (aria-pressed) and defaults to
 //    INVESTIGATION — the symptom-first operator surface is the page's reason to
 //    exist (Project 4 §A); the June collection-pipeline board is now the legacy
-//    third section, reachable for one release
-//  · each section is reachable as a deep link
+//    second section, reachable for one release
+//  · the RETIRED "Protocol diagnostics" section is gone: no button offers it and
+//    an old deep link to it lands on the investigation surface, not on a blank
+//    page (docs/design/TAC_ESCALATION_2026-09-05.md §5 — the manual bench is
+//    replaced by the escalation flow, and its knowledge moved to Iris)
+//  · each surviving section is reachable as a deep link
 //    (#/investigate/troubleshooting?section=…), and an unrecognized link falls
 //    back to the investigation surface rather than a blank page
 //  · a symptom / case deep link lands the investigation on that entry point
 //  · picking a section mounts the REAL component (route registration, not a
-//    stub): the investigation surface, the protocol-diagnostics panel, and the
-//    legacy board
+//    stub): the investigation surface and the legacy board
 //
 // The metric board's chart primitives are stubbed: they are charted elsewhere
 // and their ECharts dependency has nothing to do with the registration this
 // file asserts. Everything below the switch — the investigation page, its
-// lanes, IRIS, the diagnostics panel — is the real component against a mocked
+// lanes, IRIS, the escalation panel — is the real component against a mocked
 // api, so "the switch mounts a stub" cannot pass here.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -41,11 +44,11 @@ vi.mock("../components/ui", () => ({
   StatTone: undefined,
 }));
 
-// Every api function the page tree reaches: the legacy board, the protocol
-// diagnostics panel, the investigation page, its seven lanes and IRIS.
+// Every api function the page tree reaches: the legacy board, the investigation
+// page, its seven lanes, IRIS and the TAC escalation panel.
 const mocks = vi.hoisted(() => ({
   flowsByType: vi.fn(), searchLogs: vi.fn(), devices: vi.fn(), permissions: vi.fn(),
-  protocolDiagCatalog: vi.fn(), protocolDiagCollect: vi.fn(), protocolDiagAnalyze: vi.fn(),
+  tacState: vi.fn(), tacClassify: vi.fn(),
   correlations: vi.fn(), seams: vi.fn(), getSeamOwners: vi.fn(),
   correlationDetail: vi.fn(), correlationTimeline: vi.fn(),
   correlationTickets: vi.fn(), correlationTicketCreate: vi.fn(), downloadRcaReport: vi.fn(),
@@ -88,11 +91,11 @@ beforeEach(() => {
   mocks.searchLogs.mockResolvedValue({ hits: { total: { value: 0 } } });
   mocks.devices.mockResolvedValue([]);
   mocks.permissions.mockResolvedValue({ role: "operator", permissions: { infrastructure: 2 } });
-  mocks.protocolDiagCatalog.mockResolvedValue({
-    ruleset_version: "correlix-protocoldiag-2026-08-27",
-    vendor: "cisco-iosxe", vendor_display: "Cisco IOS-XE",
-    protocols: ["bgp", "ospf", "isis"],
-    issues: { bgp: [], ospf: [], isis: [] },
+  mocks.tacState.mockResolvedValue({
+    incident_id: CASE_ID, incident_ref: "INC-2026-0007", title: "",
+    can_collect: false, collect_note: "Live collection is not wired on this deployment.",
+    catalog_version: "correlix-tac-classes-2026-09-05", connectors: [], devices: ["wan-r2"],
+    state: null, state_note: "This incident has not been escalated in this api process.",
   });
   mocks.correlations.mockResolvedValue({ data: [openCase()] });
   mocks.seams.mockResolvedValue([]);
@@ -120,7 +123,7 @@ describe("sectionFromHash", () => {
   it.each([
     ["#/investigate/troubleshooting", "investigate"],
     ["#/investigate/troubleshooting?section=investigate", "investigate"],
-    ["#/investigate/troubleshooting?section=protocol", "protocol"],
+    ["#/investigate/troubleshooting?section=protocol", "investigate"],
     ["#/investigate/troubleshooting?section=pipeline", "pipeline"],
     ["#/investigate/troubleshooting?section=nonsense", "investigate"],
     ["#/investigate/troubleshooting?symptom=dns", "investigate"],
@@ -147,21 +150,21 @@ describe("the section switch", () => {
     expect(screen.queryByRole("group", { name: "Protocol" })).toBeNull();
   });
 
-  it("offers exactly the three sections as toggle buttons", async () => {
+  it("offers exactly the two surviving sections as toggle buttons", async () => {
     await show("#/investigate/troubleshooting");
     const group = screen.getByRole("group", { name: "Troubleshooting section" });
     expect(within(group).getAllByRole("button").map((b) => b.textContent))
-      .toEqual(["Investigation", "Protocol diagnostics", "Collection pipeline"]);
+      .toEqual(["Investigation", "Collection pipeline"]);
     expect(group.querySelectorAll('button[aria-pressed="true"]')).toHaveLength(1);
   });
 
-  it("mounts the REAL protocol-diagnostics panel when picked", async () => {
+  // The manual bench is gone, not hidden: nothing offers it and nothing mounts
+  // it. Its knowledge lives on Iris → Knowledge, its work on the escalation.
+  it("no longer offers the retired protocol-diagnostics bench", async () => {
     await show("#/investigate/troubleshooting");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Protocol diagnostics" })); });
-    expect(await screen.findByRole("group", { name: "Protocol" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Protocol diagnostics")).toBeInTheDocument();
-    expect(mocks.protocolDiagCatalog).toHaveBeenCalled();
-    expect(screen.queryByRole("heading", { name: "What's wrong?" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Protocol diagnostics" })).toBeNull();
+    expect(screen.queryByLabelText("Protocol diagnostics")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Protocol" })).toBeNull();
   });
 
   it("mounts the legacy collection-pipeline board when picked, and labels it legacy", async () => {
@@ -183,17 +186,16 @@ describe("the section switch", () => {
     await show("#/investigate/troubleshooting?section=pipeline");
     expect(screen.getByText("Monitored devices")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "What's wrong?" })).toBeNull();
-    expect(screen.queryByRole("group", { name: "Protocol" })).toBeNull();
   });
 });
 
 // ── deep links ───────────────────────────────────────────────────────────────
 
 describe("deep links", () => {
-  it("opens on the protocol diagnostics", async () => {
+  it("lands a retired protocol-diagnostics link on the investigation surface", async () => {
     await show("#/investigate/troubleshooting?section=protocol");
-    expect(pressed()).toBe("Protocol diagnostics");
-    expect(await screen.findByRole("group", { name: "Protocol" })).toBeInTheDocument();
+    expect(pressed()).toBe("Investigation");
+    expect(screen.getByRole("heading", { name: "What's wrong?", level: 2 })).toBeInTheDocument();
   });
 
   it("opens on the legacy pipeline board", async () => {

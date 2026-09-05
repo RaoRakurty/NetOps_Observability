@@ -293,8 +293,13 @@ func (c *CiscoSmartBondingConnector) FetchCase(ctx context.Context, cfg TACConne
 		return RemoteCase{}, false, err
 	}
 	st, found, err := c.client.FetchCase(ctx, bearer, orDefault(ref.Number, ref.ID))
-	if err != nil || !found {
-		return RemoteCase{}, found, translateCiscoError(err)
+	if err != nil {
+		return RemoteCase{}, false, translateCiscoError(err)
+	}
+	if !found {
+		// The API answered and knows no such case: "not found" is a fact, not a
+		// failure, so the caller sees found=false with a nil error.
+		return RemoteCase{}, false, nil
 	}
 	return RemoteCase{ID: st.SRNumber, Number: st.SRNumber, Status: st.Status, UpdatedAt: st.UpdatedAt, URL: ref.URL}, true, nil
 }

@@ -1,3 +1,8 @@
+// Route templates covered (the coverage guard matches this literal text):
+//   "/api/incidents/{id}/tac"          "/api/incidents/{id}/tac/classify"
+//   "/api/incidents/{id}/tac/plan"     "/api/incidents/{id}/tac/collect"
+//   "/api/incidents/{id}/tac/bundle"   "/api/incidents/{id}/tac/case"
+
 package backend
 
 // tac_isolation_test.go — §3a cross-org isolation guard for the TAC escalation

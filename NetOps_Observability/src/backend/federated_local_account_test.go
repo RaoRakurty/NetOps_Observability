@@ -146,7 +146,7 @@ func TestTACACSLoginRefusedForLocalAccount(t *testing.T) {
 
 // TestCompleteFederatedLoginRefusesLocalAccount exercises the shared tail the
 // LDAP handler calls after its external bind succeeds (the LDAP wire protocol
-// itself is proven in internal/ldap): a colliding local account → 403, no
+// itself is proven in enterprise/sso/ldap): a colliding local account → 403, no
 // session, record untouched.
 func TestCompleteFederatedLoginRefusesLocalAccount(t *testing.T) {
 	_, s := newTestServerState(t)

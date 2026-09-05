@@ -629,3 +629,143 @@ The watchdog's own log is `data/stack-watchdog.log` (see
 `scripts/stack-watchdog.sh`); it is timestamped and appended by cron, so
 `tail -50 data/stack-watchdog.log` is the fastest read of what the host looked
 like when the alert fired.
+
+---
+
+## Bundle restore drill
+
+> `scripts/backup-drill.sh` · report `data/api/backup-drill.report.json` ·
+> alerts `BackupRestoreDrillFailed`, `BackupRestoreDrillMissed`
+
+### What it proves, and why it is not the same as the snapshot probe
+
+The restorability probe above proves the **OpenSearch repository**. The bundle
+drill proves **the file an operator actually holds after losing this host** —
+one `correlix-YYYYMMDD.tar.zst` carrying the Postgres dump, the ClickHouse
+export, the VictoriaMetrics snapshot and the sealed custody envelope. Until
+2026-09-04 nothing had ever opened one and put it back; four rows of the Data
+Protection page said exactly that, in words.
+
+Per leg, against a real artifact:
+
+| Leg | What is restored | What is asserted |
+|---|---|---|
+| `postgres` | `postgres.sql` into a disposable Postgres (tmpfs) | every LIVE public table came back, every restored table is countable, the restore is not empty; per-table row counts are compared against live |
+| `clickhouse` | schema + per-table `FORMAT Native` dumps into a disposable ClickHouse | every dump loaded, the restore is not empty, row counts compared against live |
+| `victoriametrics` | the snapshot directory mounted as a throwaway `vmsingle`'s `-storageDataPath` | metric names come back AND one series returns sample points — "the container started" is not the assertion, a vmsingle starts happily on an empty directory |
+| `sealed_material` | the custody envelope, decrypted with `BACKUP_SEALED_PASSPHRASE` | it decrypts, every file matches the sha256 manifest that shipped beside it, and `data/swtpm` is present |
+
+Row counts are **not** asserted equal to live: the bundle is a point-in-time
+older than now, so an append-only table has legitimately grown. What must hold
+is that nothing is missing, nothing is unreadable, and the restore is not empty.
+The report records how many tables matched exactly, which is the number that
+tells you how far behind the artifact is.
+
+### Running one
+
+```bash
+cd NetOps_Observability
+# newest artifact in data/backups, all four legs
+BACKUP_SEALED_PASSPHRASE=... scripts/backup-drill.sh
+
+# one artifact, one leg, keep the scratch containers to poke at
+scripts/backup-drill.sh --bundle data/backups/correlix-20260905.tar.zst --legs pg --keep
+```
+
+Everything it creates is disposable: scratch containers under a
+`backup-drill-<pid>-*` name prefix on throwaway storage, and an extraction tree
+under `mktemp -d`. Both are removed on exit. `--keep` suspends that **and says
+so** — the tree can contain a decrypted custody copy, so delete it by hand when
+you are done.
+
+The drill never writes to a live store. It reads the live Postgres and
+ClickHouse for row COUNTS only.
+
+### Reading the verdict
+
+A leg that could not run is `skip`, never `pass`, and a drill made entirely of
+skips exits non-zero — a drill that proved nothing is not a passing drill, it is
+a drill that did not happen. The api reads the report and fills each engine's
+`last_verified` on the Data Protection page, so a `skip` leaves that row's proof
+null with the reason attached rather than green.
+
+Two things commonly produce a legitimate `skip`:
+
+* **`sealed_material`** when `BACKUP_SEALED_PASSPHRASE` is not available to the
+  drill. That is a skip, not a failure: the envelope may be perfectly good, this
+  host simply has no key to open it with. Blaming the backup for the operator's
+  key custody would be the wrong verdict.
+* **any leg** whose member is absent from the artifact, because the component
+  was skipped or failed when the bundle was taken. Read `MANIFEST` inside the
+  archive (`scripts/backup.sh --verify <file>` prints it).
+
+### Alerts
+
+`BackupRestoreDrillFailed` (warning, 15m) — the drill ran and a leg did not come
+back. Read `netops_backup_drill_leg{leg=...}` to see which. A failing
+`sealed_material` leg is the most severe of the four: the artifact would restore
+every byte of data and unseal none of it.
+
+`BackupRestoreDrillMissed` (warning, 30m after 7 days) — the last proof is more
+than a week old and the page is showing it as current.
+
+**"A drill has never run" is deliberately not an alert.** The bundle drill is
+operator-initiated, so a never-run rule would fire on every fresh deployment and
+stand lit until somebody ran one — and a rule that is always on is how the real
+ones get ignored. The coverage table reports never-run honestly instead. If that
+should change, change it with the owner, not in a diff.
+
+---
+
+## A second, off-host snapshot repository
+
+> overlay `deployment/docker/docker-compose.snapshot-repo2.yml` ·
+> registered by `deployment/docker/opensearch/apply-ism.sh` ·
+> reported by the OpenSearch row on the Data Protection page
+
+`netops-fs` is a filesystem repository at `data/opensearch-snapshots` — the same
+disk as `data/`. That is the failure domain `docs/audit/BACKUP-FAILURE-DOMAIN.md`
+names, and 2026-08-27 is that domain firing. A second `fs` repository on a
+**separately mounted** path gives the search tier restore points that survive
+losing this filesystem.
+
+It is **optional and off by default**, because where the second mount lives is a
+deployment decision the product cannot make. A bind mount whose source does not
+exist makes Docker create an empty directory on the primary disk, which is the
+exact opposite of the point — so the overlay uses `${VAR:?}` and fails the
+compose command loudly rather than silently mounting the wrong thing.
+
+```bash
+# 1. mount the off-host storage and CONFIRM it is a different device
+df -h /mnt/dr ; df -h ./data          # same filesystem => this buys you nothing
+
+# 2. make it writable by the opensearch container's uid
+sudo install -d -o 1000 -g 1000 -m 0750 /mnt/dr/correlix-snapshots
+
+# 3. configure (deployment/docker/.env or the environment)
+OPENSEARCH_SNAPSHOT_REPO2=netops-fs-offhost
+OPENSEARCH_SNAPSHOT_REPO2_HOSTPATH=/mnt/dr/correlix-snapshots
+OPENSEARCH_SNAPSHOT_REPO2_LOCATION=/usr/share/opensearch/snapshots-offhost
+
+# 4. bring the stack up WITH the overlay, then re-run the bootstrap
+cd deployment/docker
+docker compose -f docker-compose.yml -f docker-compose.snapshot-repo2.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.snapshot-repo2.yml run --rm opensearch-init
+```
+
+Every later compose command needs **both** `-f` flags. Dropping the overlay
+drops the mount, and OpenSearch then refuses the repository rather than writing
+to a path it no longer has.
+
+`REPO2_LOCATION` must differ from `/usr/share/opensearch/snapshots`.
+`apply-ism.sh` refuses the registration when they match, and it is right to:
+two repository names over one blob tree is the documented OpenSearch corruption
+hazard — two independent deleters, one of which removes blobs the other's index
+still references — and it is not off-host DR under any reading.
+
+**Registration is not a copy.** Nothing writes to the second repository
+automatically. Snapshot into it explicitly, or give it a Snapshot Management
+policy of its own. The Data Protection page MEASURES registration rather than
+trusting the variable, so a name that was configured and never registered reads
+as "configured but NOT registered", and a registered-but-empty repository reads
+as exactly that — registration with no restore points in it protects nothing.

@@ -48,8 +48,17 @@ var envGateExempt = map[string]string{
 	"RCA_EMIT_P027379":            "opt-in artifact emitter for one historical incident's report, not an assertion gate",
 	"REPORT_PDF_SIDECAR_TEST_URL": "live PDF-render sidecar (gotenberg) integration; run by hand against a running sidecar",
 	"SEAL_SWTPM_TEST":             "needs the swtpm secrets-seal sidecar running; hardware-adjacent, run by hand",
-	"SKIP_SEALED_VAULT_TEST":      "inverse gate — set to SKIP a test, so CI runs it precisely by NOT exporting this",
-	"SNMP_LIVE":                   "live SNMP device poll; needs lab hardware",
+	// TAC lab proof (internal/tac/labproof_test.go): drives the READ-ONLY collector
+	// against real lab devices over SSH. Needs the lab network and credentials
+	// that never leave the operator's machine; run by hand, results recorded in
+	// docs/design/TAC_ESCALATION_2026-09-05.md.
+	"TAC_LAB_PROOF":              "TAC lab proof against real devices over SSH; needs lab reachability + credentials, run by hand",
+	"TAC_LAB_SRLINUX":            "TAC lab proof target (Nokia SR Linux); run by hand with TAC_LAB_PROOF",
+	"TAC_LAB_EOS":                "TAC lab proof target (Arista EOS); run by hand with TAC_LAB_PROOF",
+	"PROTOCOL_DIAG_SSH_KEY_FILE": "TAC lab proof SSH credential; never present in CI",
+	"PROTOCOL_DIAG_SSH_PASSWORD": "TAC lab proof SSH credential; never present in CI",
+	"SKIP_SEALED_VAULT_TEST":     "inverse gate — set to SKIP a test, so CI runs it precisely by NOT exporting this",
+	"SNMP_LIVE":                  "live SNMP device poll; needs lab hardware",
 	// Not an enable-gate: the timeintel live pick-shape check turns ITSELF on by
 	// probing (docker on PATH → a running *clickhouse* container → SELECT 1 →
 	// the netops corr tables), so CI exports nothing and it skips cleanly. This

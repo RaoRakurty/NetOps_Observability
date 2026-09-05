@@ -331,7 +331,10 @@ func isNamedHumanEmail(addr string) bool {
 // SSRF guard. Vendor API hosts are NEVER free-form (research §5.5).
 func validatePinnedURL(raw string, allow []string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Host == "" {
+	if err != nil {
+		return fmt.Errorf("vendor url %q does not parse: %w", Truncate(raw, 120), err)
+	}
+	if u.Host == "" {
 		return fmt.Errorf("vendor url %q is not an absolute URL", Truncate(raw, 120))
 	}
 	if !strings.EqualFold(u.Scheme, "https") {
