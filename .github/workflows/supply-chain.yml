@@ -227,12 +227,23 @@ jobs:
                 f"-> {c['source_artifact']}")
           PY
 
+      # What the licence review says, in the job log. Not a gate on its own —
+      # `--release` is the gate, and it fails on every unsigned review it relies
+      # on — but a reviewer should not have to open a JSON file to learn that two
+      # components are still unresolved.
+      - name: Licence review summary
+        working-directory: NetOps_Observability
+        run: python3 scripts/oci-compliance.py --reviews
+
       - name: Regression suite (offline — fixtures, policy, fail-closed paths)
         working-directory: NetOps_Observability
         run: |
           python3 scripts/oci-compliance.py --selftest
           pip install --no-cache-dir "pytest==9.1.1"
-          python3 -m pytest tests/test_oci_compliance.py -v
+          # test_oci_digest_lock.py is the base-image lock: a `FROM …@sha256:`
+          # bump with no fresh compliance evaluation fails HERE, next to the
+          # evaluation it invalidates, rather than only in the whole-tests/ run.
+          python3 -m pytest tests/test_oci_compliance.py tests/test_oci_digest_lock.py -v
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()

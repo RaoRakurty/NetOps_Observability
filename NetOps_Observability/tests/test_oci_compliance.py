@@ -47,6 +47,7 @@ import pytest
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 FIXTURES = os.path.join(ROOT, "tests", "fixtures", "oci-regression")
 PINS = os.path.join(ROOT, "scripts", "source-mirror.json")
+REVIEWS = os.path.join(ROOT, "scripts", "source-review.json")
 INVENTORY = os.path.join(ROOT, "docs", "compliance", "oci-inventory.json")
 DOC = os.path.join(ROOT, "docs", "compliance", "OCI_SOURCE_COMPLIANCE.md")
 
@@ -80,8 +81,14 @@ def pins() -> dict:
     return oci.load_pin_table(PINS)
 
 
+@pytest.fixture(scope="module")
+def reviews() -> dict:
+    return oci.load_reviews(REVIEWS, required=True)
+
+
 def evaluate_sbom(sbom_path: str, pins: dict, *, base_layers: str | None = None,
-                  source_dir: str | None = None, image: str = "test-image"):
+                  source_dir: str | None = None, image: str = "test-image",
+                  reviews: dict | None = None):
     """The same chain `main()` runs: parse → split file entries → normalize →
     evaluate. The split is part of the path under test, not a helper shortcut."""
     raw, _meta, deps = oci.parse_sbom(sbom_path)
@@ -89,7 +96,7 @@ def evaluate_sbom(sbom_path: str, pins: dict, *, base_layers: str | None = None,
     layers = oci.load_base_layers(base_layers)
     norm = [oci.normalize_component(c, image=image, image_digest=DIGEST,
                                     base_layers=layers) for c in raw]
-    return oci.evaluate(norm, pins, source_dir=source_dir)
+    return oci.evaluate(norm, pins, source_dir=source_dir, reviews=reviews)
 
 
 def by_name(records: list[dict], name: str) -> dict:
@@ -621,15 +628,127 @@ def test_the_deferred_register_is_version_pinned(pins):
         "the register must state what the recorded posture actually IS")
 
 
-def test_recorded_postures_fail_a_production_release(pins):
-    """A recorded posture keeps daily builds green (it is pre-existing and
-    reviewed) but must never let a customer artifact out the door."""
+def test_the_alpine_fixture_has_no_undischarged_obligation_left(pins, reviews):
+    """Every obligation this fixture used to RECORD is now RETAINED.
+
+    On 2026-09-05 the sixteen definite-copyleft components in the Alpine base
+    layers (alpine-baselayout, apk-tools, geoip, gettext, libgcrypt,
+    libgpg-error, libidn2, libintl, libunistring, musl-utils, scanelf …) moved
+    from `deferred` to `components` with retained, checksum-pinned source. This
+    asserts that outcome on real scanner output rather than trusting the pin
+    table to describe itself: nothing in this image may still be recorded-but-
+    unretained.
+    """
     recs = evaluate_sbom(os.path.join(FIXTURES, "sbom-a321.cdx.json"), pins,
+                         reviews=reviews,
                          base_layers=os.path.join(FIXTURES, "base-layers-a321.txt"))
-    recorded = [r for r in recs if r.get("deferred")]
-    assert recorded, "expected some recorded-posture components in this fixture"
-    assert not oci.failures(recorded, release=False)
-    assert oci.failures(recorded, release=True)
+    still_recorded = [f"{r['name']} {r['version']}" for r in recs if r.get("deferred")]
+    assert not still_recorded, (
+        f"these Alpine components are still recorded-but-unretained: {still_recorded}")
+    obliged = [r for r in recs if r.get("source_required")]
+    assert obliged, "an Alpine image with no copyleft at all is a broken fixture"
+    assert all(r["source_status"] in (oci.STATUS_VERIFIED, oci.STATUS_PINNED)
+               for r in obliged), (
+        {r["name"]: r["source_status"] for r in obliged
+         if r["source_status"] not in (oci.STATUS_VERIFIED, oci.STATUS_PINNED)})
+
+
+def test_recorded_postures_fail_a_production_release(pins, reviews):
+    """A recorded posture keeps daily builds green (it is recorded and reviewed)
+    but must never let a customer artifact out the door.
+
+    Driven from the REAL register rather than from the Alpine fixture, because
+    that fixture no longer contains the condition under test (see the test
+    above): every obligation it recorded has been discharged. The register still
+    holds 59 — the Debian surface of netops-correlation — and this is the
+    behaviour that keeps them from shipping.
+    """
+    entry = pins["deferred"][0]
+    key = (entry["component"], entry["version"], entry["package_type"])
+    assert key in reviews, (
+        f"{key} is recorded as an undischarged obligation but has no licence "
+        f"review — every row in the register must say why it is still there")
+    comp = oci.normalize_component(
+        {"type": "library", "name": entry["component"], "version": entry["version"],
+         "purl": f"pkg:{entry['package_type']}/debian/{entry['component']}"
+                 f"@{entry['version']}"},
+        image="test-image", image_digest=DIGEST, base_layers=None)
+    rec = oci.evaluate([comp], pins, source_dir=None, reviews=reviews)[0]
+    assert rec["source_required"] is True
+    assert rec["deferred"] is True
+    assert rec["source_status"] == oci.STATUS_MISSING
+    assert not oci.failures([rec], release=False)
+    kinds = [v["kind"] for v in oci.violations([rec], release=True)]
+    assert "recorded-posture-unretained" in kinds
+
+
+# ── the reviewed licence determination ───────────────────────────────────────
+def test_every_recorded_obligation_carries_a_review(pins, reviews):
+    """The register is not a list of unanswered questions any more."""
+    unreviewed = [f"{d['component']} {d['version']}" for d in pins["deferred"]
+                  if (d["component"], d["version"], d["package_type"]) not in reviews]
+    assert not unreviewed, (
+        f"recorded obligations with no licence review: {unreviewed}")
+
+
+def test_every_review_names_evidence_and_is_unsigned_until_the_owner_signs(reviews):
+    for key, r in reviews.items():
+        assert r["evidence"].get("path"), f"{key} records no evidence path"
+        assert r["rationale"].strip(), f"{key} gives no rationale"
+        assert isinstance(r["owner_signoff"], bool), f"{key} owner_signoff is not a bool"
+
+
+def test_a_review_cannot_clear_a_resolved_copyleft_licence():
+    """The one thing a review must never be able to do."""
+    comp = {"name": "busybox", "version": "1.37.0-r12", "package_type": "apk"}
+    resolved = {"license": "GPL-2.0-only", "source_required": True,
+                "confidence": "expression", "reason": "GPL-2.0-only requires source"}
+    review = {"component": "busybox", "version": "1.37.0-r12", "package_type": "apk",
+              "source_required": False, "needs_human": False,
+              "governing_licences": ["MIT"], "rationale": "nope",
+              "reviewer": "t", "reviewed": "2026-09-05", "owner_signoff": True,
+              "evidence": {"path": "/x", "sha256": "ab"}}
+    with pytest.raises(oci.ComplianceError):
+        oci.apply_review(comp, resolved, review)
+
+
+def test_an_unsigned_review_fails_a_production_release(reviews):
+    """`--release` may not rest on an automated first pass."""
+    unsigned = [r for r in reviews.values() if not r["owner_signoff"]]
+    assert unsigned, (
+        "every review is signed off — if that is real, delete this test; if the "
+        "signatures were added by a script rather than by the owner, do not")
+    r = unsigned[0]
+    comp = oci.normalize_component(
+        {"type": "library", "name": r["component"], "version": r["version"],
+         "purl": f"pkg:{r['package_type']}/debian/{r['component']}@{r['version']}"},
+        image="test-image", image_digest=DIGEST, base_layers=None)
+    rec = oci.evaluate([comp], {"components": [], "deferred": []}, source_dir=None,
+                       reviews={(r["component"], r["version"],
+                                 r["package_type"]): r})[0]
+    assert "review-not-signed-off" in [
+        v["kind"] for v in oci.violations([rec], release=True)]
+    assert "review-not-signed-off" not in [
+        v["kind"] for v in oci.violations([rec], release=False)]
+
+
+def test_a_malformed_review_table_cannot_run(tmp_path):
+    """Fail closed: an unparsable review would silently re-open or silently
+    close every obligation it was written to decide."""
+    bad = tmp_path / "reviews.json"
+    bad.write_text(json.dumps({"reviews": [
+        {"component": "x", "version": "1", "package_type": "deb",
+         "source_required": "maybe", "rationale": "r", "reviewer": "t",
+         "reviewed": "2026-09-05", "evidence": {"path": "/x"}}]}), encoding="utf-8")
+    with pytest.raises(oci.ComplianceError):
+        oci.load_reviews(str(bad))
+    missing_evidence = tmp_path / "reviews2.json"
+    missing_evidence.write_text(json.dumps({"reviews": [
+        {"component": "x", "version": "1", "package_type": "deb",
+         "source_required": False, "rationale": "r", "reviewer": "t",
+         "reviewed": "2026-09-05"}]}), encoding="utf-8")
+    with pytest.raises(oci.ComplianceError):
+        oci.load_reviews(str(missing_evidence))
 
 
 def test_committed_inventory_is_wellformed_and_names_busybox():

@@ -25,13 +25,16 @@
     "                matches nothing.",
     "  deferred[]    Components with a real source obligation for which Correlix has",
     "                NOT yet produced a retained artifact. Explicitly recorded,",
-    "                version-pinned and dated. scripts/oci-compliance.py prints them",
-    "                on every run and FAILS `--release` on them. A component in",
-    "                NEITHER section fails every mode: silence is never a pass, and a",
-    "                base-image bump changes the versions so the records stop",
-    "                matching and a human has to look again.",
-    "",
-    "HOW IT IS USED. scripts/make-installer.sh reads this file, fetches each entry,",
+    "                version-pinned, dated and REVIEWED. scripts/oci-compliance.py",
+    "                prints them on every run and FAILS `--release` on them. A",
+    "                component in NEITHER section fails every mode: silence is never a",
+    "                pass, and a base-image bump changes the versions so the records",
+    "                stop matching and a human has to look again.",
+    "  deferred_source_coordinates{}",
+    "                For each undischarged Debian obligation, the EXACT source package,",
+    "                version, URL and Debian-attested sha256 of every file that would",
+    "                discharge it. Mirroring is then mechanical; the reason it has not",
+    "                happened is recorded in docs/TRACKER.md, not implied by silence.",
     "verifies its sha256 against the pin below, and writes it to the bundle at",
     "source-offer/<file>. A missing pin, a failed download or a checksum mismatch is",
     "a HARD BUILD FAILURE (scripts/CLAUDE.md s16.1) — an unverified tarball is never",
@@ -56,8 +59,21 @@
     "more than the evidence supports is worse than claiming less.",
     "",
     "UPDATING. When a pinned image version changes in deployment/docker, this file",
-    "MUST change with it — tests/test_source_offer.py fails the build otherwise."
+    "MUST change with it — tests/test_source_offer.py fails the build otherwise.",
+    "",
+    "THE LICENCE REVIEW. scripts/source-review.json holds the per-component licence",
+    "determination for every component an image scan could NOT resolve mechanically",
+    "(a Debian copyright file is an unordered LIST of licences, not an expression).",
+    "Each review names its evidence by path and sha256, states the licences governing",
+    "the SHIPPED BINARY, and answers one question: does a corresponding-source",
+    "obligation apply? A review that says no turns the component into `not-required`",
+    "WITH THE REVIEW AS EVIDENCE; one that says `unclear` stays in manual review; one",
+    "that says yes leaves the row in `deferred` below. Every review a `--release` run",
+    "relies on must carry `owner_signoff: true` — the owner grants that by editing",
+    "that file. A review can never overrule a RESOLVED copyleft expression: that is a",
+    "conflict and it aborts the evaluation."
   ],
+  "_source_review": "scripts/source-review.json — the per-component licence review that decides which of these obligations are real. Read by scripts/oci-compliance.py; a review that says `source_required: false` turns a manual-review component into `not-required` with the review as evidence, an `unclear` one stays in manual review, and every review relied on by a --release run must carry `owner_signoff: true`.",
   "components": [
     {
       "name": "syslog-ng",
@@ -84,7 +100,8 @@
       ],
       "images": [
         "balabit/syslog-ng:4.7.1 (separate container, redistributed unmodified)"
-      ]
+      ],
+      "retained_in_git": ""
     },
     {
       "name": "busybox",
@@ -112,7 +129,8 @@
         "netops-frontend (deployment/docker/Dockerfile.frontend)",
         "netops-nginx (deployment/docker/Dockerfile.nginx)"
       ],
-      "notes": "BusyBox is named in NO Correlix Dockerfile. It arrives inside the Alpine layers of nginx:1.27-alpine and is present in every netops-frontend and netops-nginx image we distribute, as the apk packages busybox, busybox-binsh and ssl_client — all three built from this one origin package, so this one tarball is the corresponding source for all three. That invisibility is tracker 238: the licence audit models image REFERENCES and this is a base LAYER. It is found now because scripts/oci-compliance.py scans the FINAL image, not the Dockerfile."
+      "notes": "BusyBox is named in NO Correlix Dockerfile. It arrives inside the Alpine layers of nginx:1.27-alpine and is present in every netops-frontend and netops-nginx image we distribute, as the apk packages busybox, busybox-binsh and ssl_client — all three built from this one origin package, so this one tarball is the corresponding source for all three. That invisibility is tracker 238: the licence audit models image REFERENCES and this is a base LAYER. It is found now because scripts/oci-compliance.py scans the FINAL image, not the Dockerfile.",
+      "retained_in_git": ""
     },
     {
       "name": "busybox",
@@ -148,10 +166,1062 @@
         "netops-frontend (deployment/docker/Dockerfile.frontend)",
         "netops-nginx (deployment/docker/Dockerfile.nginx)"
       ],
-      "notes": "The upstream tarball alone is not the source Alpine built. This archive is Alpine's complete packaging for busybox at the exact commit the shipped image records: the APKBUILD (which states the build configuration and the sha512 of every input), all 37 distribution patches, and busyboxconfig. Upstream tarball + this archive together are the corresponding source for the binary in the image, which is what lets scripts/oci-compliance.py report correspondence `distro-exact` instead of merely `upstream-release`."
+      "notes": "The upstream tarball alone is not the source Alpine built. This archive is Alpine's complete packaging for busybox at the exact commit the shipped image records: the APKBUILD (which states the build configuration and the sha512 of every input), all 37 distribution patches, and busyboxconfig. Upstream tarball + this archive together are the corresponding source for the binary in the image, which is what lets scripts/oci-compliance.py report correspondence `distro-exact` instead of merely `upstream-release`.",
+      "retained_in_git": "compliance/corresponding-sources/busybox-1.37.0-r12-alpine-aports.tar.gz"
+    },
+    {
+      "name": "alpine-baselayout",
+      "component": "alpine-baselayout",
+      "version": "3.6.8-r1",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "alpine-baselayout-3.6.8-r1-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/5f0cd7890349e7fe11128478ac506c709805224d/aports-5f0cd7890349e7fe11128478ac506c709805224d.tar.gz?path=main/alpine-baselayout",
+      "sha256": "fa84ea4f0187a196c82dd6410933de488e0ae03956301986b1cf4410d67acb9e",
+      "size_bytes": 7768,
+      "retained_in_git": "compliance/corresponding-sources/alpine-baselayout-3.6.8-r1-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-only",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "alpine-baselayout",
+        "package_version": "3.6.8-r1",
+        "build_ref": "5f0cd7890349e7fe11128478ac506c709805224d",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/alpine-baselayout"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "alpine-baselayout",
+          "upstream_version": "3.6.8"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "alpine-baselayout has NO separate upstream release: the aports tree IS the complete work (init scripts, /etc skeleton files and the APKBUILD that installs them). This one archive is therefore the whole corresponding source for both alpine-baselayout and alpine-baselayout-data. Two data files it names (protocols-6.4, services-6.4) are fetched by the recipe from Debian's netbase v6.4 tag; netbase 6.4's own source is retained separately in this same table."
+    },
+    {
+      "name": "apk-tools",
+      "component": "apk-tools",
+      "version": "2.14.6",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "apk-tools-v2.14.6.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/apk-tools/-/archive/v2.14.6/apk-tools-v2.14.6.tar.gz",
+      "sha256": "f2926026f2010130df929cb4a1c35b94879ba59aa9cb7465a6f686d4dfd8c7bf",
+      "size_bytes": 199574,
+      "retained_in_git": "compliance/corresponding-sources/apk-tools-v2.14.6.tar.gz",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit 41847d6ccff08940b5bf1ba0d6005e95897039f9 — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "apk-tools",
+          "upstream_version": "2.14.6"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "apk-tools",
+      "component": "apk-tools",
+      "version": "2.14.6-r3",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "apk-tools-2.14.6-r3-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/41847d6ccff08940b5bf1ba0d6005e95897039f9/aports-41847d6ccff08940b5bf1ba0d6005e95897039f9.tar.gz?path=main/apk-tools",
+      "sha256": "186c28132c7d3632c470d0d74f6ba4a77815908398cca032706ca554aac65379",
+      "size_bytes": 6858,
+      "retained_in_git": "compliance/corresponding-sources/apk-tools-2.14.6-r3-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-only",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "apk-tools",
+        "package_version": "2.14.6-r3",
+        "build_ref": "41847d6ccff08940b5bf1ba0d6005e95897039f9",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/apk-tools"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "apk-tools",
+          "upstream_version": "2.14.6"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "geoip",
+      "component": "geoip",
+      "version": "1.6.12",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "GeoIP-1.6.12.tar.gz",
+      "url": "https://github.com/maxmind/geoip-api-c/releases/download/v1.6.12/GeoIP-1.6.12.tar.gz",
+      "sha256": "1dfb748003c5e4b7fd56ba8c4cd786633d5d6f409547584f6910398389636f80",
+      "size_bytes": 473914,
+      "retained_in_git": "compliance/corresponding-sources/GeoIP-1.6.12.tar.gz",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit fc95c59998285564fbcb0bfb2443898c62e10171 — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "LGPL-2.1-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "geoip",
+          "upstream_version": "1.6.12"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "geoip",
+      "component": "geoip",
+      "version": "1.6.12-r5",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "geoip-1.6.12-r5-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/fc95c59998285564fbcb0bfb2443898c62e10171/aports-fc95c59998285564fbcb0bfb2443898c62e10171.tar.gz?path=main/geoip",
+      "sha256": "5f298d1d9c88452da91db223d4b563fa237cfba60a097f9f14288aeeba7c6a06",
+      "size_bytes": 865,
+      "retained_in_git": "compliance/corresponding-sources/geoip-1.6.12-r5-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "LGPL-2.1-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "geoip",
+        "package_version": "1.6.12-r5",
+        "build_ref": "fc95c59998285564fbcb0bfb2443898c62e10171",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/geoip"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "geoip",
+          "upstream_version": "1.6.12"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "gettext",
+      "component": "gettext",
+      "version": "0.22.5",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "gettext-0.22.5.tar.xz",
+      "url": "https://ftp.gnu.org/gnu/gettext/gettext-0.22.5.tar.xz",
+      "sha256": "fe10c37353213d78a5b83d48af231e005c4da84db5ce88037d88355938259640",
+      "size_bytes": 10270724,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit c49ded5d54b708768165f7a99589464cd5c5eeee — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "gettext",
+          "upstream_version": "0.22.5"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "Serves BOTH apk packages built from this origin and shipped in the image: gettext-envsubst (GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT) and libintl (LGPL-2.1-or-later)."
+    },
+    {
+      "name": "gettext",
+      "component": "gettext",
+      "version": "0.22.5-r0",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "gettext-0.22.5-r0-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/c49ded5d54b708768165f7a99589464cd5c5eeee/aports-c49ded5d54b708768165f7a99589464cd5c5eeee.tar.gz?path=main/gettext",
+      "sha256": "7ab0ab994deed51666cee4f00a0605a1db7b6614e6dd19309d7af7b93cd1e33d",
+      "size_bytes": 2757,
+      "retained_in_git": "compliance/corresponding-sources/gettext-0.22.5-r0-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "gettext",
+        "package_version": "0.22.5-r0",
+        "build_ref": "c49ded5d54b708768165f7a99589464cd5c5eeee",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/gettext"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "gettext",
+          "upstream_version": "0.22.5"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libgcrypt",
+      "component": "libgcrypt",
+      "version": "1.10.3",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "libgcrypt-1.10.3.tar.bz2",
+      "url": "https://www.gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.10.3.tar.bz2",
+      "sha256": "8b0870897ac5ac67ded568dcfadf45969cfa8a6beb0fd60af2a9eadc2a3272aa",
+      "size_bytes": 3783827,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit 40176cc16c5dfa243d502fa9e1f7b9e68ebcad0b — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libgcrypt",
+          "upstream_version": "1.10.3"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libgcrypt",
+      "component": "libgcrypt",
+      "version": "1.10.3-r1",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "libgcrypt-1.10.3-r1-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/40176cc16c5dfa243d502fa9e1f7b9e68ebcad0b/aports-40176cc16c5dfa243d502fa9e1f7b9e68ebcad0b.tar.gz?path=main/libgcrypt",
+      "sha256": "df50134f1deeb41c9d920ef0bf5be9c3ff47f771fb40657f80f052768633fa37",
+      "size_bytes": 2097,
+      "retained_in_git": "compliance/corresponding-sources/libgcrypt-1.10.3-r1-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "libgcrypt",
+        "package_version": "1.10.3-r1",
+        "build_ref": "40176cc16c5dfa243d502fa9e1f7b9e68ebcad0b",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/libgcrypt"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libgcrypt",
+          "upstream_version": "1.10.3"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libgpg-error",
+      "component": "libgpg-error",
+      "version": "1.51",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "libgpg-error-1.51.tar.bz2",
+      "url": "https://gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.51.tar.bz2",
+      "sha256": "be0f1b2db6b93eed55369cdf79f19f72750c8c7c39fc20b577e724545427e6b2",
+      "size_bytes": 1085510,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit 59a563eec99ff1e59c5cb42ecf7a482be3684a1c — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libgpg-error",
+          "upstream_version": "1.51"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libgpg-error",
+      "component": "libgpg-error",
+      "version": "1.51-r0",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "libgpg-error-1.51-r0-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/59a563eec99ff1e59c5cb42ecf7a482be3684a1c/aports-59a563eec99ff1e59c5cb42ecf7a482be3684a1c.tar.gz?path=main/libgpg-error",
+      "sha256": "3f19cdb41d593bc524c1b526b68e88f1265f23e79f3268a341fd4f4d03b411a8",
+      "size_bytes": 971,
+      "retained_in_git": "compliance/corresponding-sources/libgpg-error-1.51-r0-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "libgpg-error",
+        "package_version": "1.51-r0",
+        "build_ref": "59a563eec99ff1e59c5cb42ecf7a482be3684a1c",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/libgpg-error"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libgpg-error",
+          "upstream_version": "1.51"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libidn2",
+      "component": "libidn2",
+      "version": "2.3.7",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "libidn2-2.3.7.tar.gz",
+      "url": "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.7.tar.gz",
+      "sha256": "4c21a791b610b9519b9d0e12b8097bf2f359b12f8dd92647611a929e6bfd7d64",
+      "size_bytes": 2155214,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit 1cdcdd0eccbee1f60078417a7aaf83f92f6e6754 — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libidn2",
+          "upstream_version": "2.3.7"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "Dual-licensed. Correlix retains the corresponding source regardless of which branch a recipient takes, because BOTH branches of this disjunction are copyleft."
+    },
+    {
+      "name": "libidn2",
+      "component": "libidn2",
+      "version": "2.3.7-r0",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "libidn2-2.3.7-r0-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/1cdcdd0eccbee1f60078417a7aaf83f92f6e6754/aports-1cdcdd0eccbee1f60078417a7aaf83f92f6e6754.tar.gz?path=main/libidn2",
+      "sha256": "f99da70f080e3ed287aa35724ab805bb424c2f4099c606afa04c6d4a90e8c4e8",
+      "size_bytes": 948,
+      "retained_in_git": "compliance/corresponding-sources/libidn2-2.3.7-r0-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "libidn2",
+        "package_version": "2.3.7-r0",
+        "build_ref": "1cdcdd0eccbee1f60078417a7aaf83f92f6e6754",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/libidn2"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libidn2",
+          "upstream_version": "2.3.7"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libunistring",
+      "component": "libunistring",
+      "version": "1.2",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "libunistring-1.2.tar.xz",
+      "url": "https://ftp.gnu.org/gnu/libunistring/libunistring-1.2.tar.xz",
+      "sha256": "632bd65ed74a881ca8a0309a1001c428bd1cbd5cd7ddbf8cedcd2e65f4dcdc44",
+      "size_bytes": 2502196,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit c4c67852adc5bc15e278054876bc3c70c321948e — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libunistring",
+          "upstream_version": "1.2"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "libunistring",
+      "component": "libunistring",
+      "version": "1.2-r0",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "libunistring-1.2-r0-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/c4c67852adc5bc15e278054876bc3c70c321948e/aports-c4c67852adc5bc15e278054876bc3c70c321948e.tar.gz?path=main/libunistring",
+      "sha256": "e35dc7754c60b18a22814937fd944913e2241526c882a768931b64bce9484b0a",
+      "size_bytes": 841,
+      "retained_in_git": "compliance/corresponding-sources/libunistring-1.2-r0-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "libunistring",
+        "package_version": "1.2-r0",
+        "build_ref": "c4c67852adc5bc15e278054876bc3c70c321948e",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/libunistring"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "libunistring",
+          "upstream_version": "1.2"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "musl",
+      "component": "musl",
+      "version": "1.2.5",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "musl-1.2.5.tar.gz",
+      "url": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "size_bytes": 1080786,
+      "retained_in_git": "",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit efd4d5df7be0ea48d98512671f676fc5ceb14899 — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "musl",
+          "upstream_version": "1.2.5"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "musl itself is MIT and carries no corresponding-source obligation. The obligation belongs to the musl-utils SUBPACKAGE, whose getent/getconf/iconv/ldconfig are built from sources that live in the aports tree, not in the musl tarball — so the packaging archive beside this entry is the part that actually discharges it, and both are retained."
+    },
+    {
+      "name": "musl",
+      "component": "musl",
+      "version": "1.2.5-r9",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "musl-1.2.5-r9-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/efd4d5df7be0ea48d98512671f676fc5ceb14899/aports-efd4d5df7be0ea48d98512671f676fc5ceb14899.tar.gz?path=main/musl",
+      "sha256": "9efdd30d79cf42ae2c336f44ca536a77353af41e0d567f865813ab361e3dfcaf",
+      "size_bytes": 16369,
+      "retained_in_git": "compliance/corresponding-sources/musl-1.2.5-r9-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "musl",
+        "package_version": "1.2.5-r9",
+        "build_ref": "efd4d5df7be0ea48d98512671f676fc5ceb14899",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/musl"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "musl",
+          "upstream_version": "1.2.5"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "pax-utils",
+      "component": "pax-utils",
+      "version": "1.3.8",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "pax-utils-1.3.8.tar.xz",
+      "url": "https://dev.gentoo.org/~sam/distfiles/app-misc/pax-utils/pax-utils-1.3.8.tar.xz",
+      "sha256": "12a168d1aeae2626efdbde3979da88a60ca80bb38e1db565e95ee441ff1d5a0c",
+      "size_bytes": 123556,
+      "retained_in_git": "compliance/corresponding-sources/pax-utils-1.3.8.tar.xz",
+      "verified_against": "Alpine's own `sha512sums` in the APKBUILD at aports commit 398a5aee3025ec8a4d0d761e448dc86ac777fa09 — fetched from upstream and matched byte-for-byte on 2026-09-05. The sha256 recorded here is Correlix's measurement of those same distribution-attested bytes.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "pax-utils",
+          "upstream_version": "1.3.8"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "Shipped in the image as the `scanelf` subpackage (apk originPackage pax-utils)."
+    },
+    {
+      "name": "pax-utils",
+      "component": "pax-utils",
+      "version": "1.3.8-r1",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "pax-utils-1.3.8-r1-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/398a5aee3025ec8a4d0d761e448dc86ac777fa09/aports-398a5aee3025ec8a4d0d761e448dc86ac777fa09.tar.gz?path=main/pax-utils",
+      "sha256": "6bdcfe679449291d7d6737e1a14eaf0eb1f0f305ee3ed2a7664452c6912f4426",
+      "size_bytes": 1157,
+      "retained_in_git": "compliance/corresponding-sources/pax-utils-1.3.8-r1-alpine-aports.tar.gz",
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit the shipped image records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever — a future archive-format change FAILS the build rather than shipping unverified bytes (serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR).",
+      "license": "GPL-2.0-only",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "pax-utils",
+        "package_version": "1.3.8-r1",
+        "build_ref": "398a5aee3025ec8a4d0d761e448dc86ac777fa09",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/pax-utils"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "pax-utils",
+          "upstream_version": "1.3.8"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ]
+    },
+    {
+      "name": "hostname",
+      "component": "hostname",
+      "version": "3.25",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "hostname_3.25.tar.xz",
+      "url": "https://deb.debian.org/debian/pool/main/h/hostname/hostname_3.25.tar.xz",
+      "sha256": "5bb5d1be011158090157c9e7587ae5606c262a5020ecdc5caac6686b9910592e",
+      "size_bytes": 12804,
+      "retained_in_git": "compliance/corresponding-sources/hostname_3.25.tar.xz",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "hostname",
+          "upstream_version": "3.25"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "notes": "A Debian NATIVE source package: there is no separate upstream tarball, so hostname_3.25.tar.xz is the complete corresponding source and the .dsc is the signed manifest that names it."
+    },
+    {
+      "name": "hostname",
+      "component": "hostname",
+      "version": "3.25",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "hostname_3.25.dsc",
+      "url": "https://deb.debian.org/debian/pool/main/h/hostname/hostname_3.25.dsc",
+      "sha256": "80aadf116c3423044be69a4cef8ba2766f412bd4d46a500aacb61f303c19c4ef",
+      "size_bytes": 1519,
+      "retained_in_git": "compliance/corresponding-sources/hostname_3.25.dsc",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "hostname",
+          "upstream_version": "3.25"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "13",
+        "suite": "trixie",
+        "package": "hostname",
+        "package_version": "3.25",
+        "build_ref": "3.25",
+        "build_ref_source": "the SOURCE-package version the image's own /var/lib/dpkg records (dpkg `Source:`/`Version:`; Syft carries it through as syft:metadata:sourceVersion, falling back to the binary version when Debian states none because they are equal). For Debian that name+version pair IS the exact build reference: it names one immutable source package in the archive.",
+        "repository": "https://deb.debian.org/debian",
+        "path": "pool/main/h/hostname"
+      }
+    },
+    {
+      "name": "libseccomp",
+      "component": "libseccomp",
+      "version": "2.6.0",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "libseccomp_2.6.0.orig.tar.gz",
+      "url": "https://deb.debian.org/debian/pool/main/libs/libseccomp/libseccomp_2.6.0.orig.tar.gz",
+      "sha256": "83b6085232d1588c379dc9b9cae47bb37407cf262e6e74993c61ba72d2a784dc",
+      "size_bytes": 685655,
+      "retained_in_git": "",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "LGPL-2.1-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "libseccomp",
+          "upstream_version": "2.6.0"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "notes": "Upstream release + Debian's packaging (patches, rules, control) + the signed .dsc that binds them; together these are the exact source Debian built libseccomp2 2.6.0-2 from. The 670 KB orig tarball is fetched per release from its pinned URL rather than retained in git; the two small packaging artifacts are retained."
+    },
+    {
+      "name": "libseccomp",
+      "component": "libseccomp",
+      "version": "2.6.0-2",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "libseccomp_2.6.0-2.debian.tar.xz",
+      "url": "https://deb.debian.org/debian/pool/main/libs/libseccomp/libseccomp_2.6.0-2.debian.tar.xz",
+      "sha256": "ed705ec85719403e77d004c99c0b06b795f090c66fcae265c4bcf37ffea9cc27",
+      "size_bytes": 20800,
+      "retained_in_git": "compliance/corresponding-sources/libseccomp_2.6.0-2.debian.tar.xz",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "LGPL-2.1-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "libseccomp",
+          "upstream_version": "2.6.0"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "13",
+        "suite": "trixie",
+        "package": "libseccomp",
+        "package_version": "2.6.0-2",
+        "build_ref": "2.6.0-2",
+        "build_ref_source": "the SOURCE-package version the image's own /var/lib/dpkg records (dpkg `Source:`/`Version:`; Syft carries it through as syft:metadata:sourceVersion, falling back to the binary version when Debian states none because they are equal). For Debian that name+version pair IS the exact build reference: it names one immutable source package in the archive.",
+        "repository": "https://deb.debian.org/debian",
+        "path": "pool/main/libs/libseccomp"
+      }
+    },
+    {
+      "name": "libseccomp",
+      "component": "libseccomp",
+      "version": "2.6.0-2",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "libseccomp_2.6.0-2.dsc",
+      "url": "https://deb.debian.org/debian/pool/main/libs/libseccomp/libseccomp_2.6.0-2.dsc",
+      "sha256": "d05f94536558d34fa339326c6f958a3357b51efac8234470b5d97b69472db765",
+      "size_bytes": 2622,
+      "retained_in_git": "compliance/corresponding-sources/libseccomp_2.6.0-2.dsc",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "LGPL-2.1-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "libseccomp",
+          "upstream_version": "2.6.0"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "13",
+        "suite": "trixie",
+        "package": "libseccomp",
+        "package_version": "2.6.0-2",
+        "build_ref": "2.6.0-2",
+        "build_ref_source": "the SOURCE-package version the image's own /var/lib/dpkg records (dpkg `Source:`/`Version:`; Syft carries it through as syft:metadata:sourceVersion, falling back to the binary version when Debian states none because they are equal). For Debian that name+version pair IS the exact build reference: it names one immutable source package in the archive.",
+        "repository": "https://deb.debian.org/debian",
+        "path": "pool/main/libs/libseccomp"
+      }
+    },
+    {
+      "name": "netbase",
+      "component": "netbase",
+      "version": "6.4",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "gcr.io/distroless/static-debian12:nonroot (base of netops-api)",
+      "compose_pin_source": "deployment/docker/Dockerfile.backend",
+      "file": "netbase_6.4.tar.xz",
+      "url": "https://deb.debian.org/debian/pool/main/n/netbase/netbase_6.4.tar.xz",
+      "sha256": "fa6621826ff1150e581bd90bc3c8a4ecafe5df90404f207db6dcdf2c75f26ad7",
+      "size_bytes": 32712,
+      "retained_in_git": "compliance/corresponding-sources/netbase_6.4.tar.xz",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/bookworm/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/bookworm/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "netbase",
+          "upstream_version": "6.4"
+        }
+      ],
+      "images": [
+        "netops-api (deployment/docker/Dockerfile.backend)"
+      ],
+      "notes": "Debian NATIVE package. netops-api is built FROM gcr.io/distroless/static-debian12, which is Debian 12 (bookworm) — hence 6.4 here and 6.5 for the Debian 13 correlation image; they are two different works and get two different retained artifacts."
+    },
+    {
+      "name": "netbase",
+      "component": "netbase",
+      "version": "6.4",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "gcr.io/distroless/static-debian12:nonroot (base of netops-api)",
+      "compose_pin_source": "deployment/docker/Dockerfile.backend",
+      "file": "netbase_6.4.dsc",
+      "url": "https://deb.debian.org/debian/pool/main/n/netbase/netbase_6.4.dsc",
+      "sha256": "dc26cfcaa49fd874cc27c65216b2f8b6d3ad62845b78da4bdf0aea55592af756",
+      "size_bytes": 898,
+      "retained_in_git": "compliance/corresponding-sources/netbase_6.4.dsc",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/bookworm/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/bookworm/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "netbase",
+          "upstream_version": "6.4"
+        }
+      ],
+      "images": [
+        "netops-api (deployment/docker/Dockerfile.backend)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "12",
+        "suite": "bookworm",
+        "package": "netbase",
+        "package_version": "6.4",
+        "build_ref": "6.4",
+        "build_ref_source": "the SOURCE-package version the image's own /var/lib/dpkg records (dpkg `Source:`/`Version:`; Syft carries it through as syft:metadata:sourceVersion, falling back to the binary version when Debian states none because they are equal). For Debian that name+version pair IS the exact build reference: it names one immutable source package in the archive.",
+        "repository": "https://deb.debian.org/debian",
+        "path": "pool/main/n/netbase"
+      }
+    },
+    {
+      "name": "netbase",
+      "component": "netbase",
+      "version": "6.5",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "netbase_6.5.tar.xz",
+      "url": "https://deb.debian.org/debian/pool/main/n/netbase/netbase_6.5.tar.xz",
+      "sha256": "9116047aebbaa1698934052d01c6e09b4c3aed643e93df63d2ddcbec243c26d1",
+      "size_bytes": 32544,
+      "retained_in_git": "compliance/corresponding-sources/netbase_6.5.tar.xz",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "netbase",
+          "upstream_version": "6.5"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "notes": "Debian NATIVE package, Debian 13 (trixie) copy shipped in netops-correlation."
+    },
+    {
+      "name": "netbase",
+      "component": "netbase",
+      "version": "6.5",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "netbase_6.5.dsc",
+      "url": "https://deb.debian.org/debian/pool/main/n/netbase/netbase_6.5.dsc",
+      "sha256": "e8691899f57c06fcc383b0f2214b662137df539227d9d7811dc8223f32ebe4c7",
+      "size_bytes": 899,
+      "retained_in_git": "compliance/corresponding-sources/netbase_6.5.dsc",
+      "verified_against": "the sha256 Debian's own archive index declares for this file (dists/trixie/main/source/Sources.xz, whose sha256 is in turn declared by the OpenPGP-signed dists/trixie/InRelease) — fetched and matched byte-for-byte on 2026-09-05. This is a real distribution attestation, not a self-measurement.",
+      "license": "GPL-2.0-only",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "netbase",
+          "upstream_version": "6.5"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "13",
+        "suite": "trixie",
+        "package": "netbase",
+        "package_version": "6.5",
+        "build_ref": "6.5",
+        "build_ref_source": "the SOURCE-package version the image's own /var/lib/dpkg records (dpkg `Source:`/`Version:`; Syft carries it through as syft:metadata:sourceVersion, falling back to the binary version when Debian states none because they are equal). For Debian that name+version pair IS the exact build reference: it names one immutable source package in the archive.",
+        "repository": "https://deb.debian.org/debian",
+        "path": "pool/main/n/netbase"
+      }
+    },
+    {
+      "name": "base-files",
+      "component": "base-files",
+      "version": "12.4+deb12u14",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "gcr.io/distroless/static-debian12:nonroot (base of netops-api)",
+      "compose_pin_source": "deployment/docker/Dockerfile.backend",
+      "file": "base-files_12.4+deb12u14.tar.xz",
+      "url": "https://snapshot.debian.org/archive/debian/20260511T024057Z/pool/main/b/base-files/base-files_12.4%2Bdeb12u14.tar.xz",
+      "sha256": "f5ecbd6e274642ad7f19c9828d89b4eec42ee434c08d17c3e7afb00128ff2821",
+      "size_bytes": 66240,
+      "retained_in_git": "compliance/corresponding-sources/base-files_12.4+deb12u14.tar.xz",
+      "verified_against": "snapshot.debian.org serves this file content-addressed and declares its sha1 (5e78ac2253214ef34621a41f712e9538bf7c517c), which matched on fetch (2026-09-05); the .dsc is OpenPGP-signed by the Debian maintainer and declares the sha256 of the tarball, which also matched. The exact source for the version this image ships is NO LONGER in the live Debian pool (now 12.4+deb12u15 / 13.8+deb13u6), which is why Correlix retains its own copy.",
+      "license": "GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "base-files",
+          "upstream_version": "12.4+deb12u14"
+        }
+      ],
+      "images": [
+        "netops-api (deployment/docker/Dockerfile.backend)"
+      ],
+      "notes": "base-files is a Debian NATIVE package (no upstream tarball) and is reviewed GPL-2.0-or-later in scripts/source-review.json. netops-api is Debian 12 (distroless/static-debian12) and netops-correlation is Debian 13, so the two images ship two different works and each gets its own retained artifact."
+    },
+    {
+      "name": "base-files",
+      "component": "base-files",
+      "version": "12.4+deb12u14",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "gcr.io/distroless/static-debian12:nonroot (base of netops-api)",
+      "compose_pin_source": "deployment/docker/Dockerfile.backend",
+      "file": "base-files_12.4+deb12u14.dsc",
+      "url": "https://snapshot.debian.org/archive/debian/20260511T024057Z/pool/main/b/base-files/base-files_12.4%2Bdeb12u14.dsc",
+      "sha256": "c5aae887732c6ede9293645ab2f9268ec5a06fc43e75d417340f36ad794222c7",
+      "size_bytes": 1137,
+      "retained_in_git": "compliance/corresponding-sources/base-files_12.4+deb12u14.dsc",
+      "verified_against": "snapshot.debian.org serves this file content-addressed and declares its sha1 (eb43e5d53a1bd7256aa8f57f37be747821cf92ce), which matched on fetch (2026-09-05); the .dsc is OpenPGP-signed by the Debian maintainer and declares the sha256 of the tarball, which also matched. The exact source for the version this image ships is NO LONGER in the live Debian pool (now 12.4+deb12u15 / 13.8+deb13u6), which is why Correlix retains its own copy.",
+      "license": "GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "base-files",
+          "upstream_version": "12.4+deb12u14"
+        }
+      ],
+      "images": [
+        "netops-api (deployment/docker/Dockerfile.backend)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "12",
+        "suite": "bookworm",
+        "package": "base-files",
+        "package_version": "12.4+deb12u14",
+        "build_ref": "12.4+deb12u14",
+        "build_ref_source": "the SOURCE-package version the image's own dpkg database records; for base-files Debian states no separate Source: field, so the binary version IS the source version.",
+        "repository": "https://snapshot.debian.org/archive/debian/20260511T024057Z",
+        "path": "pool/main/b/base-files"
+      }
+    },
+    {
+      "name": "base-files",
+      "component": "base-files",
+      "version": "13.8+deb13u5",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "base-files_13.8+deb13u5.tar.xz",
+      "url": "https://snapshot.debian.org/archive/debian/20260511T024057Z/pool/main/b/base-files/base-files_13.8%2Bdeb13u5.tar.xz",
+      "sha256": "04430fef0d1ef6cdd20e0acb4a9dc5569612d851fd8d2e0e48a849aa80e16efa",
+      "size_bytes": 68708,
+      "retained_in_git": "compliance/corresponding-sources/base-files_13.8+deb13u5.tar.xz",
+      "verified_against": "snapshot.debian.org serves this file content-addressed and declares its sha1 (55252fd59896d7488bae5e5f34a40218f8d7b5d4), which matched on fetch (2026-09-05); the .dsc is OpenPGP-signed by the Debian maintainer and declares the sha256 of the tarball, which also matched. The exact source for the version this image ships is NO LONGER in the live Debian pool (now 12.4+deb12u15 / 13.8+deb13u6), which is why Correlix retains its own copy.",
+      "license": "GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "base-files",
+          "upstream_version": "13.8+deb13u5"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "notes": "base-files is a Debian NATIVE package (no upstream tarball) and is reviewed GPL-2.0-or-later in scripts/source-review.json. netops-api is Debian 12 (distroless/static-debian12) and netops-correlation is Debian 13, so the two images ship two different works and each gets its own retained artifact."
+    },
+    {
+      "name": "base-files",
+      "component": "base-files",
+      "version": "13.8+deb13u5",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "image": "python:3.12-slim (base of netops-correlation)",
+      "compose_pin_source": "deployment/docker/Dockerfile.correlation",
+      "file": "base-files_13.8+deb13u5.dsc",
+      "url": "https://snapshot.debian.org/archive/debian/20260511T024057Z/pool/main/b/base-files/base-files_13.8%2Bdeb13u5.dsc",
+      "sha256": "f0f228ab7759d3d59ef70548700fa9bcacfb0a33732569cd293d23bdc042ba33",
+      "size_bytes": 1247,
+      "retained_in_git": "compliance/corresponding-sources/base-files_13.8+deb13u5.dsc",
+      "verified_against": "snapshot.debian.org serves this file content-addressed and declares its sha1 (6aa13dab613e4f45e5e15dce21f5168bdd732a84), which matched on fetch (2026-09-05); the .dsc is OpenPGP-signed by the Debian maintainer and declares the sha256 of the tarball, which also matched. The exact source for the version this image ships is NO LONGER in the live Debian pool (now 12.4+deb12u15 / 13.8+deb13u6), which is why Correlix retains its own copy.",
+      "license": "GPL-2.0-or-later",
+      "provides": [
+        {
+          "package_type": "deb",
+          "source_package": "base-files",
+          "upstream_version": "13.8+deb13u5"
+        }
+      ],
+      "images": [
+        "netops-correlation (deployment/docker/Dockerfile.correlation)"
+      ],
+      "distro_package": {
+        "distro": "debian",
+        "distro_version": "13",
+        "suite": "trixie",
+        "package": "base-files",
+        "package_version": "13.8+deb13u5",
+        "build_ref": "13.8+deb13u5",
+        "build_ref_source": "the SOURCE-package version the image's own dpkg database records; for base-files Debian states no separate Source: field, so the binary version IS the source version.",
+        "repository": "https://snapshot.debian.org/archive/debian/20260511T024057Z",
+        "path": "pool/main/b/base-files"
+      }
     }
   ],
-  "deferred_posture": "Correlix has NOT yet produced a retained corresponding-source artifact for this component. The current posture is the de-facto one the 2026-09-03 licence audit recorded in §5 — reliance on the distribution's own published source for packages inherited unmodified from an upstream base image — which is normal industry practice and has never been ratified by the owner. Owner decision 2026-09-05 (tracker 238) says upstream availability alone is NOT compliance, so every entry below is a real, open obligation: scripts/oci-compliance.py prints them on every run and FAILS `--release` on them. Clearing one means adding a `components` entry with the upstream source (and, for a distribution package, its packaging archive) the way busybox was cleared. Removing one from a base image clears it too.",
+  "deferred_posture": "Correlix has NOT yet produced a retained corresponding-source artifact for this component, and its licence review (scripts/source-review.json, 2026-09-05) concluded that a corresponding-source obligation is real (`source_required: true`) or could not be resolved without a human (`unclear`). Owner decision 2026-09-05 (tracker 238) says upstream availability alone is NOT compliance, so every entry below is a real, open obligation: scripts/oci-compliance.py prints them on every run and FAILS `--release` on them. Clearing one means adding a `components` entry with the upstream source (and, for a distribution package, its packaging archive at the exact build reference) the way busybox and the sixteen 2026-09-05 components were cleared; `deferred_source_coordinates` already names the exact files and their Debian-attested checksums. Removing the component from the image clears it too, which for this residue is the cheaper fix (tracker 260).",
   "_deferred_comment": [
     "THE REGISTER OF UNDISCHARGED SOURCE OBLIGATIONS.",
     "",
@@ -165,11 +1235,27 @@
     "would hide precisely the class of defect that produced tracker 238 — software",
     "shipped by Correlix that no Correlix inventory could see.",
     "",
-    "WHY SO MANY ARE `license-list` OR `unknown-license`. Debian's copyright files list",
-    "every licence appearing anywhere in a source package with no stated relationship",
-    "between them, so a scanner cannot tell 'MIT AND GPL-2.0' from 'MIT OR GPL-2.0'.",
-    "The policy refuses to guess in either direction: any list containing a copyleft",
-    "term is manual-review, never a silent pass and never a blanket failure."
+    "WHAT WAS `license-list` OR `unknown-license`. Debian's copyright files list every",
+    "licence appearing anywhere in a source package with no stated relationship between",
+    "them, so a scanner cannot tell 'MIT AND GPL-2.0' from 'MIT OR GPL-2.0'. The policy",
+    "refuses to guess in either direction. Those 94 components were REVIEWED one by one",
+    "on 2026-09-05 against the copyright file (or APKBUILD) the image itself carries;",
+    "the answers are in scripts/source-review.json. 33 came back with no obligation and",
+    "left this register; 2 came back `unclear` and stay here with needs_human set; 59",
+    "came back with a real obligation and stay here until their source is retained.",
+    "",
+    "SOURCE AVAILABILITY DECAYS. base-files was reviewed GPL-2.0-or-later and mirrored",
+    "immediately rather than recorded, because the exact versions the images ship",
+    "(12.4+deb12u14, 13.8+deb13u5) had ALREADY left the live Debian pool and had to be",
+    "recovered from snapshot.debian.org. A recorded obligation is not a safe one.",
+    "",
+    "SOURCE COORDINATES. Every Debian row carries `source_coordinates_ref` into the",
+    "top-level `deferred_source_coordinates`, which names the exact source package,",
+    "version, base URL and DEBIAN-ATTESTED sha256 of every file that would discharge",
+    "it, plus its size. Mirroring is therefore mechanical; the reason it has not",
+    "happened is a number — ~228 MB across 38 source packages, in every release",
+    "bundle, forever — recorded in docs/TRACKER.md rows 238, 260 and 261 rather than",
+    "implied by silence."
   ],
   "deferred": [
     {
@@ -183,63 +1269,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "alpine-baselayout",
-      "version": "3.6.8-r1",
-      "package_type": "apk",
-      "license": "GPL-2.0-only",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "alpine-baselayout-data",
-      "version": "3.6.8-r1",
-      "package_type": "apk",
-      "license": "GPL-2.0-only",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "aom-libs",
-      "version": "3.11.0-r0",
-      "package_type": "apk",
-      "license": "BSD-2-Clause ; custom",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "apk-tools",
-      "version": "2.14.6-r3",
-      "package_type": "apk",
-      "license": "GPL-2.0-only",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/adduser_3.152"
     },
     {
       "component": "apt",
@@ -252,33 +1290,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "base-files",
-      "version": "12.4+deb12u14",
-      "package_type": "deb",
-      "license": "GPL-UNSPECIFIED",
-      "license_confidence": "family-unspecified",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-api"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "base-files",
-      "version": "13.8+deb13u5",
-      "package_type": "deb",
-      "license": "GPL-2.0-or-later ; GPL-UNSPECIFIED ; verbatim",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/apt_3.0.3"
     },
     {
       "component": "base-passwd",
@@ -291,7 +1311,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/base-passwd_3.6.7"
     },
     {
       "component": "bash",
@@ -304,7 +1332,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/bash_5.2.37-2"
     },
     {
       "component": "bsdutils",
@@ -317,7 +1353,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/util-linux_2.41-5"
     },
     {
       "component": "ca-certificates",
@@ -330,7 +1374,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/ca-certificates_20250419"
     },
     {
       "component": "coreutils",
@@ -343,7 +1395,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/coreutils_9.7-3"
     },
     {
       "component": "dash",
@@ -356,7 +1416,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": "unclear",
+        "needs_human": true,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/dash_0.5.12-12"
     },
     {
       "component": "debian-archive-keyring",
@@ -369,7 +1437,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/debian-archive-keyring_2025.1"
     },
     {
       "component": "debianutils",
@@ -382,7 +1458,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/debianutils_5.23.2"
     },
     {
       "component": "diffutils",
@@ -395,7 +1479,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/diffutils_1:3.10-4"
     },
     {
       "component": "dpkg",
@@ -408,7 +1500,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/dpkg_1.22.22"
     },
     {
       "component": "findutils",
@@ -421,7 +1521,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/findutils_4.10.0-3"
     },
     {
       "component": "gcc-14-base",
@@ -434,35 +1542,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "geoip",
-      "version": "1.6.12-r5",
-      "package_type": "apk",
-      "license": "LGPL-2.1-or-later",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "gettext-envsubst",
-      "version": "0.22.5-r0",
-      "package_type": "apk",
-      "license": "GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/gcc-14_14.2.0-19"
     },
     {
       "component": "grep",
@@ -475,7 +1563,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/grep_3.11-4"
     },
     {
       "component": "gzip",
@@ -488,20 +1584,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "hostname",
-      "version": "3.25",
-      "package_type": "deb",
-      "license": "GPL-2.0-only",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/gzip_1.13-1"
     },
     {
       "component": "init-system-helpers",
@@ -514,7 +1605,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/init-system-helpers_1.69~deb13u1"
     },
     {
       "component": "libacl1",
@@ -527,7 +1626,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/acl_2.3.2-2"
     },
     {
       "component": "libapt-pkg7.0",
@@ -540,7 +1647,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/apt_3.0.3"
     },
     {
       "component": "libattr1",
@@ -553,7 +1668,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/attr_1:2.5.2-3"
     },
     {
       "component": "libaudit-common",
@@ -566,7 +1689,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/audit_1:4.0.2-2"
     },
     {
       "component": "libaudit1",
@@ -579,7 +1710,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/audit_1:4.0.2-2"
     },
     {
       "component": "libblkid1",
@@ -592,33 +1731,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libbsd0",
-      "version": "0.12.2-2",
-      "package_type": "deb",
-      "license": "BSD-2-Clause ; BSD-2-clause-author ; BSD-2-clause-verbatim ; BSD-3-Clause ; BSD-3-clause-John-Birrell ; BSD-3-clause-Regents ; BSD-3-clause-author ; BSD-5-clause-Peter-Wemm ; Beerware ; ISC ; ISC-Original ; MIT ; public-domain",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libbz2-1.0",
-      "version": "1.0.8-6",
-      "package_type": "deb",
-      "license": "BSD-variant ; GPL-2.0-only",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/util-linux_2.41-5"
     },
     {
       "component": "libc-bin",
@@ -631,7 +1752,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/glibc_2.41-12+deb13u3"
     },
     {
       "component": "libc6",
@@ -644,7 +1773,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/glibc_2.41-12+deb13u3"
     },
     {
       "component": "libcap-ng0",
@@ -657,20 +1794,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libcap2",
-      "version": "1:2.75-10+deb13u1+b1",
-      "package_type": "deb",
-      "license": "BSD-3-Clause ; GPL-2.0-only ; GPL-2.0-or-later",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/libcap-ng_0.8.5-4"
     },
     {
       "component": "libcrypt1",
@@ -683,7 +1815,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/libxcrypt_1:4.4.38-1"
     },
     {
       "component": "libdb5.3t64",
@@ -696,33 +1836,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libdebconfclient0",
-      "version": "0.280",
-      "package_type": "deb",
-      "license": "BSD-2-Clause ; GPL-2.0-only ; GPL-2.0-or-later",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libffi8",
-      "version": "3.4.8-2",
-      "package_type": "deb",
-      "license": "GPL-2.0-or-later ; GPL-3.0-or-later ; GPL-UNSPECIFIED ; MIT ; MPL-1.1 ; X11 ; public-domain",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/db5.3_5.3.28+dfsg2-9"
     },
     {
       "component": "libgcc-s1",
@@ -735,21 +1857,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libgcrypt",
-      "version": "1.10.3-r1",
-      "package_type": "apk",
-      "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/gcc-14_14.2.0-19"
     },
     {
       "component": "libgdbm6t64",
@@ -762,7 +1878,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/gdbm_1.24-2"
     },
     {
       "component": "libgmp10",
@@ -775,21 +1899,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libgpg-error",
-      "version": "1.51-r0",
-      "package_type": "apk",
-      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/gmp_2:6.3.0+dfsg-3"
     },
     {
       "component": "libhogweed6t64",
@@ -802,49 +1920,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libidn2",
-      "version": "2.3.7-r0",
-      "package_type": "apk",
-      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libintl",
-      "version": "0.22.5-r0",
-      "package_type": "apk",
-      "license": "LGPL-2.1-or-later",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libjpeg-turbo",
-      "version": "3.0.4-r0",
-      "package_type": "apk",
-      "license": "BSD-3-Clause ; IJG ; Zlib",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/nettle_3.10.1-1"
     },
     {
       "component": "liblastlog2-2",
@@ -857,60 +1941,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "liblz4-1",
-      "version": "1.10.0-4",
-      "package_type": "deb",
-      "license": "BSD-2-Clause ; GPL-2.0-only ; GPL-2.0-or-later",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "liblzma5",
-      "version": "5.8.1-1",
-      "package_type": "deb",
-      "license": "0BSD ; FSFUL ; FSFULLR ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later-WITH-Autoconf-exception-macro ; LGPL-2.1-only ; LGPL-2.1-or-later ; PD ; PD-debian ; noderivs ; permissive-nowarranty",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libmd",
-      "version": "1.1.0-r0",
-      "package_type": "apk",
-      "license": "BSD-2-Clause BSD-3-Clause Beerware ISC ; Domain Public",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libmd0",
-      "version": "1.1.0-2+b1",
-      "package_type": "deb",
-      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-3-clause-Aaron-D-Gifford ; Beerware ; ISC ; public-domain-md4 ; public-domain-md5 ; public-domain-sha1",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/util-linux_2.41-5"
     },
     {
       "component": "libmount1",
@@ -923,20 +1962,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libncursesw6",
-      "version": "6.5+20250216-2",
-      "package_type": "deb",
-      "license": "BSD-3-Clause ; MIT/X11 ; X11",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/util-linux_2.41-5"
     },
     {
       "component": "libnettle8t64",
@@ -949,7 +1983,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/nettle_3.10.1-1"
     },
     {
       "component": "libpam-modules",
@@ -962,7 +2004,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/pam_1.7.0-5"
     },
     {
       "component": "libpam-modules-bin",
@@ -975,7 +2025,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/pam_1.7.0-5"
     },
     {
       "component": "libpam-runtime",
@@ -988,33 +2046,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libpam0g",
-      "version": "1.7.0-5",
-      "package_type": "deb",
-      "license": "BSD-3-Clause ; BSD-tcp_wrappers ; Beerware ; GPL-1.0-only ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; LGPL-2.0-only ; LGPL-2.0-or-later ; public-domain",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libpcre2-8-0",
-      "version": "10.46-1~deb13u1",
-      "package_type": "deb",
-      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-3-clause-Cambridge ; X11 ; public-domain",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/pam_1.7.0-5"
     },
     {
       "component": "libreadline8t64",
@@ -1027,33 +2067,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libseccomp2",
-      "version": "2.6.0-2",
-      "package_type": "deb",
-      "license": "LGPL-2.1-only",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libselinux1",
-      "version": "3.8.1-1",
-      "package_type": "deb",
-      "license": "GPL-2.0-only ; public-domain",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/readline_8.2-6"
     },
     {
       "component": "libsemanage-common",
@@ -1066,7 +2088,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/libsemanage_3.8.1-1"
     },
     {
       "component": "libsemanage2",
@@ -1079,7 +2109,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/libsemanage_3.8.1-1"
     },
     {
       "component": "libsepol2",
@@ -1092,7 +2130,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/libsepol_3.8.1-1"
     },
     {
       "component": "libsmartcols1",
@@ -1105,33 +2151,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libsqlite3-0",
-      "version": "3.46.1-7+deb13u1",
-      "package_type": "deb",
-      "license": "GPL-2.0-only ; GPL-2.0-or-later ; public-domain",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libssl3t64",
-      "version": "3.5.6-1~deb13u1",
-      "package_type": "deb",
-      "license": "Apache-2.0 ; Artistic ; GPL-1.0-only ; GPL-1.0-or-later",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/util-linux_2.41-5"
     },
     {
       "component": "libstdc++6",
@@ -1144,7 +2172,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/gcc-14_14.2.0-19"
     },
     {
       "component": "libsystemd0",
@@ -1157,20 +2193,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libtinfo6",
-      "version": "6.5+20250216-2",
-      "package_type": "deb",
-      "license": "BSD-3-Clause ; MIT/X11 ; X11",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/systemd_257.13-1~deb13u1"
     },
     {
       "component": "libudev1",
@@ -1183,21 +2214,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libunistring",
-      "version": "1.2-r0",
-      "package_type": "apk",
-      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/systemd_257.13-1~deb13u1"
     },
     {
       "component": "libuuid1",
@@ -1210,33 +2235,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libxxhash0",
-      "version": "0.8.3-2",
-      "package_type": "deb",
-      "license": "BSD-2-Clause ; GPL-2.0-only ; GPL-2.0-or-later",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "libzstd1",
-      "version": "1.5.7+dfsg-1",
-      "package_type": "deb",
-      "license": "BSD-3-Clause ; GPL-2.0-only ; MIT ; Zlib",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/util-linux_2.41-5"
     },
     {
       "component": "login",
@@ -1249,20 +2256,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "login.defs",
-      "version": "1:4.17.4-2",
-      "package_type": "deb",
-      "license": "BSD-3-Clause ; GPL-1.0-only ; GPL-2.0-only ; GPL-2.0-or-later",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/util-linux_2.41-5"
     },
     {
       "component": "mawk",
@@ -1275,20 +2277,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "media-types",
-      "version": "10.0.0",
-      "package_type": "deb",
-      "license": "ad-hoc",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-api"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/mawk_1.3.4.20250131-1"
     },
     {
       "component": "mount",
@@ -1301,169 +2298,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "musl-utils",
-      "version": "1.2.5-r9",
-      "package_type": "apk",
-      "license": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "ncurses-base",
-      "version": "6.5+20250216-2",
-      "package_type": "deb",
-      "license": "BSD-3-Clause ; MIT/X11 ; X11",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "ncurses-bin",
-      "version": "6.5+20250216-2",
-      "package_type": "deb",
-      "license": "BSD-3-Clause ; MIT/X11 ; X11",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "netbase",
-      "version": "6.4",
-      "package_type": "deb",
-      "license": "GPL-2.0-only",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-api"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "netbase",
-      "version": "6.5",
-      "package_type": "deb",
-      "license": "GPL-2.0-only",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "nginx",
-      "version": "1.27.5-r1",
-      "package_type": "apk",
-      "license": "2-clause ; BSD-like ; license",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "nginx-module-geoip",
-      "version": "1.27.5-r1",
-      "package_type": "apk",
-      "license": "2-clause ; BSD-like ; license",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "nginx-module-image-filter",
-      "version": "1.27.5-r1",
-      "package_type": "apk",
-      "license": "2-clause ; BSD-like ; license",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "nginx-module-njs",
-      "version": "1.27.5.0.8.10-r1",
-      "package_type": "apk",
-      "license": "2-clause ; BSD-like ; license",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "nginx-module-xslt",
-      "version": "1.27.5-r1",
-      "package_type": "apk",
-      "license": "2-clause ; BSD-like ; license",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "openssl",
-      "version": "3.5.6-1~deb13u1",
-      "package_type": "deb",
-      "license": "Apache-2.0 ; Artistic ; GPL-1.0-only ; GPL-1.0-or-later",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "openssl-provider-legacy",
-      "version": "3.5.6-1~deb13u1",
-      "package_type": "deb",
-      "license": "Apache-2.0 ; Artistic ; GPL-1.0-only ; GPL-1.0-or-later",
-      "license_confidence": "license-list",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/util-linux_2.41-5"
     },
     {
       "component": "passwd",
@@ -1476,7 +2319,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/shadow_1:4.17.4-2"
     },
     {
       "component": "perl-base",
@@ -1489,20 +2340,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "python",
-      "version": "3.12.13",
-      "package_type": "generic",
-      "license": "UNDETERMINED",
-      "license_confidence": "no-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-correlation"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/perl_5.40.1-6"
     },
     {
       "component": "readline-common",
@@ -1515,21 +2361,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "scanelf",
-      "version": "1.3.8-r1",
-      "package_type": "apk",
-      "license": "GPL-2.0-only",
-      "license_confidence": "expression",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/readline_8.2-6"
     },
     {
       "component": "sed",
@@ -1542,7 +2382,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/sed_4.9-2+deb13u1"
     },
     {
       "component": "Simple Launcher",
@@ -1555,7 +2403,36 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": "unclear",
+        "needs_human": true,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "note": "recorded under both package types Syft can report for the same six vendored Windows PE launcher stubs — see scripts/source-review.json"
+    },
+    {
+      "component": "Simple Launcher",
+      "version": "1.1.0.14",
+      "package_type": "binary",
+      "license": "UNDETERMINED",
+      "license_confidence": "no-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": "unclear",
+        "needs_human": true,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "note": "recorded under both package types Syft can report for the same six vendored Windows PE launcher stubs — see scripts/source-review.json"
     },
     {
       "component": "sqv",
@@ -1568,7 +2445,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/rust-sequoia-sqv_1.3.0-3"
     },
     {
       "component": "sysvinit-utils",
@@ -1581,7 +2466,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/sysvinit_3.14-4"
     },
     {
       "component": "tar",
@@ -1594,7 +2487,15 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/tar_1.35+dfsg-3.1"
     },
     {
       "component": "util-linux",
@@ -1607,21 +2508,1061 @@
         "netops-correlation"
       ],
       "tracker": 238,
-      "recorded": "2026-09-05"
-    },
-    {
-      "component": "xz-libs",
-      "version": "5.6.3-r1",
-      "package_type": "apk",
-      "license": "0BSD GPL-2.0-or-later LGPL-2.1-or-later ; Public-Domain",
-      "license_confidence": "unknown-license",
-      "origin": "inherited-base-layer",
-      "images": [
-        "netops-frontend",
-        "netops-nginx"
-      ],
-      "tracker": 238,
-      "recorded": "2026-09-05"
+      "recorded": "2026-09-05",
+      "review": {
+        "file": "scripts/source-review.json",
+        "source_required": true,
+        "needs_human": false,
+        "reviewed": "2026-09-05",
+        "owner_signoff": false
+      },
+      "source_coordinates_ref": "trixie/util-linux_2.41-5"
     }
-  ]
+  ],
+  "deferred_source_coordinates": {
+    "trixie/acl_2.3.2-2": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "acl",
+      "source_version": "2.3.2-2",
+      "base_url": "https://deb.debian.org/debian/pool/main/a/acl/",
+      "files": [
+        {
+          "file": "acl_2.3.2-2.dsc",
+          "sha256": "1f42130ccb5442fe2db2aee1dcc03c51a31512dd2519a38e8fc9270c5abbc807",
+          "size_bytes": 2604
+        },
+        {
+          "file": "acl_2.3.2.orig.tar.xz",
+          "sha256": "97203a72cae99ab89a067fe2210c1cbf052bc492b479eca7d226d9830883b0bd",
+          "size_bytes": 371680
+        },
+        {
+          "file": "acl_2.3.2.orig.tar.xz.asc",
+          "sha256": "184c6a903490885a096095db67b433a04542c6569f167cbe8115268c0f227273",
+          "size_bytes": 833
+        },
+        {
+          "file": "acl_2.3.2-2.debian.tar.xz",
+          "sha256": "e27b6e194c0a7554595d76f96acdceb800631bdc46c36457b73bc7e4a0c5f2ee",
+          "size_bytes": 24296
+        }
+      ],
+      "total_bytes": 399413,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/adduser_3.152": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "adduser",
+      "source_version": "3.152",
+      "base_url": "https://deb.debian.org/debian/pool/main/a/adduser/",
+      "files": [
+        {
+          "file": "adduser_3.152.dsc",
+          "sha256": "5ad23648a879d006e7a57d351720d4cbbbe3fb5e274ea52beb4f619896b9d520",
+          "size_bytes": 1678
+        },
+        {
+          "file": "adduser_3.152.tar.xz",
+          "sha256": "484cdde2d48053be40657b564375469fc577e89f3b984b01aed247b6081355b8",
+          "size_bytes": 334252
+        }
+      ],
+      "total_bytes": 335930,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/apt_3.0.3": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "apt",
+      "source_version": "3.0.3",
+      "base_url": "https://deb.debian.org/debian/pool/main/a/apt/",
+      "files": [
+        {
+          "file": "apt_3.0.3.dsc",
+          "sha256": "ccf1666e5b268d76bf62aafb22db089a2fdae9c17d1d1c446546b3621768add7",
+          "size_bytes": 3091
+        },
+        {
+          "file": "apt_3.0.3.tar.xz",
+          "sha256": "5b5f6f6d26121742a83aa80d4ed0eb0c6ce9bea259518db412edefd95760e4ef",
+          "size_bytes": 2422096
+        }
+      ],
+      "total_bytes": 2425187,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/attr_1:2.5.2-3": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "attr",
+      "source_version": "1:2.5.2-3",
+      "base_url": "https://deb.debian.org/debian/pool/main/a/attr/",
+      "files": [
+        {
+          "file": "attr_2.5.2-3.dsc",
+          "sha256": "c2ae3e15db059029030ddf4fdac179d8f90d423f2310a6ef8c745ba28ac18b0a",
+          "size_bytes": 2576
+        },
+        {
+          "file": "attr_2.5.2.orig.tar.xz",
+          "sha256": "f2e97b0ab7ce293681ab701915766190d607a1dba7fae8a718138150b700a70b",
+          "size_bytes": 334180
+        },
+        {
+          "file": "attr_2.5.2.orig.tar.xz.asc",
+          "sha256": "eeac729088d3c6379e91b7596cb3582e46b047c47f0fa3c5c77f9c9e84dc3a4c",
+          "size_bytes": 833
+        },
+        {
+          "file": "attr_2.5.2-3.debian.tar.xz",
+          "sha256": "153f98c87575277ea021e24dae36293b7738699174438a2060b47e8312b771e3",
+          "size_bytes": 32260
+        }
+      ],
+      "total_bytes": 369849,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/audit_1:4.0.2-2": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "audit",
+      "source_version": "1:4.0.2-2",
+      "base_url": "https://deb.debian.org/debian/pool/main/a/audit/",
+      "files": [
+        {
+          "file": "audit_4.0.2-2.dsc",
+          "sha256": "d0b9457933409cd3287bc0b8bfb10f41c08fb5b24bd5c5b8364125d5a6894974",
+          "size_bytes": 2408
+        },
+        {
+          "file": "audit_4.0.2.orig.tar.gz",
+          "sha256": "d5d1b5d50ee4a2d0d17875bc6ae6bd6a7d5b34d9557ea847a39faec531faaa0a",
+          "size_bytes": 1198769
+        },
+        {
+          "file": "audit_4.0.2-2.debian.tar.xz",
+          "sha256": "33030d53299c57cda73e9e45813b8488f9bc3ad8992aef0b740afabbf66a2ba2",
+          "size_bytes": 19228
+        }
+      ],
+      "total_bytes": 1220405,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/base-passwd_3.6.7": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "base-passwd",
+      "source_version": "3.6.7",
+      "base_url": "https://deb.debian.org/debian/pool/main/b/base-passwd/",
+      "files": [
+        {
+          "file": "base-passwd_3.6.7.dsc",
+          "sha256": "23dafe71f85d7595d9e20efba17729c1c975a33bd469cf09bfad9e96b1f542f3",
+          "size_bytes": 1891
+        },
+        {
+          "file": "base-passwd_3.6.7.tar.xz",
+          "sha256": "cf869870fed7862b57bfa9e99cd5cd6f365e2349705a1b65af7fc182629bd1ab",
+          "size_bytes": 60872
+        }
+      ],
+      "total_bytes": 62763,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/bash_5.2.37-2": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "bash",
+      "source_version": "5.2.37-2",
+      "base_url": "https://deb.debian.org/debian/pool/main/b/bash/",
+      "files": [
+        {
+          "file": "bash_5.2.37-2.dsc",
+          "sha256": "7e5f6d5a26093e812f8841d5cf3245054102e86986017d8edd859417b03707f9",
+          "size_bytes": 2162
+        },
+        {
+          "file": "bash_5.2.37.orig.tar.xz",
+          "sha256": "370704c9c859f4060b7df19055e43bb9b5fa09d887699cf6ba87885c5485d36a",
+          "size_bytes": 5600932
+        },
+        {
+          "file": "bash_5.2.37-2.debian.tar.xz",
+          "sha256": "42e03ef523258b61fa765b8c9719d7bf461f2a274260d07fbe45ca7e4627923a",
+          "size_bytes": 88360
+        }
+      ],
+      "total_bytes": 5691454,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/ca-certificates_20250419": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "ca-certificates",
+      "source_version": "20250419",
+      "base_url": "https://deb.debian.org/debian/pool/main/c/ca-certificates/",
+      "files": [
+        {
+          "file": "ca-certificates_20250419.dsc",
+          "sha256": "3fc919369a3b84e34a959faa8bdffb9bd2c5a7d4a948a4b07a09a5d43e257030",
+          "size_bytes": 1766
+        },
+        {
+          "file": "ca-certificates_20250419.tar.xz",
+          "sha256": "33b44ef78653ecd3f0f2f13e5bba6be466be2e7da72182f737912b81798ba5d2",
+          "size_bytes": 277504
+        }
+      ],
+      "total_bytes": 279270,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/coreutils_9.7-3": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "coreutils",
+      "source_version": "9.7-3",
+      "base_url": "https://deb.debian.org/debian/pool/main/c/coreutils/",
+      "files": [
+        {
+          "file": "coreutils_9.7-3.dsc",
+          "sha256": "c3a207e3aaad165765c7a6fab89045f5fd20035fea6830b9f9ebbb92ebfbff89",
+          "size_bytes": 2122
+        },
+        {
+          "file": "coreutils_9.7.orig.tar.xz",
+          "sha256": "e8bb26ad0293f9b5a1fc43fb42ba970e312c66ce92c1b0b16713d7500db251bf",
+          "size_bytes": 6158960
+        },
+        {
+          "file": "coreutils_9.7.orig.tar.xz.asc",
+          "sha256": "5070e9428bd372a7fa1f66b395b81092bb40c98f9f56a2e2bc55c47fd387e901",
+          "size_bytes": 833
+        },
+        {
+          "file": "coreutils_9.7-3.debian.tar.xz",
+          "sha256": "483f77876a080577f63da1d004cc1cf17d16df65d6925aefdd3294c6101eccfb",
+          "size_bytes": 26820
+        }
+      ],
+      "total_bytes": 6188735,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/dash_0.5.12-12": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "dash",
+      "source_version": "0.5.12-12",
+      "base_url": "https://deb.debian.org/debian/pool/main/d/dash/",
+      "files": [
+        {
+          "file": "dash_0.5.12-12.dsc",
+          "sha256": "589efc4d87a4ae4745c273bdb33198d7c4f28a71736a8ece81d3677cf9c6e5ce",
+          "size_bytes": 1460
+        },
+        {
+          "file": "dash_0.5.12.orig.tar.gz",
+          "sha256": "6a474ac46e8b0b32916c4c60df694c82058d3297d8b385b74508030ca4a8f28a",
+          "size_bytes": 246054
+        },
+        {
+          "file": "dash_0.5.12-12.debian.tar.xz",
+          "sha256": "a278acb5d9a1f5d9a086d36a547287cbf3105b8f33c0e62d86d264decf5ba1ad",
+          "size_bytes": 47300
+        }
+      ],
+      "total_bytes": 294814,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/db5.3_5.3.28+dfsg2-9": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "db5.3",
+      "source_version": "5.3.28+dfsg2-9",
+      "base_url": "https://deb.debian.org/debian/pool/main/d/db5.3/",
+      "files": [
+        {
+          "file": "db5.3_5.3.28+dfsg2-9.dsc",
+          "sha256": "045f392c75dffc9d4f3bd44978b90ca8d45b935cf0ae4202bf79a760f2ce07b1",
+          "size_bytes": 2373
+        },
+        {
+          "file": "db5.3_5.3.28+dfsg2.orig.tar.xz",
+          "sha256": "ad41b507415dec8316e828b2230242af2251d2c86eefa3c7aa9ef47c5239ef33",
+          "size_bytes": 21287688
+        },
+        {
+          "file": "db5.3_5.3.28+dfsg2-9.debian.tar.xz",
+          "sha256": "21fe6ee0491c83d0c34fe52e0e0e423946172eff68262584a0cc8ef880c36b74",
+          "size_bytes": 36412
+        }
+      ],
+      "total_bytes": 21326473,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/debian-archive-keyring_2025.1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "debian-archive-keyring",
+      "source_version": "2025.1",
+      "base_url": "https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/",
+      "files": [
+        {
+          "file": "debian-archive-keyring_2025.1.dsc",
+          "sha256": "09604bd8d4562a1e942e5d1a19a6b82447cbdeb2e7c7f0df7c32a2503647ea47",
+          "size_bytes": 1267
+        },
+        {
+          "file": "debian-archive-keyring_2025.1.tar.xz",
+          "sha256": "2d019c3fa19c42da4d37571e473c296286dad0214cb3bd5cafd99f04a8bf5471",
+          "size_bytes": 138248
+        }
+      ],
+      "total_bytes": 139515,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/debianutils_5.23.2": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "debianutils",
+      "source_version": "5.23.2",
+      "base_url": "https://deb.debian.org/debian/pool/main/d/debianutils/",
+      "files": [
+        {
+          "file": "debianutils_5.23.2.dsc",
+          "sha256": "471b65deec232bb033f3e3e06d5bf64dac0ced474c6fd61d41538f3f3de876f8",
+          "size_bytes": 1908
+        },
+        {
+          "file": "debianutils_5.23.2.tar.xz",
+          "sha256": "79e524b7526dba2ec5c409d0ee52ebec135815cf5b2907375d444122e0594b69",
+          "size_bytes": 82376
+        }
+      ],
+      "total_bytes": 84284,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/diffutils_1:3.10-4": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "diffutils",
+      "source_version": "1:3.10-4",
+      "base_url": "https://deb.debian.org/debian/pool/main/d/diffutils/",
+      "files": [
+        {
+          "file": "diffutils_3.10-4.dsc",
+          "sha256": "087b414ddfc92161a30186926bc4b4ac02c7cba589b0323561cacd54c8b48392",
+          "size_bytes": 1875
+        },
+        {
+          "file": "diffutils_3.10.orig.tar.xz",
+          "sha256": "90e5e93cc724e4ebe12ede80df1634063c7a855692685919bfe60b556c9bd09e",
+          "size_bytes": 1624240
+        },
+        {
+          "file": "diffutils_3.10.orig.tar.xz.asc",
+          "sha256": "a94faf8f1baa04ff220f7b2ccb137c16337284e023ebc4a1d5df475c08d810f7",
+          "size_bytes": 833
+        },
+        {
+          "file": "diffutils_3.10-4.debian.tar.xz",
+          "sha256": "8588b6ffb897ccff46c583e58ef50500b2511eee41949b21e8afa5439712c2c7",
+          "size_bytes": 14304
+        }
+      ],
+      "total_bytes": 1641252,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/dpkg_1.22.22": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "dpkg",
+      "source_version": "1.22.22",
+      "base_url": "https://deb.debian.org/debian/pool/main/d/dpkg/",
+      "files": [
+        {
+          "file": "dpkg_1.22.22.dsc",
+          "sha256": "fc481d9b87cd4416cd55673cc1fa716b57480a6b23253ac0d87c1abbfad4c964",
+          "size_bytes": 3449
+        },
+        {
+          "file": "dpkg_1.22.22.tar.xz",
+          "sha256": "d5ea9f132deec8030b50ab2a02ade2b49f0c7a195805a302c8301156fe833a57",
+          "size_bytes": 5746724
+        }
+      ],
+      "total_bytes": 5750173,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/findutils_4.10.0-3": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "findutils",
+      "source_version": "4.10.0-3",
+      "base_url": "https://deb.debian.org/debian/pool/main/f/findutils/",
+      "files": [
+        {
+          "file": "findutils_4.10.0-3.dsc",
+          "sha256": "fa6b67056d9e5b4d8edbfc8ab95ac15ac769b140284426973f6a1ef07a4594ec",
+          "size_bytes": 2291
+        },
+        {
+          "file": "findutils_4.10.0.orig.tar.xz",
+          "sha256": "1387e0b67ff247d2abde998f90dfbf70c1491391a59ddfecb8ae698789f0a4f5",
+          "size_bytes": 2240712
+        },
+        {
+          "file": "findutils_4.10.0.orig.tar.xz.asc",
+          "sha256": "7f53670eea6bd114e014571221eb652855c1129a3ed99f2a9257c2a313cc216f",
+          "size_bytes": 488
+        },
+        {
+          "file": "findutils_4.10.0-3.debian.tar.xz",
+          "sha256": "7d19668508523a6fcfb7731f5646305a8b1a00a3105ee3f0a5f167adf93a8a46",
+          "size_bytes": 33364
+        }
+      ],
+      "total_bytes": 2276855,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/gcc-14_14.2.0-19": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "gcc-14",
+      "source_version": "14.2.0-19",
+      "base_url": "https://deb.debian.org/debian/pool/main/g/gcc-14/",
+      "files": [
+        {
+          "file": "gcc-14_14.2.0-19.dsc",
+          "sha256": "7db1e202cce66617e9134a662c877a3a773de5b612fd52179815877e0ecfb847",
+          "size_bytes": 47347
+        },
+        {
+          "file": "gcc-14_14.2.0.orig.tar.gz",
+          "sha256": "e162a5ef3f0077ecae598c6556908d2ab80841532df3398072a96a6df6e6aa29",
+          "size_bytes": 94299633
+        },
+        {
+          "file": "gcc-14_14.2.0-19.debian.tar.xz",
+          "sha256": "31cbab4bafa48aa1c540497bd8098cbcf98e673778f927651ed944709f687781",
+          "size_bytes": 2577016
+        }
+      ],
+      "total_bytes": 96923996,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/gdbm_1.24-2": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "gdbm",
+      "source_version": "1.24-2",
+      "base_url": "https://deb.debian.org/debian/pool/main/g/gdbm/",
+      "files": [
+        {
+          "file": "gdbm_1.24-2.dsc",
+          "sha256": "28acecf1cf00240942833c04079a02bb4c199a48faa1f4ca90f0ea9b79dc5841",
+          "size_bytes": 2466
+        },
+        {
+          "file": "gdbm_1.24.orig.tar.gz",
+          "sha256": "695e9827fdf763513f133910bc7e6cfdb9187943a4fec943e57449723d2b8dbf",
+          "size_bytes": 1195931
+        },
+        {
+          "file": "gdbm_1.24.orig.tar.gz.asc",
+          "sha256": "8fb2f87e817ed6bd1d7ef2ab976f6a0046814a5ff28a06c521b796e0d3fd1226",
+          "size_bytes": 195
+        },
+        {
+          "file": "gdbm_1.24-2.debian.tar.xz",
+          "sha256": "736d23450674c1bf0b03a2f65b83870b0801bc3747df3099df970c1479b0ab63",
+          "size_bytes": 16880
+        }
+      ],
+      "total_bytes": 1215472,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/glibc_2.41-12+deb13u3": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "glibc",
+      "source_version": "2.41-12+deb13u3",
+      "base_url": "https://deb.debian.org/debian/pool/main/g/glibc/",
+      "files": [
+        {
+          "file": "glibc_2.41-12+deb13u3.dsc",
+          "sha256": "aa1ab10010fcf169454a5c6a123094a3997392922593d86a3a5adc180a07ca40",
+          "size_bytes": 7576
+        },
+        {
+          "file": "glibc_2.41.orig.tar.xz",
+          "sha256": "f24aa441021121a79266f0d75242706cab8843a47901fefe74527491807f1998",
+          "size_bytes": 20323540
+        },
+        {
+          "file": "glibc_2.41-12+deb13u3.debian.tar.xz",
+          "sha256": "de7d715bf7e559b78baebac4115122641842f65faf0a5080a55954877a55cebe",
+          "size_bytes": 494644
+        }
+      ],
+      "total_bytes": 20825760,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/gmp_2:6.3.0+dfsg-3": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "gmp",
+      "source_version": "2:6.3.0+dfsg-3",
+      "base_url": "https://deb.debian.org/debian/pool/main/g/gmp/",
+      "files": [
+        {
+          "file": "gmp_6.3.0+dfsg-3.dsc",
+          "sha256": "f7b64af28f52b7346bb8581e01d3c19daf769639345f234f8ae1e29c42171443",
+          "size_bytes": 2251
+        },
+        {
+          "file": "gmp_6.3.0+dfsg.orig.tar.xz",
+          "sha256": "bd2966e6d277f79328e894a5a9f3ba3fbf2ed2be81def5f48623e30c23fb1572",
+          "size_bytes": 1870556
+        },
+        {
+          "file": "gmp_6.3.0+dfsg-3.debian.tar.xz",
+          "sha256": "1d890bbe25dd649d2ddba1926483176520e50f22115a00566f250b613b8c20ad",
+          "size_bytes": 19912
+        }
+      ],
+      "total_bytes": 1892719,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/grep_3.11-4": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "grep",
+      "source_version": "3.11-4",
+      "base_url": "https://deb.debian.org/debian/pool/main/g/grep/",
+      "files": [
+        {
+          "file": "grep_3.11-4.dsc",
+          "sha256": "dd6f8eb933bc05446e483f7792c8bf0a1aba9d498e65c6ccafe64e9bf27ac054",
+          "size_bytes": 1642
+        },
+        {
+          "file": "grep_3.11.orig.tar.xz",
+          "sha256": "1db2aedde89d0dea42b16d9528f894c8d15dae4e190b59aecc78f5a951276eab",
+          "size_bytes": 1703776
+        },
+        {
+          "file": "grep_3.11.orig.tar.xz.asc",
+          "sha256": "89ec23ffd59b68822732dc8204fc89883c3af30a90ae390feb94346d9d09a589",
+          "size_bytes": 833
+        },
+        {
+          "file": "grep_3.11-4.debian.tar.xz",
+          "sha256": "f10394b7589c58ca7de4b580692b1b59431f898cb2068e86222c174e093fdf49",
+          "size_bytes": 20468
+        }
+      ],
+      "total_bytes": 1726719,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/gzip_1.13-1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "gzip",
+      "source_version": "1.13-1",
+      "base_url": "https://deb.debian.org/debian/pool/main/g/gzip/",
+      "files": [
+        {
+          "file": "gzip_1.13-1.dsc",
+          "sha256": "4942638dbb63dc5690e0a95ed70ee9f11e93565c43941c2485da3e561ec72028",
+          "size_bytes": 1884
+        },
+        {
+          "file": "gzip_1.13.orig.tar.xz",
+          "sha256": "7454eb6935db17c6655576c2e1b0fabefd38b4d0936e0f87f48cd062ce91a057",
+          "size_bytes": 838248
+        },
+        {
+          "file": "gzip_1.13.orig.tar.xz.asc",
+          "sha256": "aa752d6460fff2e0064857f1c6057d2dc49a28a45ad28c6b29c525851d6771f1",
+          "size_bytes": 833
+        },
+        {
+          "file": "gzip_1.13-1.debian.tar.xz",
+          "sha256": "29319b3f91d8e03d940d4d7c0f2a5fe5ec4f2ba4a0e621c9ef2682f2d0240dd2",
+          "size_bytes": 19028
+        }
+      ],
+      "total_bytes": 859993,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/init-system-helpers_1.69~deb13u1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "init-system-helpers",
+      "source_version": "1.69~deb13u1",
+      "base_url": "https://deb.debian.org/debian/pool/main/i/init-system-helpers/",
+      "files": [
+        {
+          "file": "init-system-helpers_1.69~deb13u1.dsc",
+          "sha256": "873082d72727267b6207e38df47e3002aeb0ed554f876db17c7bbfeb26174ee6",
+          "size_bytes": 2266
+        },
+        {
+          "file": "init-system-helpers_1.69~deb13u1.tar.xz",
+          "sha256": "bbd65c63420b6335b91cbf5daad9a70632a087657eb9078ea000f0a16c2d83da",
+          "size_bytes": 45852
+        }
+      ],
+      "total_bytes": 48118,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/libcap-ng_0.8.5-4": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "libcap-ng",
+      "source_version": "0.8.5-4",
+      "base_url": "https://deb.debian.org/debian/pool/main/libc/libcap-ng/",
+      "files": [
+        {
+          "file": "libcap-ng_0.8.5-4.dsc",
+          "sha256": "a5745b7d68a11068ae5beddcc7fbc94cd87dd81cb2d7495e7d48610603be3526",
+          "size_bytes": 1710
+        },
+        {
+          "file": "libcap-ng_0.8.5.orig.tar.gz",
+          "sha256": "e4be07fdd234f10b866433f224d183626003c65634ed0552b02e654a380244c2",
+          "size_bytes": 59265
+        },
+        {
+          "file": "libcap-ng_0.8.5-4.debian.tar.xz",
+          "sha256": "f5d4e7f38bdbca87de77317ce95f973883081370ef257019b484e29e3368a20d",
+          "size_bytes": 7816
+        }
+      ],
+      "total_bytes": 68791,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/libsemanage_3.8.1-1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "libsemanage",
+      "source_version": "3.8.1-1",
+      "base_url": "https://deb.debian.org/debian/pool/main/libs/libsemanage/",
+      "files": [
+        {
+          "file": "libsemanage_3.8.1-1.dsc",
+          "sha256": "b22bfc4ab2cd47fac46cc9e45d418bb30eb540c3e5c1052d6c669f53e180e4e5",
+          "size_bytes": 2992
+        },
+        {
+          "file": "libsemanage_3.8.1.orig.tar.gz",
+          "sha256": "7b39127b219cc70bfd935a4af6b0f2ba83d4b35c916f253c7e942c23ab490f07",
+          "size_bytes": 184618
+        },
+        {
+          "file": "libsemanage_3.8.1.orig.tar.gz.asc",
+          "sha256": "5b4856cb5823fba1b247ff1b5355692706da68a4df61a936d1b33b1f9e9b2f3d",
+          "size_bytes": 833
+        },
+        {
+          "file": "libsemanage_3.8.1-1.debian.tar.xz",
+          "sha256": "6d1e5bd4d06bbd25ced1b75fba394c3e2157bd604cf1cd33fb581793d70bd7b8",
+          "size_bytes": 37572
+        }
+      ],
+      "total_bytes": 226015,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/libsepol_3.8.1-1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "libsepol",
+      "source_version": "3.8.1-1",
+      "base_url": "https://deb.debian.org/debian/pool/main/libs/libsepol/",
+      "files": [
+        {
+          "file": "libsepol_3.8.1-1.dsc",
+          "sha256": "0351ffc8c3f66918c9e4ecae9244ae2af27857d8795e424e384ddda794718c34",
+          "size_bytes": 2347
+        },
+        {
+          "file": "libsepol_3.8.1.orig.tar.gz",
+          "sha256": "0e78705305f955abd4c0654d37a5477ee26349ab74db9e2b03a7868897ae1ddf",
+          "size_bytes": 513830
+        },
+        {
+          "file": "libsepol_3.8.1.orig.tar.gz.asc",
+          "sha256": "183f6cf96054986704d4224f89518e9139370385c43a533078f45ca688dca8b6",
+          "size_bytes": 833
+        },
+        {
+          "file": "libsepol_3.8.1-1.debian.tar.xz",
+          "sha256": "7aac515a941f8dd19581b16c664b3098962e6a8ed7fa0afdafd306a85c667619",
+          "size_bytes": 21432
+        }
+      ],
+      "total_bytes": 538442,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/libxcrypt_1:4.4.38-1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "libxcrypt",
+      "source_version": "1:4.4.38-1",
+      "base_url": "https://deb.debian.org/debian/pool/main/libx/libxcrypt/",
+      "files": [
+        {
+          "file": "libxcrypt_4.4.38-1.dsc",
+          "sha256": "feba1874a84616791c1c17f9a290c9e97562b2904b3b0200edc82a2db54f3f07",
+          "size_bytes": 1573
+        },
+        {
+          "file": "libxcrypt_4.4.38.orig.tar.xz",
+          "sha256": "6a275a356622c64ba9f693892215dbb399c003a7a4afeed9c4c74070eaab20f4",
+          "size_bytes": 394216
+        },
+        {
+          "file": "libxcrypt_4.4.38-1.debian.tar.xz",
+          "sha256": "6b87bcb5325e417ab3f4c01c364233444b4c9008a69ec1d6fababb3f6e693a5e",
+          "size_bytes": 8512
+        }
+      ],
+      "total_bytes": 404301,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/mawk_1.3.4.20250131-1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "mawk",
+      "source_version": "1.3.4.20250131-1",
+      "base_url": "https://deb.debian.org/debian/pool/main/m/mawk/",
+      "files": [
+        {
+          "file": "mawk_1.3.4.20250131-1.dsc",
+          "sha256": "147dd01670e2ebf61f3c78470e0025b87d14e69c7ba9cfafd54da32a355dea84",
+          "size_bytes": 2969
+        },
+        {
+          "file": "mawk_1.3.4.20250131.orig.tar.gz",
+          "sha256": "51bcb82d577b141d896d9d9c3077d7aaa209490132e9f2b9573ba8511b3835be",
+          "size_bytes": 433213
+        },
+        {
+          "file": "mawk_1.3.4.20250131.orig.tar.gz.asc",
+          "sha256": "bc83f127727edb42a91d516770c8d0d3cdb5f6e541aa3cb5213b79dae494db95",
+          "size_bytes": 729
+        },
+        {
+          "file": "mawk_1.3.4.20250131-1.debian.tar.xz",
+          "sha256": "23dea8244bf4f116ec3cd202ab5d4693207d82d986cd0a3d79442b916be4e2b7",
+          "size_bytes": 16008
+        }
+      ],
+      "total_bytes": 452919,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/nettle_3.10.1-1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "nettle",
+      "source_version": "3.10.1-1",
+      "base_url": "https://deb.debian.org/debian/pool/main/n/nettle/",
+      "files": [
+        {
+          "file": "nettle_3.10.1-1.dsc",
+          "sha256": "7b440850ce04b341363f3f5e23dfb9f96ebf7d52e0ef7ba2d07120c90ca61b3c",
+          "size_bytes": 2053
+        },
+        {
+          "file": "nettle_3.10.1.orig.tar.gz",
+          "sha256": "b0fcdd7fc0cdea6e80dcf1dd85ba794af0d5b4a57e26397eee3bc193272d9132",
+          "size_bytes": 2643267
+        },
+        {
+          "file": "nettle_3.10.1-1.debian.tar.xz",
+          "sha256": "2d40d02ddac5985d8833532a17a0ef96cb685ee0547ee9617ec13793b22e34c6",
+          "size_bytes": 25036
+        }
+      ],
+      "total_bytes": 2670356,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/pam_1.7.0-5": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "pam",
+      "source_version": "1.7.0-5",
+      "base_url": "https://deb.debian.org/debian/pool/main/p/pam/",
+      "files": [
+        {
+          "file": "pam_1.7.0-5.dsc",
+          "sha256": "5c127aa18c7cb52ec9ee91fa2099453b3a851bcc0088e79045384a2a508b341c",
+          "size_bytes": 2210
+        },
+        {
+          "file": "pam_1.7.0.orig.tar.xz",
+          "sha256": "57dcd7a6b966ecd5bbd95e1d11173734691e16b68692fa59661cdae9b13b1697",
+          "size_bytes": 507824
+        },
+        {
+          "file": "pam_1.7.0.orig.tar.xz.asc",
+          "sha256": "7a8ea18ec7d9dd1f8cbf9055c32128cbca8241aa63e9fea44d56ce6f0e15e441",
+          "size_bytes": 801
+        },
+        {
+          "file": "pam_1.7.0-5.debian.tar.xz",
+          "sha256": "d776d7cb6fc8b08273f96b7f843299356ef13c6756e30468c594ab28faf1701c",
+          "size_bytes": 145640
+        }
+      ],
+      "total_bytes": 656475,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/perl_5.40.1-6": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "perl",
+      "source_version": "5.40.1-6",
+      "base_url": "https://deb.debian.org/debian/pool/main/p/perl/",
+      "files": [
+        {
+          "file": "perl_5.40.1-6.dsc",
+          "sha256": "b521581cdc0d45d234ebba4d3c7d1e107fd9f18e1322c1bbaf7101483a7fdf08",
+          "size_bytes": 2372
+        },
+        {
+          "file": "perl_5.40.1.orig-regen-configure.tar.xz",
+          "sha256": "4ea023d08101443f6ed9dc3bdd9bb5f5e08087678dc9e443d195df22da36209a",
+          "size_bytes": 421056
+        },
+        {
+          "file": "perl_5.40.1.orig.tar.xz",
+          "sha256": "dfa20c2eef2b4af133525610bbb65dd13777ecf998c9c5b1ccf0d308e732ee3f",
+          "size_bytes": 13930924
+        },
+        {
+          "file": "perl_5.40.1-6.debian.tar.xz",
+          "sha256": "3071cd0d0ddb2bc58a739d331c5e8c5b549f679714b7d8f698b7f8f7ab27b3a3",
+          "size_bytes": 172892
+        }
+      ],
+      "total_bytes": 14527244,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/readline_8.2-6": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "readline",
+      "source_version": "8.2-6",
+      "base_url": "https://deb.debian.org/debian/pool/main/r/readline/",
+      "files": [
+        {
+          "file": "readline_8.2-6.dsc",
+          "sha256": "6f94c7144d6b6b1ff88aaebd81480e87f8773b7638031782aac12ef93ffd2e71",
+          "size_bytes": 2810
+        },
+        {
+          "file": "readline_8.2.orig.tar.gz",
+          "sha256": "3feb7171f16a84ee82ca18a36d7b9be109a52c04f492a053331d7d1095007c35",
+          "size_bytes": 3043952
+        },
+        {
+          "file": "readline_8.2-6.debian.tar.xz",
+          "sha256": "d1cf806644dbce298cf929f1cc9b3af5a50cd7db97b6f69db280c1eb2f544376",
+          "size_bytes": 38396
+        }
+      ],
+      "total_bytes": 3085158,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/rust-sequoia-sqv_1.3.0-3": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "rust-sequoia-sqv",
+      "source_version": "1.3.0-3",
+      "base_url": "https://deb.debian.org/debian/pool/main/r/rust-sequoia-sqv/",
+      "files": [
+        {
+          "file": "rust-sequoia-sqv_1.3.0-3.dsc",
+          "sha256": "98ad852ed30d42d3b0d6ce40d2f56a96fb443cc6fa2caeaa12516fe5bbe544af",
+          "size_bytes": 2704
+        },
+        {
+          "file": "rust-sequoia-sqv_1.3.0.orig.tar.gz",
+          "sha256": "8924571d26720b245292ad3c450e4061fcb24890461874790549747bffa35e60",
+          "size_bytes": 140759
+        },
+        {
+          "file": "rust-sequoia-sqv_1.3.0-3.debian.tar.xz",
+          "sha256": "be04e0365bc1206617a3e55d507bfce2e972819fb737e23a1112a717cc89b9bc",
+          "size_bytes": 3876
+        }
+      ],
+      "total_bytes": 147339,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/sed_4.9-2+deb13u1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "sed",
+      "source_version": "4.9-2+deb13u1",
+      "base_url": "https://deb.debian.org/debian/pool/main/s/sed/",
+      "files": [
+        {
+          "file": "sed_4.9-2+deb13u1.dsc",
+          "sha256": "9fcc5dffe5e712b4631757c057228ae57919aec1cca1c91a80e76719167f443b",
+          "size_bytes": 2047
+        },
+        {
+          "file": "sed_4.9.orig.tar.xz",
+          "sha256": "6e226b732e1cd739464ad6862bd1a1aba42d7982922da7a53519631d24975181",
+          "size_bytes": 1397092
+        },
+        {
+          "file": "sed_4.9-2+deb13u1.debian.tar.xz",
+          "sha256": "9c9aacda91e02802f33fb6a1a6e86f80be1bc67b92a4dae009e78f77e26e130a",
+          "size_bytes": 63644
+        }
+      ],
+      "total_bytes": 1462783,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/shadow_1:4.17.4-2": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "shadow",
+      "source_version": "1:4.17.4-2",
+      "base_url": "https://deb.debian.org/debian/pool/main/s/shadow/",
+      "files": [
+        {
+          "file": "shadow_4.17.4-2.dsc",
+          "sha256": "920de0d3be5303f2c0511d5531c1815abc258b15af8f9c511c8aa6d8e1a91a86",
+          "size_bytes": 2851
+        },
+        {
+          "file": "shadow_4.17.4.orig.tar.xz",
+          "sha256": "554801054694ff7d8a7abdf0d6ece34e2f16e111673cc01b8c9ee1278451181e",
+          "size_bytes": 2326584
+        },
+        {
+          "file": "shadow_4.17.4.orig.tar.xz.asc",
+          "sha256": "82437d2b54790b3a6734c526b757e693cd0c734ec6afd69f9a9cf0eb1dad8dc4",
+          "size_bytes": 488
+        },
+        {
+          "file": "shadow_4.17.4-2.debian.tar.xz",
+          "sha256": "97eaf0b3682a8a1a1ae6e4c4fac00885a7433d2487e636bde7c1c406e66bdb23",
+          "size_bytes": 167792
+        }
+      ],
+      "total_bytes": 2497715,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/systemd_257.13-1~deb13u1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "systemd",
+      "source_version": "257.13-1~deb13u1",
+      "base_url": "https://deb.debian.org/debian/pool/main/s/systemd/",
+      "files": [
+        {
+          "file": "systemd_257.13-1~deb13u1.dsc",
+          "sha256": "1b3405d671a82d1e20c9d99f52d4336aafe8543b28d04e91b7f1f586d3a667c7",
+          "size_bytes": 8696
+        },
+        {
+          "file": "systemd_257.13.orig.tar.gz",
+          "sha256": "1eb7d5f9ff8a426ff880a3cded9ce819613ba8003ac5ddde9eca162f14ddabe7",
+          "size_bytes": 16543653
+        },
+        {
+          "file": "systemd_257.13-1~deb13u1.debian.tar.xz",
+          "sha256": "9c6e435d613b996efcdb3b7dd9a4cebaa745333a3f64dc722f3fad646f1fdc1a",
+          "size_bytes": 183128
+        }
+      ],
+      "total_bytes": 16735477,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/sysvinit_3.14-4": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "sysvinit",
+      "source_version": "3.14-4",
+      "base_url": "https://deb.debian.org/debian/pool/main/s/sysvinit/",
+      "files": [
+        {
+          "file": "sysvinit_3.14-4.dsc",
+          "sha256": "1cfe65682218077e6f76011f0c5caacc9f2ab214d55893307d4a54c93312ac92",
+          "size_bytes": 2375
+        },
+        {
+          "file": "sysvinit_3.14.orig.tar.gz",
+          "sha256": "4e90a148707cf64113fc97343c053f9c0c9589551936b053999dcc69731f295f",
+          "size_bytes": 516357
+        },
+        {
+          "file": "sysvinit_3.14-4.debian.tar.xz",
+          "sha256": "2ba0aa763232112696bce50ee5acc707a515fcbd5b2c194193bfa7a0a525bff6",
+          "size_bytes": 122156
+        }
+      ],
+      "total_bytes": 640888,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/tar_1.35+dfsg-3.1": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "tar",
+      "source_version": "1.35+dfsg-3.1",
+      "base_url": "https://deb.debian.org/debian/pool/main/t/tar/",
+      "files": [
+        {
+          "file": "tar_1.35+dfsg-3.1.dsc",
+          "sha256": "5bb58d4966d94c99a9f1b182676089ecc05058d62fdb927f5c07539d9cda4077",
+          "size_bytes": 2017
+        },
+        {
+          "file": "tar_1.35+dfsg.orig.tar.xz",
+          "sha256": "9ae57e981c1e73c0eebc2b26c9b0c4497fe310ef1d516ea430efb5470b71f7a8",
+          "size_bytes": 2111608
+        },
+        {
+          "file": "tar_1.35+dfsg-3.1.debian.tar.xz",
+          "sha256": "0d0278034b82ed84dce04a461879b6e1871e4cb416a0ff04d3d35ff05fc30a53",
+          "size_bytes": 21540
+        }
+      ],
+      "total_bytes": 2135165,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    },
+    "trixie/util-linux_2.41-5": {
+      "distro": "debian",
+      "suite": "trixie",
+      "source_package": "util-linux",
+      "source_version": "2.41-5",
+      "base_url": "https://deb.debian.org/debian/pool/main/u/util-linux/",
+      "files": [
+        {
+          "file": "util-linux_2.41-5.dsc",
+          "sha256": "9e84dcc64170262f850aa5fd65902846a1ebf054d556ab5c4ec17fa16b00e628",
+          "size_bytes": 4942
+        },
+        {
+          "file": "util-linux_2.41.orig.tar.xz",
+          "sha256": "81ee93b3cfdfeb7d7c4090cedeba1d7bbce9141fd0b501b686b3fe475ddca4c6",
+          "size_bytes": 9535724
+        },
+        {
+          "file": "util-linux_2.41-5.debian.tar.xz",
+          "sha256": "20ad832160d5ed8de4759ce00652f620ce642ab583c3c1c431b68a15cdba1d07",
+          "size_bytes": 120144
+        }
+      ],
+      "total_bytes": 9660810,
+      "attestation": "every sha256 above is the one Debian's own archive index declares (dists/trixie/main/source/Sources.xz, itself declared by the OpenPGP-signed dists/trixie/InRelease), read on 2026-09-05. Correlix has NOT yet fetched and retained these bytes."
+    }
+  }
 }

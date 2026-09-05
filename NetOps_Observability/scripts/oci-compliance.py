@@ -110,6 +110,7 @@ from typing import Any
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 PIN_TABLE = os.path.join(ROOT, "scripts", "source-mirror.json")
 LICENSE_FACTS = os.path.join(ROOT, "scripts", "license-data.json")
+REVIEW_TABLE = os.path.join(ROOT, "scripts", "source-review.json")
 GO_MOD = os.path.join(ROOT, "src", "backend", "go.mod")
 INVENTORY = os.path.join(ROOT, "docs", "compliance", "oci-inventory.json")
 
@@ -186,6 +187,18 @@ STATUS_MANUAL_REVIEW = "manual-review"
 STATUS_UNKNOWN = "unknown"
 STATUS_PINNED = "pinned-not-materialized"
 
+# Licence-evidence shapes this policy CANNOT resolve on its own. They are the
+# only shapes a human review is allowed to answer: a review may settle a
+# question the scan could not reach, never overrule an answer it did reach.
+REVIEWABLE_CONFIDENCE = {
+    "license-list", "unknown-license", "no-license", "family-unspecified",
+    "opaque-expression",
+}
+# Confidences a review produces.
+CONF_REVIEWED_REQUIRED = "reviewed"
+CONF_REVIEWED_NOT_REQUIRED = "reviewed-not-required"
+CONF_REVIEWED_UNCLEAR = "reviewed-unclear"
+
 # Origins a component can have inside a final image.
 ORIGIN_FIRST_PARTY = "first-party"
 ORIGIN_INHERITED = "inherited-base-layer"
@@ -234,6 +247,127 @@ def load_pin_table(path: str | None = None) -> dict:
                 raise ComplianceError(
                     f"{p}: deferred entry {d.get('component', '?')!r} is missing `{field}`")
     return data
+
+
+# ── the reviewed licence determination ───────────────────────────────────────
+# A Debian copyright file is an unordered LIST of every licence appearing
+# anywhere in a SOURCE package. It does not say how the members relate, and it
+# does not say which of them govern the BINARY package the image installs. No
+# parser can resolve that; a person reading the file can. scripts/source-review.json
+# is where that reading is written down, one entry per (component, version),
+# each naming the evidence it rests on by path and sha256.
+#
+# The review is bounded on purpose (§3 zero-trust: a reviewed fact is still an
+# input):
+#   * it may only answer a question the scan could NOT resolve
+#     (REVIEWABLE_CONFIDENCE). Contradicting a resolved copyleft expression is a
+#     CONFLICT and aborts the run — never a quiet downgrade.
+#   * `source_required: false` clears the obligation and the review itself
+#     becomes the evidence recorded in the manifest.
+#   * "unclear" keeps the component in manual review, with `needs_human` set.
+#   * every review a `--release` run relies on must carry `owner_signoff: true`.
+_REVIEW_REQUIRED_VALUES = (True, False, "unclear")
+
+
+def load_reviews(path: str | None = None, *, required: bool = False) -> dict:
+    """scripts/source-review.json → {(component, version, package_type): review}.
+
+    Malformed is CANNOT RUN, never "no reviews": a review file we cannot parse
+    would silently re-open every obligation it was written to close, or silently
+    close one it was written to keep open.
+    """
+    p = path or REVIEW_TABLE
+    if not os.path.isfile(p):
+        if required or path:
+            raise ComplianceError(f"licence review table not found: {p}")
+        return {}
+    data = read_json(p, what="licence review table")
+    if not isinstance(data, dict):
+        raise ComplianceError(f"{p}: review table is not a JSON object")
+    entries = data.get("reviews")
+    if not isinstance(entries, list) or not entries:
+        raise ComplianceError(f"{p}: review table declares no `reviews`")
+    out: dict[tuple[str, str, str], dict] = {}
+    for r in entries:
+        if not isinstance(r, dict):
+            raise ComplianceError(f"{p}: a review entry is not an object")
+        for field in ("component", "version", "package_type", "rationale",
+                      "reviewer", "reviewed"):
+            if not r.get(field):
+                raise ComplianceError(
+                    f"{p}: review {r.get('component', '?')!r} is missing `{field}`")
+        if r.get("source_required") not in _REVIEW_REQUIRED_VALUES:
+            raise ComplianceError(
+                f"{p}: review {r['component']!r} has source_required="
+                f"{r.get('source_required')!r}; expected true, false or \"unclear\"")
+        ev = r.get("evidence")
+        if not isinstance(ev, dict) or not ev.get("path"):
+            raise ComplianceError(
+                f"{p}: review {r['component']!r} records no evidence path — a "
+                f"determination with no evidence is an assertion, not a review")
+        if r.get("source_required") == "unclear" and not r.get("needs_human"):
+            raise ComplianceError(
+                f"{p}: review {r['component']!r} is `unclear` but does not set "
+                f"`needs_human` — an unresolved review must ask for a human")
+        key = (r["component"], r["version"], r["package_type"])
+        if key in out:
+            raise ComplianceError(f"{p}: duplicate review for {key}")
+        out[key] = r
+    return out
+
+
+def review_for(component: dict, reviews: dict) -> dict | None:
+    """The review that covers this exact component version, or None."""
+    return reviews.get((component.get("name", ""), component.get("version", ""),
+                        component.get("package_type", "")))
+
+
+def apply_review(component: dict, verdict: dict, review: dict) -> dict:
+    """Fold a reviewed determination into the mechanical verdict.
+
+    Raises ComplianceError when the review contradicts a licence the scan
+    already resolved: two answers to the same question is a defect in the
+    record, and shipping under the more convenient one is exactly the failure
+    this file exists to prevent.
+    """
+    req = review["source_required"]
+    lic = " ; ".join(review.get("governing_licences") or []) or verdict["license"]
+    if req is False:
+        if verdict["source_required"] and verdict["confidence"] not in REVIEWABLE_CONFIDENCE:
+            raise ComplianceError(
+                f"scripts/source-review.json contradicts the image scan for "
+                f"{component.get('name')} {component.get('version')}: the scan RESOLVED "
+                f"{verdict['license']!r} [{verdict['confidence']}], which requires "
+                f"corresponding source, but the review says source_required=false. A "
+                f"review may answer a question the scan could not resolve; it may not "
+                f"overrule an answer the scan reached.")
+        return {"license": lic, "source_required": False,
+                "confidence": CONF_REVIEWED_NOT_REQUIRED,
+                "reason": f"reviewed {review['reviewed']} by {review['reviewer']}: "
+                          f"{review['rationale']}"}
+    if req == "unclear":
+        return {"license": lic, "source_required": True,
+                "confidence": CONF_REVIEWED_UNCLEAR,
+                "reason": f"reviewed {review['reviewed']} by {review['reviewer']} and NOT "
+                          f"resolved: {review['rationale']}"}
+    return {"license": lic, "source_required": True,
+            "confidence": CONF_REVIEWED_REQUIRED,
+            "reason": f"reviewed {review['reviewed']} by {review['reviewer']}: "
+                      f"{review['rationale']}"}
+
+
+def review_record(review: dict) -> dict:
+    """The subset of a review that travels into the compliance manifest."""
+    return {
+        "source_required": review["source_required"],
+        "needs_human": bool(review.get("needs_human")),
+        "governing_licences": list(review.get("governing_licences") or []),
+        "evidence": dict(review.get("evidence") or {}),
+        "rationale": review["rationale"],
+        "reviewer": review["reviewer"],
+        "reviewed": review["reviewed"],
+        "owner_signoff": bool(review.get("owner_signoff")),
+    }
 
 
 # ── licence normalization ────────────────────────────────────────────────────
@@ -513,6 +647,21 @@ def normalize_component(comp: dict, *, image: str, image_digest: str,
                       or name)
     distro = purl["qualifiers"].get("distro", "") or purl["namespace"]
 
+    # The DISTRIBUTION BUILD REFERENCE — what identifies the exact source tree a
+    # distribution built this binary from. Each ecosystem spells it differently
+    # and neither spelling is guessed:
+    #   apk   the aports commit, which Alpine writes into /lib/apk/db/installed
+    #         and Syft carries through verbatim.
+    #   deb   the SOURCE-package version. Debian's archive is versioned, not
+    #         commit-addressed: <source name>_<source version> names exactly one
+    #         immutable source package. Syft reports it as sourceVersion; when
+    #         Debian states none it is because it equals the binary version.
+    build_ref = props.get("syft:metadata:gitCommitOfApkPort", [""])[0]
+    build_ref_kind = "aports-commit" if build_ref else ""
+    if not build_ref and ptype in ("deb", "dpkg"):
+        build_ref = props.get("syft:metadata:sourceVersion", [""])[0] or version
+        build_ref_kind = "deb-source-version" if build_ref else ""
+
     return {
         "name": name,
         "version": version,
@@ -534,9 +683,11 @@ def normalize_component(comp: dict, *, image: str, image_digest: str,
         # connectors are only meaningful in place.
         "licenses_raw": raw_ids,
         "license_expressions": exprs,
-        # Alpine records the aports commit that BUILT the package. That is the
-        # exact-source pointer for a distro build, so it is preserved verbatim.
-        "distro_build_ref": props.get("syft:metadata:gitCommitOfApkPort", [""])[0],
+        # How the distribution names the exact source tree this binary was built
+        # from (see `build_ref` above). `correspondence_for` compares it with the
+        # build reference a retained packaging artifact is pinned to.
+        "distro_build_ref": build_ref,
+        "distro_build_ref_kind": build_ref_kind,
     }
 
 
@@ -784,6 +935,65 @@ def load_base_layers(path: str | None) -> set[str] | None:
     return layers
 
 
+# ── the base-image digest lock ───────────────────────────────────────────────
+# A compliance evaluation is a statement about SPECIFIC BYTES. Every finding in
+# it — which packages are present, which licences they carry, which retained
+# source matches them — is a property of the base images the build pinned at the
+# time of the scan. Bump a `FROM …@sha256:` digest and every one of those
+# statements is about an image that no longer exists.
+#
+# So the digests the tree pins are recorded IN the committed inventory, and
+# tests/test_oci_digest_lock.py fails when the tree and the inventory disagree.
+# The failure means one thing: an image was re-pinned without a fresh compliance
+# evaluation. Re-scan, regenerate, re-review the register (see
+# docs/compliance/OCI_SOURCE_COMPLIANCE.md §13).
+# Applied line by line (see `scan_pinned_images`), so `^` needs no MULTILINE.
+_PINNED_DOCKERFILE = re.compile(r"^\s*FROM\s+(?P<ref>[^\s#]+@sha256:[0-9a-f]{64})")
+_PINNED_COMPOSE = re.compile(
+    r"^\s*image:\s*[\"']?(?P<ref>[^\s\"'#]+@sha256:[0-9a-f]{64})")
+
+
+def scan_pinned_images(root: str | None = None) -> list[dict]:
+    """Every image the build definitions pin by immutable digest.
+
+    Reads `deployment/docker/Dockerfile.*` and `deployment/docker/*.yml`. A file
+    that cannot be read aborts by name: a lock built from a partial scan would
+    silently stop covering whatever it failed to read.
+    """
+    base = os.path.join(root or ROOT, "deployment", "docker")
+    if not os.path.isdir(base):
+        raise ComplianceError(
+            f"cannot build the base-image digest lock: {base} is not a directory")
+    found: dict[str, set[str]] = {}
+    for name in sorted(os.listdir(base)):
+        path = os.path.join(base, name)
+        if not os.path.isfile(path):
+            continue
+        if name.startswith("Dockerfile"):
+            pattern = _PINNED_DOCKERFILE
+        elif name.endswith((".yml", ".yaml")):
+            pattern = _PINNED_COMPOSE
+        else:
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError as exc:
+            raise ComplianceError(f"cannot read {path}: {exc}") from exc
+        for lineno, line in enumerate(text.splitlines(), 1):
+            m = pattern.match(line)
+            if m:
+                found.setdefault(m.group("ref"), set()).add(
+                    f"deployment/docker/{name}:{lineno}")
+    out = []
+    for ref, sources in found.items():
+        image, _, digest = ref.partition("@")
+        out.append({"image": image, "digest": digest,
+                    "pinned_in": sorted(sources)})
+    out.sort(key=lambda e: (e["image"], e["digest"]))
+    return out
+
+
 # ── artifact location + verification ─────────────────────────────────────────
 def _provides_match(component: dict, prov: dict) -> bool:
     if not (prov.get("source_package") or prov.get("name")):
@@ -920,10 +1130,12 @@ def verify_artifact(entry: dict, source_dir: str | None) -> tuple[str, str, str]
 # ── evaluation ───────────────────────────────────────────────────────────────
 def evaluate(components: list[dict], pins: dict, *, source_dir: str | None,
              facts: dict[str, dict[str, str]] | None = None,
-             first_party: list[str] | None = None) -> list[dict]:
+             first_party: list[str] | None = None,
+             reviews: dict | None = None) -> list[dict]:
     """Normalized components → compliance records."""
     facts = facts or {}
     first_party = first_party or []
+    reviews = reviews or {}
     records: list[dict] = []
     for c in components:
         licenses_raw = list(c["licenses_raw"])
@@ -993,7 +1205,17 @@ def evaluate(components: list[dict], pins: dict, *, source_dir: str | None,
                 verdict = evaluate_licenses(licenses_raw, expressions)
                 license_source = "scripts/license-data.json (reviewed)"
 
+        # A REVIEWED determination for exactly this component version. It is the
+        # only thing that can settle a licence list, and it is bounded: see
+        # `apply_review` (a review that contradicts a RESOLVED licence aborts).
+        review = review_for(c, reviews)
+        if review is not None:
+            verdict = apply_review(c, verdict, review)
+            license_source = "scripts/source-review.json (reviewed)"
+
         rec = dict(c)
+        if review is not None:
+            rec["review"] = review_record(review)
         rec["license_source"] = license_source
         rec["license"] = verdict["license"]
         rec["license_confidence"] = verdict["confidence"]
@@ -1039,9 +1261,9 @@ def evaluate(components: list[dict], pins: dict, *, source_dir: str | None,
         rec["source_sha256"] = ""
         rec["correspondence"] = ""
         rec["source_status"] = (
-            STATUS_MANUAL_REVIEW if verdict["confidence"] in
-            ("license-list", "unknown-license", "family-unspecified",
-             "opaque-expression", "no-license")
+            STATUS_MANUAL_REVIEW
+            if verdict["confidence"] in REVIEWABLE_CONFIDENCE
+            or verdict["confidence"] == CONF_REVIEWED_UNCLEAR
             else STATUS_UNKNOWN)
         record = deferred_for(c, pins)
         if record:
@@ -1053,7 +1275,8 @@ def evaluate(components: list[dict], pins: dict, *, source_dir: str | None,
         else:
             rec["deferred"] = False
             rec["source_status"] = (
-                STATUS_MISSING if verdict["confidence"] == "expression"
+                STATUS_MISSING
+                if verdict["confidence"] in ("expression", CONF_REVIEWED_REQUIRED)
                 else rec["source_status"])
         records.append(rec)
     return records
@@ -1083,6 +1306,20 @@ def violations(records: list[dict], *, release: bool) -> list[dict]:
         })
 
     for r in records:
+        # A reviewed determination is only as good as its sign-off. An automated
+        # first pass may clear a licence list for a daily build; it may NOT clear
+        # a production release on its own, in either direction — so every review
+        # this evaluation relied on, including the ones that merely confirmed an
+        # obligation, must carry the owner's signature before `--release` passes.
+        rev = r.get("review")
+        if release and rev and not rev.get("owner_signoff"):
+            add(r, "review-not-signed-off",
+                "This component's corresponding-source obligation was decided by a "
+                "licence review (scripts/source-review.json, "
+                f"source_required={rev.get('source_required')!r}, reviewed "
+                f"{rev.get('reviewed')} by {rev.get('reviewer')}) that the owner has "
+                "NOT signed off. A production release may not rest on an unsigned "
+                "review: read the entry, then set `owner_signoff: true` on it.")
         if not r.get("source_required"):
             continue
         status = r["source_status"]
@@ -1148,6 +1385,12 @@ def build_manifest(image: str, digest: str, records: list[dict], *,
     counts: dict[str, int] = {}
     for r in records:
         counts[r["source_status"]] = counts.get(r["source_status"], 0) + 1
+    relied = [
+        {"component": r["name"], "version": r["version"],
+         "package_type": r["package_type"], **r["review"]}
+        for r in sorted(records, key=lambda x: (x["name"].lower(), x["version"]))
+        if r.get("review")
+    ]
     return {
         "schema_version": SCHEMA_VERSION,
         "generated": os.environ.get("SOURCE_DATE_EPOCH")
@@ -1162,6 +1405,13 @@ def build_manifest(image: str, digest: str, records: list[dict], *,
         "retained_source_dir": source_dir or "",
         "component_count": len(records),
         "status_counts": dict(sorted(counts.items())),
+        # The reviewed determinations this verdict rests on, copied in full so a
+        # manifest is auditable on its own: which licences were decided by a
+        # person rather than by the scan, on what evidence, and whether the owner
+        # has signed each one off.
+        "reviews_relied_on": relied,
+        "reviews_unsigned": sum(1 for r in relied if not r["owner_signoff"]),
+        "reviews_needing_human": sum(1 for r in relied if r["needs_human"]),
         # File entries are excluded from the evaluation (see `is_file_entry`) and
         # listed here rather than dropped: an exclusion nobody can see is
         # indistinguishable from a scanner that lost them.
@@ -1186,7 +1436,8 @@ def write_manifest(manifest: dict, path: str) -> None:
         raise ComplianceError(f"cannot write the compliance manifest {path}: {exc}") from exc
 
 
-def merge_inventory(manifests: list[dict]) -> dict:
+def merge_inventory(manifests: list[dict], *,
+                    pinned_images: list[dict] | None = None) -> dict:
     """Many per-image manifests → the committed inventory license-audit.py reads.
 
     Keyed by (name, version, license) so the SAME component in several images is
@@ -1215,6 +1466,7 @@ def merge_inventory(manifests: list[dict]) -> dict:
                     "source_artifact": c.get("source_artifact", ""),
                     "source_sha256": c.get("source_sha256", ""),
                     "correspondence": c.get("correspondence", ""),
+                    "review": c.get("review", {}),
                     "images": [],
                 }
                 rows[key] = row
@@ -1258,12 +1510,30 @@ def merge_inventory(manifests: list[dict]) -> dict:
             "scripts/license-audit.py and the generated notices see inherited-layer",
             "software without a Docker daemon.",
             "",
+            "`pinned_base_images` is the BASE-IMAGE DIGEST LOCK: every image the build",
+            "definitions pinned by digest when this evaluation ran. Bumping one of those",
+            "digests without regenerating this file means every finding below describes",
+            "bytes that are no longer shipped, so tests/test_oci_digest_lock.py compares",
+            "the tree against this list and fails when they diverge.",
+            "",
+            "Each component carries the `review` (scripts/source-review.json) its verdict",
+            "rests on, where one was needed — a Debian copyright file is a LIST of",
+            "licences, not an expression, and only a person can say which of them govern",
+            "the binary that is actually installed.",
+            "",
             "Regenerate with scripts/oci-compliance.py; see",
             "docs/compliance/OCI_SOURCE_COMPLIANCE.md for the whole chain.",
         ],
         "images": sorted({(m["image"], m["image_digest"]) for m in manifests}) and
         [{"image": a, "digest": b}
          for a, b in sorted({(m["image"], m["image_digest"]) for m in manifests})],
+        # THE BASE-IMAGE DIGEST LOCK. Every image the build definitions pin by
+        # digest, as they pinned it when this evaluation ran. Bumping one without
+        # re-running the evaluation makes this whole file a statement about bytes
+        # that are no longer shipped, so tests/test_oci_digest_lock.py compares
+        # the tree against this list and fails when they diverge.
+        "pinned_base_images": list(pinned_images if pinned_images is not None
+                                   else scan_pinned_images()),
         "components": sorted(rows.values(),
                              key=lambda r: (r["name"].lower(), r["version"])),
     }
@@ -1288,6 +1558,47 @@ def propose_deferred(records: list[dict], today: str) -> list[dict]:
             "recorded": today,
         })
     return out
+
+
+# ── review summary ───────────────────────────────────────────────────────────
+def print_reviews(path: str | None) -> int:
+    """`--reviews`: what the licence review says, and what still needs a human.
+
+    Exit 0 always: this is a REPORT, not a gate. The gate is `--release`, which
+    fails on every unsigned review it relies on and on every component the
+    review left unresolved.
+    """
+    reviews = load_reviews(path, required=True)
+    entries = sorted(reviews.values(),
+                     key=lambda r: (r["component"].lower(), r["version"]))
+    req = [r for r in entries if r["source_required"] is True]
+    notreq = [r for r in entries if r["source_required"] is False]
+    unclear = [r for r in entries if r["source_required"] == "unclear"]
+    human = [r for r in entries if r.get("needs_human")]
+    unsigned = [r for r in entries if not r.get("owner_signoff")]
+    by_type: dict[str, int] = {}
+    for r in entries:
+        by_type[r["package_type"]] = by_type.get(r["package_type"], 0) + 1
+
+    print(f"oci-compliance: {len(entries)} licence review(s) in "
+          f"{path or REVIEW_TABLE}")
+    print(f"  source required        : {len(req)}")
+    print(f"  no source obligation   : {len(notreq)}")
+    print(f"  UNCLEAR                : {len(unclear)}")
+    print(f"  needs a human          : {len(human)}")
+    print(f"  awaiting owner signoff : {len(unsigned)}"
+          f"{'  (--release FAILS on every one it relies on)' if unsigned else ''}")
+    print("  by package type        : "
+          + ", ".join(f"{k}={v}" for k, v in sorted(by_type.items())))
+    if human:
+        print("\n  Reviews that a human must still resolve:")
+        for r in human:
+            print(f"    ! {r['component']} {r['version']} [{r['package_type']}] "
+                  f"source_required={r['source_required']!r}")
+            print(f"        evidence : {r['evidence'].get('path', '')}")
+            print(f"        why      : {r['rationale']}")
+    print("\n  see docs/compliance/OCI_SOURCE_COMPLIANCE.md §12")
+    return 0
 
 
 # ── selftest ─────────────────────────────────────────────────────────────────
@@ -1425,6 +1736,81 @@ def selftest() -> int:
           [v["kind"] for v in violations([rec], release=False)],
           ["no-artifact:manual-review"])
 
+    # A review settles what the scan could not, and only that.
+    listed = {"license": "MIT ; GPL-2.0-only", "source_required": True,
+              "confidence": "license-list", "reason": "…"}
+    resolved = {"license": "GPL-2.0-only", "source_required": True,
+                "confidence": "expression", "reason": "…"}
+    rev_no = {"component": "x", "version": "1", "package_type": "deb",
+              "source_required": False, "needs_human": False,
+              "governing_licences": ["MIT"], "rationale": "the shipped binary is MIT",
+              "reviewer": "t", "reviewed": "2026-09-05", "owner_signoff": False,
+              "evidence": {"path": "/usr/share/doc/x/copyright", "sha256": "ab"}}
+    comp = {"name": "x", "version": "1", "package_type": "deb"}
+    check("a review clears an unresolvable licence list",
+          apply_review(comp, listed, rev_no)["source_required"], False)
+    check("a cleared component is marked as reviewed",
+          apply_review(comp, listed, rev_no)["confidence"], CONF_REVIEWED_NOT_REQUIRED)
+    try:
+        apply_review(comp, resolved, rev_no)
+    except ComplianceError:
+        check("a review cannot overrule a resolved copyleft licence", True, True)
+    else:
+        check("a review cannot overrule a resolved copyleft licence", False, True)
+    rev_unclear = dict(rev_no, source_required="unclear", needs_human=True)
+    check("an unclear review keeps the obligation",
+          apply_review(comp, listed, rev_unclear)["source_required"], True)
+    check("an unclear review stays in manual review",
+          apply_review(comp, listed, rev_unclear)["confidence"], CONF_REVIEWED_UNCLEAR)
+    rev_yes = dict(rev_no, source_required=True, governing_licences=["GPL-2.0-or-later"])
+    check("a confirming review keeps the obligation",
+          apply_review(comp, listed, rev_yes)["source_required"], True)
+
+    # The review travels into the record, and an unsigned one fails --release
+    # (in BOTH directions: confirming and clearing).
+    norm_x = normalize_component(
+        {"type": "library", "name": "x", "version": "1",
+         "purl": "pkg:deb/debian/x@1",
+         "licenses": [{"license": {"id": "MIT"}}, {"license": {"id": "GPL-2.0-only"}}]},
+        image="i", image_digest="sha256:" + "0" * 64, base_layers=None)
+    reviewed = evaluate([norm_x], {"components": [], "deferred": []},
+                        source_dir=None,
+                        reviews={("x", "1", "deb"): rev_no})[0]
+    check("a cleared component needs no source",
+          reviewed["source_status"], STATUS_NOT_REQUIRED)
+    check("the review is recorded on the component",
+          reviewed["review"]["rationale"], "the shipped binary is MIT")
+    check("a cleared component is clean on a normal run",
+          violations([reviewed], release=False), [])
+    check("an unsigned review fails a release",
+          [v["kind"] for v in violations([reviewed], release=True)],
+          ["review-not-signed-off"])
+    signed = evaluate([norm_x], {"components": [], "deferred": []}, source_dir=None,
+                      reviews={("x", "1", "deb"): dict(rev_no, owner_signoff=True)})[0]
+    check("a signed review passes a release",
+          violations([signed], release=True), [])
+
+    # Debian's exact build reference is the SOURCE-package version.
+    deb = normalize_component(
+        {"type": "library", "name": "libseccomp2", "version": "2.6.0-2",
+         "purl": "pkg:deb/debian/libseccomp2@2.6.0-2?upstream=libseccomp",
+         "properties": [{"name": "syft:package:type", "value": "deb"},
+                        {"name": "syft:metadata:source", "value": "libseccomp"}]},
+        image="i", image_digest="sha256:" + "0" * 64, base_layers=None)
+    check("deb build ref falls back to the binary version",
+          deb["distro_build_ref"], "2.6.0-2")
+    check("deb build ref names its own kind",
+          deb["distro_build_ref_kind"], "deb-source-version")
+    deb2 = normalize_component(
+        {"type": "library", "name": "libacl1", "version": "2.3.2-2+b1",
+         "purl": "pkg:deb/debian/libacl1@2.3.2-2%2Bb1?upstream=acl%402.3.2-2",
+         "properties": [{"name": "syft:package:type", "value": "deb"},
+                        {"name": "syft:metadata:source", "value": "acl"},
+                        {"name": "syft:metadata:sourceVersion", "value": "2.3.2-2"}]},
+        image="i", image_digest="sha256:" + "0" * 64, base_layers=None)
+    check("a binNMU takes the SOURCE version as its build ref",
+          deb2["distro_build_ref"], "2.3.2-2")
+
     if fails:
         for f in fails:
             print(f"selftest FAIL: {f}", file=sys.stderr)
@@ -1444,6 +1830,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--source-dir", help="directory of retained source artifacts "
                                          "(the bundle's source-offer/)")
     ap.add_argument("--pins", help="pin table (default scripts/source-mirror.json)")
+    ap.add_argument("--reviews", action="store_true",
+                    help="summarise scripts/source-review.json: how many "
+                         "obligations the review cleared, how many it confirmed, "
+                         "and every entry that still needs a human")
+    ap.add_argument("--review-table",
+                    help="licence review table (default scripts/source-review.json)")
     ap.add_argument("--license-facts",
                     help="reviewed licence facts for components an image scan "
                          "cannot resolve (default scripts/license-data.json)")
@@ -1467,12 +1859,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.selftest:
         return selftest()
 
+    if args.reviews:
+        try:
+            return print_reviews(args.review_table)
+        except ComplianceError as exc:
+            print(f"oci-compliance: CANNOT RUN: {exc}", file=sys.stderr)
+            return 2
+
     try:
         if args.emit_inventory:
             if not args.manifest_in:
                 raise ComplianceError("--emit-inventory needs at least one --manifest-in")
             manifests = [read_json(p, what="compliance manifest") for p in args.manifest_in]
-            inv = merge_inventory(manifests)
+            inv = merge_inventory(manifests, pinned_images=scan_pinned_images())
             write_manifest(inv, args.emit_inventory)
             print(f"oci-compliance: wrote {args.emit_inventory} "
                   f"({len(inv['components'])} components, {len(inv['images'])} image(s))")
@@ -1500,7 +1899,8 @@ def main(argv: list[str] | None = None) -> int:
                                     base_layers=base_layers) for c in raw]
         records = evaluate(norm, pins, source_dir=args.source_dir,
                            facts=load_license_facts(args.license_facts),
-                           first_party=first_party_prefixes(args.first_party))
+                           first_party=first_party_prefixes(args.first_party),
+                           reviews=load_reviews(args.review_table))
     except ComplianceError as exc:
         print(f"oci-compliance: CANNOT RUN: {exc}", file=sys.stderr)
         return 2

@@ -164,7 +164,7 @@ real obligation disappears:
 | shape | example | verdict |
 |---|---|---|
 | **expression** | `GPL-2.0-only`, `MIT AND GPL-2.0-or-later`, `BSD-3-Clause OR GPL-2.0-or-later` | resolved. `OR` is taken on its most permissive branch (dual licensing is our choice to make); `AND` requires source if any term does |
-| **list** | Debian: `MIT ; GPL-2.0-only ; BSD-3-Clause` | **manual-review** if any member is copyleft. A dpkg copyright file lists every licence appearing anywhere in a source package with no stated relationship, so `MIT AND GPL` and `MIT OR GPL` are indistinguishable — guessing either way is wrong |
+| **list** | Debian: `MIT ; GPL-2.0-only ; BSD-3-Clause` | **manual-review** if any member is copyleft. A dpkg copyright file lists every licence appearing anywhere in a source package with no stated relationship, so `MIT AND GPL` and `MIT OR GPL` are indistinguishable — guessing either way is wrong. This is the shape a written review (§12) is allowed to settle |
 | **unknown** | no licence recorded, or an id outside the tables | **manual-review**. An undetermined licence is never assumed obligation-free |
 
 A reviewed fact in `scripts/license-data.json` takes precedence **only** where
@@ -223,12 +223,41 @@ So a component can be served by two artifacts:
 
 | value | meaning |
 |---|---|
-| `distro-exact` | a `distro-packaging` artifact is pinned to the SAME build reference the image's own package database records. Alpine writes the aports commit into `/lib/apk/db/installed`; Syft carries it through, and the tool compares them |
+| `distro-exact` | a `distro-packaging` artifact is pinned to the SAME build reference the image's own package database records. Each ecosystem spells that reference differently and neither spelling is guessed — Alpine writes the aports commit into `/lib/apk/db/installed`, Debian's is the SOURCE-package version (`<source name>_<source version>` names exactly one immutable source package in the archive). Syft carries both through (`gitCommitOfApkPort`, `sourceVersion`) and the tool compares them; the record says which kind it used (`distro_build_ref_kind`) |
 | `upstream-release` | the right program at the right version, with no packaging artifact — exact correspondence with the distribution build is **not** asserted |
 | `distro-packaging-mismatch` | packaging is retained but was built from a different reference |
 | `distro-packaging-unverified` | packaging is retained but the image records nothing to check it against |
 
 Claiming more than the evidence supports is worse than claiming less.
+
+### Mirroring a Debian source package
+
+For a Debian component the corresponding source is **the source package that
+produced the shipped binary version**, not "the upstream project at roughly that
+version". Retrieving it:
+
+1. The image's own `/var/lib/dpkg/status` gives the binary version and, where it
+   differs, the `Source:` name and version. Syft carries them as
+   `syft:metadata:source` / `syft:metadata:sourceVersion`, which is what the pin
+   is matched against.
+2. `dists/<suite>/InRelease` is OpenPGP-signed by Debian and declares the sha256
+   of `main/source/Sources.xz`; that index declares the sha256 of the `.dsc`,
+   the `.orig.tar.*` and the `.debian.tar.*`. **That is the attestation chain**,
+   and `verified_against` on each pin records which link it matched.
+3. Fetch from `deb.debian.org/debian/pool/main/<prefix>/<source>/`. A *native*
+   package (`hostname`, `netbase`, `base-files`) has no separate upstream
+   tarball: the single `.tar.xz` is the whole corresponding source.
+4. Pin the `.orig.tar.*` (or the native tarball) as `corresponding-source`, and
+   the `.debian.tar.*` and `.dsc` as `distro-packaging` with
+   `distro_package.build_ref` set to the SOURCE version. That is what earns
+   `distro-exact`.
+
+**The live pool is not an archive.** `base-files` proved it: the versions the
+images ship (`12.4+deb12u14`, `13.8+deb13u5`) had already been superseded in
+`pool/` by `u15`/`u6` and had to be recovered from `snapshot.debian.org` — whose
+`/mr/package/<pkg>/<version>/srcfiles?fileinfo=1` gives the sha1 the file is
+content-addressed by, and whose `.dsc` is signed and declares the tarball's
+sha256. A recorded obligation is not a safe one; source availability decays.
 
 ### Where the artifacts live
 
@@ -240,7 +269,8 @@ history, and the obligation is to the *recipient of the binary*, so:
 |---|---|---|
 | pin table, checksums, provenance, licence facts | `scripts/source-mirror.json` (git) | forever, in history |
 | compliance manifests + inventory | `docs/compliance/` (git) | forever, in history |
-| the source archives themselves | the release bundle's `source-offer/`, covered by its `SHA256SUMS`, and uploaded as GitHub Release assets by `release-bundle.yml` | **as long as the release they support** (§8) |
+| small source archives (≤ ~500 KB: every Alpine packaging archive, the small Debian source packages, three small upstream tarballs) | `compliance/corresponding-sources/` (git) — taken FIRST by the installer via `CORRELIX_SOURCE_MIRROR_DIR` and re-checksummed exactly as a download would be | forever, in history |
+| large upstream tarballs (gettext, libgcrypt, libgpg-error, libidn2, libunistring, musl, libseccomp's orig, busybox, syslog-ng) | fetched per release from the pinned URL, then the release bundle's `source-offer/`, covered by its `SHA256SUMS`, and uploaded as GitHub Release assets by `release-bundle.yml` | **as long as the release they support** (§8). A Correlix-controlled artifact store for these is tracker 261 |
 
 An air-gapped build host sets `CORRELIX_SOURCE_MIRROR_DIR` to a directory of
 pre-fetched archives. The checksum gate applies there exactly as it does to a
@@ -258,6 +288,10 @@ download: local provenance is not trusted provenance.
 | `invalid` | present, wrong bytes | **FAIL** |
 | `unknown` | evaluation incomplete | **FAIL** |
 
+One more thing can fail a release without being a component status: a licence
+review (§12) that this evaluation relied on and the owner has not signed off
+(`review-not-signed-off`).
+
 Upstream availability alone never reaches `verified`.
 
 ---
@@ -272,10 +306,29 @@ discharge it.
 * every entry is **version-pinned**, so a base-image bump stops matching and the
   gate asks again. A blanket rule would hide exactly the class of defect that
   produced tracker 238.
+* every entry is **REVIEWED** (§12). Its `review` block says what the reviewer
+  concluded and whether a human still has to look; a component whose review
+  concluded that no obligation exists is not listed here at all.
+* every Debian entry carries a `source_coordinates_ref` into
+  `deferred_source_coordinates`, which names the exact source package, version,
+  URL and **Debian-attested sha256** of every file that would discharge it, and
+  its size. Mirroring is then mechanical, and the cost of doing it is a number
+  in the file rather than an argument.
 * they are printed loudly on every run of `scripts/oci-compliance.py` and by
   `scripts/license-audit.py --check`.
 * they **FAIL `--release`**. A recorded posture is not a verified artifact.
 * a component in **neither** section fails every mode. Silence is never a pass.
+
+**State on 2026-09-05.** 21 inventory rows are `verified`, all of them
+`distro-exact`: BusyBox and its two subpackages, the sixteen definite-copyleft
+components the 2026-09-05 scan surfaced (`alpine-baselayout`(+`-data`),
+`apk-tools`, `geoip`, `gettext-envsubst`, `libintl`, `libgcrypt`,
+`libgpg-error`, `libidn2`, `libunistring`, `musl-utils`, `scanelf`, `hostname`,
+`libseccomp2`, `netbase` ×2), and `base-files` ×2. 57 rows remain
+recorded-and-unretained, essentially all of them the Debian surface of
+`netops-correlation`; retaining them is ~228 MB across 38 source packages, which
+is why the cheaper fix is to shrink that surface (tracker 260) rather than to
+ship the archive.
 
 ---
 
@@ -417,9 +470,16 @@ python3 scripts/oci-compliance.py --emit-inventory docs/compliance/oci-inventory
 python3 scripts/license-audit.py --notices
 (cd src/frontend && node scripts/gen-licenses.mjs)
 
+# 7. what the licence review says, and what still needs a human
+python3 scripts/oci-compliance.py --reviews
+
 python3 scripts/oci-compliance.py --selftest
-python3 -m pytest tests/test_oci_compliance.py -v
+python3 -m pytest tests/test_oci_compliance.py tests/test_oci_digest_lock.py -v
 ```
+
+Step 5 also refreshes the **base-image digest lock** (§13): the inventory
+records every digest the build definitions pin, and `tests/test_oci_digest_lock.py`
+fails if the tree moves without a fresh evaluation.
 
 Regenerate the regression fixtures (`tests/fixtures/oci-regression/`) only when
 the pinned Alpine bases change; the checked-in SBOMs are real Syft output and
@@ -446,19 +506,142 @@ else changes: the policy and the gate are ecosystem-agnostic.
 
 **Discharging a `deferred` entry.** Add a `components` entry with the upstream
 source (and, for a distribution package, its packaging archive at the exact
-build reference), then delete the `deferred` row. `make-installer.sh` will
-mirror it into the next bundle with no code change.
+build reference — §5 has the Debian recipe), then delete the `deferred` row.
+`make-installer.sh` will mirror it into the next bundle with no code change. If
+the archive is ≤ ~500 KB, retain a copy in `compliance/corresponding-sources/`
+and list it in that directory's README; otherwise leave it to be fetched per
+release from its pinned URL.
+
+**Answering a `manual-review` component.** Add an entry to
+`scripts/source-review.json` (§12): the evidence file the image itself carries
+with its sha256, the licences governing the shipped binary, the verdict, and one
+sentence of rationale. A review that clears an obligation must be able to say
+which files the copyleft stanzas cover and that this binary package does not
+ship them.
 
 **A base-image bump.** Rescan, regenerate the inventory, and re-review the
 register: pinned versions will have moved and the gate will say so.
 
 ---
 
-## 12. Known limitations
+## 12. The licence review record
+
+`scripts/source-review.json` is where the question a scanner cannot answer gets
+answered by a person, in writing.
+
+**The question.** A Debian `copyright` file is an unordered **list** of every
+licence appearing anywhere in a *source* package. It states no relationship
+between the members (so `MIT AND GPL` and `MIT OR GPL` are indistinguishable)
+and it does not say which of them govern the *binary* package the image
+installs. `libselinux1` ships one file, `libselinux.so.1`, from a
+`Files: *  License: public-domain` tree — and its copyright file also contains a
+GPL-2 stanza, for `utils/avcstat.c`, which lives in a different binary package.
+Guessing either way is wrong, so the policy lands all of them in
+`manual-review` and fails closed.
+
+**The answer.** One entry per (component, version, package type):
+
+| field | what it holds |
+|---|---|
+| `evidence` | a file **the image itself carries** — `/usr/share/doc/<pkg>/copyright`, the Alpine `APKBUILD` at the exact aports commit the apk database records, the apk database record itself, or an in-image licence text — with its `sha256`, so the determination can be re-checked against the same bytes |
+| `governing_licences` | the licences governing the **shipped binary**, not every licence in the source tree |
+| `source_required` | `true`, `false`, or `"unclear"` |
+| `needs_human` | set whenever the evidence did not settle it — mandatory when `source_required` is `"unclear"` |
+| `rationale` | one sentence saying *why*, naming the stanza and (where it mattered) the package's own file list in the image |
+| `reviewer`, `reviewed`, `owner_signoff` | who, when, and whether the owner has signed it |
+
+**What a review may and may not do.**
+
+* `false` turns a `manual-review` component into `not-required`, **with the
+  review recorded in the compliance manifest as the evidence**.
+* `"unclear"` keeps it in manual review, with `needs_human` set.
+* `true` leaves the obligation standing; the component stays in `deferred`.
+* It may only answer a shape the scan could not resolve (a licence list, an
+  unknown id, an absent licence, an unversioned copyleft family, an opaque
+  expression). **A review that contradicts a RESOLVED copyleft expression is a
+  conflict and aborts the run (exit 2)** — never a quiet downgrade.
+
+**Owner sign-off.** Every review is `owner_signoff: false` until the owner sets
+it to `true` by editing that file. `--release` refuses while any review it
+relied on is unsigned — in **both** directions, including reviews that merely
+confirmed an obligation, because signing is how the owner accepts the pass as a
+whole. An automated first pass can make a daily build honest; it cannot clear a
+customer release on its own.
+
+```bash
+python3 scripts/oci-compliance.py --reviews      # counts + every needs_human item
+```
+
+**State on 2026-09-05.** 95 review entries covering the 94 components the scan
+could not resolve (`Simple Launcher` is recorded twice, once per package type
+Syft can report it under — see below). 59 confirmed a real obligation, 33 found
+none, 2 came back `unclear`, and **all 95 are awaiting owner sign-off**. The two
+unclear ones:
+
+* **`dash 0.5.12-12`** — `Files: *` is BSD-3-Clause and the only copyleft stanza
+  is `Files: src/mksignames.c  License: GPL-2+`. `mksignames.c` is a build-time
+  generator whose *output* is compiled into `/usr/bin/dash`. Whether the shipped
+  binary is a derivative of a GPL-2+ work is a legal judgement, not a parsing
+  one.
+* **`Simple Launcher 1.1.0.14`** — six **Windows** PE stubs vendored inside pip
+  (`pip/_vendor/distlib/{t32,t64,t64-arm,w32,w64,w64-arm}.exe`). They cannot
+  execute in a Linux image and nothing links them, but the image ships no
+  licence text beside them, and Correlix does not assert a licence it cannot
+  read out of the artifact it ships. Note that *which package type* they are
+  reported under is a property of the scanner (`binary` from the PE cataloger,
+  `nuget` when a .NET cataloger names them first), so both spellings are
+  recorded — a scanner-shape difference must never drop an obligation.
+
+---
+
+## 13. Bumping a base image (the digest lock)
+
+A compliance evaluation is a statement about **specific bytes**. Which packages
+are present, which licences they carry, which retained source matches which
+binary — all of it is a property of the base images the build pinned when the
+scan ran. Bump a `FROM …@sha256:` and the whole inventory silently becomes a
+claim about an image nobody ships.
+
+So the digests are locked. `--emit-inventory` writes every image the build
+definitions pin by digest into `docs/compliance/oci-inventory.json` as
+`pinned_base_images` (image, digest, and the file:line it is pinned in), and
+**`tests/test_oci_digest_lock.py` fails when the tree and that record
+disagree**. There is exactly one way for them to diverge: a re-pin without a
+re-scan.
+
+**The procedure.** Never hand-edit the inventory.
+
+```bash
+# 1. re-pin the base image, rebuild the affected Correlix images
+# 2. re-scan each one and re-evaluate (§10 steps 1–4)
+# 3. regenerate the inventory (this refreshes the digest lock)
+# 4. RE-REVIEW THE REGISTER — this is the step the lock exists to force:
+python3 scripts/oci-compliance.py --record-deferred …   # what is newly unrecorded
+python3 scripts/oci-compliance.py --reviews             # what the review still covers
+```
+
+Step 4 matters because both the register and the review table are
+**version-pinned**. A base-image bump moves package versions, so recorded
+postures and reviews stop matching and the components fall back to failing
+closed — which is the point. Re-record and re-review them deliberately, then
+regenerate the notices (§10 step 6).
+
+---
+
+## 14. Known limitations
 
 * **Debian licence fidelity.** dpkg copyright files are lists, not expressions,
-  so most Debian components land in `manual-review`. This is honest rather than
-  precise; resolving it needs per-package review, not a cleverer parser.
+  so Debian components cannot be resolved mechanically. That is now answered by
+  per-package review (§12) rather than left as a shrug — but the reviews are an
+  automated first pass over the evidence and are not a legal opinion until the
+  owner signs them.
+* **The residue is a surface problem, not a mirroring problem.** 57 of the 59
+  recorded obligations are the Debian userland of `netops-correlation`
+  (`python:3.12-slim`). Retaining their source is ~228 MB across 38 source
+  packages, in every release bundle, forever. Moving that service to a
+  distroless or Alpine base removes most of them outright (tracker 260); a
+  Correlix-controlled artifact store is the alternative for what remains
+  (tracker 261).
 * **The committed inventory is a snapshot.** `docs/compliance/oci-inventory.json`
   records the digests of images built on the machine that ran the scan. The
   authoritative evaluation for a release runs in `publish-images.yml` against the
