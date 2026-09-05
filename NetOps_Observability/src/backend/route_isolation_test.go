@@ -125,6 +125,20 @@ var routeIsolationLedger = map[string]string{
 	"/api/dem/targets":    "scoped",
 	"/api/dem/targets/":   "scoped",
 	"/api/dem/experience": "scoped",
+	// The DEM causality layer (internal/dem/experience). Per-tenant data end to
+	// end: the module refuses a cross-tenant principal, scopes every read and
+	// write to ONE concrete tenant, answers 404 for another tenant's journey,
+	// change or incident id, and derives incidents ONLY from that tenant's own
+	// evidence — the derivation reads no store the scoping did not already
+	// narrow. Proven by dem_experience_isolation_test.go.
+	"/api/dem/overview":            "scoped",
+	"/api/dem/incidents":           "scoped",
+	"/api/dem/incidents/":          "scoped",
+	"/api/dem/journeys":            "scoped",
+	"/api/dem/journeys/":           "scoped",
+	"/api/dem/synthetics/coverage": "scoped",
+	"/api/dem/changes":             "scoped",
+	"/api/dem/data-health":         "scoped",
 	// Protocol diagnostics (Troubleshooting item 7, protocol_diagnostics.go):
 	// catalog is the version-pinned 15-issue ruleset, identical for every tenant
 	// (?vendor= only picks the rendered command dialect), behind

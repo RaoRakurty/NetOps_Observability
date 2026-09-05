@@ -10,6 +10,7 @@ import (
 
 	"netops/backend/collectors"
 	"netops/backend/internal/dem"
+	"netops/backend/internal/dem/experience"
 	"netops/backend/internal/platformdb"
 )
 
@@ -192,3 +193,134 @@ func (s *server) handleDEMTargetItem(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleDEMExperience(w http.ResponseWriter, r *http.Request) {
 	s.demAPI.HandleExperience(w, r)
 }
+
+// DEM-EXPERIENCE-BEGIN — the Digital Experience causality surface
+// (internal/dem/experience): journeys, changes, evidence, hypotheses, derived
+// experience incidents, the published score and per-source data health.
+//
+// It sits ABOVE internal/dem: that package answers "was this check healthy",
+// this one answers "was the experience good, and which seam owns the fix". The
+// wiring lives HERE beside the rest of the DEM integration rather than in a new
+// root file — the root package is at its file-count ratchet, and the domain
+// logic is where CLAUDE.md §2 wants it.
+//
+// See docs/design/dem-architecture.md and docs/design/DEM_2026-09-05.md §M.
+
+// newExperienceStore picks the backend for the two PERSISTED objects (journey
+// definitions and the normalized change feed): Postgres (migration 0044,
+// FORCE-RLS) when it is active, the file store otherwise.
+//
+// A corrupt file still SERVES (an empty store) but says so — a store that
+// failed to load must never look like one a tenant never wrote, because the
+// visible consequence of both is the same empty table.
+func newExperienceStore() experience.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return experience.NewPGStore(ps.DB())
+	}
+	fs := experience.NewFileStore(envOr(experience.EnvStoreFile, "/data/dem_experience.json"))
+	if err := fs.LoadErr(); err != nil {
+		logError("dem", "the experience journey/change store could not be read — it starts EMPTY and no journey will be reported until it is re-added or the file is repaired",
+			map[string]any{"err": err.Error()})
+	}
+	return fs
+}
+
+// experienceScorePolicy loads the versioned score policy: the embedded product
+// policy, optionally replaced by an operator file. A BAD override is loud and
+// the embedded policy stands — a scoring policy that silently half-applied
+// would be worse than one that was ignored.
+func experienceScorePolicy() experience.ScorePolicy {
+	policy, err := experience.EmbeddedScorePolicy()
+	if err != nil {
+		// Unreachable in a built binary (the package test proves the embedded
+		// file parses), but a nil-weight policy would publish no score at all,
+		// so it is reported rather than swallowed.
+		logError("dem", "the embedded experience score policy could not be parsed — no experience score will be published",
+			map[string]any{"err": err.Error()})
+		return experience.ScorePolicy{}
+	}
+	path := os.Getenv(experience.EnvScorePolicyFile)
+	if path == "" {
+		return policy
+	}
+	raw, rerr := os.ReadFile(path) // #nosec G304 — an operator-supplied policy path, read-only, and the parser refuses anything outside its closed grammar
+	if rerr != nil {
+		logError("dem", "the experience score policy override could not be read — the shipped policy is in force instead",
+			map[string]any{"err": rerr.Error(), "path": path})
+		return policy
+	}
+	override, perr := experience.ParseScorePolicy(string(raw))
+	if perr != nil {
+		logError("dem", "the experience score policy override is invalid — the shipped policy is in force instead",
+			map[string]any{"err": perr.Error(), "path": path})
+		return policy
+	}
+	override.Source = path
+	logInfo("dem", "an operator experience score policy is in force", map[string]any{
+		"path": path, "policy": override.Name, "version": override.Version})
+	return override
+}
+
+// buildExperienceAPI builds the causality surface. Like the catalogue surface it
+// is built UNCONDITIONALLY: with collection off, every view says so rather than
+// rendering an empty table that reads as "all well".
+func (s *server) buildExperienceAPI(store experience.Store, cat dem.Catalogue) (*experience.API, error) {
+	var q dem.Querier
+	if metricsUpstreamIsVictoria(s.metricsBase()) {
+		q = demQuerier{s: s}
+	}
+	return experience.NewAPI(experience.Deps{
+		Authz:   s.demAuthz,
+		Store:   store,
+		Targets: cat,
+		Metrics: q,
+		Policy:  experienceScorePolicy(),
+		Enabled: envBool(dem.EnvFeatureFlag),
+		// The AI investigator needs BOTH the platform copilot and its own
+		// switch: a feature that can send evidence to a model gets its own.
+		InvestigatorEnabled: envBool("FEATURE_COPILOT") && envBool(experience.EnvInvestigatorFlag),
+		Now:                 func() time.Time { return time.Now().UTC() },
+		WriteJSON:           writeJSON,
+		WriteError:          writeError,
+		LogWarn:             func(m string, f map[string]any) { logWarn("dem", m, f) },
+		Counters:            s.demExperienceMetrics,
+	})
+}
+
+// The experience route entry points. They resolve s.experienceAPI at REQUEST
+// time (a bound method value would capture a nil surface at registration time),
+// and the module's handlers nil-check their receiver, so an unbuilt surface
+// answers 404 rather than degrading into an unscoped read.
+func (s *server) handleDEMOverview(w http.ResponseWriter, r *http.Request) {
+	s.experienceAPI.HandleOverview(w, r)
+}
+
+func (s *server) handleDEMIncidents(w http.ResponseWriter, r *http.Request) {
+	s.experienceAPI.HandleIncidents(w, r)
+}
+
+func (s *server) handleDEMIncidentItem(w http.ResponseWriter, r *http.Request) {
+	s.experienceAPI.HandleIncidentItem(w, r)
+}
+
+func (s *server) handleDEMJourneys(w http.ResponseWriter, r *http.Request) {
+	s.experienceAPI.HandleJourneys(w, r)
+}
+
+func (s *server) handleDEMJourneyItem(w http.ResponseWriter, r *http.Request) {
+	s.experienceAPI.HandleJourneyItem(w, r)
+}
+
+func (s *server) handleDEMCoverage(w http.ResponseWriter, r *http.Request) {
+	s.experienceAPI.HandleCoverage(w, r)
+}
+
+func (s *server) handleDEMChanges(w http.ResponseWriter, r *http.Request) {
+	s.experienceAPI.HandleChanges(w, r)
+}
+
+func (s *server) handleDEMDataHealth(w http.ResponseWriter, r *http.Request) {
+	s.experienceAPI.HandleDataHealth(w, r)
+}
+
+// DEM-EXPERIENCE-END

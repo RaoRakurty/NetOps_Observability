@@ -1,0 +1,71 @@
+# score-policy.yaml — the VERSIONED experience-score weights (§M.4, Phase I).
+#
+# Weights are DATA, reviewed like a rule, and the version below is stored with
+# every score observation. Changing a weight WITHOUT bumping the version would
+# silently rewrite the meaning of yesterday's numbers; the loader refuses a
+# policy whose class weights do not sum to 1.0, and the API publishes the
+# version beside every score.
+#
+# Six dimensions, exactly (the loader refuses any other name):
+#   journey_success        did the workflow complete
+#   availability           could it be reached at all
+#   responsiveness         p95 against the declared budget
+#   error_free_interaction did it work without errors when it was reached
+#   network_quality        loss / jitter / path stability under it
+#   user_friction          retries, re-auths, roams, abandonment
+#
+# A dimension a class does not name is NOT SCORED for that class — it is absent
+# from the composite rather than weighted at zero, so the UI can say "this class
+# does not measure that" instead of showing a permanent 0.
+#
+# Classes: `default` is required. A subject whose class is unknown uses it.
+
+name: correlix.dem.score
+version: 1
+
+classes:
+  default:
+    journey_success: 0.30
+    availability: 0.25
+    responsiveness: 0.20
+    error_free_interaction: 0.10
+    network_quality: 0.10
+    user_friction: 0.05
+
+  # Browser/SaaS applications: the workflow completing is most of the answer,
+  # and responsiveness is felt directly.
+  web:
+    journey_success: 0.35
+    availability: 0.20
+    responsiveness: 0.25
+    error_free_interaction: 0.10
+    network_quality: 0.05
+    user_friction: 0.05
+
+  # Voice / video / conferencing: network quality IS the experience, and a
+  # session that connects but is unusable is not a success.
+  real_time:
+    journey_success: 0.20
+    availability: 0.20
+    responsiveness: 0.15
+    error_free_interaction: 0.05
+    network_quality: 0.35
+    user_friction: 0.05
+
+  # Thick clients and virtual desktops: reachability and friction dominate;
+  # per-interaction latency matters more than page-shaped responsiveness.
+  thick_client:
+    journey_success: 0.25
+    availability: 0.30
+    responsiveness: 0.20
+    error_free_interaction: 0.10
+    network_quality: 0.10
+    user_friction: 0.05
+
+  # Infrastructure services (DNS, auth, print, file): availability and network
+  # quality are the whole story; there is no journey and no friction to speak of.
+  infrastructure:
+    availability: 0.50
+    responsiveness: 0.20
+    error_free_interaction: 0.10
+    network_quality: 0.20

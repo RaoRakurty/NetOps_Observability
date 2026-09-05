@@ -54,6 +54,7 @@ import (
 	// DATA-PROTECTION-BEGIN
 	"netops/backend/internal/dataprotect"
 	"netops/backend/internal/dem"
+	"netops/backend/internal/dem/experience"
 	// DATA-PROTECTION-END
 	"netops/backend/internal/discovery"
 	// CONFIG-BACKUP-BEGIN
@@ -203,6 +204,13 @@ type server struct {
 	demAPI       *dem.API
 	demMetrics   *dem.Metrics
 	demProjector *dem.Projector
+	// The causality layer above the catalogue (internal/dem/experience):
+	// journeys, changes, evidence, hypotheses, derived experience incidents and
+	// the published score. Built unconditionally for the same reason the
+	// catalogue is — with collection off, every view must SAY so.
+	experienceStore      experience.Store
+	experienceAPI        *experience.API
+	demExperienceMetrics *experience.Counters
 	// DEM-END
 	// Routing-protocol diagnostics (Troubleshooting item 7). Catalog + analyzer
 	// are pure/immutable and always built; the collector is wired to the live
@@ -1108,6 +1116,13 @@ func newServer() *server {
 		logError("dem", "the Digital Experience routes could not be wired — they will answer 404 and no experience score will be served", errf(err))
 	} else {
 		srv.demAPI = api
+	}
+	srv.demExperienceMetrics = experience.NewCounters()
+	srv.experienceStore = newExperienceStore()
+	if api, err := srv.buildExperienceAPI(srv.experienceStore, srv.demTargets); err != nil {
+		logError("dem", "the Digital Experience causality routes could not be wired — they will answer 404, and a 404 on the experience screen is indistinguishable from 'nothing is wrong'", errf(err))
+	} else {
+		srv.experienceAPI = api
 	}
 	if envBool(dem.EnvFeatureFlag) {
 		if pr, err := dem.NewProjector(srv.demTargets, demPublisher{},
@@ -2340,6 +2355,18 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/dem/targets", s.handleDEMTargets)
 	mux.HandleFunc("/api/dem/targets/", s.handleDEMTargetItem) // GET|PUT|DELETE {id}
 	mux.HandleFunc("/api/dem/experience", s.handleDEMExperience)
+	// The causality surface (internal/dem/experience). Same registration
+	// discipline as above: literals so the isolation ledger's scanner can see
+	// them, *server methods so a surface assembled after routes() runs is still
+	// reachable, and a nil surface answers 404 rather than reading unscoped.
+	mux.HandleFunc("/api/dem/overview", s.handleDEMOverview)
+	mux.HandleFunc("/api/dem/incidents", s.handleDEMIncidents)
+	mux.HandleFunc("/api/dem/incidents/", s.handleDEMIncidentItem) // {id}[/evidence|/timeline|/path]
+	mux.HandleFunc("/api/dem/journeys", s.handleDEMJourneys)
+	mux.HandleFunc("/api/dem/journeys/", s.handleDEMJourneyItem) // GET|PUT|DELETE {id}
+	mux.HandleFunc("/api/dem/synthetics/coverage", s.handleDEMCoverage)
+	mux.HandleFunc("/api/dem/changes", s.handleDEMChanges)
+	mux.HandleFunc("/api/dem/data-health", s.handleDEMDataHealth)
 	// DEM-END
 	// BGP-WATCH-END
 	// Routing-protocol diagnostics (Troubleshooting item 7).
