@@ -1,0 +1,101 @@
+name: release-gate
+
+# THE tag gate — one list, one place.
+#
+# Every blocking CI gate a release artifact must have passed, expressed as
+# reusable-workflow calls. `publish-images.yml` (GHCR images + provenance + SBOM)
+# and `release-bundle.yml` (offline customer bundle) each run this as their FIRST
+# job and `needs:` it from every other job, so nothing is pushed, uploaded or
+# attached to a release until all of it is green on the tag's exact commit.
+#
+# WHY THIS SHAPE (owner decision 2026-09-04, before v0.9.0-rc1). Two designs were
+# on the table:
+#
+#   (A) reusable workflows — this file. The tag run EXECUTES the gates.
+#   (B) an API gate job — a first job that asks the GitHub API which check runs
+#       already exist for `github.sha` and fails unless all required ones are
+#       `completed/success`.
+#
+# (B) was rejected because it cannot be made both honest and fail-closed here:
+#
+#   1. The gate workflows keep `paths:` filters on their `push:` trigger (fast
+#      feedback on feature branches — see docs/runbooks/ci-branch-protection.md §2).
+#      A push to `main` therefore produces check runs for SOME gates only, so the
+#      set of check runs attached to a release commit is a function of that
+#      commit's diff. Fail-closed on a missing check would block every tag whose
+#      last merge did not touch, say, the frontend; fail-open on a missing check
+#      is exactly the hole this work closes.
+#   2. `pull_request` check runs are attached to GitHub's ephemeral merge commit,
+#      not to the commit that lands on `main` — so the PR gate's greenness is not
+#      addressable by the release commit's SHA at all.
+#   3. Pushing a TAG does not re-run the path-filtered workflows (a tag push
+#      carries no file diff to match `paths:` against), so (B) could never make
+#      the tag itself run anything; it could only inspect history.
+#   4. Even where it works, (B) is a point-in-time read: it proves a check
+#      existed, not that it ran against the tree being published.
+#
+# (A) makes the guarantee structural instead of inspected. `workflow_call` takes
+# no `paths:` filter, so calling a gate here runs ALL of its jobs against the
+# tag's commit no matter what the diff touched — the per-workflow `push` filters
+# stay honest for branch feedback while the release path is unconditional. And
+# `needs:` is enforced by Actions itself: a failed, cancelled or skipped gate
+# leaves the publish job unreachable. There is no token, no polling and no
+# TOCTOU window.
+#
+# The cost is deliberate and accepted: a tag re-runs the gates (and runs them
+# twice, once per calling workflow, since Actions cannot share a run between two
+# workflows). Tags are rare; a wrong artifact is not recoverable once pulled.
+#
+# KEEPING IT ONE LIST. The jobs below must stay in step with the required-check
+# table in `docs/runbooks/ci-branch-protection.md` §1.1/§1.2 and with the branch
+# ruleset. `NetOps_Observability/tests/test_required_checks_consistency.py`
+# fails if they drift — including if a path-filtered gate is added and not
+# reached from this file.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # --- required on every PR to main (runbook §1.1) -------------------------
+  backend:
+    uses: ./.github/workflows/backend-ci.yml
+    permissions:
+      contents: read
+
+  frontend:
+    uses: ./.github/workflows/frontend-ci.yml
+    permissions:
+      contents: read
+
+  correlation:
+    uses: ./.github/workflows/correlation-ci.yml
+    permissions:
+      contents: read
+
+  supply-chain:
+    uses: ./.github/workflows/supply-chain.yml
+    permissions:
+      contents: read
+
+  ingest-contract:
+    uses: ./.github/workflows/ingest-contract-ci.yml
+    permissions:
+      contents: read
+
+  telemetry-catalog:
+    uses: ./.github/workflows/telemetry-catalog-ci.yml
+    permissions:
+      contents: read
+
+  # --- required HERE even where a repo admin may leave it off the branch
+  # ruleset (runbook §1.2). `tls-install-boot` is the slowest check in the repo
+  # (~45 min) and an admin may reasonably not charge every PR for it — but a
+  # release artifact that has never been installed from a clean runner is
+  # precisely the artifact this gate exists to stop.
+  fresh-install:
+    uses: ./.github/workflows/fresh-install-integrity.yml
+    permissions:
+      contents: read

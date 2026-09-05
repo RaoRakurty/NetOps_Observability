@@ -20,12 +20,21 @@ on:
   # No paths filter on pull_request: a required check must report on EVERY PR to
   # main (a path-skipped workflow leaves the check stuck "Expected").
   pull_request:
+  # Reusable-workflow trigger (release gate). `release-gate.yml` — called by
+  # publish-images.yml and release-bundle.yml — invokes this whole workflow on the
+  # tag's commit. `workflow_call` carries NO paths filter, so a release runs EVERY
+  # job here regardless of what the tag's diff touched: the `push` filter above
+  # stays honest for fast branch feedback without ever weakening the tag gate.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: fresh-install-integrity-${{ github.ref }}
+  # `github.workflow` is the CALLER's workflow when this file runs as a reusable
+  # workflow, so a gate run invoked by release-gate.yml can never share (and so
+  # never cancel) a group with this workflow's own direct push/PR run.
+  group: fresh-install-integrity-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Pinned for determinism, mirroring correlation-ci: an unpinned `pip install

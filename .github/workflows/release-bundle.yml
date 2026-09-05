@@ -58,7 +58,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # FAIL-CLOSED RELEASE GATE (owner decision 2026-09-04). Until this landed, a
+  # `v*.*.*` tag built the customer bundle and attached it to the GitHub Release
+  # with **no test job gating it** — the bundle's own smoke test proves the
+  # ARCHIVE is well formed, not that the code inside it passes CI.
+  # `release-gate.yml` runs the full blocking gate — backend, frontend,
+  # correlation, supply-chain, ingest, telemetry catalogue and fresh-install —
+  # against the tag's exact commit, with no `paths:` filters to skip any of it.
+  # The bundle job `needs:` it, so no asset is ever uploaded (and no artifact
+  # published on a main push) unless all of it is green. See release-gate.yml for
+  # why this is a reusable-workflow call and not an API check-run poll.
+  #
+  # This also gates the `branches: [main]` leg: a merge to main now pays for the
+  # gate before it produces a downloadable bundle. Deliberate — a bundle artifact
+  # nobody can trust is worse than no artifact.
+  gate:
+    uses: ./.github/workflows/release-gate.yml
+    permissions:
+      contents: read
+
   bundle:
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -124,12 +144,39 @@ jobs:
           # customer looks — manifest, compose, or the bundle-root docs.
           # Redis (RSAL) and Prometheus are removed components and must never
           # reappear in the image set either.
+          #
+          # NOT `! grep ...` (2026-09-04): under `set -e` a pipeline whose value
+          # is inverted with `!` NEVER exits the shell, so every one of these
+          # assertions was dead — a bundle carrying redpanda/redis/prometheus
+          # passed this smoke test silently. `refute` fails loudly instead.
+          refute() { # refute <label> <grep-args...>
+            local label="$1"; shift
+            if grep "$@" >/dev/null 2>&1; then
+              echo "BUNDLE ASSERTION FAILED: $label"; grep -n "$@" || true; exit 1
+            fi
+          }
           grep -q '^  - apache/kafka:' MANIFEST
           grep -q '^  - valkey/valkey:' MANIFEST
-          ! grep -qi 'redpanda' MANIFEST
-          ! grep -Eqi 'redis|prometheus' MANIFEST
-          ! grep -qi 'redpanda' README.md ADVANCED.md TROUBLESHOOTING.md
+          refute 'redpanda in MANIFEST'            -i  'redpanda' MANIFEST
+          refute 'redis/prometheus in MANIFEST'    -Ei 'redis|prometheus' MANIFEST
+          refute 'redpanda in bundle-root docs'    -i  'redpanda' README.md ADVANCED.md TROUBLESHOOTING.md
           test -x install-correlix.sh
+
+          # GPL/LGPL corresponding source (licence audit D2, owner decision
+          # 2026-09-04). We discharge the source obligation by SHIPPING the
+          # source alongside the binaries (GPL-2.0 s3a), not by a three-year
+          # written offer — so a release without source-offer/ is out of
+          # compliance the moment it leaves this runner. make-installer.sh
+          # already fails closed on a fetch or checksum failure; this asserts
+          # the result actually arrived, is a real archive, and is covered by
+          # the checksums the customer verifies.
+          test -d source-offer
+          test -s source-offer/README
+          grep -q 'THIS DIRECTORY IS THAT SOURCE' source-offer/README
+          SNG_VER="$(python3 -c "import json,os;p=os.environ['GITHUB_WORKSPACE']+'/NetOps_Observability/scripts/source-mirror.json';print(next(c['version'] for c in json.load(open(p))['components'] if c['name']=='syslog-ng'))")"
+          test -s "source-offer/syslog-ng-$SNG_VER.tar.gz"
+          tar -tzf "source-offer/syslog-ng-$SNG_VER.tar.gz" >/dev/null
+          grep -q "source-offer/syslog-ng-$SNG_VER.tar.gz" SHA256SUMS
 
           # docker-load round-trip: exercises decompression + per-layer digest
           # verification on the exact archive a client would load.
@@ -145,7 +192,7 @@ jobs:
           tar -xzf correlix-source-*.tar.gz -C "$SMOKE"
           python3 "$SMOKE/NetOps_Observability/scripts/preflight-install.py"
           # Belt-and-braces: no redpanda image/service in the shipped compose.
-          ! grep -Ei 'redpandadata|image:.*redpanda' \
+          refute 'redpanda service in shipped compose' -Ei 'redpandadata|image:.*redpanda' \
               "$SMOKE/NetOps_Observability/deployment/docker/docker-compose.yml"
 
       # Release assets are capped at 2 GiB/file — split anything bigger.
@@ -180,7 +227,17 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --verify-tag --title "Correlix $TAG" \
               --notes "Offline Correlix installer bundle (full profile: base appliance + optional add-on packs). Download all files into one directory and run \`./install-correlix.sh\` — it verifies checksums, rejoins split \`.partNN\` pieces, and installs. Add-on packs stay off until \`./install-correlix.sh enable <addon>\`. See README.md."
-          gh release upload "$TAG" ./* --clobber
+          # `./*` globs the bundle ROOT only, and source-offer/ is a
+          # DIRECTORY — gh would skip or reject it, and the GPL source must
+          # reach the customer through the same channel as the binaries it
+          # belongs to. Enumerate real files one level deep instead. Release
+          # asset names are flat, so a source-offer member is published under
+          # its own basename; SHA256SUMS still records the source-offer/ path
+          # it occupies inside an extracted bundle, and README.md points there.
+          mapfile -t ASSETS < <(find . -maxdepth 2 -type f | sed 's|^\./||')
+          [ "${#ASSETS[@]}" -gt 0 ] || { echo "no release assets resolved"; exit 1; }
+          printf 'uploading %s\n' "${ASSETS[@]}"
+          gh release upload "$TAG" "${ASSETS[@]}" --clobber
 
       # Dispatch runs (no tag) keep the bundle as a short-lived artifact so a
       # branch build can be validated without publishing anything.

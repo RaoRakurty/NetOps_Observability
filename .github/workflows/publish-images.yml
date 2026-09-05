@@ -21,7 +21,21 @@ permissions:
   contents: read
 
 jobs:
+  # FAIL-CLOSED RELEASE GATE (owner decision 2026-09-04). Until this landed, a
+  # `v*.*.*` tag pushed four images to GHCR with **no test job gating it**
+  # (RELEASE_CHECKLIST §4.4). `release-gate.yml` runs the full blocking gate —
+  # backend, frontend, correlation, supply-chain, ingest, telemetry catalogue and
+  # fresh-install — against the tag's exact commit, with no `paths:` filters to
+  # skip any of it. Every job below `needs:` it, so nothing reaches the registry
+  # (or a release page) unless all of it is green. See release-gate.yml for why
+  # this is a reusable-workflow call and not an API check-run poll.
+  gate:
+    uses: ./.github/workflows/release-gate.yml
+    permissions:
+      contents: read
+
   publish:
+    needs: gate
     runs-on: ubuntu-latest
     # Write scopes confined to THIS job; every other workflow stays contents:read.
     permissions:
