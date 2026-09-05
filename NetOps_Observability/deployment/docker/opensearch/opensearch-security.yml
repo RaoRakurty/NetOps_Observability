@@ -61,3 +61,13 @@ plugins.security.system_indices.indices: [.plugins-ml-agent, .plugins-ml-config,
   .geospatial-ip2geo-data*, .plugins-flow-framework-config, .plugins-flow-framework-templates,
   .plugins-flow-framework-state]
 node.max_local_storage_nodes: 3
+
+# Disk-threshold monitor cadence (2026-09-05 incident): after a flood-stage
+# event every index carries the read-only-allow-delete block, and a plugin
+# that writes its own index at node start (.opensearch-observability) then
+# throws in the main thread — the keep-alive thread is never started and the
+# node exits as soon as the security plugin finishes initialising (~40 s),
+# BEFORE the monitor's default 30 s first run can release the blocks. A short
+# interval lets the release land inside that window and persist in cluster
+# state, so the next boot is clean. Cheap on a single node.
+cluster.info.update.interval: 10s
