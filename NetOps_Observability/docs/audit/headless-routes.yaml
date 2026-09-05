@@ -1,0 +1,207 @@
+# Public API route families that the frontend does NOT call.
+#
+# Enforced by tests/test_feature_ui_coverage.py. A backend route family
+# (`/api/<a>/<b>`) must either be referenced by the frontend sources or appear
+# here. A NEW family that is neither fails CI — that is the whole point: the
+# 2026-09-05 audit found 34 families with no UI, built over months, unnoticed.
+#
+# Three sections, all of which suppress the failure, for three different reasons:
+#
+#   headless    — correct as-is. A machine surface: an nginx auth_request
+#                 target, an inbound webhook receiver, a token-authenticated
+#                 link opened outside the SPA, a service-to-service route, or a
+#                 platform break-glass operation. These never get a page.
+#   dynamic     — the frontend DOES call it, through a templated path
+#                 (`/api/protocols/${proto}/summary`) the literal scanner
+#                 cannot resolve. Cite the template.
+#   missing_ui  — DEBT, not design. A real user capability with no surface,
+#                 recorded by docs/audit/FEATURE_UI_COVERAGE_2026-09-05.md.
+#                 This list may only SHRINK; the test pins its size.
+#
+# Seeded 2026-09-05 from docs/audit/FEATURE_UI_COVERAGE_2026-09-05.md.
+
+headless:
+  - route: /api/auth/osd-gate
+    reason: >-
+      nginx auth_request target for the embedded /search and /netbox consoles
+      (auth.go handleOSDGate, isPlatformOwner). nginx calls it, never a browser
+      XHR; it emits X-Netbox-User / X-Grafana-User headers, not a document.
+
+  - route: /api/exports/view/
+    reason: >-
+      Token-authenticated artifact link (logs_export.go handleExportView). The
+      signed, expiring URL is opened directly by the recipient outside the SPA,
+      so there is nothing for a page to fetch.
+
+  - route: /api/reports/view/
+    reason: >-
+      Token-authenticated report artifact link (report_links.go
+      handleReportView). The URL is embedded in the "report is ready" email and
+      opened outside the SPA; the Reports page links to it rather than fetching.
+
+  - route: /api/integrations/webhook/
+    reason: >-
+      Inbound ITSM webhook receiver (integrations_http.go
+      handleIntegrationWebhook). Authenticated by a per-tenant opaque path token
+      plus the provider's own signature; the caller is ServiceNow/Jira/PagerDuty.
+
+  - route: /api/nms/webhook/
+    reason: >-
+      Inbound NMS vendor-controller webhook receiver (nms_http.go
+      handleNMSWebhook, opaque path token + connector signature verification).
+      The caller is Meraki or a generic controller, never the browser.
+
+  - route: /api/cloud/ingest/connectors
+    reason: >-
+      Service-to-service fan-out for the cloud poller (cloud_ingest_service.go,
+      requireCloudIngestService — platform owner or the cloudIngestScope service
+      JWT). Deliberately cross-tenant; a tenant UI must never see this list.
+
+  - route: /api/appid/fusion/status
+    reason: >-
+      App-ID fusion worker ops metrics (fusion_worker.go handleFusionStatus) —
+      adapter/counter plumbing behind FUSION_WORKER_ENABLED, read by probes and
+      the CLI. The user-facing coverage view is /api/appid/status (see the audit).
+
+  - route: /api/rca/
+    reason: >-
+      The frozen ordered path-spine contract for external consumers
+      (path_graph_api.go handleRcaPath). The SPA renders exactly this data via
+      /api/correlations/{id}/rca-path-view, so a second UI call would be a
+      duplicate, not a gap.
+
+  - route: /api/quarantine/reattribute
+    reason: >-
+      Platform break-glass: unseal and re-inject quarantined envelopes in
+      batches (pipeline_processors.go, requirePlatformAdmin AND
+      sensitive_data:admin). Deliberately not a button; it is run deliberately,
+      with an audit record, by the platform owner.
+
+dynamic:
+  - route: /api/protocols/ospf/adjacencies
+    reason: >-
+      Called through the templated client path
+      `/api/protocols/${encodeURIComponent(proto)}/adjacencies|summary|health`
+      in services/api.ts, rendered by pages/igp/IgpAdjacencies.tsx. The literal
+      scanner cannot resolve the interpolated protocol segment.
+
+  - route: /api/protocols/isis/adjacencies
+    reason: >-
+      Same templated client path as the OSPF family above
+      (`/api/protocols/${proto}/...`, services/api.ts); IS-IS is the other value
+      the proto argument takes.
+
+missing_ui:
+  - route: /api/ai/modules
+    reason: >-
+      DEBT. "What can Iris answer" — enabled AI modules and their question
+      categories. Its own doc comment names the missing consumer.
+
+  - route: /api/appid/catalog
+    reason: >-
+      DEBT. Operator-curated application attribution overrides (list/create/
+      delete) — the highest-precedence layer of the attribution ladder.
+
+  - route: /api/appid/status
+    reason: >-
+      DEBT. App-ID engine coverage: active precedence ladder, catalog sizes,
+      NGFW/cloud attribution counts, tenant override counts.
+
+  - route: /api/applications
+    reason: >-
+      DEBT. Application registry CRUD (name, criticality, archive). Distinct
+      from the cloud business-services registry the Services page uses.
+
+  - route: /api/cloud/network/overview
+    reason: >-
+      DEBT. Cloud provider/seam roll-up with open-issue localization counts;
+      the handler comment names a "Cloud Network Overview surface" that is unbuilt.
+
+  - route: /api/flows/apps
+    reason: >-
+      DEBT. Top source-to-destination flow pairs resolved to application labels
+      and tier — the app view of the flow plane.
+
+  - route: /api/flows/services
+    reason: >-
+      DEBT. Bytes and flows per catalog service, with an honest attributed:false
+      for services that have no selector yet.
+
+  - route: /api/integrations/reconcile
+    reason: >-
+      DEBT. On-demand ITSM drift sweep ("Sync now") for the caller's tenant;
+      written for NOC operators, reachable only by curl today.
+
+  - route: /api/quarantine
+    reason: >-
+      DEBT. Sealed-quarantine metadata listing plus depth/age summary (never the
+      payload) — the operator's only view of what the pipeline quarantined.
+
+  - route: /api/reliability/time-metrics
+    reason: >-
+      DEBT. The tenant's persisted MTTD/MTTR phase-metric snapshot history. The
+      SPA reads only the per-correlation time metrics, never the trend series.
+
+  - route: /api/seams/groups
+    reason: >-
+      DEBT. Grouped seam roll-up with state filter and group PATCH; the SPA
+      reads only the flat /api/seams list.
+
+  - route: /api/security/lane/status
+    reason: >-
+      DEBT. Security producer-lane health (interval, per-tenant rows, metrics) —
+      the only way to tell whether the security lane is actually running.
+
+  - route: /api/security/scan
+    reason: >-
+      DEBT. Manual bounded security scan for the caller's own tenant (202/429
+      backpressure). A "Scan now" control with no button.
+
+  - route: /api/settings/verification
+    reason: >-
+      DEBT. Active-verification opt-in plus the read-only SSH credential for the
+      tenant, audited on write. Every sibling /api/settings/* has a panel.
+
+  - route: /api/troubleshoot/tac/knowledge
+    reason: >-
+      DEBT. The version-pinned vendor-coverage view for the TAC escalation pack
+      (which vendors/products the collect plans cover). Registered as the "Iris
+      → Knowledge" surface; that panel does not exist yet.
+
+  - route: /api/tickets/audit
+    reason: >-
+      DEBT. Paged ticket audit trail, filterable by correlation object id.
+
+  - route: /api/tickets/outbox
+    reason: >-
+      DEBT. Paged ITSM delivery outbox — what is queued or failed on the way to
+      the ticketing system. The operator cannot see a stuck ticket today.
+
+  - route: /api/services
+    reason: >-
+      DEBT. Service-catalog CRUD plus selectors, bindings and the audited
+      selector backfill job. The Services page uses a different registry.
+
+  - route: /api/wan/circuits
+    reason: >-
+      DEBT. The derived interface-to-target circuit mesh. pages/WanCircuits.tsx
+      is named for this route and does not call it.
+
+  - route: /api/wan/endpoints
+    reason: >-
+      DEBT. The derived WAN endpoint registry that the circuit mesh is built from.
+
+  - route: /api/wan/policy
+    reason: >-
+      DEBT. Per-tenant WAN measurement policy (thresholds and targets) — GET and
+      PUT, i.e. an intent surface with no editor.
+
+  - route: /api/wireless/actions
+    reason: >-
+      DEBT. The wireless remediation workflow — propose, approve, reject,
+      execute, fully audited. A complete human-approval loop with zero UI.
+
+  - route: /api/wireless/bssids
+    reason: >-
+      DEBT. BSSID inventory. The Wireless page renders controllers, APs and
+      WLANs but not the BSSIDs beneath them.
