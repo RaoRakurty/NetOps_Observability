@@ -3826,7 +3826,9 @@ export const api = {
   // every one of them answers the SAME View, so the page never has to reconcile
   // two reads of the licence taken a moment apart.
 
-  // contract: openapi.go GET /api/system/licence
+  // contract: openapi.go GET /api/system/licence — the SERVER decides the scope
+  // of the answer (platform view for a cross-tenant caller, tenant projection
+  // for everyone else); there is no parameter for it.
   getLicence: () => request<LicenceView>(`/api/system/licence`),
 
   // contract: openapi.go PUT /api/system/licence
@@ -6508,17 +6510,46 @@ export type LicenceOverage = {
 /** A trusted public signing key, as the page displays and offers it. */
 export type LicenceKey = { id: string; role: string; note?: string; base64: string };
 
+/**
+ * Which of the two payloads a read returned. The SERVER decides it from the
+ * caller's scope — the page never infers it from a missing field, and never
+ * asks for one scope or the other.
+ *
+ * - "platform" — the provider view (cross-tenant caller): the whole licence,
+ *   the trusted keys, the offline recipe, PLATFORM-WIDE usage, and the
+ *   install/remove controls.
+ * - "tenant" — the tenant projection (any other administration:admin caller,
+ *   and the platform owner narrowed with the tenant switcher): tier, entitled
+ *   features, the same ceilings with THIS TENANT'S usage beside them, expiry
+ *   state and who manages the licence. No customer, no licence id, no key
+ *   material, no file path — those are the provider's, not the tenant's.
+ */
+export type LicenceScope = "platform" | "tenant";
+
 /** GET/PUT/DELETE /api/system/licence all answer this. */
 export type LicenceView = {
+  /** Which payload this is. Always present. */
+  scope: LicenceScope;
+  /** The tenant the usage was counted for. Absent in the platform view. */
+  tenant?: string;
+  /** Who may install or replace this licence. Closed vocabulary: "provider". */
+  managed_by: string;
+  managed_by_detail: string;
+  /**
+   * What the usage numbers mean in the tenant projection: a ceiling shared by
+   * the whole installation, with only this tenant's slice beside it.
+   */
+  scope_note?: string;
   state: LicenceState;
   ceilings: LicenceCeiling[];
   features: LicenceFeature[];
   overages: LicenceOverage[];
-  keys: LicenceKey[];
-  /** Where an operator may drop a licence by hand. */
-  path: string;
-  /** The offline verification recipe, shown verbatim. */
-  verify_hint: string;
+  /** Provider-only: absent in the tenant projection, never blanked. */
+  keys?: LicenceKey[];
+  /** Where an operator may drop a licence by hand. Provider-only. */
+  path?: string;
+  /** The offline verification recipe, shown verbatim. Provider-only. */
+  verify_hint?: string;
   /** The standing statement that expiry policy is still an owner decision. */
   expiry_semantics: string;
   /** null when there is nothing to expire. */
