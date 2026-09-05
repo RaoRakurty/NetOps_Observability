@@ -374,7 +374,13 @@ export function bisectingHeadline(symptom: Symptom | null): { title: string; sub
 
 // ── Deep link ────────────────────────────────────────────────────────────────
 
-export type TroubleshootSection = "investigate" | "protocol" | "pipeline";
+// The page carries TWO sections. "Protocol diagnostics" was removed on
+// 2026-09-05 (docs/design/TAC_ESCALATION_2026-09-05.md §5): the manual bench is
+// replaced by the escalation flow on the investigation surface, and the issue ×
+// command knowledge moved to Iris → Knowledge. An old `?section=protocol` deep
+// link therefore resolves to the investigation surface — the same fallback any
+// unrecognized section takes, so a bookmark lands on the work, not on a blank.
+export type TroubleshootSection = "investigate" | "pipeline";
 
 /**
  * Reads the section, symptom and case out of the page hash. Anything
@@ -388,8 +394,7 @@ export function parseInvestigationHash(hash: string): {
 } {
   const q = new URLSearchParams(String(hash || "").split("?")[1] || "");
   const raw = q.get("section");
-  const section: TroubleshootSection =
-    raw === "protocol" ? "protocol" : raw === "pipeline" ? "pipeline" : "investigate";
+  const section: TroubleshootSection = raw === "pipeline" ? "pipeline" : "investigate";
   const sym = symptomById(q.get("symptom"));
   // Only an opaque token is accepted as a case id — never rendered as markup.
   const caseId = /^[A-Za-z0-9_-]{1,64}$/.test(q.get("case") || "") ? String(q.get("case")) : "";

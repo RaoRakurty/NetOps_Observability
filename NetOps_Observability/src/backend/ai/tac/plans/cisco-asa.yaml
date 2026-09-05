@@ -1,0 +1,67 @@
+# plans/cisco-asa.yaml — the Cisco ASA BASELINE plan for the TAC escalation pack.
+#
+# Schema: ai/tac/README.md §4. This dialect carries the vendor's STANDARD
+# data-collection set only — the outputs a TAC engineer opens before anything
+# issue-specific. It has no class deep-dive bindings yet, so every class's own
+# intents are listed as UNBOUND in the plan preview with the reason, and the
+# operator collects those by hand and pastes them in. That is the honest state,
+# not a degraded one: an authored baseline plus a named gap beats a guessed
+# command every time.
+#
+# Every command here is `verified: doc_claimed` — taken from the vendor's
+# published command reference and NOT yet run by Correlix on this platform. The
+# plan preview and the bundle MANIFEST both say so.
+schema_version: 1
+dialect: cisco-asa
+profile: cisco/asa
+display: Cisco ASA
+version: correlix-tac-plan-cisco-asa-2026-09-05
+
+# The dialect's default citation set. A doc_claimed binding inherits it.
+sources:
+  - title: 'Cisco ASA Series Command Reference'
+    url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
+    retrieved: 2026-09-05
+
+baseline:
+  - system.version
+  - system.inventory
+  - system.uptime
+  - hardware.environment
+  - interface.brief
+  - route.summary
+  - logging.recent
+  - config.running
+
+# optional — off by default: large and slow captures the operator opts into.
+optional:
+  - tech.support
+
+bindings:
+  system.version:
+    command: show version
+    verified: doc_claimed
+  system.inventory:
+    command: show inventory
+    verified: doc_claimed
+  system.uptime:
+    command: show version
+    verified: doc_claimed
+  hardware.environment:
+    command: show environment
+    verified: doc_claimed
+  interface.brief:
+    command: show interface ip brief
+    verified: doc_claimed
+  route.summary:
+    command: show route summary
+    verified: doc_claimed
+  logging.recent:
+    command: show logging
+    verified: doc_claimed
+  config.running:
+    command: show running-config
+    verified: doc_claimed
+  tech.support:
+    command: show tech-support
+    verified: doc_claimed

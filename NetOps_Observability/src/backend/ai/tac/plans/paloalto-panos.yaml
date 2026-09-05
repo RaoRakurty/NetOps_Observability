@@ -1,0 +1,591 @@
+# plans/paloalto-panos.yaml — the Palo Alto PAN-OS command plan for the TAC escalation pack.
+#
+# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven
+# by the loader (protocoldiag.ValidateReadOnly) and again by the runner. An
+# intent this dialect does not bind is simply ABSENT — the plan preview shows
+# it as unbound rather than rendering another vendor's command at this device.
+#
+# `verified: doc_claimed` means the vendor documents the command and Correlix
+# has not run it on this platform. `consent: true` marks a command the vendor
+# says is NOT routine (a core dump, a control-plane load, a file written on the
+# device): it never runs by default and never sits in a baseline.
+# `read_only_exception` is a CITED documented-status read whose text carries a
+# token the grammar refuses on sight.
+#
+# MACHINE-MERGED from ai/tac/research/*.yaml by scripts/tac-merge-research.py.
+schema_version: 1
+dialect: paloalto-panos
+profile: paloalto/pan-os
+display: Palo Alto PAN-OS
+version: correlix-tac-plan-paloalto-panos-2026-09-05
+
+# The dialect's default citation set. A doc_claimed binding inherits it.
+sources:
+  - title: PAN-OS CLI Quick Start / Command Reference
+    url: https://docs.paloaltonetworks.com/pan-os
+    retrieved: 2026-09-05
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Networking'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Device Management'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Virtual Systems (Vsys)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Panorama'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: HA'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: User-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Content-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-content-id
+  - title: 'PAN-OS CLI Quick Start — Test the Configuration'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration
+  - title: 'PAN-OS CLI Quick Start — View Settings and Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics
+  - title: 'PAN-OS CLI Quick Start — Use Secure Copy to Import and Export Files'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/use-secure-copy-to-import-and-export-files
+  - title: 'SD-WAN Administration — Troubleshooting (View or Clear SD-WAN Information, global counters, VPN, BGP)'
+    url: https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting
+  - title: 'PAN-OS Networking — Monitor and Troubleshoot DHCP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dhcp/monitor-and-troubleshoot-dhcp
+  - title: 'PAN-OS Networking — Configure a DNS Proxy Object'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dns/configure-a-dns-proxy-object
+  - title: 'PAN-OS Networking — Dataplane NAT Memory Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/nat/dataplane-nat-memory-statistics
+  - title: 'PAN-OS Administration — HA Firewall States'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/high-availability/ha-firewall-states
+  - title: 'NGFW Administration — Failover (heartbeat, link and path monitoring)'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/failover
+  - title: 'NGFW Administration — Set Up Active/Passive HA'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha
+  - title: 'Decryption Administration — Decryption Log Errors and Error Indexes'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-log-errors
+  - title: 'Decryption Administration — Investigate Reasons for Decryption Failure'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/troubleshooting-decryption/investigate-decryption-failures
+  - title: 'Decryption Administration — Local SSL Decryption Exclusion Cache'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/decryption-exclusions/local-ssl-decryption-exclusion-cache
+  - title: 'PAN-OS Administration — Troubleshoot and Monitor Decryption'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/decryption/troubleshoot-and-monitor-decryption
+  - title: 'PAN-OS Administration — Configure Packet Buffer Protection'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/zone-protection-and-dos-protection/configure-zone-protection-to-increase-network-security/configure-packet-buffer-protection
+  - title: 'IPsec VPN Administration — Monitor Your IPSec VPN Tunnel (tunnel monitoring, IKEv2 liveness)'
+    url: https://docs.paloaltonetworks.com/network-security/ipsec-vpn/administration/set-up-tunnel-monitoring
+  - title: 'PAN-OS Web Interface Help — Device > Support (Generate Tech Support File)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-web-interface-help/device/device-support
+  - title: 'Panorama Administration — Generate Diagnostic Files for Panorama'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/generate-diagnostic-files-for-panorama
+  - title: 'Panorama Administration — Diagnose Panorama Suspended State'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/diagnose-panorama-suspended-state
+  - title: 'Panorama Administration — Troubleshoot Panorama System Issues'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues
+  - title: 'PAN-OS Networking — Verify ECMP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/ecmp/verify-ecmp
+  - title: 'PAN-OS Administration — Monitoring / View and Manage Logs'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/monitoring/view-and-manage-logs
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Networking'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Device Management'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Virtual Systems (Vsys)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Panorama'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: HA'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: User-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Content-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-content-id
+  - title: 'PAN-OS CLI Quick Start — Test the Configuration'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration
+  - title: 'PAN-OS CLI Quick Start — View Settings and Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics
+  - title: 'PAN-OS CLI Quick Start — Use Secure Copy to Import and Export Files'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/use-secure-copy-to-import-and-export-files
+  - title: 'SD-WAN Administration — Troubleshooting (View or Clear SD-WAN Information, global counters, VPN, BGP)'
+    url: https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting
+  - title: 'PAN-OS Networking — Monitor and Troubleshoot DHCP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dhcp/monitor-and-troubleshoot-dhcp
+  - title: 'PAN-OS Networking — Configure a DNS Proxy Object'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dns/configure-a-dns-proxy-object
+  - title: 'PAN-OS Networking — Dataplane NAT Memory Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/nat/dataplane-nat-memory-statistics
+  - title: 'PAN-OS Administration — HA Firewall States'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/high-availability/ha-firewall-states
+  - title: 'NGFW Administration — Failover (heartbeat, link and path monitoring)'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/failover
+  - title: 'NGFW Administration — Set Up Active/Passive HA'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha
+  - title: 'Decryption Administration — Decryption Log Errors and Error Indexes'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-log-errors
+  - title: 'Decryption Administration — Investigate Reasons for Decryption Failure'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/troubleshooting-decryption/investigate-decryption-failures
+  - title: 'Decryption Administration — Local SSL Decryption Exclusion Cache'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/decryption-exclusions/local-ssl-decryption-exclusion-cache
+  - title: 'PAN-OS Administration — Troubleshoot and Monitor Decryption'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/decryption/troubleshoot-and-monitor-decryption
+  - title: 'PAN-OS Administration — Configure Packet Buffer Protection'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/zone-protection-and-dos-protection/configure-zone-protection-to-increase-network-security/configure-packet-buffer-protection
+  - title: 'IPsec VPN Administration — Monitor Your IPSec VPN Tunnel (tunnel monitoring, IKEv2 liveness)'
+    url: https://docs.paloaltonetworks.com/network-security/ipsec-vpn/administration/set-up-tunnel-monitoring
+  - title: 'PAN-OS Web Interface Help — Device > Support (Generate Tech Support File)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-web-interface-help/device/device-support
+  - title: 'Panorama Administration — Generate Diagnostic Files for Panorama'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/generate-diagnostic-files-for-panorama
+  - title: 'Panorama Administration — Diagnose Panorama Suspended State'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/diagnose-panorama-suspended-state
+  - title: 'Panorama Administration — Troubleshoot Panorama System Issues'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues
+  - title: 'PAN-OS Networking — Verify ECMP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/ecmp/verify-ecmp
+  - title: 'PAN-OS Administration — Monitoring / View and Manage Logs'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/monitoring/view-and-manage-logs
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Networking'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Device Management'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Virtual Systems (Vsys)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Panorama'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: HA'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: User-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Content-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-content-id
+  - title: 'PAN-OS CLI Quick Start — Test the Configuration'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration
+  - title: 'PAN-OS CLI Quick Start — View Settings and Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics
+  - title: 'PAN-OS CLI Quick Start — Use Secure Copy to Import and Export Files'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/use-secure-copy-to-import-and-export-files
+  - title: 'SD-WAN Administration — Troubleshooting (View or Clear SD-WAN Information, global counters, VPN, BGP)'
+    url: https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting
+  - title: 'PAN-OS Networking — Monitor and Troubleshoot DHCP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dhcp/monitor-and-troubleshoot-dhcp
+  - title: 'PAN-OS Networking — Configure a DNS Proxy Object'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dns/configure-a-dns-proxy-object
+  - title: 'PAN-OS Networking — Dataplane NAT Memory Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/nat/dataplane-nat-memory-statistics
+  - title: 'PAN-OS Administration — HA Firewall States'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/high-availability/ha-firewall-states
+  - title: 'NGFW Administration — Failover (heartbeat, link and path monitoring)'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/failover
+  - title: 'NGFW Administration — Set Up Active/Passive HA'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha
+  - title: 'Decryption Administration — Decryption Log Errors and Error Indexes'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-log-errors
+  - title: 'Decryption Administration — Investigate Reasons for Decryption Failure'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/troubleshooting-decryption/investigate-decryption-failures
+  - title: 'Decryption Administration — Local SSL Decryption Exclusion Cache'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/decryption-exclusions/local-ssl-decryption-exclusion-cache
+  - title: 'PAN-OS Administration — Troubleshoot and Monitor Decryption'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/decryption/troubleshoot-and-monitor-decryption
+  - title: 'PAN-OS Administration — Configure Packet Buffer Protection'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/zone-protection-and-dos-protection/configure-zone-protection-to-increase-network-security/configure-packet-buffer-protection
+  - title: 'IPsec VPN Administration — Monitor Your IPSec VPN Tunnel (tunnel monitoring, IKEv2 liveness)'
+    url: https://docs.paloaltonetworks.com/network-security/ipsec-vpn/administration/set-up-tunnel-monitoring
+  - title: 'PAN-OS Web Interface Help — Device > Support (Generate Tech Support File)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-web-interface-help/device/device-support
+  - title: 'Panorama Administration — Generate Diagnostic Files for Panorama'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/generate-diagnostic-files-for-panorama
+  - title: 'Panorama Administration — Diagnose Panorama Suspended State'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/diagnose-panorama-suspended-state
+  - title: 'Panorama Administration — Troubleshoot Panorama System Issues'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues
+  - title: 'PAN-OS Networking — Verify ECMP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/ecmp/verify-ecmp
+  - title: 'PAN-OS Administration — Monitoring / View and Manage Logs'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/monitoring/view-and-manage-logs
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Networking'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Device Management'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Virtual Systems (Vsys)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Panorama'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: HA'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: User-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Content-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-content-id
+  - title: 'PAN-OS CLI Quick Start — Test the Configuration'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration
+  - title: 'PAN-OS CLI Quick Start — View Settings and Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics
+  - title: 'PAN-OS CLI Quick Start — Use Secure Copy to Import and Export Files'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/use-secure-copy-to-import-and-export-files
+  - title: 'SD-WAN Administration — Troubleshooting (View or Clear SD-WAN Information, global counters, VPN, BGP)'
+    url: https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting
+  - title: 'PAN-OS Networking — Monitor and Troubleshoot DHCP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dhcp/monitor-and-troubleshoot-dhcp
+  - title: 'PAN-OS Networking — Configure a DNS Proxy Object'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dns/configure-a-dns-proxy-object
+  - title: 'PAN-OS Networking — Dataplane NAT Memory Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/nat/dataplane-nat-memory-statistics
+  - title: 'PAN-OS Administration — HA Firewall States'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/high-availability/ha-firewall-states
+  - title: 'NGFW Administration — Failover (heartbeat, link and path monitoring)'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/failover
+  - title: 'NGFW Administration — Set Up Active/Passive HA'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha
+  - title: 'Decryption Administration — Decryption Log Errors and Error Indexes'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-log-errors
+  - title: 'Decryption Administration — Investigate Reasons for Decryption Failure'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/troubleshooting-decryption/investigate-decryption-failures
+  - title: 'Decryption Administration — Local SSL Decryption Exclusion Cache'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/decryption-exclusions/local-ssl-decryption-exclusion-cache
+  - title: 'PAN-OS Administration — Troubleshoot and Monitor Decryption'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/decryption/troubleshoot-and-monitor-decryption
+  - title: 'PAN-OS Administration — Configure Packet Buffer Protection'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/zone-protection-and-dos-protection/configure-zone-protection-to-increase-network-security/configure-packet-buffer-protection
+  - title: 'IPsec VPN Administration — Monitor Your IPSec VPN Tunnel (tunnel monitoring, IKEv2 liveness)'
+    url: https://docs.paloaltonetworks.com/network-security/ipsec-vpn/administration/set-up-tunnel-monitoring
+  - title: 'PAN-OS Web Interface Help — Device > Support (Generate Tech Support File)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-web-interface-help/device/device-support
+  - title: 'Panorama Administration — Generate Diagnostic Files for Panorama'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/generate-diagnostic-files-for-panorama
+  - title: 'Panorama Administration — Diagnose Panorama Suspended State'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/diagnose-panorama-suspended-state
+  - title: 'Panorama Administration — Troubleshoot Panorama System Issues'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues
+  - title: 'PAN-OS Networking — Verify ECMP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/ecmp/verify-ecmp
+  - title: 'PAN-OS Administration — Monitoring / View and Manage Logs'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/monitoring/view-and-manage-logs
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Networking'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Device Management'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Virtual Systems (Vsys)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Panorama'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: HA'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: User-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Content-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-content-id
+  - title: 'PAN-OS CLI Quick Start — Test the Configuration'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration
+  - title: 'PAN-OS CLI Quick Start — View Settings and Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics
+  - title: 'PAN-OS CLI Quick Start — Use Secure Copy to Import and Export Files'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/use-secure-copy-to-import-and-export-files
+  - title: 'SD-WAN Administration — Troubleshooting (View or Clear SD-WAN Information, global counters, VPN, BGP)'
+    url: https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting
+  - title: 'PAN-OS Networking — Monitor and Troubleshoot DHCP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dhcp/monitor-and-troubleshoot-dhcp
+  - title: 'PAN-OS Networking — Configure a DNS Proxy Object'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dns/configure-a-dns-proxy-object
+  - title: 'PAN-OS Networking — Dataplane NAT Memory Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/nat/dataplane-nat-memory-statistics
+  - title: 'PAN-OS Administration — HA Firewall States'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/high-availability/ha-firewall-states
+  - title: 'NGFW Administration — Failover (heartbeat, link and path monitoring)'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/failover
+  - title: 'NGFW Administration — Set Up Active/Passive HA'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha
+  - title: 'Decryption Administration — Decryption Log Errors and Error Indexes'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-log-errors
+  - title: 'Decryption Administration — Investigate Reasons for Decryption Failure'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/troubleshooting-decryption/investigate-decryption-failures
+  - title: 'Decryption Administration — Local SSL Decryption Exclusion Cache'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/decryption-exclusions/local-ssl-decryption-exclusion-cache
+  - title: 'PAN-OS Administration — Troubleshoot and Monitor Decryption'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/decryption/troubleshoot-and-monitor-decryption
+  - title: 'PAN-OS Administration — Configure Packet Buffer Protection'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/zone-protection-and-dos-protection/configure-zone-protection-to-increase-network-security/configure-packet-buffer-protection
+  - title: 'IPsec VPN Administration — Monitor Your IPSec VPN Tunnel (tunnel monitoring, IKEv2 liveness)'
+    url: https://docs.paloaltonetworks.com/network-security/ipsec-vpn/administration/set-up-tunnel-monitoring
+  - title: 'PAN-OS Web Interface Help — Device > Support (Generate Tech Support File)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-web-interface-help/device/device-support
+  - title: 'Panorama Administration — Generate Diagnostic Files for Panorama'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/generate-diagnostic-files-for-panorama
+  - title: 'Panorama Administration — Diagnose Panorama Suspended State'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/diagnose-panorama-suspended-state
+  - title: 'Panorama Administration — Troubleshoot Panorama System Issues'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues
+  - title: 'PAN-OS Networking — Verify ECMP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/ecmp/verify-ecmp
+  - title: 'PAN-OS Administration — Monitoring / View and Manage Logs'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/monitoring/view-and-manage-logs
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Networking'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Device Management'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-device-management
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Virtual Systems (Vsys)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-vsys
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Panorama'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-panorama
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: HA'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-ha
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: User-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-user-id
+  - title: 'PAN-OS CLI Quick Start — CLI Cheat Sheet: Content-ID'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-content-id
+  - title: 'PAN-OS CLI Quick Start — Test the Configuration'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/test-the-configuration
+  - title: 'PAN-OS CLI Quick Start — View Settings and Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/view-settings-and-statistics
+  - title: 'PAN-OS CLI Quick Start — Use Secure Copy to Import and Export Files'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/use-the-cli/use-secure-copy-to-import-and-export-files
+  - title: 'SD-WAN Administration — Troubleshooting (View or Clear SD-WAN Information, global counters, VPN, BGP)'
+    url: https://docs.paloaltonetworks.com/sd-wan/administration/troubleshooting
+  - title: 'PAN-OS Networking — Monitor and Troubleshoot DHCP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dhcp/monitor-and-troubleshoot-dhcp
+  - title: 'PAN-OS Networking — Configure a DNS Proxy Object'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/dns/configure-a-dns-proxy-object
+  - title: 'PAN-OS Networking — Dataplane NAT Memory Statistics'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/nat/dataplane-nat-memory-statistics
+  - title: 'PAN-OS Administration — HA Firewall States'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/high-availability/ha-firewall-states
+  - title: 'NGFW Administration — Failover (heartbeat, link and path monitoring)'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/failover
+  - title: 'NGFW Administration — Set Up Active/Passive HA'
+    url: https://docs.paloaltonetworks.com/ngfw/administration/high-availability/set-up-activepassive-ha
+  - title: 'Decryption Administration — Decryption Log Errors and Error Indexes'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-log-errors
+  - title: 'Decryption Administration — Investigate Reasons for Decryption Failure'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/troubleshooting-decryption/investigate-decryption-failures
+  - title: 'Decryption Administration — Local SSL Decryption Exclusion Cache'
+    url: https://docs.paloaltonetworks.com/network-security/decryption/administration/decryption-exclusions/local-ssl-decryption-exclusion-cache
+  - title: 'PAN-OS Administration — Troubleshoot and Monitor Decryption'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/decryption/troubleshoot-and-monitor-decryption
+  - title: 'PAN-OS Administration — Configure Packet Buffer Protection'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/zone-protection-and-dos-protection/configure-zone-protection-to-increase-network-security/configure-packet-buffer-protection
+  - title: 'IPsec VPN Administration — Monitor Your IPSec VPN Tunnel (tunnel monitoring, IKEv2 liveness)'
+    url: https://docs.paloaltonetworks.com/network-security/ipsec-vpn/administration/set-up-tunnel-monitoring
+  - title: 'PAN-OS Web Interface Help — Device > Support (Generate Tech Support File)'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-web-interface-help/device/device-support
+  - title: 'Panorama Administration — Generate Diagnostic Files for Panorama'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/generate-diagnostic-files-for-panorama
+  - title: 'Panorama Administration — Diagnose Panorama Suspended State'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues/diagnose-panorama-suspended-state
+  - title: 'Panorama Administration — Troubleshoot Panorama System Issues'
+    url: https://docs.paloaltonetworks.com/panorama/administration/troubleshooting/troubleshoot-panorama-system-issues
+  - title: 'PAN-OS Networking — Verify ECMP'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-networking-admin/ecmp/verify-ecmp
+  - title: 'PAN-OS Administration — Monitoring / View and Manage Logs'
+    url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/monitoring/view-and-manage-logs
+
+# baseline — collected for EVERY class: the vendor-standard set a TAC engineer
+# opens before anything issue-specific.
+baseline:
+  - system.version
+  - system.uptime
+  - system.resources
+  - hardware.environment
+  - interface.brief
+  - logging.recent
+  - config.running
+  - platform.version
+  - platform.vsys.mode
+  - system.processes
+  - system.disk
+  - logging.quota
+  - dataplane.resources
+  - jobs.status
+  - session.stats
+  - policy.list
+  - admin.sessions
+  - ha.cluster.status
+  - dataplane.counters
+
+bindings:
+  system.version:
+    command: show system info
+    verified: doc_claimed
+  system.uptime:
+    command: show system info
+    verified: doc_claimed
+  system.resources:
+    command: show system resources
+    verified: doc_claimed
+  hardware.environment:
+    command: show system environmentals
+    verified: doc_claimed
+  interface.brief:
+    command: show interface all
+    verified: doc_claimed
+  logging.recent:
+    command: show log system
+    verified: doc_claimed
+  config.running:
+    command: show config running
+    verified: doc_claimed
+  platform.version:
+    command: show system info
+    verified: doc_claimed
+  platform.vsys.mode:
+    command: 'show system info | match vsys'
+    verified: doc_claimed
+  system.processes:
+    command: show system software status
+    verified: doc_claimed
+  system.disk:
+    command: show system disk-space files
+    verified: doc_claimed
+  logging.quota:
+    command: show system logdb-quota
+    verified: doc_claimed
+  route.table:
+    command: show routing route
+    verified: doc_claimed
+  route.fib:
+    command: show routing fib
+    verified: doc_claimed
+  config.pushed:
+    command: show config pushed-shared-policy
+    verified: doc_claimed
+  bgp.routes:
+    command: show routing protocol bgp loc-rib
+    verified: doc_claimed
+  ospf.neighbors:
+    command: show advanced-routing ospf neighbor
+    verified: doc_claimed
+  ospf.interfaces:
+    command: show advanced-routing ospf interface
+    verified: doc_claimed
+  ospf.areas:
+    command: show advanced-routing ospf area
+    verified: doc_claimed
+  ospf.database:
+    command: show advanced-routing ospf lsdb
+    verified: doc_claimed
+  ospf.summary:
+    command: show advanced-routing ospf summary
+    verified: doc_claimed
+  route.pathmonitor:
+    command: show advanced-routing static-route-path-monitor
+    verified: doc_claimed
+  arp.settings:
+    command: show system setting arp-cache-timeout
+    verified: doc_claimed
+  platform.mode:
+    command: 'show system info | match system-mode'
+    verified: doc_claimed
+  qos.lockless.status:
+    command: show lockless-qos enable
+    verified: doc_claimed
+  qos.lockless.mapping:
+    command: show lockless-qos if-core-mapping
+    verified: doc_claimed
+  qos.lockless.cores:
+    command: show lockless-qos core-num
+    verified: doc_claimed
+  dataplane.resources:
+    command: show running resource-monitor
+    verified: doc_claimed
+  jobs.status:
+    command: show jobs processed
+    verified: doc_claimed
+  session.stats:
+    command: show session info
+    verified: doc_claimed
+  policy.list:
+    command: show running security-policy
+    verified: doc_claimed
+  admin.sessions:
+    command: show admins all
+    verified: doc_claimed
+  ha.cluster.status:
+    command: show high-availability cluster state
+    verified: doc_claimed
+  dataplane.counters:
+    command: show counter global
+    verified: doc_claimed
+  session.meter:
+    command: show session meter
+    verified: doc_claimed
+  ha.session.sync:
+    command: show high-availability cluster session-synchronization
+    verified: doc_claimed
+  nat.pool:
+    command: show running ippool
+    verified: doc_claimed
+  nat.policy.list:
+    command: show running nat-policy
+    verified: doc_claimed
+  vpn.ipsec.ike.sa:
+    command: show vpn ike-sa
+    verified: doc_claimed
+  vpn.ipsec.gateways:
+    command: show vpn gateway
+    verified: doc_claimed
+  vpn.ipsec.flow:
+    command: show vpn flow
+    verified: doc_claimed
+  vpn.ipsec.sa:
+    command: show vpn ipsec-sa
+    verified: doc_claimed
+  vpn.ipsec.tunnel.list:
+    command: show vpn tunnel
+    verified: doc_claimed
+  user.groupmapping.status:
+    command: show user group-mapping state all
+    verified: doc_claimed
+  user.mapping.list:
+    command: show user ip-user-mapping all
+    verified: doc_claimed
+  ha.cluster.stats:
+    command: show high-availability cluster statistics
+    verified: doc_claimed
+  ha.cluster.flap:
+    command: show high-availability cluster flap-statistics
+    verified: doc_claimed
+  ha.link.status:
+    command: show high-availability cluster ha4-status
+    verified: doc_claimed
+  network.netstat:
+    command: show netstat statistics yes
+    verified: doc_claimed
+  bfd.sessions:
+    command: show routing bfd details
+    verified: doc_claimed
+  user.list:
+    command: show user user-ids
+    verified: doc_claimed
+  user.agent.stats:
+    command: show user server-monitor statistics
+    verified: doc_claimed
+  user.groupmapping.stats:
+    command: show user group-mapping statistics
+    verified: doc_claimed
+  user.groups:
+    command: show user group list
+    verified: doc_claimed
+  user.agent.status:
+    command: show user user-id-agent state all
+    verified: doc_claimed
+  dns.proxy.status:
+    command: show dns-proxy all
+    verified: doc_claimed
+  dns.proxy.config:
+    command: show dns-proxy settings all
+    verified: doc_claimed
+  dns.proxy.stats:
+    command: show dns-proxy statistics all
+    verified: doc_claimed
+  dhcp.leases:
+    command: show dhcp server lease interface all
+    verified: doc_claimed
+  dhcp.server.settings:
+    command: show dhcp server settings all
+    verified: doc_claimed
+  route.fib.lookup:
+    command: 'show routing fib virtual-router {vrf-scope} | match {prefix}'
+    verified: doc_claimed
+  bgp.summary:
+    command: 'show advanced-routing bgp summary logical-router {vrf-scope}'
+    verified: doc_claimed
+  bgp.peer.detail:
+    command: 'show advanced-routing bgp peer status peer-name {peer} logical-router {vrf-scope}'
+    verified: doc_claimed
+  route.logicalrouter:
+    command: 'show advanced-routing logical-router {vrf-scope}'
+    verified: doc_claimed

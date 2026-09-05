@@ -192,11 +192,17 @@ export function HealthLane({ scope, report, protocolSlot }: {
       <LaneCard
         id="health"
         result={res}
+        // The toggle exists only when a host actually supplies the slot. It used
+        // to render unconditionally, and after the protocol-diagnostics bench
+        // was retired (TAC_ESCALATION_2026-09-05 §5) that left a control which
+        // expanded to nothing — a button that promises a surface it cannot open.
         action={
-          <button type="button" className="chip-btn" aria-expanded={openDiag}
-            onClick={() => setOpenDiag((o) => !o)}>
-            {openDiag ? "Hide protocol diagnostics" : "Protocol diagnostics"}
-          </button>
+          protocolSlot ? (
+            <button type="button" className="chip-btn" aria-expanded={openDiag}
+              onClick={() => setOpenDiag((o) => !o)}>
+              {openDiag ? "Hide protocol diagnostics" : "Protocol diagnostics"}
+            </button>
+          ) : undefined
         }
       >
         <ul className="tsl-list">

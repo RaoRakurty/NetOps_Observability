@@ -166,7 +166,14 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
   }, []);
 
   const railItem = (s: NavSection) => {
+    // Two INDEPENDENT questions, which this used to conflate:
+    //   · what does a CLICK do?      → act (Iris opens the slide-over) or route
+    //   · does it open a FLYOUT?     → does it have routed children
+    // Iris answers "act" to the first and, since it gained a Knowledge page,
+    // "yes" to the second. Gating the flyout on `!isCopilot` made every page
+    // under an acting section unreachable in rail mode.
     const isCopilot = s.action === "copilot";
+    const hasFlyout = !!s.children?.length;
     const active = isCopilot ? copilotOpen : s.id === activeSection;
     const onActivate = () => (isCopilot ? setCopilotOpen(!copilotOpen) : navigate(routeFor(s)));
     return (
@@ -176,18 +183,18 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         className={`rail-item${active ? " active" : ""}`}
         style={{ ["--mod" as string]: hueFor(s.id) } as React.CSSProperties}
         aria-current={active ? "page" : undefined}
-        aria-haspopup={!isCopilot ? "menu" : undefined}
-        aria-expanded={!isCopilot ? open?.id === s.id : undefined}
+        aria-haspopup={hasFlyout ? "menu" : undefined}
+        aria-expanded={hasFlyout ? open?.id === s.id : undefined}
         title={s.label}
         onClick={onActivate}
         onKeyDown={(e) => {
-          if (!isCopilot && e.key === "ArrowRight") {
+          if (hasFlyout && e.key === "ArrowRight") {
             e.preventDefault();
             keyboardOpen(s.id, e.currentTarget);
           }
         }}
-        onMouseEnter={(e) => !isCopilot && scheduleOpen(s.id, e.currentTarget)}
-        onFocus={(e) => !isCopilot && scheduleOpen(s.id, e.currentTarget)}
+        onMouseEnter={(e) => hasFlyout && scheduleOpen(s.id, e.currentTarget)}
+        onFocus={(e) => hasFlyout && scheduleOpen(s.id, e.currentTarget)}
         onMouseLeave={scheduleClose}
         onBlur={scheduleClose}
       >

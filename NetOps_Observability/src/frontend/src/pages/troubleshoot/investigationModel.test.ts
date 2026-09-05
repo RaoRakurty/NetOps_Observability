@@ -358,12 +358,12 @@ describe("parseInvestigationHash", () => {
   it.each([
     ["#/investigate/troubleshooting", "investigate"],
     ["#/investigate/troubleshooting?section=investigate", "investigate"],
-    ["#/investigate/troubleshooting?section=protocol", "protocol"],
+    ["#/investigate/troubleshooting?section=protocol", "investigate"],
     ["#/investigate/troubleshooting?section=pipeline", "pipeline"],
     ["#/investigate/troubleshooting?section=nonsense", "investigate"],
     ["#/investigate/troubleshooting?section=", "investigate"],
     ["", "investigate"],
-    ["?section=protocol", "protocol"],
+    ["?section=protocol", "investigate"],
   ] as const)("%p → section %s", (hash, section) => {
     expect(parseInvestigationHash(hash).section).toBe(section);
   });

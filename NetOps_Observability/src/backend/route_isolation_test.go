@@ -150,6 +150,29 @@ var routeIsolationLedger = map[string]string{
 	// analyze: it reads no store, resolves no device and reveals nothing the
 	// caller did not send. Same classification for the same reason.
 	"/api/troubleshoot/protocol-diagnostics/export": "globalRef",
+	// TAC escalation pack (docs/design/TAC_ESCALATION_2026-09-05.md,
+	// internal/tac). All six /tac routes are per-tenant DATA. The chain is the
+	// protocol-diagnostics one: requirePerm (infrastructure read, write for the
+	// two that act) → {id} resolved through the caller's OWN incident register
+	// (incidents.Get(tenant, cross, id)) and/or the correlation object read at
+	// chTenantScope, so a foreign id and an absent id answer the SAME 404 and
+	// the subtree is not an existence oracle → the subject device resolved
+	// through the principal-scoped inventory (canSeeDevice) with its tenant
+	// STAMPED onto the escalation → bundles written under a TENANT-KEYED
+	// directory (data/tac/<tenant>/<incident>, 0700) that has no cross-tenant
+	// listing at all. Cross-org isolation proven by tac_isolation_test.go.
+	"/api/incidents/{id}/tac":          "scoped",
+	"/api/incidents/{id}/tac/classify": "scoped",
+	"/api/incidents/{id}/tac/plan":     "scoped",
+	"/api/incidents/{id}/tac/collect":  "scoped",
+	"/api/incidents/{id}/tac/bundle":   "scoped",
+	"/api/incidents/{id}/tac/case":     "scoped",
+	// The Iris → Knowledge coverage view is version-pinned REFERENCE DATA: the
+	// issue-class taxonomy and the per-dialect command plans, identical for
+	// every tenant, naming no device, no incident and no tenant. It reads no
+	// store. Same classification, for the same reason, as the diagnostics
+	// analyze/export routes.
+	"/api/troubleshoot/tac/knowledge": "globalRef",
 	// OSPF / IS-IS advanced monitoring (Project 4 D item 11, internal/igpmon).
 	// All six are per-tenant DATA and read NOTHING that is not already
 	// collected. The chain is the pcap/configstore one: requirePerm

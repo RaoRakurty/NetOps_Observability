@@ -42,15 +42,28 @@ package backend
 // config-version read is.
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
+	"netops/backend/ai"
+	"netops/backend/internal/chschema"
 	"netops/backend/internal/httppage"
+	"netops/backend/internal/incident"
 	"netops/backend/internal/protocoldiag"
+	"netops/backend/internal/tac"
+	"netops/backend/internal/ticketing"
+	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
 )
 
@@ -790,3 +803,900 @@ func pdSlug(s string) string {
 	}
 	return strings.Trim(b.String(), "-")
 }
+
+// TAC-ROUTES-BEGIN
+//
+// The TAC ESCALATION PACK's HTTP surface (docs/design/TAC_ESCALATION_2026-09-05.md).
+// It lives in this file rather than a new one because the root-package ratchet
+// (package_growth_guard_test.go) is at its floor and this is the same bounded
+// context: the escalation pack REPLACES the protocol-diagnostics bench on the
+// Investigate page, reuses its runner, its closed-table pattern and its
+// redactor, and shares its feature flag and SSH custody.
+//
+// Everything below is ADAPTER ONLY. Classification, planning, collection,
+// bundling, the case seam and the bundle store are internal/tac; these handlers
+// resolve the caller's own incident and device, hand ids to that package, and
+// render its answers. No decision is made here.
+//
+//	GET  /api/incidents/{id}/tac            — the escalation's state
+//	POST /api/incidents/{id}/tac/classify   — evidence → issue class + why
+//	POST /api/incidents/{id}/tac/plan       — class + device → the command plan
+//	POST /api/incidents/{id}/tac/collect    — start the read-only collection
+//	GET  /api/incidents/{id}/tac/bundle     — download the redacted zip
+//	POST /api/incidents/{id}/tac/case       — pre-fill / submit the case
+//
+// §3a: every route resolves {id} through the caller's OWN incident/correlation
+// scope and 404s anything else (an absent id and another tenant's id answer
+// identically, so the subtree is not an existence oracle); the subject device is
+// resolved through the principal-scoped inventory the same way; the escalation's
+// tenant is stamped from those resolved records and NEVER from a request body.
+
+// tacMaxBody bounds every TAC request body (§3/§9).
+const tacMaxBody = 1 << 20
+
+// tacMaxSuppliedOutputs / tacMaxSuppliedBytes bound the paste fallback.
+const (
+	tacMaxSuppliedOutputs = 40
+	tacMaxSuppliedBytes   = 256 << 10
+)
+
+// tacMaxLogExcerpts bounds how many timeline lines become classification input
+// and bundle evidence.
+const tacMaxLogExcerpts = 200
+
+// errTACUnavailable is the honest "this build has no TAC catalog" condition. It
+// can only happen if the embedded data failed to load, which the package's own
+// test would have caught — so it is a 503, not a 500 pretending to be one.
+var errTACUnavailable = errors.New("the TAC escalation catalog is not available on this build")
+
+// tacSvc returns the escalation service, or nil.
+func (s *server) tacSvc() *tac.Service { return s.tacService }
+
+// tacResolveIncident authorises the caller and resolves {id} in their own scope.
+// It returns the incident facts the escalation is built from. A cross-tenant or
+// unknown id is a 404 — never a 403, which would confirm the id exists.
+func (s *server) tacResolveIncident(w http.ResponseWriter, r *http.Request, level int) (tacIncident, jwtClaims, bool) {
+	claims, ok := s.requirePerm(w, r, "infrastructure", level)
+	if !ok {
+		return tacIncident{}, claims, false
+	}
+	if s.tacSvc() == nil {
+		writeError(w, http.StatusServiceUnavailable, errTACUnavailable)
+		return tacIncident{}, claims, false
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" || len(id) > 128 {
+		http.NotFound(w, r)
+		return tacIncident{}, claims, false
+	}
+	tenant, cross := principalTenant(claims)
+	inc, found := s.tacLookupIncident(r, tenant, cross, id)
+	if !found {
+		http.NotFound(w, r)
+		return tacIncident{}, claims, false
+	}
+	inc.Tenant = tenant
+	inc.Cross = cross
+	return inc, claims, true
+}
+
+// tacIncident is the resolved subject of an escalation.
+type tacIncident struct {
+	ID     string
+	Ref    string
+	Title  string
+	Tenant string
+	Cross  bool
+
+	WindowStart time.Time
+	WindowEnd   time.Time
+
+	// Hypotheses are the RCA hypothesis template ids ranked for this case.
+	Hypotheses []string
+	// Devices are the affected device ids/names from the correlation object.
+	Devices []string
+	// Sources records WHICH evidence stores actually answered, and which did
+	// not. It is rendered to the operator: an escalation built without the alert
+	// store must not look like one built with it.
+	Sources []string
+	Missing []string
+}
+
+// tacLookupIncident resolves an id as EITHER an incident record OR a correlation
+// object, both in the caller's own scope. Correlix's Investigate page works from
+// correlation ids and its incident register from incident ids; an operator
+// escalating should not have to know which one they are holding.
+func (s *server) tacLookupIncident(r *http.Request, tenant string, cross bool, id string) (tacIncident, bool) {
+	out := tacIncident{ID: id, Ref: id}
+	found := false
+
+	if s.incidents != nil {
+		if inc, _, ok, err := s.incidents.Get(r.Context(), tenant, cross, id); err == nil && ok {
+			found = true
+			out.Ref = incident.DisplayID(inc.ID)
+			out.Title = inc.Title
+			out.WindowStart = inc.FirstSeenAt
+			out.WindowEnd = inc.LastSeenAt
+			out.Sources = append(out.Sources, "incident register")
+			if inc.SourceType == "correlation" && isUUIDToken(inc.SourceID) {
+				id = inc.SourceID
+			}
+		}
+	}
+	if isUUIDToken(id) {
+		if obj, ok := s.tacCorrelationFacts(r, id); ok {
+			found = true
+			out.Sources = append(out.Sources, "correlation object")
+			out.Hypotheses = obj.hypotheses
+			out.Devices = obj.devices
+			if out.Title == "" {
+				out.Title = obj.title
+			}
+			if out.WindowStart.IsZero() {
+				out.WindowStart = obj.windowStart
+				out.WindowEnd = obj.windowEnd
+			}
+		} else {
+			out.Missing = append(out.Missing, "correlation object (not readable for this id)")
+		}
+	}
+	return out, found
+}
+
+// tacCorrFacts is what the correlation object contributes.
+type tacCorrFacts struct {
+	title       string
+	hypotheses  []string
+	devices     []string
+	windowStart time.Time
+	windowEnd   time.Time
+}
+
+// tacCorrelationFacts reads the latest version of one correlation object. The
+// read goes through s.chRows, so the ClickHouse row policies scope it to the
+// caller's tenant exactly as the RCA workspace's own read is scoped — this
+// handler adds no tenant predicate of its own and cannot widen that scope.
+func (s *server) tacCorrelationFacts(r *http.Request, id string) (tacCorrFacts, bool) {
+	if !isUUIDToken(id) {
+		return tacCorrFacts{}, false
+	}
+	sql := `
+SELECT top_hypothesis, hypotheses, affected,
+       ` + chschema.ISO("window_start") + ` AS window_start,
+       ` + chschema.ISO("window_end") + ` AS window_end
+  FROM netops.corr_objects
+ WHERE correlation_id = '` + id + `'
+ ORDER BY version DESC
+ LIMIT 1
+ FORMAT JSON`
+	rows, err := s.chRows(r, sql)
+	if err != nil || len(rows) == 0 {
+		return tacCorrFacts{}, false
+	}
+	row := rows[0]
+	out := tacCorrFacts{}
+	if top := fmt.Sprintf("%v", row["top_hypothesis"]); top != "" && top != "<nil>" && top != "undetermined" {
+		out.title = top
+		out.hypotheses = append(out.hypotheses, top)
+	}
+	out.hypotheses = append(out.hypotheses, tac.HypothesisIDs(fmt.Sprintf("%v", row["hypotheses"]))...)
+	out.devices = tac.AffectedDevices(fmt.Sprintf("%v", row["affected"]))
+	out.windowStart = tac.ParseTime(fmt.Sprintf("%v", row["window_start"]))
+	out.windowEnd = tac.ParseTime(fmt.Sprintf("%v", row["window_end"]))
+	return out, true
+}
+
+// tacEvidence assembles the CLOSED classification input from stores the caller
+// can already read. Everything here is server-derived: the client sends an
+// incident id, never evidence.
+func (s *server) tacEvidence(r *http.Request, claims jwtClaims, inc tacIncident) (tac.Evidence, []string, []string) {
+	ev := tac.Evidence{IncidentID: inc.ID, TenantID: inc.Tenant, Hypotheses: inc.Hypotheses}
+	sources := append([]string(nil), inc.Sources...)
+	missing := append([]string(nil), inc.Missing...)
+
+	// The correlation case timeline is the alert/log evidence the RCA workspace
+	// already shows. Reusing it means the escalation classifies on exactly what
+	// the operator was looking at.
+	if fn := s.aiCaseTimeline(claims); fn != nil && isUUIDToken(inc.ID) {
+		events, err := fn(r.Context(), tacPrincipal(claims), inc.ID)
+		switch {
+		case err != nil:
+			missing = append(missing, "case timeline ("+operatorSafeErr(err)+")")
+		default:
+			sources = append(sources, "case timeline")
+			for _, e := range events {
+				if len(ev.LogLines) >= tacMaxLogExcerpts {
+					break
+				}
+				ev.LogLines = append(ev.LogLines, strings.TrimSpace(e.Kind+" "+e.Entity+" "+e.Text))
+				if e.Kind == "alert" && e.Entity != "" {
+					ev.Alerts = append(ev.Alerts, e.Entity)
+				}
+			}
+		}
+	}
+	// The incident's own title is operator-visible text, not a store read, but a
+	// log pattern in it is a legitimate hint.
+	if inc.Title != "" {
+		ev.LogLines = append(ev.LogLines, inc.Title)
+	}
+	return ev, sources, missing
+}
+
+func tacPrincipal(claims jwtClaims) ai.Principal {
+	tenant, cross := principalTenant(claims)
+	return ai.Principal{Tenant: tenant, Cross: cross}
+}
+
+// operatorSafeErr renders an error for an operator without leaking internals.
+func operatorSafeErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return clampString(err.Error(), 160)
+}
+
+// ── GET /api/incidents/{id}/tac ─────────────────────────────────────────────
+
+func (s *server) handleTACState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	inc, claims, ok := s.tacResolveIncident(w, r, LevelRead)
+	if !ok {
+		return
+	}
+	svc := s.tacSvc()
+	st := svc.Get(inc.Tenant, inc.ID)
+	body := map[string]any{
+		"incident_id":     inc.ID,
+		"incident_ref":    inc.Ref,
+		"title":           inc.Title,
+		"can_collect":     svc.CanCollect(),
+		"collect_note":    tac.CollectNote(svc.CanCollect()),
+		"catalog_version": svc.Catalog().Version,
+		"connectors":      svc.Connectors(r.Context(), inc.Tenant),
+		"devices":         inc.Devices,
+		"state":           st.View(),
+	}
+	if st == nil {
+		body["state_note"] = "This incident has not been escalated in this api process. " +
+			"Classify it to start; an escalation started before a restart is not resumed."
+	}
+	_ = claims
+	writeJSON(w, http.StatusOK, body)
+}
+
+// ── POST /api/incidents/{id}/tac/classify ───────────────────────────────────
+
+func (s *server) handleTACClassify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
+		return
+	}
+	inc, claims, ok := s.tacResolveIncident(w, r, LevelRead)
+	if !ok {
+		return
+	}
+	ev, sources, missing := s.tacEvidence(r, claims, inc)
+	res := s.tacSvc().Classify(inc.Tenant, inc.ID, ev)
+	s.pdAudit(r, claims, inc.Tenant, "tac.classify", map[string]any{
+		"incident_id": inc.ID, "class_id": res.ClassID, "classified": res.Classified,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"incident_id":      inc.ID,
+		"classification":   res,
+		"evidence_sources": sources,
+		"evidence_missing": missing,
+		"classes":          s.tacSvc().Catalog().ClassSummaries(),
+	})
+}
+
+// ── POST /api/incidents/{id}/tac/plan ───────────────────────────────────────
+
+type tacPlanRequest struct {
+	DeviceID        string `json:"device_id"`
+	ClassID         string `json:"class_id"`
+	IncludeOptional bool   `json:"include_optional"`
+	// Consent names the intents the operator has explicitly approved, for the
+	// commands a vendor documents as not-routine (a core dump, a control-plane
+	// load, a file written on the device). Approval is per command and is a
+	// human act; it is never implied by include_optional.
+	Consent []string `json:"consent"`
+	Target  struct {
+		Interface string `json:"interface"`
+		Peer      string `json:"peer"`
+		Prefix    string `json:"prefix"`
+		VRF       string `json:"vrf"`
+		RouterID  string `json:"router_id"`
+		Area      string `json:"area"`
+	} `json:"target"`
+}
+
+func (s *server) handleTACPlan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
+		return
+	}
+	inc, claims, ok := s.tacResolveIncident(w, r, LevelRead)
+	if !ok {
+		return
+	}
+	var req tacPlanRequest
+	if !tacDecode(w, r, &req) {
+		return
+	}
+	dev, ok := s.tacResolveDevice(w, r, inc, strings.TrimSpace(req.DeviceID))
+	if !ok {
+		return
+	}
+	classID := strings.TrimSpace(req.ClassID)
+	if classID == "" {
+		if st := s.tacSvc().Get(inc.Tenant, inc.ID); st != nil && st.Classification != nil {
+			classID = st.Classification.ClassID
+		}
+	}
+	if classID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("classify the incident first, or send class_id"))
+		return
+	}
+	plan, err := s.tacSvc().Plan(inc.Tenant, inc.ID, classID, dev, tac.PlanOptions{
+		IncludeOptional: req.IncludeOptional,
+		Target: tac.Target{
+			Interface: clampString(req.Target.Interface, pdMaxTargetField),
+			Peer:      clampString(req.Target.Peer, pdMaxTargetField),
+			Prefix:    clampString(req.Target.Prefix, pdMaxTargetField),
+			VRF:       clampString(req.Target.VRF, pdMaxTargetField),
+			RouterID:  clampString(req.Target.RouterID, pdMaxTargetField),
+			Area:      clampString(req.Target.Area, pdMaxTargetField),
+		},
+		Topology: s.tacTopology(r, claims, dev.ID),
+		Consent:  tac.ConsentSet(req.Consent),
+	})
+	if err != nil {
+		if errors.Is(err, tac.ErrUnknownClass) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.pdAudit(r, claims, inc.Tenant, "tac.plan", map[string]any{
+		"incident_id": inc.ID, "device_id": dev.ID, "class_id": classID,
+		"commands": len(plan.Steps), "unbound": len(plan.Unbound), "has_plan": plan.HasPlan,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"plan": plan, "can_collect": s.tacSvc().CanCollect(), "collect_note": tac.CollectNote(s.tacSvc().CanCollect()),
+	})
+}
+
+// tacResolveDevice resolves the subject device in the CALLER'S OWN inventory. A
+// device the caller cannot see and a device that does not exist answer the same
+// 404 (§3a rule 1); the device's tenant becomes the escalation's owner.
+func (s *server) tacResolveDevice(w http.ResponseWriter, r *http.Request, inc tacIncident, deviceID string) (tac.Device, bool) {
+	if deviceID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("device_id is required"))
+		return tac.Device{}, false
+	}
+	dev, found := s.discovery.Get(deviceID)
+	if !found || !canSeeDevice(dev, inc.Tenant, inc.Cross) {
+		http.NotFound(w, r)
+		return tac.Device{}, false
+	}
+	return tac.Device{
+		ID: dev.ID, Hostname: dev.Name, Platform: pdPlatformString(dev),
+		TenantID: deviceTenant(dev), // §3a: owner from the resolved device
+		// The management endpoint comes from the resolved inventory row, the
+		// same one the diagnostics collector and the operator terminal dial.
+		Address: dev.Address, Port: envInt(protocoldiag.EnvSSHPort, 22),
+	}, true
+}
+
+// tacTopology reads Correlix's own neighbourhood for the device through the
+// SAME principal-scoped adapter the assistant uses.
+func (s *server) tacTopology(r *http.Request, claims jwtClaims, deviceID string) []tac.TopologyNote {
+	fn := s.aiTopologyContext(claims)
+	if fn == nil {
+		return nil
+	}
+	ctxInfo, err := fn(r.Context(), tacPrincipal(claims), deviceID)
+	if err != nil {
+		return nil
+	}
+	out := make([]tac.TopologyNote, 0, len(ctxInfo.Neighbors)+len(ctxInfo.Seams)+len(ctxInfo.Paths)+1)
+	if ctxInfo.Site != "" || ctxInfo.Role != "" {
+		out = append(out, tac.TopologyNote{Kind: "site", Ref: ctxInfo.Site, Detail: ctxInfo.Role})
+	}
+	for _, n := range ctxInfo.Neighbors {
+		out = append(out, tac.TopologyNote{
+			Kind: "neighbor", Ref: n.PeerName,
+			Detail: n.LocalPort + " → " + n.PeerPort + " (observed by " + n.Source + ")",
+		})
+	}
+	for _, sm := range ctxInfo.Seams {
+		out = append(out, tac.TopologyNote{Kind: "seam", Ref: sm.ID, Detail: sm.Type + " owned by " + sm.Owner})
+	}
+	for _, p := range ctxInfo.Paths {
+		out = append(out, tac.TopologyNote{Kind: "link", Ref: p.ID, Detail: p.Label + " " + p.Health})
+	}
+	return out
+}
+
+// ── POST /api/incidents/{id}/tac/collect ────────────────────────────────────
+
+type tacCollectRequest struct {
+	Outputs []struct {
+		Intent  string `json:"intent"`
+		Command string `json:"command"`
+		Output  string `json:"output"`
+	} `json:"outputs"`
+	Cancel bool `json:"cancel"`
+}
+
+func (s *server) handleTACCollect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
+		return
+	}
+	// A collection operates against a device → write level.
+	inc, claims, ok := s.tacResolveIncident(w, r, LevelWrite)
+	if !ok {
+		return
+	}
+	var req tacCollectRequest
+	if !tacDecode(w, r, &req) {
+		return
+	}
+	svc := s.tacSvc()
+	if req.Cancel {
+		stopped := svc.Cancel(inc.Tenant, inc.ID)
+		s.pdAudit(r, claims, inc.Tenant, "tac.collect.cancel", map[string]any{"incident_id": inc.ID, "stopped": stopped})
+		writeJSON(w, http.StatusOK, map[string]any{"cancelled": stopped, "state": svc.Get(inc.Tenant, inc.ID).View()})
+		return
+	}
+	if len(req.Outputs) > tacMaxSuppliedOutputs {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("at most %d pasted outputs per request", tacMaxSuppliedOutputs))
+		return
+	}
+	supplied := make([]tac.SuppliedOutput, 0, len(req.Outputs))
+	for _, o := range req.Outputs {
+		supplied = append(supplied, tac.SuppliedOutput{
+			Intent:  clampString(strings.TrimSpace(o.Intent), 128),
+			Command: clampString(strings.TrimSpace(o.Command), 512),
+			Output:  clampString(o.Output, tacMaxSuppliedBytes),
+		})
+	}
+	job, err := svc.StartCollect(inc.Tenant, inc.ID, supplied)
+	switch {
+	case errors.Is(err, tac.ErrNoRunner):
+		writeError(w, http.StatusServiceUnavailable, errors.New(tac.CollectNote(false)))
+		return
+	case errors.Is(err, tac.ErrCollectBusy):
+		writeError(w, http.StatusConflict, err)
+		return
+	case err != nil:
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.pdAudit(r, claims, inc.Tenant, "tac.collect", map[string]any{
+		"incident_id": inc.ID, "job_id": job.ID, "commands": job.Total, "pasted": len(supplied),
+	})
+	writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "state": svc.Get(inc.Tenant, inc.ID).View()})
+}
+
+// ── GET /api/incidents/{id}/tac/bundle ──────────────────────────────────────
+
+func (s *server) handleTACBundle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	inc, claims, ok := s.tacResolveIncident(w, r, LevelRead)
+	if !ok {
+		return
+	}
+	profile := tac.BundleProfile(strings.TrimSpace(r.URL.Query().Get("profile")))
+	switch profile {
+	case "", tac.ProfileFull, tac.ProfileEmail, tac.ProfileLinkOnly:
+	default:
+		writeError(w, http.StatusBadRequest, errors.New("profile must be full, email or link_only"))
+		return
+	}
+	b, meta, err := s.tacSvc().Bundle(r.Context(), inc.Tenant, inc.ID, s.tacBundleInput(r, claims, inc, profile))
+	if err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	// §8: producing something meant to LEAVE the platform is audited, with the
+	// sensitive tag, exactly like the protocol-diagnostics export.
+	s.pdAudit(r, claims, inc.Tenant, "tac.bundle", map[string]any{
+		"incident_id": inc.ID, "bundle": meta.Name, "bytes": meta.Bytes,
+		"profile": b.Manifest.Profile, "statement_by": b.Statement.WrittenBy,
+	})
+	// The escalation becomes REAL the first time a bundle is produced, so that is
+	// when it is written into the investigation memory Iris recalls from — once,
+	// not once per download, and regardless of whether a case is ever opened.
+	if s.tacSvc().MarkRemembered(inc.Tenant, inc.ID) {
+		s.tacRememberEscalation(r, claims, inc, b, tac.CaseResult{})
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+b.Name+"\"")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", strconv.Itoa(len(b.Zip)))
+	w.WriteHeader(http.StatusOK)
+	// #nosec G705 -- this is a binary attachment, not a rendered document: the
+	// bytes are a zip this process just built, the response is served as
+	// application/zip with `X-Content-Type-Options: nosniff` and a
+	// Content-Disposition attachment, and every text inside it has already been
+	// through the redaction pass. There is no HTML context for a script to
+	// execute in, and the browser is told not to invent one.
+	if _, err := w.Write(b.Zip); err != nil {
+		logError("tac", "bundle write failed", map[string]any{"incident_id": inc.ID, "error": err.Error()})
+	}
+}
+
+// tacBundleInput gathers the evidence the bundle carries, each read through the
+// same principal-scoped adapter the assistant uses.
+func (s *server) tacBundleInput(r *http.Request, claims jwtClaims, inc tacIncident, profile tac.BundleProfile) tac.BundleInput {
+	in := tac.BundleInput{
+		IncidentRef: inc.Ref, Title: inc.Title,
+		WindowStart: inc.WindowStart, WindowEnd: inc.WindowEnd,
+		Actor: claims.Sub, Profile: profile,
+	}
+	for _, h := range inc.Hypotheses {
+		in.Hypotheses = append(in.Hypotheses, tac.HypothesisFact{TemplateID: h})
+	}
+	if fn := s.aiCaseTimeline(claims); fn != nil && isUUIDToken(inc.ID) {
+		if events, err := fn(r.Context(), tacPrincipal(claims), inc.ID); err == nil {
+			for _, e := range events {
+				if len(in.Logs) >= tacMaxLogExcerpts {
+					break
+				}
+				at := tac.ParseTime(e.At)
+				if e.Kind == "alert" && e.Entity != "" {
+					in.Alerts = append(in.Alerts, tac.AlertFact{Name: e.Entity, Summary: e.Text, At: at})
+					continue
+				}
+				in.Logs = append(in.Logs, tac.LogLine{At: at, Device: e.Entity, Severity: e.Kind, Message: e.Text})
+			}
+		}
+	}
+	if fn := s.aiSecurityFindings(claims); fn != nil {
+		if rows, err := fn(r.Context(), tacPrincipal(claims), ai.FindingsQuery{Current: true, Limit: 25}); err == nil {
+			for _, f := range rows {
+				in.Findings = append(in.Findings, tac.FindingFact{
+					ID: f.ID, Title: f.Title, Severity: f.Severity, Device: f.Entity,
+				})
+			}
+		}
+	}
+	return in
+}
+
+// ── POST /api/incidents/{id}/tac/case ───────────────────────────────────────
+
+type tacCaseRequest struct {
+	ConnectorID string `json:"connector_id"`
+	// Submit=false returns the pre-filled form for a human to review; true
+	// performs the (human-approved) action. Case creation is NEVER automatic.
+	Submit bool `json:"submit"`
+	Form   struct {
+		Title        string `json:"title"`
+		Severity     string `json:"severity"`
+		Product      string `json:"product"`
+		SerialNumber string `json:"serial_number"`
+		ContractID   string `json:"contract_id"`
+		ContactName  string `json:"contact_name"`
+		ContactEmail string `json:"contact_email"`
+		// ExistingCaseNumber is the SR/case an attach-to-existing connector
+		// attaches to. It is a reference, not a credential: echoed and logged.
+		ExistingCaseNumber string `json:"existing_case_number"`
+	} `json:"form"`
+	// UploadToken and UploadHost are the EPHEMERAL per-case credential the
+	// operator copies out of the vendor's portal (Cisco SCM mints one per SR).
+	// They are read straight into tac.CaseSecrets and never stored, never
+	// echoed and never logged — CaseSecrets redacts itself under every
+	// rendering Go has, which is why they do not live on the form above.
+	UploadToken string `json:"upload_token"`
+	UploadHost  string `json:"upload_host"`
+}
+
+func (s *server) handleTACCase(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
+		return
+	}
+	inc, claims, ok := s.tacResolveIncident(w, r, LevelWrite)
+	if !ok {
+		return
+	}
+	var req tacCaseRequest
+	if !tacDecode(w, r, &req) {
+		return
+	}
+	connector := strings.TrimSpace(req.ConnectorID)
+	if connector == "" {
+		connector = tac.PortalTextConnectorID
+	}
+	svc := s.tacSvc()
+	st := svc.Get(inc.Tenant, inc.ID)
+	if st == nil || st.Capture == nil {
+		writeError(w, http.StatusConflict, errors.New("collect the evidence before opening a case"))
+		return
+	}
+	// The bundle is built to THE CHOSEN CONNECTOR'S limits, not to this
+	// package's defaults. An email path caps well below the profile constant
+	// because base64 expands the attachment on the wire, and trimming to the
+	// wrong number produces a case the vendor's mail gateway silently rejects.
+	in := s.tacBundleInput(r, claims, inc, "")
+	for _, info := range svc.Connectors(r.Context(), inc.Tenant) {
+		if info.ID != connector {
+			continue
+		}
+		in.Profile = tac.ProfileForConnector(info)
+		in.MaxBytes = info.MaxAttachmentBytes
+	}
+	b, meta, err := svc.Bundle(r.Context(), inc.Tenant, inc.ID, in)
+	if err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	caseReq := tac.CaseRequest{
+		TenantID: inc.Tenant, IncidentID: inc.ID, ClassID: b.Manifest.Classification.ClassID,
+		DeviceID: st.Capture.DeviceID, Hostname: st.Capture.Hostname, Platform: st.Capture.Platform,
+		Actor: claims.Sub,
+		Form: tac.CaseForm{
+			Title:        clampString(strings.TrimSpace(req.Form.Title), 200),
+			Description:  b.Statement.Text,
+			Severity:     clampString(strings.TrimSpace(req.Form.Severity), 32),
+			Product:      clampString(strings.TrimSpace(req.Form.Product), 128),
+			SerialNumber: clampString(strings.TrimSpace(req.Form.SerialNumber), 64),
+			ContractID:   clampString(strings.TrimSpace(req.Form.ContractID), 64),
+			ContactName:  clampString(strings.TrimSpace(req.Form.ContactName), 128),
+			ContactEmail: clampString(strings.TrimSpace(req.Form.ContactEmail), 200),
+			BundleName:   meta.Name, BundleBytes: meta.Bytes,
+			ExistingCaseNumber: clampString(strings.TrimSpace(req.Form.ExistingCaseNumber), 64),
+		},
+		Secrets: tac.CaseSecrets{
+			UploadToken: clampString(strings.TrimSpace(req.UploadToken), 512),
+			UploadHost:  clampString(strings.TrimSpace(req.UploadHost), 253),
+		},
+		// The bundle the connector will stream, addressed inside THIS tenant's
+		// own bundle tree. The store validates both segments, so a connector can
+		// never be handed a path from anywhere else.
+		BundlePath: inc.ID + "/" + meta.Name,
+	}
+	if !req.Submit {
+		form, info, ferr := svc.PrepareCase(r.Context(), inc.Tenant, connector, caseReq)
+		if ferr != nil {
+			writeError(w, http.StatusConflict, ferr)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"form": form, "connector": info, "bundle": meta})
+		return
+	}
+	res, serr := svc.SubmitCase(r.Context(), inc.Tenant, inc.ID, connector, caseReq)
+	if serr != nil {
+		writeError(w, http.StatusConflict, serr)
+		return
+	}
+	s.pdAudit(r, claims, inc.Tenant, "tac.case", map[string]any{
+		"incident_id": inc.ID, "connector": connector, "case_id": res.CaseID, "attached": res.Attached,
+	})
+	// The escalation is recorded as an investigation Iris recalls, so the next
+	// operator asking about this device is told it was escalated and how.
+	if s.tacSvc().MarkRemembered(inc.Tenant, inc.ID) || res.CaseID != "" {
+		// A case id is worth a SECOND memory row even when the bundle already
+		// wrote one: "escalated" and "escalated, case 12345" are different facts
+		// and the later one is what the next operator needs.
+		s.tacRememberEscalation(r, claims, inc, b, res)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": res, "bundle": meta})
+}
+
+// tacRememberEscalation writes the escalation into the SAME investigation memory
+// Iris recalls from (ai.InvestigationStore). It is best-effort: a memory that
+// could not be written is logged, never a reason to fail a case the operator
+// just opened.
+func (s *server) tacRememberEscalation(r *http.Request, claims jwtClaims, inc tacIncident, b *tac.Bundle, res tac.CaseResult) {
+	if s.irisMemory == nil {
+		return
+	}
+	verdict := "Escalated to TAC as " + b.Manifest.Classification.Title +
+		" (" + b.Manifest.Classification.ClassID + "), plan " + b.Manifest.PlanVersion +
+		", bundle " + b.Name
+	if res.CaseID != "" {
+		verdict += ", case " + res.CaseID
+	}
+	row, err := ai.NormalizeInvestigation(ai.InvestigationRow{
+		TenantID:      inc.Tenant,
+		DeviceID:      b.Manifest.Device.ID,
+		DeviceName:    b.Manifest.Device.Hostname,
+		CorrelationID: inc.ID,
+		Skills:        []string{"tac-escalation", b.Manifest.Classification.ClassID},
+		Verdict:       verdict,
+		Citations:     b.Statement.CitedIDs,
+		Outcome:       ai.OutcomeUnknown,
+	})
+	if err != nil {
+		logError("tac", "escalation memory rejected", map[string]any{"incident_id": inc.ID, "error": err.Error()})
+		return
+	}
+	if err := s.irisMemory.Record(r.Context(), row); err != nil {
+		logError("tac", "escalation memory not written", map[string]any{"incident_id": inc.ID, "error": err.Error()})
+	}
+	_ = claims
+}
+
+// tacDecode reads a bounded, unknown-field-rejecting request body.
+func tacDecode(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, tacMaxBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("bad body: %w", err))
+		return false
+	}
+	return true
+}
+
+// ── GET /api/troubleshoot/tac/knowledge ─────────────────────────────────────
+//
+// The Iris → Knowledge coverage view. It is version-pinned REFERENCE DATA,
+// identical for every tenant — what Correlix knows, per vendor dialect — and it
+// reveals nothing about any tenant's devices or incidents.
+
+func (s *server) handleTACKnowledge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+		return
+	}
+	if s.tacSvc() == nil {
+		writeError(w, http.StatusServiceUnavailable, errTACUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.tacSvc().Catalog().Knowledge(tacKnownDialects()))
+}
+
+// tacKnownDialects lists the platforms the vendorprofile registry carries, so
+// the coverage view can name the ones with NO authored plan. A coverage page
+// that only shows what works is a marketing page.
+func tacKnownDialects() []tac.DialectRef {
+	reg := vendorprofile.Default()
+	out := make([]tac.DialectRef, 0, len(reg.IDs()))
+	for _, id := range reg.IDs() {
+		prof, ok := reg.Lookup(id)
+		if !ok {
+			continue
+		}
+		out = append(out, tac.DialectRef{Slug: tac.DialectSlug(prof.ID), Display: prof.DisplayName, Profile: prof.ID})
+	}
+	return out
+}
+
+// tacConnectorConfig resolves ONE tenant's case-connector configuration for ONE
+// connector.
+//
+// The connector id matters: ServiceNow and Jira share a config record but need
+// DIFFERENT ITSM connections, and the seam's resolver is handed only a tenant.
+// Binding the connector id per opener (below) is what lets the right connection
+// reach the right adapter without widening internal/ticketing's interface.
+//
+// §3a: the tenant is the one the caller was resolved to. `Get(tenant, false,
+// tenant)` reads that tenant's own row and nothing else — a cross-tenant read is
+// not merely filtered, it is refused by the store.
+func (s *server) tacConnectorConfig(_ context.Context, tenantID, connectorID string) (ticketing.TACConnectorConfig, error) {
+	if s.tacConnectors == nil {
+		return ticketing.TACConnectorConfig{}, ticketing.ErrTenantNotFound
+	}
+	cfg, err := s.tacConnectors.Get(tenantID, false, tenantID)
+	if err != nil {
+		return ticketing.TACConnectorConfig{}, err
+	}
+	// The ITSM connection is resolved at CALL TIME from the tenant's existing
+	// ServiceNow/Jira config and is never persisted in the TAC record.
+	if s.itsmCfg != nil {
+		switch connectorID {
+		case "servicenow", "jira":
+			if sc, ok := s.itsmCfg.SystemConfigFor(tenantID, connectorID); ok {
+				cfg.ITSM = sc
+			}
+		}
+	}
+	return cfg, nil
+}
+
+// tacOpenBundle streams one stored bundle to a case connector. The path is a
+// `<incident>/<bundle-name>` reference INSIDE the tenant's own bundle tree — the
+// store validates both segments, so a connector can never be handed a path from
+// anywhere else (§3a rule 4 / the CaseRequest contract).
+func (s *server) tacOpenBundle(_ context.Context, tenantID, ref string) (ticketing.Bundle, error) {
+	if s.tacBundles == nil {
+		return ticketing.Bundle{}, errors.New("no TAC bundle store is configured")
+	}
+	incidentID, name, ok := strings.Cut(ref, "/")
+	if !ok {
+		return ticketing.Bundle{}, tac.ErrNotFound
+	}
+	data, meta, err := s.tacBundles.Get(tenantID, incidentID, name)
+	if err != nil {
+		return ticketing.Bundle{}, err
+	}
+	sum := sha256.Sum256(data)
+	return ticketing.Bundle{
+		Name: meta.Name, ContentType: "application/zip", Size: int64(len(data)),
+		SHA256: hex.EncodeToString(sum[:]),
+		Open:   func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil },
+	}, nil
+}
+
+// tacCaseOpeners builds the W2 connectors behind the published CaseOpener seam.
+// Each adapter's Resolve is REBOUND to a connector-aware closure (see
+// tacConnectorConfig); every field it touches is exported and documented as
+// injected, so this is the intended wiring point rather than a reach into the
+// package's internals.
+func (s *server) tacCaseOpeners() []tac.CaseOpener {
+	openers := ticketing.TACOpenersFromRegistry(
+		ticketing.DefaultCaseConnectorRegistry(),
+		func(ctx context.Context, tenantID string) (ticketing.TACConnectorConfig, error) {
+			return s.tacConnectorConfig(ctx, tenantID, "")
+		},
+		s.tacOpenBundle,
+	)
+	for _, o := range openers {
+		to, ok := o.(*ticketing.TACOpener)
+		if !ok {
+			continue
+		}
+		id := to.Connector.Name()
+		to.Resolve = func(ctx context.Context, tenantID string) (ticketing.TACConnectorConfig, error) {
+			return s.tacConnectorConfig(ctx, tenantID, id)
+		}
+	}
+	return openers
+}
+
+// buildTACService constructs the escalation service. The live collector is wired
+// only when the SAME feature flag the protocol-diagnostics collector uses is on
+// and its runner built — one flag, one SSH custody, one read-only account.
+func (s *server) buildTACService() error {
+	cat, err := tac.Default()
+	if err != nil {
+		return fmt.Errorf("tac catalog: %w", err)
+	}
+	opts := []tac.ServiceOption{}
+	if protocolDiagCollectEnabled() && s.sshHosts != nil {
+		runner, rerr := protocoldiag.NewSSHGatedRunner(tac.NewGate(cat), s.protocolDiagGateway())
+		if rerr != nil {
+			return fmt.Errorf("tac runner: %w", rerr)
+		}
+		col, cerr := tac.NewCollector(runner)
+		if cerr != nil {
+			return fmt.Errorf("tac collector: %w", cerr)
+		}
+		opts = append(opts, tac.WithCollector(col))
+	}
+	store, serr := tac.NewStore(filepath.Join(envOr("DATA_DIR", "/data"), "tac"))
+	if serr != nil {
+		return fmt.Errorf("tac bundle store: %w", serr)
+	}
+	opts = append(opts, tac.WithStore(store))
+	s.tacBundles = store
+	// The per-tenant case-connector credentials (W2). The store is always built:
+	// a tenant with no configuration simply has no configured connector, which
+	// the UI shows greyed with its reason — the honest state, not an absence.
+	s.tacConnectors = ticketing.NewTACConnectorStore(
+		envOr("TAC_CONNECTOR_CONFIG_FILE", filepath.Join(envOr("DATA_DIR", "/data"), "tac_connectors.json")))
+	opts = append(opts, tac.WithOpeners(s.tacCaseOpeners()...))
+	svc, err := tac.NewService(cat, opts...)
+	if err != nil {
+		return err
+	}
+	s.tacService = svc
+	return nil
+}
+
+// TAC-ROUTES-END

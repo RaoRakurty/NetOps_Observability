@@ -1,0 +1,746 @@
+# plans/cisco-iosxr.yaml — the Cisco IOS-XR command plan for the TAC escalation pack.
+#
+# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven
+# by the loader (protocoldiag.ValidateReadOnly) and again by the runner. An
+# intent this dialect does not bind is simply ABSENT — the plan preview shows
+# it as unbound rather than rendering another vendor's command at this device.
+#
+# `verified: doc_claimed` means the vendor documents the command and Correlix
+# has not run it on this platform. `consent: true` marks a command the vendor
+# says is NOT routine (a core dump, a control-plane load, a file written on the
+# device): it never runs by default and never sits in a baseline.
+# `read_only_exception` is a CITED documented-status read whose text carries a
+# token the grammar refuses on sight.
+#
+# MACHINE-MERGED from ai/tac/research/*.yaml by scripts/tac-merge-research.py.
+schema_version: 1
+dialect: cisco-iosxr
+profile: cisco/ios_xr
+display: Cisco IOS-XR
+version: correlix-tac-plan-cisco-iosxr-2026-09-05
+
+# The dialect's default citation set. A doc_claimed binding inherits it.
+sources:
+  - title: Cisco IOS XR Command References
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-xr-software/products-command-reference-list.html
+    retrieved: 2026-09-05
+  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
+    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
+  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
+  - title: Troubleshoot Input Drops in Cisco IOS XR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
+  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
+    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
+  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
+  - title: Troubleshoot Input Drops in Cisco IOS XR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
+  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
+    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
+  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
+  - title: Troubleshoot Input Drops in Cisco IOS XR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
+  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
+    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
+  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
+  - title: Troubleshoot Input Drops in Cisco IOS XR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
+  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
+    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
+  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
+  - title: Troubleshoot Input Drops in Cisco IOS XR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
+  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
+    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
+  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
+  - title: Troubleshoot Input Drops in Cisco IOS XR
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
+
+# baseline — collected for EVERY class: the vendor-standard set a TAC engineer
+# opens before anything issue-specific.
+baseline:
+  - system.version
+  - system.inventory
+  - system.uptime
+  - hardware.environment
+  - interface.brief
+  - route.summary
+  - logging.recent
+  - config.running
+
+# optional — off by default: large and slow captures the operator opts into.
+optional:
+  - tech.support
+
+bindings:
+  system.version:
+    command: show version
+    verified: doc_claimed
+  system.inventory:
+    command: show inventory
+    verified: doc_claimed
+  system.uptime:
+    command: show version
+    verified: doc_claimed
+  hardware.environment:
+    command: show environment all
+    verified: doc_claimed
+  interface.brief:
+    command: show ipv4 interface brief
+    verified: doc_claimed
+  route.summary:
+    command: show route summary
+    verified: doc_claimed
+  logging.recent:
+    command: show logging
+    verified: doc_claimed
+  config.running:
+    command: show running-config
+    verified: doc_claimed
+  tech.support:
+    command: show tech-support
+    verified: doc_claimed
+  ospf.neighbor.list:
+    command: show ospf neighbor
+    verified: doc_claimed
+  ospf.interface.detail:
+    command: 'show ospf interface {if}'
+    verified: doc_claimed
+  interface.ipv4.mtu:
+    command: 'show ipv4 interface {if} | i MTU'
+    verified: doc_claimed
+  interface.im.database:
+    command: 'show im database interface {if}'
+    verified: doc_claimed
+  ospf.process.summary:
+    command: show ospf
+    verified: doc_claimed
+  ospf.database.list:
+    command: show ospf database
+    verified: doc_claimed
+  ospf.interface.timers:
+    command: 'show ospf interface {if}'
+    verified: doc_claimed
+  ospf.messagequeue.depth:
+    command: show ospf message-queue
+    verified: doc_claimed
+  ospf.retransmit.list:
+    command: show ospf retransmission-list
+    verified: doc_claimed
+  ospf.flood.list:
+    command: show ospf flood-list
+    verified: doc_claimed
+  interface.controller.stats:
+    command: 'show controllers {if} all'
+    verified: doc_claimed
+  ospf.route.table:
+    command: show ospf routes
+    verified: doc_claimed
+  ospf.database.lsa:
+    command: show ospf database
+    verified: doc_claimed
+  ospf.abr.list:
+    command: show ospf border-routers
+    verified: doc_claimed
+  ospf.summary.prefix:
+    command: show ospf summary-prefix
+    verified: doc_claimed
+  ospf.virtuallink.state:
+    command: show ospf virtual-links
+    verified: doc_claimed
+  fib.cef.lookup:
+    command: 'show cef ipv4 {prefix} detail'
+    verified: doc_claimed
+  interface.ipv6.mtu:
+    command: 'show ipv6 interface {if} | i MTU'
+    verified: doc_claimed
+  isis.adjacency.list:
+    command: show isis adjacency
+    verified: doc_claimed
+  isis.adjacency.detail:
+    command: 'show isis adjacency {if} detail'
+    verified: doc_claimed
+  isis.interface.detail:
+    command: 'show isis interface {if} detail'
+    verified: doc_claimed
+  isis.process.summary:
+    command: show isis protocol
+    verified: doc_claimed
+  isis.neighbor.list:
+    command: show isis neighbors
+    verified: doc_claimed
+  isis.adjacency.log:
+    command: show isis adjacency-log
+    verified: doc_claimed
+  isis.protocol.counters:
+    command: show isis statistics
+    verified: doc_claimed
+  isis.lsdb.list:
+    command: show isis database
+    verified: doc_claimed
+  isis.lsdb.log:
+    command: show isis database-log
+    verified: doc_claimed
+  isis.route.table:
+    command: show isis route
+    verified: doc_claimed
+  isis.topology.list:
+    command: show isis topology
+    verified: doc_claimed
+  isis.spf.log:
+    command: show isis spf-log
+    verified: doc_claimed
+  isis.lsp.log:
+    command: show isis lsp-log
+    verified: doc_claimed
+  isis.hostname.map:
+    command: show isis hostname
+    verified: doc_claimed
+  bgp.summary:
+    command: show bgp summary
+    verified: doc_claimed
+  bgp.session.list:
+    command: show bgp sessions
+    verified: doc_claimed
+  bgp.neighbor.detail:
+    command: 'show bgp neighbors {peer}'
+    verified: doc_claimed
+  bgp.process.state:
+    command: show bgp process
+    verified: doc_claimed
+  bgp.prefix.entry:
+    command: 'show bgp ipv4 unicast {prefix}'
+    verified: doc_claimed
+  bgp.advertised.set:
+    command: show bgp advertised
+    verified: doc_claimed
+  bgp.policy.effect:
+    command: show bgp policy
+    verified: doc_claimed
+  bgp.updategroup.membership:
+    command: show bgp update-group
+    verified: doc_claimed
+  bgp.policy.evaluate:
+    command: show bgp route-policy
+    verified: doc_claimed
+  bgp.update.inbound.errors:
+    command: show bgp update in error process
+    verified: doc_claimed
+  bgp.neighbor.maxprefix:
+    command: 'show bgp neighbors {peer}'
+    verified: doc_claimed
+  bgp.scale.instance:
+    command: show bgp instance all scale
+    verified: doc_claimed
+  bgp.scale.summary:
+    command: show bgp scale
+    verified: doc_claimed
+  bgp.rlimit.check:
+    command: 'show bgp process performance-statistics | i RLIMIT'
+    verified: doc_claimed
+  bgp.process.perfstats:
+    command: show bgp all all process performance-statistics detail
+    verified: doc_claimed
+  bgp.vrf.table:
+    command: 'show bgp vrf {vrf-scope} ipv4 unicast'
+    verified: doc_claimed
+  bgp.vrf.prefix.entry:
+    command: 'show bgp vrf {vrf-scope} ipv4 unicast {prefix}'
+    verified: doc_claimed
+  bgp.label.bindings:
+    command: show bgp labels
+    verified: doc_claimed
+  fib.vrf.lookup:
+    command: 'show cef vrf {vrf-scope} ipv4 {prefix} detail'
+    verified: doc_claimed
+  mpls.vrf.forwarding:
+    command: 'show mpls forwarding vrf {vrf-scope}'
+    verified: doc_claimed
+  bgp.summary.vpnv4:
+    command: show bgp summary
+    verified: doc_claimed
+  mpls.interface.state:
+    command: 'show mpls interfaces {if} detail'
+    verified: doc_claimed
+  mpls.forwarding.table:
+    command: show mpls forwarding
+    verified: doc_claimed
+  mpls.forwarding.prefix:
+    command: 'show mpls forwarding prefix {prefix}'
+    verified: doc_claimed
+  mpls.label.range:
+    command: show mpls label range
+    verified: doc_claimed
+  mpls.lsd.clients:
+    command: show mpls lsd clients
+    verified: doc_claimed
+  interface.counters:
+    command: 'show interfaces {if}'
+    verified: doc_claimed
+  interface.controller.all:
+    command: 'show controllers {if} all'
+    verified: doc_claimed
+  interface.controller.phy:
+    command: 'show controllers {if} phy'
+    verified: doc_claimed
+  interface.detail:
+    command: 'show interfaces {if} detail'
+    verified: doc_claimed
+  optics.levels:
+    command: 'show controllers optics {if}'
+    verified: doc_claimed
+  interface.im.state:
+    command: 'show im database interface {if}'
+    verified: doc_claimed
+  hardware.inventory:
+    command: show inventory
+    verified: doc_claimed
+  interface.drops.counter:
+    command: 'show interfaces {if} | i "input drops"'
+    verified: doc_claimed
+  interface.state.summary:
+    command: show ip interface brief
+    verified: doc_claimed
+  interface.controller.state:
+    command: 'show controllers {if}'
+    verified: doc_claimed
+  interface.controller.internal:
+    command: 'show controllers {if} internal'
+    verified: doc_claimed
+  interface.phy.state:
+    command: 'show controllers {if} phy'
+    verified: doc_claimed
+  interface.dampening:
+    command: 'show im dampening interface {if}'
+    verified: doc_claimed
+  platform.esd.switch:
+    command: show controller switch reachable
+    verified: doc_claimed
+  optics.summary:
+    command: 'show controllers optics {if} summary'
+    verified: doc_claimed
+  optics.pm.history:
+    command: 'show controllers optics {if} pm current 15-min optics 1'
+    verified: doc_claimed
+  optics.dsp.state:
+    command: 'show controllers coherentDSP {if}'
+    verified: doc_claimed
+  optics.dsp.fec:
+    command: 'show controllers coherentDSP {if} pm current 15-min fec'
+    verified: doc_claimed
+  optics.pid.serial:
+    command: show inventory details
+    verified: doc_claimed
+  optics.phy.readout:
+    command: 'show controllers {if} phy'
+    verified: doc_claimed
+  optics.techsupport.bundle:
+    command: show tech-support optics
+    verified: doc_claimed
+    consent: true
+    consent_note: >-
+      The vendor's full support bundle: output can be tens of megabytes and take
+      minutes on a loaded box.
+  platform.pfm.faults:
+    command: show pfm location all
+    verified: doc_claimed
+  platform.np.counters:
+    command: show controllers np counters all
+    verified: doc_claimed
+  config.commit.diff:
+    command: show configuration commit changes all
+    verified: doc_claimed
+  qos.policy.counters:
+    command: 'show policy-map interface {if}'
+    verified: doc_claimed
+  qos.interface.program:
+    command: 'show qos interface {if} output'
+    verified: doc_claimed
+  config.commit.failure:
+    command: show configuration failed
+    verified: doc_claimed
+  qos.techsupport.bundle:
+    command: show tech-support qos
+    verified: doc_claimed
+    consent: true
+    consent_note: >-
+      The vendor's full support bundle: output can be tens of megabytes and take
+      minutes on a loaded box.
+  logging.buffer:
+    command: show logging
+    verified: doc_claimed
+  logging.filter.fan:
+    command: 'show logging | include FAN'
+    verified: doc_claimed
+  logging.filter.power:
+    command: 'show logging | include Power'
+    verified: doc_claimed
+  platform.node.state:
+    command: show platform
+    verified: doc_claimed
+  platform.slices:
+    command: show platform slices
+    verified: doc_claimed
+  platform.cardmgr.inventory:
+    command: show controller card-mgr inventory summary
+    verified: doc_claimed
+  config.standby.consistency:
+    command: show configuration inconsistency replica
+    verified: doc_claimed
+  system.verify:
+    command: show system verify
+    verified: doc_claimed
+  config.commit.failure.detail:
+    command: show configuration failed inheritance
+    verified: doc_claimed
+  config.startup.failure:
+    command: show configuration failed startup
+    verified: doc_claimed
+  config.change.history:
+    command: show configuration history
+    verified: doc_claimed
+  config.commit.list:
+    command: show configuration commit list
+    verified: doc_claimed
+  config.rollback.preview:
+    command: show configuration rollback changes
+    verified: doc_claimed
+  config.sessions:
+    command: show configuration sessions
+    verified: doc_claimed
+  bfd.session.list:
+    command: show bfd session
+    verified: doc_claimed
+  cpu.processes:
+    command: show processes cpu
+    verified: doc_claimed
+  rib.route.lookup:
+    command: 'show route ipv4 {prefix}'
+    verified: doc_claimed
+  rpl.policy.active:
+    command: show rpl active route-policy
+    verified: doc_claimed
+  ospfv3.neighbor.list:
+    command: show ospfv3 neighbor
+    verified: doc_claimed
+  ospfv3.neighbor.detail:
+    command: 'show ospfv3 neighbor {if} detail'
+    verified: doc_claimed
+  ospfv3.interface.detail:
+    command: 'show ospfv3 interface {if}'
+    verified: doc_claimed
+  ospfv3.process.summary:
+    command: show ospfv3
+    verified: doc_claimed
+  ospfv3.database.lsa:
+    command: show ospfv3 database
+    verified: doc_claimed
+  ospfv3.messagequeue.depth:
+    command: show ospfv3 message-queue
+    verified: doc_claimed
+  ospfv3.route.table:
+    command: show ospfv3 routes
+    verified: doc_claimed
+  tcp.socket.list:
+    command: show tcp brief
+    verified: doc_claimed
+  rib.route.lookup.peer:
+    command: 'show route ipv4 {prefix}'
+    verified: doc_claimed
+  np.drop.counters:
+    command: show controllers np counters all
+    verified: doc_claimed
+  rpl.policy.attachpoints:
+    command: show rpl route-policy attachpoints
+    verified: doc_claimed
+  rpl.prefixset.active:
+    command: show rpl active prefix-set
+    verified: doc_claimed
+  memory.summary:
+    command: show memory summary location all
+    verified: doc_claimed
+  watchdog.memory.state:
+    command: show watchdog memory-state
+    verified: doc_claimed
+  process.blocked.list:
+    command: show processes blocked location all
+    verified: doc_claimed
+  rpl.extcommunity.rt:
+    command: show rpl extcommunity-set
+    verified: doc_claimed
+  rib.vrf.lookup:
+    command: 'show route vrf {vrf-scope} ipv4 unicast {prefix}'
+    verified: doc_claimed
+  ldp.neighbor.list:
+    command: show mpls ldp neighbor
+    verified: doc_claimed
+  ldp.neighbor.detail:
+    command: 'show mpls ldp neighbor {peer} detail'
+    verified: doc_claimed
+  ldp.discovery.hellos:
+    command: show mpls ldp discovery
+    verified: doc_claimed
+  ldp.interface.state:
+    command: 'show mpls ldp interface {if}'
+    verified: doc_claimed
+  ldp.parameters:
+    command: show mpls ldp parameters
+    verified: doc_claimed
+  ldp.igp.sync:
+    command: show mpls ldp igp sync
+    verified: doc_claimed
+  ldp.summary:
+    command: show mpls ldp summary
+    verified: doc_claimed
+  ldp.label.bindings:
+    command: 'show mpls ldp bindings {prefix}'
+    verified: doc_claimed
+  ldp.forwarding.table:
+    command: show mpls ldp forwarding
+    verified: doc_claimed
+  te.tunnel.state:
+    command: show mpls traffic-eng tunnels
+    verified: doc_claimed
+  te.topology.db:
+    command: show mpls traffic-eng topology
+    verified: doc_claimed
+  te.admission.control:
+    command: show mpls traffic-eng link-management admission-control
+    verified: doc_claimed
+  te.link.interfaces:
+    command: show mpls traffic-eng link-management interfaces
+    verified: doc_claimed
+  te.signaling.counters:
+    command: show mpls traffic-eng counters signaling
+    verified: doc_claimed
+  te.autoroute.announce:
+    command: show mpls traffic-eng autoroute
+    verified: doc_claimed
+  rsvp.session.list:
+    command: show rsvp session
+    verified: doc_claimed
+  rsvp.neighbor.detail:
+    command: show rsvp neighbor detail
+    verified: doc_claimed
+  rsvp.interface.bandwidth:
+    command: 'show rsvp interface {if} detail'
+    verified: doc_claimed
+  pim.neighbor.list:
+    command: 'show pim neighbor {if}'
+    verified: doc_claimed
+  pim.interface.state:
+    command: 'show pim interface {if}'
+    verified: doc_claimed
+  pim.rpf.lookup:
+    command: 'show pim rpf {prefix}'
+    verified: doc_claimed
+  pim.rp.mapping:
+    command: show pim group-map
+    verified: doc_claimed
+  pim.topology.state:
+    command: show pim topology
+    verified: doc_claimed
+  pim.traffic.counters:
+    command: show pim traffic
+    verified: doc_claimed
+  mrib.route.table:
+    command: show mrib route
+    verified: doc_claimed
+  mfib.route.table:
+    command: show mfib route
+    verified: doc_claimed
+  rib.route.lookup.source:
+    command: 'show route ipv4 {prefix}'
+    verified: doc_claimed
+  bfd.session.detail:
+    command: 'show bfd session interface {if} detail'
+    verified: doc_claimed
+  bfd.client.list:
+    command: show bfd client
+    verified: doc_claimed
+  bfd.label.session:
+    command: show bfd label session
+    verified: doc_claimed
+  forwarding.netio.idb:
+    command: 'show netio idb {if}'
+    verified: doc_claimed
+  forwarding.drops.summary:
+    command: show drops
+    verified: doc_claimed
+  alarms.active:
+    command: show alarms brief
+    verified: doc_claimed
+  lpts.bindings:
+    command: show lpts bindings brief
+    verified: doc_claimed
+  lpts.flows:
+    command: show lpts flows brief
+    verified: doc_claimed
+  process.blocked:
+    command: show processes blocked location all
+    verified: doc_claimed
+  process.detail.alarmlogger:
+    command: show processes alarm-logger
+    verified: doc_claimed
+  process.crash.context:
+    command: show context location all
+    verified: doc_claimed
+  process.list:
+    command: show processes
+    verified: doc_claimed
+  memory.leak.compare:
+    command: show memory compare report
+    verified: doc_claimed
+  reload.history:
+    command: show reboot history
+    verified: doc_claimed
+  process.core.config:
+    command: show exception
+    verified: doc_claimed
+  alarms.detail:
+    command: show alarms detail system active
+    verified: doc_claimed
+  environment.power:
+    command: show environment power
+    verified: doc_claimed
+  environment.temperature:
+    command: show environment temperatures
+    verified: doc_claimed
+  environment.voltage:
+    command: show environment voltages
+    verified: doc_claimed
+  fpd.status:
+    command: show hw-module fpd location all
+    verified: doc_claimed
+  install.active:
+    command: show install active summary
+    verified: doc_claimed
+  install.techsupport.bundle:
+    command: show tech install one-showtech
+    verified: doc_claimed
+  software.version:
+    command: show version
+    verified: doc_claimed
+  fpd.status.all:
+    command: show hw-module fpd location all
+    verified: doc_claimed
+  fpd.package.baseline:
+    command: show fpd package
+    verified: doc_claimed
+  fpd.techsupport.bundle:
+    command: show tech-support fpd
+    verified: doc_claimed
+    consent: true
+    consent_note: >-
+      The vendor's full support bundle: output can be tens of megabytes and take
+      minutes on a loaded box.
+  redundancy.state:
+    command: show redundancy
+    verified: doc_claimed
+  redundancy.summary:
+    command: show redundancy summary
+    verified: doc_claimed
+  install.committed:
+    command: show install committed
+    verified: doc_claimed
+  install.log:
+    command: show install log
+    verified: doc_claimed
+  install.superseded:
+    command: show install superceded
+    verified: doc_claimed
+  install.package.detail:
+    command: show install package pie detail
+    verified: doc_claimed
+  install.request.state:
+    command: show install request
+    verified: doc_claimed
+  install.audit:
+    command: show install audit
+    verified: doc_claimed
+  install.boot.options:
+    command: show install boot-options location all
+    verified: doc_claimed
+  cli.history:
+    command: show cli history detail
+    verified: doc_claimed
+  clock.calendar:
+    command: show calendar
+    verified: doc_claimed
+  transport.sessions:
+    command: show tcp brief
+    verified: doc_claimed
+  snmp.status:
+    command: show snmp
+    verified: doc_claimed
+  snmp.ifindex.map:
+    command: show snmp interface
+    verified: doc_claimed
+  snmp.linkupdown.state:
+    command: 'show snmp interface notification {if}'
+    verified: doc_claimed
+  snmp.queue.depth:
+    command: show snmp request incoming-queue detail
+    verified: doc_claimed
+  snmp.duplicate.drops:
+    command: show snmp request duplicates
+    verified: doc_claimed
+  snmp.slow.oids:
+    command: show snmp statistics slow oid
+    verified: doc_claimed
+  snmp.pdu.stats:
+    command: show snmp statistics pdu
+    verified: doc_claimed
+  snmp.traps:
+    command: show snmp traps details
+    verified: doc_claimed
+  snmp.receivers:
+    command: show snmp host
+    verified: doc_claimed
+  snmp.views:
+    command: show snmp view
+    verified: doc_claimed
+  aaa.tacacs.servers:
+    command: show tacacs
+    verified: doc_claimed
+  aaa.tacacs.counters:
+    command: show tacacs counters
+    verified: doc_claimed
+  aaa.tacacs.detail:
+    command: show tacacs details
+    verified: doc_claimed
+  aaa.tacacs.groups:
+    command: show tacacs server-groups
+    verified: doc_claimed
+  aaa.tacacs.source:
+    command: show tacacs source-interface
+    verified: doc_claimed
+  aaa.config.state:
+    command: show aaa
+    verified: doc_claimed
+  aaa.trace:
+    command: show aaa trace
+    verified: doc_claimed
+  aaa.current.user:
+    command: show user
+    verified: doc_claimed
+  process.detail.tacacsd:
+    command: show processes tacacsd
+    verified: doc_claimed

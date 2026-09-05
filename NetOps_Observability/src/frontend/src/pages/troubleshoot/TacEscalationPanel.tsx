@@ -1,0 +1,835 @@
+// TacEscalationPanel — the TAC escalation flow, one panel, incident-first.
+//
+// Design of record: docs/design/TAC_ESCALATION_2026-09-05.md §1. It replaces the
+// manual protocol-diagnostics bench: an operator no longer picks a protocol, an
+// issue and a device and presses "analyze". They press ONE button under the
+// verdict and Correlix does the legwork in six visible steps:
+//
+//   1. verdict          — RcaCaseHeader, above this panel (not ours)
+//   2. class + why      — what Correlix thinks this is, the exact evidence rows
+//                         that scored it, the alternatives, and an override
+//   3. plan preview     — the commands, BEFORE anything runs, with the size/time
+//                         estimate and what will be redacted
+//   4. collect          — read-only over the SSH gateway, live per command; or
+//                         paste the output when the platform has no plan / the
+//                         deployment has no runner
+//   5. bundle           — the redacted zip the SERVER builds
+//   6. open case        — a pre-filled form a PERSON submits
+//
+// HONESTY (the reason the feature exists). Nothing here is filled in to look
+// finished. `classified:false` shows the server's own note and never an invented
+// class. `has_plan:false` says this platform has no authored command set. An
+// unbound intent is listed WITH its reason. A `doc_claimed` command is labelled
+// "documented, not verified". A 503 on collect renders the server's own
+// collect_note and leaves the paste path open. A connector with no credentials
+// is greyed with its own note and cannot be pressed into a case.
+//
+// SECURITY (§3 zero trust / §15 untrusted output). Command output, the problem
+// statement, connector notes and case text are all remote-authored. Every one of
+// them is rendered as an escaped React text node — there is no innerHTML and no
+// dangerouslySetInnerHTML in this file. The download name is built from a closed
+// character set, so a remote string cannot steer a file path.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  api,
+  type Device,
+  type TacCaseForm,
+  type TacCaseResult,
+  type TacClassifyResponse,
+  type TacConnectorInfo,
+  type TacPlan,
+  type TacState,
+  type TacStateResponse,
+  type TacStep,
+  type TacTarget,
+} from "../../services/api";
+import {
+  BUNDLE_FAILED,
+  BUNDLE_PROFILES,
+  CANCEL_FAILED,
+  CASE_FORM_FAILED,
+  CASE_HUMAN_APPROVED,
+  CASE_SUBMIT_FAILED,
+  CLASSIFY_FAILED,
+  CONNECTOR_NOT_CONFIGURED,
+  DEVICES_FAILED,
+  MAX_PASTE_CHARS,
+  NOT_ESCALATED_NOTE,
+  NO_AUTHORED_PLAN_NOTE,
+  NO_BUNDLE_YET,
+  NO_CAPTURE_YET,
+  PASTE_INVITE,
+  PLAN_FAILED,
+  PLAN_NEEDS_DEVICE,
+  ROW_RENDER_CAP,
+  SECTION_ORDER,
+  SECTION_TITLE,
+  STATE_READ_FAILED,
+  buildPasteOutputs,
+  buildPlanRequest,
+  bundleFileName,
+  cappedNote,
+  classificationNote,
+  collectErrorMessage,
+  connectorCapabilityLine,
+  connectorNote,
+  evidenceLine,
+  groupSteps,
+  hasCapability,
+  humanBytes,
+  humanSeconds,
+  isCollecting,
+  isMissingField,
+  pasteIntents,
+  phaseLabel,
+  reasonLine,
+  tacError,
+  unboundReason,
+  verifiedLabel,
+} from "./tacModel";
+
+/** The editable half of the case form — everything the vendor wants from a human. */
+type CaseFields = {
+  title: string; severity: string; product: string; serial_number: string;
+  contract_id: string; contact_name: string; contact_email: string;
+};
+
+const EMPTY_FIELDS: CaseFields = {
+  title: "", severity: "", product: "", serial_number: "",
+  contract_id: "", contact_name: "", contact_email: "",
+};
+
+const CASE_FIELD_LABEL: { key: keyof CaseFields; label: string }[] = [
+  { key: "title", label: "Title" },
+  { key: "severity", label: "Severity" },
+  { key: "product", label: "Product" },
+  { key: "serial_number", label: "Serial number" },
+  { key: "contract_id", label: "Contract" },
+  { key: "contact_name", label: "Contact name" },
+  { key: "contact_email", label: "Contact email" },
+];
+
+export default function TacEscalationPanel({ incidentId }: { incidentId: string }) {
+  const [info, setInfo] = useState<TacStateResponse | null>(null);
+  const [infoErr, setInfoErr] = useState("");
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [devicesErr, setDevicesErr] = useState("");
+
+  const [classify, setClassify] = useState<TacClassifyResponse | null>(null);
+  const [classErr, setClassErr] = useState("");
+  const [classifying, setClassifying] = useState(false);
+  const [classOverride, setClassOverride] = useState("");
+
+  const [deviceId, setDeviceId] = useState("");
+  const [target, setTarget] = useState<TacTarget>({});
+  const [includeOptional, setIncludeOptional] = useState(false);
+  const [planning, setPlanning] = useState(false);
+  const [planErr, setPlanErr] = useState("");
+
+  const [collectBusy, setCollectBusy] = useState(false);
+  const [collectErr, setCollectErr] = useState("");
+  const [paste, setPaste] = useState<Record<string, string>>({});
+
+  const [bundleErr, setBundleErr] = useState("");
+  const [bundleNote, setBundleNote] = useState("");
+  const [bundleProfile, setBundleProfile] = useState("full");
+
+  const [caseConnector, setCaseConnector] = useState<TacConnectorInfo | null>(null);
+  const [caseForm, setCaseForm] = useState<TacCaseForm | null>(null);
+  const [caseFields, setCaseFields] = useState<CaseFields>(EMPTY_FIELDS);
+  const [caseErr, setCaseErr] = useState("");
+  const [caseNote, setCaseNote] = useState("");
+  const [caseResult, setCaseResult] = useState<TacCaseResult | null>(null);
+  const [caseBusy, setCaseBusy] = useState(false);
+
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
+
+  const state: TacState | null = info?.state ?? null;
+  const plan: TacPlan | undefined = state?.plan;
+  const capture = state?.capture;
+  const classification = classify?.classification ?? state?.classification;
+
+  const readState = useCallback(async () => {
+    try {
+      const r = await api.tacState(incidentId);
+      if (alive.current) { setInfo(r); setInfoErr(""); }
+    } catch (e) {
+      if (alive.current) setInfoErr(tacError(e, STATE_READ_FAILED));
+    }
+  }, [incidentId]);
+
+  // The escalation's state, and the caller's own inventory for the device picker.
+  useEffect(() => {
+    setInfo(null); setInfoErr(""); setClassify(null); setClassErr("");
+    setDeviceId(""); setPlanErr(""); setCollectErr(""); setPaste({});
+    setCaseForm(null); setCaseConnector(null); setCaseResult(null); setCaseErr("");
+    void readState();
+  }, [incidentId, readState]);
+
+  useEffect(() => {
+    api.devices()
+      .then((rows) => { if (alive.current) { setDevices(Array.isArray(rows) ? rows : []); setDevicesErr(""); } })
+      .catch((e: unknown) => { if (alive.current) { setDevices([]); setDevicesErr(tacError(e, DEVICES_FAILED)); } });
+  }, []);
+
+  // Seed the device from the incident's own affected list, once.
+  useEffect(() => {
+    if (deviceId === "" && (info?.devices?.length ?? 0) > 0) setDeviceId(info!.devices[0]);
+  }, [info, deviceId]);
+
+  // LIVE collection: re-read the escalation every 2 s while the server says a
+  // job is running, and stop the moment it is not. The interval is cleared on
+  // unmount and on every status change — a closed panel reads nothing.
+  const running = isCollecting(state);
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => { void readState(); }, 2000);
+    return () => clearInterval(id);
+  }, [running, readState]);
+
+  // ── actions ───────────────────────────────────────────────────────────────
+
+  const runClassify = async () => {
+    setClassErr(""); setClassifying(true);
+    try {
+      const r = await api.tacClassify(incidentId);
+      if (!alive.current) return;
+      setClassify(r);
+      setClassOverride(r.classification?.class_id ?? "");
+      await readState();
+    } catch (e) {
+      if (alive.current) setClassErr(tacError(e, CLASSIFY_FAILED));
+    } finally {
+      if (alive.current) setClassifying(false);
+    }
+  };
+
+  const runPlan = async () => {
+    setPlanErr("");
+    if (!deviceId.trim()) { setPlanErr(PLAN_NEEDS_DEVICE); return; }
+    setPlanning(true);
+    try {
+      const classId = classOverride || classification?.class_id || "";
+      await api.tacPlan(incidentId, buildPlanRequest(deviceId, classId, includeOptional, target));
+      if (alive.current) await readState();
+    } catch (e) {
+      if (alive.current) setPlanErr(tacError(e, PLAN_FAILED));
+    } finally {
+      if (alive.current) setPlanning(false);
+    }
+  };
+
+  const pasteSteps = useMemo(() => pasteIntents(plan, state), [plan, state]);
+
+  const runCollect = async (withPaste: boolean) => {
+    setCollectErr(""); setCollectBusy(true);
+    try {
+      const outputs = withPaste ? buildPasteOutputs(pasteSteps, paste) : [];
+      await api.tacCollect(incidentId, outputs.length ? { outputs } : {});
+      if (alive.current) await readState();
+    } catch (e) {
+      if (alive.current) setCollectErr(collectErrorMessage(e, info?.collect_note ?? ""));
+    } finally {
+      if (alive.current) setCollectBusy(false);
+    }
+  };
+
+  const runCancel = async () => {
+    setCollectErr("");
+    try {
+      await api.tacCancelCollect(incidentId);
+      if (alive.current) await readState();
+    } catch (e) {
+      if (alive.current) setCollectErr(tacError(e, CANCEL_FAILED));
+    }
+  };
+
+  const runDownload = async () => {
+    setBundleErr(""); setBundleNote("");
+    const name = bundleFileName(info?.incident_ref || incidentId, bundleProfile);
+    try {
+      await api.tacDownloadBundle(incidentId, bundleProfile, name);
+      if (alive.current) { setBundleNote(`The redacted bundle was saved as ${name}.`); await readState(); }
+    } catch (e) {
+      if (alive.current) setBundleErr(tacError(e, BUNDLE_FAILED));
+    }
+  };
+
+  const openCaseForm = async (connector: TacConnectorInfo) => {
+    setCaseErr(""); setCaseNote(""); setCaseResult(null); setCaseBusy(true);
+    try {
+      const r = await api.tacCaseForm(incidentId, connector.id);
+      if (!alive.current) return;
+      setCaseConnector(r.connector ?? connector);
+      setCaseForm(r.form);
+      setCaseFields({
+        title: r.form.title ?? "", severity: r.form.severity ?? "", product: r.form.product ?? "",
+        serial_number: r.form.serial_number ?? "", contract_id: r.form.contract_id ?? "",
+        contact_name: r.form.contact_name ?? "", contact_email: r.form.contact_email ?? "",
+      });
+    } catch (e) {
+      if (alive.current) { setCaseForm(null); setCaseErr(tacError(e, CASE_FORM_FAILED)); }
+    } finally {
+      if (alive.current) setCaseBusy(false);
+    }
+  };
+
+  const submitCase = async () => {
+    if (!caseConnector) return;
+    setCaseErr(""); setCaseNote(""); setCaseBusy(true);
+    try {
+      const r = await api.tacCaseSubmit(incidentId, caseConnector.id, { ...caseFields });
+      if (!alive.current) return;
+      setCaseResult(r.result);
+      setCaseNote(
+        r.result.case_id
+          ? `Case ${r.result.case_id} recorded with ${caseConnector.display}.`
+          : `${caseConnector.display} recorded the escalation; it issued no case number.`,
+      );
+      await readState();
+    } catch (e) {
+      if (alive.current) setCaseErr(tacError(e, CASE_SUBMIT_FAILED));
+    } finally {
+      if (alive.current) setCaseBusy(false);
+    }
+  };
+
+  // ── render ────────────────────────────────────────────────────────────────
+
+  if (infoErr) {
+    return (
+      <section className="tac-panel card" aria-label="Escalate to TAC">
+        <h2 className="tac-h">Escalate to TAC</h2>
+        <p className="tac-bad" role="alert">{infoErr}</p>
+      </section>
+    );
+  }
+  if (!info) {
+    return (
+      <section className="tac-panel card" aria-label="Escalate to TAC">
+        <h2 className="tac-h">Escalate to TAC</h2>
+        <p className="mini-meta" role="status">Reading this incident&apos;s escalation…</p>
+      </section>
+    );
+  }
+
+  const started = Boolean(classification);
+  const evidence = evidenceLine(classify?.evidence_sources ?? [], classify?.evidence_missing ?? []);
+  const sections = groupSteps(plan?.steps);
+  const bundles = state?.bundles ?? [];
+
+  return (
+    <section className="tac-panel card" aria-label="Escalate to TAC">
+      <div className="tac-head">
+        <h2 className="tac-h">Escalate to TAC</h2>
+        <span className="mini-meta tac-ver">Issue catalogue {info.catalog_version}</span>
+      </div>
+
+      {/* ── step 1: start ────────────────────────────────────────────────── */}
+      {!started && (
+        <div className="tac-start">
+          <p className="mini-meta">{info.state_note || NOT_ESCALATED_NOTE}</p>
+          <button type="button" className="btn accent" onClick={() => { void runClassify(); }} disabled={classifying}>
+            {classifying ? "Classifying…" : "Escalate to TAC"}
+          </button>
+          {classErr && <p className="tac-bad" role="alert">{classErr}</p>}
+        </div>
+      )}
+
+      {/* ── step 2: class + why ──────────────────────────────────────────── */}
+      {started && classification && (
+        <section className="tac-step" aria-labelledby="tac-class-h">
+          <h3 id="tac-class-h" className="tac-step-h">Issue class</h3>
+          <p className="tac-class-title">
+            <strong>{classification.title}</strong>{" "}
+            <code className="tac-id">{classification.class_id}</code>{" "}
+            <span className={`badge${classification.classified ? "" : " tac-unsure"}`}>
+              {classification.classified ? "matched the evidence" : "nothing scored"}
+            </span>
+          </p>
+          {classificationNote(classification) && (
+            <p className="mini-meta tac-note">{classificationNote(classification)}</p>
+          )}
+          {classification.tac_first_look && (
+            <p className="mini-meta tac-note">
+              <strong>What TAC opens first:</strong> {classification.tac_first_look}
+            </p>
+          )}
+
+          {classification.why.length > 0 ? (
+            <>
+              <p className="mini-meta">The evidence that scored this class:</p>
+              <ul className="tac-why">
+                {classification.why.map((r) => (
+                  <li key={`${r.kind}-${r.ref}`}>{reasonLine(r)}</li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="mini-meta tac-note">No evidence row scored this class.</p>
+          )}
+
+          {classification.alternatives.length > 0 && (
+            <>
+              <p className="mini-meta">Other classes that scored:</p>
+              <ul className="tac-alts">
+                {classification.alternatives.map((a) => (
+                  <li key={a.class_id}>
+                    <span className="tac-alt-t">{a.title}</span>{" "}
+                    <code className="tac-id">{a.class_id}</code>{" "}
+                    <span className="mini-meta">score {a.score}</span>
+                    {a.why.length > 0 && (
+                      <span className="mini-meta"> — {a.why.map(reasonLine).join(" · ")}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {classify?.evidence_sources && (
+            <p className="mini-meta tac-note" data-testid="tac-evidence">
+              {evidence.on}
+              {evidence.without ? ` ${evidence.without}` : ""}
+            </p>
+          )}
+
+          <div className="tac-row">
+            {(classify?.classes?.length ?? 0) > 0 ? (
+              <div className="tac-field">
+                {/* The hint sits OUTSIDE the label: a label that wraps its own
+                    help text names the control after both, and the accessible
+                    name stops being the field's name. */}
+                <label>
+                  <span>Change the issue class</span>
+                  <select
+                    value={classOverride || classification.class_id}
+                    onChange={(e) => setClassOverride(e.target.value)}
+                  >
+                    {classify!.classes.map((c) => (
+                      <option key={c.id} value={c.id}>{c.title} — {c.id}</option>
+                    ))}
+                  </select>
+                </label>
+                <span className="mini-meta">Override it if you know the issue better than the evidence does.</span>
+              </div>
+            ) : (
+              <p className="mini-meta tac-note">
+                The full class list arrives with a classification — classify again to change the class.
+              </p>
+            )}
+            <button type="button" className="btn" onClick={() => { void runClassify(); }} disabled={classifying}>
+              {classifying ? "Classifying…" : "Classify again"}
+            </button>
+          </div>
+          {classErr && <p className="tac-bad" role="alert">{classErr}</p>}
+        </section>
+      )}
+
+      {/* ── step 3: plan preview ─────────────────────────────────────────── */}
+      {started && (
+        <section className="tac-step" aria-labelledby="tac-plan-h">
+          <h3 id="tac-plan-h" className="tac-step-h">Command plan</h3>
+          <div className="tac-form">
+            <div className="tac-field">
+              <label>
+                <span>Device</span>
+                <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
+                  <option value="">Choose the device…</option>
+                  {(info.devices ?? []).filter((d) => !devices.some((x) => x.id === d)).map((d) => (
+                    <option key={`aff-${d}`} value={d}>{d} — named by this incident</option>
+                  ))}
+                  {devices.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name || d.id}{d.address ? ` — ${d.address}` : ""}</option>
+                  ))}
+                </select>
+              </label>
+              <span className="mini-meta">
+                {devicesErr || "The incident's own devices are listed first; any device you can see is selectable."}
+              </span>
+            </div>
+            {([
+              ["interface", "Interface"], ["peer", "Peer"], ["prefix", "Prefix"],
+              ["vrf", "VRF"], ["router_id", "Router id"], ["area", "Area"],
+            ] as [keyof TacTarget, string][]).map(([key, label]) => (
+              <label className="tac-field" key={key}>
+                <span>{label} (optional)</span>
+                <input
+                  type="text"
+                  maxLength={256}
+                  value={target[key] ?? ""}
+                  onChange={(e) => setTarget((t) => ({ ...t, [key]: e.target.value }))}
+                />
+              </label>
+            ))}
+            <label className="tac-check">
+              <input
+                type="checkbox"
+                checked={includeOptional}
+                onChange={(e) => setIncludeOptional(e.target.checked)}
+              />
+              <span>Include the optional captures (large and slow, off by default)</span>
+            </label>
+            <div className="tac-actions">
+              <button type="button" className="btn accent" onClick={() => { void runPlan(); }} disabled={planning}>
+                {planning ? "Building the plan…" : plan ? "Rebuild the plan" : "Build the command plan"}
+              </button>
+            </div>
+          </div>
+          {planErr && <p className="tac-bad" role="alert">{planErr}</p>}
+
+          {!plan ? (
+            <p className="mini-meta tac-note" role="status">{PLAN_NEEDS_DEVICE}</p>
+          ) : (
+            <div className="tac-plan" data-testid="tac-plan">
+              <p className="mini-meta tac-note">
+                {plan.class_title} on <strong>{plan.hostname || plan.device_id}</strong> ·{" "}
+                {plan.dialect_display || plan.dialect}
+                {plan.plan_version ? ` · plan ${plan.plan_version}` : ""}
+              </p>
+              {!plan.has_plan && (
+                <p className="tac-bad" role="status" data-testid="tac-no-plan">
+                  {plan.note || NO_AUTHORED_PLAN_NOTE}
+                </p>
+              )}
+              {plan.has_plan && plan.note && <p className="mini-meta tac-note">{plan.note}</p>}
+              <p className="mini-meta tac-note">
+                Estimated {humanBytes(plan.estimated_bytes)} · {humanSeconds(plan.estimated_seconds)}
+              </p>
+              <p className="mini-meta tac-note" data-testid="tac-redaction">{plan.redaction_note}</p>
+
+              {SECTION_ORDER.map((sec) => {
+                const steps = sections[sec];
+                if (steps.length === 0) return null;
+                const shown = steps.slice(0, ROW_RENDER_CAP);
+                return (
+                  <div className="tac-section" key={sec}>
+                    <h4 className="tac-section-h">{SECTION_TITLE[sec]}</h4>
+                    <ul className="tac-steps">
+                      {shown.map((s) => <PlanStep key={`${sec}-${s.intent}`} step={s} />)}
+                    </ul>
+                    {steps.length > shown.length && (
+                      <p className="mini-meta tac-note">{cappedNote(shown.length, steps.length, "steps")}</p>
+                    )}
+                  </div>
+                );
+              })}
+
+              {plan.topology.length > 0 && (
+                <div className="tac-section">
+                  <h4 className="tac-section-h">Topology carried into the bundle</h4>
+                  <ul className="tac-topo">
+                    {plan.topology.slice(0, ROW_RENDER_CAP).map((t, i) => (
+                      <li key={`${t.kind}-${t.ref}-${i}`}>
+                        <span className="tac-kind">{t.kind}</span> {t.ref}
+                        {t.detail ? <span className="mini-meta"> — {t.detail}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="tac-section" data-testid="tac-unbound">
+                <h4 className="tac-section-h">Intents this platform binds no command for</h4>
+                {plan.unbound.length === 0 ? (
+                  <p className="mini-meta tac-note">Every intent in this plan is bound to a command.</p>
+                ) : (
+                  <ul className="tac-steps">
+                    {plan.unbound.slice(0, ROW_RENDER_CAP).map((s) => (
+                      <li className="tac-step-row unbound" key={`ub-${s.intent}`}>
+                        <span className="tac-step-t">{s.title}</span>
+                        <code className="tac-id">{s.intent}</code>
+                        <span className="mini-meta">{unboundReason(s)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ── step 4: collect ──────────────────────────────────────────────── */}
+      {started && plan && (
+        <section className="tac-step" aria-labelledby="tac-collect-h">
+          <h3 id="tac-collect-h" className="tac-step-h">Collect</h3>
+          {!info.can_collect && (
+            <p className="tac-bad" role="status" data-testid="tac-collect-note">{info.collect_note}</p>
+          )}
+          <div className="tac-actions">
+            <button
+              type="button"
+              className="btn accent"
+              onClick={() => { void runCollect(false); }}
+              disabled={collectBusy || running || !info.can_collect}
+              title={info.can_collect ? undefined : info.collect_note}
+            >
+              {running ? "Collecting…" : "Start the collection"}
+            </button>
+            <button type="button" className="btn" onClick={() => { void runCancel(); }} disabled={!running}>
+              Stop
+            </button>
+          </div>
+          {collectErr && <p className="tac-bad" role="alert" data-testid="tac-collect-error">{collectErr}</p>}
+
+          {state?.job && (
+            <div className="tac-job" role="status" aria-live="polite" data-testid="tac-job">
+              <p className="mini-meta">
+                {state.job.done} of {state.job.total} commands · {state.job.status}
+                {state.job.error ? ` · ${state.job.error}` : ""}
+              </p>
+              <ul className="tac-progress">
+                {state.job.progress.slice(-ROW_RENDER_CAP).map((p, i) => (
+                  <li key={`${p.index}-${p.phase}-${i}`} className={`tac-prog ${p.phase}`}>
+                    <span className="tac-prog-i">{p.index + 1}/{p.total}</span>
+                    <code className="tac-id">{p.intent}</code>
+                    <code className="tac-cmd">{p.command}</code>
+                    <span className="tac-prog-p">{phaseLabel(p.phase)}</span>
+                    <span className="mini-meta">
+                      {p.error ? p.error : p.bytes != null ? humanBytes(p.bytes) : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {state.job.progress.length > ROW_RENDER_CAP && (
+                <p className="mini-meta tac-note">
+                  {cappedNote(ROW_RENDER_CAP, state.job.progress.length, "progress lines")}
+                </p>
+              )}
+            </div>
+          )}
+
+          {capture && (
+            <div className="tac-capture" data-testid="tac-capture">
+              <p className="mini-meta tac-note">
+                {capture.commands.length} command(s) · {humanBytes(capture.total_bytes)} from{" "}
+                {capture.hostname || capture.device_id}
+                {capture.stopped ? ` · stopped: ${capture.stopped}` : ""}
+              </p>
+              {capture.commands.slice(0, ROW_RENDER_CAP).map((c) => (
+                <details className="tac-out" key={`cap-${c.intent}`}>
+                  <summary>
+                    <code className="tac-cmd">{c.command || c.intent}</code>{" "}
+                    <span className="mini-meta">
+                      {c.error ? c.error : `${humanBytes(c.bytes)}`}
+                      {verifiedLabel(c.verified) ? ` · ${verifiedLabel(c.verified)}` : ""}
+                    </span>
+                  </summary>
+                  {c.output ? (
+                    <pre className="tac-pre">{c.output}</pre>
+                  ) : (
+                    <p className="mini-meta tac-note">
+                      {c.error || "The device returned nothing for this command."}
+                    </p>
+                  )}
+                </details>
+              ))}
+            </div>
+          )}
+
+          {/* the paste fallback lives HERE and only here */}
+          {pasteSteps.length > 0 && (
+            <div className="tac-paste" data-testid="tac-paste">
+              <h4 className="tac-section-h">Paste output Correlix does not have</h4>
+              <p className="mini-meta tac-note">{PASTE_INVITE}</p>
+              {pasteSteps.slice(0, ROW_RENDER_CAP).map((s) => (
+                <label className="tac-paste-item" key={`p-${s.intent}`}>
+                  <span className="tac-step-t">
+                    {s.title} <code className="tac-id">{s.intent}</code>
+                    {s.command ? <> — <code className="tac-cmd">{s.command}</code></> : null}
+                  </span>
+                  <textarea
+                    rows={4}
+                    maxLength={MAX_PASTE_CHARS}
+                    value={paste[s.intent] ?? ""}
+                    aria-label={`Output for ${s.intent}`}
+                    onChange={(e) => setPaste((p) => ({ ...p, [s.intent]: e.target.value }))}
+                  />
+                </label>
+              ))}
+              <div className="tac-actions">
+                <button type="button" className="btn" onClick={() => { void runCollect(true); }} disabled={collectBusy}>
+                  {collectBusy ? "Filing…" : "File the pasted output"}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ── step 5: bundle ───────────────────────────────────────────────── */}
+      {started && plan && (
+        <section className="tac-step" aria-labelledby="tac-bundle-h">
+          <h3 id="tac-bundle-h" className="tac-step-h">Bundle</h3>
+          {!capture ? (
+            <p className="mini-meta tac-note" role="status">{NO_CAPTURE_YET}</p>
+          ) : (
+            <>
+              <div className="tac-actions">
+                <label className="tac-field">
+                  <span>Profile</span>
+                  <select value={bundleProfile} onChange={(e) => setBundleProfile(e.target.value)}>
+                    {BUNDLE_PROFILES.map((p) => (
+                      <option key={p.id} value={p.id}>{p.label} — {p.hint}</option>
+                    ))}
+                  </select>
+                </label>
+                <button type="button" className="btn accent" onClick={() => { void runDownload(); }}>
+                  Download the redacted bundle
+                </button>
+              </div>
+              {bundleErr && <p className="tac-bad" role="alert">{bundleErr}</p>}
+              {bundleNote && <p className="mini-meta tac-note" role="status">{bundleNote}</p>}
+            </>
+          )}
+          <h4 className="tac-section-h">Bundles built for this incident</h4>
+          {bundles.length === 0 ? (
+            <p className="mini-meta tac-note">{NO_BUNDLE_YET}</p>
+          ) : (
+            <ul className="tac-bundles">
+              {bundles.map((b) => (
+                <li key={b.name}>
+                  <code className="tac-cmd">{b.name}</code>{" "}
+                  <span className="mini-meta">{humanBytes(b.bytes)} · {b.profile} profile · {b.created_at}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {/* ── step 6: open the case ────────────────────────────────────────── */}
+      {started && plan && (
+        <section className="tac-step" aria-labelledby="tac-case-h">
+          <h3 id="tac-case-h" className="tac-step-h">Open the case</h3>
+          <p className="mini-meta tac-note">{CASE_HUMAN_APPROVED}</p>
+          {(info.connectors ?? []).length === 0 ? (
+            <p className="mini-meta tac-note">
+              No case connector is offered on this deployment — download the bundle and open the case yourself.
+            </p>
+          ) : (
+            <ul className="tac-connectors">
+              {info.connectors.map((c) => (
+                <li key={c.id} className={`tac-conn${c.configured ? "" : " off"}`} data-testid={`tac-conn-${c.id}`}>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!c.configured || caseBusy}
+                    aria-disabled={!c.configured}
+                    onClick={() => { void openCaseForm(c); }}
+                  >
+                    {c.display}
+                  </button>
+                  <span className="mini-meta">{connectorCapabilityLine(c)}</span>
+                  {connectorNote(c) && (
+                    <span className={`mini-meta${c.configured ? "" : " tac-bad"}`}>{connectorNote(c)}</span>
+                  )}
+                  <span className="mini-meta">
+                    attachment ceiling {humanBytes(c.max_attachment_bytes)} · {c.profile} profile
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {caseErr && <p className="tac-bad" role="alert" data-testid="tac-case-error">{caseErr}</p>}
+
+          {caseForm && caseConnector && (
+            <div className="tac-case" data-testid="tac-case-form">
+              <h4 className="tac-section-h">{caseConnector.display} — review before it is sent</h4>
+              <p className="mini-meta tac-note">
+                {caseForm.bundle_name} · {humanBytes(caseForm.bundle_bytes)} · {caseForm.profile} profile
+                {caseConnector.configured ? "" : ` · ${CONNECTOR_NOT_CONFIGURED}`}
+              </p>
+              <div className="tac-form">
+                {CASE_FIELD_LABEL.map(({ key, label }) => {
+                  const required = isMissingField(caseForm, key);
+                  return (
+                    <label className={`tac-field${required ? " req" : ""}`} key={key}>
+                      <span>{label}{required ? " — the vendor requires this" : ""}</span>
+                      <input
+                        type="text"
+                        maxLength={200}
+                        required={required}
+                        aria-required={required}
+                        value={caseFields[key]}
+                        onChange={(e) => setCaseFields((f) => ({ ...f, [key]: e.target.value }))}
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              <label className="tac-field">
+                <span>Case text</span>
+                <textarea className="tac-portal" rows={10} readOnly value={caseForm.portal_text} />
+              </label>
+              <div className="tac-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => { void navigator.clipboard?.writeText(caseForm.portal_text); setCaseNote("The case text was copied."); }}
+                >
+                  Copy the case text
+                </button>
+                {caseForm.portal_url && (
+                  <a className="btn" href={caseForm.portal_url} target="_blank" rel="noreferrer noopener">
+                    Open the vendor portal
+                  </a>
+                )}
+                <button
+                  type="button"
+                  className="btn accent"
+                  disabled={caseBusy || !hasCapability(caseConnector, "create")}
+                  onClick={() => { void submitCase(); }}
+                >
+                  {caseBusy ? "Opening…" : "Open the case"}
+                </button>
+              </div>
+              {!hasCapability(caseConnector, "create") && (
+                <p className="mini-meta tac-note">{connectorCapabilityLine(caseConnector)}</p>
+              )}
+            </div>
+          )}
+
+          {caseNote && <p className="mini-meta tac-note" role="status">{caseNote}</p>}
+          {caseResult && (
+            <p className="mini-meta tac-note" data-testid="tac-case-result">
+              {caseResult.attached ? "The bundle was attached." : caseResult.attach_note || "The bundle was not attached."}
+              {caseResult.case_url ? " " : ""}
+              {caseResult.case_url && (
+                <a href={caseResult.case_url} target="_blank" rel="noreferrer noopener">Open the case</a>
+              )}
+            </p>
+          )}
+        </section>
+      )}
+    </section>
+  );
+}
+
+/** One planned step: what it is for, the command, and how sure we are of it. */
+function PlanStep({ step }: { step: TacStep }) {
+  const vlabel = verifiedLabel(step.verified);
+  return (
+    <li className={`tac-step-row${step.bound ? "" : " unbound"}`}>
+      <span className="tac-step-t">{step.title}</span>
+      <code className="tac-id">{step.intent}</code>
+      {step.bound && step.command ? <code className="tac-cmd">{step.command}</code> : null}
+      {!step.bound && <span className="mini-meta">{unboundReason(step)}</span>}
+      {vlabel && <span className={`badge tac-v-${step.verified}`}>{vlabel}</span>}
+      {step.note && step.bound && <span className="mini-meta">{step.note}</span>}
+      {(step.sources ?? []).length > 0 && (
+        <span className="mini-meta tac-src">
+          {(step.sources ?? []).map((s) => (
+            <a key={s.url} href={s.url} target="_blank" rel="noreferrer noopener">{s.title}</a>
+          ))}
+        </span>
+      )}
+    </li>
+  );
+}

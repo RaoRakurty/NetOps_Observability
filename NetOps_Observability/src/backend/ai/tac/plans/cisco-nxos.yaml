@@ -1,0 +1,1017 @@
+# plans/cisco-nxos.yaml — the Cisco NX-OS command plan for the TAC escalation pack.
+#
+# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven
+# by the loader (protocoldiag.ValidateReadOnly) and again by the runner. An
+# intent this dialect does not bind is simply ABSENT — the plan preview shows
+# it as unbound rather than rendering another vendor's command at this device.
+#
+# `verified: doc_claimed` means the vendor documents the command and Correlix
+# has not run it on this platform. `consent: true` marks a command the vendor
+# says is NOT routine (a core dump, a control-plane load, a file written on the
+# device): it never runs by default and never sits in a baseline.
+# `read_only_exception` is a CITED documented-status read whose text carries a
+# token the grammar refuses on sight.
+#
+# MACHINE-MERGED from ai/tac/research/*.yaml by scripts/tac-merge-research.py.
+schema_version: 1
+dialect: cisco-nxos
+profile: cisco/nx-os
+display: Cisco NX-OS
+version: correlix-tac-plan-cisco-nxos-2026-09-05
+
+# The dialect's default citation set. A doc_claimed binding inherits it.
+sources:
+  - title: Cisco Nexus 9000 Series NX-OS Command References
+    url: https://www.cisco.com/c/en/us/support/switches/nexus-9000-series-switches/products-command-reference-list.html
+    retrieved: 2026-09-05
+  - title: Cisco Nexus 9000 Series NX-OS Troubleshooting Guide
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/troubleshooting/guide/b_Cisco_Nexus_9000_Series_NX-OS_Troubleshooting_Guide.html
+    retrieved: 2026-09-05
+  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
+  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
+  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
+  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
+  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
+  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
+  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
+
+# baseline — collected for EVERY class: the vendor-standard set a TAC engineer
+# opens before anything issue-specific.
+baseline:
+  - system.version
+  - system.inventory
+  - system.uptime
+  - hardware.environment
+  - interface.brief
+  - interface.counters
+  - route.summary
+  - logging.recent
+  - config.running
+
+# optional — off by default: large and slow captures the operator opts into.
+optional:
+  - tech.support
+
+bindings:
+  system.version:
+    command: show version
+    verified: doc_claimed
+  system.inventory:
+    command: show inventory
+    verified: doc_claimed
+  system.uptime:
+    command: show version
+    verified: doc_claimed
+  system.processes.cpu:
+    command: show processes cpu sort
+    verified: doc_claimed
+  system.processes.memory:
+    command: show processes memory
+    verified: doc_claimed
+  system.resources:
+    command: show system resources
+    verified: doc_claimed
+  hardware.environment:
+    command: show environment
+    verified: doc_claimed
+  hardware.power:
+    command: show environment power
+    verified: doc_claimed
+  hardware.fans:
+    command: show environment fan
+    verified: doc_claimed
+  interface.brief:
+    command: show interface brief
+    verified: doc_claimed
+  interface.status:
+    command: show interface status
+    verified: doc_claimed
+  interface.detail:
+    command: 'show interface {if}'
+    verified: doc_claimed
+  interface.counters:
+    command: show interface counters
+    verified: doc_claimed
+  interface.errors:
+    command: show interface counters errors
+    verified: doc_claimed
+  optics.detail:
+    command: show interface transceiver details
+    verified: doc_claimed
+  optics.thresholds:
+    command: show interface transceiver
+    verified: doc_claimed
+  route.summary:
+    command: show ip route summary
+    verified: doc_claimed
+  route.ospf:
+    command: show ip route ospf
+    verified: doc_claimed
+  route.isis:
+    command: show ip route isis
+    verified: doc_claimed
+  route.bgp:
+    command: show ip route bgp
+    verified: doc_claimed
+  route.prefix:
+    command: 'show ip route {prefix}'
+    verified: doc_claimed
+  fib.summary:
+    command: show forwarding route summary
+    verified: doc_claimed
+  fib.prefix:
+    command: 'show forwarding route {prefix}'
+    verified: doc_claimed
+  arp.table:
+    command: show ip arp
+    verified: doc_claimed
+  l2.mac:
+    command: show mac address-table
+    verified: doc_claimed
+  l2.vlan:
+    command: show vlan brief
+    verified: doc_claimed
+  ospf.summary:
+    command: show ip ospf
+    verified: doc_claimed
+  ospf.interfaces:
+    command: show ip ospf interface
+    verified: doc_claimed
+  ospf.neighbors:
+    command: show ip ospf neighbor
+    verified: doc_claimed
+  ospf.neighbors.detail:
+    command: show ip ospf neighbor detail
+    verified: doc_claimed
+  ospf.database:
+    command: show ip ospf database
+    verified: doc_claimed
+  ospf.database.router:
+    command: 'show ip ospf database router {rid}'
+    verified: doc_claimed
+  isis.summary:
+    command: show isis
+    verified: doc_claimed
+  isis.interfaces:
+    command: show isis interface
+    verified: doc_claimed
+  isis.adjacency:
+    command: show isis adjacency
+    verified: doc_claimed
+  isis.adjacency.detail:
+    command: show isis adjacency detail
+    verified: doc_claimed
+  isis.database:
+    command: show isis database
+    verified: doc_claimed
+  isis.database.detail:
+    command: show isis database detail
+    verified: doc_claimed
+  bgp.summary:
+    command: show ip bgp summary
+    verified: doc_claimed
+  bgp.neighbor.detail:
+    command: 'show ip bgp neighbors {peer}'
+    verified: doc_claimed
+  bgp.neighbor.received:
+    command: 'show ip bgp neighbors {peer} received-routes'
+    verified: doc_claimed
+  bgp.neighbor.advertised:
+    command: 'show ip bgp neighbors {peer} advertised-routes'
+    verified: doc_claimed
+  bgp.prefix:
+    command: 'show ip bgp {prefix}'
+    verified: doc_claimed
+  bgp.dampening:
+    command: show ip bgp dampening flap-statistics
+    verified: doc_claimed
+  mpls.interfaces:
+    command: show mpls interface
+    verified: doc_claimed
+  mpls.ldp.neighbor:
+    command: show mpls ldp neighbor
+    verified: doc_claimed
+  mpls.ldp.bindings:
+    command: show mpls ldp bindings
+    verified: doc_claimed
+  overlay.vxlan.vtep:
+    command: show nve peers
+    verified: doc_claimed
+  overlay.vxlan.vni:
+    command: show nve vni
+    verified: doc_claimed
+  overlay.evpn.routes:
+    command: show bgp l2vpn evpn summary
+    verified: doc_claimed
+  mlag.peer:
+    command: show vpc
+    verified: doc_claimed
+  mlag.interfaces:
+    command: show vpc consistency-parameters global
+    verified: doc_claimed
+  qos.interface:
+    command: 'show policy-map interface {if}'
+    verified: doc_claimed
+  qos.drops:
+    command: 'show queuing interface {if}'
+    verified: doc_claimed
+  logging.recent:
+    command: show logging
+    verified: doc_claimed
+  logging.ospf:
+    command: 'show logging | include OSPF'
+    verified: doc_claimed
+  logging.isis:
+    command: 'show logging | include ISIS'
+    verified: doc_claimed
+  logging.bgp:
+    command: 'show logging | include BGP'
+    verified: doc_claimed
+  config.running:
+    command: show running-config
+    verified: doc_claimed
+  tech.support:
+    command: show tech-support
+    verified: doc_claimed
+  stp.state.overall:
+    command: show spanning-tree
+    verified: doc_claimed
+  stp.config:
+    command: show running-config spanning-tree
+    verified: doc_claimed
+  stp.mode.summary:
+    command: show spanning-tree summary
+    verified: doc_claimed
+  qos.queuing.interface:
+    command: show queuing interface
+    verified: doc_claimed
+  hardware.module.compat:
+    command: show module
+    verified: doc_claimed
+  stp.vlan.state:
+    command: 'show spanning-tree vlan {vlan}'
+    verified: doc_claimed
+  interface.capabilities:
+    command: show interface capabilities
+    verified: doc_claimed
+  stp.tcn.totals:
+    command: show spanning-tree summary totals
+    verified: doc_claimed
+  stp.tcn.detail:
+    command: 'show spanning-tree vlan {vlan} detail'
+    verified: doc_claimed
+  stp.detail:
+    command: show spanning-tree detail
+    verified: doc_claimed
+  stp.port.detail:
+    command: 'show spanning-tree interface {if} detail'
+    verified: doc_claimed
+  l2.mac.dynamic:
+    command: 'show mac address-table dynamic vlan {vlan}'
+    verified: doc_claimed
+  l2.mac.aging:
+    command: show mac address-table aging-time
+    verified: doc_claimed
+  stp.blocked.ports:
+    command: show spanning-tree blockedports
+    verified: doc_claimed
+  stp.extensions.summary:
+    command: show spanning-tree summary
+    verified: doc_claimed
+  stp.inconsistent.ports:
+    command: show spanning-tree inconsistentports
+    verified: doc_claimed
+  stp.config.all:
+    command: show running-config spanning-tree all
+    verified: doc_claimed
+  stp.mst.port.detail:
+    command: 'show spanning-tree mst {vrf-scope} interface {if} detail'
+    verified: doc_claimed
+  interface.errdisabled:
+    command: show interface status err-disabled
+    verified: doc_claimed
+  interface.errvlans:
+    command: show interface status err-vlans
+    verified: doc_claimed
+  interface.errors.nonzero:
+    command: show interface counters errors non-zero
+    verified: doc_claimed
+  interface.asic.mapping:
+    command: show interface hardware-mappings
+    verified: doc_claimed
+  optics.dom.readings:
+    command: 'show interface {if} transceiver details'
+    verified: doc_claimed
+  qos.policy.counters:
+    command: show policy-map interface
+    verified: doc_claimed
+  qos.policy.brief:
+    command: show policy-map interface brief
+    verified: doc_claimed
+  interface.counters.detailed:
+    command: 'show interface {if} counters detailed'
+    verified: doc_claimed
+  interface.debounce:
+    command: show interface debounce
+    verified: doc_claimed
+  optics.inventory:
+    command: show interface transceiver
+    verified: doc_claimed
+  hardware.inventory:
+    command: show inventory
+    verified: doc_claimed
+  logging.level.l2fm:
+    command: show logging level l2fm
+    verified: doc_claimed
+  interface.ifindex.map:
+    command: show interface snmp-ifindex
+    verified: doc_claimed
+  ospf.neighbors.allvrf:
+    command: show ip ospf neighbor vrf all
+    verified: doc_claimed
+  ospf.interface.detail:
+    command: 'show ip ospf interface {if}'
+    verified: doc_claimed
+  ospf.process:
+    command: 'show ip ospf {vrf-scope}'
+    verified: doc_claimed
+  ospf.config:
+    command: show running-config ospf
+    verified: doc_claimed
+  ospf.traffic.counters:
+    command: show ip ospf traffic
+    verified: doc_claimed
+  ospf.statistics:
+    command: show ip ospf statistics
+    verified: doc_claimed
+  interface.vrf:
+    command: 'show vrf interface {if}'
+    verified: doc_claimed
+  logging.tail:
+    command: show logging last 200
+    verified: doc_claimed
+  interface.flap.errdisable:
+    command: show errdisable flap
+    verified: doc_claimed
+  bgp.sessions:
+    command: show bgp sessions
+    verified: doc_claimed
+  bgp.summary.all:
+    command: show bgp all summary
+    verified: doc_claimed
+  bgp.neighbors:
+    command: show bgp ipv4 unicast neighbors
+    verified: doc_claimed
+  bgp.neighbors.detail:
+    command: 'show bgp neighbors {peer}'
+    verified: doc_claimed
+  bgp.process:
+    command: show bgp process
+    verified: doc_claimed
+  bgp.config:
+    command: show running-config bgp
+    verified: doc_claimed
+  bgp.statistics:
+    command: show bgp statistics
+    verified: doc_claimed
+  bgp.neighbors.flapstats:
+    command: show bgp neighbors flap-statistics
+    verified: doc_claimed
+  bgp.convergence:
+    command: show bgp convergence detail
+    verified: doc_claimed
+  bgp.table.ipv4:
+    command: show bgp ipv4 unicast
+    verified: doc_claimed
+  bgp.neighbors.advertised:
+    command: 'show bgp ipv4 unicast neighbors {peer} advertised-routes'
+    verified: doc_claimed
+  bgp.prefix.detail:
+    command: 'show bgp ipv4 unicast {prefix}'
+    verified: doc_claimed
+  bgp.ribfailure:
+    command: show ip bgp rib-failure
+    verified: doc_claimed
+  bgp.neighbors.paths:
+    command: show bgp neighbors paths
+    verified: doc_claimed
+  bgp.evpn.table:
+    command: show bgp l2vpn evpn
+    verified: doc_claimed
+  bgp.vpnv4.table:
+    command: show bgp vpnv4 unicast
+    verified: doc_claimed
+  bgp.vpnv4.allvrf:
+    command: show ip bgp vpnv4 vrf all
+    verified: doc_claimed
+  bgp.summary.vrf:
+    command: 'show bgp all summary vrf {vrf-scope}'
+    verified: doc_claimed
+  bgp.vrf.table:
+    command: 'show bgp vrf {vrf-scope} ipv4 unicast'
+    verified: doc_claimed
+  bgp.config.all:
+    command: show running-config bgp all
+    verified: doc_claimed
+  fib.inconsistency:
+    command: 'show forwarding ipv4 unicast inconsistency vrf {vrf-scope} module all'
+    verified: doc_claimed
+  fib.cc.unicast:
+    command: show consistency-checker forwarding unicast
+    verified: doc_claimed
+  fib.cc.singleroute:
+    command: show consistency-checker forwarding single-route
+    verified: doc_claimed
+  fib.distribution.state:
+    command: show forwarding distribution fib-state
+    verified: doc_claimed
+  system.clock:
+    command: show clock
+    verified: doc_claimed
+  system.resetreason:
+    command: show system reset-reason
+    verified: doc_claimed
+  logging.nvram:
+    command: show log nvram
+    verified: doc_claimed
+  config.running.diff:
+    command: show running-config diff
+    verified: doc_claimed
+  config.rollback.log:
+    command: show rollback log exec
+    verified: doc_claimed
+  config.rollback.status:
+    command: show rollback status
+    verified: doc_claimed
+  vpc.status.summary:
+    command: show vpc
+    verified: doc_claimed
+  vpc.status.brief:
+    command: show vpc brief
+    verified: doc_claimed
+  vpc.role.current:
+    command: show vpc role
+    verified: doc_claimed
+  vpc.keepalive.status:
+    command: show vpc peer-keepalive
+    verified: doc_claimed
+  portchannel.bundle.state:
+    command: show port-channel summary
+    verified: doc_claimed
+  vpc.role.sticky:
+    command: 'show system internal vpcm info global | include ignore-case sticky'
+    verified: doc_claimed
+  vpc.consistency.global:
+    command: show vpc consistency-parameters global
+    verified: doc_claimed
+  vpc.keepalive.counters:
+    command: show vpc statistics peer-keepalive
+    verified: doc_claimed
+  ip.interface.brief:
+    command: show ip int bri vrf all
+    verified: doc_claimed
+  vpc.consistency.all:
+    command: show vpc consistency-parameters
+    verified: doc_claimed
+  vpc.consistency.vlans:
+    command: show vpc consistency-parameters vlans
+    verified: doc_claimed
+  vpc.config:
+    command: show running-config vpc
+    verified: doc_claimed
+  vlan.list:
+    command: show vlan brief
+    verified: doc_claimed
+  vlan.summary:
+    command: show vlan summary
+    verified: doc_claimed
+  trunk.allowed.vlans:
+    command: show interface trunk
+    verified: doc_claimed
+  lacp.interface.state:
+    command: 'show lacp interface {if}'
+    verified: doc_claimed
+  lacp.neighbor:
+    command: show lacp neighbor
+    verified: doc_claimed
+  lacp.pdu.counters:
+    command: show lacp counters
+    verified: doc_claimed
+  stormcontrol.counters:
+    command: show interface counters storm-control
+    verified: doc_claimed
+  cpu.history:
+    command: show processes cpu history
+    verified: doc_claimed
+  trunk.state.allowed:
+    command: show interface trunk
+    verified: doc_claimed
+  switchport.mode:
+    command: show interface switchport
+    verified: doc_claimed
+  vlan.detail:
+    command: 'show vlan id {vlan}'
+    verified: doc_claimed
+  vlan.config:
+    command: 'show running-config vlan {vlan}'
+    verified: doc_claimed
+  neighbor.discovery:
+    command: show cdp neighbors
+    verified: doc_claimed
+  buffer.pktstats:
+    command: show hardware internal buffer info pkt-stats
+    verified: doc_claimed
+  buffer.pktstats.peak:
+    command: show hardware internal buffer info pkt-stats peak
+    verified: doc_claimed
+  ethpm.event.history:
+    command: 'show system internal ethpm event-history interface {if}'
+    verified: doc_claimed
+  pie.linkflap.rca:
+    command: 'show pie interface {if} link-flap-rca'
+    verified: doc_claimed
+  pie.linkdown.rca:
+    command: 'show pie interface {if} link-down-rca'
+    verified: doc_claimed
+  udld.state:
+    command: show udld
+    verified: doc_claimed
+  pie.optics.health:
+    command: 'show pie interface {if} transceiver-insights'
+    verified: doc_claimed
+  mac.move.notification:
+    command: show mac address-table notification mac-move
+    verified: doc_claimed
+  mac.table.vlan:
+    command: 'show mac address-table vlan {vlan}'
+    verified: doc_claimed
+  mac.loopdetect.state:
+    command: show mac address-table loop-detect
+    verified: doc_claimed
+  mac.table.count:
+    command: show mac address-table count
+    verified: doc_claimed
+  vxlan.nve.peers:
+    command: show nve peers
+    verified: doc_claimed
+  vxlan.nve.interface:
+    command: show nve interface
+    verified: doc_claimed
+  vxlan.global.params:
+    command: show nve vxlan-params
+    verified: doc_claimed
+  underlay.interfaces:
+    command: 'show ip interface brief | exclude down'
+    verified: doc_claimed
+  underlay.bgp.advertised:
+    command: 'show ip bgp {prefix} vrf {vrf-scope}'
+    verified: doc_claimed
+  evpn.vtep.route:
+    command: 'show bgp l2vpn evpn {prefix} vrf {vrf-scope}'
+    verified: doc_claimed
+  vxlan.vni.state:
+    command: show nve vni
+    verified: doc_claimed
+  vxlan.vni.counters:
+    command: show nve vni counters
+    verified: doc_claimed
+  vxlan.summary:
+    command: show vxlan
+    verified: doc_claimed
+  mac.table.vlan.local:
+    command: 'show mac address-table vlan {vlan}'
+    verified: doc_claimed
+  evpn.l2route.mac:
+    command: 'show l2route evpn mac evi {vni}'
+    verified: doc_claimed
+  evpn.l2route.macip:
+    command: 'show l2route evpn mac-ip evi {vni}'
+    verified: doc_claimed
+  evpn.bgp.byvni:
+    command: 'show bgp l2vpn evpn vni-id {vni}'
+    verified: doc_claimed
+  evpn.bgp.sessions:
+    command: show bgp l2vpn evpn summary
+    verified: doc_claimed
+  evpn.bgp.advertised:
+    command: 'show bgp l2vpn evpn neighbors {peer} advertised-routes'
+    verified: doc_claimed
+  feature.enabled:
+    command: show feature
+    verified: doc_claimed
+  copp.stats:
+    command: show policy-map interface control-plane
+    verified: doc_claimed
+  obfl.errorstats:
+    command: show logging onboard error-stats
+    verified: doc_claimed
+  eigrp.neighbors.detail:
+    command: 'show ip eigrp {vrf-scope} neighbors {if} detail'
+    verified: doc_claimed
+  eigrp.neighbors.allvrf:
+    command: show ip eigrp neighbor vrf all
+    verified: doc_claimed
+  eigrp.interfaces.detail:
+    command: 'show ip eigrp {vrf-scope} interfaces {if} detail'
+    verified: doc_claimed
+  eigrp.topology.active:
+    command: 'show ip eigrp {vrf-scope} topology {prefix} active'
+    verified: doc_claimed
+  eigrp.traffic.counters:
+    command: 'show ip eigrp {vrf-scope} traffic vrf {vrf-scope}'
+    verified: doc_claimed
+  eigrp.accounting:
+    command: 'show ip eigrp {vrf-scope} accounting vrf {vrf-scope}'
+    verified: doc_claimed
+  eigrp.config.all:
+    command: show running-config eigrp all
+    verified: doc_claimed
+  rib.routes:
+    command: show ip route
+    verified: doc_claimed
+  rib.route.peer:
+    command: 'show ip route {peer}'
+    verified: doc_claimed
+  rib.route.lookup:
+    command: 'show ip route {prefix}'
+    verified: doc_claimed
+  rib.summary.allvrf:
+    command: show ip route vrf all summary
+    verified: doc_claimed
+  vrf.list:
+    command: show vrf
+    verified: doc_claimed
+  vrf.interfaces:
+    command: show vrf interface
+    verified: doc_claimed
+  rib.adjacency.detail:
+    command: 'show ip adjacency {prefix} detail vrf {vrf-scope}'
+    verified: doc_claimed
+  rib.clients:
+    command: show routing unicast clients
+    verified: doc_claimed
+  hw.capacity.forwarding:
+    command: show hardware capacity forwarding
+    verified: doc_claimed
+  pim.neighbors:
+    command: show ip pim neighbor
+    verified: doc_claimed
+  pim.interface:
+    command: 'show ip pim interface {if}'
+    verified: doc_claimed
+  pim.interface.brief:
+    command: show ip pim interface brief vrf all
+    verified: doc_claimed
+  pim.rp:
+    command: show ip pim rp
+    verified: doc_claimed
+  pim.rp.hash:
+    command: show ip pim rp-hash
+    verified: doc_claimed
+  pim.grouprange:
+    command: 'show ip pim group-range vrf {vrf-scope}'
+    verified: doc_claimed
+  mroute.detail:
+    command: show ip mroute detail
+    verified: doc_claimed
+  mroute.summary:
+    command: show ip mroute summary
+    verified: doc_claimed
+  pim.route:
+    command: show ip pim route
+    verified: doc_claimed
+  pim.statistics:
+    command: show ip pim statistics
+    verified: doc_claimed
+  rpf.unicast.lookup:
+    command: 'show ip route {prefix}'
+    verified: doc_claimed
+  igmpsnoop.vlan:
+    command: 'show ip igmp snooping vlan {vlan}'
+    verified: doc_claimed
+  igmpsnoop.groups.detail:
+    command: 'show ip igmp snooping groups vlan {vlan} detail'
+    verified: doc_claimed
+  igmpsnoop.querier:
+    command: 'show ip igmp snooping querier vlan {vlan}'
+    verified: doc_claimed
+  igmpsnoop.mrouterports:
+    command: 'show ip igmp snooping mroute vlan {vlan}'
+    verified: doc_claimed
+  igmpsnoop.tracking:
+    command: 'show ip igmp snooping explicit-tracking vlan {vlan} detail'
+    verified: doc_claimed
+  igmpsnoop.statistics:
+    command: show ip igmp snooping statistics vlan
+    verified: doc_claimed
+  igmp.groups:
+    command: show ip igmp groups
+    verified: doc_claimed
+  igmp.interface:
+    command: show ip igmp interface
+    verified: doc_claimed
+  hsrp.brief:
+    command: show hsrp brief
+    verified: doc_claimed
+  hsrp.summary:
+    command: show hsrp summary
+    verified: doc_claimed
+  hsrp.delay:
+    command: 'show hsrp delay interface {if}'
+    verified: doc_claimed
+  hsrp.bfd:
+    command: 'show hsrp bfd-sessions interface {if}'
+    verified: doc_claimed
+  hsrp.config:
+    command: show running-config hsrp
+    verified: doc_claimed
+  hsrp.vmac.location:
+    command: 'show mac address-table vlan {vlan}'
+    verified: doc_claimed
+  vrrp.statistics:
+    command: show vrrp statistics
+    verified: doc_claimed
+  vrrpv3.detail:
+    command: show vrrpv3 detail
+    verified: doc_claimed
+  vrrpv3.statistics:
+    command: show vrrpv3 statistics
+    verified: doc_claimed
+  fhrp.state:
+    command: 'show fhrp {if}'
+    verified: doc_claimed
+  vrrp.config:
+    command: show running-config vrrp
+    verified: doc_claimed
+  copp.status:
+    command: show copp status
+    verified: doc_claimed
+  copp.classmaps:
+    command: show class-map type control-plane
+    verified: doc_claimed
+  copp.profile.reference:
+    command: show copp profile strict
+    verified: doc_claimed
+  copp.profile.diff:
+    command: show copp diff profile strict
+    verified: doc_claimed
+  ratelimiter.stats:
+    command: show hardware rate-limiter
+    verified: doc_claimed
+  ratelimiter.acllog:
+    command: show hardware rate-limiter access-list-log
+    verified: doc_claimed
+  copp.config:
+    command: show running-config copp all
+    verified: doc_claimed
+  copp.cc:
+    command: show consistency-checker copp
+    verified: doc_claimed
+  cpu.processes:
+    command: show processes cpu
+    verified: doc_claimed
+  processes.list:
+    command: show processes
+    verified: doc_claimed
+  memory.processes:
+    command: show processes memory
+    verified: doc_claimed
+  memory.processes.sorted:
+    command: show processes memory sort
+    verified: doc_claimed
+  memory.kernel:
+    command: show system internal kernel meminfo
+    verified: doc_claimed
+  memory.shared:
+    command: show processes memory shared detail
+    verified: doc_claimed
+  rib.memory.estimate:
+    command: show routing ip unicast memory estimate
+    verified: doc_claimed
+  cores.list:
+    command: show cores
+    verified: doc_claimed
+  cores.config:
+    command: show system cores
+    verified: doc_claimed
+  process.log:
+    command: show processes log
+    verified: doc_claimed
+  process.log.details:
+    command: show processes log details
+    verified: doc_claimed
+  module.exceptionlog:
+    command: show module internal exceptionlog
+    verified: doc_claimed
+  env.all:
+    command: show environment
+    verified: doc_claimed
+  env.power.detail:
+    command: show environment power detail
+    verified: doc_claimed
+  env.fan.detail:
+    command: show environment fan detail
+    verified: doc_claimed
+  module.status:
+    command: show module
+    verified: doc_claimed
+  diag.result.all:
+    command: show diagnostic result mod all
+    verified: doc_claimed
+  diag.events.error:
+    command: show diagnostic events error
+    verified: doc_claimed
+  hw.capacity.power:
+    command: show hardware capacity power
+    verified: doc_claimed
+  hw.inventory:
+    command: show inventory
+    verified: doc_claimed
+  hw.sprom:
+    command: show sprom
+    verified: doc_claimed
+  acl.tcam.utilization:
+    command: show hardware access-list resource utilization
+    verified: doc_claimed
+  acl.tcam.regions:
+    command: show hardware access-list tcam region
+    verified: doc_claimed
+  acl.tcam.internal:
+    command: show system internal access-list resource utilization
+    verified: doc_claimed
+  acl.tcam.pooling:
+    command: show hardware access-list resource pooling
+    verified: doc_claimed
+  acl.config:
+    command: show running-config aclmgr
+    verified: doc_claimed
+  ntp.peer.status:
+    command: show ntp peer-status
+    verified: doc_claimed
+  ntp.peers:
+    command: show ntp peers
+    verified: doc_claimed
+  ntp.peer.statistics:
+    command: 'show ntp statistics peer ipaddr {peer}'
+    verified: doc_claimed
+  ntp.auth.status:
+    command: show ntp authentication-status
+    verified: doc_claimed
+  ntp.trusted.keys:
+    command: show ntp trusted-keys
+    verified: doc_claimed
+  ntp.source:
+    command: show ntp source
+    verified: doc_claimed
+  ntp.source.interface:
+    command: show ntp source-interface
+    verified: doc_claimed
+  ntp.access.groups:
+    command: show ntp access-groups
+    verified: doc_claimed
+  ntp.logging.status:
+    command: show ntp logging-status
+    verified: doc_claimed
+  ntp.config:
+    command: show running-config ntp
+    verified: doc_claimed
+  snmp.status:
+    command: show snmp
+    verified: doc_claimed
+  snmp.communities:
+    command: show snmp community
+    verified: doc_claimed
+  snmp.users:
+    command: show snmp user
+    verified: doc_claimed
+  snmp.groups:
+    command: show snmp group
+    verified: doc_claimed
+  snmp.receivers:
+    command: show snmp host
+    verified: doc_claimed
+  snmp.sessions:
+    command: show snmp session
+    verified: doc_claimed
+  snmp.traps:
+    command: show snmp trap
+    verified: doc_claimed
+  snmp.source.interface:
+    command: show snmp source-interface
+    verified: doc_claimed
+  snmp.config:
+    command: show running-config snmp all
+    verified: doc_claimed
+  aaa.tacacs.servers:
+    command: show tacacs-server
+    verified: doc_claimed
+  aaa.tacacs.groups:
+    command: show tacacs-server groups
+    verified: doc_claimed
+  aaa.tacacs.directed:
+    command: show tacacs-server directed-request
+    verified: doc_claimed
+  aaa.tacacs.status:
+    command: show tacacs+ status
+    verified: doc_claimed
+  aaa.authentication:
+    command: show aaa authentication
+    verified: doc_claimed
+  aaa.authorization:
+    command: show aaa authorization all
+    verified: doc_claimed
+  aaa.accounting:
+    command: show aaa accounting
+    verified: doc_claimed
+  aaa.config:
+    command: show running-config tacacs all
+    verified: doc_claimed
+  dhcp.relay.state:
+    command: show ip dhcp relay
+    verified: doc_claimed
+  dhcp.relay.addresses:
+    command: show ip dhcp relay address
+    verified: doc_claimed
+  dhcp.relay.interface:
+    command: 'show ip dhcp relay interface {if}'
+    verified: doc_claimed
+  dhcp.relay.trusted:
+    command: show ip dhcp relay information trusted-sources
+    verified: doc_claimed
+  dhcp.snooping.state:
+    command: show ip dhcp snooping
+    verified: doc_claimed
+  dhcp.snooping.bindings:
+    command: show ip dhcp snooping binding
+    verified: doc_claimed
+  dhcp.option82:
+    command: 'show ip dhcp option82 info interface {if}'
+    verified: doc_claimed
+  dhcp.global.statistics:
+    command: show ip dhcp global statistics
+    verified: doc_claimed
+  dhcp.config:
+    command: show running-config dhcp
+    verified: doc_claimed
+  license.installed:
+    command: show license
+    verified: doc_claimed
+  license.hostid:
+    command: show license host-id
+    verified: doc_claimed
+  license.usage:
+    command: show license usage
+    verified: doc_claimed
+  license.config:
+    command: 'show running-config | include license'
+    verified: doc_claimed
+  audit.accounting:
+    command: show accounting log
+    verified: doc_claimed
+  audit.users:
+    command: show user-account
+    verified: doc_claimed
+  underlay.route.remote_vtep:
+    command: 'show ip route {prefix} vrf {vrf-scope}'
+    verified: doc_claimed

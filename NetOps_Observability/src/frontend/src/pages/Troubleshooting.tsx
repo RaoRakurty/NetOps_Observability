@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { api } from "../services/api";
 import { Group, Panel, MetricLine, MetricTop, MetricStat, fmtNum } from "../components/board/panels";
 import { StatStrip, Stat, StatTone } from "../components/ui";
-import ProtocolDiagnosticsPanel from "./troubleshoot/ProtocolDiagnosticsPanel";
 import InvestigationPage from "./troubleshoot/InvestigationPage";
 import { parseInvestigationHash, type TroubleshootSection } from "./troubleshoot/investigationModel";
 
@@ -77,16 +76,23 @@ const snmpReachQuery = [
   `label_replace(sum(collector_targets{collector=~"snmp.*"}),"k","configured","","")`,
 ].join(" or ");
 
-// The page carries THREE sections, switched (never stacked) so none buries the
-// others, each reachable as a deep link (#/investigate/troubleshooting?section=…):
+// The page carries TWO sections, switched (never stacked) so neither buries the
+// other, each reachable as a deep link (#/investigate/troubleshooting?section=…):
 //
 //  · Investigation (DEFAULT) — the symptom-first operator surface: pick what is
-//    wrong, get a verdict header, then parallel evidence lanes, Iris and a
-//    seam-owned handoff. This is the page's reason to exist (Project 4 §A).
-//  · Protocol diagnostics — operator-initiated BGP/OSPF/IS-IS capture+analyze.
+//    wrong, get a verdict header, escalate to TAC from that verdict, then
+//    parallel evidence lanes, Iris and a seam-owned handoff. This is the page's
+//    reason to exist (Project 4 §A).
 //  · Collection pipeline — the old June board (is the PIPELINE or the DEVICE at
 //    fault?). Kept reachable for ONE RELEASE while operators migrate; its
 //    step-zero insight now lives beside the investigation lanes.
+//
+// The third section, "Protocol diagnostics", was REMOVED on 2026-09-05
+// (docs/design/TAC_ESCALATION_2026-09-05.md §5). Its manual bench — pick a
+// protocol, pick an issue, pick a device, press analyze — is replaced by the
+// escalation flow that hangs off the verdict, and its issue × command matrix
+// became Iris → Knowledge (coverage per vendor dialect). An old deep link to
+// it lands on the investigation surface.
 export type { TroubleshootSection };
 
 /** Initial section from the hash. Anything unrecognized falls back to the
@@ -107,16 +113,12 @@ export default function Troubleshooting({ rangeMinutes = 60 }: { rangeMinutes?: 
       <div className="seg-mini" role="group" aria-label="Troubleshooting section">
         <button type="button" aria-pressed={section === "investigate"} className={section === "investigate" ? "on" : ""}
           onClick={() => setSection("investigate")}>Investigation</button>
-        <button type="button" aria-pressed={section === "protocol"} className={section === "protocol" ? "on" : ""}
-          onClick={() => setSection("protocol")}>Protocol diagnostics</button>
         <button type="button" aria-pressed={section === "pipeline"} className={section === "pipeline" ? "on" : ""}
           onClick={() => setSection("pipeline")}>Collection pipeline</button>
       </div>
 
       {section === "investigate" ? (
         <InvestigationPage rangeMinutes={m} initialSymptom={initial.symptom} initialCaseId={initial.caseId} />
-      ) : section === "protocol" ? (
-        <ProtocolDiagnosticsPanel />
       ) : (
       <>
       <p className="mini-meta" style={{ margin: 0 }}>

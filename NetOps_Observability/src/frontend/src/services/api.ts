@@ -2964,6 +2964,347 @@ export type ProtocolDiagCollectRequest = {
   target: { interface: string; peer: string; prefix: string; vrf: string };
 };
 
+// ── TAC escalation pack (Investigate → Troubleshooting, design of record
+//    docs/design/TAC_ESCALATION_2026-09-05.md) ────────────────────────────────
+//
+// One incident-first flow: classify the issue from evidence Correlix already
+// holds, show the command plan BEFORE anything runs, collect read-only over the
+// SSH gateway, bundle the redacted zip, and open the vendor case from a
+// pre-filled form a human presses.
+//
+// SECURITY (§3/§15). Every string in these shapes is DEVICE- or SERVER-authored
+// text — command output, the problem statement, a connector's own note. It is
+// rendered as escaped React text and never through an HTML sink. Isolation is a
+// SERVER guarantee: no call here sends a tenant, the incident and the device are
+// resolved in the caller's own scope, and a foreign or unknown id answers 404
+// identically so the routes are not an existence oracle.
+//
+// HONESTY. `can_collect:false` carries the server's own `collect_note` and the
+// paste path stays open; `has_plan:false` means this platform has no authored
+// command set and says so; an unbound step is listed with its reason instead of
+// being dropped or guessed; `verified:"doc_claimed"` means the command came from
+// the vendor's documentation and has never been run here.
+
+/** Why one class scored: the evidence kind, the exact id, and its weight. */
+export type TacReason = { kind: string; ref: string; weight: number };
+
+/** A class that scored but did not win, with its own reasons. */
+export type TacClassMatch = { class_id: string; title: string; score: number; why: TacReason[] };
+
+/** The classification result. `classified:false` means nothing scored — `note`
+ *  says so in the server's words and a class is never invented to fill it. */
+export type TacClassification = {
+  class_id: string;
+  title: string;
+  protocol: string;
+  tac_first_look?: string;
+  classified: boolean;
+  why: TacReason[];
+  alternatives: TacClassMatch[];
+  note: string;
+  catalog_version: string;
+};
+
+/** One row of the override list — the operator may pick ANY class. */
+export type TacClassSummary = { id: string; title: string; protocol: string; summary: string };
+
+/** A citation carried by a plan step. */
+export type TacSource = { title: string; url: string; retrieved?: string };
+
+export type TacSection = "baseline" | "deep-dive" | "optional" | "topology";
+
+/** capture = this command shape has been run on this platform; doc_claimed =
+ *  taken from the vendor's published documentation and never executed here. */
+export type TacVerified = "capture" | "doc_claimed";
+
+/** One planned step. `bound:false` means this dialect binds no command for the
+ *  intent; `note` carries the reason and the step is shown, never dropped. */
+export type TacStep = {
+  intent: string;
+  title: string;
+  section: TacSection;
+  bound: boolean;
+  command?: string;
+  verified?: TacVerified;
+  note?: string;
+  sources?: TacSource[];
+  max_bytes?: number;
+  timeout_seconds?: number;
+};
+
+/** Correlix's own neighbourhood for the device — model context, not a command. */
+export type TacTopologyNote = { kind: string; ref: string; detail?: string };
+
+export type TacTarget = {
+  interface?: string;
+  peer?: string;
+  prefix?: string;
+  vrf?: string;
+  router_id?: string;
+  area?: string;
+};
+
+/** The command plan, shown before anything runs. */
+export type TacPlan = {
+  id: string;
+  incident_id: string;
+  device_id: string;
+  hostname: string;
+  platform: string;
+  dialect: string;
+  dialect_display: string;
+  has_plan: boolean;
+  plan_version?: string;
+  class_id: string;
+  class_title: string;
+  tac_first_look?: string;
+  target: TacTarget;
+  include_optional: boolean;
+  steps: TacStep[];
+  unbound: TacStep[];
+  topology: TacTopologyNote[];
+  estimated_bytes: number;
+  estimated_seconds: number;
+  redaction_note: string;
+  note: string;
+  catalog_version: string;
+  engine_version: string;
+};
+
+/** One line of live progress from the running collection. */
+export type TacProgress = {
+  index: number;
+  total: number;
+  intent: string;
+  command: string;
+  phase: "start" | "done" | "error";
+  bytes?: number;
+  error?: string;
+};
+
+export type TacJob = {
+  id: string;
+  status: "running" | "done" | "failed";
+  started_at: string;
+  finished_at?: string;
+  total: number;
+  done: number;
+  progress: TacProgress[];
+  error?: string;
+};
+
+/** One collected command. `output` is raw device text. */
+export type TacCollectedCommand = {
+  intent: string;
+  title: string;
+  section: TacSection;
+  command: string;
+  verified: TacVerified | "";
+  output: string;
+  bytes: number;
+  error?: string;
+  started_at: string;
+  duration_ms: number;
+};
+
+export type TacCapture = {
+  incident_id: string;
+  plan_id: string;
+  class_id: string;
+  class_title: string;
+  device_id: string;
+  hostname: string;
+  platform: string;
+  dialect: string;
+  dialect_display: string;
+  has_plan: boolean;
+  started_at: string;
+  finished_at: string;
+  commands: TacCollectedCommand[];
+  unbound: TacStep[];
+  topology: TacTopologyNote[];
+  target: TacTarget;
+  total_bytes: number;
+  redacted: boolean;
+  stopped?: string;
+  catalog_version: string;
+  plan_version?: string;
+  engine_version: string;
+};
+
+/** One stored bundle's metadata (the zip itself is downloaded separately). */
+export type TacStoredBundle = {
+  name: string;
+  bytes: number;
+  created_at: string;
+  incident_id: string;
+  profile: string;
+  class_id: string;
+  plan_id: string;
+};
+
+export type TacCaseCapability = "create" | "attach" | "poll_status" | "link";
+
+/** A case-opening connector. `configured:false` is an honest product state: the
+ *  connector exists, this tenant has not brought credentials for it. */
+export type TacConnectorInfo = {
+  id: string;
+  display: string;
+  vendor?: string;
+  capabilities: TacCaseCapability[];
+  max_attachment_bytes: number;
+  profile: string;
+  configured: boolean;
+  note?: string;
+};
+
+/** The pre-filled case form. `missing_fields` names what the vendor requires and
+ *  the platform cannot supply — a human fills those before submitting. */
+export type TacCaseForm = {
+  connector_id: string;
+  title: string;
+  description: string;
+  severity: string;
+  product?: string;
+  serial_number?: string;
+  contract_id?: string;
+  contact_name?: string;
+  contact_email?: string;
+  bundle_name: string;
+  bundle_bytes: number;
+  profile: string;
+  missing_fields?: string[];
+  portal_text: string;
+  portal_url?: string;
+};
+
+export type TacCaseResult = {
+  connector_id: string;
+  case_id?: string;
+  case_url?: string;
+  status?: string;
+  attached: boolean;
+  attach_note?: string;
+  submitted_at: string;
+  portal_text?: string;
+};
+
+/** The escalation's whole server-side state. Null until it is classified. */
+export type TacState = {
+  incident_id: string;
+  classification?: TacClassification;
+  plan?: TacPlan;
+  job?: TacJob;
+  capture?: TacCapture;
+  bundles: TacStoredBundle[];
+  case?: TacCaseResult;
+  updated_at: string;
+};
+
+/** GET /api/incidents/{id}/tac */
+export type TacStateResponse = {
+  incident_id: string;
+  incident_ref: string;
+  title: string;
+  can_collect: boolean;
+  collect_note: string;
+  catalog_version: string;
+  connectors: TacConnectorInfo[];
+  devices: string[];
+  state: TacState | null;
+  /** Present only when there is no escalation yet — the server's own wording. */
+  state_note?: string;
+};
+
+/** POST /api/incidents/{id}/tac/classify */
+export type TacClassifyResponse = {
+  incident_id: string;
+  classification: TacClassification;
+  /** Which stores actually backed the classification, and which did not. */
+  evidence_sources: string[];
+  evidence_missing: string[];
+  classes: TacClassSummary[];
+};
+
+/** POST /api/incidents/{id}/tac/plan */
+export type TacPlanRequest = {
+  device_id: string;
+  class_id?: string;
+  include_optional?: boolean;
+  target?: TacTarget;
+};
+export type TacPlanResponse = { plan: TacPlan; can_collect: boolean; collect_note: string };
+
+/** POST /api/incidents/{id}/tac/collect — 202 with the job, or 503 carrying the
+ *  server's collect_note when no read-only runner is wired. */
+export type TacCollectRequest = {
+  outputs?: { intent: string; command: string; output: string }[];
+  cancel?: boolean;
+};
+export type TacCollectResponse = { job: TacJob; state: TacState };
+export type TacCancelResponse = { cancelled: boolean; state: TacState | null };
+
+/** POST /api/incidents/{id}/tac/case with submit:false — the form to review. */
+export type TacCaseFormResponse = {
+  form: TacCaseForm;
+  connector: TacConnectorInfo;
+  bundle: TacStoredBundle;
+};
+/** POST … with submit:true — the human-approved action's result. */
+export type TacCaseSubmitResponse = { result: TacCaseResult; bundle: TacStoredBundle };
+
+// ── Iris → Knowledge (GET /api/troubleshoot/tac/knowledge) ──────────────────
+// Version-pinned REFERENCE data, identical for every tenant: what Correlix knows
+// per vendor dialect. It is deliberately unflattering — a dialect with no
+// authored plan is listed with zero bound intents rather than left out.
+
+export type TacIntentCoverage = {
+  intent: string;
+  title: string;
+  area: string;
+  bound: boolean;
+  command?: string;
+  verified?: TacVerified;
+  sources?: TacSource[];
+};
+
+export type TacClassCoverage = {
+  class_id: string;
+  title: string;
+  protocol: string;
+  bound: number;
+  total: number;
+  missing: string[] | null;
+};
+
+export type TacDialectCoverage = {
+  dialect: string;
+  display: string;
+  profile: string;
+  has_plan: boolean;
+  plan_version?: string;
+  baseline_intents: number;
+  optional_intents: number;
+  bound_intents: number;
+  total_intents: number;
+  verified_commands: number;
+  doc_claimed_commands: number;
+  classes: TacClassCoverage[];
+  intents: TacIntentCoverage[];
+};
+
+export type TacKnowledgeIntent = { id: string; area: string; title: string; note?: string };
+
+export type TacKnowledge = {
+  catalog_version: string;
+  engine_version: string;
+  classes: { id: string; title: string; protocol: string; summary?: string }[];
+  intents: TacKnowledgeIntent[];
+  dialects: TacDialectCoverage[];
+  /** Platforms Correlix recognises and has authored NO plan for. */
+  unplanned_dialects: TacDialectCoverage[];
+};
+
 // ---- OSPF / IS-IS advanced monitoring (Project 4 D item 11) ---------------
 // GET /api/protocols/{ospf|isis}/{adjacencies,summary,health}. The backend
 // collects NOTHING for these routes itself: adjacency history comes from the
@@ -5201,6 +5542,84 @@ export const api = {
       method: "POST",
       body: JSON.stringify(req),
     }),
+
+  // ---------- TAC escalation pack (Investigate → Troubleshooting) ----------
+  // docs/design/TAC_ESCALATION_2026-09-05.md. Reads need infrastructure:read;
+  // collect and case (they act on a device / open a vendor case) need
+  // infrastructure:write. The incident and the device are resolved in the
+  // caller's own scope server-side — a foreign or unknown id answers 404
+  // identically, so these routes are not an existence oracle. A deployment with
+  // no read-only SSH runner answers collect with 503 carrying its own note; the
+  // plan, the bundle and the case text still work from pasted output.
+  /** The escalation's state, connectors and the incident's affected devices.
+   *  `state:null` means nothing has been escalated yet in this api process. */
+  tacState: (incidentId: string) =>
+    request<TacStateResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac`),
+  /** Classifies the incident from evidence the server already holds. The client
+   *  sends NO evidence — only the incident id. */
+  tacClassify: (incidentId: string) =>
+    request<TacClassifyResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/classify`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  /** Builds the command plan for a class on one of the caller's own devices.
+   *  Nothing runs — the plan is what the operator reviews first. */
+  tacPlan: (incidentId: string, req: TacPlanRequest) =>
+    request<TacPlanResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/plan`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  /** Starts the read-only collection, or files pasted output as the capture.
+   *  202 + the job; 503 when no runner is wired; 409 when one is already busy. */
+  tacCollect: (incidentId: string, req: TacCollectRequest) =>
+    request<TacCollectResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/collect`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  /** Stops a running collection. What was already collected is kept. */
+  tacCancelCollect: (incidentId: string) =>
+    request<TacCancelResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/collect`, {
+      method: "POST",
+      body: JSON.stringify({ cancel: true }),
+    }),
+  /** Downloads the redacted zip. The SERVER builds and redacts it; the browser
+   *  only names the file and hands it to the download sink. */
+  tacDownloadBundle: async (incidentId: string, profile: string, filename: string): Promise<void> => {
+    const token = getToken();
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    const scope = getActiveScope();
+    if (scope) headers["X-Acting-Tenant"] = scope;
+    const res = await fetch(
+      `/api/incidents/${encodeURIComponent(incidentId)}/tac/bundle?profile=${encodeURIComponent(profile)}`,
+      { headers },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    }
+    await downloadResponse(res, filename);
+  },
+  /** The pre-filled case form for one connector. Submits nothing. */
+  tacCaseForm: (incidentId: string, connectorId: string) =>
+    request<TacCaseFormResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/case`, {
+      method: "POST",
+      body: JSON.stringify({ connector_id: connectorId, submit: false }),
+    }),
+  /** Opens the case. Always a human's press — never automatic (design §4). */
+  tacCaseSubmit: (
+    incidentId: string,
+    connectorId: string,
+    form: {
+      title: string; severity: string; product?: string; serial_number?: string;
+      contract_id?: string; contact_name?: string; contact_email?: string;
+    },
+  ) =>
+    request<TacCaseSubmitResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/case`, {
+      method: "POST",
+      body: JSON.stringify({ connector_id: connectorId, submit: true, form }),
+    }),
+  /** Iris → Knowledge: the per-dialect coverage catalogue. Reference data. */
+  tacKnowledge: () => request<TacKnowledge>("/api/troubleshoot/tac/knowledge"),
 
   // ---------- Packet capture (FEATURE_PACKET_CAPTURE) ----------------------
   // Reads need infrastructure:read; start, download and delete need

@@ -1,0 +1,872 @@
+# plans/arista-eos.yaml — the Arista EOS command plan for the TAC escalation pack.
+#
+# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven
+# by the loader (protocoldiag.ValidateReadOnly) and again by the runner. An
+# intent this dialect does not bind is simply ABSENT — the plan preview shows
+# it as unbound rather than rendering another vendor's command at this device.
+#
+# `verified: doc_claimed` means the vendor documents the command and Correlix
+# has not run it on this platform. `consent: true` marks a command the vendor
+# says is NOT routine (a core dump, a control-plane load, a file written on the
+# device): it never runs by default and never sits in a baseline.
+# `read_only_exception` is a CITED documented-status read whose text carries a
+# token the grammar refuses on sight.
+#
+# MACHINE-MERGED from ai/tac/research/*.yaml by scripts/tac-merge-research.py.
+schema_version: 1
+dialect: arista-eos
+profile: arista/eos
+display: Arista EOS
+version: correlix-tac-plan-arista-eos-2026-09-05
+
+# The dialect's default citation set. A doc_claimed binding inherits it.
+sources:
+  - title: 'Arista EOS User Manual — Command Reference'
+    url: https://www.arista.com/en/um-eos
+    retrieved: 2026-09-05
+  - title: 'Arista TAC — Information to collect for a support case'
+    url: https://www.arista.com/en/support/advisories-notices
+    retrieved: 2026-09-05
+  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+  - title: 'EOS User Manual — Open Shortest Path First Version 2'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+  - title: 'EOS User Manual — Open Shortest Path First Version 3'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
+  - title: 'EOS User Manual — IS-IS'
+    url: https://www.arista.com/en/um-eos/eos-is-is
+  - title: 'EOS User Manual — ACLs and Route Maps'
+    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+  - title: 'EOS User Manual — Port Channels and LACP'
+    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
+  - title: 'EOS User Manual — Spanning Tree Protocol'
+    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
+  - title: 'EOS User Manual — Virtual LANs (VLANs)'
+    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
+  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
+    url: https://www.arista.com/en/um-eos/eos-data-transfer
+  - title: 'EOS User Manual — VXLAN Configuration'
+    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
+  - title: 'EOS User Manual — Configuring EVPN'
+    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
+  - title: 'EOS User Manual — EVPN and VCS Commands'
+    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
+  - title: 'EOS User Manual — VRRP and VARP'
+    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
+  - title: 'EOS 4.36.2F User Manual (index)'
+    url: https://www.arista.com/en/um-eos
+  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+  - title: 'EOS User Manual — Open Shortest Path First Version 2'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+  - title: 'EOS User Manual — Open Shortest Path First Version 3'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
+  - title: 'EOS User Manual — IS-IS'
+    url: https://www.arista.com/en/um-eos/eos-is-is
+  - title: 'EOS User Manual — ACLs and Route Maps'
+    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+  - title: 'EOS User Manual — Port Channels and LACP'
+    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
+  - title: 'EOS User Manual — Spanning Tree Protocol'
+    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
+  - title: 'EOS User Manual — Virtual LANs (VLANs)'
+    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
+  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
+    url: https://www.arista.com/en/um-eos/eos-data-transfer
+  - title: 'EOS User Manual — VXLAN Configuration'
+    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
+  - title: 'EOS User Manual — Configuring EVPN'
+    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
+  - title: 'EOS User Manual — EVPN and VCS Commands'
+    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
+  - title: 'EOS User Manual — VRRP and VARP'
+    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
+  - title: 'EOS 4.36.2F User Manual (index)'
+    url: https://www.arista.com/en/um-eos
+  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+  - title: 'EOS User Manual — Open Shortest Path First Version 2'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+  - title: 'EOS User Manual — Open Shortest Path First Version 3'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
+  - title: 'EOS User Manual — IS-IS'
+    url: https://www.arista.com/en/um-eos/eos-is-is
+  - title: 'EOS User Manual — ACLs and Route Maps'
+    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+  - title: 'EOS User Manual — Port Channels and LACP'
+    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
+  - title: 'EOS User Manual — Spanning Tree Protocol'
+    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
+  - title: 'EOS User Manual — Virtual LANs (VLANs)'
+    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
+  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
+    url: https://www.arista.com/en/um-eos/eos-data-transfer
+  - title: 'EOS User Manual — VXLAN Configuration'
+    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
+  - title: 'EOS User Manual — Configuring EVPN'
+    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
+  - title: 'EOS User Manual — EVPN and VCS Commands'
+    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
+  - title: 'EOS User Manual — VRRP and VARP'
+    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
+  - title: 'EOS 4.36.2F User Manual (index)'
+    url: https://www.arista.com/en/um-eos
+  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+  - title: 'EOS User Manual — Open Shortest Path First Version 2'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+  - title: 'EOS User Manual — Open Shortest Path First Version 3'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
+  - title: 'EOS User Manual — IS-IS'
+    url: https://www.arista.com/en/um-eos/eos-is-is
+  - title: 'EOS User Manual — ACLs and Route Maps'
+    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+  - title: 'EOS User Manual — Port Channels and LACP'
+    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
+  - title: 'EOS User Manual — Spanning Tree Protocol'
+    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
+  - title: 'EOS User Manual — Virtual LANs (VLANs)'
+    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
+  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
+    url: https://www.arista.com/en/um-eos/eos-data-transfer
+  - title: 'EOS User Manual — VXLAN Configuration'
+    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
+  - title: 'EOS User Manual — Configuring EVPN'
+    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
+  - title: 'EOS User Manual — EVPN and VCS Commands'
+    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
+  - title: 'EOS User Manual — VRRP and VARP'
+    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
+  - title: 'EOS 4.36.2F User Manual (index)'
+    url: https://www.arista.com/en/um-eos
+  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+  - title: 'EOS User Manual — Open Shortest Path First Version 2'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+  - title: 'EOS User Manual — Open Shortest Path First Version 3'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
+  - title: 'EOS User Manual — IS-IS'
+    url: https://www.arista.com/en/um-eos/eos-is-is
+  - title: 'EOS User Manual — ACLs and Route Maps'
+    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+  - title: 'EOS User Manual — Port Channels and LACP'
+    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
+  - title: 'EOS User Manual — Spanning Tree Protocol'
+    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
+  - title: 'EOS User Manual — Virtual LANs (VLANs)'
+    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
+  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
+    url: https://www.arista.com/en/um-eos/eos-data-transfer
+  - title: 'EOS User Manual — VXLAN Configuration'
+    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
+  - title: 'EOS User Manual — Configuring EVPN'
+    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
+  - title: 'EOS User Manual — EVPN and VCS Commands'
+    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
+  - title: 'EOS User Manual — VRRP and VARP'
+    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
+  - title: 'EOS 4.36.2F User Manual (index)'
+    url: https://www.arista.com/en/um-eos
+  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+  - title: 'EOS User Manual — Open Shortest Path First Version 2'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+  - title: 'EOS User Manual — Open Shortest Path First Version 3'
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
+  - title: 'EOS User Manual — IS-IS'
+    url: https://www.arista.com/en/um-eos/eos-is-is
+  - title: 'EOS User Manual — ACLs and Route Maps'
+    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+  - title: 'EOS User Manual — Port Channels and LACP'
+    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
+  - title: 'EOS User Manual — Spanning Tree Protocol'
+    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
+  - title: 'EOS User Manual — Virtual LANs (VLANs)'
+    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
+  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
+    url: https://www.arista.com/en/um-eos/eos-data-transfer
+  - title: 'EOS User Manual — VXLAN Configuration'
+    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
+  - title: 'EOS User Manual — Configuring EVPN'
+    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
+  - title: 'EOS User Manual — EVPN and VCS Commands'
+    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
+  - title: 'EOS User Manual — VRRP and VARP'
+    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
+  - title: 'EOS 4.36.2F User Manual (index)'
+    url: https://www.arista.com/en/um-eos
+
+# baseline — collected for EVERY class: the vendor-standard set a TAC engineer
+# opens before anything issue-specific.
+baseline:
+  - system.version
+  - system.inventory
+  - system.uptime
+  - hardware.environment
+  - interface.brief
+  - interface.counters
+  - route.summary
+  - logging.recent
+  - config.running
+  - interface.status
+  - version.info
+  - environment.all
+  - agent.logs.crash
+
+# optional — off by default: large and slow captures the operator opts into.
+optional:
+  - tech.support
+
+bindings:
+  system.version:
+    command: show version
+    verified: capture
+  system.inventory:
+    command: show inventory
+    verified: capture
+  system.uptime:
+    command: show version
+    verified: capture
+  system.processes.cpu:
+    command: show processes top once
+    verified: doc_claimed
+  system.processes.memory:
+    command: show version
+    verified: doc_claimed
+  system.resources:
+    command: show version
+    verified: doc_claimed
+  hardware.environment:
+    command: show environment all
+    verified: doc_claimed
+  hardware.power:
+    command: show environment power
+    verified: doc_claimed
+  hardware.fans:
+    command: show environment cooling
+    verified: doc_claimed
+  interface.brief:
+    command: show ip interface brief
+    verified: capture
+  interface.status:
+    command: show interfaces status
+    verified: capture
+  interface.detail:
+    command: 'show interfaces {if}'
+    verified: capture
+  interface.counters:
+    command: show interfaces counters
+    verified: capture
+  interface.errors:
+    command: show interfaces counters errors
+    verified: doc_claimed
+  optics.detail:
+    command: show interfaces transceiver detail
+    verified: doc_claimed
+  route.summary:
+    command: show ip route summary
+    verified: capture
+  route.ospf:
+    command: show ip route ospf
+    verified: doc_claimed
+  route.isis:
+    command: show ip route isis
+    verified: doc_claimed
+  route.bgp:
+    command: show ip route bgp
+    verified: doc_claimed
+  route.prefix:
+    command: 'show ip route {prefix}'
+    verified: capture
+  fib.prefix:
+    command: 'show ip route {prefix} detail'
+    verified: doc_claimed
+  arp.table:
+    command: show ip arp
+    verified: capture
+  l2.mac:
+    command: show mac address-table
+    verified: doc_claimed
+  l2.vlan:
+    command: show vlan
+    verified: doc_claimed
+  ospf.summary:
+    command: show ip ospf
+    verified: doc_claimed
+  ospf.interfaces:
+    command: show ip ospf interface
+    verified: doc_claimed
+  ospf.neighbors:
+    command: show ip ospf neighbor
+    verified: doc_claimed
+  ospf.neighbors.detail:
+    command: show ip ospf neighbor detail
+    verified: doc_claimed
+  ospf.database:
+    command: show ip ospf database
+    verified: doc_claimed
+  ospf.database.router:
+    command: 'show ip ospf database router {rid}'
+    verified: doc_claimed
+  isis.summary:
+    command: show isis summary
+    verified: doc_claimed
+  isis.interfaces:
+    command: show isis interface
+    verified: doc_claimed
+  isis.adjacency:
+    command: show isis neighbors
+    verified: doc_claimed
+  isis.adjacency.detail:
+    command: show isis neighbors detail
+    verified: doc_claimed
+  isis.database:
+    command: show isis database
+    verified: doc_claimed
+  isis.database.detail:
+    command: show isis database detail
+    verified: doc_claimed
+  bgp.summary:
+    command: show ip bgp summary
+    verified: capture
+  bgp.neighbor.detail:
+    command: 'show ip bgp neighbors {peer}'
+    verified: capture
+  bgp.neighbor.received:
+    command: 'show ip bgp neighbors {peer} received-routes'
+    verified: doc_claimed
+  bgp.neighbor.advertised:
+    command: 'show ip bgp neighbors {peer} advertised-routes'
+    verified: doc_claimed
+  bgp.prefix:
+    command: 'show ip bgp {prefix}'
+    verified: doc_claimed
+  overlay.vxlan.vtep:
+    command: show vxlan vtep
+    verified: doc_claimed
+  overlay.vxlan.vni:
+    command: show vxlan vni
+    verified: doc_claimed
+  overlay.evpn.routes:
+    command: show bgp evpn summary
+    verified: doc_claimed
+  mlag.peer:
+    command: show mlag
+    verified: doc_claimed
+  mlag.interfaces:
+    command: show mlag interfaces
+    verified: doc_claimed
+  qos.interface:
+    command: 'show policy-map interface {if}'
+    verified: doc_claimed
+  qos.drops:
+    command: show interfaces counters queue
+    verified: doc_claimed
+  logging.recent:
+    command: show logging
+    verified: capture
+  logging.ospf:
+    command: 'show logging | include OSPF'
+    verified: doc_claimed
+  logging.isis:
+    command: 'show logging | include ISIS'
+    verified: doc_claimed
+  logging.bgp:
+    command: 'show logging | include BGP'
+    verified: capture
+  config.running:
+    command: show running-config
+    verified: doc_claimed
+  tech.support:
+    command: show tech-support
+    verified: doc_claimed
+  bgp.peergroup:
+    command: show ip bgp peer-group
+    verified: capture
+  bgp.peerfilter:
+    command: show peer-filter
+    verified: capture
+  bgp.route.prefix:
+    command: 'show ip bgp {prefix}'
+    verified: capture
+  bgp.vrf.routes:
+    command: 'show ip bgp vrf {vrf-scope}'
+    verified: doc_claimed
+  bgp.labeled.unicast:
+    command: show bgp labeled-unicast tunnel
+    verified: doc_claimed
+  mpls.forwarding:
+    command: show mpls lfib route
+    verified: doc_claimed
+  isis.sr.tunnel:
+    command: show isis segment-routing tunnel
+    verified: doc_claimed
+  ospf.neighbor.detail:
+    command: 'show ip ospf neighbor {if} detail'
+    verified: doc_claimed
+  ospf.neighbor.changes:
+    command: 'show ip ospf neighbor {if} adjacency-changes'
+    verified: doc_claimed
+  ospf.neighbors.summary:
+    command: show ip ospf neighbor summary
+    verified: doc_claimed
+  ospf.interfaces.brief:
+    command: show ip ospf interface brief
+    verified: doc_claimed
+  ospf.process:
+    command: show ip ospf
+    verified: doc_claimed
+  ospf.database.summary:
+    command: 'show ip ospf {vrf-scope} {area} database database-summary'
+    verified: doc_claimed
+  route.protocol.ospf:
+    command: show ip route ospf
+    verified: doc_claimed
+  ospf.spf.log:
+    command: show ip ospf spf-log
+    verified: doc_claimed
+  isis.sr.adjsids:
+    command: show isis segment-routing adjacency-segments
+    verified: doc_claimed
+  isis.sr.prefixsids:
+    command: show isis segment-routing prefix-segments
+    verified: doc_claimed
+  isis.tilfa.path:
+    command: show isis ti-lfa path
+    verified: doc_claimed
+  isis.tilfa.tunnel:
+    command: show isis ti-lfa tunnel
+    verified: doc_claimed
+  isis.convergence.delay:
+    command: show isis local-convergence-delay
+    verified: doc_claimed
+  mlag.status:
+    command: show mlag
+    verified: doc_claimed
+  mlag.config.sanity:
+    command: show mlag config-sanity
+    verified: doc_claimed
+  mlag.interfaces.detail:
+    command: show mlag interfaces detail
+    verified: doc_claimed
+  mlag.interfaces.states:
+    command: show mlag interfaces states
+    verified: doc_claimed
+  mlag.interfaces.members:
+    command: show mlag interfaces members
+    verified: doc_claimed
+  stp.instance.detail:
+    command: show spanning-tree instance detail
+    verified: doc_claimed
+  mlag.subinterfaces:
+    command: show mlag subinterfaces
+    verified: doc_claimed
+  stp.root:
+    command: show spanning-tree root
+    verified: doc_claimed
+  stp.counters:
+    command: show spanning-tree counters
+    verified: doc_claimed
+  stp.topology.status:
+    command: show spanning-tree topology status
+    verified: doc_claimed
+  stp.summary:
+    command: show spanning-tree
+    verified: doc_claimed
+  stp.instance:
+    command: show spanning-tree instance
+    verified: doc_claimed
+  stp.interface:
+    command: show spanning-tree interface
+    verified: doc_claimed
+  stp.blockedports:
+    command: show spanning-tree blockedports
+    verified: doc_claimed
+  stp.mst.interface:
+    command: show spanning-tree mst interface
+    verified: doc_claimed
+  stp.loopprotection:
+    command: show loop-protection
+    verified: doc_claimed
+  interface.switchport:
+    command: show interfaces switchport
+    verified: doc_claimed
+  interface.vlans:
+    command: 'show interfaces {if} vlans'
+    verified: doc_claimed
+  interface.status.one:
+    command: 'show interfaces {if} status'
+    verified: doc_claimed
+  hardware.drop.counters:
+    command: show hardware counter drop
+    verified: doc_claimed
+  interface.phy.detail:
+    command: 'show interfaces {if} phy detail'
+    verified: doc_claimed
+  interface.interactions:
+    command: 'show interfaces et1,2 interactions'
+    verified: doc_claimed
+  platform.fap.mapping:
+    command: show platform fap mapping interface Ethernet 1
+    verified: doc_claimed
+  platform.bios:
+    command: show platform bios
+    verified: doc_claimed
+  platform.bios.history:
+    command: show platform bios history
+    verified: doc_claimed
+  qos.interfaces:
+    command: show qos interfaces
+    verified: doc_claimed
+  qos.trust:
+    command: show qos interfaces trust
+    verified: doc_claimed
+  qos.maps:
+    command: show qos maps
+    verified: doc_claimed
+  qos.policy.interface.counters:
+    command: 'show policy-map interface {if} input counters'
+    verified: doc_claimed
+  techsupport.bundle:
+    command: show tech-support
+    verified: doc_claimed
+    consent: true
+    consent_note: >-
+      The vendor's full support bundle: output can be tens of megabytes and take
+      minutes on a loaded box.
+  version.info:
+    command: show version
+    verified: capture
+  environment.all:
+    command: show system environment all
+    verified: doc_claimed
+  agent.logs.crash:
+    command: show agent logs crash
+    verified: capture
+  policy.routemap:
+    command: show route-map
+    verified: capture
+  tunnel.rib:
+    command: show tunnel rib brief
+    verified: doc_claimed
+  evpn.sanity:
+    command: show bgp evpn sanity detail
+    verified: doc_claimed
+  evpn.routes:
+    command: show bgp evpn
+    verified: doc_claimed
+  evpn.routes.type2:
+    command: show bgp evpn route-type mac-ip
+    verified: doc_claimed
+  evpn.instance:
+    command: show bgp evpn instance
+    verified: doc_claimed
+  ospfv3.spf.log:
+    command: show ipv6 ospf spf-log
+    verified: doc_claimed
+  ospfv3.lsa.log:
+    command: show ipv6 ospf lsa-log
+    verified: doc_claimed
+  ospfv3.neighbors:
+    command: show ipv6 ospf neighbor
+    verified: doc_claimed
+  tunnel.fib:
+    command: show tunnel fib
+    verified: doc_claimed
+  portchannel.summary:
+    command: show port-channel
+    verified: doc_claimed
+  lacp.interfaces:
+    command: show lacp interface
+    verified: doc_claimed
+  lacp.internal:
+    command: show lacp internal
+    verified: doc_claimed
+  lacp.peer:
+    command: show lacp peer
+    verified: doc_claimed
+  lacp.counters:
+    command: show lacp counters
+    verified: doc_claimed
+  lacp.aggregates:
+    command: show lacp aggregates
+    verified: doc_claimed
+  lacp.sysid:
+    command: show lacp sys-id
+    verified: doc_claimed
+  portchannel.dense:
+    command: show port-channel dense
+    verified: doc_claimed
+  portchannel.limits:
+    command: show port-channel limits
+    verified: doc_claimed
+  vlan.trunk:
+    command: show interfaces trunk
+    verified: doc_claimed
+  vlan.list:
+    command: show vlan
+    verified: doc_claimed
+  vlan.count:
+    command: show vlan brief count
+    verified: doc_claimed
+  vlan.trunkgroup:
+    command: show vlan trunk group
+    verified: doc_claimed
+  mac.table:
+    command: show mac address-table
+    verified: doc_claimed
+  mac.table.static:
+    command: show mac address-table static
+    verified: doc_claimed
+  portsecurity.status:
+    command: show port-security
+    verified: doc_claimed
+  portsecurity.macs:
+    command: show port-security mac-address
+    verified: doc_claimed
+  vxlan.vtep:
+    command: show vxlan vtep
+    verified: doc_claimed
+  vxlan.interface:
+    command: show interface vxlan 1
+    verified: doc_claimed
+  vxlan.address.table:
+    command: show vxlan address-table
+    verified: doc_claimed
+  vxlan.vni:
+    command: show vxlan vni
+    verified: doc_claimed
+  vxlan.flood.list:
+    command: show vxlan flood vtep
+    verified: doc_claimed
+  vxlan.counters:
+    command: show vxlan counters software
+    verified: doc_claimed
+  vxlan.arp:
+    command: show arp interface VXLAN 1
+    verified: doc_claimed
+  vxlan.learnrestrict:
+    command: show vxlan learn-restrict vtep
+    verified: doc_claimed
+  vxlan.l2rib:
+    command: show l2Rib input vxlan-dynamic
+    verified: doc_claimed
+  evpn.routes.type4:
+    command: show bgp evpn route-type ethernet-segment esi
+    verified: doc_claimed
+  evpn.routes.type5:
+    command: show bgp evpn route-type ip-prefix
+    verified: doc_claimed
+  vrrp.brief:
+    command: 'show vrrp interface vlan {vlan} brief'
+    verified: doc_claimed
+  vrrp.status:
+    command: show vrrp
+    verified: doc_claimed
+  vrrp.interface:
+    command: 'show vrrp interface vlan {vlan}'
+    verified: doc_claimed
+  vrrp.interface.all:
+    command: 'show vrrp interface vlan {vlan} all'
+    verified: doc_claimed
+  varp.status:
+    command: show ip virtual-router
+    verified: doc_claimed
+  varp.status.v6:
+    command: show ipv6 virtual-router
+    verified: doc_claimed
+  transceiver.dom:
+    command: show interfaces transceiver dom
+    verified: doc_claimed
+  transceiver.dom.thresholds:
+    command: show interfaces transceiver dom thresholds
+    verified: doc_claimed
+  transceiver.perfmon:
+    command: show interfaces transceiver performance-monitoring
+    verified: doc_claimed
+  transceiver.perfmon.thresholds:
+    command: show interfaces transceiver performance-monitoring thresholds
+    verified: doc_claimed
+  environment.power:
+    command: show environment power
+    verified: doc_claimed
+  environment.temperature:
+    command: show environment temperature
+    verified: doc_claimed
+  environment.cooling:
+    command: show system environment cooling
+    verified: doc_claimed
+  eventmonitor.route:
+    command: show event-monitor route
+    verified: doc_claimed
+  eventmonitor.arp:
+    command: show event-monitor arp
+    verified: doc_claimed
+  eventmonitor.mac:
+    command: show event-monitor mac
+    verified: doc_claimed
+  eventmonitor.neighbor:
+    command: show event-monitor neighbor
+    verified: doc_claimed
+  eventmonitor.stp:
+    command: show event-monitor stpunstable
+    verified: doc_claimed
+  eventmonitor.sqlite:
+    command: show event-monitor sqlite
+    verified: doc_claimed
+  extensions.list:
+    command: show extensions
+    verified: doc_claimed
+  extensions.boot:
+    command: show boot-extensions
+    verified: doc_claimed
+  boot.config:
+    command: show boot-config
+    verified: doc_claimed
+  reload.cause:
+    command: show reload cause
+    verified: doc_claimed
+  reload.status:
+    command: show reload
+    verified: doc_claimed
+  redundancy.status:
+    command: show redundancy status
+    verified: doc_claimed
+  redundancy.filerepl:
+    command: show redundancy file-replication
+    verified: doc_claimed
+  acl.list:
+    command: show ip access-lists
+    verified: doc_claimed
+  acl.summary:
+    command: show ip access-lists summary
+    verified: doc_claimed
+  acl.list.v6:
+    command: show ipv6 access-lists
+    verified: doc_claimed
+  acl.list.mac:
+    command: show mac access-lists
+    verified: doc_claimed
+  acl.all:
+    command: show access-lists
+    verified: doc_claimed
+  copp.counters:
+    command: 'show policy-map interface {if} input counters'
+    verified: doc_claimed
+  ntp.status:
+    command: show ntp status
+    verified: doc_claimed
+  ntp.associations:
+    command: show ntp associations
+    verified: doc_claimed
+  clock.now:
+    command: show clock
+    verified: doc_claimed
+  snmp.status:
+    command: show snmp
+    verified: doc_claimed
+  snmp.community:
+    command: show snmp community
+    verified: doc_claimed
+  snmp.user:
+    command: show snmp user
+    verified: doc_claimed
+  snmp.group:
+    command: show snmp group
+    verified: doc_claimed
+  snmp.view:
+    command: show snmp view
+    verified: doc_claimed
+  snmp.engineid:
+    command: show snmp engineID
+    verified: doc_claimed
+  snmp.notification:
+    command: show snmp notification
+    verified: doc_claimed
+  snmp.notification.host:
+    command: show snmp notification host
+    verified: doc_claimed
+  snmp.localif:
+    command: show snmp local-interface
+    verified: doc_claimed
+  snmp.mib:
+    command: show snmp mib
+    verified: doc_claimed
+  snmp.acl.detail:
+    command: show snmp ipv4 access-list detail
+    verified: doc_claimed
+  snmp.acl.summary:
+    command: show snmp ipv4 access-list summary
+    verified: doc_claimed
+  aaa.tacacs:
+    command: show tacacs
+    verified: doc_claimed
+  aaa.radius:
+    command: show radius
+    verified: doc_claimed
+  aaa.radius.monitor:
+    command: show monitor server radius
+    verified: doc_claimed
+  aaa.radius.monitor.detail:
+    command: show monitor server radius detail
+    verified: doc_claimed
+  aaa.roles:
+    command: show users roles
+    verified: doc_claimed
+  aaa.accounts:
+    command: show users accounts
+    verified: doc_claimed
+  aaa.users.detail:
+    command: show users detail
+    verified: doc_claimed
+  multicast.pim.neighbors:
+    command: show ip pim neighbor
+    verified: doc_claimed
+  multicast.pim.interfaces:
+    command: show ip pim interface
+    verified: doc_claimed
+  multicast.pim.sanity:
+    command: show ip pim config-sanity
+    verified: doc_claimed
+  multicast.pim.rp:
+    command: show ip pim rp
+    verified: doc_claimed
+  multicast.pim.bsr:
+    command: show ip pim bsr
+    verified: doc_claimed
+  multicast.pim.joins:
+    command: show ip pim upstream joins
+    verified: doc_claimed
+  multicast.pim.counters:
+    command: show ip pim protocol counters
+    verified: doc_claimed
+  multicast.igmp.groups:
+    command: show ip igmp groups
+    verified: doc_claimed
+  multicast.igmp.interfaces:
+    command: show ip igmp interface
+    verified: doc_claimed
+  multicast.igmp.stats:
+    command: show ip igmp statistics
+    verified: doc_claimed
+  multicast.igmpsnooping:
+    command: show ip igmp snooping
+    verified: doc_claimed
+  multicast.igmpsnooping.mrouter:
+    command: show ip igmp snooping mrouter
+    verified: doc_claimed
+  multicast.igmpsnooping.groups:
+    command: show ip igmp snooping groups
+    verified: doc_claimed

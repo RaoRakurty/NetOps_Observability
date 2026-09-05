@@ -28,9 +28,9 @@ const mocks = vi.hoisted(() => ({
   // lanes
   pathsHealth: vi.fn(), eventsFeed: vi.fn(), metricNames: vi.fn(), metricsQuery: vi.fn(),
   probePaths: vi.fn(), flowsByType: vi.fn(), topTalkers: vi.fn(),
-  // iris + protocol diagnostics panel
+  // iris + the TAC escalation panel that hangs off the verdict
   aiAsk: vi.fn(), devices: vi.fn(), permissions: vi.fn(),
-  protocolDiagCatalog: vi.fn(), protocolDiagCollect: vi.fn(), protocolDiagAnalyze: vi.fn(),
+  tacState: vi.fn(), tacClassify: vi.fn(),
   exportRcaPdf: vi.fn(),
 }));
 
@@ -122,6 +122,16 @@ beforeEach(() => {
   mocks.topTalkers.mockResolvedValue({ data: [] });
   mocks.aiAsk.mockResolvedValue({ mode: "grounded", intent: "x", modules: [], text: "ok", citations: [], disclaimers: [] });
   mocks.exportRcaPdf.mockReturnValue(true);
+  mocks.devices.mockResolvedValue([]);
+  // The escalation panel reads the incident's escalation state as soon as a case
+  // is open. Nothing has been escalated in these fixtures, which is the state
+  // the panel renders its one "Escalate to TAC" button for.
+  mocks.tacState.mockResolvedValue({
+    incident_id: CASE_ID, incident_ref: "INC-2026-0007", title: "",
+    can_collect: false, collect_note: "Live collection is not wired on this deployment.",
+    catalog_version: "correlix-tac-classes-2026-09-05", connectors: [], devices: ["wan-r2"],
+    state: null, state_note: "This incident has not been escalated in this api process.",
+  });
 });
 afterEach(() => cleanup());
 

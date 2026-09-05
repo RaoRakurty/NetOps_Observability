@@ -1,0 +1,660 @@
+# plans/juniper-junos.yaml — the Juniper Junos command plan for the TAC escalation pack.
+#
+# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven
+# by the loader (protocoldiag.ValidateReadOnly) and again by the runner. An
+# intent this dialect does not bind is simply ABSENT — the plan preview shows
+# it as unbound rather than rendering another vendor's command at this device.
+#
+# `verified: doc_claimed` means the vendor documents the command and Correlix
+# has not run it on this platform. `consent: true` marks a command the vendor
+# says is NOT routine (a core dump, a control-plane load, a file written on the
+# device): it never runs by default and never sits in a baseline.
+# `read_only_exception` is a CITED documented-status read whose text carries a
+# token the grammar refuses on sight.
+#
+# MACHINE-MERGED from ai/tac/research/*.yaml by scripts/tac-merge-research.py.
+schema_version: 1
+dialect: juniper-junos
+profile: juniper/junos
+display: Juniper Junos
+version: correlix-tac-plan-juniper-junos-2026-09-05
+
+# The dialect's default citation set. A doc_claimed binding inherits it.
+sources:
+  - title: 'Junos OS CLI Explorer — operational mode commands'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
+    retrieved: 2026-09-05
+  - title: 'Juniper JTAC — Data collection for a technical support case'
+    url: https://supportportal.juniper.net/
+    retrieved: 2026-09-05
+  - title: 'Data Collection for Customer Support (JTAC)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
+  - title: 'request support information — Junos CLI reference'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
+  - title: Troubleshooting BGP Sessions
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+  - title: BGP Session Flaps
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
+  - title: Understanding Hidden Routes
+    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
+  - title: Understanding the Layered MPLS Troubleshooting Model
+    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+  - title: Troubleshooting MPLS
+    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+  - title: Layer 3 VPNs Troubleshooting
+    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
+  - title: Troubleshoot Interfaces
+    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+  - title: Troubleshooting an EX Series Virtual Chassis
+    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
+  - title: 'System Troubleshooting (core files)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
+  - title: Understand Chassis Alarms
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
+  - title: EVPN Type-2 and Type-5 route coexistence
+    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
+  - title: 'Junos OS CLI reference (command pages cited per issue)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
+  - title: 'Data Collection for Customer Support (JTAC)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
+  - title: 'request support information — Junos CLI reference'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
+  - title: Troubleshooting BGP Sessions
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+  - title: BGP Session Flaps
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
+  - title: Understanding Hidden Routes
+    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
+  - title: Understanding the Layered MPLS Troubleshooting Model
+    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+  - title: Troubleshooting MPLS
+    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+  - title: Layer 3 VPNs Troubleshooting
+    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
+  - title: Troubleshoot Interfaces
+    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+  - title: Troubleshooting an EX Series Virtual Chassis
+    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
+  - title: 'System Troubleshooting (core files)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
+  - title: Understand Chassis Alarms
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
+  - title: EVPN Type-2 and Type-5 route coexistence
+    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
+  - title: 'Junos OS CLI reference (command pages cited per issue)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
+  - title: 'Data Collection for Customer Support (JTAC)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
+  - title: 'request support information — Junos CLI reference'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
+  - title: Troubleshooting BGP Sessions
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+  - title: BGP Session Flaps
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
+  - title: Understanding Hidden Routes
+    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
+  - title: Understanding the Layered MPLS Troubleshooting Model
+    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+  - title: Troubleshooting MPLS
+    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+  - title: Layer 3 VPNs Troubleshooting
+    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
+  - title: Troubleshoot Interfaces
+    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+  - title: Troubleshooting an EX Series Virtual Chassis
+    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
+  - title: 'System Troubleshooting (core files)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
+  - title: Understand Chassis Alarms
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
+  - title: EVPN Type-2 and Type-5 route coexistence
+    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
+  - title: 'Junos OS CLI reference (command pages cited per issue)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
+  - title: 'Data Collection for Customer Support (JTAC)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
+  - title: 'request support information — Junos CLI reference'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
+  - title: Troubleshooting BGP Sessions
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+  - title: BGP Session Flaps
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
+  - title: Understanding Hidden Routes
+    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
+  - title: Understanding the Layered MPLS Troubleshooting Model
+    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+  - title: Troubleshooting MPLS
+    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+  - title: Layer 3 VPNs Troubleshooting
+    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
+  - title: Troubleshoot Interfaces
+    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+  - title: Troubleshooting an EX Series Virtual Chassis
+    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
+  - title: 'System Troubleshooting (core files)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
+  - title: Understand Chassis Alarms
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
+  - title: EVPN Type-2 and Type-5 route coexistence
+    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
+  - title: 'Junos OS CLI reference (command pages cited per issue)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
+  - title: 'Data Collection for Customer Support (JTAC)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
+  - title: 'request support information — Junos CLI reference'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
+  - title: Troubleshooting BGP Sessions
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+  - title: BGP Session Flaps
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
+  - title: Understanding Hidden Routes
+    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
+  - title: Understanding the Layered MPLS Troubleshooting Model
+    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+  - title: Troubleshooting MPLS
+    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+  - title: Layer 3 VPNs Troubleshooting
+    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
+  - title: Troubleshoot Interfaces
+    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+  - title: Troubleshooting an EX Series Virtual Chassis
+    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
+  - title: 'System Troubleshooting (core files)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
+  - title: Understand Chassis Alarms
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
+  - title: EVPN Type-2 and Type-5 route coexistence
+    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
+  - title: 'Junos OS CLI reference (command pages cited per issue)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
+  - title: 'Data Collection for Customer Support (JTAC)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
+  - title: 'request support information — Junos CLI reference'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
+  - title: Troubleshooting BGP Sessions
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+  - title: BGP Session Flaps
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
+  - title: Understanding Hidden Routes
+    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
+  - title: Understanding the Layered MPLS Troubleshooting Model
+    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+  - title: Troubleshooting MPLS
+    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+  - title: Layer 3 VPNs Troubleshooting
+    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
+  - title: Troubleshoot Interfaces
+    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+  - title: Troubleshooting an EX Series Virtual Chassis
+    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
+  - title: 'System Troubleshooting (core files)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
+  - title: Understand Chassis Alarms
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
+  - title: EVPN Type-2 and Type-5 route coexistence
+    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
+  - title: 'Junos OS CLI reference (command pages cited per issue)'
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
+
+# baseline — collected for EVERY class: the vendor-standard set a TAC engineer
+# opens before anything issue-specific.
+baseline:
+  - system.version
+  - system.inventory
+  - system.uptime
+  - hardware.environment
+  - interface.brief
+  - interface.counters
+  - route.summary
+  - logging.recent
+  - config.running
+  - interface.counters.extensive
+  - config.running.redacted
+  - version.info
+  - inventory.hardware
+  - environment.all
+  - alarms.chassis
+  - alarms.system
+
+bindings:
+  system.version:
+    command: show version
+    verified: doc_claimed
+  system.inventory:
+    command: show chassis hardware detail
+    verified: doc_claimed
+  system.uptime:
+    command: show system uptime
+    verified: doc_claimed
+  system.processes.cpu:
+    command: show chassis routing-engine
+    verified: doc_claimed
+  system.processes.memory:
+    command: show system memory
+    verified: doc_claimed
+  system.resources:
+    command: show system processes extensive
+    verified: doc_claimed
+  hardware.environment:
+    command: show chassis environment
+    verified: doc_claimed
+  hardware.power:
+    command: show chassis power
+    verified: doc_claimed
+  interface.brief:
+    command: show interfaces terse
+    verified: doc_claimed
+  interface.status:
+    command: show interfaces terse
+    verified: doc_claimed
+  interface.detail:
+    command: 'show interfaces {if} extensive'
+    verified: doc_claimed
+  interface.counters:
+    command: show interfaces statistics
+    verified: doc_claimed
+  interface.errors:
+    command: show interfaces extensive
+    verified: doc_claimed
+  optics.detail:
+    command: show interfaces diagnostics optics
+    verified: doc_claimed
+  route.summary:
+    command: show route summary
+    verified: doc_claimed
+  route.ospf:
+    command: show route protocol ospf
+    verified: doc_claimed
+  route.isis:
+    command: show route protocol isis
+    verified: doc_claimed
+  route.bgp:
+    command: show route protocol bgp
+    verified: doc_claimed
+  route.prefix:
+    command: 'show route {prefix} detail'
+    verified: doc_claimed
+  fib.summary:
+    command: show route forwarding-table summary
+    verified: doc_claimed
+  fib.prefix:
+    command: 'show route forwarding-table destination {prefix}'
+    verified: doc_claimed
+  arp.table:
+    command: show arp no-resolve
+    verified: doc_claimed
+  l2.mac:
+    command: show ethernet-switching table
+    verified: doc_claimed
+  l2.vlan:
+    command: show vlans
+    verified: doc_claimed
+  ospf.summary:
+    command: show ospf overview
+    verified: doc_claimed
+  ospf.interfaces:
+    command: show ospf interface extensive
+    verified: doc_claimed
+  ospf.neighbors:
+    command: show ospf neighbor
+    verified: doc_claimed
+  ospf.neighbors.detail:
+    command: show ospf neighbor extensive
+    verified: doc_claimed
+  ospf.database:
+    command: show ospf database
+    verified: doc_claimed
+  ospf.database.router:
+    command: 'show ospf database router advertising-router {rid} detail'
+    verified: doc_claimed
+  isis.summary:
+    command: show isis overview
+    verified: doc_claimed
+  isis.interfaces:
+    command: show isis interface detail
+    verified: doc_claimed
+  isis.adjacency:
+    command: show isis adjacency
+    verified: doc_claimed
+  isis.adjacency.detail:
+    command: show isis adjacency extensive
+    verified: doc_claimed
+  isis.database:
+    command: show isis database
+    verified: doc_claimed
+  isis.database.detail:
+    command: show isis database extensive
+    verified: doc_claimed
+  bgp.summary:
+    command: show bgp summary
+    verified: doc_claimed
+  bgp.neighbor.detail:
+    command: 'show bgp neighbor {peer}'
+    verified: doc_claimed
+  bgp.neighbor.received:
+    command: 'show route receive-protocol bgp {peer}'
+    verified: doc_claimed
+  bgp.neighbor.advertised:
+    command: 'show route advertising-protocol bgp {peer}'
+    verified: doc_claimed
+  bgp.prefix:
+    command: 'show route protocol bgp {prefix} detail'
+    verified: doc_claimed
+  mpls.interfaces:
+    command: show mpls interface
+    verified: doc_claimed
+  mpls.ldp.neighbor:
+    command: show ldp neighbor
+    verified: doc_claimed
+  mpls.ldp.bindings:
+    command: show ldp database
+    verified: doc_claimed
+  overlay.evpn.routes:
+    command: show route table bgp.evpn.0
+    verified: doc_claimed
+  qos.interface:
+    command: 'show class-of-service interface {if}'
+    verified: doc_claimed
+  qos.drops:
+    command: 'show interfaces queue {if}'
+    verified: doc_claimed
+  logging.recent:
+    command: show log messages
+    verified: doc_claimed
+  logging.ospf:
+    command: 'show log messages | match OSPF'
+    verified: doc_claimed
+  logging.isis:
+    command: 'show log messages | match ISIS'
+    verified: doc_claimed
+  logging.bgp:
+    command: 'show log messages | match BGP'
+    verified: doc_claimed
+  config.running:
+    command: 'show configuration | display set'
+    verified: doc_claimed
+  interface.counters.extensive:
+    command: show interfaces extensive
+    verified: doc_claimed
+  config.running.redacted:
+    command: 'show configuration | except SECRET-DATA'
+    verified: doc_claimed
+  route.resolution.unresolved:
+    command: show route resolution unresolved detail
+    verified: doc_claimed
+  fib.table:
+    command: show route forwarding-table
+    verified: doc_claimed
+  bgp.group:
+    command: show bgp group
+    verified: doc_claimed
+  bgp.damping.suppressed:
+    command: show route damping suppressed
+    verified: doc_claimed
+  bgp.damping.suppressed.detail:
+    command: show route damping suppressed detail
+    verified: doc_claimed
+  bgp.damping.policy:
+    command: show policy damping
+    verified: doc_claimed
+  config.commit.history:
+    command: show system commit
+    verified: doc_claimed
+  bgp.routes.received:
+    command: 'show route receive-protocol bgp {peer}'
+    verified: doc_claimed
+  bgp.routes.received.hidden:
+    command: 'show route receive-protocol bgp {peer} hidden'
+    verified: doc_claimed
+  route.hidden.detail:
+    command: show route hidden detail
+    verified: doc_claimed
+  bgp.routes.advertised:
+    command: 'show route advertising-protocol bgp {peer}'
+    verified: doc_claimed
+  route.protocol.bgp:
+    command: show route protocol bgp
+    verified: doc_claimed
+  route.protocol.static:
+    command: show route protocol static
+    verified: doc_claimed
+  route.protocol.direct:
+    command: show route protocol direct
+    verified: doc_claimed
+  route.prefix.detail:
+    command: 'show route {prefix} detail'
+    verified: doc_claimed
+  route.prefix.extensive:
+    command: 'show route {prefix} extensive'
+    verified: doc_claimed
+  ospf.neighbor.detail:
+    command: show ospf neighbor extensive
+    verified: doc_claimed
+  ospf.neighbors.instance:
+    command: 'show ospf neighbor instance {vrf-scope}'
+    verified: doc_claimed
+  ospf.database.extensive:
+    command: show ospf database extensive
+    verified: doc_claimed
+  isis.overview:
+    command: show isis overview
+    verified: doc_claimed
+  isis.database.extensive:
+    command: show isis database extensive
+    verified: doc_claimed
+  isis.spf.log:
+    command: show isis spf log
+    verified: doc_claimed
+  isis.spf.results:
+    command: show isis spf results
+    verified: doc_claimed
+  route.protocol.isis:
+    command: show route protocol isis
+    verified: doc_claimed
+  mpls.ldp.session:
+    command: show ldp session
+    verified: doc_claimed
+  mpls.ldp.session.detail:
+    command: show ldp session detail
+    verified: doc_claimed
+  mpls.interface:
+    command: show mpls interface
+    verified: doc_claimed
+  mpls.inet3:
+    command: show route table inet.3
+    verified: doc_claimed
+  mpls.table:
+    command: show route table mpls.0
+    verified: doc_claimed
+  mpls.lsp:
+    command: show mpls lsp
+    verified: doc_claimed
+  mpls.lsp.extensive:
+    command: show mpls lsp extensive
+    verified: doc_claimed
+  mpls.lsp.statistics:
+    command: show mpls lsp statistics
+    verified: doc_claimed
+  interface.list:
+    command: show interfaces
+    verified: doc_claimed
+  interface.terse:
+    command: show interfaces terse
+    verified: doc_claimed
+  interface.media:
+    command: 'show interfaces {if} media'
+    verified: doc_claimed
+  logging.files:
+    command: show log
+    verified: doc_claimed
+  qos.queue.counters:
+    command: show interfaces queue
+    verified: doc_claimed
+  qos.queue.counters.one:
+    command: 'show interfaces queue {if}'
+    verified: doc_claimed
+  qos.interface.map:
+    command: show class-of-service interface
+    verified: doc_claimed
+  qos.interface.detail:
+    command: 'show class-of-service interface {if} detail'
+    verified: doc_claimed
+  route.table:
+    command: show route
+    verified: doc_claimed
+  version.info:
+    command: show version
+    verified: doc_claimed
+  inventory.hardware:
+    command: show chassis hardware
+    verified: doc_claimed
+  environment.all:
+    command: show chassis environment
+    verified: doc_claimed
+  alarms.chassis:
+    command: show chassis alarms
+    verified: doc_claimed
+  alarms.system:
+    command: show system alarms
+    verified: doc_claimed
+  evpn.ipprefix.db:
+    command: show evpn ip-prefix-database
+    verified: doc_claimed
+  evpn.ipprefix.db.extensive:
+    command: show evpn ip-prefix-database extensive
+    verified: doc_claimed
+  evpn.database.extensive:
+    command: show evpn database extensive
+    verified: doc_claimed
+  evpn.instance.extensive:
+    command: show evpn instance extensive
+    verified: doc_claimed
+  evpn.macip.table:
+    command: show ethernet-switching mac-ip-table
+    verified: doc_claimed
+  transceiver.dom:
+    command: show interfaces diagnostics optics
+    verified: doc_claimed
+  process.list.extensive:
+    command: show system processes extensive
+    verified: doc_claimed
+  cpu.utilization:
+    command: show chassis routing-engine
+    verified: doc_claimed
+  core.dumps:
+    command: show system core-dumps
+    verified: doc_claimed
+  rsvp.session:
+    command: show rsvp session
+    verified: doc_claimed
+  rsvp.neighbor:
+    command: show rsvp neighbor
+    verified: doc_claimed
+  rsvp.interface:
+    command: show rsvp interface
+    verified: doc_claimed
+  rsvp.interface.extensive:
+    command: show rsvp interface extensive
+    verified: doc_claimed
+  l3vpn.bgp.table:
+    command: show route table bgp.l3vpn.0 extensive
+    verified: doc_claimed
+  l3vpn.bgp.table.hidden:
+    command: show route table bgp.l3vpn.0 hidden
+    verified: doc_claimed
+  vrf.routes.extensive:
+    command: 'show route extensive table {vrf-scope}'
+    verified: doc_claimed
+  vxlan.vtep.remote:
+    command: show ethernet-switching vxlan-tunnel-end-point remote
+    verified: doc_claimed
+  evpn.database:
+    command: show evpn database
+    verified: doc_claimed
+  evpn.ipprefix.db.imported:
+    command: show evpn ip-prefix-database direction imported
+    verified: doc_claimed
+  evpn.ipprefix.db.exported:
+    command: show evpn ip-prefix-database direction exported
+    verified: doc_claimed
+  vc.status:
+    command: show virtual-chassis
+    verified: doc_claimed
+  vc.ports:
+    command: show virtual-chassis vc-port
+    verified: doc_claimed
+  vc.ports.all:
+    command: show virtual-chassis vc-port all-members
+    verified: doc_claimed
+  lacp.interfaces:
+    command: show lacp interfaces
+    verified: doc_claimed
+  lacp.counters:
+    command: show lacp statistics interfaces
+    verified: doc_claimed
+  transceiver.dom.one:
+    command: 'show interfaces diagnostics optics {if}'
+    verified: doc_claimed
+  chassis.fpc:
+    command: show chassis fpc
+    verified: doc_claimed
+  chassis.fpc.detail:
+    command: show chassis fpc detail
+    verified: doc_claimed
+  chassis.fpc.errors:
+    command: show chassis fpc errors
+    verified: doc_claimed
+  inventory.firmware:
+    command: show chassis firmware
+    verified: doc_claimed
+  process.list.summary:
+    command: show system processes summary
+    verified: doc_claimed
+  memory.utilization:
+    command: show chassis routing-engine
+    verified: doc_claimed
+  storage.usage:
+    command: show system storage
+    verified: doc_claimed
+  session.users:
+    command: show system users
+    verified: doc_claimed
+  ddos.violations:
+    command: show ddos-protection protocols violations
+    verified: doc_claimed
+  ddos.protocols:
+    command: show ddos-protection protocols
+    verified: doc_claimed
+  ddos.protocols.statistics:
+    command: show ddos-protection protocols statistics
+    verified: doc_claimed
+  ddos.statistics:
+    command: show ddos-protection statistics
+    verified: doc_claimed
+  ddos.culprit.flows:
+    command: show ddos-protection protocols culprit-flows
+    verified: doc_claimed
+  ntp.status:
+    command: show ntp status
+    verified: doc_claimed
+  ntp.associations:
+    command: show ntp associations
+    verified: doc_claimed
+  snmp.stats:
+    command: show snmp statistics
+    verified: doc_claimed
+  snmp.stats.subagents:
+    command: show snmp statistics subagents
+    verified: doc_claimed
+  aaa.stats:
+    command: show network-access aaa statistics
+    verified: doc_claimed
+  dhcp.relay.stats:
+    command: show dhcp relay statistics
+    verified: doc_claimed
+  multicast.pim.neighbors:
+    command: show pim neighbors
+    verified: doc_claimed
+  multicast.igmp.groups:
+    command: show igmp group
+    verified: doc_claimed

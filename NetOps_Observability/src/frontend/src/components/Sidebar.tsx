@@ -48,7 +48,16 @@ export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onT
     const open = grouped && isOpen(s.id);
 
     const onClick = () => {
-      if (isCopilot) return setCopilotOpen(!copilotOpen);
+      // An ACTING section (Iris) still acts on click — that is the whole point
+      // of the pinned "Ask Iris" button and it is unchanged. What is new is
+      // that acting no longer means leafless: when such a section also carries
+      // routed children, the click reveals them too, so the pages under it are
+      // one more click away rather than unreachable.
+      if (isCopilot) {
+        setCopilotOpen(!copilotOpen);
+        if (grouped) setOverrides((m) => ({ ...m, [s.id]: true }));
+        return;
+      }
       // Navigate into the section (active or first leaf) and reveal its
       // children. The caret handles pure collapse without leaving the page.
       navigate(routeFor(s));

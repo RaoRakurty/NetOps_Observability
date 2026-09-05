@@ -1,0 +1,1067 @@
+# plans/nokia-srlinux.yaml — the Nokia SR Linux command plan for the TAC escalation pack.
+#
+# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven
+# by the loader (protocoldiag.ValidateReadOnly) and again by the runner. An
+# intent this dialect does not bind is simply ABSENT — the plan preview shows
+# it as unbound rather than rendering another vendor's command at this device.
+#
+# `verified: doc_claimed` means the vendor documents the command and Correlix
+# has not run it on this platform. `consent: true` marks a command the vendor
+# says is NOT routine (a core dump, a control-plane load, a file written on the
+# device): it never runs by default and never sits in a baseline.
+# `read_only_exception` is a CITED documented-status read whose text carries a
+# token the grammar refuses on sight.
+#
+# MACHINE-MERGED from ai/tac/research/*.yaml by scripts/tac-merge-research.py.
+schema_version: 1
+dialect: nokia-srlinux
+profile: nokia/srlinux
+display: Nokia SR Linux
+version: correlix-tac-plan-nokia-srlinux-2026-09-05
+
+# The dialect's default citation set. A doc_claimed binding inherits it.
+sources:
+  - title: 'SR Linux documentation portal (release index)'
+    url: https://documentation.nokia.com/srlinux/
+  - title: SR Linux R26.7 documentation home
+    url: https://documentation.nokia.com/srlinux/26-7/index.html
+  - title: SR Linux R26.7 - Monitor and troubleshoot
+    url: https://documentation.nokia.com/srlinux/26-7/html/product/Monitor.html
+  - title: SR Linux System Management Guide - CLI interface
+    url: https://documentation.nokia.com/srlinux/26-3/books/system-mgmt/cli-interface.html
+  - title: SR Linux R26.7 - General and operational commands
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html
+  - title: SR Linux R26.7 - Pre-defined show reports
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html
+  - title: Learn SR Linux - Show commands index
+    url: https://learn.srlinux.dev/cli/show-commands/
+  - title: Learn SR Linux - Troubleshooting BGP
+    url: https://learn.srlinux.dev/cli/show-commands/bgp/
+  - title: Learn SR Linux - OSPF show commands
+    url: https://learn.srlinux.dev/cli/show-commands/ospf/
+  - title: Learn SR Linux - IS-IS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/is-is/
+  - title: Learn SR Linux - Interface show commands
+    url: https://learn.srlinux.dev/cli/show-commands/interface/
+  - title: Learn SR Linux - LAG show commands
+    url: https://learn.srlinux.dev/cli/show-commands/lag/
+  - title: Learn SR Linux - EVPN show commands
+    url: https://learn.srlinux.dev/cli/show-commands/evpn/
+  - title: Learn SR Linux - Network-instance show commands
+    url: https://learn.srlinux.dev/cli/show-commands/network-instance/
+  - title: Learn SR Linux - ACL show commands
+    url: https://learn.srlinux.dev/cli/show-commands/acl/
+  - title: Learn SR Linux - CPM filter show commands
+    url: https://learn.srlinux.dev/cli/show-commands/cpm-filter/
+  - title: Learn SR Linux - DHCP relay show commands
+    url: https://learn.srlinux.dev/cli/show-commands/dhcp-relay/
+  - title: Learn SR Linux - TACACS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/tacacs/
+  - title: Learn SR Linux - Chassis and environment show commands
+    url: https://learn.srlinux.dev/cli/show-commands/chassis-and-env/
+  - title: Learn SR Linux - Getting started with the CLI
+    url: https://learn.srlinux.dev/get-started/cli/
+  - title: Learn SR Linux - EVPN multi-homing verification
+    url: https://learn.srlinux.dev/tutorials/evpn-mh/basics/verify/
+  - title: Learn SR Linux - L2 EVPN service
+    url: https://learn.srlinux.dev/tutorials/l2evpn/evpn/
+  - title: 'Learn SR Linux - L2 EVPN fabric (underlay)'
+    url: https://learn.srlinux.dev/tutorials/l2evpn/fabric/
+  - title: 'Learn SR Linux - L3 EVPN (RT5) instance'
+    url: https://learn.srlinux.dev/tutorials/l3evpn/rt5-only/l3evpn/
+  - title: Learn SR Linux - MPLS LDP tutorial
+    url: https://learn.srlinux.dev/tutorials/mpls/mpls-ldp/ldp/
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface status
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-statistics.html
+  - title: SR Linux R26.7 Interfaces Guide - MTU
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/mtu.html
+  - title: SR Linux R26.7 Interfaces Guide - LAG
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lag.html
+  - title: SR Linux R26.7 Interfaces Guide - LLDP
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lldp.html
+  - title: SR Linux R26.7 Interfaces Guide - IPv4 ARP and IPv6 ND
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/ipv4-arp-ipv6-nd.html
+  - title: SR Linux R26.7 Routing Protocols Guide - BGP
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/bgp.html
+  - title: SR Linux R26.7 Routing Protocols Guide - IS-IS
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/is-is.html
+  - title: SR Linux R26.7 Config Basics - SR Linux applications
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html
+  - title: SR Linux R26.7 Config Basics - Control plane resource monitoring
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/cpm-resources.html
+  - title: SR Linux R26.7 Config Basics - Configuration management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html
+  - title: SR Linux R26.7 Config Basics - System management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/system-management.html
+  - title: SR Linux R26.7 Config Basics - Securing access
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html
+  - title: SR Linux R26.7 Config Basics - Management servers
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/management-servers.html
+  - title: SR Linux R26.7 Config Basics - Logging
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/logg.html
+  - title: SR Linux R26.7 QoS Guide - Displaying QoS statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/display-qos-statistics.html
+  - title: SR Linux R26.7 QoS Guide - Buffer utilization display
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/buffer-utilization-display.html
+  - title: SR Linux R26.7 Log Events Guide - bgp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html
+  - title: SR Linux R26.7 Log Events Guide - ospf
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html
+  - title: SR Linux R26.7 Log Events Guide - isis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-isis.html
+  - title: SR Linux R26.7 Log Events Guide - lag
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lag.html
+  - title: SR Linux R26.7 Log Events Guide - chassis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html
+  - title: SR Linux R26.7 Log Events Guide - platform
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-platform.html
+  - title: SR Linux R26.7 Log Events Guide - evpn
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html
+  - title: SR Linux R26.7 Log Events Guide - bridgetable
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bridgetable.html
+  - title: SR Linux R26.7 Log Events Guide - arpnd
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-arpnd.html
+  - title: SR Linux R26.7 Log Events Guide - aaa
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-aaa.html
+  - title: SR Linux R26.7 Log Events Guide - ldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ldp.html
+  - title: SR Linux R26.7 Log Events Guide - dhcp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-dhcp.html
+  - title: SR Linux R26.7 Log Events Guide - qos
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-qos.html
+  - title: SR Linux R26.7 Log Events Guide - acl
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-acl.html
+  - title: SR Linux R26.7 Log Events Guide - linux
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html
+  - title: SR Linux R26.7 Log Events Guide - mgmt
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-mgmt.html
+  - title: SR Linux R26.7 Log Events Guide - netinst
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-netinst.html
+  - title: SR Linux R26.7 Log Events Guide - lldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lldp.html
+  - title: SR Linux R26.7 Log Events Guide - sync
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-sync.html
+  - title: 'SR Linux documentation portal (release index)'
+    url: https://documentation.nokia.com/srlinux/
+  - title: SR Linux R26.7 documentation home
+    url: https://documentation.nokia.com/srlinux/26-7/index.html
+  - title: SR Linux R26.7 - Monitor and troubleshoot
+    url: https://documentation.nokia.com/srlinux/26-7/html/product/Monitor.html
+  - title: SR Linux System Management Guide - CLI interface
+    url: https://documentation.nokia.com/srlinux/26-3/books/system-mgmt/cli-interface.html
+  - title: SR Linux R26.7 - General and operational commands
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html
+  - title: SR Linux R26.7 - Pre-defined show reports
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html
+  - title: Learn SR Linux - Show commands index
+    url: https://learn.srlinux.dev/cli/show-commands/
+  - title: Learn SR Linux - Troubleshooting BGP
+    url: https://learn.srlinux.dev/cli/show-commands/bgp/
+  - title: Learn SR Linux - OSPF show commands
+    url: https://learn.srlinux.dev/cli/show-commands/ospf/
+  - title: Learn SR Linux - IS-IS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/is-is/
+  - title: Learn SR Linux - Interface show commands
+    url: https://learn.srlinux.dev/cli/show-commands/interface/
+  - title: Learn SR Linux - LAG show commands
+    url: https://learn.srlinux.dev/cli/show-commands/lag/
+  - title: Learn SR Linux - EVPN show commands
+    url: https://learn.srlinux.dev/cli/show-commands/evpn/
+  - title: Learn SR Linux - Network-instance show commands
+    url: https://learn.srlinux.dev/cli/show-commands/network-instance/
+  - title: Learn SR Linux - ACL show commands
+    url: https://learn.srlinux.dev/cli/show-commands/acl/
+  - title: Learn SR Linux - CPM filter show commands
+    url: https://learn.srlinux.dev/cli/show-commands/cpm-filter/
+  - title: Learn SR Linux - DHCP relay show commands
+    url: https://learn.srlinux.dev/cli/show-commands/dhcp-relay/
+  - title: Learn SR Linux - TACACS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/tacacs/
+  - title: Learn SR Linux - Chassis and environment show commands
+    url: https://learn.srlinux.dev/cli/show-commands/chassis-and-env/
+  - title: Learn SR Linux - Getting started with the CLI
+    url: https://learn.srlinux.dev/get-started/cli/
+  - title: Learn SR Linux - EVPN multi-homing verification
+    url: https://learn.srlinux.dev/tutorials/evpn-mh/basics/verify/
+  - title: Learn SR Linux - L2 EVPN service
+    url: https://learn.srlinux.dev/tutorials/l2evpn/evpn/
+  - title: 'Learn SR Linux - L2 EVPN fabric (underlay)'
+    url: https://learn.srlinux.dev/tutorials/l2evpn/fabric/
+  - title: 'Learn SR Linux - L3 EVPN (RT5) instance'
+    url: https://learn.srlinux.dev/tutorials/l3evpn/rt5-only/l3evpn/
+  - title: Learn SR Linux - MPLS LDP tutorial
+    url: https://learn.srlinux.dev/tutorials/mpls/mpls-ldp/ldp/
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface status
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-statistics.html
+  - title: SR Linux R26.7 Interfaces Guide - MTU
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/mtu.html
+  - title: SR Linux R26.7 Interfaces Guide - LAG
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lag.html
+  - title: SR Linux R26.7 Interfaces Guide - LLDP
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lldp.html
+  - title: SR Linux R26.7 Interfaces Guide - IPv4 ARP and IPv6 ND
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/ipv4-arp-ipv6-nd.html
+  - title: SR Linux R26.7 Routing Protocols Guide - BGP
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/bgp.html
+  - title: SR Linux R26.7 Routing Protocols Guide - IS-IS
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/is-is.html
+  - title: SR Linux R26.7 Config Basics - SR Linux applications
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html
+  - title: SR Linux R26.7 Config Basics - Control plane resource monitoring
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/cpm-resources.html
+  - title: SR Linux R26.7 Config Basics - Configuration management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html
+  - title: SR Linux R26.7 Config Basics - System management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/system-management.html
+  - title: SR Linux R26.7 Config Basics - Securing access
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html
+  - title: SR Linux R26.7 Config Basics - Management servers
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/management-servers.html
+  - title: SR Linux R26.7 Config Basics - Logging
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/logg.html
+  - title: SR Linux R26.7 QoS Guide - Displaying QoS statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/display-qos-statistics.html
+  - title: SR Linux R26.7 QoS Guide - Buffer utilization display
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/buffer-utilization-display.html
+  - title: SR Linux R26.7 Log Events Guide - bgp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html
+  - title: SR Linux R26.7 Log Events Guide - ospf
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html
+  - title: SR Linux R26.7 Log Events Guide - isis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-isis.html
+  - title: SR Linux R26.7 Log Events Guide - lag
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lag.html
+  - title: SR Linux R26.7 Log Events Guide - chassis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html
+  - title: SR Linux R26.7 Log Events Guide - platform
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-platform.html
+  - title: SR Linux R26.7 Log Events Guide - evpn
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html
+  - title: SR Linux R26.7 Log Events Guide - bridgetable
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bridgetable.html
+  - title: SR Linux R26.7 Log Events Guide - arpnd
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-arpnd.html
+  - title: SR Linux R26.7 Log Events Guide - aaa
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-aaa.html
+  - title: SR Linux R26.7 Log Events Guide - ldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ldp.html
+  - title: SR Linux R26.7 Log Events Guide - dhcp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-dhcp.html
+  - title: SR Linux R26.7 Log Events Guide - qos
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-qos.html
+  - title: SR Linux R26.7 Log Events Guide - acl
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-acl.html
+  - title: SR Linux R26.7 Log Events Guide - linux
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html
+  - title: SR Linux R26.7 Log Events Guide - mgmt
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-mgmt.html
+  - title: SR Linux R26.7 Log Events Guide - netinst
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-netinst.html
+  - title: SR Linux R26.7 Log Events Guide - lldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lldp.html
+  - title: SR Linux R26.7 Log Events Guide - sync
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-sync.html
+  - title: 'SR Linux documentation portal (release index)'
+    url: https://documentation.nokia.com/srlinux/
+  - title: SR Linux R26.7 documentation home
+    url: https://documentation.nokia.com/srlinux/26-7/index.html
+  - title: SR Linux R26.7 - Monitor and troubleshoot
+    url: https://documentation.nokia.com/srlinux/26-7/html/product/Monitor.html
+  - title: SR Linux System Management Guide - CLI interface
+    url: https://documentation.nokia.com/srlinux/26-3/books/system-mgmt/cli-interface.html
+  - title: SR Linux R26.7 - General and operational commands
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html
+  - title: SR Linux R26.7 - Pre-defined show reports
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html
+  - title: Learn SR Linux - Show commands index
+    url: https://learn.srlinux.dev/cli/show-commands/
+  - title: Learn SR Linux - Troubleshooting BGP
+    url: https://learn.srlinux.dev/cli/show-commands/bgp/
+  - title: Learn SR Linux - OSPF show commands
+    url: https://learn.srlinux.dev/cli/show-commands/ospf/
+  - title: Learn SR Linux - IS-IS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/is-is/
+  - title: Learn SR Linux - Interface show commands
+    url: https://learn.srlinux.dev/cli/show-commands/interface/
+  - title: Learn SR Linux - LAG show commands
+    url: https://learn.srlinux.dev/cli/show-commands/lag/
+  - title: Learn SR Linux - EVPN show commands
+    url: https://learn.srlinux.dev/cli/show-commands/evpn/
+  - title: Learn SR Linux - Network-instance show commands
+    url: https://learn.srlinux.dev/cli/show-commands/network-instance/
+  - title: Learn SR Linux - ACL show commands
+    url: https://learn.srlinux.dev/cli/show-commands/acl/
+  - title: Learn SR Linux - CPM filter show commands
+    url: https://learn.srlinux.dev/cli/show-commands/cpm-filter/
+  - title: Learn SR Linux - DHCP relay show commands
+    url: https://learn.srlinux.dev/cli/show-commands/dhcp-relay/
+  - title: Learn SR Linux - TACACS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/tacacs/
+  - title: Learn SR Linux - Chassis and environment show commands
+    url: https://learn.srlinux.dev/cli/show-commands/chassis-and-env/
+  - title: Learn SR Linux - Getting started with the CLI
+    url: https://learn.srlinux.dev/get-started/cli/
+  - title: Learn SR Linux - EVPN multi-homing verification
+    url: https://learn.srlinux.dev/tutorials/evpn-mh/basics/verify/
+  - title: Learn SR Linux - L2 EVPN service
+    url: https://learn.srlinux.dev/tutorials/l2evpn/evpn/
+  - title: 'Learn SR Linux - L2 EVPN fabric (underlay)'
+    url: https://learn.srlinux.dev/tutorials/l2evpn/fabric/
+  - title: 'Learn SR Linux - L3 EVPN (RT5) instance'
+    url: https://learn.srlinux.dev/tutorials/l3evpn/rt5-only/l3evpn/
+  - title: Learn SR Linux - MPLS LDP tutorial
+    url: https://learn.srlinux.dev/tutorials/mpls/mpls-ldp/ldp/
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface status
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-statistics.html
+  - title: SR Linux R26.7 Interfaces Guide - MTU
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/mtu.html
+  - title: SR Linux R26.7 Interfaces Guide - LAG
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lag.html
+  - title: SR Linux R26.7 Interfaces Guide - LLDP
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lldp.html
+  - title: SR Linux R26.7 Interfaces Guide - IPv4 ARP and IPv6 ND
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/ipv4-arp-ipv6-nd.html
+  - title: SR Linux R26.7 Routing Protocols Guide - BGP
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/bgp.html
+  - title: SR Linux R26.7 Routing Protocols Guide - IS-IS
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/is-is.html
+  - title: SR Linux R26.7 Config Basics - SR Linux applications
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html
+  - title: SR Linux R26.7 Config Basics - Control plane resource monitoring
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/cpm-resources.html
+  - title: SR Linux R26.7 Config Basics - Configuration management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html
+  - title: SR Linux R26.7 Config Basics - System management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/system-management.html
+  - title: SR Linux R26.7 Config Basics - Securing access
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html
+  - title: SR Linux R26.7 Config Basics - Management servers
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/management-servers.html
+  - title: SR Linux R26.7 Config Basics - Logging
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/logg.html
+  - title: SR Linux R26.7 QoS Guide - Displaying QoS statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/display-qos-statistics.html
+  - title: SR Linux R26.7 QoS Guide - Buffer utilization display
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/buffer-utilization-display.html
+  - title: SR Linux R26.7 Log Events Guide - bgp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html
+  - title: SR Linux R26.7 Log Events Guide - ospf
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html
+  - title: SR Linux R26.7 Log Events Guide - isis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-isis.html
+  - title: SR Linux R26.7 Log Events Guide - lag
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lag.html
+  - title: SR Linux R26.7 Log Events Guide - chassis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html
+  - title: SR Linux R26.7 Log Events Guide - platform
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-platform.html
+  - title: SR Linux R26.7 Log Events Guide - evpn
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html
+  - title: SR Linux R26.7 Log Events Guide - bridgetable
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bridgetable.html
+  - title: SR Linux R26.7 Log Events Guide - arpnd
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-arpnd.html
+  - title: SR Linux R26.7 Log Events Guide - aaa
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-aaa.html
+  - title: SR Linux R26.7 Log Events Guide - ldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ldp.html
+  - title: SR Linux R26.7 Log Events Guide - dhcp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-dhcp.html
+  - title: SR Linux R26.7 Log Events Guide - qos
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-qos.html
+  - title: SR Linux R26.7 Log Events Guide - acl
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-acl.html
+  - title: SR Linux R26.7 Log Events Guide - linux
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html
+  - title: SR Linux R26.7 Log Events Guide - mgmt
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-mgmt.html
+  - title: SR Linux R26.7 Log Events Guide - netinst
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-netinst.html
+  - title: SR Linux R26.7 Log Events Guide - lldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lldp.html
+  - title: SR Linux R26.7 Log Events Guide - sync
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-sync.html
+  - title: 'SR Linux documentation portal (release index)'
+    url: https://documentation.nokia.com/srlinux/
+  - title: SR Linux R26.7 documentation home
+    url: https://documentation.nokia.com/srlinux/26-7/index.html
+  - title: SR Linux R26.7 - Monitor and troubleshoot
+    url: https://documentation.nokia.com/srlinux/26-7/html/product/Monitor.html
+  - title: SR Linux System Management Guide - CLI interface
+    url: https://documentation.nokia.com/srlinux/26-3/books/system-mgmt/cli-interface.html
+  - title: SR Linux R26.7 - General and operational commands
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html
+  - title: SR Linux R26.7 - Pre-defined show reports
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html
+  - title: Learn SR Linux - Show commands index
+    url: https://learn.srlinux.dev/cli/show-commands/
+  - title: Learn SR Linux - Troubleshooting BGP
+    url: https://learn.srlinux.dev/cli/show-commands/bgp/
+  - title: Learn SR Linux - OSPF show commands
+    url: https://learn.srlinux.dev/cli/show-commands/ospf/
+  - title: Learn SR Linux - IS-IS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/is-is/
+  - title: Learn SR Linux - Interface show commands
+    url: https://learn.srlinux.dev/cli/show-commands/interface/
+  - title: Learn SR Linux - LAG show commands
+    url: https://learn.srlinux.dev/cli/show-commands/lag/
+  - title: Learn SR Linux - EVPN show commands
+    url: https://learn.srlinux.dev/cli/show-commands/evpn/
+  - title: Learn SR Linux - Network-instance show commands
+    url: https://learn.srlinux.dev/cli/show-commands/network-instance/
+  - title: Learn SR Linux - ACL show commands
+    url: https://learn.srlinux.dev/cli/show-commands/acl/
+  - title: Learn SR Linux - CPM filter show commands
+    url: https://learn.srlinux.dev/cli/show-commands/cpm-filter/
+  - title: Learn SR Linux - DHCP relay show commands
+    url: https://learn.srlinux.dev/cli/show-commands/dhcp-relay/
+  - title: Learn SR Linux - TACACS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/tacacs/
+  - title: Learn SR Linux - Chassis and environment show commands
+    url: https://learn.srlinux.dev/cli/show-commands/chassis-and-env/
+  - title: Learn SR Linux - Getting started with the CLI
+    url: https://learn.srlinux.dev/get-started/cli/
+  - title: Learn SR Linux - EVPN multi-homing verification
+    url: https://learn.srlinux.dev/tutorials/evpn-mh/basics/verify/
+  - title: Learn SR Linux - L2 EVPN service
+    url: https://learn.srlinux.dev/tutorials/l2evpn/evpn/
+  - title: 'Learn SR Linux - L2 EVPN fabric (underlay)'
+    url: https://learn.srlinux.dev/tutorials/l2evpn/fabric/
+  - title: 'Learn SR Linux - L3 EVPN (RT5) instance'
+    url: https://learn.srlinux.dev/tutorials/l3evpn/rt5-only/l3evpn/
+  - title: Learn SR Linux - MPLS LDP tutorial
+    url: https://learn.srlinux.dev/tutorials/mpls/mpls-ldp/ldp/
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface status
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-statistics.html
+  - title: SR Linux R26.7 Interfaces Guide - MTU
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/mtu.html
+  - title: SR Linux R26.7 Interfaces Guide - LAG
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lag.html
+  - title: SR Linux R26.7 Interfaces Guide - LLDP
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lldp.html
+  - title: SR Linux R26.7 Interfaces Guide - IPv4 ARP and IPv6 ND
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/ipv4-arp-ipv6-nd.html
+  - title: SR Linux R26.7 Routing Protocols Guide - BGP
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/bgp.html
+  - title: SR Linux R26.7 Routing Protocols Guide - IS-IS
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/is-is.html
+  - title: SR Linux R26.7 Config Basics - SR Linux applications
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html
+  - title: SR Linux R26.7 Config Basics - Control plane resource monitoring
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/cpm-resources.html
+  - title: SR Linux R26.7 Config Basics - Configuration management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html
+  - title: SR Linux R26.7 Config Basics - System management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/system-management.html
+  - title: SR Linux R26.7 Config Basics - Securing access
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html
+  - title: SR Linux R26.7 Config Basics - Management servers
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/management-servers.html
+  - title: SR Linux R26.7 Config Basics - Logging
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/logg.html
+  - title: SR Linux R26.7 QoS Guide - Displaying QoS statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/display-qos-statistics.html
+  - title: SR Linux R26.7 QoS Guide - Buffer utilization display
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/buffer-utilization-display.html
+  - title: SR Linux R26.7 Log Events Guide - bgp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html
+  - title: SR Linux R26.7 Log Events Guide - ospf
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html
+  - title: SR Linux R26.7 Log Events Guide - isis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-isis.html
+  - title: SR Linux R26.7 Log Events Guide - lag
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lag.html
+  - title: SR Linux R26.7 Log Events Guide - chassis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html
+  - title: SR Linux R26.7 Log Events Guide - platform
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-platform.html
+  - title: SR Linux R26.7 Log Events Guide - evpn
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html
+  - title: SR Linux R26.7 Log Events Guide - bridgetable
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bridgetable.html
+  - title: SR Linux R26.7 Log Events Guide - arpnd
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-arpnd.html
+  - title: SR Linux R26.7 Log Events Guide - aaa
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-aaa.html
+  - title: SR Linux R26.7 Log Events Guide - ldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ldp.html
+  - title: SR Linux R26.7 Log Events Guide - dhcp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-dhcp.html
+  - title: SR Linux R26.7 Log Events Guide - qos
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-qos.html
+  - title: SR Linux R26.7 Log Events Guide - acl
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-acl.html
+  - title: SR Linux R26.7 Log Events Guide - linux
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html
+  - title: SR Linux R26.7 Log Events Guide - mgmt
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-mgmt.html
+  - title: SR Linux R26.7 Log Events Guide - netinst
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-netinst.html
+  - title: SR Linux R26.7 Log Events Guide - lldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lldp.html
+  - title: SR Linux R26.7 Log Events Guide - sync
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-sync.html
+  - title: 'SR Linux documentation portal (release index)'
+    url: https://documentation.nokia.com/srlinux/
+  - title: SR Linux R26.7 documentation home
+    url: https://documentation.nokia.com/srlinux/26-7/index.html
+  - title: SR Linux R26.7 - Monitor and troubleshoot
+    url: https://documentation.nokia.com/srlinux/26-7/html/product/Monitor.html
+  - title: SR Linux System Management Guide - CLI interface
+    url: https://documentation.nokia.com/srlinux/26-3/books/system-mgmt/cli-interface.html
+  - title: SR Linux R26.7 - General and operational commands
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html
+  - title: SR Linux R26.7 - Pre-defined show reports
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html
+  - title: Learn SR Linux - Show commands index
+    url: https://learn.srlinux.dev/cli/show-commands/
+  - title: Learn SR Linux - Troubleshooting BGP
+    url: https://learn.srlinux.dev/cli/show-commands/bgp/
+  - title: Learn SR Linux - OSPF show commands
+    url: https://learn.srlinux.dev/cli/show-commands/ospf/
+  - title: Learn SR Linux - IS-IS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/is-is/
+  - title: Learn SR Linux - Interface show commands
+    url: https://learn.srlinux.dev/cli/show-commands/interface/
+  - title: Learn SR Linux - LAG show commands
+    url: https://learn.srlinux.dev/cli/show-commands/lag/
+  - title: Learn SR Linux - EVPN show commands
+    url: https://learn.srlinux.dev/cli/show-commands/evpn/
+  - title: Learn SR Linux - Network-instance show commands
+    url: https://learn.srlinux.dev/cli/show-commands/network-instance/
+  - title: Learn SR Linux - ACL show commands
+    url: https://learn.srlinux.dev/cli/show-commands/acl/
+  - title: Learn SR Linux - CPM filter show commands
+    url: https://learn.srlinux.dev/cli/show-commands/cpm-filter/
+  - title: Learn SR Linux - DHCP relay show commands
+    url: https://learn.srlinux.dev/cli/show-commands/dhcp-relay/
+  - title: Learn SR Linux - TACACS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/tacacs/
+  - title: Learn SR Linux - Chassis and environment show commands
+    url: https://learn.srlinux.dev/cli/show-commands/chassis-and-env/
+  - title: Learn SR Linux - Getting started with the CLI
+    url: https://learn.srlinux.dev/get-started/cli/
+  - title: Learn SR Linux - EVPN multi-homing verification
+    url: https://learn.srlinux.dev/tutorials/evpn-mh/basics/verify/
+  - title: Learn SR Linux - L2 EVPN service
+    url: https://learn.srlinux.dev/tutorials/l2evpn/evpn/
+  - title: 'Learn SR Linux - L2 EVPN fabric (underlay)'
+    url: https://learn.srlinux.dev/tutorials/l2evpn/fabric/
+  - title: 'Learn SR Linux - L3 EVPN (RT5) instance'
+    url: https://learn.srlinux.dev/tutorials/l3evpn/rt5-only/l3evpn/
+  - title: Learn SR Linux - MPLS LDP tutorial
+    url: https://learn.srlinux.dev/tutorials/mpls/mpls-ldp/ldp/
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface status
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-statistics.html
+  - title: SR Linux R26.7 Interfaces Guide - MTU
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/mtu.html
+  - title: SR Linux R26.7 Interfaces Guide - LAG
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lag.html
+  - title: SR Linux R26.7 Interfaces Guide - LLDP
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lldp.html
+  - title: SR Linux R26.7 Interfaces Guide - IPv4 ARP and IPv6 ND
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/ipv4-arp-ipv6-nd.html
+  - title: SR Linux R26.7 Routing Protocols Guide - BGP
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/bgp.html
+  - title: SR Linux R26.7 Routing Protocols Guide - IS-IS
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/is-is.html
+  - title: SR Linux R26.7 Config Basics - SR Linux applications
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html
+  - title: SR Linux R26.7 Config Basics - Control plane resource monitoring
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/cpm-resources.html
+  - title: SR Linux R26.7 Config Basics - Configuration management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html
+  - title: SR Linux R26.7 Config Basics - System management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/system-management.html
+  - title: SR Linux R26.7 Config Basics - Securing access
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html
+  - title: SR Linux R26.7 Config Basics - Management servers
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/management-servers.html
+  - title: SR Linux R26.7 Config Basics - Logging
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/logg.html
+  - title: SR Linux R26.7 QoS Guide - Displaying QoS statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/display-qos-statistics.html
+  - title: SR Linux R26.7 QoS Guide - Buffer utilization display
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/buffer-utilization-display.html
+  - title: SR Linux R26.7 Log Events Guide - bgp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html
+  - title: SR Linux R26.7 Log Events Guide - ospf
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html
+  - title: SR Linux R26.7 Log Events Guide - isis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-isis.html
+  - title: SR Linux R26.7 Log Events Guide - lag
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lag.html
+  - title: SR Linux R26.7 Log Events Guide - chassis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html
+  - title: SR Linux R26.7 Log Events Guide - platform
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-platform.html
+  - title: SR Linux R26.7 Log Events Guide - evpn
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html
+  - title: SR Linux R26.7 Log Events Guide - bridgetable
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bridgetable.html
+  - title: SR Linux R26.7 Log Events Guide - arpnd
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-arpnd.html
+  - title: SR Linux R26.7 Log Events Guide - aaa
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-aaa.html
+  - title: SR Linux R26.7 Log Events Guide - ldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ldp.html
+  - title: SR Linux R26.7 Log Events Guide - dhcp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-dhcp.html
+  - title: SR Linux R26.7 Log Events Guide - qos
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-qos.html
+  - title: SR Linux R26.7 Log Events Guide - acl
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-acl.html
+  - title: SR Linux R26.7 Log Events Guide - linux
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html
+  - title: SR Linux R26.7 Log Events Guide - mgmt
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-mgmt.html
+  - title: SR Linux R26.7 Log Events Guide - netinst
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-netinst.html
+  - title: SR Linux R26.7 Log Events Guide - lldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lldp.html
+  - title: SR Linux R26.7 Log Events Guide - sync
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-sync.html
+  - title: 'SR Linux documentation portal (release index)'
+    url: https://documentation.nokia.com/srlinux/
+  - title: SR Linux R26.7 documentation home
+    url: https://documentation.nokia.com/srlinux/26-7/index.html
+  - title: SR Linux R26.7 - Monitor and troubleshoot
+    url: https://documentation.nokia.com/srlinux/26-7/html/product/Monitor.html
+  - title: SR Linux System Management Guide - CLI interface
+    url: https://documentation.nokia.com/srlinux/26-3/books/system-mgmt/cli-interface.html
+  - title: SR Linux R26.7 - General and operational commands
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html
+  - title: SR Linux R26.7 - Pre-defined show reports
+    url: https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/pre-defined-show-reports.html
+  - title: Learn SR Linux - Show commands index
+    url: https://learn.srlinux.dev/cli/show-commands/
+  - title: Learn SR Linux - Troubleshooting BGP
+    url: https://learn.srlinux.dev/cli/show-commands/bgp/
+  - title: Learn SR Linux - OSPF show commands
+    url: https://learn.srlinux.dev/cli/show-commands/ospf/
+  - title: Learn SR Linux - IS-IS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/is-is/
+  - title: Learn SR Linux - Interface show commands
+    url: https://learn.srlinux.dev/cli/show-commands/interface/
+  - title: Learn SR Linux - LAG show commands
+    url: https://learn.srlinux.dev/cli/show-commands/lag/
+  - title: Learn SR Linux - EVPN show commands
+    url: https://learn.srlinux.dev/cli/show-commands/evpn/
+  - title: Learn SR Linux - Network-instance show commands
+    url: https://learn.srlinux.dev/cli/show-commands/network-instance/
+  - title: Learn SR Linux - ACL show commands
+    url: https://learn.srlinux.dev/cli/show-commands/acl/
+  - title: Learn SR Linux - CPM filter show commands
+    url: https://learn.srlinux.dev/cli/show-commands/cpm-filter/
+  - title: Learn SR Linux - DHCP relay show commands
+    url: https://learn.srlinux.dev/cli/show-commands/dhcp-relay/
+  - title: Learn SR Linux - TACACS show commands
+    url: https://learn.srlinux.dev/cli/show-commands/tacacs/
+  - title: Learn SR Linux - Chassis and environment show commands
+    url: https://learn.srlinux.dev/cli/show-commands/chassis-and-env/
+  - title: Learn SR Linux - Getting started with the CLI
+    url: https://learn.srlinux.dev/get-started/cli/
+  - title: Learn SR Linux - EVPN multi-homing verification
+    url: https://learn.srlinux.dev/tutorials/evpn-mh/basics/verify/
+  - title: Learn SR Linux - L2 EVPN service
+    url: https://learn.srlinux.dev/tutorials/l2evpn/evpn/
+  - title: 'Learn SR Linux - L2 EVPN fabric (underlay)'
+    url: https://learn.srlinux.dev/tutorials/l2evpn/fabric/
+  - title: 'Learn SR Linux - L3 EVPN (RT5) instance'
+    url: https://learn.srlinux.dev/tutorials/l3evpn/rt5-only/l3evpn/
+  - title: Learn SR Linux - MPLS LDP tutorial
+    url: https://learn.srlinux.dev/tutorials/mpls/mpls-ldp/ldp/
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface status
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-status.html
+  - title: SR Linux R26.7 Interfaces Guide - Displaying interface statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/display-interface-statistics.html
+  - title: SR Linux R26.7 Interfaces Guide - MTU
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/mtu.html
+  - title: SR Linux R26.7 Interfaces Guide - LAG
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lag.html
+  - title: SR Linux R26.7 Interfaces Guide - LLDP
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/lldp.html
+  - title: SR Linux R26.7 Interfaces Guide - IPv4 ARP and IPv6 ND
+    url: https://documentation.nokia.com/srlinux/26-7/books/interfaces/ipv4-arp-ipv6-nd.html
+  - title: SR Linux R26.7 Routing Protocols Guide - BGP
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/bgp.html
+  - title: SR Linux R26.7 Routing Protocols Guide - IS-IS
+    url: https://documentation.nokia.com/srlinux/26-7/books/routing-protocols/is-is.html
+  - title: SR Linux R26.7 Config Basics - SR Linux applications
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/sr-linux-applications.html
+  - title: SR Linux R26.7 Config Basics - Control plane resource monitoring
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/cpm-resources.html
+  - title: SR Linux R26.7 Config Basics - Configuration management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html
+  - title: SR Linux R26.7 Config Basics - System management
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/system-management.html
+  - title: SR Linux R26.7 Config Basics - Securing access
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html
+  - title: SR Linux R26.7 Config Basics - Management servers
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/management-servers.html
+  - title: SR Linux R26.7 Config Basics - Logging
+    url: https://documentation.nokia.com/srlinux/26-7/books/config-basics/logg.html
+  - title: SR Linux R26.7 QoS Guide - Displaying QoS statistics
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/display-qos-statistics.html
+  - title: SR Linux R26.7 QoS Guide - Buffer utilization display
+    url: https://documentation.nokia.com/srlinux/26-7/books/qos/buffer-utilization-display.html
+  - title: SR Linux R26.7 Log Events Guide - bgp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bgp.html
+  - title: SR Linux R26.7 Log Events Guide - ospf
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ospf.html
+  - title: SR Linux R26.7 Log Events Guide - isis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-isis.html
+  - title: SR Linux R26.7 Log Events Guide - lag
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lag.html
+  - title: SR Linux R26.7 Log Events Guide - chassis
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-chassis.html
+  - title: SR Linux R26.7 Log Events Guide - platform
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-platform.html
+  - title: SR Linux R26.7 Log Events Guide - evpn
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-evpn.html
+  - title: SR Linux R26.7 Log Events Guide - bridgetable
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-bridgetable.html
+  - title: SR Linux R26.7 Log Events Guide - arpnd
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-arpnd.html
+  - title: SR Linux R26.7 Log Events Guide - aaa
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-aaa.html
+  - title: SR Linux R26.7 Log Events Guide - ldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-ldp.html
+  - title: SR Linux R26.7 Log Events Guide - dhcp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-dhcp.html
+  - title: SR Linux R26.7 Log Events Guide - qos
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-qos.html
+  - title: SR Linux R26.7 Log Events Guide - acl
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-acl.html
+  - title: SR Linux R26.7 Log Events Guide - linux
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-linux.html
+  - title: SR Linux R26.7 Log Events Guide - mgmt
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-mgmt.html
+  - title: SR Linux R26.7 Log Events Guide - netinst
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-netinst.html
+  - title: SR Linux R26.7 Log Events Guide - lldp
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-lldp.html
+  - title: SR Linux R26.7 Log Events Guide - sync
+    url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-sync.html
+
+# baseline — collected for EVERY class: the vendor-standard set a TAC engineer
+# opens before anything issue-specific.
+baseline:
+  - platform.version
+  - platform.system-info
+  - platform.components
+  - platform.chassis
+  - platform.environment
+  - platform.resource-monitoring
+  - system.alarms
+  - system.processes
+  - interface.brief
+  - logging.recent
+  - config.running
+  - vrf.summary
+
+bindings:
+  platform.version:
+    command: show version
+    verified: doc_claimed
+  platform.system-info:
+    command: info from state /system information
+    verified: doc_claimed
+  platform.components:
+    command: show platform
+    verified: doc_claimed
+  platform.chassis:
+    command: show platform chassis
+    verified: doc_claimed
+  platform.environment:
+    command: show platform environment
+    verified: doc_claimed
+  platform.resource-monitoring:
+    command: show platform resource-monitoring
+    verified: doc_claimed
+  system.alarms:
+    command: show system alarms
+    verified: doc_claimed
+  system.processes:
+    command: show system application
+    verified: doc_claimed
+  interface.brief:
+    command: show interface brief
+    verified: doc_claimed
+  logging.recent:
+    command: show system logging file messages
+    verified: doc_claimed
+  config.running:
+    command: info
+    verified: doc_claimed
+  interface.all:
+    command: show interface all
+    verified: doc_claimed
+  interface.detail.all:
+    command: show interface detail
+    verified: doc_claimed
+  arp.entries:
+    command: show arpnd arp-entries
+    verified: doc_claimed
+  platform.fan-tray:
+    command: show platform fan-tray
+    verified: doc_claimed
+  platform.control.detail:
+    command: 'show platform control * detail'
+    verified: doc_claimed
+  platform.power-supply:
+    command: show platform power-supply
+    verified: doc_claimed
+  platform.fabric.detail:
+    command: 'show platform fabric * detail'
+    verified: doc_claimed
+  platform.redundancy:
+    command: show platform redundancy
+    verified: doc_claimed
+  system.cpu:
+    command: 'show platform control * detail'
+    verified: doc_claimed
+  system.utilization:
+    command: 'info with-context from state system utilization resource *'
+    verified: doc_claimed
+  system.app.cgroup:
+    command: 'info from state system app-management application * cgroup'
+    verified: doc_claimed
+  system.memory:
+    command: 'show platform control * detail'
+    verified: doc_claimed
+  logging.files:
+    command: show system logging
+    verified: doc_claimed
+  system.app.oom-score:
+    command: 'info with-context from state system app-management application * oom-score-adj'
+    verified: doc_claimed
+  qos.queue.detail:
+    command: show interface queue-detail
+    verified: doc_claimed
+  qos.mismatches:
+    command: show qos interfaces mismatches
+    verified: doc_claimed
+  config.running.flat:
+    command: info flat
+    verified: doc_claimed
+  config.running.detail:
+    command: info detail
+    verified: doc_claimed
+  config.system.settings:
+    command: info with-context system configuration
+    verified: doc_claimed
+  config.checkpoint.state:
+    command: info from state system configuration checkpoint 0
+    verified: doc_claimed
+  logging.buffer:
+    command: show system logging buffer messages
+    verified: doc_claimed
+  logging.file.list:
+    command: show system logging file
+    verified: doc_claimed
+  logging.buffer.list:
+    command: show system logging buffer
+    verified: doc_claimed
+  vrf.summary:
+    command: show network-instance summary
+    verified: doc_claimed
+  acl.cpm-filter:
+    command: show acl cpm-filter ipv4-filter
+    verified: doc_claimed
+  lag.summary:
+    command: show lag
+    verified: doc_claimed
+  lag.lacp.statistics:
+    command: show lag lacp-statistics
+    verified: doc_claimed
+  evpn.vxlan-interface.brief:
+    command: show tunnel-interface vxlan-interface brief
+    verified: doc_claimed
+  evpn.vxlan-tunnels:
+    command: show tunnel vxlan-tunnel all
+    verified: doc_claimed
+  evpn.vxlan-tunnel.state:
+    command: info from state /tunnel vxlan-tunnel
+    verified: doc_claimed
+  evpn.ethernet-segments:
+    command: show system network-instance ethernet-segments
+    verified: doc_claimed
+  nd.neighbors:
+    command: show arpnd neighbors
+    verified: doc_claimed
+  acl.summary:
+    command: show acl summary
+    verified: doc_claimed
+  ntp.config:
+    command: info with-context system ntp
+    verified: doc_claimed
+  aaa.sessions:
+    command: show system aaa authentication session
+    verified: doc_claimed
+  aaa.config:
+    command: info with-context system aaa
+    verified: doc_claimed
+  bgp.summary:
+    command: 'show network-instance {vrf-scope} protocols bgp summary'
+    verified: doc_claimed
+  bgp.neighbors:
+    command: 'show network-instance {vrf-scope} protocols bgp neighbor'
+    verified: doc_claimed
+  bgp.neighbor.detail:
+    command: 'show network-instance {vrf-scope} protocols bgp neighbor {peer} detail'
+    verified: doc_claimed
+  route.prefix:
+    command: 'show network-instance {vrf-scope} route-table ipv4-unicast prefix {prefix} detail'
+    verified: doc_claimed
+  vrf.interfaces:
+    command: 'show network-instance {vrf-scope} interfaces'
+    verified: doc_claimed
+  bgp.statistics:
+    command: 'info from state network-instance {vrf-scope} protocols bgp statistics'
+    verified: doc_claimed
+  bgp.graceful-restart:
+    command: 'info from state network-instance {vrf-scope} protocols bgp graceful-restart'
+    verified: doc_claimed
+  interface.detail:
+    command: 'show interface {if} detail'
+    verified: doc_claimed
+  bgp.afi-safi.state:
+    command: 'info from state network-instance {vrf-scope} protocols bgp neighbor afi-safi'
+    verified: doc_claimed
+  bgp.neighbor.received-routes:
+    command: 'show network-instance {vrf-scope} protocols bgp neighbor {peer} received-routes ipv4'
+    verified: doc_claimed
+  bgp.routes.summary:
+    command: 'show network-instance {vrf-scope} protocols bgp routes ipv4 summary'
+    verified: doc_claimed
+  route.table.summary:
+    command: 'show network-instance {vrf-scope} route-table summary'
+    verified: doc_claimed
+  bgp.rib.in-post:
+    command: 'info from state network-instance {vrf-scope} bgp-rib afi-safi ipv4-unicast ipv4-unicast rib-in-out rib-in-post route'
+    verified: doc_claimed
+  bgp.rib.local:
+    command: 'info from state network-instance {vrf-scope} bgp-rib afi-safi ipv4-unicast ipv4-unicast local-rib route'
+    verified: doc_claimed
+  bgp.neighbor.advertised-routes:
+    command: 'show network-instance {vrf-scope} protocols bgp neighbor {peer} advertised-routes ipv4'
+    verified: doc_claimed
+  ospf.neighbors:
+    command: 'show network-instance {vrf-scope} protocols ospf neighbor'
+    verified: doc_claimed
+  ospf.status:
+    command: 'show network-instance {vrf-scope} protocols ospf status'
+    verified: doc_claimed
+  ospf.statistics:
+    command: 'show network-instance {vrf-scope} protocols ospf statistics'
+    verified: doc_claimed
+  vrf.config:
+    command: 'info with-context network-instance {vrf-scope}'
+    verified: doc_claimed
+  interface.state:
+    command: 'info with-context from state interface {if}'
+    verified: doc_claimed
+  ospf.database:
+    command: 'show network-instance {vrf-scope} protocols ospf database'
+    verified: doc_claimed
+  isis.adjacency:
+    command: 'show network-instance {vrf-scope} protocols isis adjacency'
+    verified: doc_claimed
+  isis.summary:
+    command: 'show network-instance {vrf-scope} protocols isis summary'
+    verified: doc_claimed
+  isis.interfaces:
+    command: 'show network-instance {vrf-scope} protocols isis interface'
+    verified: doc_claimed
+  isis.interface.detail:
+    command: 'show network-instance {vrf-scope} protocols isis interface {if} detail'
+    verified: doc_claimed
+  isis.instance.state:
+    command: 'info from state network-instance {vrf-scope} protocols isis instance {vrf-scope}'
+    verified: doc_claimed
+  isis.database:
+    command: 'show network-instance {vrf-scope} protocols isis database'
+    verified: doc_claimed
+  interface.status:
+    command: 'show interface {if}'
+    verified: doc_claimed
+  interface.brief.one:
+    command: 'show interface {if} brief'
+    verified: doc_claimed
+  optics.dom:
+    command: 'show interface {if} detail'
+    verified: doc_claimed
+  evpn.route-type2.summary:
+    command: 'show network-instance {vrf-scope} protocols bgp routes evpn route-type 2 summary'
+    verified: doc_claimed
+  evpn.neighbor.received:
+    command: 'show network-instance {vrf-scope} protocols bgp neighbor {peer} received-routes evpn'
+    verified: doc_claimed
+  tunnel.table:
+    command: 'show network-instance {vrf-scope} tunnel-table all'
+    verified: doc_claimed
+  evpn.route-type3.summary:
+    command: 'show network-instance {vrf-scope} protocols bgp routes evpn route-type 3 summary'
+    verified: doc_claimed
+  evpn.route-type3.detail:
+    command: 'show network-instance {vrf-scope} protocols bgp routes evpn route-type 3 detail'
+    verified: doc_claimed
+  evpn.neighbor.advertised:
+    command: 'show network-instance {vrf-scope} protocols bgp neighbor {peer} advertised-routes evpn'
+    verified: doc_claimed
+  evpn.routes.summary:
+    command: 'show network-instance {vrf-scope} protocols bgp routes evpn route-type summary'
+    verified: doc_claimed
+  evpn.route-type5.summary:
+    command: 'show network-instance {vrf-scope} protocols bgp routes evpn route-type 5 summary'
+    verified: doc_claimed
+  evpn.route-type5.detail:
+    command: 'show network-instance {vrf-scope} protocols bgp routes evpn route-type 5 prefix {prefix} detail'
+    verified: doc_claimed
+  route.table:
+    command: 'show network-instance {vrf-scope} route-table'
+    verified: doc_claimed
+  arp.entries.interface:
+    command: 'show arpnd arp-entries interface {if}'
+    verified: doc_claimed
+  nd.neighbors.interface:
+    command: 'show arpnd neighbors interface {if}'
+    verified: doc_claimed
+  qos.queue.statistics:
+    command: 'show interface {if} queue-statistics'
+    verified: doc_claimed
+  qos.queue.statistics.member:
+    command: 'info from state qos interfaces interface {if} output queues queue * queue-statistics'
+    verified: doc_claimed
+  mpls.ldp.neighbors:
+    command: 'show network-instance {vrf-scope} protocols ldp neighbor'
+    verified: doc_claimed
+  mpls.ldp.sessions:
+    command: 'show network-instance {vrf-scope} protocols ldp session'
+    verified: doc_claimed
+  mpls.ldp.fec:
+    command: 'show network-instance {vrf-scope} protocols ldp ipv4 fec'
+    verified: doc_claimed
+  mpls.route-table:
+    command: 'show network-instance {vrf-scope} route-table mpls'
+    verified: doc_claimed
+  mpls.aft:
+    command: 'show mpls-aft network-instance {vrf-scope}'
+    verified: doc_claimed
+  route.table.ipv4:
+    command: 'show network-instance {vrf-scope} ipv4 route'
+    verified: doc_claimed
+  ssh-server.config:
+    command: info with-context system ssh-server
+    verified: doc_claimed

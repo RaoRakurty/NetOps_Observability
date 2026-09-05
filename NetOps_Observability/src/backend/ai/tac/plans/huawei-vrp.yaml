@@ -1,0 +1,733 @@
+# plans/huawei-vrp.yaml — the Huawei VRP command plan for the TAC escalation pack.
+#
+# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven
+# by the loader (protocoldiag.ValidateReadOnly) and again by the runner. An
+# intent this dialect does not bind is simply ABSENT — the plan preview shows
+# it as unbound rather than rendering another vendor's command at this device.
+#
+# `verified: doc_claimed` means the vendor documents the command and Correlix
+# has not run it on this platform. `consent: true` marks a command the vendor
+# says is NOT routine (a core dump, a control-plane load, a file written on the
+# device): it never runs by default and never sits in a baseline.
+# `read_only_exception` is a CITED documented-status read whose text carries a
+# token the grammar refuses on sight.
+#
+# MACHINE-MERGED from ai/tac/research/*.yaml by scripts/tac-merge-research.py.
+schema_version: 1
+dialect: huawei-vrp
+profile: huawei/vrp
+display: Huawei VRP
+version: correlix-tac-plan-huawei-vrp-2026-09-05
+
+# The dialect's default citation set. A doc_claimed binding inherits it.
+sources:
+  - title: Huawei VRP Command Reference
+    url: https://support.huawei.com/enterprise/en/index.html
+    retrieved: 2026-09-05
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
+  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
+  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
+  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
+  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
+  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
+  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
+  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
+  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
+  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
+  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
+  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
+  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
+  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
+  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
+  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
+  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
+    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
+
+# baseline — collected for EVERY class: the vendor-standard set a TAC engineer
+# opens before anything issue-specific.
+baseline:
+  - system.version
+  - system.inventory
+  - system.uptime
+  - hardware.environment
+  - interface.brief
+  - route.summary
+  - logging.recent
+  - config.running
+  - platform.version
+  - platform.boot-config
+  - platform.patch
+  - platform.clock
+  - platform.environment
+  - platform.environment.detail
+  - platform.inventory
+  - platform.inventory.subcards
+  - platform.inventory.serial
+  - platform.board-reset-history
+  - platform.board-reset-history.cards
+  - platform.redundancy
+  - system.cpu
+  - system.memory
+  - interface.summary
+  - interface.detail
+  - logging.traps
+  - config.startup
+  - config.restore-result
+  - config.commit.diff
+  - config.commit.history
+  - platform.license
+  - alarms.hardware
+  - alarms.hardware.history
+  - alarms.active
+  - alarms.history
+  - filesystem.list
+
+# optional — off by default: large and slow captures the operator opts into.
+optional:
+  - tech.support
+
+bindings:
+  system.version:
+    command: display version
+    verified: doc_claimed
+  system.inventory:
+    command: display device
+    verified: doc_claimed
+  system.uptime:
+    command: display version
+    verified: doc_claimed
+  hardware.environment:
+    command: display environment
+    verified: doc_claimed
+  interface.brief:
+    command: display interface brief
+    verified: doc_claimed
+  route.summary:
+    command: display ip routing-table statistics
+    verified: doc_claimed
+  logging.recent:
+    command: display logbuffer
+    verified: doc_claimed
+  config.running:
+    command: display current-configuration
+    verified: doc_claimed
+  tech.support:
+    command: display diagnostic-information
+    verified: doc_claimed
+  platform.version:
+    command: display version
+    verified: doc_claimed
+  platform.boot-config:
+    command: display startup
+    verified: doc_claimed
+  platform.patch:
+    command: display patch-information
+    verified: doc_claimed
+  platform.clock:
+    command: display clock
+    verified: doc_claimed
+  platform.environment:
+    command: display health
+    verified: doc_claimed
+  platform.environment.detail:
+    command: display health verbose
+    verified: doc_claimed
+  platform.inventory:
+    command: display device
+    verified: doc_claimed
+  platform.inventory.subcards:
+    command: display device pic-status
+    verified: doc_claimed
+  platform.inventory.serial:
+    command: display device elabel
+    verified: doc_claimed
+  platform.board-reset-history:
+    command: display board-reset all
+    verified: doc_claimed
+  platform.board-reset-history.cards:
+    command: display board-reset card all
+    verified: doc_claimed
+  platform.redundancy:
+    command: display switchover state
+    verified: doc_claimed
+  system.cpu:
+    command: display cpu-usage
+    verified: doc_claimed
+  system.memory:
+    command: display memory-usage
+    verified: doc_claimed
+  interface.summary:
+    command: display interface brief main
+    verified: doc_claimed
+  interface.detail:
+    command: display interface
+    verified: doc_claimed
+  logging.traps:
+    command: display trapbuffer
+    verified: doc_claimed
+  config.startup:
+    command: display saved-configuration
+    verified: doc_claimed
+  config.restore-result:
+    command: display configuration recover-result
+    verified: doc_claimed
+  config.commit.diff:
+    command: display configuration commit changes
+    verified: doc_claimed
+  config.commit.history:
+    command: display configuration commit list
+    verified: doc_claimed
+  platform.license:
+    command: display license
+    verified: doc_claimed
+  bgp.summary:
+    command: display bgp peer
+    verified: doc_claimed
+  bgp.troubleshooting:
+    command: display bgp troubleshooting
+    verified: doc_claimed
+  bgp.neighbor.log:
+    command: 'display bgp peer {peer} log-info'
+    verified: doc_claimed
+  bgp.summary.ipv6:
+    command: display bgp ipv6 peer
+    verified: doc_claimed
+  bgp.summary.vpnv4:
+    command: display bgp vpnv4 all peer
+    verified: doc_claimed
+  bgp.summary.vpnv6:
+    command: display bgp vpnv6 all peer
+    verified: doc_claimed
+  bgp.summary.evpn:
+    command: display bgp evpn peer
+    verified: doc_claimed
+  route.prefix.detail:
+    command: 'display ip routing-table {peer} verbose'
+    verified: doc_claimed
+  config.protocol.bgp:
+    command: display current-configuration configuration bgp
+    verified: doc_claimed
+  route.prefix:
+    command: 'display ip routing-table {prefix}'
+    verified: doc_claimed
+  bgp.route.vpnv4:
+    command: 'display bgp vpnv4 all routing-table {prefix}'
+    verified: doc_claimed
+  bgp.neighbor.received:
+    command: 'display bgp vpnv4 all routing-table peer {peer} received-routes'
+    verified: doc_claimed
+  bgp.neighbor.advertised:
+    command: 'display bgp vpnv4 all routing-table peer {peer} advertised-routes'
+    verified: doc_claimed
+  config.route-policy:
+    command: display current-configuration configuration route-policy
+    verified: doc_claimed
+  config.protocol.bgp.peer:
+    command: 'display current-configuration configuration bgp | include peer {peer}'
+    verified: doc_claimed
+  ospf.neighbors:
+    command: display ospf peer
+    verified: doc_claimed
+  ospf.neighbors.last-down:
+    command: display ospf peer last-nbr-down
+    verified: doc_claimed
+  ospf.troubleshooting:
+    command: display ospf troubleshooting
+    verified: doc_claimed
+  ospf.interfaces:
+    command: display ospf interface
+    verified: doc_claimed
+  ospf.summary:
+    command: display ospf brief
+    verified: doc_claimed
+  ospf.errors:
+    command: display ospf error
+    verified: doc_claimed
+  ospf.statistics:
+    command: display ospf cumulative
+    verified: doc_claimed
+  config.protocol.ospf:
+    command: display current-configuration configuration ospf
+    verified: doc_claimed
+  ospf.database:
+    command: display ospf lsdb
+    verified: doc_claimed
+  ospf.routes:
+    command: display ospf routing
+    verified: doc_claimed
+  platform.router-id:
+    command: display router id
+    verified: doc_claimed
+  ospf.neighbors.v3:
+    command: display ospfv3 peer
+    verified: doc_claimed
+  ospf.neighbors.v3.last-down:
+    command: display ospfv3 peer last-nbr-down
+    verified: doc_claimed
+  ospf.troubleshooting.v3:
+    command: display ospfv3 troubleshooting
+    verified: doc_claimed
+  ospf.interfaces.v3:
+    command: display ospfv3 interface
+    verified: doc_claimed
+  isis.adjacency:
+    command: display isis peer
+    verified: doc_claimed
+  isis.adjacency.detail:
+    command: display isis peer verbose
+    verified: doc_claimed
+  isis.adjacency.last-change:
+    command: display isis last-peer-change
+    verified: doc_claimed
+  isis.troubleshooting:
+    command: display isis troubleshooting
+    verified: doc_claimed
+  isis.summary:
+    command: display isis brief
+    verified: doc_claimed
+  isis.defaults:
+    command: display default-parameter isis
+    verified: doc_claimed
+  config.protocol.isis:
+    command: display current-configuration configuration isis
+    verified: doc_claimed
+  isis.routes:
+    command: display isis route
+    verified: doc_claimed
+  isis.database:
+    command: display isis lsdb
+    verified: doc_claimed
+  isis.database.detail:
+    command: display isis lsdb verbose
+    verified: doc_claimed
+  isis.database.local:
+    command: display isis lsdb verbose local
+    verified: doc_claimed
+  mpls.lsp:
+    command: display mpls lsp
+    verified: doc_claimed
+  interface.summary.main:
+    command: display interface brief main
+    verified: doc_claimed
+  platform.power:
+    command: display power
+    verified: doc_claimed
+  platform.temperature:
+    command: display temperature
+    verified: doc_claimed
+  platform.voltage:
+    command: display voltage
+    verified: doc_claimed
+  config.cpu-defend:
+    command: display current-configuration configuration cpu-defend-policy
+    verified: doc_claimed
+  mpls.te.tunnels:
+    command: display mpls te tunnel-interface
+    verified: doc_claimed
+  mpls.te.path:
+    command: display mpls te tunnel path
+    verified: doc_claimed
+  mpls.bfd.session:
+    command: display mpls bfd session
+    verified: doc_claimed
+  arp.network:
+    command: 'display arp network {prefix}'
+    verified: doc_claimed
+  route.prefix.ipv6:
+    command: 'display ipv6 routing-table {prefix}'
+    verified: doc_claimed
+  interface.error-down:
+    command: display error-down recovery
+    verified: doc_claimed
+  mlag.dfs-group:
+    command: display dfs-group
+    verified: doc_claimed
+  mlag.consistency.global:
+    command: display dfs-group consistency-check global
+    verified: doc_claimed
+  mlag.consistency:
+    command: display dfs-group consistency-check
+    verified: doc_claimed
+  config.protocol.bfd:
+    command: display current-configuration configuration bfd
+    verified: doc_claimed
+  stp.brief:
+    command: display stp brief
+    verified: doc_claimed
+  stp.region:
+    command: display stp region-configuration
+    verified: doc_claimed
+  stp.abnormal-interfaces:
+    command: display stp abnormal-interface
+    verified: doc_claimed
+  stp.tc.statistics:
+    command: display stp tc-bpdu statistics
+    verified: doc_claimed
+  stp.topology-change:
+    command: display stp topology-change
+    verified: doc_claimed
+  arp.table:
+    command: display arp
+    verified: doc_claimed
+  config.cpu-defend.grep:
+    command: 'display current-configuration | include cpu-defend'
+    verified: doc_claimed
+  arp.history:
+    command: display arp history
+    verified: doc_claimed
+  arp.conflicts:
+    command: display arp ip-conflict track
+    verified: doc_claimed
+  alarms.hardware:
+    command: display alarm hardware
+    verified: doc_claimed
+  alarms.hardware.history:
+    command: display alarm hardware history all
+    verified: doc_claimed
+  alarms.active:
+    command: display alarm active
+    verified: doc_claimed
+  alarms.history:
+    command: display alarm history
+    verified: doc_claimed
+  filesystem.list:
+    command: dir
+    verified: doc_claimed
+    read_only_exception: >-
+      lists the storage device so the operator can confirm a diagnostic file was
+      written; Huawei's own collection procedure uses it
+    sources:
+      - title: 'Huawei VRP — collecting fault information'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/c4073c75/collecting-fault-information
+  support.techsupport.terminal:
+    command: display diagnostic-information
+    verified: doc_claimed
+    consent: true
+    consent_note: >-
+      Huawei warns that this markedly raises CPU and degrades device
+      performance, and that its output contains personal data (MAC addresses)
+      that must be deleted after use.
+  acl.all:
+    command: display acl all
+    verified: doc_claimed
+  cpp.statistics:
+    command: display cpu-defend statistics all
+    verified: doc_claimed
+  cpp.rate:
+    command: display cpu-defend rate all
+    verified: doc_claimed
+  cpp.car:
+    command: display cpu-defend car
+    verified: doc_claimed
+  cpp.auto-port-defend:
+    command: display cpu-defend auto-port-defend statistics
+    verified: doc_claimed
+  cpp.auto-source-trace:
+    command: display auto-source-trace record
+    verified: doc_claimed
+  cpp.ma-defend.statistics:
+    command: display cpu-defend ma-defend statistics
+    verified: doc_claimed
+  cpp.ma-defend.policy.global:
+    command: display ma-defend global-policy
+    verified: doc_claimed
+  ldp.session:
+    command: display mpls ldp session
+    verified: doc_claimed
+  ldp.peer:
+    command: display mpls ldp peer
+    verified: doc_claimed
+  ldp.interface:
+    command: display mpls ldp interface
+    verified: doc_claimed
+  ldp.session.down-events:
+    command: display mpls ldp event session-down
+    verified: doc_claimed
+  sr.prefix.forwarding:
+    command: display segment-routing prefix mpls forwarding
+    verified: doc_claimed
+  sr.adjacency.forwarding:
+    command: display segment-routing adjacency mpls forwarding
+    verified: doc_claimed
+  vxlan.troubleshooting:
+    command: display vxlan troubleshooting
+    verified: doc_claimed
+  vxlan.tunnels:
+    command: display vxlan tunnel
+    verified: doc_claimed
+  evpn.mac-table:
+    command: display mac-address
+    verified: doc_claimed
+  evpn.mac-table.flapping:
+    command: display mac-address flapping
+    verified: doc_claimed
+  evpn.mac-table.flapping.aged:
+    command: display mac-address flapping aged-table
+    verified: doc_claimed
+  evpn.routes.prefix:
+    command: 'display bgp evpn all routing-table prefix-route {prefix}'
+    verified: doc_claimed
+  stack.troubleshooting:
+    command: display stack troubleshooting
+    verified: doc_claimed
+  stack.troubleshooting.css:
+    command: display css troubleshooting
+    verified: doc_claimed
+  stack.config:
+    command: display stack configuration
+    verified: doc_claimed
+  stack.config.css:
+    command: display css configuration
+    verified: doc_claimed
+  stack.port.last-down:
+    command: display stack-port link-state last-down-reason
+    verified: doc_claimed
+  bfd.sessions:
+    command: display bfd session all
+    verified: doc_claimed
+  bfd.statistics:
+    command: display bfd statistics session all
+    verified: doc_claimed
+  bfd.troubleshooting:
+    command: display bfd troubleshooting
+    verified: doc_claimed
+  icmp.statistics:
+    command: display icmp statistics
+    verified: doc_claimed
+  ip.statistics:
+    command: display ip statistics
+    verified: doc_claimed
+  nd.history:
+    command: display ipv6 neighbors history
+    verified: doc_claimed
+  ntp.status:
+    command: display ntp-service status
+    verified: doc_claimed
+  ntp.sessions:
+    command: display ntp-service sessions
+    verified: doc_claimed
+  snmp.version:
+    command: display snmp-agent sys-info version
+    verified: doc_claimed
+  snmp.community:
+    command: display snmp-agent community
+    verified: doc_claimed
+  snmp.usm-user:
+    command: display snmp-agent usm-user
+    verified: doc_claimed
+  aaa.hwtacacs.status:
+    command: display hwtacacs current-status
+    verified: doc_claimed
+  aaa.authentication-scheme:
+    command: display authentication-scheme
+    verified: doc_claimed
+  aaa.config:
+    command: display aaa configuration
+    verified: doc_claimed
+  aaa.online-fail-record:
+    command: display aaa online-fail-record all
+    verified: doc_claimed
+  alarms.statistics:
+    command: display alarm statistics
+    verified: doc_claimed
+  alarms.detail:
+    command: display alarm information
+    verified: doc_claimed
+  bgp.route.vrf:
+    command: 'display bgp vpnv4 vpn-instance {vrf-scope} routing-table {prefix}'
+    verified: doc_claimed
+  route.prefix.vrf.detail:
+    command: 'display ip routing-table vpn-instance {vrf-scope} {prefix} verbose'
+    verified: doc_claimed
+  config.vrf:
+    command: 'display current-configuration configuration vpn-instance {vrf-scope}'
+    verified: doc_claimed
+  isis.errors.interface:
+    command: 'display isis error interface {if}'
+    verified: doc_claimed
+  config.interface:
+    command: 'display current-configuration interface {if}'
+    verified: doc_claimed
+  optics.dom:
+    command: 'display interface {if} transceiver verbose'
+    verified: doc_claimed
+  route.table.vrf:
+    command: 'display ip routing-table vpn-instance {vrf-scope}'
+    verified: doc_claimed
+  route.prefix.vrf:
+    command: 'display ip routing-table vpn-instance {vrf-scope} {prefix}'
+    verified: doc_claimed
+  evpn.routes.filtered:
+    command: 'display bgp instance {vrf-scope} evpn all routing-table | include {prefix}'
+    verified: doc_claimed
+  stp.interface:
+    command: 'display stp interface {if}'
+    verified: doc_claimed
+  arp.interface:
+    command: 'display arp interface {if}'
+    verified: doc_claimed
+  qos.policy.statistics:
+    command: 'display traffic policy statistics interface {if} inbound'
+    verified: doc_claimed

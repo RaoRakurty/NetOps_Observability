@@ -346,11 +346,12 @@ describe("the health lane hosts the protocol diagnostics on demand", () => {
     expect(screen.queryByTestId("diag")).toBeNull();
   });
 
-  it("renders no toggle target when the host supplied no slot", async () => {
+  // A control that expands to nothing is a promise the page cannot keep, so the
+  // toggle is not rendered at all when the host supplies no slot.
+  it("renders no toggle at all when the host supplied no slot", async () => {
     render(<HealthLane scope={scope} />);
     await waitFor(() => expect(stateOf("health")).not.toBe("loading"));
-    fireEvent.click(screen.getByRole("button", { name: "Protocol diagnostics" }));
-    expect(screen.getByRole("button", { name: "Hide protocol diagnostics" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("button", { name: "Protocol diagnostics" })).toBeNull();
   });
 });
 

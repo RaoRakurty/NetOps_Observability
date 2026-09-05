@@ -16,6 +16,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   Dashboard: () => import("./pages/Dashboard"),
   DemoShowcase: () => import("./pages/DemoShowcase"),
   FrontPage: () => import("./pages/FrontPage"),
+  IrisKnowledge: () => import("./pages/iris/Knowledge"),
   Devices: () => import("./pages/Devices"),
   DeviceMonitoring: () => import("./pages/DeviceMonitoring"),
   InterfacePerformance: () => import("./pages/InterfacePerformance"),
@@ -86,6 +87,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   Quarantine: () => import("./pages/platform/Quarantine"),
 };
 
+const IrisKnowledge = lazy(ROUTE_CHUNKS["IrisKnowledge"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DemoShowcase = lazy(ROUTE_CHUNKS["DemoShowcase"] as () => Promise<{ default: React.ComponentType<any> }>);
 const FrontPage = lazy(ROUTE_CHUNKS["FrontPage"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -397,12 +399,20 @@ export const NAV: NavSection[] = [
       { id: "scorecard", label: "Recovery Scorecard", render: () => <ReliabilityScorecard /> },
     ],
   },
+  // Iris is the one section that BOTH acts and routes. Clicking it opens the
+  // ask slide-over (`action: "copilot"`, unchanged); its children are ordinary
+  // routed leaves reached from the flyout or the expanded sidebar. Knowledge
+  // lives here because the catalogue IS what Iris knows — the same reason the
+  // skills, the docs corpus and the TAC command plans all sit under ai/.
   {
     id: "copilot",
     label: AI_NAME,
     icon: "copilot",
     action: "copilot",
     footer: true,
+    children: [
+      { id: "knowledge", label: "Knowledge", render: () => <IrisKnowledge /> },
+    ],
   },
   // Administration — config + power-user escape hatches to the raw backend
   // tools, kept out of the day-to-day monitoring sections (as Grafana
@@ -814,7 +824,14 @@ export function navDestinations(nav: NavSection[] = NAV): NavDestination[] {
   const out: NavDestination[] = [];
   for (const s of nav) {
     if (s.action) {
+      // The action itself ("Ask Iris" opens the slide-over) …
       out.push({ label: s.label, section: s.label, route: s.id, action: s.action });
+      // … and, when the section also routes, every leaf as a real destination.
+      // Without this an acting section's pages would be unreachable from ⌘K,
+      // which is where an operator who knows the page name looks first.
+      for (const l of s.children ?? []) {
+        out.push({ label: `${s.label} · ${l.label}`, section: s.label, route: `${s.id}/${l.id}` });
+      }
       continue;
     }
     if (s.children) {

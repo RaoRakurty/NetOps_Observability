@@ -1,0 +1,933 @@
+# plans/cisco-iosxe.yaml — the Cisco IOS-XE command plan for the TAC escalation pack.
+#
+# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven
+# by the loader (protocoldiag.ValidateReadOnly) and again by the runner. An
+# intent this dialect does not bind is simply ABSENT — the plan preview shows
+# it as unbound rather than rendering another vendor's command at this device.
+#
+# `verified: doc_claimed` means the vendor documents the command and Correlix
+# has not run it on this platform. `consent: true` marks a command the vendor
+# says is NOT routine (a core dump, a control-plane load, a file written on the
+# device): it never runs by default and never sits in a baseline.
+# `read_only_exception` is a CITED documented-status read whose text carries a
+# token the grammar refuses on sight.
+#
+# MACHINE-MERGED from ai/tac/research/*.yaml by scripts/tac-merge-research.py.
+schema_version: 1
+dialect: cisco-iosxe
+profile: cisco/ios_xe
+display: Cisco IOS-XE
+version: correlix-tac-plan-cisco-iosxe-2026-09-05
+
+# The dialect's default citation set. A doc_claimed binding inherits it.
+sources:
+  - title: Cisco IOS XE Command References
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-xe-17/products-command-reference-list.html
+    retrieved: 2026-09-05
+  - title: Troubleshoot OSPF Neighbor Problems
+    url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
+    retrieved: 2026-09-05
+  - title: BGP Case Studies and Troubleshooting
+    url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/26634-bgp-toc.html
+    retrieved: 2026-09-05
+  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
+    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
+  - title: Cisco IOS XE Software Forensic Data Collection Procedures
+    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
+  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
+    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
+  - title: Troubleshoot High CPU on ASR1000 Series Router
+    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
+  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
+    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
+  - title: Cisco IOS XE Software Forensic Data Collection Procedures
+    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
+  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
+    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
+  - title: Troubleshoot High CPU on ASR1000 Series Router
+    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
+  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
+    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
+  - title: Cisco IOS XE Software Forensic Data Collection Procedures
+    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
+  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
+    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
+  - title: Troubleshoot High CPU on ASR1000 Series Router
+    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
+  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
+    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
+  - title: Cisco IOS XE Software Forensic Data Collection Procedures
+    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
+  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
+    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
+  - title: Troubleshoot High CPU on ASR1000 Series Router
+    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
+  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
+    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
+  - title: Cisco IOS XE Software Forensic Data Collection Procedures
+    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
+  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
+    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
+  - title: Troubleshoot High CPU on ASR1000 Series Router
+    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
+  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
+    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
+  - title: Cisco IOS XE Software Forensic Data Collection Procedures
+    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
+  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
+    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
+  - title: Troubleshoot High CPU on ASR1000 Series Router
+    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
+
+# baseline — collected for EVERY class: the vendor-standard set a TAC engineer
+# opens before anything issue-specific.
+baseline:
+  - system.version
+  - system.inventory
+  - system.uptime
+  - hardware.environment
+  - interface.brief
+  - interface.counters
+  - route.summary
+  - logging.recent
+  - config.running
+
+# optional — off by default: large and slow captures the operator opts into.
+optional:
+  - tech.support
+
+bindings:
+  system.version:
+    command: show version
+    verified: doc_claimed
+  system.inventory:
+    command: show inventory
+    verified: doc_claimed
+  system.uptime:
+    command: show version
+    verified: doc_claimed
+  system.processes.cpu:
+    command: show processes cpu sorted
+    verified: doc_claimed
+  system.processes.memory:
+    command: show processes memory sorted
+    verified: doc_claimed
+  hardware.environment:
+    command: show environment all
+    verified: doc_claimed
+  hardware.power:
+    command: show environment power
+    verified: doc_claimed
+  hardware.fans:
+    command: show environment fan
+    verified: doc_claimed
+  interface.brief:
+    command: show ip interface brief
+    verified: doc_claimed
+  interface.status:
+    command: show interfaces status
+    verified: doc_claimed
+  interface.detail:
+    command: 'show interfaces {if}'
+    verified: doc_claimed
+  interface.counters:
+    command: show interfaces counters
+    verified: doc_claimed
+  interface.errors:
+    command: show interfaces counters errors
+    verified: doc_claimed
+  optics.detail:
+    command: show interfaces transceiver detail
+    verified: doc_claimed
+  optics.thresholds:
+    command: show interfaces transceiver threshold
+    verified: doc_claimed
+  route.summary:
+    command: show ip route summary
+    verified: doc_claimed
+  route.ospf:
+    command: show ip route ospf
+    verified: doc_claimed
+  route.isis:
+    command: show ip route isis
+    verified: doc_claimed
+  route.bgp:
+    command: show ip route bgp
+    verified: doc_claimed
+  route.prefix:
+    command: 'show ip route {prefix}'
+    verified: doc_claimed
+  fib.summary:
+    command: show ip cef summary
+    verified: doc_claimed
+  fib.prefix:
+    command: 'show ip cef {prefix}'
+    verified: doc_claimed
+  arp.table:
+    command: show ip arp
+    verified: doc_claimed
+  l2.mac:
+    command: show mac address-table
+    verified: doc_claimed
+  l2.vlan:
+    command: show vlan brief
+    verified: doc_claimed
+  ospf.summary:
+    command: show ip ospf
+    verified: doc_claimed
+  ospf.interfaces:
+    command: show ip ospf interface
+    verified: doc_claimed
+  ospf.neighbors:
+    command: show ip ospf neighbor
+    verified: doc_claimed
+  ospf.neighbors.detail:
+    command: show ip ospf neighbor detail
+    verified: doc_claimed
+  ospf.database:
+    command: show ip ospf database
+    verified: doc_claimed
+  ospf.database.router:
+    command: 'show ip ospf database router {rid}'
+    verified: doc_claimed
+  isis.summary:
+    command: show clns protocol
+    verified: doc_claimed
+  isis.interfaces:
+    command: show clns interface
+    verified: doc_claimed
+  isis.adjacency:
+    command: show isis neighbors
+    verified: doc_claimed
+  isis.adjacency.detail:
+    command: show isis neighbors detail
+    verified: doc_claimed
+  isis.database:
+    command: show isis database
+    verified: doc_claimed
+  isis.database.detail:
+    command: show isis database detail
+    verified: doc_claimed
+  bgp.summary:
+    command: show ip bgp summary
+    verified: doc_claimed
+  bgp.neighbor.detail:
+    command: 'show ip bgp neighbors {peer}'
+    verified: doc_claimed
+  bgp.neighbor.received:
+    command: 'show ip bgp neighbors {peer} received-routes'
+    verified: doc_claimed
+  bgp.neighbor.advertised:
+    command: 'show ip bgp neighbors {peer} advertised-routes'
+    verified: doc_claimed
+  bgp.prefix:
+    command: 'show ip bgp {prefix}'
+    verified: doc_claimed
+  bgp.dampening:
+    command: show ip bgp dampening flap-statistics
+    verified: doc_claimed
+  mpls.interfaces:
+    command: show mpls interfaces
+    verified: doc_claimed
+  mpls.ldp.neighbor:
+    command: show mpls ldp neighbor
+    verified: doc_claimed
+  mpls.ldp.bindings:
+    command: show mpls ldp bindings
+    verified: doc_claimed
+  overlay.vxlan.vtep:
+    command: show nve peers
+    verified: doc_claimed
+  overlay.vxlan.vni:
+    command: show nve vni
+    verified: doc_claimed
+  overlay.evpn.routes:
+    command: show bgp l2vpn evpn summary
+    verified: doc_claimed
+  qos.interface:
+    command: 'show policy-map interface {if}'
+    verified: doc_claimed
+  qos.drops:
+    command: 'show policy-map interface {if}'
+    verified: doc_claimed
+  logging.recent:
+    command: show logging
+    verified: doc_claimed
+  logging.ospf:
+    command: 'show logging | include OSPF'
+    verified: doc_claimed
+  logging.isis:
+    command: 'show logging | include ISIS'
+    verified: doc_claimed
+  logging.bgp:
+    command: 'show logging | include BGP'
+    verified: doc_claimed
+  config.running:
+    command: show running-config
+    verified: doc_claimed
+  tech.support:
+    command: show tech-support
+    verified: doc_claimed
+  ospf.neighbors.list:
+    command: show ip ospf neighbor
+    verified: doc_claimed
+  interface.state:
+    command: show interface
+    verified: doc_claimed
+  ospf.interface.params:
+    command: 'show ip ospf interface {if}'
+    verified: doc_claimed
+  ospf.process.summary:
+    command: show ip ospf
+    verified: doc_claimed
+  l2.neighbor.identity:
+    command: 'show cdp neighbor {if}'
+    verified: doc_claimed
+  config.compare:
+    command: show running-config
+    verified: doc_claimed
+  ospf.neighbors.state:
+    command: show ip ospf neighbor
+    verified: doc_claimed
+  ospf.interface.mtu:
+    command: 'show ip ospf interface {if}'
+    verified: doc_claimed
+  interface.mtu:
+    command: show interface
+    verified: doc_claimed
+  ospf.routerid.check:
+    command: show ip ospf
+    verified: doc_claimed
+  ospf.retransmit.list:
+    command: show ip ospf retransmission-list
+    verified: doc_claimed
+  ospf.interface.timers:
+    command: 'show ip ospf interface {if}'
+    verified: doc_claimed
+  ospf.interface.all:
+    command: show ip ospf interface
+    verified: doc_claimed
+  interface.addressing:
+    command: show ip interface brief
+    verified: doc_claimed
+  ospf.database.summary:
+    command: show ip ospf database
+    verified: doc_claimed
+  ospf.database.type4:
+    command: show ip ospf database asbr-summary
+    verified: doc_claimed
+  ospf.process.areas:
+    command: show ip ospf
+    verified: doc_claimed
+  ospf.process.routerid:
+    command: show ip ospf
+    verified: doc_claimed
+  ospf.spf.statistics:
+    command: show ip ospf statistics
+    verified: doc_claimed
+  isis.neighbors.detail:
+    command: show isis neighbors detail
+    verified: doc_claimed
+  isis.hello.counters:
+    command: 'show clns traffic interface {if}'
+    verified: doc_claimed
+  bgp.peers.state:
+    command: show ip bgp summary
+    verified: doc_claimed
+  bgp.neighbors.detail:
+    command: 'show ip bgp neighbors {peer}'
+    verified: doc_claimed
+  bgp.policy.outbound:
+    command: 'show ip bgp neighbors {peer} advertised-routes'
+    verified: doc_claimed
+  bgp.table.full:
+    command: show ip bgp
+    verified: doc_claimed
+  bgp.vpnv4.labels:
+    command: show ip bgp vpnv4 all tags
+    verified: doc_claimed
+  mpls.interface.enabled:
+    command: show mpls interfaces
+    verified: doc_claimed
+  interface.counters.errors:
+    command: show interfaces counters errors
+    verified: doc_claimed
+  interface.phy.portinfo:
+    command: 'show controllers ethernet-controller {if} port-info'
+    verified: doc_claimed
+  optics.dom.levels:
+    command: 'show interfaces {if} transceiver detail'
+    verified: doc_claimed
+  interface.counters.traffic:
+    command: show interfaces counters
+    verified: doc_claimed
+  interface.counters.perport:
+    command: 'show interfaces {if} counters'
+    verified: doc_claimed
+  qos.policy.counters:
+    command: 'show policy-map interface {if}'
+    verified: doc_claimed
+  qos.policy.config:
+    command: show policy-map
+    verified: doc_claimed
+  qos.classmap.config:
+    command: show class-map
+    verified: doc_claimed
+  qos.techsupport.bundle:
+    command: show tech-support qos
+    verified: doc_claimed
+    consent: true
+    consent_note: >-
+      The vendor's full support bundle: output can be tens of megabytes and take
+      minutes on a loaded box.
+  interface.status.errdisable:
+    command: show interfaces status err-disabled
+    verified: doc_claimed
+  interface.flap.history:
+    command: 'show platform pm interface-flaps {if}'
+    verified: doc_claimed
+  interface.link.status:
+    command: 'show controllers ethernet-controller {if} link status detail'
+    verified: doc_claimed
+  optics.compatibility.list:
+    command: show interfaces transceiver supported-list
+    verified: doc_claimed
+  optics.idprom.raw:
+    command: 'show idprom interface {if}'
+    verified: doc_claimed
+  optics.idprom.pid:
+    command: 'show idprom interface {if} | include PID'
+    verified: doc_claimed
+  optics.idprom.type:
+    command: 'show idprom interface {if} | include Transceiver Type'
+    verified: doc_claimed
+  interface.capabilities.speed:
+    command: 'show interfaces {if} capabilities | include Speed'
+    verified: doc_claimed
+  optics.idprom.connector:
+    command: 'show idprom interface {if} | include Connector type'
+    verified: doc_claimed
+  stp.port.detail:
+    command: 'show spanning-tree interface {if} detail'
+    verified: doc_claimed
+  stp.detail.all:
+    command: show spanning-tree detail
+    verified: doc_claimed
+  stp.summary:
+    command: show spanning-tree summary
+    verified: doc_claimed
+  stp.active.ports:
+    command: show spanning-tree active
+    verified: doc_claimed
+  stp.port.portfast:
+    command: 'show spanning-tree interface {if} portfast'
+    verified: doc_claimed
+  stp.vlan.detail:
+    command: 'show spanning-tree vlan {vlan} detail'
+    verified: doc_claimed
+  stp.summary.loopguard:
+    command: show spanning-tree summary
+    verified: doc_claimed
+  interface.capabilities.trunk:
+    command: 'show interfaces {if} capabilities'
+    verified: doc_claimed
+  config.interface.channelgroup:
+    command: 'show run interface {if}'
+    verified: doc_claimed
+  interface.l3.state:
+    command: show ip interface brief
+    verified: doc_claimed
+  stp.vlan.state:
+    command: 'show spanning-tree vlan {vlan}'
+    verified: doc_claimed
+  config.interface.hsrp:
+    command: 'show run interface vlan {vlan}'
+    verified: doc_claimed
+  platform.resources.memory:
+    command: show platform resources
+    verified: doc_claimed
+  hardware.module.status:
+    command: show module
+    verified: doc_claimed
+  system.clock:
+    command: show clock
+    verified: doc_claimed
+  config.running.aaa:
+    command: show running-config
+    verified: doc_claimed
+  interface.source.candidates:
+    command: show ip interface brief
+    verified: doc_claimed
+  config.archive.versions:
+    command: show archive
+    verified: doc_claimed
+  config.lock.state:
+    command: show configuration lock
+    verified: doc_claimed
+  config.startup:
+    command: show configuration
+    verified: doc_claimed
+  config.interface.scoped:
+    command: 'show run interface {if}'
+    verified: doc_claimed
+  rib.lookup:
+    command: show ip route
+    verified: doc_claimed
+  cpu.trend:
+    command: show process cpu history
+    verified: doc_claimed
+  ospfv3.neighbors.detail:
+    command: show ospfv3 neighbor detail
+    verified: doc_claimed
+  ospfv3.interface.params:
+    command: show ospfv3 interface
+    verified: doc_claimed
+  ospfv3.database:
+    command: show ospfv3 database
+    verified: doc_claimed
+  ospfv3.events.neighbor:
+    command: show ospfv3 events neighbor
+    verified: doc_claimed
+  ospfv3.spf.statistics:
+    command: show ospfv3 statistic detail
+    verified: doc_claimed
+  ospfv3.traffic.counters:
+    command: show ospfv3 traffic
+    verified: doc_claimed
+  ospfv3.retransmit.list:
+    command: show ospfv3 retransmission-list
+    verified: doc_claimed
+  eigrp.neighbors.list:
+    command: show ip eigrp neighbors
+    verified: doc_claimed
+  eigrp.neighbors.detail:
+    command: show ip eigrp neighbors detail
+    verified: doc_claimed
+  eigrp.interfaces.enabled:
+    command: show ip eigrp interfaces
+    verified: doc_claimed
+  eigrp.traffic.counters:
+    command: show ip eigrp traffic
+    verified: doc_claimed
+  eigrp.eventlog:
+    command: show ip eigrp events
+    verified: doc_claimed
+  eigrp.topology.active:
+    command: show ip eigrp topology active
+    verified: doc_claimed
+  eigrp.topology.full:
+    command: show ip eigrp topology
+    verified: doc_claimed
+  clns.neighbors.detail:
+    command: show clns neighbors detail
+    verified: doc_claimed
+  dataplane.qfp.load:
+    command: show platform hardware qfp active datapath utilization
+    verified: doc_claimed
+  vrf.rib.lookup:
+    command: 'show ip route vrf {vrf-scope} {prefix}'
+    verified: doc_claimed
+  ldp.discovery.hellos:
+    command: show mpls ldp discovery
+    verified: doc_claimed
+  ldp.session.state:
+    command: show mpls ldp neighbor
+    verified: doc_claimed
+  cef.enabled:
+    command: show ip cef summary
+    verified: doc_claimed
+  pim.neighbors.list:
+    command: show ip pim neighbor
+    verified: doc_claimed
+  pim.interface.detail:
+    command: 'show ip pim interface {if} detail'
+    verified: doc_claimed
+  ip.protocol.counters:
+    command: show ip traffic
+    verified: doc_claimed
+  mroute.summary:
+    command: show ip mroute summary
+    verified: doc_claimed
+  igmpsnoop.querier:
+    command: show ip igmp snooping querier
+    verified: doc_claimed
+  igmpsnoop.groups:
+    command: show ip igmp snooping group
+    verified: doc_claimed
+  cable.tdr:
+    command: 'show cable-diagnostics tdr interface {if}'
+    verified: doc_claimed
+  errdisable.detect.config:
+    command: show errdisable detect
+    verified: doc_claimed
+  errdisable.recovery.config:
+    command: show errdisable recovery
+    verified: doc_claimed
+  errdisable.flap.thresholds:
+    command: show errdisable flap-values
+    verified: doc_claimed
+  trunk.perport.state:
+    command: 'show interfaces {if} trunk'
+    verified: doc_claimed
+  vlan.database.summary:
+    command: show vlan brief
+    verified: doc_claimed
+  vlan.database.detail:
+    command: show vlan summary
+    verified: doc_claimed
+  vtp.status.revision:
+    command: show vtp status
+    verified: doc_claimed
+  vtp.counters:
+    command: show vtp counters
+    verified: doc_claimed
+  lacp.system.id:
+    command: show lacp sys-id
+    verified: doc_claimed
+  fhrp.hsrp.state:
+    command: show standby
+    verified: doc_claimed
+  cpu.platform.linux:
+    command: show processes cpu platform sorted
+    verified: doc_claimed
+  punt.cause.summary:
+    command: show platform software fed switch active punt cause summary
+    verified: doc_claimed
+  punt.queue.stats:
+    command: show platform software fed switch active punt cpuq all
+    verified: doc_claimed
+  copp.policer.drops:
+    command: show platform hardware fed switch active qos queue stats internal cpu policer
+    verified: doc_claimed
+  copp.policy.counters:
+    command: show policy-map control-plane
+    verified: doc_claimed
+  copp.policy.definition:
+    command: show platform software qos copp policy-info
+    verified: doc_claimed
+  copp.class.definition:
+    command: show platform software qos copp class-info
+    verified: doc_claimed
+  punt.queue.detail:
+    command: show platform software fed switch active punt cpuq all
+    verified: doc_claimed
+  acl.config.all:
+    command: show access-lists
+    verified: doc_claimed
+  memory.process.top:
+    command: show processes memory platform sorted
+    verified: doc_claimed
+  memory.accounting:
+    command: show processes memory platform accounting
+    verified: doc_claimed
+  obfl.status:
+    command: show logging onboard RP active status
+    verified: doc_claimed
+  techsupport.bundle:
+    command: show tech-support
+    verified: doc_claimed
+    consent: true
+    consent_note: >-
+      The vendor's full support bundle: output can be tens of megabytes and take
+      minutes on a loaded box.
+  environment.all:
+    command: show environment all
+    verified: doc_claimed
+  environment.temperature:
+    command: show env temperature status
+    verified: doc_claimed
+  environment.power:
+    command: show env power
+    verified: doc_claimed
+  poe.status:
+    command: show power inline
+    verified: doc_claimed
+  obfl.environment:
+    command: show logging onboard RP active environment
+    verified: doc_claimed
+  obfl.temperature:
+    command: show logging onboard RP active temperature
+    verified: doc_claimed
+  obfl.voltage:
+    command: show logging onboard RP active voltage
+    verified: doc_claimed
+  environment.alarms:
+    command: show environment alarms
+    verified: doc_claimed
+  ntp.sync.state:
+    command: show ntp status
+    verified: doc_claimed
+  ntp.peers.summary:
+    command: show ntp association
+    verified: doc_claimed
+  ntp.peers.detail:
+    command: show ntp association detail
+    verified: doc_claimed
+  acl.config.udp123:
+    command: show access-lists
+    verified: doc_claimed
+  snmp.mibcache.config:
+    command: 'show running-config all | include snmp mib flash cache'
+    verified: doc_claimed
+  cpu.process:
+    command: show process cpu
+    verified: doc_claimed
+  acl.config.tcp49:
+    command: show access-lists
+    verified: doc_claimed
+  aaa.techsupport.bundle:
+    command: show tech-support aaa
+    verified: doc_claimed
+    consent: true
+    consent_note: >-
+      The vendor's full support bundle: output can be tens of megabytes and take
+      minutes on a loaded box.
+  dhcp.helper.address:
+    command: 'show ip interface vlan {vlan}'
+    verified: doc_claimed
+  vlan.database.active:
+    command: show vlan brief
+    verified: doc_claimed
+  trunk.vlan.path:
+    command: show interfaces trunk
+    verified: doc_claimed
+  license.status.trust:
+    command: show license status
+    verified: doc_claimed
+  license.all:
+    command: show license all
+    verified: doc_claimed
+  license.techsupport:
+    command: show license tech support
+    verified: doc_claimed
+  license.message.history:
+    command: show license history message
+    verified: doc_claimed
+  license.eventlog:
+    command: show license eventlog 1
+    verified: doc_claimed
+  license.udi:
+    command: show license udi
+    verified: doc_claimed
+  license.authorization:
+    command: show license authorization
+    verified: doc_claimed
+  boot.variable:
+    command: show boot
+    verified: doc_claimed
+  config.acl_nat_check:
+    command: show running-config
+    verified: doc_claimed
+  ospf.neighbors.detail.per_interface:
+    command: 'show ip ospf neighbor {if} detail'
+    verified: doc_claimed
+  ospf.retransmit.list.per_interface:
+    command: 'show ip ospf retransmission-list {if}'
+    verified: doc_claimed
+  interface.errors_and_drops:
+    command: show interface
+    verified: doc_claimed
+  ospf.interface.hello_dead_area:
+    command: 'show ip ospf interface {if}'
+    verified: doc_claimed
+  ospf.area.type_and_flags:
+    command: show ip ospf
+    verified: doc_claimed
+  ospf.neighbors.dr_role:
+    command: show ip ospf neighbor
+    verified: doc_claimed
+  config.area_stub_nssa:
+    command: show running-config
+    verified: doc_claimed
+  ospf.database.type_check:
+    command: show ip ospf database
+    verified: doc_claimed
+  ospf.database.router_lsa:
+    command: 'show ip ospf database router {rid}'
+    verified: doc_claimed
+  ospf.database.network_lsa:
+    command: 'show ip ospf database network adv-router {rid}'
+    verified: doc_claimed
+  ospf.database.external_lsa:
+    command: 'show ip ospf database external adv-router {rid}'
+    verified: doc_claimed
+  ospf.abr_asbr.reachability:
+    command: show ip ospf border-routers
+    verified: doc_claimed
+  cpu.top_processes:
+    command: show processes cpu sorted
+    verified: doc_claimed
+  ospfv3.abr_asbr:
+    command: show ospfv3 border-routers
+    verified: doc_claimed
+  ospfv3.virtual_links:
+    command: show ospfv3 virtual-links
+    verified: doc_claimed
+  routing.protocol.as_and_kvalues:
+    command: show ip protocols
+    verified: doc_claimed
+  config.eigrp_block:
+    command: 'show running-config | begin router eigrp'
+    verified: doc_claimed
+  interface.mtu_and_errors:
+    command: 'show interface {if}'
+    verified: doc_claimed
+  interface.resets_and_errors:
+    command: 'show interface {if}'
+    verified: doc_claimed
+  eigrp.topology.all_paths:
+    command: show ip eigrp topology all-links
+    verified: doc_claimed
+  eigrp.topology.zero_successors:
+    command: show ip eigrp topology zero-successors
+    verified: doc_claimed
+  routing.filters_and_distance:
+    command: show ip protocols
+    verified: doc_claimed
+  config.distribute_lists:
+    command: 'show running-config | begin router eigrp'
+    verified: doc_claimed
+  isis.interface.mtu_circuit_type:
+    command: 'show clns interface {if}'
+    verified: doc_claimed
+  interface.errors_and_optics:
+    command: 'show interface {if}'
+    verified: doc_claimed
+  bgp.peers.state.all_af:
+    command: show ip bgp all summary
+    verified: doc_claimed
+  rib.peer_reachability:
+    command: 'show ip route {peer}'
+    verified: doc_claimed
+  bgp.neighbors.reset_reason:
+    command: 'show ip bgp neighbors {peer}'
+    verified: doc_claimed
+  interface.errors_and_flaps:
+    command: show interface
+    verified: doc_claimed
+  memory.top_consumers:
+    command: show processes memory sorted
+    verified: doc_claimed
+  bgp.policy.inbound_prefilter:
+    command: 'show ip bgp neighbors {peer} received-routes'
+    verified: doc_claimed
+  bgp.policy.inbound_postfilter:
+    command: 'show ip bgp neighbors {peer} routes'
+    verified: doc_claimed
+  bgp.prefix.path_attributes:
+    command: 'show ip bgp {prefix}'
+    verified: doc_claimed
+  bgp.rib.install_failures:
+    command: show ip bgp rib-failure
+    verified: doc_claimed
+  rib.installed_path:
+    command: 'show ip route {prefix}'
+    verified: doc_claimed
+  vrf.rd_and_route_targets:
+    command: 'show ip vrf detail {vrf-scope}'
+    verified: doc_claimed
+  vrf.interface_membership:
+    command: show ip vrf interfaces
+    verified: doc_claimed
+  bgp.vpnv4.prefix_in_vrf:
+    command: 'show ip bgp vpnv4 vrf {vrf-scope} {prefix}'
+    verified: doc_claimed
+  bgp.vpnv4.table_all:
+    command: show ip bgp vpnv4 all
+    verified: doc_claimed
+  vrf.cef.label_stack:
+    command: 'show ip cef vrf {vrf-scope} detail'
+    verified: doc_claimed
+  ldp.router_id_and_timers:
+    command: show mpls ldp parameters
+    verified: doc_claimed
+  ldp.label_bindings:
+    command: show mpls ldp bindings
+    verified: doc_claimed
+  ldp.igp_sync_state:
+    command: show mpls ldp igp sync
+    verified: doc_claimed
+  rib.ldp_id_reachability:
+    command: 'show ip route {prefix}'
+    verified: doc_claimed
+  pim.interface.mode_and_count:
+    command: show ip pim interface
+    verified: doc_claimed
+  pim.neighbors.per_interface:
+    command: 'show ip pim neighbor {if}'
+    verified: doc_claimed
+  pim.rp.group_mappings:
+    command: show ip pim rp mapping
+    verified: doc_claimed
+  mroute.active_sources:
+    command: show ip mroute active
+    verified: doc_claimed
+  interface.buffer_pressure:
+    command: 'show buffers input-interface {if}'
+    verified: doc_claimed
+  igmpsnoop.mrouter_ports:
+    command: show ip igmp snooping mrouter
+    verified: doc_claimed
+  igmpsnoop.vlan_state:
+    command: 'show ip igmp snooping vlan {vlan}'
+    verified: doc_claimed
+  igmp.router_membership:
+    command: show ip igmp groups
+    verified: doc_claimed
+  igmp.interface.version_querier:
+    command: show ip igmp interface
+    verified: doc_claimed
+  interface.status.speed_duplex:
+    command: 'show interfaces {if} status'
+    verified: doc_claimed
+  l2.neighbor.duplex_check:
+    command: 'show cdp neighbors {if} detail'
+    verified: doc_claimed
+  interface.counters.output_drops:
+    command: 'show interfaces {if}'
+    verified: doc_claimed
+  stp.vlan.topology_changes:
+    command: 'show spanning-tree vlan {vlan} detail'
+    verified: doc_claimed
+  stp.vlan.root_id:
+    command: 'show spanning-tree vlan {vlan}'
+    verified: doc_claimed
+  l2.mac.aging_time:
+    command: 'show mac address-table aging-time vlan {vlan}'
+    verified: doc_claimed
+  stp.port.bpdu_counts:
+    command: 'show spanning-tree interface {if} detail'
+    verified: doc_claimed
+  trunk.status.allowed_vlans:
+    command: show interfaces trunk
+    verified: doc_claimed
+  switchport.mode.native_vlan:
+    command: 'show interface {if} switchport'
+    verified: doc_claimed
+  l2.neighbor.native_vlan:
+    command: 'show cdp neighbors {if} detail'
+    verified: doc_claimed
+  punt.rate.per_interface:
+    command: show platform software fed switch active punt rates interfaces
+    verified: doc_claimed
+  punt.cpu_interface.stats:
+    command: show platform software fed switch active cpu-interface
+    verified: doc_claimed
+  copp.policer.queue_drops:
+    command: show platform hardware fed switch active qos queue stats internal cpu policer
+    verified: doc_claimed
+  snmp.oid.last_polled:
+    command: show snmp stats oid
+    verified: doc_claimed
+  aaa.tacacs.server_stats:
+    command: show tacacs
+    verified: doc_claimed
+  dhcp.relay.helper_config:
+    command: 'show running-config interface vlan {vlan}'
+    verified: doc_claimed
+  l2.mac.client_port:
+    command: 'show mac address interface {if}'
+    verified: doc_claimed
+  copp.broadcast_queue.drops:
+    command: show platform hardware fed switch active qos queue stats internal cpu policer
+    verified: doc_claimed

@@ -14,8 +14,16 @@
 // layers actually have evidence behind them.
 //
 // REUSE, not re-implementation: buildRcaCase + RcaCaseHeader (verdict), the
-// already-deployed lane APIs, ProtocolDiagnosticsPanel (routing/protocol),
-// the ticket + report endpoints (handoff), the Iris ask endpoint (co-pilot).
+// already-deployed lane APIs, the ticket + report endpoints (handoff), the Iris
+// ask endpoint (co-pilot).
+//
+// ESCALATION (2026-09-05, docs/design/TAC_ESCALATION_2026-09-05.md §5). The
+// manual protocol-diagnostics bench — pick a protocol, pick an issue, pick a
+// device, press analyze — is GONE from this page. Its knowledge moved to Iris →
+// Knowledge (coverage per vendor), and its work moved into TacEscalationPanel,
+// which hangs directly off the verdict: one "Escalate to TAC" button, then
+// class → plan → collect → bundle → case. An escalation is anchored to a
+// correlated incident, so the panel renders only when a case is open.
 
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import "./investigation.css";
@@ -33,10 +41,11 @@ import RcaCaseHeader from "../../components/rca/RcaCaseHeader";
 import { buildRcaCase, type RcaCase } from "../../components/rca/rcaCase";
 import { friendlyProblemId } from "../../components/rca/labels";
 import { exportRcaPdf } from "../../components/rca/rcaExport";
-import ProtocolDiagnosticsPanel from "./ProtocolDiagnosticsPanel";
+import TacEscalationPanel from "./TacEscalationPanel";
 import IrisLane from "./IrisLane";
 import { LANE_COMPONENT, type LaneScope } from "./InvestigationLanes";
 import { operatorError } from "../../lib/errors";
+import { ESCALATION_NEEDS_CASE } from "./tacModel";
 import {
   SYMPTOMS,
   bisectingHeadline,
@@ -290,6 +299,15 @@ export default function InvestigationPage({ rangeMinutes = 60, initialSymptom = 
         )
       )}
 
+      {/* ── 2b. Escalate to TAC ────────────────────────────────────────── */}
+      {started && (
+        caseId ? (
+          <TacEscalationPanel incidentId={caseId} />
+        ) : (
+          <p className="mini-meta ts-escalate-note" role="status">{ESCALATION_NEEDS_CASE}</p>
+        )
+      )}
+
       {/* ── 3. Parallel evidence lanes ─────────────────────────────────── */}
       {started && (
         <div className="ts-lanes dm-grid" data-testid="ts-lanes">
@@ -300,7 +318,6 @@ export default function InvestigationPage({ rangeMinutes = 60, initialSymptom = 
                 key={id}
                 scope={scope}
                 report={reportLane}
-                protocolSlot={id === "health" ? <ProtocolDiagnosticsPanel /> : undefined}
               />
             );
           })}

@@ -79,3 +79,95 @@
 .ts-handoff-h { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
 .ts-owner { margin: 0 0 8px; font-size: 13px; }
 .ts-handoff-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── TAC escalation panel (TacEscalationPanel) + Iris → Knowledge ──────────
+   One prefix, `tac-`, for both surfaces: the escalation panel and the coverage
+   page render the same vocabulary (a step, an intent, a command, how sure we
+   are of it), so they share one set of rules rather than drifting apart. */
+.tac-panel { display: flex; flex-direction: column; gap: 14px; margin: 10px 0; }
+.tac-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tac-h { margin: 0; font-size: 16px; font-weight: 650; }
+.tac-ver { font-family: var(--font-mono, ui-monospace, monospace); }
+.tac-start { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.tac-step { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+.tac-step-h { margin: 0; font-size: 14px; font-weight: 650; }
+.tac-section { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.tac-section-h { margin: 6px 0 0; font-size: 12.5px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.tac-note { margin: 0; }
+.tac-bad { margin: 0; color: var(--bad, #ef4444); font-size: 12.5px; }
+.tac-id, .tac-cmd { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+.tac-cmd { color: var(--fg); }
+.tac-id { color: var(--muted); }
+.tac-kind { text-transform: uppercase; font-size: 10.5px; letter-spacing: .04em; color: var(--muted); }
+.tac-unsure { border-color: var(--warn, #f59e0b); color: var(--warn, #f59e0b); }
+
+/* class + why */
+.tac-class-title { margin: 0; font-size: 13.5px; }
+.tac-why, .tac-alts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.tac-why li { font-family: var(--font-mono, ui-monospace, monospace); color: var(--muted); }
+.tac-alt-t { font-weight: 600; font-size: 12.5px; }
+
+/* forms */
+.tac-form, .tac-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.tac-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; min-width: 190px; flex: 1 1 190px; }
+.tac-field > span { color: var(--muted); }
+.tac-field.req > span { color: var(--warn, #f59e0b); font-weight: 600; }
+.tac-field input, .tac-field select, .tac-field textarea {
+  padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--fg); font-size: 12.5px; width: 100%;
+}
+.tac-check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; flex: 1 1 100%; }
+.tac-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+
+/* plan steps */
+.tac-plan { display: flex; flex-direction: column; gap: 6px; }
+.tac-steps, .tac-topo, .tac-bundles, .tac-connectors, .tac-dialects, .tac-unplanned, .tac-classes {
+  list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px;
+}
+.tac-step-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+.tac-step-row.unbound { opacity: .8; border-left: 2px solid var(--warn, #f59e0b); padding-left: 6px; }
+.tac-step-t { font-weight: 600; }
+.tac-v-doc_claimed { border-color: var(--warn, #f59e0b); color: var(--warn, #f59e0b); }
+.tac-src a { margin-right: 8px; }
+
+/* collection progress + captured output */
+.tac-job { display: flex; flex-direction: column; gap: 4px; }
+.tac-progress { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tac-prog { display: flex; gap: 8px; align-items: baseline; font-size: 12px; flex-wrap: wrap; }
+.tac-prog-i { font-family: var(--font-mono, ui-monospace, monospace); color: var(--muted); }
+.tac-prog-p { font-weight: 600; }
+.tac-prog.error .tac-prog-p { color: var(--bad, #ef4444); }
+.tac-prog.done .tac-prog-p { color: var(--good, #22c55e); }
+.tac-out { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.tac-pre { margin: 6px 0 0; padding: 8px; border-radius: 6px; background: var(--panel, rgba(0,0,0,.15)); overflow: auto; max-height: 320px; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+.tac-paste { display: flex; flex-direction: column; gap: 8px; }
+.tac-paste-item { display: flex; flex-direction: column; gap: 3px; }
+.tac-paste-item textarea, .tac-portal {
+  width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--fg); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px;
+}
+
+/* connectors + case form */
+.tac-conn { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+.tac-conn.off { opacity: .55; }
+.tac-case { display: flex; flex-direction: column; gap: 8px; }
+
+/* Iris → Knowledge */
+.tac-know { display: flex; flex-direction: column; gap: 14px; }
+.tac-know-head { display: flex; flex-direction: column; gap: 4px; }
+.tac-dialect { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+.tac-dialect-head {
+  width: 100%; text-align: left; cursor: pointer; background: transparent; color: var(--fg);
+  border: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 2px 0;
+}
+.tac-dialect-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tac-dialect-t { font-weight: 650; font-size: 13px; }
+.tac-dialect-body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; border-top: 1px solid var(--border); padding-top: 6px; }
+.tac-classes li.partial { border-left: 2px solid var(--warn, #f59e0b); padding-left: 6px; }
+.tac-intent-head, .tac-intent {
+  display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1.6fr) minmax(0, .8fr);
+  gap: 8px; align-items: center; font-size: 12px;
+}
+.tac-intent-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding-bottom: 2px; }
+.tac-intent > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tac-intents { max-height: 320px; border: 1px solid var(--border); border-radius: 6px; }

@@ -27,6 +27,16 @@ type mockServiceNow struct {
 	wantUser  string
 	wantPass  string
 	creates   int
+	// attachments records what the Attachment API received (TAC escalation W2).
+	attachments []mockAttachment
+}
+
+// mockAttachment is one file the fake instance stored.
+type mockAttachment struct {
+	SysID       string
+	Name        string
+	ContentType string
+	Bytes       []byte
 }
 
 func newMockServiceNow() *mockServiceNow {
@@ -62,6 +72,24 @@ func (m *mockServiceNow) handle(w http.ResponseWriter, r *http.Request) {
 	defer m.mu.Unlock()
 
 	switch {
+	case r.Method == http.MethodPost && r.URL.Path == "/api/now/attachment/file":
+		// Attachment API (TAC escalation pack W2): raw bytes in the body,
+		// table + sys_id + file name in the query string.
+		sysID := r.URL.Query().Get("table_sys_id")
+		if _, ok := m.incidents[sysID]; !ok {
+			writeMockJSON(w, 404, map[string]any{"error": map[string]any{"message": "no record"}})
+			return
+		}
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // best-effort: the fake only needs the length
+		m.attachments = append(m.attachments, mockAttachment{
+			SysID: sysID, Name: r.URL.Query().Get("file_name"),
+			ContentType: r.Header.Get("Content-Type"), Bytes: body,
+		})
+		writeMockJSON(w, 201, map[string]any{"result": map[string]any{
+			"sys_id": fmt.Sprintf("att%04d", len(m.attachments)), "file_name": r.URL.Query().Get("file_name"),
+			"size_bytes": fmt.Sprintf("%d", len(body)),
+		}})
+
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/now/table/incident/"):
 		// Single-record read (inbound state sync): GET .../incident/{sys_id}.
 		sysID := strings.TrimPrefix(r.URL.Path, "/api/now/table/incident/")

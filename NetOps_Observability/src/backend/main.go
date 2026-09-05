@@ -86,6 +86,7 @@ import (
 	"netops/backend/internal/saved"
 	"netops/backend/internal/sealedfields"
 	"netops/backend/internal/seam"
+	"netops/backend/internal/tac"
 	// SECURITY-LANE-BEGIN
 	"netops/backend/internal/seclane"
 	// SECURITY-LANE-END
@@ -198,28 +199,39 @@ type server struct {
 	protocolCatalog   *protocoldiag.Catalog
 	protocolAnalyzer  *protocoldiag.Analyzer
 	protocolCollector *protocoldiag.Collector
-	tenants           tenantRepo
-	orgs              *tenant.OrgStore
-	bindings          *bindingStore
-	securitySettings  *securitySettingsStore
-	loginThrottle     *loginguard.Throttle // in-memory failed-login lockout (best-effort)
-	sessions          *session.Store       // server-side session lifecycle (idle/absolute/revocation)
-	apiKeys           *apikey.Store
-	refresh           *session.RefreshStore
-	snmpCreds         *snmpcred.Store
-	credOverrides     *credOverrideStore // learned SNMP credential bindings (credential sentinel)
-	credSentinel      *credSentinel      // self-healing credential resolution loop
-	sshHosts          *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
-	snmpProfiles      *snmpProfileStore
-	saved             saved.Repo
-	audit             auditRepo
-	notifyCfg         *notifyConfigStore
-	contactPoints     *contactPointStore
-	deviceLocations   *deviceLocationStore
-	sites             *sitesStore      // internal SoT sites (default provider)
-	deviceSites       *deviceSiteStore // operator device→site bindings (intent)
-	wanPolicy         *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
-	systemNet         *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
+	// TAC-ROUTES-BEGIN — the TAC escalation pack (internal/tac). The service is
+	// always built (its taxonomy and plans are embedded data); its live
+	// COLLECTOR is wired only under the same FEATURE_PROTOCOL_DIAG_COLLECT flag
+	// and the same read-only SSH custody the diagnostics collector uses, so the
+	// collect route 503s honestly while it is nil.
+	tacService *tac.Service
+	// tacBundles is the on-disk bundle store; tacConnectors holds each tenant's
+	// BYO case-connector credentials (write-only, sealed by the store).
+	tacBundles    *tac.Store
+	tacConnectors *ticketing.TACConnectorStore
+	// TAC-ROUTES-END
+	tenants          tenantRepo
+	orgs             *tenant.OrgStore
+	bindings         *bindingStore
+	securitySettings *securitySettingsStore
+	loginThrottle    *loginguard.Throttle // in-memory failed-login lockout (best-effort)
+	sessions         *session.Store       // server-side session lifecycle (idle/absolute/revocation)
+	apiKeys          *apikey.Store
+	refresh          *session.RefreshStore
+	snmpCreds        *snmpcred.Store
+	credOverrides    *credOverrideStore // learned SNMP credential bindings (credential sentinel)
+	credSentinel     *credSentinel      // self-healing credential resolution loop
+	sshHosts         *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
+	snmpProfiles     *snmpProfileStore
+	saved            saved.Repo
+	audit            auditRepo
+	notifyCfg        *notifyConfigStore
+	contactPoints    *contactPointStore
+	deviceLocations  *deviceLocationStore
+	sites            *sitesStore      // internal SoT sites (default provider)
+	deviceSites      *deviceSiteStore // operator device→site bindings (intent)
+	wanPolicy        *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
+	systemNet        *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
 	// DATA-PROTECTION-BEGIN — the whole Data Protection domain lives in
 	// internal/dataprotect: the backup intent store + live DR status, the
 	// netops-daily SM policy control plane, the snapshot inventory/management
@@ -1085,6 +1097,14 @@ func newServer() *server {
 		logError("protocol-diag", "live collect transport could not be wired — collect stays 503", errf(err))
 	}
 	// PROTOCOL-DIAG-END
+	// TAC-ROUTES-BEGIN — the escalation pack. A failure here means the EMBEDDED
+	// taxonomy/plan data did not load, which the package's own test would have
+	// caught; it is logged loudly and leaves every /tac route answering an
+	// honest 503 rather than taking the api down.
+	if err := srv.buildTACService(); err != nil {
+		logError("tac", "TAC escalation catalog could not be built — the escalation routes will answer 503", errf(err))
+	}
+	// TAC-ROUTES-END
 	// NMS vendor-controller framework (#95 P3b): dormant unless
 	// FEATURE_NMS_INTEGRATIONS=true. PG-backed on postgres (migration 0020,
 	// FORCE-RLS); in-memory store on the file backend (dev).
@@ -2268,6 +2288,21 @@ func (s *server) routes(mux *http.ServeMux) {
 	// to export a capture no signature could explain, which is the case the
 	// feature exists for.
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/export", s.handleProtocolDiagExport)
+	// TAC-ROUTES-BEGIN — the TAC escalation pack (protocol_diagnostics.go,
+	// internal/tac). Each route is registered INDIVIDUALLY so it stays visible
+	// to the route-isolation ledger; a nil tacService (embedded data failed to
+	// load) answers 503 on all six. The {id} wildcard is matched ahead of the
+	// broader "/api/incidents/" prefix by the mux's own specificity rule.
+	mux.HandleFunc("/api/incidents/{id}/tac", s.handleTACState)
+	mux.HandleFunc("/api/incidents/{id}/tac/classify", s.handleTACClassify)
+	mux.HandleFunc("/api/incidents/{id}/tac/plan", s.handleTACPlan)
+	mux.HandleFunc("/api/incidents/{id}/tac/collect", s.handleTACCollect)
+	mux.HandleFunc("/api/incidents/{id}/tac/bundle", s.handleTACBundle)
+	mux.HandleFunc("/api/incidents/{id}/tac/case", s.handleTACCase)
+	// The vendor-coverage view behind Iris → Knowledge: version-pinned reference
+	// data, identical for every tenant, revealing no tenant's devices.
+	mux.HandleFunc("/api/troubleshoot/tac/knowledge", s.handleTACKnowledge)
+	// TAC-ROUTES-END
 	// IGP-MONITORING-BEGIN — OSPF/IS-IS advanced monitoring (Project 4 D item
 	// 11, internal/igpmon). READ-ONLY over telemetry the platform already
 	// collects; every response carries an honest coverage block. Each route is
