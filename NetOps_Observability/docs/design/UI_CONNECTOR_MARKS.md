@@ -1,8 +1,9 @@
 # UI guidance — icons, connector marks and third-party artwork
 
-**Status: binding.** Owner decision D5 (2026-09-04, cloud provider marks) and
-tracker 239 (2026-09-05, connector marks) settled this for the whole product.
-Read this before drawing, importing or vendoring ANY glyph into the SPA.
+**Status: binding.** Owner decision D5 (2026-09-04, cloud provider marks),
+tracker 239 (2026-09-05, connector marks) and tracker 251 (2026-09-05, NMS
+controller marks) settled this for the whole product. Read this before drawing,
+importing or vendoring ANY glyph into the SPA.
 
 ---
 
@@ -35,9 +36,10 @@ Slack channel", "Twilio Account SID" are factual product copy and must stay.
 | Concern | File |
 |---|---|
 | Connector → display name, category, glyph, capability | `src/frontend/src/components/ConnectorGlyph.tsx` |
+| NMS controller → display name, category, glyph, scene | `src/frontend/src/components/NmsControllerArt.tsx` |
 | The glyph shapes themselves | `src/frontend/src/components/Icon.tsx` |
 | Cloud provider identity (AWS / Azure / GCP) | `src/frontend/src/components/CloudGlyph.tsx` |
-| Chip styling (`.conn-logo`) | `src/frontend/src/styles.css` — theme tokens only |
+| Chip styling (`.conn-logo`, `.nms-mark`) | `src/frontend/src/styles.css` — theme tokens only |
 | Register of every third-party mark and its terms | `scripts/license-data.json` |
 
 **Adding a connector is ONE ENTRY in `CONNECTOR_REGISTRY`.** No component may
@@ -67,6 +69,34 @@ artwork creeps back in.
 An unknown connector renders the **plug** — never a broken image, never another
 vendor's glyph.
 
+### 3a. The same rule for NMS controllers (tracker 251)
+
+A monitored **controller platform** — an NMS, a wireless controller, an SD-WAN
+manager, a fabric controller, an orchestrator — is identified exactly the same
+way: a generic functional glyph plus the product's name as plain text. The
+registry is `NMS_CONTROLLER_REGISTRY` in `components/NmsControllerArt.tsx`, and
+adding a controller is ONE ENTRY in it.
+
+| Category | Glyph | Controllers today |
+|---|---|---|
+| Wireless controller | `wireless` — radiated coverage | Meraki |
+| Campus assurance | `monitoring` | Catalyst Center |
+| SD-WAN controller | `topology` | SD-WAN Manager |
+| Fabric controller | `infrastructure` | Nexus Dashboard |
+| Secure edge services | `stack` — a layered service chain | Versa Director |
+| Multi-tenant orchestration | `automation` | Versa Concerto |
+| NMS | `alerts` | Prime Infrastructure |
+| **Controller (fallback)** | `plug` | anything unrecognised |
+
+The gallery's **dashboard-preview art** is kept, because it was never the
+problem: it is original, functional artwork showing what a CLASS of controller
+knows. It is keyed by functional SCENE (`wireless`, `assurance`, `overlay`,
+`fabric`, `services`, `orchestration`, `alarms`, `stream`), never by vendor,
+drawn entirely from theme tokens, and its window caption names the class of
+state on screen. **A scene must never be given a per-product variant, a
+per-product palette, or a caption that imitates a vendor's own console — a
+hostname least of all.**
+
 ## 4. The trademark boundary
 
 A glyph is acceptable only if it is recognisable as its FUNCTION and
@@ -87,7 +117,8 @@ them). This is not only a trademark rule — the theme is chosen at login, and a
 hardcoded light-mode tint is invisible or illegible in dark mode.
 
 `src/frontend/scripts/ui-consistency-check.mjs` fails on a hardcoded colour in a
-component; `ConnectorGlyph.test.tsx` fails on a retired brand hex anywhere in
+component; `ConnectorGlyph.test.tsx` and `NmsControllerArt.test.tsx` fail on a
+retired brand hex, monogram, symbol or imitated console caption anywhere in
 `src/`.
 
 ## 6. Accessibility
@@ -138,3 +169,11 @@ Without all four the answer is the generic glyph.
   They had been verbatim brand path data in brand colours, bundled into the
   shipped SPA with no usage terms recorded. `ConnectorGlyph.tsx` and this
   document are the replacement.
+- **2026-09-05 — tracker 251.** The NMS connector gallery's **controller
+  monogram chips** were replaced with generic Correlix glyphs. They were not a
+  trademark reproduction, but they were the last place in the product where a
+  third-party BRAND COLOUR carried identity: a per-vendor palette table
+  (`NMS_THEMES`) gradient-filled behind a stylised two-letter initial, with the
+  preview scene themed to match under a caption that imitated the vendor's own
+  console — a product hostname included. `NmsControllerArt.tsx` and §3a above
+  are the replacement; the vendor **names** stayed exactly where they were.

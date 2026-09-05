@@ -9,7 +9,7 @@ import {
 } from "../services/api";
 import Wizard, { WizardStep } from "../components/Wizard";
 import { Modal, Skeleton, Stat, StatStrip } from "../components/ui";
-import { NmsDashArt, NmsMark, NmsVendorId } from "../components/NmsVendorArt";
+import { NmsDashArt, NmsMark } from "../components/NmsControllerArt";
 
 // NMS Integrations (#95) — the vendor-controller gallery + guided setup +
 // integration manager. Controller INTELLIGENCE ingestion: each connected
@@ -244,11 +244,11 @@ export default function NmsIntegrations() {
           return (
             <button key={c.vendor} className="nms-tile" onClick={() => setSetupVendor(c)} aria-label={`Set up ${c.product}`}>
               <div className="nms-tile-art">
-                <NmsDashArt vendor={c.vendor as NmsVendorId} />
+                <NmsDashArt vendor={c.vendor} />
               </div>
               <div className="nms-tile-body">
                 <div className="nms-tile-head">
-                  <NmsMark vendor={c.vendor as NmsVendorId} size={34} />
+                  <span className="nms-mark"><NmsMark vendor={c.vendor} size={20} /></span>
                   <div className="nms-tile-title">
                     <span className="nms-tile-name">{c.product}</span>
                     <span className="nms-tile-domain">{meta.domain}</span>
@@ -505,7 +505,7 @@ function SetupWizard({ connector, onClose, onDone }: {
     <Modal
       title={connector.product}
       subtitle={meta.tagline}
-      logo={<NmsMark vendor={connector.vendor as NmsVendorId} size={28} />}
+      logo={<span className="nms-mark"><NmsMark vendor={connector.vendor} size={18} /></span>}
       onClose={onClose}
     >
       <Wizard
@@ -592,7 +592,7 @@ function ManageModal({ integration, health, onClose, onChanged, onDeleted }: {
     <Modal
       title={it.displayName || it.id}
       subtitle={`${it.product || it.vendor} · ${it.baseUrl}`}
-      logo={<NmsMark vendor={it.vendor as NmsVendorId} size={28} />}
+      logo={<span className="nms-mark"><NmsMark vendor={it.vendor} size={18} /></span>}
       onClose={onClose}
       wide
     >

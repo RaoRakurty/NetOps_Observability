@@ -510,6 +510,17 @@ const PATHS: Record<string, JSX.Element> = {
       <path d="M12 19v2.5" />
     </>
   ),
+  // wireless — radiated coverage: two broadcast arcs over a radiating point.
+  // The functional mark for a WIRELESS CONTROLLER (tracker 251). Original
+  // Correlix geometry drawn in this file's language; the dot idiom is the same
+  // zero-length round-capped line `infrastructure` already uses.
+  wireless: (
+    <>
+      <path d="M3.6 10.2a11.4 11.4 0 0 1 16.8 0" />
+      <path d="M7.4 14a6.6 6.6 0 0 1 9.2 0" />
+      <line x1="12" y1="18" x2="12.01" y2="18" />
+    </>
+  ),
 };
 
 export default function Icon({ name, size = 18, className, style, label }: Props) {
