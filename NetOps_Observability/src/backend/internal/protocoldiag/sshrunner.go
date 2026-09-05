@@ -211,3 +211,49 @@ func (r *SSHCommandRunner) release(deviceID string) {
 }
 
 var _ CommandRunner = (*SSHCommandRunner)(nil)
+
+// ── the exported gate seam ──────────────────────────────────────────────────
+//
+// CommandGate is the EXPORTED form of the closed-table question: "could the
+// feature this runner serves have rendered this exact command for this device?".
+//
+// It exists so a SIBLING feature can reuse this whole policy layer — read-only
+// shape, closed table, one collection in flight per device, bounded time and
+// output — over its OWN closed table, without either widening this package's
+// tables or growing a second, subtly different runner somewhere else. The TAC
+// escalation pack (internal/tac) is the first such caller: its table is the set
+// of commands its reviewed per-dialect plan files authorise, and nothing else.
+//
+// An implementation MUST be conservative: it is the last thing between a plan
+// file and a device, and it answers for a SPECIFIC device, so a platform it does
+// not recognise must answer false (there is no fallback dialect) rather than
+// borrow another vendor's table.
+type CommandGate interface {
+	// Allows reports whether command is a rendering of an authored template for
+	// this device's dialect.
+	Allows(dev Device, command string) bool
+	// Name identifies the gate in a refusal message, so an operator reading the
+	// error knows WHICH closed table refused.
+	Name() string
+}
+
+// NewSSHGatedRunner builds the live runner over a caller-supplied closed table.
+// It is the same policy layer NewSSHCommandRunner and NewSSHBatteryRunner build;
+// only the table differs. Both dependencies are REQUIRED — a nil gate would be a
+// runner that allows everything, which is the exact opposite of the point.
+func NewSSHGatedRunner(gate CommandGate, gw Gateway, opts ...SSHRunnerOption) (*SSHCommandRunner, error) {
+	if gate == nil {
+		return nil, errors.New("protocoldiag: nil command gate")
+	}
+	if gw == nil {
+		return nil, errors.New("protocoldiag: nil gateway")
+	}
+	return newLiveRunner(gw, exportedGate{gate: gate}, opts...), nil
+}
+
+// exportedGate adapts an exported CommandGate onto the package's internal
+// commandGate seam.
+type exportedGate struct{ gate CommandGate }
+
+func (g exportedGate) allows(dev Device, command string) bool { return g.gate.Allows(dev, command) }
+func (g exportedGate) name() string                           { return g.gate.Name() }
