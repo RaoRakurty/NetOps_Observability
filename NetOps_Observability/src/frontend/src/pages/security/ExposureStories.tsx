@@ -34,7 +34,7 @@ function StoryCard({ story, onOpen }: { story: CorrObject; onOpen: (id: string) 
         className={`sec-stripe ${story.verdict_tier === "confirmed" ? "t-bad" : story.verdict_tier === "suspected" ? "t-warn" : ""}`}
         aria-hidden="true"
       />
-      <span className="main">
+      <span className="sec-main">
         <b>{story.top_hypothesis || "Correlated exposure"}</b>
         <span className="sub">
           {story.owner ? `${story.owner} · ` : ""}

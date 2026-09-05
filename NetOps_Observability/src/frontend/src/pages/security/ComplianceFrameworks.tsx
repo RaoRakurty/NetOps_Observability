@@ -114,7 +114,7 @@ export default function ComplianceFrameworks({
                     onChange={(e) => setPending((p) => ({ ...p, [r.id]: e.target.checked }))}
                   />
                 </label>
-                <div className="main">
+                <div className="sec-main">
                   <b>{r.name}</b>
                   <div className="sub">{r.origin} · version {r.version}</div>
                   <div className="sub">{r.scope}</div>
@@ -143,7 +143,7 @@ export default function ComplianceFrameworks({
                           onChange={(e) => setPending((p) => ({ ...p, [r.id]: e.target.checked }))}
                         />
                       </label>
-                      <div className="main">
+                      <div className="sec-main">
                         <b>{r.name}</b>
                         <div className="sub">{r.origin} · version {r.version}</div>
                         <div className="sub">{r.scope}</div>

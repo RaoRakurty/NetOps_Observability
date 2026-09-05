@@ -315,7 +315,9 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
         <div
           class="sec-hero-grid"
         >
-          <div>
+          <div
+            class="sec-hero-col sec-hero-chain"
+          >
             <p
               class="mini-meta"
               style="margin: 0px;"
@@ -323,7 +325,9 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
               The chronology for this story has not loaded — open the full story for its causality path.
             </p>
           </div>
-          <div>
+          <div
+            class="sec-hero-col sec-hero-side"
+          >
             <div
               class="sec-owner"
             >
@@ -447,7 +451,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
               class="sec-stripe t-bad"
             />
             <span
-              class="main"
+              class="sec-main"
             >
               <b>
                 Non-TLS HTTP server
@@ -473,7 +477,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
               class="sec-stripe t-warn"
             />
             <span
-              class="main"
+              class="sec-main"
             >
               <b>
                 SNMP v2c community
@@ -520,7 +524,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
               class="sec-stripe t-bad"
             />
             <span
-              class="main"
+              class="sec-main"
             >
               <b>
                 Telnet on VTY — ISP seam
@@ -567,7 +571,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
               class="sec-stripe t-bad"
             />
             <span
-              class="main"
+              class="sec-main"
             >
               <b>
                 Outbound beacon to a rare destination
@@ -615,7 +619,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
                 class="sec-stripe"
               />
               <span
-                class="main"
+                class="sec-main"
               >
                 <b>
                   CIS
@@ -641,7 +645,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
                 class="sec-stripe"
               />
               <span
-                class="main"
+                class="sec-main"
               >
                 <b>
                   NIST-CSF
@@ -667,7 +671,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
                 class="sec-stripe"
               />
               <span
-                class="main"
+                class="sec-main"
               >
                 <b>
                   PCI-DSS

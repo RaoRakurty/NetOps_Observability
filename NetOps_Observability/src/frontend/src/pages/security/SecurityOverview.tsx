@@ -54,7 +54,7 @@ function StoryHero({ story, events, onOpen }: {
         {Number(story.node_count) === 1 ? "y" : "ies"} into a single seam-owned story.
       </p>
       <div className="sec-hero-grid">
-        <div>
+        <div className="sec-hero-col sec-hero-chain">
           {chain.length === 0 ? (
             <p className="mini-meta" style={{ margin: 0 }}>
               The chronology for this story has not loaded — open the full story for its causality path.
@@ -63,7 +63,7 @@ function StoryHero({ story, events, onOpen }: {
             <ol className="sec-chain" aria-label="Causality chain">
               {chain.map((e, i) => (
                 <li className="sec-node" key={`${e.ts}-${i}`}>
-                  <span className="rail" aria-hidden="true">
+                  <span className="sec-rail" aria-hidden="true">
                     <span className={`pin ${e.tone === "red" ? "t-bad" : e.tone === "orange" ? "t-warn" : e.tone === "green" ? "t-good" : ""}`} />
                     <span className="link" />
                   </span>
@@ -77,7 +77,7 @@ function StoryHero({ story, events, onOpen }: {
             </ol>
           )}
         </div>
-        <div>
+        <div className="sec-hero-col sec-hero-side">
           <div className="sec-owner">
             <div className="sec-eyebrow">Ownership</div>
             <div className="seam-name">{story.owner || "unattributed"}</div>
@@ -252,7 +252,7 @@ export default function SecurityOverview() {
                 {frameworks.slice(0, 6).map((f) => (
                   <div key={f.key} className="sec-row" style={{ cursor: "default" }}>
                     <span className="sec-stripe" aria-hidden="true" />
-                    <span className="main"><b>{f.label}</b><span className="sub">tagged hardening findings</span></span>
+                    <span className="sec-main"><b>{f.label}</b><span className="sub">tagged hardening findings</span></span>
                     <span className="fix">{f.count.toLocaleString()}</span>
                   </div>
                 ))}

@@ -40,6 +40,35 @@ vi.mock("../../services/api", () => ({
 
 import SecurityOverview from "./SecurityOverview";
 import { FACETS, FINDINGS, POSTURE, POSTURE_UNASSESSED, SEAMS, STORY, TREND } from "./fixtures";
+import { signal, timeline } from "../../test/factories";
+
+// A deliberately UNFRIENDLY flagship: a headline and an owner made of long
+// unbreakable identifiers, six chain nodes, and details long enough to wrap.
+// This is the shape that made the hero render its columns on top of each other.
+const LONG_STORY = {
+  ...STORY,
+  top_hypothesis:
+    "dc1-border-leaf-01.pod3.example.net:HundredGigE0/0/0/17.3001 management plane is reachable from the ISP seam",
+  owner: "dc1-border-leaf-01.pod3.example.net/HundredGigE0/0/0/17.3001",
+  grounding: "seam+topo+prefix-origin",
+};
+const LONG_TIMELINE = timeline({
+  correlation_id: "corr-9",
+  signals: [
+    "bgp_state_anomaly", "interface_error_rate", "security_exposure",
+    "security_posture", "probe_latency_departure", "syslog_burst",
+  ].map((kind, i) =>
+    signal({
+      signal_id: `sig-${i}`,
+      kind,
+      ts: `2026-09-01 09:0${i}:00`,
+      entity_id: `dc1-border-leaf-0${i + 1}.pod3.example.net:HundredGigE0/0/0/17.300${i}`,
+      modality_class: i % 2 ? "data_plane" : "control_plane",
+      attached: true,
+      is_trigger: i === 0,
+    }),
+  ),
+});
 
 afterEach(cleanup);
 
@@ -132,6 +161,77 @@ describe("Security Overview — exposure story hero", () => {
     securityExposureStories.mockResolvedValue([]);
     render(<SecurityOverview />);
     expect(await screen.findByText(/No security-lane correlation has been grounded yet/i)).toBeTruthy();
+  });
+});
+
+// Layout contract for the flagship box (owner report 2026-09-05: "the stories
+// overlapped format"). The cause was CSS, so the guards here are the STRUCTURE
+// the fixed CSS keys off: the two hero columns are real, labelled elements that
+// can fold independently, every chain node still owns exactly one rail and one
+// body, and — the actual bug — nothing in the section reuses an app-shell class
+// name. `.rail` (the nav sidebar) and `.main` (the content region) are global
+// element rules in styles.css; a bare `rail`/`main` class inside a `.sec` grid
+// inherits grid-area:sidebar / grid-area:main and paints out of its cell, over
+// its siblings. happy-dom applies no CSS, so these are class contracts, not
+// geometry — geometry is what they PROTECT.
+describe("Security Overview — exposure story hero layout", () => {
+  beforeEach(() => {
+    securityExposureStories.mockResolvedValue([LONG_STORY]);
+    correlationTimeline.mockResolvedValue(LONG_TIMELINE);
+  });
+
+  it("gives the hero two independently foldable columns, both allowed to shrink", async () => {
+    const { container } = render(<SecurityOverview />);
+    await screen.findByRole("list", { name: /causality chain/i });
+    const grid = container.querySelector(".sec-hero-grid")!;
+    const cols = grid.querySelectorAll(":scope > .sec-hero-col");
+    expect(cols.length).toBe(2);
+    expect(cols[0].classList.contains("sec-hero-chain")).toBe(true);
+    expect(cols[1].classList.contains("sec-hero-side")).toBe(true);
+    // The chain lives in the first column, the ownership card in the second —
+    // never both in one cell.
+    expect(cols[0].querySelector(".sec-chain")).toBeTruthy();
+    expect(cols[1].querySelector(".sec-owner")).toBeTruthy();
+  });
+
+  it("renders every chain node as exactly one rail plus one body", async () => {
+    const { container } = render(<SecurityOverview />);
+    const chain = await screen.findByRole("list", { name: /causality chain/i });
+    const nodes = chain.querySelectorAll(".sec-node");
+    expect(nodes.length).toBe(6);
+    for (const n of nodes) {
+      expect(n.querySelectorAll(":scope > .sec-rail").length).toBe(1);
+      expect(n.querySelectorAll(":scope > .body").length).toBe(1);
+      // pin + dashed link ride INSIDE the rail, never as loose node children.
+      expect(n.querySelectorAll(".sec-rail > .pin").length).toBe(1);
+      expect(n.querySelectorAll(".sec-rail > .link").length).toBe(1);
+      // title and timestamp are separate elements so they can be separate lines
+      expect(n.querySelector(".body > b")).toBeTruthy();
+      expect(n.querySelector(".body > .meta")).toBeTruthy();
+    }
+  });
+
+  it("reuses no app-shell class name anywhere in the section", async () => {
+    const { container } = render(<SecurityOverview />);
+    await screen.findByRole("list", { name: /causality chain/i });
+    // styles.css owns `.rail` (grid-area: sidebar, z-index: 50) and `.main`
+    // (grid-area: main, own background). Either one inside `.sec` is the
+    // overlap bug coming back.
+    expect(container.querySelectorAll(".rail, .main").length).toBe(0);
+    expect(container.querySelectorAll(".sec-rail").length).toBe(6);
+    expect(container.querySelectorAll(".sec-row .sec-main").length).toBeGreaterThan(0);
+  });
+
+  it("keeps a long headline and a long owner as plain wrapping text", async () => {
+    render(<SecurityOverview />);
+    await screen.findByRole("list", { name: /causality chain/i });
+    const h = screen.getByRole("heading", { name: /management plane is reachable from the ISP seam/i });
+    // No inline nowrap/width escape hatch: wrapping is the CSS's job and must
+    // stay possible for the long identifier in the headline.
+    expect((h as HTMLElement).style.whiteSpace).toBe("");
+    const owner = document.querySelector(".sec-owner .seam-name") as HTMLElement;
+    expect(owner.textContent).toContain("HundredGigE0/0/0/17.3001");
+    expect(owner.style.whiteSpace).toBe("");
   });
 });
 

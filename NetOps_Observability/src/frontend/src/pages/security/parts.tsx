@@ -87,7 +87,7 @@ export function FindingRow({ finding, onOpen }: { finding: SecFindingLike; onOpe
   return (
     <button type="button" className="sec-row" onClick={() => onOpen?.(finding)}>
       <span className={`sec-stripe ${toneClass(tone)}`} aria-hidden="true" />
-      <span className="main">
+      <span className="sec-main">
         <b>{title}</b>
         <span className="sub">
           {subjectLine(finding)}

@@ -153,7 +153,7 @@ export default function SecurityCompliance() {
                     {reasons.map((r) => (
                       <li key={r.reason} className="sec-row" style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                         <span className={`sec-stripe ${r.recorded ? "" : "t-warn"}`} aria-hidden="true" />
-                        <div className="main">
+                        <div className="sec-main">
                           <b>{r.reason}</b>
                           <div className="sub">
                             {r.count.toLocaleString()} control{r.count === 1 ? "" : "s"}
