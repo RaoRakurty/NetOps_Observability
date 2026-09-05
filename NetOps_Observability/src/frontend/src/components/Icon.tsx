@@ -89,11 +89,13 @@ const PATHS: Record<string, JSX.Element> = {
       <path d="m7 14 4-4 3 3 5-6" />
     </>
   ),
+  // Geometry: translated +1 in y (2026-09-03 rail geometry audit) — the
+  // cylinder was authored 2..20, now 3..21, so its bbox centre is (12,12).
   datasets: (
     <>
-      <ellipse cx="12" cy="5" rx="8" ry="3" />
-      <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
-      <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+      <ellipse cx="12" cy="6" rx="8" ry="3" />
+      <path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6" />
+      <path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
     </>
   ),
   // upstream: Feather `grid` (MIT) — verbatim path data.
@@ -129,7 +131,9 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="8.6" y1="13.3" x2="15.4" y2="17.7" />
     </>
   ),
-  copilot: <path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z" />,
+  // Geometry: translated +1 in y (2026-09-03 rail geometry audit) — the
+  // sparkle was authored 3..19, now 4..20, so its bbox centre is (12,12).
+  copilot: <path d="m12 4 1.9 5.8L20 12l-6.1 2.2L12 20l-1.9-5.8L4 12l6.1-2.2z" />,
   // upstream: Feather `sliders` (MIT) — verbatim path data.
   settings: (
     <>
@@ -169,12 +173,16 @@ const PATHS: Record<string, JSX.Element> = {
     </>
   ),
   // Monitoring — a gauge/speedometer (active health watching).
+  // Geometry: translated +2 in y (2026-09-03 rail geometry audit) — the glyph
+  // was authored against the top of the viewBox (ink 2..18), so it floated
+  // 2px high inside the rail key while every neighbour was box-centred.
+  // Now 4..20, i.e. bbox centre (12,12). Guarded by Icon.geometry.test.ts.
   monitoring: (
     <>
-      <path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
-      <path d="M12 3a9 9 0 0 0-9 9 9 9 0 0 0 1.5 5" />
-      <path d="M12 3a9 9 0 0 1 9 9 9 9 0 0 1-1.5 5" />
-      <line x1="13.5" y1="10.5" x2="17" y2="7" />
+      <path d="M12 16a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
+      <path d="M12 5a9 9 0 0 0-9 9 9 9 0 0 0 1.5 5" />
+      <path d="M12 5a9 9 0 0 1 9 9 9 9 0 0 1-1.5 5" />
+      <line x1="13.5" y1="12.5" x2="17" y2="9" />
     </>
   ),
   // Incident Response — a siren/alert with response rays.
