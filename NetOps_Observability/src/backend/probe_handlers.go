@@ -484,8 +484,8 @@ func (s *server) buildExperienceAPI(store experience.Store, cat dem.Catalogue) (
 		// verdict instead of stopping at suspected. Wired unconditionally —
 		// with ClickHouse unreachable the source reports misconfigured with its
 		// reason, which is what an operator needs to see.
-		Flows:  demFlowQuerier{s: s},
-		Policy: experienceScorePolicy(),
+		Flows:   demFlowQuerier{s: s},
+		Policy:  experienceScorePolicy(),
 		Enabled: envBool(dem.EnvFeatureFlag),
 		// The AI investigator needs BOTH the platform copilot and its own
 		// switch: a feature that can send evidence to a model gets its own.
