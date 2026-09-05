@@ -3506,8 +3506,11 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		all := s.withCredActive(withDeviceType(visibleDevices(s.discovery.Devices(), claims)))
-		// Wireless WLCs + APs are fleet citizens too (one LAN domain) —
-		// projected read-time from the wireless store, deduped by address.
+		// Wireless WLCs + APs are fleet citizens too (one LAN domain). The ones
+		// an enabled integration polls are already in `all` — the registry holds
+		// them (wireless.DeviceSource) so the licence counts them; this adds the
+		// REMAINDER, the inventory nothing is polling, marked not monitored with
+		// its reason rather than dropped from the fleet (tracker 256).
 		all = append(all, s.wirelessDeviceRows(r.Context(), claims, all)...)
 		// Stable order: without one, paging over a map-backed aggregator can
 		// show the same device twice and never show another at all.
