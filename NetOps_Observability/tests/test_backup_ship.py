@@ -22,8 +22,9 @@ PATH — never grep-only where execution is possible) pinning:
     rsync rc=24 on the live data/ tree is an expected warning, not an abort;
     the zstd archive write carries -f (same-day re-run must not abort);
   * restore-drill.sh: writes its report to the exact path the API reads
-    (parity-pinned against system_backup.go's RESTORE_DRILL_REPORT default and
-    the compose data/api ↔ /data mount) — LastDrillResult can actually appear;
+    (parity-pinned against main.go's RESTORE_DRILL_REPORT default — the Data
+    Protection domain moved to internal/dataprotect and reads no environment of
+    its own — and the compose data/api ↔ /data mount) — LastDrillResult can actually appear;
   * every touched script stays `bash -n`/`sh -n` clean and shellcheck-clean
     (restore-drill.sh: no error-severity findings; the rest: fully clean).
 """
@@ -48,7 +49,12 @@ WATCHDOG = SCRIPTS / "stack-watchdog.sh"
 APPLY = SCRIPTS / "apply-backup-config.sh"
 BACKUP = SCRIPTS / "backup.sh"
 DRILL = SCRIPTS / "restore-drill.sh"
-SYSTEM_BACKUP_GO = ROOT / "src" / "backend" / "system_backup.go"
+# The Data Protection domain was extracted to internal/dataprotect on
+# 2026-09-03, and with it every env switch it used to read: the package now
+# reads NO environment at all, and the two report paths are resolved ONCE in
+# main.go and travel to it in Deps as values. main.go is therefore where the
+# api's side of this parity lives.
+API_ENV_WIRING_GO = ROOT / "src" / "backend" / "main.go"
 SWTPM_GO = ROOT / "src" / "backend" / "internal" / "vault" / "secrets_swtpm.go"
 COMPOSE = ROOT / "deployment" / "docker" / "docker-compose.yml"
 
@@ -596,9 +602,22 @@ def test_backup_zstd_invocation_carries_force_overwrite(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _go_default(env_key: str) -> str:
-    m = re.search(rf'envOr\("{env_key}",\s*"([^"]+)"\)', SYSTEM_BACKUP_GO.read_text())
-    assert m, f"system_backup.go no longer reads {env_key} — update these pins"
-    return m.group(1)
+    """The default container path the api reads a host-written report from.
+
+    Read out of main.go's Deps assembly, which is the ONE place the switch is
+    resolved. If a second resolution site ever appears, this returns the first
+    and the parity assertion silently pins the wrong one — so the count is
+    checked too."""
+    body = API_ENV_WIRING_GO.read_text()
+    hits = re.findall(rf'envOr\("{env_key}",\s*"([^"]+)"\)', body)
+    assert hits, (
+        f"main.go no longer resolves {env_key} — the Data Protection wiring "
+        f"moved again; find the new site and update these pins")
+    assert len(hits) == 1, (
+        f"{env_key} is resolved in {len(hits)} places in main.go ({hits}); the "
+        f"api must read the report from exactly one path or the scripts cannot "
+        f"be proved to write where it reads")
+    return hits[0]
 
 
 def test_api_data_mount_is_data_api():

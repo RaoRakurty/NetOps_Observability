@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/apikey"
+	"netops/backend/internal/dataprotect"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/licence"
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
@@ -73,8 +75,39 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 		wirelessActions: newWirelessActionStore(), // #128 Phase 8: dormant unless FEATURE_WIRELESS_ACTIONS
 		wsTickets:       wsticket.NewStore(),      // one-time WebSocket tickets (device SSH)
 	}
+	// LICENCE-BEGIN — the harness is LICENCE-NEUTRAL: every ceiling unlimited,
+	// every feature granted, so every existing test behaves exactly as it did
+	// before the licence mechanism existed.
+	//
+	// This is deliberate and it is not a gap. The gates sit on real admission
+	// paths (device create, tenant create, watchlist add) and this corpus builds
+	// fleets and multi-org fixtures through those same handlers — an isolation
+	// test asserting that tenant A cannot see tenant B's rows must assert that
+	// at full strength, not fail because its fixture needed a second tenant. The
+	// gates are proved separately, against real signed documents, in
+	// licence_routes_test.go; internal/licence and internal/entitlement prove the
+	// mechanism and the semantics.
+	s.entitlements = licence.NewUnlimitedService()
+	// LICENCE-END
 	must(us.SeedAdmin("admin", "Passw0rd!2345"))
 	s.backfillBindings() // PBAC Phase A: mirror seeded users into role_bindings
+	// DATA-PROTECTION: the routes are registered off s.dataProtect, so the
+	// harness must build it exactly like newServer does. The three file paths
+	// are pointed INSIDE the test's temp dir unless the caller already set them
+	// (backupTestServer does, and TestOperationHistorySurvivesARestart needs a
+	// second server to see the SAME ops file), so no test can touch /data.
+	if envOr("SYSTEM_BACKUP_FILE", "") == "" {
+		t.Setenv("SYSTEM_BACKUP_FILE", dir+"/system_backup.json")
+	}
+	if envOr("SNAPSHOT_OPS_FILE", "") == "" {
+		t.Setenv("SNAPSHOT_OPS_FILE", dir+"/snapshot_operations.json")
+	}
+	if envOr("SNAPSHOT_VERIFY_FILE", "") == "" {
+		t.Setenv("SNAPSHOT_VERIFY_FILE", dir+"/snapshot_verify.json")
+	}
+	backupCfg, err := dataprotect.NewFileConfigStore(envOr("SYSTEM_BACKUP_FILE", dir+"/system_backup.json"))
+	must(err)
+	s.dataProtect = dataprotect.New(s.dataProtectDeps(backupCfg))
 	mux := http.NewServeMux()
 	s.routes(mux)
 	srv := httptest.NewServer(s.withAuth(s.withAudit(mux)))

@@ -95,21 +95,164 @@ os_ip() {
     --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null
 }
 
+# ---------------------------------------------------------------------------
+# 2026-09-03 — THE HEALING HAS NEVER WORKED ON A TLS INSTALL.
+#
+# Every call below used to be a bare `http://$ip:9200/...`. This deployment runs
+# OpenSearch with the security plugin and HTTPS on 9200, so each one hit the TLS
+# listener with a plaintext HTTP request: OpenSearch logged NotSslRecordException
+# (that spam is ~90% of a 1.1 GiB container log — the healer was the thing
+# filling the disk it exists to protect), curl failed, and `-fsS ... 2>/dev/null
+# | grep -o ... | wc -l` turned the failure into the number **0**. So
+# heal_opensearch reported "no blocked indices" and returned — i.e. the
+# flood-stage healing this whole script exists for has never once run on a
+# secured install. Textbook §16.1: the probe failed and the script reported
+# health.
+#
+# Two fixes, and the second is the one that matters:
+#   1. Speak the right protocol. Try https with the internal CA and the ADMIN
+#      client certificate (data/tls/admin — the superadmin DN; clearing an
+#      index block is a cluster-admin write), fall back to plaintext only if
+#      that is genuinely what the node speaks.
+#   2. A failed probe is a NAMED WARN carrying curl's own error, never a 0.
+#      "I could not ask" and "the answer is none" are different facts.
+#
+# --resolve, never -k: the issued SAN set is `DNS:opensearch` plus a SPIFFE URI
+# and NO IP address, so https://<container-ip> cannot pass hostname
+# verification. Pinning the NAME to the container's address keeps full
+# verification; -k would convert a real MITM or a misissued cert into a silent
+# pass, which is the same swallow in a different costume.
+# ---------------------------------------------------------------------------
+OS_TLS_DIR="${HYGIENE_TLS_DIR:-$SCRIPT_DIR/../data/tls}"
+OS_URL=""
+OS_CURL_ARGS=()
+OS_PROBE_ERR=""
+OS_BLOCKED=""
+OS_BLOCKED_ERR=""
+OS_PROBE_STATE="$SCRIPT_DIR/.host-hygiene.osprobe.state"
+
+# os_probe_setup <container-ip> — decide the scheme ONCE per run from evidence.
+# Sets OS_URL + OS_CURL_ARGS on success; sets OS_PROBE_ERR and returns 1 when
+# neither scheme answers, so the caller can report WHY rather than assume.
+os_probe_setup() {
+  local ip="$1" out rc ca crt key tls_err http_err
+  OS_URL=""; OS_CURL_ARGS=(); OS_PROBE_ERR=""
+  ca="$OS_TLS_DIR/ca.pem"
+  [ -r "$ca" ] || ca="$OS_TLS_DIR/admin/ca.pem"
+  crt="$OS_TLS_DIR/admin/admin.crt"
+  key="$OS_TLS_DIR/admin/admin.key"
+  if [ -r "$ca" ] && [ -r "$crt" ] && [ -r "$key" ]; then
+    # stderr KEPT (§16.1): curl's own message is the evidence.
+    out=$(curl -sS -m 10 --cacert "$ca" --cert "$crt" --key "$key" \
+            --resolve "opensearch:9200:$ip" \
+            "https://opensearch:9200/_cluster/health" 2>&1)
+    rc=$?   # OWN LINE — inside `if ! out=$(...)` this would be the if's status.
+    if [ "$rc" -eq 0 ]; then
+      OS_URL="https://opensearch:9200"
+      OS_CURL_ARGS=(--cacert "$ca" --cert "$crt" --key "$key"
+                    --resolve "opensearch:9200:$ip")
+      return 0
+    fi
+    tls_err="https probe failed (curl rc=$rc): $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"
+  else
+    tls_err="https not attempted — TLS material unreadable (need $ca, $crt, $key)"
+  fi
+  # Plaintext fallback: correct for a non-TLS install, and deliberately SECOND
+  # so a secured node is never poked with a plaintext request (that is what
+  # produced the NotSslRecordException flood).
+  out=$(curl -sS -m 10 "http://$ip:9200/_cluster/health" 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    OS_URL="http://$ip:9200"
+    OS_CURL_ARGS=()
+    return 0
+  fi
+  http_err="http probe failed (curl rc=$rc): $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"
+  OS_PROBE_ERR="$tls_err ;; $http_err"
+  return 1
+}
+
+# os_blocked_count — sets OS_BLOCKED to the count and returns 0, or returns 1
+# with the cause in OS_BLOCKED_ERR. It must never yield 0 for a question it
+# could not ask.
+#
+# The result comes back in a GLOBAL, not on stdout, on purpose: `n=$(fn)` runs
+# the function in a SUBSHELL, and a subshell cannot export OS_BLOCKED_ERR back
+# to its caller — the error would vanish and the caller would fall through as
+# though nothing had failed, which is precisely the swallow this whole change
+# removes. (Caught by the unit test, not by review.)
 os_blocked_count() {
-  local ip="$1"
-  curl -fsS -m 10 "http://$ip:9200/_all/_settings/index.blocks.read_only_allow_delete" 2>/dev/null \
-    | grep -o 'read_only_allow_delete' | wc -l
+  local out rc
+  OS_BLOCKED_ERR=""; OS_BLOCKED=""
+  if [ -z "$OS_URL" ]; then
+    OS_BLOCKED_ERR="no OpenSearch endpoint resolved (os_probe_setup not run or failed)"
+    return 1
+  fi
+  out=$(curl -sS -m 10 "${OS_CURL_ARGS[@]+"${OS_CURL_ARGS[@]}"}" \
+          "$OS_URL/_all/_settings/index.blocks.read_only_allow_delete" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    OS_BLOCKED_ERR="curl rc=$rc: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"
+    return 1
+  fi
+  # A 401/403/exception body is a 200-shaped failure: curl exits 0, `grep -o`
+  # finds nothing, and the old code called that "0 blocked".
+  case "$out" in
+    *security_exception*|*NotSslRecordException*|*'"status":40'*|*'"status":50'*)
+      OS_BLOCKED_ERR="OpenSearch refused the query: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"
+      return 1 ;;
+  esac
+  OS_BLOCKED=$(printf '%s' "$out" | grep -o 'read_only_allow_delete' | wc -l)
+  return 0
+}
+
+# One push per TRANSITION into (and out of) a broken probe — a 10-minute cron
+# that pushed every run would be muted within the hour, and a muted alert is
+# how the original bug survived. The log line is emitted every run regardless.
+os_probe_failure_transition() {  # $1 = current state: ok|failed
+  local prev
+  prev=$(cat "$OS_PROBE_STATE" 2>/dev/null || echo "ok")
+  [ "$prev" = "$1" ] && return 1
+  printf '%s\n' "$1" > "$OS_PROBE_STATE" 2>/dev/null ||
+    echo "   WARN: could not persist $OS_PROBE_STATE — probe-state transitions will re-alert" >&2
+  return 0
 }
 
 heal_opensearch() {
   local pct ip blocked
   pct=$(disk_pct)
   [ -n "$pct" ] && [ "$pct" -lt "$FLOOD_CLEAR_PCT" ] || return 0  # never unlock while disk is still hot
+  # No OpenSearch container on this host is not a fault — nothing to heal.
   ip=$(os_ip); [ -n "$ip" ] || return 0
-  blocked=$(os_blocked_count "$ip")
-  [ "${blocked:-0}" -gt 0 ] || return 0
+  if ! os_probe_setup "$ip"; then
+    # NAMED, with curl's own error. Counted as a reclaim failure so the run
+    # exits non-zero and the existing degraded push covers a sweep that could
+    # not do its job (§16.1) — the healer being blind is exactly as serious as
+    # the flood stage it heals.
+    echo "   WARN: OPENSEARCH_PROBE_FAILED — flood-stage read-only healing did NOT run and the number of blocked indices is UNKNOWN (not zero). $OS_PROBE_ERR"
+    RECLAIM_FAILURES=$((RECLAIM_FAILURES + 1))
+    if os_probe_failure_transition failed; then
+      push "NetOps: OpenSearch heal probe FAILED" "warning" "high" \
+        "host-hygiene cannot reach OpenSearch on $(hostname), so flood-stage read-only healing is OFF and the blocked-index count is UNKNOWN. If ingest stops after a disk episode this is why. Detail: $OS_PROBE_ERR"
+    fi
+    return 1
+  fi
+  # Recovery: record "ok" so the NEXT failure alerts again. The non-zero return
+  # here means "no transition" (we were already ok), which is the normal path —
+  # it is a value, not an error, so there is nothing to report. This is NOT a
+  # `|| true` swallow: os_probe_failure_transition reports its own write failure
+  # on stderr and has no other failure mode.
+  if os_probe_failure_transition ok; then :; fi
+  if ! os_blocked_count; then
+    echo "   WARN: OPENSEARCH_BLOCK_QUERY_FAILED — cannot tell whether any index is read-only (this is UNKNOWN, not zero). $OS_BLOCKED_ERR"
+    RECLAIM_FAILURES=$((RECLAIM_FAILURES + 1))
+    return 1
+  fi
+  blocked="$OS_BLOCKED"
+  [ "$blocked" -gt 0 ] || return 0
   echo "-- healing: clearing read_only_allow_delete on $blocked indices (disk ${pct}%) --"
-  if curl -fsS -m 30 -X PUT "http://$ip:9200/_all/_settings" \
+  if curl -fsS -m 30 "${OS_CURL_ARGS[@]+"${OS_CURL_ARGS[@]}"}" \
+       -X PUT "$OS_URL/_all/_settings" \
        -H 'Content-Type: application/json' \
        -d '{"index.blocks.read_only_allow_delete": null}' -o /dev/null; then
     push "NetOps: OpenSearch indices healed" "adhesive_bandage" "high" \
@@ -200,8 +343,19 @@ status() {
   echo "pip cache:       $(du -sh ~/.cache/pip 2>/dev/null | cut -f1 || echo '—')"
   docker system df 2>/dev/null || true
   local ip; ip=$(os_ip)
-  if [ -n "$ip" ]; then
-    echo "opensearch read-only indices: $(os_blocked_count "$ip")"
+  if [ -z "$ip" ]; then
+    echo "opensearch: no netops-opensearch-1 container — nothing to heal"
+  elif ! os_probe_setup "$ip"; then
+    # --status must report UNKNOWN, not a comfortable 0. This line is what
+    # would have shown, in one command, that the healer had been blind for
+    # months on this TLS install.
+    echo "opensearch read-only indices: UNKNOWN — probe failed: $OS_PROBE_ERR"
+  else
+    if os_blocked_count; then
+      echo "opensearch read-only indices: $OS_BLOCKED (via $OS_URL)"
+    else
+      echo "opensearch read-only indices: UNKNOWN — query failed: $OS_BLOCKED_ERR"
+    fi
   fi
 }
 

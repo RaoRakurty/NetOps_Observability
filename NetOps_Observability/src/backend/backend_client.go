@@ -1,11 +1,15 @@
 package backend
 
 import (
+	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"netops/backend/internal/dataprotect"
 	"netops/backend/tlsconfig"
 )
 
@@ -146,4 +150,65 @@ func backendHTTPClient(timeout time.Duration) *http.Client {
 		base = backendTr
 	}
 	return &http.Client{Timeout: timeout, Transport: authURLTransport{base: base}}
+}
+
+// ── OpenSearch request plumbing ─────────────────────────────────────────────
+//
+// The api is the ONLY thing that speaks to OpenSearch: the browser never does,
+// the proxy carries the service identity, and the admin certificate never
+// leaves the host. These three helpers are the shared request path — the
+// quarantine restore loop (pipeline_processors.go) and the Data Protection
+// adapter (internal/dataprotect, wired in main.go) both go through them, so a
+// transport or error-shape change lands in exactly one place.
+
+// osBase is the search cluster's base URL, trailing slash trimmed.
+func (s *server) osBase() string {
+	return strings.TrimRight(envOr("OPENSEARCH_URL", "http://opensearch:9200"), "/")
+}
+
+// osDo performs one OpenSearch request with an EXPLICIT per-call timeout and
+// decodes the JSON reply into out (nil = discard the body).
+//
+// A non-2xx status comes back as a *dataprotect.StatusError carrying both the
+// status and a BOUNDED slice of the body: the 2026-08-27 repository incident
+// was diagnosable ONLY from the NoSuchFileException text, and a bare status
+// line would have thrown it away again. Callers turn that into an honest
+// Detail string, never a silent zero value.
+func (s *server) osDo(ctx context.Context, method, path string, body []byte, out any, timeout time.Duration) error {
+	var rd io.Reader = strings.NewReader("")
+	if body != nil {
+		rd = strings.NewReader(string(body))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, s.osBase()+path, rd)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := backendHTTPClient(timeout).Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		// best-effort: a read error just leaves the snippet empty; the status line is already actionable
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		msg := "opensearch " + resp.Status + " on " + path
+		if t := strings.TrimSpace(string(snippet)); t != "" {
+			msg += ": " + t
+		}
+		return &dataprotect.StatusError{Status: resp.StatusCode, StatusText: resp.Status, Msg: msg}
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// osJSON is osDo with the fixed document/policy deadline. 10s is right for a
+// document write and catastrophically wrong for a restore, which is why the
+// long operations pass their own timeout to osDo instead of borrowing this.
+func (s *server) osJSON(ctx context.Context, method, path string, body []byte, out any) error {
+	return s.osDo(ctx, method, path, body, out, 10*time.Second)
 }

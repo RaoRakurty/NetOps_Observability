@@ -245,10 +245,78 @@ echo "ism: quarantine retention applied — netops-quarantine-* deletes after ${
 # the job — see docs/runbooks/backup-restore.md.
 # ---------------------------------------------------------------------------
 if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
+  REPO_LOCATION="/usr/share/opensearch/snapshots"
+
+  # -------------------------------------------------------------------------
+  # SINGLE-WRITER GUARD (2026-09-03).
+  #
+  # Two repository NAMES pointing at ONE filesystem location is the documented
+  # OpenSearch corruption hazard: each repository believes it owns the blob
+  # tree, each runs its own retention/delete pass, and each writes its own
+  # root index-N generation. Two deleters over one tree means one of them
+  # removes segment blobs the other's index still references — the repository
+  # then reads as "registered and healthy" while every restore fails with
+  # NoSuchFileException out of BlobStoreRepository.buildBlobStoreIndexShardSnapshots.
+  # That is exactly the failure shape that made netops-fs silently
+  # unrestorable for seven days (2026-08-26 → 2026-09-03); a second registered
+  # writer would reproduce it without anyone deleting anything by hand.
+  #
+  # So: look BEFORE registering. If some other name already claims this
+  # location, refuse to register netops-fs and say why. Refusing is loud but
+  # NON-FATAL to the rest of the bootstrap — retention/ISM must still be
+  # applied, and an operator who sees "no backup" is strictly better off than
+  # one who has two writers quietly eating each other's blobs.
+  # -------------------------------------------------------------------------
+  REPO_GUARD_OK=1
+  ALL_REPOS=$(curl -s -m 10 "$OS/_snapshot/_all" 2>/dev/null)
+  if [ -z "${ALL_REPOS:-}" ]; then
+    # §16.1: an unreadable guard is NOT a passed guard — name it. We still
+    # register, because refusing on an unproven conflict would leave a fresh
+    # stack with no backup at all; the operator gets the ambiguity in the log.
+    echo "ism: WARNING could not read GET _snapshot/_all — the single-writer check did NOT run." >&2
+    echo "ism:         Registering netops-fs anyway. If another repository name already points at" >&2
+    echo "ism:         $REPO_LOCATION, the two will corrupt each other's blob tree." >&2
+  else
+    # No jq/python in this image (curlimages/curl): split the flat object into
+    # one line per repository, keep the ones whose location is ours, drop our
+    # own name. `}},"` is the entry boundary in OpenSearch's compact reply.
+    REPO_CONFLICT=$(printf '%s' "$ALL_REPOS" |
+      sed -e 's/^{//' -e 's/}},"/}}\
+"/g' |
+      grep -E "\"location\"[[:space:]]*:[[:space:]]*\"$REPO_LOCATION\"" |
+      sed -n 's/^"\([^"]*\)".*/\1/p' |
+      grep -v '^netops-fs$' | tr '\n' ' ')
+    if [ -n "${REPO_CONFLICT% }" ]; then
+      REPO_GUARD_OK=0
+      echo "ism: REFUSING to register netops-fs — repository name(s) [ ${REPO_CONFLICT}] already point at" >&2
+      echo "ism:         $REPO_LOCATION. Two repository names over ONE filesystem path is the" >&2
+      echo "ism:         documented OpenSearch corruption hazard: two independent deleters over one" >&2
+      echo "ism:         blob tree, which ends in snapshots that list shards whose blobs are gone" >&2
+      echo "ism:         (restore fails with NoSuchFileException) while the repo still reads healthy." >&2
+      echo "ism:         Remove the duplicate registration (DELETE _snapshot/<name>) or give it its" >&2
+      echo "ism:         own location, then re-run this bootstrap. Until then the search tier's" >&2
+      echo "ism:         backup registration is UNCHANGED and this stack may have NO usable backup." >&2
+    fi
+  fi
+
+  if [ "$REPO_GUARD_OK" = 1 ]; then
   echo "ism: registering snapshot repository netops-fs ..."
   REPO_RESP=$(curl -s -X PUT "$OS/_snapshot/netops-fs" \
     -H 'Content-Type: application/json' \
-    -d '{"type":"fs","settings":{"location":"/usr/share/opensearch/snapshots","compress":true}}')
+    -d "{\"type\":\"fs\",\"settings\":{\"location\":\"$REPO_LOCATION\",\"compress\":true}}")
+  # WHERE THE "DO NOT DELETE" NOTICE LIVES, and why it is not written here.
+  # The 2026-08-26 incident had no code root cause: a human ran
+  # `rm -rf data/opensearch-snapshots/indices` from a shell to free disk. A
+  # notice beside the repository is the only control that addresses that, and
+  # SNAPSHOTS-DO-NOT-DELETE-README.txt (this directory, versioned) is its text.
+  # It is PLACED by scripts/install.py, not by this script, for a hard reason:
+  # opensearch-init mounts only ./opensearch:/opensearch-init:ro and has NO
+  # mount of the snapshot repository, so it cannot write anywhere the operator
+  # would see — and giving the bootstrap a writable mount of the blob tree
+  # would add a new way to damage the blob tree. The installer owns the data/
+  # layout on the host and can place the file as a SIBLING of the repository
+  # directory, which also keeps a stray file out of the blob tree itself
+  # (where `_cleanup` may remove it and a future reader may misread it).
   case "$REPO_RESP" in
     *'"acknowledged":true'*) echo "ism: snapshot repository ready." ;;
     *)
@@ -260,31 +328,81 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
       echo "ism:       that data/opensearch-snapshots is writable by the container." >&2
       ;;
   esac
+  fi
 
   # Snapshot Management policy: one snapshot a day, keep SNAP_KEEP of them.
   # PUT is create-only (409 if it exists) like the ISM policy above, so read
   # the seq_no first and update in place — the same trap that let the ism
   # patterns stay stuck at three lanes while this file claimed six.
-  SM_SEQ=$(curl -s "$OS/_plugins/_sm/policies/netops-daily" 2>/dev/null |
+  # ONE read, three facts (_seq_no, _primary_term and — new, 2026-09-03 — the
+  # live `enabled` flag). It used to be two separate GETs; a third would have
+  # been a third chance for the two halves to disagree mid-flight.
+  SM_GET=$(curl -s -m 10 "$OS/_plugins/_sm/policies/netops-daily" 2>/dev/null)
+  SM_SEQ=$(printf '%s' "$SM_GET" |
         sed -n 's/.*"_seq_no"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
-  SM_TERM=$(curl -s "$OS/_plugins/_sm/policies/netops-daily" 2>/dev/null |
+  SM_TERM=$(printf '%s' "$SM_GET" |
         sed -n 's/.*"_primary_term"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+  # `"enabled"` with the closing quote — never matches `"enabled_time"`.
+  SM_ENABLED=$(printf '%s' "$SM_GET" |
+        sed -n 's/.*"enabled"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -1)
   # Snapshot Management differs from ISM here: CREATE is POST, UPDATE is PUT with
   # seq_no/primary_term. ISM accepts PUT for both, so the sibling code above uses
   # PUT throughout — but SM rejects a seq_no-less PUT as "must be provided when
   # updating" even for a policy that does not exist (404 on GET). This was the
   # bug that left netops-daily uninstalled: the else branch below PUT-created it
   # and SM 400'd every time. Method + URL now branch together.
+  #
+  # PRESERVE THE OPERATOR'S INTENT (2026-09-03). The body below carried no
+  # `enabled` field, and OpenSearch defaults a missing `enabled` to TRUE. So an
+  # operator who deliberately stopped the schedule from the GUI (or via
+  # _sm/policies/netops-daily/_stop) had it silently RE-ENABLED by the next
+  # `docker compose up` — proven live at 11:47Z on 2026-09-03 by setting
+  # enabled=false, replaying this PUT verbatim, and reading enabled=true back.
+  # That is why "snapshots were disabled in the GUI" and snapshots kept running.
+  #
+  # The rule now: an UPDATE never changes the flag, only a CREATE sets it. The
+  # authoritative copy of the flag is the one IN OPENSEARCH (read above); the
+  # api additionally records the human context of a deliberate stop in
+  # data/api/system_backup.json (snapshot_schedule_disabled_at/_by/_reason).
+  SM_SKIP=0
   if [ -n "${SM_SEQ:-}" ] && [ -n "${SM_TERM:-}" ]; then
     SM_METHOD=PUT
     SM_URL="$OS/_plugins/_sm/policies/netops-daily?if_seq_no=${SM_SEQ}&if_primary_term=${SM_TERM}"
+    case "${SM_ENABLED:-}" in
+      true) : ;;
+      false)
+        echo "ism: NOTE snapshot schedule netops-daily is DISABLED by operator intent — leaving it disabled." >&2
+        echo "ism:      CONSEQUENCE: no new restore points are being created. Every hour it stays off is an" >&2
+        echo "ism:      hour of indexed logs, traps and flows with no backup. Re-enable from Settings →" >&2
+        echo "ism:      Data Protection, or POST $OS_REDACTED/_plugins/_sm/policies/netops-daily/_start" >&2
+        ;;
+      *)
+        # §16.1: the policy EXISTS (we parsed its seq_no from the same body) but
+        # its enabled flag did not parse. Writing the body without the flag
+        # would default it to true and could re-enable a deliberately stopped
+        # schedule — the exact defect this block fixes. Preserve by NOT writing.
+        SM_SKIP=1
+        echo "ism: ERROR snapshot policy netops-daily exists but its 'enabled' flag could not be read." >&2
+        echo "ism:       REFUSING to update it: a write without the flag defaults to enabled=true and" >&2
+        echo "ism:       would clobber a deliberate operator stop. The policy is left EXACTLY as it is," >&2
+        echo "ism:       which also means any change to OPENSEARCH_SNAPSHOT_KEEP or the schedule in this" >&2
+        echo "ism:       file has NOT been applied. Inspect: GET _plugins/_sm/policies/netops-daily" >&2
+        ;;
+    esac
   else
+    # Absent (the GET 404s): this is a CREATE, and enabled=true is the product
+    # default. This is the ONLY branch allowed to turn the schedule on.
     SM_METHOD=POST
     SM_URL="$OS/_plugins/_sm/policies/netops-daily"
+    SM_ENABLED=true
   fi
+  if [ "$SM_SKIP" = 1 ]; then
+    SM_RESP='(skipped: enabled flag unreadable — see the ERROR above)'
+  else
   SM_RESP=$(curl -s -X "$SM_METHOD" "$SM_URL" -H 'Content-Type: application/json' -d @- <<JSON
 {
   "description": "Daily snapshot of netops-* to the netops-fs repository (F-59).",
+  "enabled": ${SM_ENABLED},
   "creation": {
     "schedule": { "cron": { "expression": "30 1 * * *", "timezone": "UTC" } },
     "time_limit": "2h"
@@ -302,8 +420,11 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
 }
 JSON
 )
+  fi
   case "$SM_RESP" in
-    *'"netops-daily"'*) echo "ism: snapshot policy netops-daily installed (daily 01:30 UTC, keep ${SNAP_KEEP})." ;;
+    *'"netops-daily"'*)
+      echo "ism: snapshot policy netops-daily installed (daily 01:30 UTC, keep ${SNAP_KEEP}, enabled=${SM_ENABLED})." ;;
+    '(skipped'*) : ;;   # already reported as an ERROR above; do not double-report
     *) echo "ism: WARNING snapshot policy NOT installed: $SM_RESP" >&2 ;;
   esac
 else

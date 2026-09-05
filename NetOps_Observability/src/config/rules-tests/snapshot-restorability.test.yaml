@@ -1,0 +1,264 @@
+# promtool unit tests for the SNAPSHOT RESTORABILITY rules in
+# rules-scale-slo.yaml (engine-liveness group, added 2026-09-03).
+#
+# WHY THIS FILE EXISTS. For seven days (2026-08-26 -> 2026-09-03) the netops-fs
+# repository could not restore a single shard, and every control in the stack
+# read green. A manual `rm -rf .../data/opensearch-snapshots/indices` during the
+# 08-26 disk crunch removed the repository's blob tree while the repository
+# stayed registered; OpenSearch re-created the empty directory at
+# 2026-08-27T01:30:46Z (the instant the next scheduled snapshot began) and every
+# shard from then on failed with NoSuchFileException out of
+# BlobStoreRepository.buildBlobStoreIndexShardSnapshots. `_cat/snapshots` kept
+# listing rows, the SM policy kept "succeeding" into PARTIAL, and the existing
+# backup-FRESHNESS checks kept reading a recent newest-snapshot timestamp.
+#
+# So the rules under test are not about freshness. They are about whether a
+# restore has actually been PROVEN, and these tests pin the three distinctions
+# that make them worth having:
+#
+#   (a) each rule fires on a faithful reproduction of its condition, with the
+#       exact labels and annotations an operator will be paged-adjacent with;
+#   (b) each rule is SILENT on the all-clear -- a rule that always fires is a
+#       rule that gets muted, and a muted rule is what the seven days were;
+#   (c) OpenSearchSnapshotRestorabilityStale does not double-report the two
+#       cases that belong to its siblings: a NEVER-PROBED repository (timestamp
+#       0, owned by OpenSearchSnapshotNotRestorable) and a DELIBERATELY
+#       DISABLED probe (owned by OpenSearchSnapshotProbeDisabled). Both are
+#       negative tests here because both were live in the incident window and
+#       both are one missing `and` clause away from firing.
+#
+# TIMEBASE NOTE. promtool's synthetic clock starts at Unix epoch 0, so `time()`
+# at eval_time T is simply T seconds. The 36h staleness threshold therefore
+# needs a genuinely 37-hour test window; evaluation_interval is 5m (not 1m) to
+# keep that affordable, which is still six evaluations inside the rule's
+# `for: 30m` and twelve inside OpenSearchSnapshotProbeDisabled's `for: 1h`.
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 5m
+
+tests:
+  # ==========================================================================
+  # 1) OpenSearchSnapshotNotRestorable
+  # ==========================================================================
+
+  # 1a) PROBED AND FAILED -- the 2026-08-26 shape. Snapshots exist and are
+  #     recent (last_success is fresh, which is exactly what fooled every
+  #     freshness check), the probe HAS run (verified timestamp non-zero), and
+  #     the verdict is 0. This must fire.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_restorable{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "0x40"
+      - series: 'netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "600x40"
+      - series: 'netops_opensearch_snapshot_probe_enabled{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x40"
+      - series: 'netops_opensearch_snapshot_last_success_timestamp_seconds{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "900x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: OpenSearchSnapshotNotRestorable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: storage
+              tier: warning
+              repo: netops-fs
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "Snapshot repository netops-fs is NOT restorable \u2014 the search tier's backups cannot be restored from"
+              description: "Read this WITH netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo=\"netops-fs\"}, which separates the two very different faults this one gauge covers. A NON-ZERO verified timestamp means the restore probe actually ran and FAILED: snapshots are being written and none of them can be restored, the 2026-08-26 shape where the repository's blob tree was deleted underneath a still-registered repository and every shard failed with NoSuchFileException while _cat/snapshots kept listing healthy-looking rows. A ZERO verified timestamp means the probe has NEVER returned a verdict, so restorability is UNPROVEN rather than proven-bad \u2014 this rule reports that as not-restorable by design, because treating unproven as healthy is the exact defect that hid a week of unrestorable backups. Neither case is fixed by taking another snapshot. Every hour this stands is an hour in which a lost data/ directory means permanent loss of every log, trap and flow the platform has indexed."
+              runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"
+
+  # 1b) NEVER PROBED -- verified timestamp 0. Restorability is UNKNOWN, and
+  #     this rule reports unknown as not-restorable ON PURPOSE (default-closed).
+  #     Same alert, and the description is the thing that tells the operator
+  #     which of the two halves they are in.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_restorable{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "0x40"
+      - series: 'netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "0x40"
+      - series: 'netops_opensearch_snapshot_probe_enabled{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: OpenSearchSnapshotNotRestorable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: storage
+              tier: warning
+              repo: netops-fs
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "Snapshot repository netops-fs is NOT restorable \u2014 the search tier's backups cannot be restored from"
+              description: "Read this WITH netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo=\"netops-fs\"}, which separates the two very different faults this one gauge covers. A NON-ZERO verified timestamp means the restore probe actually ran and FAILED: snapshots are being written and none of them can be restored, the 2026-08-26 shape where the repository's blob tree was deleted underneath a still-registered repository and every shard failed with NoSuchFileException while _cat/snapshots kept listing healthy-looking rows. A ZERO verified timestamp means the probe has NEVER returned a verdict, so restorability is UNPROVEN rather than proven-bad \u2014 this rule reports that as not-restorable by design, because treating unproven as healthy is the exact defect that hid a week of unrestorable backups. Neither case is fixed by taking another snapshot. Every hour this stands is an hour in which a lost data/ directory means permanent loss of every log, trap and flow the platform has indexed."
+              runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"
+
+  # 1c) ALL-CLEAR: a proven-restorable repository is SILENT.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_restorable{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x40"
+      - series: 'netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "600x40"
+      - series: 'netops_opensearch_snapshot_probe_enabled{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: OpenSearchSnapshotNotRestorable
+        exp_alerts: []
+
+  # 1d) The `for: 15m` is not decoration: a single bad sample must not alert.
+  #     At 10m the condition has been true for 10m and the rule is still
+  #     PENDING, so nothing is delivered.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_restorable{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "0x40"
+      - series: 'netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "600x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OpenSearchSnapshotNotRestorable
+        exp_alerts: []
+
+  # ==========================================================================
+  # 2) OpenSearchSnapshotRestorabilityStale
+  #
+  # 37-hour windows. The verified timestamp is pinned at 600 (epoch+10m), so at
+  # eval_time 37h the age is 132600s > 129600s (36h) and the alert has been
+  # active well past its `for: 30m`.
+  # ==========================================================================
+
+  # 2a) FIRES: probe enabled, a real past verdict, not re-proven in 36h.
+  #     restorable is deliberately 1 here -- a STALE GREEN is the whole point;
+  #     if this only worked while restorable was 0 it would be redundant.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_restorable{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x2260"
+      - series: 'netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "600x2260"
+      - series: 'netops_opensearch_snapshot_probe_enabled{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x2260"
+    alert_rule_test:
+      - eval_time: 37h
+        alertname: OpenSearchSnapshotRestorabilityStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: storage
+              tier: warning
+              repo: netops-fs
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "Restorability of snapshot repository netops-fs has not been re-proven in over 36h \u2014 the green verdict is stale, not current"
+              description: "The restore probe is enabled and previously returned a verdict, but has not produced a fresh one for more than 36 hours, so netops_opensearch_snapshot_restorable is reporting a PAST proof as though it were a present one. Everything about the repository can have changed since: a deleted blob tree, a second repository name registered over the same location, a filesystem that filled. The probe itself is the thing to look at first \u2014 it runs inside the api, so an api that is up but wedged on this path leaves exactly this signature. Until it clears, treat the backups as UNVERIFIED rather than good; that distinction is the whole lesson of the 2026-08-26 incident."
+              runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"
+
+  # 2b) NEGATIVE -- NEVER PROBED. Timestamp 0 makes `time() - ts` ~57 years,
+  #     so without the `> 0` guard this rule would fire on every fresh
+  #     deployment and duplicate OpenSearchSnapshotNotRestorable, which owns
+  #     that case. Delete the guard and this test goes red.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_restorable{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "0x2260"
+      - series: 'netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "0x2260"
+      - series: 'netops_opensearch_snapshot_probe_enabled{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x2260"
+    alert_rule_test:
+      - eval_time: 37h
+        alertname: OpenSearchSnapshotRestorabilityStale
+        exp_alerts: []
+
+  # 2c) NEGATIVE -- PROBE DELIBERATELY DISABLED. The verdict is genuinely stale
+  #     (same 600 timestamp as 2a), but staleness is the EXPECTED consequence
+  #     of the operator's choice, and OpenSearchSnapshotProbeDisabled already
+  #     says so in the right words. Two alerts for one decision is how a pager
+  #     gets muted. Delete the `probe_enabled == 1` clause and this goes red.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_restorable{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x2260"
+      - series: 'netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "600x2260"
+      - series: 'netops_opensearch_snapshot_probe_enabled{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "0x2260"
+    alert_rule_test:
+      - eval_time: 37h
+        alertname: OpenSearchSnapshotRestorabilityStale
+        exp_alerts: []
+
+  # 2d) ALL-CLEAR: a verdict re-proven inside the window is SILENT.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_restorable{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x40"
+      - series: 'netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "600x40"
+      - series: 'netops_opensearch_snapshot_probe_enabled{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: OpenSearchSnapshotRestorabilityStale
+        exp_alerts: []
+
+  # ==========================================================================
+  # 3) OpenSearchSnapshotProbeDisabled
+  # ==========================================================================
+
+  # 3a) FIRES after the full `for: 1h`.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_probe_enabled{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "0x120"
+      - series: 'netops_opensearch_snapshot_restorable{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x120"
+      - series: 'netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "600x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: OpenSearchSnapshotProbeDisabled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: storage
+              tier: warning
+              repo: netops-fs
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "The restore probe for snapshot repository netops-fs is DISABLED \u2014 nothing is proving the backups can be restored"
+              description: "While the probe is off, netops_opensearch_snapshot_restorable is frozen at whatever it last read and OpenSearchSnapshotRestorabilityStale is deliberately suppressed, so NO layer of this stack is testing a restore. Snapshots will keep being taken and keep looking successful; that is the state the platform was already in for the seven days to 2026-09-03, when the repository's blob tree had been deleted and every restore would have failed. Backups are unproven until this is switched back on."
+              runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"
+
+  # 3b) ALL-CLEAR: probe enabled -> SILENT. This is the normal state and must
+  #     never be a standing advisory.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_probe_enabled{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "1x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: OpenSearchSnapshotProbeDisabled
+        exp_alerts: []
+
+  # 3c) The `for: 1h` holds: a 30m blip while the probe is being reconfigured
+  #     is PENDING, not firing.
+  - interval: 1m
+    input_series:
+      - series: 'netops_opensearch_snapshot_probe_enabled{repo="netops-fs",job="netops-api",instance="api:8080"}'
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: OpenSearchSnapshotProbeDisabled
+        exp_alerts: []

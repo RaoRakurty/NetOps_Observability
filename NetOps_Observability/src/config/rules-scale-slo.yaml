@@ -308,6 +308,14 @@ groups:
   #                      3. storage is refusing writes
   #                      4. the alerting heartbeat itself stopped arriving
   #   tier: heartbeat  plumbing, never routed to a human (see AlertingHeartbeat).
+  #   tier: warning    severity warning. NOT routed to the phone: it lands in
+  #                    the alert list and the runbook, and an operator reads it
+  #                    on their own schedule. Latent risk, not a live outage.
+  #                    (CorrEvidenceLaneNotGrounded predates this label and
+  #                    carries `tier: watch` for the same meaning — one of the
+  #                    two spellings should win the next time this group is
+  #                    touched; nothing routes on the label yet, so neither is
+  #                    load-bearing today.)
   # Everything else that proves an engine is working is already covered by the
   # ~140 warning/critical rules in rules.yaml; the matrix document maps each
   # service to the rule that covers it rather than minting a duplicate here.
@@ -732,3 +740,146 @@ groups:
             CORR_EVIDENCE_TOPICS rather than leaving this standing — a
             permanently-firing advisory is how a real one gets ignored.
           runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # ==================================================================
+      # SNAPSHOT RESTORABILITY  (2026-09-03)
+      #
+      # WHY THESE EXIST. The netops-fs snapshot repository was silently
+      # UNRESTORABLE for seven days (2026-08-26 → 2026-09-03). A manual
+      # `rm -rf .../data/opensearch-snapshots/indices` during the 08-26 disk
+      # crunch deleted the repository's blob tree while the repository stayed
+      # registered; OpenSearch re-created the empty `indices/` directory at
+      # 2026-08-27T01:30:46Z — the instant the next scheduled snapshot started —
+      # and every shard from then on failed with
+      # `java.nio.file.NoSuchFileException: .../snapshots/indices/<id>/0/index-<gen>`
+      # out of BlobStoreRepository.buildBlobStoreIndexShardSnapshots.
+      #
+      # NOTHING alerted for a week. The SM policy kept "succeeding" into
+      # PARTIAL, `_cat/snapshots` kept listing rows, the repository kept
+      # answering, and the existing backup-freshness checks all read a fresh
+      # newest-snapshot timestamp. Every layer measured that a snapshot HAPPENED.
+      # No layer ever measured that one could be RESTORED. A backup that has
+      # never been restored is a hypothesis, not a backup.
+      #
+      # The api now runs an actual restore probe and exports the verdict:
+      #   netops_opensearch_snapshot_restorable{repo}                     0|1
+      #   netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo}
+      #                                                     unix secs, 0 = never
+      #   netops_opensearch_snapshot_probe_enabled{repo}                  0|1
+      #   netops_opensearch_snapshot_last_success_timestamp_seconds{repo}
+      #                                                     unix secs, 0 = none
+      #
+      # TIER. All three are `tier: warning`, deliberately NOT `tier: page`.
+      # The owner approved exactly FOUR page conditions (2026-09-02; enumerated
+      # in the TIERS block at the top of this group and in
+      # docs/runbooks/engine-liveness-matrix.md) and an unrestorable backup is
+      # not one of them: it is a latent recovery risk, not a live outage of
+      # ingest, storage, an engine consumer or the alerting path. Adding a
+      # fifth page here would dilute the four that were chosen — raise it with
+      # the owner rather than promoting it in a diff. The external watchdog
+      # (scripts/stack-watchdog.sh, SNAPSHOT_RESTORABLE_CHECK) carries the same
+      # signal over its own independent ntfy path, which is the layer that
+      # survives this stack being the thing that is broken.
+      # ==================================================================
+
+      - alert: OpenSearchSnapshotNotRestorable
+        # ONE expression, TWO meanings, and the annotation has to keep them
+        # apart or the operator wastes the first ten minutes on the wrong half:
+        #   * verified_timestamp > 0  -> the probe RAN and the restore FAILED.
+        #     This is the 2026-08-26 shape: real snapshots, real rows in
+        #     _cat/snapshots, and a blob tree that cannot serve any of them.
+        #   * verified_timestamp == 0 -> the probe has NEVER produced a verdict
+        #     (fresh deployment, or the probe has failed every attempt since
+        #     boot). Restorability is UNKNOWN, which this rule reports as
+        #     not-restorable ON PURPOSE: default-closed. "Unproven" read as
+        #     "fine" is precisely the seven-day silence.
+        # 15m is longer than a probe cycle plus a restart, so a rolling deploy
+        # or one transient probe failure does not raise it.
+        expr: netops_opensearch_snapshot_restorable{repo="netops-fs"} == 0
+        for: 15m
+        labels: { severity: warning, layer: storage, tier: warning }
+        annotations:
+          summary: "Snapshot repository {{ $labels.repo }} is NOT restorable — the search tier's backups cannot be restored from"
+          description: >-
+            Read this WITH
+            netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs"},
+            which separates the two very different faults this one gauge
+            covers. A NON-ZERO verified timestamp means the restore probe
+            actually ran and FAILED: snapshots are being written and none of
+            them can be restored, the 2026-08-26 shape where the repository's
+            blob tree was deleted underneath a still-registered repository and
+            every shard failed with NoSuchFileException while _cat/snapshots
+            kept listing healthy-looking rows. A ZERO verified timestamp means
+            the probe has NEVER returned a verdict, so restorability is
+            UNPROVEN rather than proven-bad — this rule reports that as
+            not-restorable by design, because treating unproven as healthy is
+            the exact defect that hid a week of unrestorable backups. Neither
+            case is fixed by taking another snapshot. Every hour this stands is
+            an hour in which a lost data/ directory means permanent loss of
+            every log, trap and flow the platform has indexed.
+          runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"
+
+      - alert: OpenSearchSnapshotRestorabilityStale
+        # The verdict is only worth its age. A probe that stopped running leaves
+        # the LAST verdict standing, so `restorable == 1` keeps reading green
+        # off a proof that may be days old — the same "it succeeded once"
+        # reasoning that made the daily PARTIAL snapshots look like backups.
+        #
+        # 36h, matching the watchdog's SNAPSHOT_MAX_AGE_H default: one daily
+        # cycle plus a full missed cycle of slack.
+        #
+        # TWO explicit non-firing conditions, both load-bearing:
+        #   * `... > 0` — a NEVER-PROBED repo has timestamp 0, and time() - 0 is
+        #     ~57 years, so without this guard this rule would fire on every
+        #     fresh deployment and duplicate OpenSearchSnapshotNotRestorable,
+        #     which owns that case.
+        #   * probe_enabled == 1 — a deliberately disabled probe is a decision,
+        #     not a fault; OpenSearchSnapshotProbeDisabled says that in the
+        #     right words. Two alerts for one operator choice is how a pager
+        #     gets muted.
+        # `on(repo)` throughout: `time() - metric` drops __name__ while
+        # `metric > 0` keeps it, so a bare `and` would never match.
+        expr: |
+          (time() - netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs"}) > 129600
+          and on(repo) (netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs"} > 0)
+          and on(repo) (netops_opensearch_snapshot_probe_enabled{repo="netops-fs"} == 1)
+        for: 30m
+        labels: { severity: warning, layer: storage, tier: warning }
+        annotations:
+          summary: "Restorability of snapshot repository {{ $labels.repo }} has not been re-proven in over 36h — the green verdict is stale, not current"
+          description: >-
+            The restore probe is enabled and previously returned a verdict, but
+            has not produced a fresh one for more than 36 hours, so
+            netops_opensearch_snapshot_restorable is reporting a PAST proof as
+            though it were a present one. Everything about the repository can
+            have changed since: a deleted blob tree, a second repository name
+            registered over the same location, a filesystem that filled. The
+            probe itself is the thing to look at first — it runs inside the
+            api, so an api that is up but wedged on this path leaves exactly
+            this signature. Until it clears, treat the backups as UNVERIFIED
+            rather than good; that distinction is the whole lesson of the
+            2026-08-26 incident.
+          runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"
+
+      - alert: OpenSearchSnapshotProbeDisabled
+        # A standing advisory, and it is meant to be one: the only way this
+        # fires is that somebody turned the restore probe off. 1h keeps it out
+        # of restarts and reconfigurations. If a deployment genuinely does not
+        # want the probe, that is a decision to record in the runbook, not an
+        # alert to leave permanently lit — a rule that fires forever is how the
+        # real ones get ignored.
+        expr: netops_opensearch_snapshot_probe_enabled{repo="netops-fs"} == 0
+        for: 1h
+        labels: { severity: warning, layer: storage, tier: warning }
+        annotations:
+          summary: "The restore probe for snapshot repository {{ $labels.repo }} is DISABLED — nothing is proving the backups can be restored"
+          description: >-
+            While the probe is off, netops_opensearch_snapshot_restorable is
+            frozen at whatever it last read and
+            OpenSearchSnapshotRestorabilityStale is deliberately suppressed, so
+            NO layer of this stack is testing a restore. Snapshots will keep
+            being taken and keep looking successful; that is the state the
+            platform was already in for the seven days to 2026-09-03, when the
+            repository's blob tree had been deleted and every restore would
+            have failed. Backups are unproven until this is switched back on.
+          runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"

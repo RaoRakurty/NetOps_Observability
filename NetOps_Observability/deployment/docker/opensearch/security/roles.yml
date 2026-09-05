@@ -21,16 +21,57 @@ netops_api:
     - "cluster_composite_ops"
     - "cluster:monitor/health"
     - "cluster:monitor/state"
+    # Repository DISK HEADROOM (2026-09-03). The Data Protection page reports how
+    # much room the snapshot repository actually has, because disk headroom is
+    # the failure class behind the 2026-08-27 incident: a filesystem repository
+    # sharing a disk with the data it protects, a 14-snapshot retention whose
+    # union spans ~28 days of indices, and an operator freeing space with `rm`.
+    # A page that cannot show the number cannot warn about it.
+    #
+    # The api cannot measure it directly — it does not mount
+    # data/opensearch-snapshots — so it asks OpenSearch, which does, via
+    # GET /_nodes/stats/fs. That call needs this one privilege. It is a READ of
+    # aggregate node statistics (filesystem totals, heap, thread pools); it
+    # exposes no index content, no document, no tenant data, and grants no
+    # write anywhere. Narrower than the alternative of mounting the repository
+    # path into the api container, which would hand the api the very tree it is
+    # meant to protect.
+    - "cluster:monitor/nodes/stats"
     - "indices:data/read/scroll*"
-    # Backup & DR surface (#150): the api is the GUI's thin truthful view over
-    # the snapshot posture — read repo + snapshots (the DR status panel 403'd
-    # here from the day SEC-008 went live, misreporting a healthy repo as
-    # broken) and manage the netops-daily SM policy (enable/disable, schedule,
-    # retention). Policy CRUD only — snapshot create/restore/delete stay
-    # OUT of this role (restore is runbook-only by owner decision).
+    # Backup & DR surface (#150, widened 2026-09-03): the api is the GUI's thin
+    # truthful view over the snapshot posture — read repo + snapshots (the DR
+    # status panel 403'd here from the day SEC-008 went live, misreporting a
+    # healthy repo as broken) and manage the netops-daily SM policy
+    # (enable/disable, schedule, retention).
+    #
+    # 2026-09-03 — THE OWNER REVERSED THE "policy CRUD only" RULE. The previous
+    # comment here said snapshot create/restore/delete stay OUT of this role and
+    # restore is runbook-only; snapshots must now be manageable from the GUI, so
+    # verify/create/delete/restore are granted below. What keeps that safe is
+    # NOT the cluster grant but the INDEX scoping:
+    #   * restore targets are confined to the restored-* and probe-* namespaces
+    #     (the index_permissions block further down), so a restore can never
+    #     overwrite a live netops-* index except through the explicitly
+    #     type-to-confirm'd in_place path;
+    #   * in_place is exactly why indices_all on netops-* is NOT granted —
+    #     instead the netops-* block gets the MINIMUM that path needs:
+    #     indices:admin/close, indices:admin/open, indices:admin/delete;
+    #   * the restorability probe restores into probe-* and deletes it again,
+    #     which is the only thing that can prove a snapshot is restorable
+    #     (2026-08-27: seven days of unrestorable restore points, and nothing
+    #     noticed because nothing ever tried a restore).
+    #
+    # THESE CHANGES TAKE EFFECT ONLY AFTER THE opensearch-security-init
+    # CONTAINER RE-RUNS securityadmin. Editing this file alone changes nothing
+    # in a running cluster — the api will keep 403ing until the security config
+    # is reloaded.
     - "cluster:admin/repository/get"
+    - "cluster:admin/repository/verify"
     - "cluster:admin/snapshot/get"
     - "cluster:admin/snapshot/status"
+    - "cluster:admin/snapshot/create"
+    - "cluster:admin/snapshot/delete"
+    - "cluster:admin/snapshot/restore"
     - "cluster:admin/opensearch/snapshot_management/policy/get"
     - "cluster:admin/opensearch/snapshot_management/policy/write"
     - "cluster:admin/opensearch/snapshot_management/policy/explain"
@@ -44,6 +85,16 @@ netops_api:
         - "indices:admin/mappings/get"
         - "indices:admin/get"
         - "indices:monitor/settings/get"
+        # The MINIMUM an in_place restore needs on the live lanes, and nothing
+        # more (2026-09-03). OpenSearch refuses to restore over an OPEN index,
+        # so the api closes the targets, restores, and reopens them; the delete
+        # is what a restore performs on the index it replaces. Deliberately NOT
+        # "indices_all": the api must never be able to write or reindex a live
+        # lane, only to close/open/replace one through the confirmed restore
+        # path.
+        - "indices:admin/close"
+        - "indices:admin/open"
+        - "indices:admin/delete"
     - index_patterns: ["netops-audit-*", "netops-saved-*", "netops-deadletter-*"]
       allowed_actions:
         - "crud"
@@ -54,6 +105,15 @@ netops_api:
     - index_patterns: ["netops-quarantine-*"]
       allowed_actions:
         - "crud"
+    # Restore + probe namespaces (2026-09-03). A renamed restore lands under
+    # restored-*; the restorability probe restores into probe-* and deletes it
+    # again. Both are disposable namespaces that hold NO live telemetry, which
+    # is what makes indices_all acceptable here and unacceptable on netops-*.
+    # The api's own grammar refuses any rename prefix outside restored-*, so a
+    # request that tried to land elsewhere is a 400 before it is a 403.
+    - index_patterns: ["restored-*", "probe-*"]
+      allowed_actions:
+        - "indices_all"
 
 # vector-router: the log-ingest writer. Write-only on the lanes it sinks;
 # no read, no cluster admin. TELEMETRY-CRITICAL — a wrong credential here
