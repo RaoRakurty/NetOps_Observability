@@ -28,6 +28,7 @@ import type {
   LicenceCeiling,
   LicenceFeature,
   LicenceOverage,
+  LicencePhase,
   LicenceState,
   LicenceTier,
   LicenceView,
@@ -64,7 +65,7 @@ export function notMeasuredText(reason: string): string {
 
 // ── tone ────────────────────────────────────────────────────────────────────
 
-export type Tone = "good" | "warn" | "bad" | "muted";
+export type Tone = "good" | "warn" | "near" | "bad" | "muted";
 
 // ── ceilings ────────────────────────────────────────────────────────────────
 
@@ -116,13 +117,94 @@ export function usageBar(row: LicenceCeiling): UsageBar {
   };
 }
 
+/**
+ * The 80 / 90 / 100 % usage bands (owner decision, 2026-09-05 — TIERING_PLAN
+ * §9, "Soft overage + alerts (80/90/100 %)").
+ *
+ * Five bands and not three, because 100 % and "past 100 %" are different
+ * sentences: at the allowance nothing has happened yet; past it, something has,
+ * and on a paid tier that something is a true-up rather than a block.
+ *
+ * A row nobody measured, one with no limit, and one nothing enforces have NO
+ * band at all — inventing a percentage for any of them would be the page making
+ * up a number.
+ */
+export type UsageBand = "unrated" | "ok" | "approaching" | "near" | "full" | "over";
+
+export function usageBand(row: LicenceCeiling): UsageBand {
+  if (!row.enforced) return "unrated";
+  const bar = usageBar(row);
+  if (bar.kind !== "measured") return "unrated";
+  // The band is computed from the EXACT ratio, not from the bar's rounded fill.
+  // 249 of 250 is 99.6 %, and rounding it to 100 would put a deployment that is
+  // still inside its allowance in the band that says it has reached it — and
+  // would also disagree with the alert rules, which divide exactly.
+  if (row.over || bar.current > bar.limit) return "over";
+  if (bar.current >= bar.limit) return "full";
+  const pct = bar.limit > 0 ? (bar.current / bar.limit) * 100 : 100;
+  if (pct >= 90) return "near";
+  if (pct >= 80) return "approaching";
+  return "ok";
+}
+
+/**
+ * The tone of a band. The three severity tokens carry all five bands: the ramp
+ * agrees with every other severity on the page rather than introducing a
+ * private palette (`near` is a warn/crit mix declared once in styles.css).
+ */
+export function bandTone(band: UsageBand): Tone {
+  switch (band) {
+    case "ok":
+      return "good";
+    case "approaching":
+      return "warn";
+    case "near":
+      return "near";
+    case "full":
+    case "over":
+      return "bad";
+    default:
+      return "muted";
+  }
+}
+
+/** The pill beside a bar that has entered a warning band, or null below 80 %. */
+export function bandLabel(band: UsageBand): string | null {
+  switch (band) {
+    case "approaching":
+      return "80% of the allowance";
+    case "near":
+      return "90% of the allowance";
+    case "full":
+      return "at the allowance";
+    case "over":
+      return "over the allowance";
+    default:
+      return null;
+  }
+}
+
 /** The tone of a usage row. An un-enforced row is muted: nothing gates on it. */
 export function ceilingTone(row: LicenceCeiling): Tone {
   if (!row.enforced) return "muted";
-  if (row.over) return "bad";
-  const bar = usageBar(row);
-  if (bar.kind === "measured" && bar.percent >= 90) return "warn";
-  return "good";
+  return bandTone(usageBand(row));
+}
+
+/**
+ * What happens at this ceiling when you go past it — the sentence under a bar
+ * in a warning band.
+ *
+ * SOFT and HARD are not the same statement and must never be phrased alike: a
+ * soft ceiling never blocks anything, and telling a paid customer they are
+ * about to be cut off would be false. A hard one does block, and softening that
+ * would be equally false.
+ */
+export function ceilingConsequence(row: LicenceCeiling): string {
+  if (!row.enforced) return NOT_ENFORCED_REASON;
+  if (row.soft) {
+    return "This allowance does not block. Going past it is allowed and recorded for true-up — nothing is disabled and nothing is deleted.";
+  }
+  return "This is a hard limit: the next one past it is refused. Nothing already here is disabled or deleted.";
 }
 
 /** The standing note beside a limit no code gates on. */
@@ -187,23 +269,24 @@ export function headline(state: LicenceState): Headline {
       tone: "bad",
     };
   }
-  if (state.degraded) {
+  if (state.degraded || state.phase === "post_grace") {
     return {
       state: "degraded",
-      label: "Running at Community ceilings",
+      label: "Past grace — running at Community ceilings",
       reason:
         state.reason ||
-        "The installed licence is past its grace period, so the Community ceilings are the ones in force.",
+        "The installed licence is past its grace period, so the Community ceilings are the ones in force. " +
+          "Everything already here stays visible and exportable; only creating and configuring paid capability is refused.",
       tone: "bad",
     };
   }
-  if (state.in_grace) {
+  if (state.in_grace || state.phase === "in_grace") {
     return {
       state: "grace",
       label: "In grace",
       reason:
         state.reason ||
-        "The licence has expired and the issuer's grace period is still running. The licensed ceilings stay in force until it ends.",
+        "The licence has expired and the issuer's grace period is still running. Nothing has changed: the licensed ceilings and capabilities stay in force until it ends.",
       tone: "warn",
     };
   }
@@ -218,9 +301,79 @@ export function headline(state: LicenceState): Headline {
   }
   return {
     state: "licensed",
-    label: `${tierLabel(state.licensed_tier || state.tier)} licence`,
+    label: state.trial
+      ? `${tierLabel(state.licensed_tier || state.tier)} evaluation licence`
+      : `${tierLabel(state.licensed_tier || state.tier)} licence`,
     reason: `Issued to ${state.customer || "an unnamed customer"} and in force.`,
     tone: "good",
+  };
+}
+
+// ── the state chip ──────────────────────────────────────────────────────────
+
+/**
+ * The one-glance chip: valid · trial · in grace, N days left · past grace.
+ *
+ * It is derived, like the headline, from facts the server publishes — the phase
+ * and the two counts — rather than from a server-side "chip" field, so the
+ * arithmetic stays visible and testable here instead of being hidden in a
+ * string the API happened to send.
+ *
+ * The days come from the server's own clock (`grace_days_left`,
+ * `days_to_expiry`), so the chip and the metric can never disagree by a
+ * timezone. A count the server did not send is simply not shown: a chip reading
+ * "0 days left" that meant "we do not know" would be the worst possible lie on
+ * this page.
+ */
+export type StateChip = { phase: LicencePhase | "community"; label: string; tone: Tone; detail: string };
+
+export function stateChip(view: Pick<LicenceView, "state" | "days_to_expiry" | "grace_days_left">): StateChip {
+  const st = view.state;
+  const phase = st.phase ?? (st.degraded ? "post_grace" : st.in_grace ? "in_grace" : "valid");
+
+  if (phase === "post_grace") {
+    return {
+      phase,
+      label: "Past grace",
+      tone: "bad",
+      detail:
+        "Creating and configuring paid capability is refused. Everything already here stays visible and exportable, and nothing has been disabled or deleted.",
+    };
+  }
+  if (phase === "in_grace") {
+    const left = view.grace_days_left;
+    const days = left === null || left === undefined ? null : left;
+    return {
+      phase,
+      label: days === null ? "In grace" : `In grace · ${days} ${days === 1 ? "day" : "days"} left`,
+      tone: "warn",
+      detail:
+        "The licence has expired and nothing has changed yet. Install a renewal before the grace period ends.",
+    };
+  }
+  if (st.source === "community") {
+    return {
+      phase: "community",
+      label: "Community",
+      tone: "muted",
+      detail: "The free tier. No licence is installed, and that is a supported state, not a fault.",
+    };
+  }
+  const days = view.days_to_expiry;
+  if (st.trial) {
+    return {
+      phase,
+      label: days === null || days === undefined ? "Evaluation licence" : `Evaluation licence · ${days} ${days === 1 ? "day" : "days"} left`,
+      tone: days !== null && days !== undefined && days <= 7 ? "warn" : "good",
+      detail:
+        "A trial grants exactly what its tier, ceilings and capabilities say. Nothing about it is a reduced version of the product.",
+    };
+  }
+  return {
+    phase,
+    label: days === null || days === undefined ? "Valid" : `Valid · expires in ${days} ${days === 1 ? "day" : "days"}`,
+    tone: days !== null && days !== undefined && days <= EXPIRY_SOON_DAYS ? "warn" : "good",
+    detail: "The licence is in force.",
   };
 }
 
@@ -247,10 +400,10 @@ export function expiryVerdict(view: Pick<LicenceView, "state" | "days_to_expiry"
     return { state: "none", text: "No expiry — Community ceilings do not lapse" };
   }
   const days = m.value;
-  if (st.degraded) {
+  if (st.degraded || st.phase === "post_grace") {
     return { state: "expired", days, text: `expired ${Math.abs(days)} days ago — past its grace period`, tone: "bad" };
   }
-  if (st.in_grace) {
+  if (st.in_grace || st.phase === "in_grace") {
     const grace = st.grace_days ?? 0;
     return {
       state: "grace",
@@ -281,7 +434,32 @@ export function overageSummary(overages: readonly LicenceOverage[]): string | nu
   if (overages.length === 0) return null;
   const total = overages.reduce((n, o) => n + o.over, 0);
   const what = overages.map((o) => o.label).join(", ");
+  // SOFT and HARD overages are different facts and get different sentences.
+  // "Not covered" would be wrong for a paid customer whose ceiling never
+  // blocks, and "recorded for true-up" would be wrong for a free one whose next
+  // activation is refused.
+  if (overages.every((o) => o.soft)) {
+    return `${total} above the licensed ${what}. Everything is still being collected from — nothing has been blocked, disabled or deleted; the overage is recorded for true-up.`;
+  }
   return `${total} over the licensed ${what}. Everything is still here and nothing has been removed — what is over a ceiling is listed below, not deleted.`;
+}
+
+/**
+ * How long an overage has been running, as a sentence, or null when the
+ * platform does not know.
+ *
+ * It states the START and stops. NO deadline, no countdown, no consequence:
+ * how long an overage may run is an order-form term, and a page that invented
+ * one would be the product writing commercial policy.
+ */
+export function overageSince(o: Pick<LicenceOverage, "since">, now: Date = new Date()): string | null {
+  if (!o.since) return null;
+  const started = new Date(o.since);
+  if (Number.isNaN(started.getTime())) return null;
+  const days = Math.floor((now.getTime() - started.getTime()) / 86_400_000);
+  const when = started.toISOString().slice(0, 10);
+  if (days <= 0) return `Recorded since today (${when}).`;
+  return `Recorded since ${when} — ${days} ${days === 1 ? "day" : "days"}.`;
 }
 
 // ── keys ────────────────────────────────────────────────────────────────────

@@ -18,6 +18,9 @@ import {
   MAX_DOCUMENT_BYTES,
   NOT_MEASURED_FALLBACK,
   UNLIMITED,
+  bandLabel,
+  bandTone,
+  ceilingConsequence,
   ceilingTone,
   checkDocument,
   confirmMatches,
@@ -33,8 +36,11 @@ import {
   notMeasuredText,
   overageSummary,
   refusalReason,
+  overageSince,
   sortedCeilings,
+  stateChip,
   tierLabel,
+  usageBand,
   usageBar,
 } from "./licence.model";
 
@@ -55,6 +61,7 @@ function state(over: Partial<LicenceState> = {}): LicenceState {
       devices: 25, tenants: 1, orgs: 1, retention_days: 7,
       watched_prefixes: 5, skills: 0, provider_tokens_per_day: 0,
     },
+    phase: "valid",
     in_grace: false,
     degraded: false,
     ...over,
@@ -138,12 +145,17 @@ describe("ceilingTone", () => {
   });
 
   it("close to an enforced ceiling warns before it bites", () => {
-    expect(ceilingTone(ceiling({ current: 24, limit: 25 }))).toBe("warn");
+    // The ramp got a middle step on 2026-09-05 (80 / 90 / 100 %): 24 of 25 is
+    // 96 %, which is the `near` band rather than a flat `warn`.
+    expect(ceilingTone(ceiling({ current: 21, limit: 25 }))).toBe("warn"); // 84 %
+    expect(ceilingTone(ceiling({ current: 24, limit: 25 }))).toBe("near"); // 96 %
     expect(ceilingTone(ceiling({ current: 12, limit: 25 }))).toBe("good");
   });
 
   it("an uncounted ceiling is never green — there is nothing to be green about", () => {
-    expect(ceilingTone(ceiling({ current: null }))).toBe("good");
+    // It is muted, not green: green is a claim that the platform looked and was
+    // satisfied, and nobody looked.
+    expect(ceilingTone(ceiling({ current: null }))).toBe("muted");
   });
 });
 
@@ -220,7 +232,7 @@ describe("headline — the worst true statement wins, and it names the condition
 
   it("degraded says which ceilings are actually in force", () => {
     const h = headline(state({ source: "file", degraded: true, reason: "expired 40 days ago, past a 30-day grace period" }));
-    expect(h).toMatchObject({ state: "degraded", label: "Running at Community ceilings", tone: "bad" });
+    expect(h).toMatchObject({ state: "degraded", label: "Past grace — running at Community ceilings", tone: "bad" });
     expect(h.reason).toBe("expired 40 days ago, past a 30-day grace period");
   });
 
@@ -401,5 +413,178 @@ describe("sortedCeilings", () => {
     const rows = [ceiling({ name: "tenants", enforced: false }), ceiling({ name: "devices" })];
     sortedCeilings(rows);
     expect(rows.map((r) => r.name)).toEqual(["tenants", "devices"]);
+  });
+});
+
+// ── the 80 / 90 / 100 % bands (owner decision, 2026-09-05) ──────────────────
+
+describe("usageBand — five bands, because 100 % and past 100 % are different sentences", () => {
+  it("bands a measured, enforced, finite ceiling", () => {
+    const at = (current: number, limit = 250) => usageBand(ceiling({ limit, current, over: current > limit }));
+    expect(at(100)).toBe("ok");
+    expect(at(199)).toBe("ok"); // 79.6 % — exact, not the rounded fill
+    expect(at(200)).toBe("approaching"); // exactly 80 %
+    expect(at(224)).toBe("approaching"); // 89.6 %
+    expect(at(225)).toBe("near"); // exactly 90 %
+    expect(at(249)).toBe("near");
+    expect(at(250)).toBe("full"); // at the allowance, nothing has happened yet
+    expect(at(251)).toBe("over");
+  });
+
+  it("has NO band where a percentage would be invented", () => {
+    // Nobody counted it.
+    expect(usageBand(ceiling({ current: null, current_reason: "not counted" }))).toBe("unrated");
+    // No limit to be a percentage of.
+    expect(usageBand(ceiling({ limit: UNLIMITED, current: 4000 }))).toBe("unrated");
+    // Nothing gates on it, so a warning band would imply a consequence.
+    expect(usageBand(ceiling({ enforced: false, current: 24 }))).toBe("unrated");
+  });
+
+  it("maps the bands onto the platform's own severity tones", () => {
+    expect(bandTone("ok")).toBe("good");
+    expect(bandTone("approaching")).toBe("warn");
+    expect(bandTone("near")).toBe("near");
+    expect(bandTone("full")).toBe("bad");
+    expect(bandTone("over")).toBe("bad");
+    expect(bandTone("unrated")).toBe("muted");
+    // ceilingTone is the same decision, with the un-enforced short-circuit.
+    expect(ceilingTone(ceiling({ current: 200, limit: 250 }))).toBe("warn");
+    expect(ceilingTone(ceiling({ current: 240, limit: 250 }))).toBe("near");
+    expect(ceilingTone(ceiling({ enforced: false, current: 240, limit: 250 }))).toBe("muted");
+  });
+
+  it("says nothing below 80 % and names the band above it", () => {
+    expect(bandLabel("ok")).toBeNull();
+    expect(bandLabel("unrated")).toBeNull();
+    expect(bandLabel("approaching")).toBe("80% of the allowance");
+    expect(bandLabel("near")).toBe("90% of the allowance");
+    expect(bandLabel("over")).toBe("over the allowance");
+  });
+});
+
+describe("ceilingConsequence — soft and hard are not the same statement", () => {
+  it("promises a soft ceiling will not block, and says the overage is recorded", () => {
+    const t = ceilingConsequence(ceiling({ soft: true }));
+    expect(t).toContain("does not block");
+    expect(t).toContain("true-up");
+    expect(t).toContain("nothing is deleted");
+  });
+
+  it("says a hard ceiling refuses the next one, without threatening what exists", () => {
+    const t = ceilingConsequence(ceiling({ soft: false }));
+    expect(t).toContain("hard limit");
+    expect(t).toContain("refused");
+    expect(t).toContain("Nothing already here is disabled or deleted");
+    expect(t).not.toContain("true-up");
+  });
+});
+
+// ── the state chip ──────────────────────────────────────────────────────────
+
+describe("stateChip — valid / trial / in grace N days / past grace", () => {
+  const view = (st: Partial<LicenceState>, days: number | null = null, graceLeft: number | null = null) => ({
+    state: state(st),
+    days_to_expiry: days,
+    grace_days_left: graceLeft,
+  });
+
+  it("calls Community what it is — the free tier, not a fault", () => {
+    const c = stateChip(view({}));
+    expect(c.phase).toBe("community");
+    expect(c.label).toBe("Community");
+    expect(c.tone).toBe("muted");
+    expect(c.detail).toContain("not a fault");
+  });
+
+  it("counts down a valid licence and warns only inside the runway", () => {
+    expect(stateChip(view({ source: "file", tier: "team" }, 200)).label).toBe("Valid · expires in 200 days");
+    expect(stateChip(view({ source: "file", tier: "team" }, 200)).tone).toBe("good");
+    expect(stateChip(view({ source: "file", tier: "team" }, 9)).tone).toBe("warn");
+    expect(stateChip(view({ source: "file", tier: "team" }, 1)).label).toBe("Valid · expires in 1 day");
+  });
+
+  it("names an evaluation licence and says how long is left", () => {
+    const c = stateChip(view({ source: "file", tier: "team", trial: true }, 12));
+    expect(c.label).toBe("Evaluation licence · 12 days left");
+    expect(c.tone).toBe("good");
+    expect(stateChip(view({ source: "file", tier: "team", trial: true }, 3)).tone).toBe("warn");
+  });
+
+  it("shows the grace runway from the SERVER's count, never its own arithmetic", () => {
+    const c = stateChip(view({ source: "file", tier: "team", phase: "in_grace", in_grace: true }, -4, 26));
+    expect(c.label).toBe("In grace · 26 days left");
+    expect(c.tone).toBe("warn");
+    expect(c.detail).toContain("nothing has changed yet");
+  });
+
+  it("does NOT invent a count the server did not send", () => {
+    // "0 days left" meaning "we do not know" is the worst lie this page could
+    // tell, so an absent count renders no count at all.
+    const c = stateChip(view({ source: "file", tier: "team", phase: "in_grace", in_grace: true }, -4, null));
+    expect(c.label).toBe("In grace");
+    expect(c.label).not.toContain("0");
+  });
+
+  it("states past-grace as what stops AND what does not", () => {
+    const c = stateChip(view({ source: "file", tier: "team", phase: "post_grace", degraded: true }, -60, null));
+    expect(c.label).toBe("Past grace");
+    expect(c.tone).toBe("bad");
+    expect(c.detail).toContain("refused");
+    expect(c.detail).toContain("visible and exportable");
+    expect(c.detail).toContain("nothing has been disabled or deleted");
+  });
+
+  it("falls back to the booleans when an older server sends no phase", () => {
+    const noPhase = { ...state({ source: "file", tier: "team", in_grace: true }) } as LicenceState;
+    delete (noPhase as Partial<LicenceState>).phase;
+    expect(stateChip({ state: noPhase, days_to_expiry: -2, grace_days_left: 5 }).phase).toBe("in_grace");
+  });
+});
+
+// ── overage wording ─────────────────────────────────────────────────────────
+
+describe("overageSummary — a soft overage is a billing fact, not a fault", () => {
+  const over = (o: Partial<LicenceOverage>): LicenceOverage => ({
+    ceiling: "devices", label: "monitored devices", current: 262, limit: 250, over: 12,
+    message: "…", ...o,
+  });
+
+  it("says the paid case is recorded, and never that anything was blocked", () => {
+    const t = overageSummary([over({ soft: true })]) ?? "";
+    expect(t).toContain("12 above the licensed monitored devices");
+    expect(t).toContain("true-up");
+    expect(t).toContain("nothing has been blocked, disabled or deleted");
+  });
+
+  it("keeps the hard wording where the ceiling really does bite", () => {
+    const t = overageSummary([over({ soft: false })]) ?? "";
+    expect(t).toContain("12 over the licensed monitored devices");
+    expect(t).toContain("nothing has been removed");
+    expect(t).not.toContain("true-up");
+  });
+
+  it("is null with no overage — an empty banner is a claim of its own", () => {
+    expect(overageSummary([])).toBeNull();
+  });
+});
+
+describe("overageSince — states the start, and stops", () => {
+  it("reports how long an episode has run", () => {
+    const now = new Date("2026-09-11T00:00:00Z");
+    expect(overageSince({ since: "2026-09-01T00:00:00Z" }, now)).toBe("Recorded since 2026-09-01 — 10 days.");
+    expect(overageSince({ since: "2026-09-09T12:00:00Z" }, now)).toBe("Recorded since 2026-09-09 — 1 day.");
+    expect(overageSince({ since: "2026-09-11T00:00:00Z" }, now)).toBe("Recorded since today (2026-09-11).");
+  });
+
+  it("invents no deadline, countdown or consequence — those are order-form terms", () => {
+    const t = overageSince({ since: "2026-09-01T00:00:00Z" }, new Date("2026-10-01T00:00:00Z")) ?? "";
+    for (const banned of ["remaining", "deadline", "expires", "must", "will be"]) {
+      expect(t.toLowerCase()).not.toContain(banned);
+    }
+  });
+
+  it("is null when the platform is not keeping a register", () => {
+    expect(overageSince({})).toBeNull();
+    expect(overageSince({ since: "not a date" })).toBeNull();
   });
 });

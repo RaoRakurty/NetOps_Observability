@@ -1,8 +1,8 @@
 // Command correlix-licence issues and inspects Correlix licence files.
 //
 //	correlix-licence keygen  --dir <dir> [--name <base>]
-//	correlix-licence sign    --key <priv> --customer <name> --tier <t> --expires <date> \
-//	                         [--ceilings k=v,…] [--features a,b] [--grace-days N] [--out <file>]
+//	correlix-licence sign    --key <priv> --customer <name> --tier <t> [--expires <date>] \
+//	                         [--trial] [--ceilings k=v,…] [--features a,b] [--grace-days N] [--out <file>]
 //	correlix-licence verify  [--pubkey <base64>] [--at <time>] <file>
 //	correlix-licence show    <file>
 //
@@ -49,13 +49,23 @@ const usage = `correlix-licence — issue and inspect Correlix licence files
       publishing in docs/runbooks/licensing.md.
 
   sign --key <priv> --customer <name> --tier community|team|enterprise
-       --expires <RFC3339 or YYYY-MM-DD> [--issued <t>] [--licence-id <id>]
-       [--ceilings devices=250,watched_prefixes=100,…] [--features a,b,…]
-       [--grace-days N] [--support-level <s>] [--support-contact <s>]
-       [--out <file>]
+       [--expires <RFC3339 or YYYY-MM-DD>] [--trial] [--issued <t>]
+       [--licence-id <id>] [--ceilings devices=250,watched_prefixes=100,…]
+       [--features a,b,…] [--grace-days N] [--support-level <s>]
+       [--support-contact <s>] [--out <file>]
       Issue a licence. Ceilings not named default to the tier's reference
-      values; -1 means unlimited. grace_days has NO default (owner decision
-      pending) — state it explicitly or the licence carries zero.
+      values; -1 means unlimited.
+
+      GRACE (owner policy, 2026-09-05): --grace-days defaults to 30 for a paid
+      tier (team, enterprise), 7 with --trial, and 0 for community. An explicit
+      --grace-days always wins. The default is applied HERE, by the issuer, and
+      lands in the file as a number — the format itself still has no default, so
+      a licence issued before this policy existed is never reinterpreted by it.
+
+      --trial issues a 30-day evaluation licence: expiry defaults to 30 days
+      from issue, the document is marked trial, and grace defaults to 7 days.
+      Trials are Team/Enterprise (there is nothing to evaluate at community).
+      --expires still wins if you give one.
 
   verify [--pubkey <base64>] [--at <RFC3339>] <file>
       Verify a licence against the embedded public keys (or one supplied with
@@ -140,7 +150,8 @@ func cmdSign(args []string, out *os.File) error {
 	id := fs.String("licence-id", "", "licence id (default: derived from customer + issue date)")
 	ceilings := fs.String("ceilings", "", "comma-separated name=value overrides; -1 = unlimited")
 	features := fs.String("features", "", "comma-separated feature names")
-	grace := fs.Int("grace-days", 0, "grace days after expiry (issuer-set; there is no product default)")
+	grace := fs.Int("grace-days", licence.GraceDaysUnset, "grace days after expiry; unset = 30 for a paid tier, 7 with --trial, 0 for community")
+	trial := fs.Bool("trial", false, "issue a 30-day evaluation licence (marks the document as a trial; grace defaults to 7 days)")
 	supportLevel := fs.String("support-level", "", "support entitlement level (informational)")
 	supportContact := fs.String("support-contact", "", "support contact (informational)")
 	outPath := fs.String("out", "", "write the licence here instead of stdout")
@@ -154,8 +165,11 @@ func cmdSign(args []string, out *os.File) error {
 		return errors.New("sign: --customer is required")
 	case strings.TrimSpace(*tier) == "":
 		return errors.New("sign: --tier is required")
-	case strings.TrimSpace(*expires) == "":
-		return errors.New("sign: --expires is required")
+	case strings.TrimSpace(*expires) == "" && !*trial:
+		return errors.New("sign: --expires is required (or --trial, which sets a 30-day expiry)")
+	}
+	if *grace < licence.GraceDaysUnset {
+		return errors.New("sign: --grace-days cannot be negative")
 	}
 
 	t := entitlement.Tier(strings.ToLower(strings.TrimSpace(*tier)))
@@ -170,9 +184,21 @@ func cmdSign(args []string, out *os.File) error {
 		}
 		issuedAt = v
 	}
-	expiresAt, err := parseTime(*expires)
-	if err != nil {
-		return fmt.Errorf("sign: --expires: %w", err)
+	// A trial's expiry is derived from its ISSUE time, not from "now": with
+	// --issued given, the file's own two dates stay consistent with each other.
+	expiresAt := issuedAt.AddDate(0, 0, licence.TrialDays)
+	if strings.TrimSpace(*expires) != "" {
+		v, err := parseTime(*expires)
+		if err != nil {
+			return fmt.Errorf("sign: --expires: %w", err)
+		}
+		expiresAt = v
+	}
+	if *trial && t == entitlement.TierCommunity {
+		// Community is free and has no expiry; a "community trial" is a
+		// document that would expire into the tier it already is. Refusing is
+		// the honest answer — an issuer who typed this meant team or enterprise.
+		return errors.New("sign: --trial is for team or enterprise; community needs no evaluation licence")
 	}
 
 	// Ceilings start at the tier's reference values so an issuer states only
@@ -204,7 +230,8 @@ func cmdSign(args []string, out *os.File) error {
 		Ceilings:  base,
 		Features:  feats,
 		Support:   licence.Support{Level: strings.TrimSpace(*supportLevel), Contact: strings.TrimSpace(*supportContact)},
-		GraceDays: *grace,
+		GraceDays: licence.DefaultGraceDays(t, *trial, *grace),
+		Trial:     *trial,
 	}
 
 	priv, err := signer.LoadPrivateKey(*keyPath)
@@ -227,7 +254,13 @@ func cmdSign(args []string, out *os.File) error {
 		if err := os.WriteFile(*outPath, body, 0o644); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "wrote %s (licence_id=%s, tier=%s, key=%s)\n", *outPath, signed.LicenceID, signed.Tier, signed.KeyID)
+		kind := "licence"
+		if signed.Trial {
+			kind = "evaluation licence"
+		}
+		fmt.Fprintf(out, "wrote %s %s (licence_id=%s, tier=%s, expires=%s, grace=%d days, key=%s)\n",
+			*outPath, kind, signed.LicenceID, signed.Tier,
+			signed.ExpiresAt.UTC().Format(time.RFC3339), signed.GraceDays, signed.KeyID)
 		return nil
 	}
 	_, err = out.Write(body)
@@ -374,6 +407,7 @@ func cmdShow(args []string, out *os.File) error {
 	fmt.Fprintf(out, "  issued_at:   %s\n", doc.IssuedAt.UTC().Format(time.RFC3339))
 	fmt.Fprintf(out, "  expires_at:  %s\n", doc.ExpiresAt.UTC().Format(time.RFC3339))
 	fmt.Fprintf(out, "  grace_days:  %d\n", doc.GraceDays)
+	fmt.Fprintf(out, "  trial:       %t\n", doc.Trial)
 	fmt.Fprintf(out, "  key_id:      %s\n", doc.KeyID)
 	printCeilings(out, doc.Ceilings)
 	printFeatures(out, doc.Features)
@@ -386,13 +420,27 @@ func cmdShow(args []string, out *os.File) error {
 // ── shared printing ──────────────────────────────────────────────────────────
 
 func printState(out *os.File, st licence.State) {
+	fmt.Fprintf(out, "  state:     %s\n", st.Phase)
+	if st.Trial {
+		fmt.Fprintf(out, "  trial:     yes — evaluation licence\n")
+	}
+	if !st.GraceEndsAt.IsZero() {
+		fmt.Fprintf(out, "  grace:     %d day(s), until %s\n", st.GraceDays, st.GraceEndsAt.UTC().Format(time.RFC3339))
+	}
 	printCeilings(out, st.Ceilings)
 	printFeatures(out, st.Features)
 	if st.InGrace {
 		fmt.Fprintf(out, "  IN GRACE:  %s\n", st.Reason)
 	}
 	if st.Degraded {
-		fmt.Fprintf(out, "  DEGRADED:  %s\n", st.Reason)
+		fmt.Fprintf(out, "  PAST GRACE: %s\n", st.Reason)
+		// The features the lapsed licence granted are the ones whose EXISTING
+		// data stays readable. Printing them is how an operator sees that the
+		// data is still there, which is the first thing they ask.
+		if len(st.LapsedFeatures) > 0 {
+			fmt.Fprintf(out, "  still readable (existing data only):\n")
+			printFeatures(out, st.LapsedFeatures)
+		}
 	}
 }
 

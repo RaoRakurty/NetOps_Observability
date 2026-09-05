@@ -995,6 +995,20 @@ func newServer() *server {
 	// reports Community plus a loud reason.
 	srv.licenceStore = licence.NewFileStore(envOr("LICENCE_FILE", licence.DefaultPath), licence.FileStoreOptions{})
 	srv.entitlements = licence.NewService(srv.licenceStore)
+	// The durable "since when are you over" register (owner decision,
+	// 2026-09-05: "record overage_since and let the order form decide"). It
+	// lives beside the licence, fails soft — a register that cannot be written
+	// costs the start time and nothing else — and encodes no window, no
+	// countdown and no consequence, because those are order-form terms.
+	srv.entitlements.SetOverageTracker(licence.NewOverageTracker(
+		licence.OveragePathFor(srv.licenceStore.Path()),
+		func(msg string, err error) {
+			if err != nil {
+				logWarn("licence", msg, errf(err))
+				return
+			}
+			logWarn("licence", msg, nil)
+		}))
 	srv.licenceAPI = licence.New(srv.licenceDeps())
 	// The MONITORED-DEVICE ceiling. Injected rather than read by the aggregator,
 	// so internal/discovery keeps knowing nothing about licensing: it asks
@@ -3817,6 +3831,11 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// "no licence" is a VALUE (the 36500-day sentinel) and never a gap in the
 	// series. A vanished series must mean a scrape failure, not a state change.
 	s.entitlements.WriteMetrics(w, time.Now().UTC())
+	// The ceiling/usage/soft/overage families the 80/90/100 % soft-overage rules
+	// divide. This call is ALSO what records the overage episode's start time,
+	// so the number on a dashboard and the `overage_since` on the Licence page
+	// come from one observation and cannot disagree.
+	s.entitlements.WriteUsageMetrics(w, s.licenceUsage(r.Context()), time.Now().UTC())
 	// LICENCE-END
 	// IGP-MONITORING-BEGIN
 	s.igpAPI.Metrics().Write(w) // nil-safe on both the API and the counter set
@@ -5177,9 +5196,13 @@ func (s *server) licenceDeps() licence.Deps {
 		Usage:       s.licenceUsage,
 		UsageNotes:  s.licenceUsageNotes,
 		TenantUsage: s.licenceTenantUsage,
-		Now:         func() time.Time { return time.Now().UTC() },
-		WriteJSON:   writeJSON,
-		WriteError:  writeError,
+		// The over-ceiling device list — the "which devices are over" half of
+		// the honest-degradation rule. Provider view only (the module drops it
+		// from the tenant projection).
+		OverCeilingDevices: s.licenceOverCeilingDevices,
+		Now:                func() time.Time { return time.Now().UTC() },
+		WriteJSON:          writeJSON,
+		WriteError:         writeError,
 	}
 }
 
@@ -5365,6 +5388,36 @@ func (s *server) licenceTenantUsage(ctx context.Context, tenant string) (licence
 	return u, notes
 }
 
+// licenceOverCeilingDevices lists the monitored devices beyond the licensed
+// allowance, most recently enabled first.
+//
+// It is the device-granular half of "over-ceiling state is LISTED" (owner
+// decision, 2026-09-05). None of these devices is disabled, hidden or deleted,
+// and nothing here chooses which devices a licence covers — the ordering is
+// presentational and the page says so verbatim (licence.OverCeilingNoteText).
+//
+// The reason carried per device is deliberately the SAME sentence for all of
+// them: they are in one state, not ranked.
+func (s *server) licenceOverCeilingDevices(_ context.Context) []licence.OverCeilingDevice {
+	if s.discovery == nil || s.entitlements == nil {
+		return nil
+	}
+	limit, _ := s.entitlements.Ceiling(entitlement.CeilingDevices)
+	rows := s.discovery.MonitoredOverCeiling(limit)
+	if len(rows) == 0 {
+		return nil
+	}
+	reason := fmt.Sprintf("monitored and beyond the licensed allowance of %d %s — still being collected from; nothing has been disabled, hidden or deleted",
+		limit, entitlement.CeilingLabel(entitlement.CeilingDevices))
+	out := make([]licence.OverCeilingDevice, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, licence.OverCeilingDevice{
+			DeviceID: r.DeviceID, TenantID: r.TenantID, Name: r.Name, Reason: reason,
+		})
+	}
+	return out
+}
+
 // licenceUsageNotes explains, per ceiling, why the page shows no number.
 func (s *server) licenceUsageNotes(_ context.Context) map[string]string {
 	notes := map[string]string{}
@@ -5375,6 +5428,15 @@ func (s *server) licenceUsageNotes(_ context.Context) map[string]string {
 	}
 	if s.discovery == nil {
 		notes[entitlement.CeilingDevices] = "the device registry is not available"
+	} else if limit, _ := s.entitlements.Ceiling(entitlement.CeilingDevices); entitlement.SoftCeiling(entitlement.CeilingDevices, s.entitlements.Tier()) &&
+		entitlement.Exceeds(s.discovery.MonitoredCount(), limit) {
+		// The SOFT case: nothing was withheld because nothing is refused on a
+		// paid tier. The bar reads over 100 % and the honest line beside it is
+		// what that means commercially, not operationally.
+		notes[entitlement.CeilingDevices] = fmt.Sprintf(
+			"%d monitored device(s) above the allowance. This ceiling does not block on your tier — every device is still being collected from, "+
+				"nothing has been disabled or deleted, and the overage is recorded for true-up; the devices concerned are listed below",
+			s.discovery.MonitoredCount()-limit)
 	} else if n := s.discovery.MonitoringWithheldCount(); n > 0 {
 		// The honest half of the ceiling: these devices are in the inventory,
 		// nothing about them was deleted or hidden, and Correlix is simply not
@@ -5399,6 +5461,27 @@ func (s *server) licenceUsageNotes(_ context.Context) map[string]string {
 // licence that grants a capability outside its usual bundle (a trial, a
 // contractual exception) works with no special case.
 //
+// READ AND WRITE ARE DIFFERENT QUESTIONS (owner decision, 2026-09-05). After a
+// licence lapses past its grace period, "paid-only creation/configuration
+// actions become unavailable, existing data stays viewable/exportable". So the
+// METHOD picks the gate, and nothing else does:
+//
+//	GET, HEAD          → RequireRead. A customer whose Team licence lapsed can
+//	                     still open, search and export the findings they have.
+//	everything else    → Require. Creating or configuring more is refused with
+//	                     the 402, carrying licence_state: post_grace.
+//
+// The method is the right discriminator here rather than a per-route table
+// because every route this wraps follows the HTTP contract already: its GET
+// reads and its PUT/POST/DELETE write. A future route that mutated on GET would
+// be a bug in that route, not in this rule — and would be caught by the
+// enumeration test in licence_routes_test.go, which drives BOTH verbs against
+// every wrapped route.
+//
+// Nothing about this widens a lapsed licence: RequireRead admits only features
+// the lapsed document actually granted (State.LapsedFeatures). A capability
+// nobody ever bought stays refused in every phase.
+//
 // Order matters: the licence check runs BEFORE the handler, so an unlicensed
 // caller never reaches the domain code, and AFTER nothing — in particular it
 // does not replace the handler's own authorization. A 402 means "your licence
@@ -5407,7 +5490,11 @@ func (s *server) licenceUsageNotes(_ context.Context) map[string]string {
 // permission check; it only ever adds a commercial one on top.
 func (s *server) licenceFeature(f entitlement.Feature, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := entitlement.Require(s.entitlements, f); err != nil {
+		gate := entitlement.Require
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			gate = entitlement.RequireRead
+		}
+		if err := gate(s.entitlements, f); err != nil {
 			entitlement.WriteRefusal(w, err)
 			return
 		}

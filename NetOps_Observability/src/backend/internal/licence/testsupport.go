@@ -51,8 +51,11 @@ func Unlimited() State {
 		Source:       SourceFile,
 		Tier:         entitlement.TierEnterprise,
 		LicensedTier: entitlement.TierEnterprise,
-		Customer:     "test harness",
-		LicenceID:    "test-harness-unlimited",
+		// Explicitly `valid`: the licence-neutral harness must never make the
+		// corpus look like a lapsed deployment.
+		Phase:     entitlement.PhaseValid,
+		Customer:  "test harness",
+		LicenceID: "test-harness-unlimited",
 		Ceilings: entitlement.Ceilings{
 			Devices:              entitlement.Unlimited,
 			Tenants:              entitlement.Unlimited,

@@ -1175,8 +1175,13 @@ func TestLicenceRouteLifecycle(t *testing.T) {
 		if s, _ := v["verify_hint"].(string); !strings.Contains(s, "correlix-licence verify") {
 			t.Fatalf("the offline verification recipe must be on the page: %q", s)
 		}
-		if s, _ := v["expiry_semantics"].(string); !strings.Contains(s, "owner decision") {
-			t.Fatalf("the page must state that expiry policy is still being decided: %q", s)
+		// The DECIDED policy (owner, 2026-09-05), stated in the product rather
+		// than only in a design doc. All three halves must be there: the grace
+		// window, what stops after it, and — the part an operator reads first —
+		// what does NOT happen to their data.
+		if s, _ := v["expiry_semantics"].(string); !strings.Contains(s, "grace period") ||
+			!strings.Contains(s, "visible and exportable") || !strings.Contains(s, "nothing is disabled or deleted") {
+			t.Fatalf("the page must state the expiry, grace and overage policy: %q", s)
 		}
 	})
 

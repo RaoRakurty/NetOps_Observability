@@ -119,6 +119,18 @@ type Deps struct {
 	// Nil means nothing is measured for a tenant caller: every ceiling reads
 	// "not measured", which is the fail-closed direction.
 	TenantUsage func(ctx context.Context, tenant string) (Usage, map[string]string)
+	// OverCeilingDevices lists the monitored devices beyond the licensed
+	// allowance — the "over-ceiling state is LISTED" half of the owner's
+	// 2026-09-05 decision, at device granularity rather than a bare count.
+	//
+	// PROVIDER VIEW ONLY. The ordering that decides which devices are "beyond"
+	// is platform-wide, so the list is not a tenant's to read; the tenant
+	// projection omits it entirely rather than showing a filtered slice of an
+	// ordering that was never per-tenant.
+	//
+	// Nil means the platform does not compute one, and the page says so instead
+	// of showing an empty list as if it had looked.
+	OverCeilingDevices func(ctx context.Context) []OverCeilingDevice
 	// Now is the clock. Injected so expiry and grace are testable.
 	Now func() time.Time
 	// WriteJSON and WriteError are the platform's response helpers, so a licence
@@ -166,10 +178,28 @@ type CeilingView struct {
 	// something else you need to know" and "we never counted" are different
 	// statements and a page that conflated them would be lying in one of the
 	// two cases.
-	Note     string           `json:"note,omitempty"`
-	Enforced bool             `json:"enforced"`
-	Over     bool             `json:"over"`
+	Note     string `json:"note,omitempty"`
+	Enforced bool   `json:"enforced"`
+	Over     bool   `json:"over"`
+	// Soft is true where going over this ceiling is ALLOWED and recorded rather
+	// than refused (entitlement.SoftCeiling — monitored devices on a paid
+	// tier). The page renders a soft ceiling's overage as a true-up banner and a
+	// hard one's as a block, which are different things and must not look alike.
+	Soft     bool             `json:"soft"`
 	LiftedBy entitlement.Tier `json:"lifted_by,omitempty"`
+}
+
+// OverCeilingDevice is one monitored device beyond the licensed allowance.
+//
+// Listing them is honesty, not enforcement: none of these is disabled, hidden
+// or deleted, and NOTHING in the product picks which devices "lose" — the
+// ordering below is presentational and says so.
+type OverCeilingDevice struct {
+	DeviceID string `json:"device_id"`
+	TenantID string `json:"tenant_id,omitempty"`
+	Name     string `json:"name,omitempty"`
+	// Reason is the operator sentence for this device's state.
+	Reason string `json:"reason"`
 }
 
 // FeatureView is one row of the page's feature table.
@@ -249,20 +279,47 @@ type View struct {
 	// VerifyHint is the offline verification recipe, shown verbatim on the page
 	// so a customer can check what we sent them without trusting this UI.
 	VerifyHint string `json:"verify_hint,omitempty"`
-	// ExpirySemantics states, in the product itself, that the commercial policy
-	// for expiry is not yet decided. Saying it here rather than only in a design
-	// doc is the honest-states rule applied to our own roadmap.
+	// ExpirySemantics states the expiry, grace and overage policy in the
+	// product itself, so an operator reads the same rules on the page they
+	// would read in the design doc.
 	ExpirySemantics string `json:"expiry_semantics"`
 	// DaysToExpiry mirrors the metric. Null when there is nothing to expire.
 	DaysToExpiry *int `json:"days_to_expiry"`
+	// GraceDaysLeft is whole days until the grace window closes. Null unless
+	// the licence is IN GRACE — "0 days left" and "grace does not apply" are
+	// different facts and the page must not merge them.
+	GraceDaysLeft *int `json:"grace_days_left"`
+	// OverCeilingDevices are the monitored devices beyond the allowance.
+	// PROVIDER VIEW ONLY (see Deps.OverCeilingDevices); absent, not empty, in
+	// the tenant projection.
+	OverCeilingDevices []OverCeilingDevice `json:"over_ceiling_devices,omitempty"`
+	// OverCeilingNote explains what the list above is and — just as important —
+	// what it is not. Present whenever the list is.
+	OverCeilingNote string `json:"over_ceiling_note,omitempty"`
 }
 
-// ExpirySemanticsNote is the standing statement that expiry policy is pending.
-const ExpirySemanticsNote = "Expiry semantics are an owner decision that is still open. " +
-	"The mechanism is in place: a licence carries an expiry and an issuer-set grace period, and after grace the " +
-	"commercial ceilings fall back to Community with everything over a ceiling listed here. " +
-	"Nothing is ever deleted, and no licence state can affect tenant isolation, data separation, " +
-	"permissions or sign-in — those are not licensed capabilities."
+// OverCeilingNoteText is the sentence beside the over-ceiling device list.
+//
+// It exists because a list of "the devices that are over" invites exactly one
+// wrong conclusion — that Correlix picked them and is doing something to them.
+// It picked nothing and is doing nothing.
+const OverCeilingNoteText = "These are the monitored devices beyond the licensed allowance. " +
+	"Correlix does not choose which devices a licence covers: they are listed most-recently-enabled first purely so the size and shape of the overage are visible. " +
+	"Every one of them is still being collected from — nothing here has been disabled, hidden or deleted."
+
+// ExpirySemanticsNote is the expiry, grace and overage policy, stated in the
+// product (owner decision, 2026-09-05 — docs/design/TIERING_PLAN_2026-09-03.md
+// §9, and the LICENSING_MODEL addendum "Expiry, grace and overage").
+//
+// It says what happens AND what does not, because the second half is the part
+// an operator reading this page at 2am actually needs.
+const ExpirySemanticsNote = "A paid licence carries a grace period after its expiry date — 30 days as issued, 7 for an evaluation licence — " +
+	"and during grace nothing changes at all. " +
+	"After grace, creating and configuring paid capability is refused: no new monitored devices beyond the Community allowance, " +
+	"no new tenants or organisations, no new configuration of licensed features. " +
+	"Everything already here stays visible and exportable, everything over a ceiling is listed, and nothing is disabled or deleted. " +
+	"On Team and Enterprise the monitored-device allowance is a SOFT limit: going over it is allowed and recorded for true-up, never blocked mid-incident. " +
+	"No licence state can affect tenant isolation, data separation, permissions or sign-in — those are not licensed capabilities."
 
 // VerifyHintText is the offline recipe. It names the command and the key so a
 // customer can verify a file we issued without contacting us.
@@ -405,7 +462,7 @@ func (a *API) view(ctx context.Context) View {
 	if a.d.UsageNotes != nil {
 		notes = a.d.UsageNotes(ctx)
 	}
-	v := a.compose(a.d.Store.State(), usage, notes)
+	v := a.compose(a.d.Store.State(), usage, notes, true)
 	v.Scope = ScopePlatform
 	keys := make([]KeyView, 0, 2)
 	for _, k := range EmbeddedKeys() {
@@ -414,6 +471,12 @@ func (a *API) view(ctx context.Context) View {
 	v.Keys = keys
 	v.Path = a.d.Store.Path()
 	v.VerifyHint = VerifyHintText
+	if a.d.OverCeilingDevices != nil {
+		if rows := a.d.OverCeilingDevices(ctx); len(rows) > 0 {
+			v.OverCeilingDevices = rows
+			v.OverCeilingNote = OverCeilingNoteText
+		}
+	}
 	return v
 }
 
@@ -439,7 +502,7 @@ func (a *API) tenantView(ctx context.Context, tenant string) View {
 	if a.d.TenantUsage != nil {
 		usage, notes = a.d.TenantUsage(ctx, tenant)
 	}
-	v := a.compose(tenantState(a.d.Store.State()), usage, notes)
+	v := a.compose(tenantState(a.d.Store.State()), usage, notes, false)
 	v.Scope = ScopeTenant
 	v.Tenant = tenant
 	v.ScopeNote = TenantScopeNote
@@ -463,8 +526,17 @@ func tenantState(st State) State {
 		LicensedTier: st.LicensedTier,
 		// GraceDays is part of the EXPIRY STATE, not of the commercial identity:
 		// "expired 3 days ago, inside a 30-day grace" is the sentence a tenant
-		// needs, and without the number the page would have to invent one.
-		GraceDays: st.GraceDays,
+		// needs, and without the number the page would have to invent one. The
+		// phase, the grace end and the trial flag are the same kind of fact:
+		// what a tenant may do right now and for how long.
+		GraceDays:   st.GraceDays,
+		Phase:       st.Phase,
+		GraceEndsAt: st.GraceEndsAt,
+		Trial:       st.Trial,
+		// LapsedFeatures is what keeps a tenant's own history readable after a
+		// lapse; a tenant who cannot see it cannot understand why a page they
+		// use still loads while a button on it refuses.
+		LapsedFeatures: st.LapsedFeatures,
 	}
 	// A REFUSED licence is a fact the tenant must have — their ceilings fell
 	// back to Community and they need to know why their tier vanished — but the
@@ -479,7 +551,7 @@ func tenantState(st State) State {
 // compose builds the shared body of both views from one state and one usage
 // reading, so the provider view and the tenant projection can never disagree
 // about how a ceiling, a feature or an overage is rendered.
-func (a *API) compose(st State, usage Usage, notes map[string]string) View {
+func (a *API) compose(st State, usage Usage, notes map[string]string, record bool) View {
 	if notes == nil {
 		notes = map[string]string{}
 	}
@@ -493,6 +565,7 @@ func (a *API) compose(st State, usage Usage, notes map[string]string) View {
 			Unit:     entitlement.CeilingUnit(n),
 			Limit:    limit,
 			Enforced: entitlement.Enforced(n),
+			Soft:     entitlement.Enforced(n) && entitlement.SoftCeiling(n, st.Tier),
 			LiftedBy: entitlement.LiftedBy(n, limit, st.Tier),
 		}
 		if cur, measured := usage[n]; measured {
@@ -522,13 +595,36 @@ func (a *API) compose(st State, usage Usage, notes map[string]string) View {
 	v := View{
 		ManagedBy: ManagedByProvider, ManagedByDetail: ManagedByProviderDetail,
 		State: st, Ceilings: ceilings, Features: features,
-		Overages:        st.Overages(usage),
+		Overages:        a.overages(st, usage, record),
 		ExpirySemantics: ExpirySemanticsNote,
 	}
-	if d, ok := st.DaysToExpiry(a.d.Now()); ok {
+	now := a.d.Now()
+	if d, ok := st.DaysToExpiry(now); ok {
 		v.DaysToExpiry = &d
 	}
+	if d, ok := st.GraceDaysLeft(now); ok {
+		v.GraceDaysLeft = &d
+	}
 	return v
+}
+
+// overages lists the ceilings the usage exceeds, stamped with when each
+// episode began where the entitlement service keeps a register.
+//
+// Going through the Service rather than the State is what makes the page's
+// `since` and the metric's `since` the same observation. With no Service wired
+// the list is still correct, it simply carries no start time — a fact the page
+// renders as an absent field rather than as "just now".
+func (a *API) overages(st State, usage Usage, record bool) []Overage {
+	// `record` is FALSE for the tenant projection, and that is load-bearing:
+	// the register answers "since when is this INSTALLATION over its ceiling",
+	// and feeding it one tenant's slice of the fleet would restart the episode
+	// at a smaller number every time a tenant admin opened the page. The tenant
+	// still sees its own over-ceiling rows; only the platform reading writes.
+	if record && a.d.Service != nil {
+		return a.d.Service.ObserveUsage(usage, a.d.Now())
+	}
+	return st.Overages(usage)
 }
 
 func (a *API) audit(r *http.Request, caller Principal, status int, decision string, detail map[string]any) {

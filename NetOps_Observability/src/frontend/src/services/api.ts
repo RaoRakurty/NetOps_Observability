@@ -8547,6 +8547,19 @@ export type LicenceCeilings = {
 /** The support entitlement recorded in the licence. Informational only. */
 export type LicenceSupport = { level?: string; contact?: string };
 
+/**
+ * Where a licence stands against its own expiry (owner decision, 2026-09-05).
+ *
+ * - "valid"      — not expired. Also the answer for Community, which has no
+ *                  expiry to be past, and is NOT a fault state.
+ * - "in_grace"   — expired, inside the issuer's grace window. NOTHING changes
+ *                  for the user; the page shows how long is left.
+ * - "post_grace" — expired and past grace. Creating and configuring paid
+ *                  capability refuses; everything already here stays visible
+ *                  and exportable, and nothing is disabled or deleted.
+ */
+export type LicencePhase = "valid" | "in_grace" | "post_grace";
+
 /** The evaluated licence: what is permitted right now. */
 export type LicenceState = {
   source: LicenceSource;
@@ -8555,9 +8568,23 @@ export type LicenceState = {
   /** The feature names granted right now; absent/empty means none. */
   features?: string[];
   expires_at?: string;
+  /** The expiry phase. The ONE field to switch on — the two booleans below are
+   *  the same fact in the older shape and are kept for compatibility. */
+  phase: LicencePhase;
   in_grace: boolean;
+  /** True exactly when `phase === "post_grace"`. The name predates the phase. */
   degraded: boolean;
   reason?: string;
+  /** When the grace window closes (expires_at + grace_days). Present whenever
+   *  there is an expiry at all, not only once expired. */
+  grace_ends_at?: string;
+  /** An EVALUATION licence. Display only: a trial grants exactly what its tier,
+   *  ceilings and features say. */
+  trial?: boolean;
+  /** The features an EXPIRED licence granted, whose existing data stays
+   *  readable and exportable past grace. Never contains a feature the licence
+   *  did not grant — a lapse cannot hand out capability nobody bought. */
+  lapsed_features?: string[];
   /** The tier the FILE names — differs from `tier` only once a licence degraded. */
   licensed_tier?: LicenceTier;
   customer?: string;
@@ -8589,6 +8616,10 @@ export type LicenceCeiling = {
   /** false = the limit is carried in the licence but nothing gates on it. */
   enforced: boolean;
   over: boolean;
+  /** true = going over this ceiling is ALLOWED and recorded for true-up rather
+   *  than refused (monitored devices on Team/Enterprise). A soft overage and a
+   *  hard one are different things and must not render alike. */
+  soft?: boolean;
   lifted_by?: LicenceTier;
 };
 
@@ -8605,11 +8636,28 @@ export type LicenceFeature = {
 export type LicenceOverage = {
   ceiling: string;
   label: string;
+  /** What the number counts ("monitored_devices"), not what it is called. */
+  unit?: string;
   current: number;
   limit: number;
   over: number;
+  /** Soft = allowed and recorded for true-up; hard = state that predates the
+   *  ceiling in force, with nothing new admitted. */
+  soft?: boolean;
+  /** When this overage began. NO window is derived from it — how long an
+   *  overage may run is an order-form term, never a number in the product. */
+  since?: string;
   lifted_by?: LicenceTier;
   message: string;
+};
+
+/** One monitored device beyond the licensed allowance. Listed, never acted on:
+ *  every one of these is still being collected from. */
+export type LicenceOverCeilingDevice = {
+  device_id: string;
+  tenant_id?: string;
+  name?: string;
+  reason: string;
 };
 
 /** A trusted public signing key, as the page displays and offers it. */
@@ -8655,10 +8703,19 @@ export type LicenceView = {
   path?: string;
   /** The offline verification recipe, shown verbatim. Provider-only. */
   verify_hint?: string;
-  /** The standing statement that expiry policy is still an owner decision. */
+  /** The expiry, grace and overage policy, stated in the product. */
   expiry_semantics: string;
   /** null when there is nothing to expire. */
   days_to_expiry: number | null;
+  /** Whole days until the grace window closes. null unless the licence is IN
+   *  grace — "0 days left" and "grace does not apply" are different facts. */
+  grace_days_left: number | null;
+  /** The monitored devices beyond the allowance. PROVIDER VIEW ONLY: absent in
+   *  the tenant projection, because the ordering that decides which devices are
+   *  "beyond" is platform-wide and is not a tenant's to read. */
+  over_ceiling_devices?: LicenceOverCeilingDevice[];
+  /** What that list is, and — just as important — what it is not. */
+  over_ceiling_note?: string;
 };
 
 /**
@@ -8669,10 +8726,19 @@ export type LicenceView = {
 export type LicenceRefusalBody = {
   error: "licence_ceiling" | "licence_feature" | string;
   ceiling?: string;
+  /** What the ceiling counts, as a machine token. Render this, never `ceiling`. */
+  unit?: string;
   feature?: string;
   current?: number;
   limit?: number;
   tier?: string;
   lifted_by?: string;
+  /**
+   * The expiry phase the refusal was issued in. It is what tells "you never
+   * bought this" (remedy: upgrade, and `lifted_by` names the tier) apart from
+   * "your licence lapsed" (remedy: renew, and `lifted_by` is deliberately
+   * empty). Same 402, two entirely different next steps.
+   */
+  licence_state?: LicencePhase;
   message?: string;
 };

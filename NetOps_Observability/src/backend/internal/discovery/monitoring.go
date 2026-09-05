@@ -23,6 +23,7 @@ package discovery
 
 import (
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -361,4 +362,81 @@ func (a *DiscoveryAggregator) admitMonitoringLocked(d models.Device, count int) 
 	}
 	delete(a.withheld, d.ID)
 	return true
+}
+
+// OverCeiling is one monitored device beyond a licensed allowance.
+//
+// It is the SOFT-overage sibling of WithheldMonitoring, and the difference
+// between the two is the whole point of listing both: a WITHHELD device is one
+// Correlix is NOT collecting from because a hard ceiling was full; an
+// OVER-CEILING device is one Correlix IS collecting from, above a soft
+// allowance, recorded for true-up. Nothing about either is deleted or hidden.
+type OverCeiling struct {
+	DeviceID string `json:"device_id"`
+	TenantID string `json:"tenant_id,omitempty"`
+	Name     string `json:"name,omitempty"`
+	// EnabledAt is when an operator turned monitoring on, where there is an
+	// explicit decision. Zero for a device monitored by provenance default —
+	// which is why the ordering below falls back to the id.
+	EnabledAt time.Time `json:"enabled_at,omitzero"`
+}
+
+// MonitoredOverCeiling lists the monitored devices beyond `limit`, most
+// recently enabled first.
+//
+// THE ORDERING IS PRESENTATIONAL AND NOTHING ELSE. Correlix does not choose
+// which devices a licence covers, and no device is treated differently for
+// appearing here: every one of them is still collected from. The order exists
+// so an operator reading "12 over" can see WHICH twelve arrived last, which is
+// the question they actually ask. Ties break on the device id so two reads of
+// the page never disagree.
+//
+// A limit of entitlement-unlimited (-1) or a non-positive limit returns nothing:
+// there is no "beyond" an unlimited allowance, and a zero limit is a
+// pathological licence whose overage is the whole fleet — the count already
+// says so and naming every device would be noise, not honesty.
+func (a *DiscoveryAggregator) MonitoredOverCeiling(limit int) []OverCeiling {
+	if limit <= 0 {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	devices, state, owners := a.monitorViewLocked()
+
+	// The newest explicit decision wins for a canonical device: a deduped device
+	// may carry decisions against more than one raw id.
+	enabledAt := make(map[string]time.Time, len(devices))
+	for rawID, rec := range a.monitor {
+		if !rec.Enabled {
+			continue
+		}
+		ownerID := owners[rawID]
+		if ownerID == "" {
+			ownerID = rawID
+		}
+		if rec.UpdatedAt.After(enabledAt[ownerID]) {
+			enabledAt[ownerID] = rec.UpdatedAt.UTC()
+		}
+	}
+
+	rows := make([]OverCeiling, 0, len(devices))
+	for _, d := range devices {
+		if !state[d.ID].on {
+			continue
+		}
+		rows = append(rows, OverCeiling{
+			DeviceID: d.ID, TenantID: deviceTenantKey(d), Name: d.Name,
+			EnabledAt: enabledAt[d.ID],
+		})
+	}
+	if len(rows) <= limit {
+		return nil
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if !rows[i].EnabledAt.Equal(rows[j].EnabledAt) {
+			return rows[i].EnabledAt.After(rows[j].EnabledAt)
+		}
+		return rows[i].DeviceID > rows[j].DeviceID
+	})
+	return rows[:len(rows)-limit]
 }

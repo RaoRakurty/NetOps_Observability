@@ -4,7 +4,9 @@
 explain to a customer why the one they were sent will not install.
 
 **Alerts that route here:** `LicenceExpiringSoon`, `LicenceInGrace`,
-`LicenceDegraded` (group `licence` in `src/config/rules.yaml`). None of them is
+`LicenceExpired` (group `licence` in `src/config/rules.yaml`), plus the
+soft-overage group `licence-ceilings` (`LicenceCeilingApproaching`,
+`LicenceCeilingReached`, `LicenceOverage`). None of them is
 a page.
 
 **Design of record:** `docs/design/LICENSING_MODEL_2026-09-04.md` §3 (the file)
@@ -67,22 +69,58 @@ that ever drifts.
 Adding an eighth name gates a capability for every customer, so it is an owner
 decision, not a diff.
 
-### Expiry semantics — OWNER DECISION PENDING
+### Expiry, grace and overage — DECIDED 2026-09-05
 
-**The commercial policy for expiry has not been decided, and none is invented
-anywhere in the code or in this file.**
+Owner decision, recorded in `docs/design/TIERING_PLAN_2026-09-03.md` §9 and
+written up in `docs/design/LICENSING_MODEL_2026-09-04.md` §8. This is what you
+may tell a customer.
 
-What exists is the mechanism and nothing more:
+**Three phases.** The evaluated state carries `phase`, and every 402 carries the
+same value as `licence_state`:
 
-* the document carries `expires_at` and an **issuer-set `grace_days`**;
-* there is **no built-in default grace**. A file that omits `grace_days` gets
-  **zero**, not thirty. The issuer states the policy explicitly, per file;
-* past grace, the effective ceilings and features fall back to Community, the
-  licensed tier is remembered, and everything over a ceiling is **listed**.
+| phase | when | what they experience |
+|---|---|---|
+| `valid` | before `expires_at` — and always on Community, which has no expiry | everything the licence grants |
+| `in_grace` | inside `expires_at + grace_days` | **nothing changes at all.** The Licence page shows the days left; `LicenceInGrace` warns |
+| `post_grace` | after that | creation and configuration of paid capability is refused; everything else keeps working |
 
-When the owner decides the policy it lands in `evaluate()`
-(`internal/licence/verify.go`) and in §7 below. Until then, do not tell a
-customer what happens at expiry beyond what §7 says.
+**What stops after grace, and what does not.** Refused: a monitoring activation
+beyond the Community 25, a second tenant or organisation, and any non-GET on a
+feature-gated route (SAML config, LDAP config/test, a new dialect, a SIEM
+export). Kept working: every GET/list/export of a licensed feature — findings,
+their facets and trend, the LDAP configuration as it stands, the tenant and org
+lists. Every device already monitored stays monitored. **Nothing is disabled,
+hidden or deleted, and Correlix never chooses which devices "lose"** — the
+over-ceiling devices are listed newest-first so the shape of the overage is
+visible, and the API says exactly that beside the list.
+
+**Grace defaults are the ISSUER's, not the format's.** `correlix-licence sign`
+writes an explicit number: 30 days for team/enterprise, 7 with `--trial`, 0 for
+community, and whatever `--grace-days N` says when given (including 0). A file
+that omits `grace_days` still means **zero** — a licence already in a customer's
+hands is never re-termed by a later policy.
+
+**Trials.** `--trial` issues a 30-day Team/Enterprise evaluation licence: expiry
+30 days from issue, `trial: true` in the document, 7 days of grace. It grants
+exactly what its tier, ceilings and features say; the flag changes the words
+(`show`, `verify`, and "Evaluation licence · N days left" on the page), never the
+enforcement. Because `trial` is omitted from the canonical payload when false,
+every licence issued before the field existed still verifies.
+
+**Soft overage (Team and Enterprise).** The monitored-device allowance does not
+block: activation beyond it succeeds and is recorded. Never a kill switch during
+an incident. Community keeps the **hard** block at the 26th activation — a
+published free ceiling. The register beside the licence
+(`licence-overage.json`) keeps `overage_since` and the peak across restarts and
+fails soft. **Do not quote a window**: how long an overage may run and what it
+costs are order-form terms and appear nowhere in the product. The word the
+product uses is *true-up*.
+
+Alerts: `LicenceCeilingApproaching` (80–90 %), `LicenceCeilingReached`
+(90–100 %), `LicenceOverage` (over) — all `tier: warning`, all joined on
+`netops_licence_ceiling_soft == 1`, so a Community deployment fires none of them.
+The post-grace rule is `LicenceExpired` (renamed from `LicenceDegraded` on
+2026-09-05; the expression is unchanged).
 
 ---
 
@@ -441,7 +479,7 @@ line, and in the metrics.
 |---|---|---|---|---|
 | **live** | `now <= expires_at` | the licensed tier | as granted | nothing unusual |
 | **in grace** | `expires_at < now <= expires_at + grace_days` | still the licensed tier | still granted | a banner and `LicenceInGrace`. **Nothing has changed yet.** This is the last quiet window to install a renewal |
-| **degraded** | `now > expires_at + grace_days` | **Community** | **none** | `LicenceDegraded`, the licensed tier remembered ("your Team licence expired"), and every over-ceiling item listed |
+| **post_grace** | `now > expires_at + grace_days` | **Community** | **none granted; the lapsed set stays READABLE** | `LicenceExpired`, the licensed tier remembered ("your Team licence expired"), every over-ceiling item and device listed, and every GET/list/export of a licensed feature still served |
 
 `grace_days` is issuer-set with **no default**: a file that omits it goes from
 live to degraded at expiry with no grace at all.
@@ -505,7 +543,10 @@ Group `licence` in `src/config/rules.yaml`, unit-tested in
 |---|---|---|---|
 | `LicenceExpiringSoon` | `netops_licence_days_to_expiry >= 0 and … < 14` | 1h | `warning` |
 | `LicenceInGrace` | `netops_licence_state{in_grace="true"} == 1` | 15m | `warning` |
-| `LicenceDegraded` | `netops_licence_state{degraded="true"} == 1` | 15m | `warning` |
+| `LicenceExpired` | `netops_licence_state{degraded="true"} == 1` | 15m | `warning` |
+| `LicenceCeilingApproaching` | `(usage / ceiling >= 0.8 < 0.9) and on(ceiling) ceiling_soft == 1 and on(ceiling) ceiling > 0` | 1h | `warning` |
+| `LicenceCeilingReached` | `(usage / ceiling >= 0.9 <= 1) and on(ceiling) ceiling_soft == 1 and on(ceiling) ceiling > 0` | 1h | `warning` |
+| `LicenceOverage` | `netops_licence_overage_devices > 0 and on() ceiling_soft{ceiling="devices"} == 1` | 1h | `warning` |
 
 **None of these is a page, and that is deliberate.** The four page conditions are
 the ones in `docs/runbooks/engine-liveness-matrix.md`, and a licence is none of

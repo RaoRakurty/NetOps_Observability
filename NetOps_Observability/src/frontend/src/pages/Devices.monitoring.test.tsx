@@ -23,6 +23,9 @@ const mockApi = vi.hoisted(() => ({
   deviceLocations: vi.fn(),
   sites: vi.fn(),
   features: vi.fn(),
+  // Best-effort on the page: most operators cannot read the licence at all, so
+  // the fleet table must render identically whether this resolves or rejects.
+  getLicence: vi.fn(),
   setDeviceMonitoring: vi.fn(),
   upsertDevice: vi.fn(),
   deleteDevice: vi.fn(),
@@ -50,6 +53,7 @@ function setup(devices: Device[]) {
   mockApi.deviceLocations.mockResolvedValue({ devices: [] });
   mockApi.sites.mockResolvedValue({ sites: [], active: "internal" });
   mockApi.features.mockResolvedValue({});
+  mockApi.getLicence.mockRejectedValue(new Error("403 Forbidden: administration:admin required"));
 }
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
@@ -143,5 +147,75 @@ describe("monitoringRemedy", () => {
     const text = monitoringRemedy({ kind: "ceiling", ceiling: "devices", tier: "community", message: "…" });
     expect(text).toContain("Community monitoring limit reached.");
     expect(text).not.toContain("undefined");
+  });
+});
+
+// ── the soft-overage banner (owner decision, 2026-09-05) ────────────────────
+//
+// An operator enabling their 260th device should learn that it is being
+// recorded HERE, where they are doing it — not only on a Licence page they may
+// never open.
+
+describe("the monitored-device overage banner", () => {
+  const overage = (soft: boolean) => ({
+    ceiling: "devices",
+    label: "monitored devices",
+    unit: "monitored_devices",
+    current: 262,
+    limit: 250,
+    over: 12,
+    soft,
+    message: "…",
+  });
+
+  const licenceView = (soft: boolean) =>
+    ({
+      scope: "platform",
+      managed_by: "provider",
+      managed_by_detail: "",
+      state: {
+        source: "file", tier: soft ? "team" : "community",
+        ceilings: {
+          devices: soft ? 250 : 25, tenants: 1, orgs: 1, retention_days: 7,
+          watched_prefixes: 5, skills: 0, provider_tokens_per_day: 0,
+        },
+        phase: "valid", in_grace: false, degraded: false,
+      },
+      ceilings: [],
+      features: [],
+      overages: [overage(soft)],
+      expiry_semantics: "",
+      days_to_expiry: null,
+      grace_days_left: null,
+    }) as never;
+
+  it("says a PAID overage is recorded, never that anything was blocked", async () => {
+    setup([]);
+    mockApi.getLicence.mockResolvedValue(licenceView(true));
+    render(<Devices />);
+    expect(await screen.findByText("Above your monitored-device allowance")).toBeTruthy();
+    const banner = screen.getByRole("note");
+    expect(banner.textContent).toContain("true-up");
+    expect(banner.textContent).toContain("nothing has been blocked, disabled or deleted");
+    // The C4 wording, reused verbatim from the ceiling itself.
+    expect(banner.textContent).toContain("monitored devices");
+    expect(banner.textContent).toContain("Discovery does not consume your monitoring allowance.");
+  });
+
+  it("keeps the honest hard wording where the ceiling really does bite", async () => {
+    setup([]);
+    mockApi.getLicence.mockResolvedValue(licenceView(false));
+    render(<Devices />);
+    expect(await screen.findByText("Over the monitored-device ceiling")).toBeTruthy();
+    const banner = screen.getByRole("note");
+    expect(banner.textContent).toContain("nothing has been removed");
+    expect(banner.textContent).not.toContain("true-up");
+  });
+
+  it("shows no banner at all when the caller cannot read the licence", async () => {
+    setup([]); // getLicence rejects with 403 in the default fixture
+    render(<Devices />);
+    await screen.findByText("Inventory & Devices");
+    expect(screen.queryByRole("note")).toBeNull();
   });
 });

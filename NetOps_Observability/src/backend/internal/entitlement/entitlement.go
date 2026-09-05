@@ -37,6 +37,21 @@
 // bug in this package is a customer who paid for SAML not getting SAML, which
 // is a support ticket, not a breach.
 //
+// # Expiry, grace and overage (owner decision, 2026-09-05)
+//
+// Phase is the post-expiry state machine — valid → in_grace → post_grace — and
+// SoftCeiling is the paid-tier overage policy. Both live here rather than in
+// internal/licence because they are POLICY the product asks about, not file
+// format. Two rules govern them and neither is negotiable:
+//
+//   - post_grace removes CREATION and CONFIGURATION only. Require refuses;
+//     RequireRead still admits, so existing data stays viewable and exportable.
+//     Nothing is disabled and nothing is deleted.
+//   - no phase and no ceiling can reach a safety property. The isolation, RLS,
+//     authorization, integrity and authentication paths do not consult this
+//     package at all, so there is no state of this machine in which they differ
+//     (safety_invariant_test.go).
+//
 // # Failing closed
 //
 // The zero value of Service is nil, and every helper here is nil-safe and
@@ -74,6 +89,105 @@ type Service interface {
 	// Tier is the tier in force, for display and for the refusal body. It is
 	// NOT a gate: nothing outside this package may branch on it.
 	Tier() Tier
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Expiry phases — the post-expiry state machine (owner decision, 2026-09-05)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Phase is where a licence stands against its own expiry. It is the vocabulary
+// of the state machine the owner adopted on 2026-09-05
+// (docs/design/TIERING_PLAN_2026-09-03.md §9, row "Paid expiry / grace"):
+//
+//	valid       → the licence has not expired. Everything it grants is in force.
+//	in_grace    → expired, inside the issuer's grace window. NOTHING changes for
+//	              the user: the licensed ceilings and features are still in
+//	              force. The page and a warning alert say how long is left.
+//	post_grace  → expired and past grace. The commercial ceilings and features
+//	              fall back to Community for CREATION and CONFIGURATION only.
+//	              Existing data stays viewable and exportable, over-ceiling state
+//	              is LISTED, and nothing is disabled or deleted.
+//
+// It is a DISPLAY and REFUSAL token, not a gate: no business code branches on
+// it. What business code asks is Require (may I create/configure this?) and
+// RequireRead (may I still see what is already here?).
+//
+// The phase can never reach a safety property. Isolation, RLS, authorization,
+// integrity and core authentication do not consult this package at all
+// (safety_invariant_test.go), so there is no phase in which they change.
+type Phase string
+
+const (
+	// PhaseValid — not expired. Also the answer for Community, which has no
+	// expiry to be past, and for any Service that does not track one.
+	PhaseValid Phase = "valid"
+	// PhaseInGrace — expired, still inside the issuer's grace window.
+	PhaseInGrace Phase = "in_grace"
+	// PhasePostGrace — expired and past grace.
+	PhasePostGrace Phase = "post_grace"
+)
+
+// phaseOrder is the closed phase vocabulary, in the order the machine walks it.
+var phaseOrder = []Phase{PhaseValid, PhaseInGrace, PhasePostGrace}
+
+// Phases returns the closed phase vocabulary in transition order.
+func Phases() []Phase { return append([]Phase(nil), phaseOrder...) }
+
+// ValidPhase reports whether p is in the closed vocabulary.
+func ValidPhase(p Phase) bool {
+	for _, k := range phaseOrder {
+		if k == p {
+			return true
+		}
+	}
+	return false
+}
+
+// Label is the phase's display name.
+func (p Phase) Label() string {
+	switch p {
+	case PhaseValid:
+		return "Valid"
+	case PhaseInGrace:
+		return "In grace"
+	case PhasePostGrace:
+		return "Past grace"
+	}
+	return string(p)
+}
+
+// Lifecycle is the OPTIONAL extension a Service implements when it is backed by
+// a document that can expire. It is deliberately an EXTENSION and not part of
+// Service: the base question ("is X entitled?") is what business code depends
+// on, and a Service that has no expiry — a fixture, a future source of truth —
+// must not have to invent an answer about grace periods.
+//
+// A Service that does not implement it reads as PhaseValid with no retained
+// reads, which is the fail-closed direction: nothing extra is granted, and
+// nothing is claimed about a lifecycle that is not being tracked.
+type Lifecycle interface {
+	Service
+	// Phase is the expiry phase in force.
+	Phase() Phase
+	// EntitledForRead reports whether f's EXISTING data stays readable and
+	// exportable. It differs from Entitled only in PhasePostGrace, where the
+	// owner's policy is that the customer keeps SEEING what they already have
+	// and loses only the ability to create and configure more.
+	//
+	// It must never grant a read the licence never granted at all: a feature
+	// the document did not include is not readable because a licence lapsed.
+	EntitledForRead(f Feature) bool
+}
+
+// PhaseOf reports the expiry phase svc is in. Nil-safe, and PhaseValid for a
+// Service that does not track a lifecycle.
+func PhaseOf(svc Service) Phase {
+	if lc, ok := svc.(Lifecycle); ok && lc != nil {
+		if p := lc.Phase(); ValidPhase(p) {
+			return p
+		}
+	}
+	return PhaseValid
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -350,6 +464,41 @@ func ValidCeiling(name string) bool {
 // rather than showing a bar that nothing enforces as if it bit.
 func Enforced(name string) bool { return enforcedCeilings[name] }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Soft ceilings — the paid-tier overage policy (owner decision, 2026-09-05)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// SoftCeiling reports whether exceeding `name` at tier `at` is ALLOWED and
+// recorded, rather than refused.
+//
+// The owner's decision (docs/design/TIERING_PLAN_2026-09-03.md §9, Team and
+// Enterprise rows): "Soft overage + alerts (80/90/100 %), never a kill switch
+// during an incident." A paid customer who activates their 251st monitored
+// device in the middle of an outage gets the device, not a 402 — the overage is
+// recorded, surfaced on the Licence page and the Devices page, alerted on, and
+// settled on the order form as a true-up. NO CONTRACTUAL WINDOW IS ENCODED
+// HERE: the product records `overage_since` and states the size; how long an
+// overage may run and what it costs are commercial terms and live on the order
+// form, never in code.
+//
+// Community is the exception and stays HARD: 25 monitored devices is a
+// PUBLISHED free ceiling, and the 26th activation is refused (§9, Community
+// row: "Hard block at the 26th activation"). A free tier whose limit did not
+// bite would not be a limit.
+//
+// The watched-prefix ceiling stays hard at every tier: it is a small,
+// operator-chosen list with no incident-time urgency behind it, and the owner's
+// soft-overage decision names monitored devices only. Adding a ceiling here is
+// a commercial decision, not a diff.
+//
+// Post-grace consequence, and it is deliberate: at PhasePostGrace the tier in
+// force IS Community (the fallback), so this returns false and the hard block
+// applies to NEW activations. Nothing already monitored is touched — the gate
+// only ever sees a transition.
+func SoftCeiling(name string, at Tier) bool {
+	return name == CeilingDevices && rank(at) >= rank(TierTeam)
+}
+
 // CeilingLabel is the operator-facing name of a ceiling.
 func CeilingLabel(name string) string {
 	switch name {
@@ -522,6 +671,11 @@ type ErrLicence struct {
 	Tier Tier `json:"tier"`
 	// LiftedBy is the lowest tier that removes this refusal, "" when none does.
 	LiftedBy Tier `json:"lifted_by,omitempty"`
+	// LicenceState is the expiry phase in force (PhaseValid / PhaseInGrace /
+	// PhasePostGrace). It is what lets a client tell "you never bought this"
+	// from "the licence that covered this has lapsed", which are the same 402
+	// with two entirely different remedies. Always set.
+	LicenceState Phase `json:"licence_state,omitempty"`
 	// Message is the honest operator-facing sentence.
 	Message string `json:"message"`
 }
@@ -580,6 +734,7 @@ func Require(svc Service, f Feature) error {
 	if svc != nil {
 		at = svc.Tier()
 	}
+	phase := PhaseOf(svc)
 	lifted := featureTier[f]
 	if rank(lifted) <= rank(at) {
 		// Either an unknown feature, or the tier in force already ought to grant
@@ -588,13 +743,75 @@ func Require(svc Service, f Feature) error {
 		// message carries the real reason.
 		lifted = ""
 	}
-	msg := fmt.Sprintf("%s is not included in your %s licence", FeatureLabel(f), at.Label())
-	if lifted != "" {
-		msg += fmt.Sprintf(" — the %s tier includes it", lifted.Label())
+	var msg string
+	if phase == PhasePostGrace && EntitledForRead(svc, f) {
+		// The customer DID buy this and the licence lapsed. Naming a tier to
+		// upgrade to would be the wrong instruction entirely: the fix is a
+		// renewal, and the reassurance they need first is that the data they
+		// already have is still there.
+		lifted = ""
+		msg = fmt.Sprintf("%s cannot be configured: the licence that included it has expired and its grace period has ended. "+
+			"What is already here stays visible and exportable, and nothing has been disabled or deleted — "+
+			"install a renewed licence to configure it again", FeatureLabel(f))
 	} else {
-		msg += " — contact Correlix to enable it"
+		msg = fmt.Sprintf("%s is not included in your %s licence", FeatureLabel(f), at.Label())
+		if lifted != "" {
+			msg += fmt.Sprintf(" — the %s tier includes it", lifted.Label())
+		} else {
+			msg += " — contact Correlix to enable it"
+		}
 	}
-	return &ErrLicence{Feature: f, Tier: at, LiftedBy: lifted, Message: msg}
+	return &ErrLicence{Feature: f, Tier: at, LiftedBy: lifted, LicenceState: phase, Message: msg}
+}
+
+// EntitledForRead reports whether f's EXISTING data may still be read and
+// exported.
+//
+// It is Entitled, widened by exactly one case: a licence that GRANTED f and has
+// since lapsed past its grace period. The owner's 2026-09-05 decision draws the
+// line at creation and configuration —
+//
+//	"after grace, paid-only creation/configuration actions become unavailable,
+//	 existing data stays viewable/exportable, over-ceiling state is listed;
+//	 never delete data or weaken a security property"
+//
+// — so a customer whose Team licence lapsed can still open, search and export
+// the findings they have. They cannot make new ones.
+//
+// Nil-safe and fail-closed: with no Service, or a Service that tracks no
+// lifecycle, this is exactly Entitled. It NEVER grants a read for a feature the
+// licence did not include in the first place.
+func EntitledForRead(svc Service, f Feature) bool {
+	if Entitled(svc, f) {
+		return true
+	}
+	if !ValidFeature(f) {
+		return false
+	}
+	lc, ok := svc.(Lifecycle)
+	if !ok || lc == nil {
+		return false
+	}
+	return lc.EntitledForRead(f)
+}
+
+// RequireRead is the READ half of the feature gate: it admits a caller who may
+// still SEE what f produced, and refuses one who never had f at all.
+//
+// Pair it with Require, which stays the CREATE/CONFIGURE gate:
+//
+//	GET  /api/security/findings   → RequireRead(svc, FeatureSecurityFindings)
+//	POST /api/security/exports    → Require(svc, FeatureSIEMExport)
+//
+// The two are different questions and must not share an answer. Using Require
+// on a read would delete a lapsed customer's access to their own history from
+// their point of view — the screen would be empty — which is precisely the
+// "never delete data" line the owner drew.
+func RequireRead(svc Service, f Feature) error {
+	if EntitledForRead(svc, f) {
+		return nil
+	}
+	return Require(svc, f)
 }
 
 // CheckCeiling is the ceiling gate for ADMITTING ONE MORE of something.
@@ -606,8 +823,11 @@ func Require(svc Service, f Feature) error {
 //	        return
 //	}
 //
-// Note the boundary: with a limit of 25 and 25 devices already admitted, the
-// 26th is refused. Nothing existing is ever removed or hidden by this call —
+// Note the boundary: with a HARD limit of 25 and 25 devices already admitted,
+// the 26th is refused. Where the ceiling is SOFT (SoftCeiling — monitored
+// devices on a paid tier) the 26th is ADMITTED and the overage recorded; the
+// owner's decision is that a paid customer is never blocked mid-incident.
+// Nothing existing is ever removed or hidden by this call either way —
 // over-ceiling items already present stay visible and are LISTED as
 // over-ceiling (see internal/licence State.Overages), which is the honest
 // degradation the design requires.
@@ -625,7 +845,7 @@ func CheckCeilingValue(svc Service, name string, want, current int) error {
 		// silently permitting an unknown ceiling is how a gate quietly stops
 		// gating.
 		return &ErrLicence{
-			Ceiling: name, Current: current, Tier: TierCommunity,
+			Ceiling: name, Current: current, Tier: TierCommunity, LicenceState: PhaseOf(svc),
 			Message: fmt.Sprintf("unknown licence ceiling %q", name),
 		}
 	}
@@ -641,10 +861,27 @@ func CheckCeilingValue(svc Service, name string, want, current int) error {
 	if !Exceeds(want, lim) {
 		return nil
 	}
+	if SoftCeiling(name, at) {
+		// SOFT: allowed and recorded, never refused. The overage is measured
+		// from usage (internal/licence.OverageTracker), shown on the Licence and
+		// Devices pages, and alerted on at 80/90/100 %. Returning nil here is
+		// the whole "never a kill switch during an incident" decision — the
+		// admission succeeds and the commercial conversation happens out of
+		// band.
+		return nil
+	}
+	phase := PhaseOf(svc)
 	lifted := LiftedBy(name, lim, at)
 	msg := fmt.Sprintf("your %s licence covers %d %s and %d %s in use",
 		at.Label(), lim, CeilingLabel(name), current, plural(current))
-	if lifted != "" {
+	if phase == PhasePostGrace {
+		// The Community ceilings in force are a FALLBACK, not what the customer
+		// bought. Say so, and say what is not happening: nothing already
+		// admitted has been touched.
+		msg = fmt.Sprintf("the licence that covered this expired and its grace period has ended, so the Community ceiling of %d %s is the one in force and %d %s in use",
+			lim, CeilingLabel(name), current, plural(current))
+		msg += " — nothing has been disabled or deleted and everything over the ceiling is listed; install a renewed licence to lift it again"
+	} else if lifted != "" {
 		lc, _ := tierCeilings[lifted].Get(name)
 		if lc == Unlimited {
 			msg += fmt.Sprintf(" — the %s tier removes this limit", lifted.Label())
@@ -654,9 +891,14 @@ func CheckCeilingValue(svc Service, name string, want, current int) error {
 	} else {
 		msg += " — contact Correlix to raise it"
 	}
+	if phase == PhasePostGrace {
+		// A renewal is the remedy, not an upgrade: naming a tier to buy would
+		// send the operator to the wrong purchase.
+		lifted = ""
+	}
 	return &ErrLicence{
 		Ceiling: name, Unit: CeilingUnit(name), Current: current, Limit: lim,
-		Tier: at, LiftedBy: lifted, Message: msg,
+		Tier: at, LiftedBy: lifted, LicenceState: phase, Message: msg,
 	}
 }
 

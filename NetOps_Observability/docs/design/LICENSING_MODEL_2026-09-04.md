@@ -61,11 +61,13 @@ entitled?" through one central entitlement service, never "is this Enterprise?".
   ceilings, expiry, and what the current usage is against each ceiling.
 - **No licence file = Community**, no key needed, no phone-home. Trials are a Team/Enterprise
   file with a short `expires_at`.
-- **Expiry and grace: OWNER DECISION PENDING** — no commercial policy is invented here. The
-  mechanism carries `expires_at` and an issuer-set `grace_days` (no built-in default) and,
-  whatever the policy becomes, it is technically impossible for expiry to touch isolation,
-  RLS, authorization, integrity or OIDC; degradation of commercial capabilities is always
-  honest (listed, never hidden).
+- **Expiry and grace: DECIDED 2026-09-05** — see the addendum "Expiry, grace and overage"
+  at the end of this document. The mechanism still carries `expires_at` and an issuer-set
+  `grace_days` with no default IN THE FORMAT; the defaults are applied by the ISSUER
+  (`correlix-licence sign`: 30 days paid, 7 for a trial) and land in the file as explicit
+  numbers, so a licence already issued is never re-termed by a later policy. Expiry remains
+  technically incapable of touching isolation, RLS, authorization, integrity or OIDC;
+  degradation of commercial capabilities is always honest (listed, never hidden).
 - **Offline:** everything above works with no network. There is no activation server.
 
 ## 4. Enforcement points (all existing chokepoints)
@@ -138,3 +140,123 @@ safety invariant) and adds: the monitored-device unit (C4), an Enterprise MSP co
 Enterprise entitlement (no fourth tier in code), the paid expiry/grace policy, trial issuance, metering as
 a separate data contract, and production signing-key ceremony as a GA prerequisite (the lab key must never
 sign a production release).
+
+
+---
+
+## 8. Expiry, grace and overage (DECIDED 2026-09-05) — replaces the "owner decision pending" note in §3
+
+Owner decision, recorded in `docs/design/TIERING_PLAN_2026-09-03.md` §9 (rows "Paid expiry /
+grace (adopted)", "Trials", Team/Enterprise "Soft overage + alerts (80/90/100 %)", Community
+"Hard block at the 26th activation"). Implemented as tracker row 257.
+
+### 8.1 The state machine
+
+`internal/licence.evaluate()` puts every authenticated document in exactly one of three
+phases, and the phase is a first-class field (`entitlement.Phase`, on the wire as `phase`,
+and on every 402 as `licence_state`):
+
+| phase | when | what the customer experiences |
+|---|---|---|
+| `valid` | `now <= expires_at` — and always, for Community, which has no expiry | everything the licence grants |
+| `in_grace` | `expires_at < now <= expires_at + grace_days` | **nothing changes at all.** The licensed tier, ceilings and features stay in force. The Licence page shows the runway and `LicenceInGrace` fires as a warning |
+| `post_grace` | past that | ceilings and features fall back to Community for **creation and configuration only** |
+
+`InGrace` / `Degraded` remain on the wire as the same fact in the older boolean shape, because
+the metric family `netops_licence_state{tier,degraded,in_grace}` and the installed SPA read
+them. `Degraded == (phase == post_grace)`.
+
+### 8.2 What `post_grace` refuses, and what it must never touch
+
+REFUSED — creation and configuration of paid capability, with the existing structured 402 plus
+`licence_state: "post_grace"` and **no `lifted_by`** (the remedy is a renewal, not an upgrade,
+and naming a tier to buy would send the operator to the wrong purchase):
+
+- a new monitoring activation beyond the Community allowance of 25 monitored devices;
+- a second tenant or a second organisation (the first of each is core single-tenant operation
+  and is never gated);
+- any non-GET on a feature-gated route — configuring SAML, writing an LDAP configuration,
+  installing a new dialect, creating a SIEM export.
+
+KEPT WORKING — everything that reads or exports what already exists. The rule is the HTTP verb:
+`GET`/`HEAD` on a feature-gated route runs `entitlement.RequireRead`, which admits any feature
+the lapsed document granted (`State.LapsedFeatures`). Enumerated and tested route by route in
+`licence_expiry_routes_test.go`:
+
+| surface | after grace |
+|---|---|
+| `GET /api/security/findings`, `/facets`, `/trend`, `/{id}` | served |
+| non-GET on any of those | 402 `post_grace` |
+| `GET /api/auth/ldap/config` | served |
+| `PUT`/`POST /api/auth/ldap/config`, `POST /api/auth/ldap/test` | 402 `post_grace` |
+| `GET /api/tenants`, `GET /api/orgs` | served |
+| `POST /api/tenants` (second+), `POST /api/orgs` (second+) | 402 `post_grace` |
+| every device already monitored | still monitored — nothing is disabled |
+| the over-ceiling state | LISTED, per ceiling and per device, on the Licence page and in `GET /api/system/licence` |
+
+NEVER TOUCHED — isolation, RLS, authorization, integrity, authentication (OIDC included). The
+structural proof is `internal/entitlement/safety_invariant_test.go` (the safety paths cannot
+reach this package at all); the behavioural proof over the new phases is
+`TestLicencePostGraceChangesNoAuthorizationDecision`, which asserts that every
+(principal, module, level) authorization decision is byte-identical with no licence, a live
+licence, in grace, past grace and after an expired trial.
+
+Nothing is ever deleted, and **nothing chooses which devices "lose"**. The over-ceiling device
+list is ordered most-recently-enabled-first purely so the size and shape of the overage are
+visible, and the API says so verbatim (`licence.OverCeilingNoteText`).
+
+### 8.3 Grace defaults and trials (issuer-side)
+
+`correlix-licence sign` applies the policy; the FORMAT keeps no default, so an issued file is a
+complete statement of its own terms and a policy change can never silently re-term a licence
+somebody is holding.
+
+| | grace | expiry |
+|---|---|---|
+| team / enterprise | 30 days | `--expires` (required) |
+| `--trial` (team / enterprise only) | 7 days | 30 days from issue, unless `--expires` overrides |
+| community | 0 | — |
+| explicit `--grace-days N` | exactly `N`, including 0 | — |
+
+`--trial` also stamps `trial: true` in the document. The field is `omitempty` in the canonical
+signing payload, so a NON-trial document signs over byte-for-byte the payload it always did and
+**every licence issued before the field existed still verifies**; a trial's flag is covered by
+the signature and can be neither added nor stripped. A trial grants exactly what its tier,
+ceilings and features say — the flag changes the words (`show`, `verify`, the Licence page's
+"Evaluation licence · N days left"), never the enforcement.
+
+### 8.4 Soft overage on paid tiers
+
+On Team and Enterprise the monitored-device ceiling is **not a block**. Activation beyond it
+succeeds, is recorded, and is surfaced; "never a kill switch during an incident".
+
+- `entitlement.SoftCeiling(name, tier)` is the whole policy: monitored devices, Team and above.
+  Watched prefixes stay hard at every tier; Community stays hard at the 26th activation, which
+  is a published free ceiling.
+- `internal/licence.OverageTracker` is the durable register beside the licence
+  (`licence-overage.json`): it records `overage_since` and the episode's peak, survives a
+  restart, forgets a closed episode, and **fails soft** — a register that cannot be written
+  costs the start time and nothing else.
+- **No contractual window is encoded anywhere.** The product records when an overage started
+  and how big it is; how long it may run and what it costs are order-form terms. The rule text
+  and the UI say "true-up".
+- Metrics: `netops_licence_ceiling{ceiling,unit}`, `netops_licence_usage{ceiling,unit}`,
+  `netops_licence_ceiling_soft{ceiling}`, `netops_licence_overage_devices`,
+  `netops_licence_overage_since_seconds{ceiling}`.
+- Alerts (`rules.yaml` group `licence-ceilings`, all `tier: warning`, promtool-tested in
+  `rules-tests/licence-ceilings.test.yaml`): `LicenceCeilingApproaching` (80–90 %),
+  `LicenceCeilingReached` (90–100 %), `LicenceOverage` (over). **Every one joins on
+  `netops_licence_ceiling_soft == 1`**, which is the Community guard: a free tier publishes 0
+  and cannot fire any of them however full its fleet is.
+- The post-grace rule was renamed `LicenceDegraded` → `LicenceExpired` to match the phase
+  vocabulary; the expression is unchanged.
+
+### 8.5 Where it is implemented
+
+`internal/entitlement` (Phase, Lifecycle, RequireRead, SoftCeiling, `licence_state` on
+ErrLicence) · `internal/licence` (`policy.go` issuance defaults, `overage.go` the register,
+`state.go` phase + lapsed features + soft overage messages, `verify.go` the machine,
+`service.go` Lifecycle + usage metrics, `api.go` the view) · `internal/discovery`
+(`MonitoredOverCeiling`) · `cmd/correlix-licence` (`--trial`, grace defaults, `show`/`verify`
+output) · `main.go` (the verb-based feature gate, the register wiring, the metrics) ·
+`src/frontend/src/pages/{Licence.tsx,licence.model.ts,Devices.tsx}` · `src/config/rules.yaml`.

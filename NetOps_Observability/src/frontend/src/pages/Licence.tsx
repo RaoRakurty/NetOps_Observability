@@ -82,11 +82,17 @@ import {
   liftedByText,
   measured,
   notMeasuredText,
+  overageSince,
   overageSummary,
   refusalReason,
   sortedCeilings,
+  stateChip,
   tierLabel,
+  usageBand,
   usageBar,
+  bandLabel,
+  bandTone,
+  ceilingConsequence,
   type Measured,
   type Tone,
 } from "./licence.model";
@@ -188,6 +194,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 function LicenceHeadline({ view }: { view: LicenceView }) {
   const st = view.state;
   const h = headline(st);
+  const chip = stateChip(view);
   const expiry = expiryVerdict(view);
   const summary = overageSummary(view.overages);
   const support = st.support;
@@ -203,7 +210,13 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
         <div className="lic-hero-head">
           <Icon name="shield" size={22} />
           <div className="lic-hero-verdict">
-            <span className="lic-hero-state">{h.label}</span>
+            <span className="lic-hero-state">
+              {h.label}
+              {/* The one-glance chip: valid · trial · in grace, N days left ·
+                  past grace. The days come from the server's own clock, so this
+                  and the metric can never disagree by a timezone. */}
+              <Pill tone={chip.tone} title={chip.detail}>{chip.label}</Pill>
+            </span>
             <span className="lic-hero-reason">{h.reason}</span>
           </div>
         </div>
@@ -245,7 +258,18 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
           <Fact label="Grace period">
             <Value
               m={measured(st.grace_days ?? null, "no licence is installed, so no grace period applies")}
-              render={(v) => <span>{v} days, set by the issuer</span>}
+              render={(v) => (
+                <>
+                  <span>{v} days, set by the issuer</span>
+                  {st.grace_ends_at && (
+                    <span className="lic-sub lic-block">
+                      {view.grace_days_left === null || view.grace_days_left === undefined
+                        ? `covered until ${st.grace_ends_at}`
+                        : `${view.grace_days_left} ${view.grace_days_left === 1 ? "day" : "days"} left — until ${st.grace_ends_at}`}
+                    </span>
+                  )}
+                </>
+              )}
             />
           </Fact>
           {provider ? (
@@ -283,10 +307,40 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
         <div className="lic-over" role="note">
           <strong>{summary}</strong>
           <ul className="lic-over-list">
-            {view.overages.map((o) => (
-              <li key={o.ceiling}>
-                <Pill tone="bad">{o.over} over</Pill>
-                <span>{o.message}</span>
+            {view.overages.map((o) => {
+              const since = overageSince(o);
+              return (
+                <li key={o.ceiling}>
+                  {/* A SOFT overage is a billing fact, not a fault: nothing was
+                      blocked. Rendering it in the same red as a hard one would
+                      send a paid operator hunting for a device that stopped. */}
+                  <Pill tone={o.soft ? "warn" : "bad"}>{o.over} {o.soft ? "above" : "over"}</Pill>
+                  <span>{o.message}</span>
+                  {/* The START of the episode, and nothing else. How long an
+                      overage may run is an order-form term; a countdown here
+                      would be the product inventing commercial policy. */}
+                  {since && <span className="lic-sub lic-block">{since}</span>}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* WHICH devices are beyond the allowance. Provider view only — the
+          ordering that decides "beyond" is platform-wide, so the server does
+          not send this to a tenant. Nothing here is disabled: the note says so
+          in the server's own words. */}
+      {view.over_ceiling_devices && view.over_ceiling_devices.length > 0 && (
+        <div className="lic-over" role="note">
+          <strong>{view.over_ceiling_devices.length} monitored device(s) beyond the allowance</strong>
+          {view.over_ceiling_note && <span className="lic-sub lic-block">{view.over_ceiling_note}</span>}
+          <ul className="lic-over-list">
+            {view.over_ceiling_devices.map((d) => (
+              <li key={d.device_id}>
+                <Pill tone="warn">still monitored</Pill>
+                <span className="mono">{d.name || d.device_id}</span>
+                <span className="lic-sub lic-block">{d.reason}</span>
               </li>
             ))}
           </ul>
@@ -301,14 +355,23 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
 function UsageRow({ row }: { row: LicenceCeiling }) {
   const bar = usageBar(row);
   const lifted = liftedByText(row.lifted_by);
-  const tone: Tone = !row.enforced ? "muted" : row.over ? "bad" : bar.kind === "measured" && bar.percent >= 90 ? "warn" : "good";
+  // The 80 / 90 / 100 % ramp, from the three severity tokens the rest of the
+  // page uses — one place decides the colour, so a pill, a banner and a bar
+  // never disagree about what "warn" means here.
+  const band = usageBand(row);
+  const tone: Tone = !row.enforced ? "muted" : bandTone(band);
+  const bandText = bandLabel(band);
 
   return (
     <li className={`lic-usage-row lic-${tone}`}>
       <div className="lic-usage-hd">
         <span className="lic-usage-name">{row.label}</span>
         {!row.enforced && <Pill tone="muted" title={NOT_ENFORCED_REASON}>{NOT_ENFORCED_NOTE}</Pill>}
-        {row.over && <Pill tone="bad">over the ceiling</Pill>}
+        {/* SOFT is stated on the row, not only in the overage banner: an
+            operator reading a bar at 96 % needs to know, right there, whether
+            the next device is admitted or refused. */}
+        {row.enforced && row.soft && <Pill tone="muted" title={ceilingConsequence(row)}>soft — recorded, not blocked</Pill>}
+        {bandText && <Pill tone={tone}>{bandText}</Pill>}
         <span className="lic-sp" />
         <span className="lic-usage-num">
           {bar.kind === "unmeasured"
@@ -335,6 +398,10 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
           {bar.kind === "unlimited"
             ? "This licence sets no limit here."
             : `Licensed limit ${fmtLimit(row.limit)}.`}
+          {/* What actually happens past the limit, said only once the bar is in
+              a warning band — below 80 % it is noise, and above it, it is the
+              question the operator has. */}
+          {row.enforced && bandText ? ` ${ceilingConsequence(row)}` : ""}
           {row.enforced ? "" : ` ${NOT_ENFORCED_REASON}`}
         </span>
         {lifted && <Pill tone="muted">{lifted}</Pill>}

@@ -131,62 +131,93 @@ func (v *keyVerifier) keyIDs() string {
 
 // evaluate turns an authenticated document into the State the product reads.
 //
-// EXPIRY SEMANTICS ARE AN OWNER DECISION PENDING (see the package doc). What is
-// implemented is the mechanism and nothing more:
+// THE POST-EXPIRY STATE MACHINE (owner decision, 2026-09-05 —
+// docs/design/TIERING_PLAN_2026-09-03.md §9, row "Paid expiry / grace"):
 //
-//	now <= expires_at                    → live at the licensed tier.
-//	expires_at < now <= +grace_days      → InGrace: still the licensed tier, with
-//	                                       a Reason the banner and the warning
-//	                                       alert rule show. grace_days is
-//	                                       ISSUER-SET; omitted means zero.
-//	now > expires_at + grace_days        → Degraded: the effective ceilings and
-//	                                       features fall back to Community, the
-//	                                       licensed tier is REMEMBERED (so the
-//	                                       page can say "your Team licence
-//	                                       expired" rather than pretending the
-//	                                       customer was always Community), and
-//	                                       over-ceiling items are LISTED, never
-//	                                       hidden and never deleted.
+//	now <= expires_at                 → valid. Live at the licensed tier.
+//	expires_at < now <= +grace_days   → in_grace. NOTHING changes for the user:
+//	                                    the licensed tier, ceilings and features
+//	                                    are still in force. The page says how
+//	                                    many days are left and the LicenceInGrace
+//	                                    warning rule fires. grace_days is
+//	                                    ISSUER-SET (the signer defaults it to 30
+//	                                    for a paid tier, 7 for a trial); a file
+//	                                    that omits it carries zero, because a
+//	                                    licence issued before the policy existed
+//	                                    is never reinterpreted by it.
+//	now > expires_at + grace_days     → post_grace. The effective ceilings and
+//	                                    features fall back to Community, so
+//	                                    CREATION and CONFIGURATION of paid
+//	                                    capability refuse (402, carrying
+//	                                    licence_state: post_grace). What does NOT
+//	                                    happen is the whole point:
+//	                                      · LapsedFeatures keeps the granted set,
+//	                                        so entitlement.RequireRead still
+//	                                        admits reads and exports of existing
+//	                                        data;
+//	                                      · the licensed tier is REMEMBERED, so
+//	                                        the page says "your Team licence
+//	                                        expired" rather than pretending the
+//	                                        customer was always Community;
+//	                                      · over-ceiling items are LISTED, never
+//	                                        hidden, never disabled, never
+//	                                        deleted, and nothing here chooses
+//	                                        which devices "lose" — no such choice
+//	                                        is made anywhere.
 //
 // No safety property appears anywhere in this function, and that is the point:
 // isolation, RLS, authorization, integrity and core authentication are not
 // reachable from any State field.
 func evaluate(doc Document, now time.Time) State {
+	graceEnd := doc.ExpiresAt.UTC().Add(time.Duration(doc.GraceDays) * 24 * time.Hour)
 	st := State{
 		Source:       SourceFile,
 		Tier:         doc.Tier,
 		LicensedTier: doc.Tier,
+		Phase:        entitlement.PhaseValid,
 		Ceilings:     doc.Ceilings,
 		Features:     NormaliseFeatures(doc.Features),
 		Customer:     doc.Customer,
 		LicenceID:    doc.LicenceID,
 		IssuedAt:     doc.IssuedAt.UTC(),
 		ExpiresAt:    doc.ExpiresAt.UTC(),
+		GraceEndsAt:  graceEnd,
 		GraceDays:    doc.GraceDays,
+		Trial:        doc.Trial,
 		Support:      doc.Support,
 		KeyID:        doc.KeyID,
 	}
 	if !now.After(doc.ExpiresAt) {
 		return st
 	}
-	graceEnd := doc.ExpiresAt.Add(time.Duration(doc.GraceDays) * 24 * time.Hour)
 	expired := doc.ExpiresAt.UTC().Format("2006-01-02")
+	kind := "licence"
+	if doc.Trial {
+		kind = "evaluation licence"
+	}
 	if !now.After(graceEnd) {
+		st.Phase = entitlement.PhaseInGrace
 		st.InGrace = true
-		st.Reason = fmt.Sprintf("licence expired on %s; running at %s under the issuer's %d-day grace until %s",
-			expired, doc.Tier.Label(), doc.GraceDays, graceEnd.UTC().Format("2006-01-02"))
+		st.Reason = fmt.Sprintf("%s expired on %s; nothing has changed yet — the %s ceilings and capabilities stay in force under the issuer's %d-day grace until %s",
+			kind, expired, doc.Tier.Label(), doc.GraceDays, graceEnd.UTC().Format("2006-01-02"))
 		return st
 	}
+	st.Phase = entitlement.PhasePostGrace
 	st.Degraded = true
 	st.Tier = entitlement.TierCommunity
 	st.Ceilings = entitlement.CommunityCeilings()
+	// The granted set moves to LapsedFeatures rather than being discarded: what
+	// the customer already has stays readable and exportable, and only creating
+	// or configuring more is refused.
+	st.LapsedFeatures = st.Features
 	st.Features = nil
-	if doc.GraceDays > 0 {
-		st.Reason = fmt.Sprintf("licence expired on %s and the %d-day grace ended on %s; running at Community ceilings — nothing has been deleted and everything over a ceiling is listed",
-			expired, doc.GraceDays, graceEnd.UTC().Format("2006-01-02"))
-	} else {
-		st.Reason = fmt.Sprintf("licence expired on %s and carries no grace period; running at Community ceilings — nothing has been deleted and everything over a ceiling is listed",
-			expired)
+	grace := fmt.Sprintf("the %d-day grace ended on %s", doc.GraceDays, graceEnd.UTC().Format("2006-01-02"))
+	if doc.GraceDays <= 0 {
+		grace = "it carries no grace period"
 	}
+	st.Reason = fmt.Sprintf("%s expired on %s and %s; the Community ceilings are the ones in force. "+
+		"Existing data stays visible and exportable and everything over a ceiling is listed — nothing has been disabled or deleted. "+
+		"Creating or configuring paid capability is refused until a renewed licence is installed",
+		kind, expired, grace)
 	return st
 }

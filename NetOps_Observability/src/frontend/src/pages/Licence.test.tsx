@@ -97,7 +97,7 @@ const KEY: LicenceKey = {
 function state(over: Partial<LicenceState> = {}): LicenceState {
   return {
     source: "community", tier: "community", ceilings: COMMUNITY_CEILINGS,
-    in_grace: false, degraded: false, ...over,
+    phase: "valid", in_grace: false, degraded: false, ...over,
   };
 }
 
@@ -136,6 +136,7 @@ function view(over: Partial<LicenceView> = {}): LicenceView {
     verify_hint: VERIFY_HINT,
     expiry_semantics: EXPIRY_NOTE,
     days_to_expiry: null,
+    grace_days_left: null,
     ...over,
   };
 }
@@ -226,9 +227,9 @@ describe("the licence headline", () => {
   it("Community reads as the free tier, not as a fault", async () => {
     setup();
     render(<Licence />);
-    // "Community" is both the headline state and the tier in force, so it is
-    // deliberately on the page twice.
-    expect((await screen.findAllByText("Community")).length).toBe(2);
+    // "Community" is the headline state, the state chip and the tier in force,
+    // so it is deliberately on the page three times.
+    expect((await screen.findAllByText("Community")).length).toBe(3);
     expect(screen.getByText(/free tier, not a fault state/)).toBeTruthy();
   });
 
@@ -271,7 +272,7 @@ describe("the licence headline", () => {
         state: state({
           source: "file", tier: "community", licensed_tier: "team",
           customer: "Acme Networks", licence_id: "lic-2026-0007",
-          expires_at: "2026-06-01T00:00:00Z", degraded: true, grace_days: 30,
+          expires_at: "2026-06-01T00:00:00Z", phase: "post_grace", degraded: true, grace_days: 30,
           reason: "expired on 2026-06-01 and its 30-day grace period has passed",
         }),
         overages: [OVERAGE],
@@ -279,7 +280,9 @@ describe("the licence headline", () => {
       }),
     });
     render(<Licence />);
-    expect(await screen.findByText("Running at Community ceilings")).toBeTruthy();
+    expect(await screen.findByText("Past grace — running at Community ceilings")).toBeTruthy();
+    // …and the state chip says what stopped and what did not.
+    expect(screen.getByText("Past grace")).toBeTruthy();
     expect(screen.getByText("expired on 2026-06-01 and its 30-day grace period has passed")).toBeTruthy();
     expect(screen.getByText("expired 95 days ago — past its grace period")).toBeTruthy();
     // The overage list, verbatim, with the reassurance ahead of it.
@@ -297,13 +300,18 @@ describe("the licence headline", () => {
         state: state({
           source: "file", tier: "team", licensed_tier: "team", customer: "Acme Networks",
           licence_id: "lic-2026-0007", expires_at: "2026-09-01T00:00:00Z",
-          in_grace: true, grace_days: 30, reason: "expired 3 days ago",
+          phase: "in_grace", in_grace: true, grace_days: 30,
+          grace_ends_at: "2026-10-01T00:00:00Z", reason: "expired 3 days ago",
         }),
         days_to_expiry: -3,
+        grace_days_left: 27,
       }),
     });
     render(<Licence />);
     expect(await screen.findByText("In grace")).toBeTruthy();
+    // The chip carries the RUNWAY, from the server's own count — this page and
+    // the metric can never disagree by a timezone.
+    expect(screen.getByText("In grace · 27 days left")).toBeTruthy();
     expect(screen.getByText("expired 3 days ago — inside a 30-day grace period")).toBeTruthy();
   });
 });
@@ -397,8 +405,12 @@ describe("current usage", () => {
       }),
     });
     render(<Licence />);
-    expect(await screen.findByText("over the ceiling")).toBeTruthy();
+    // The band pill replaced the old flat "over the ceiling" wording on
+    // 2026-09-05 with the 80 / 90 / 100 % ramp.
+    expect(await screen.findByText("over the allowance")).toBeTruthy();
     expect(screen.getByText("30 of 25")).toBeTruthy();
+    // A HARD ceiling must not be described as a limit that does not block.
+    expect(screen.getByText(/hard limit/)).toBeTruthy();
   });
 
   it("puts what actually gates at the top of the list", async () => {
@@ -703,7 +715,7 @@ describe("a read that failed", () => {
     const again = (await screen.findAllByRole("button", { name: "Read it again" }))[0];
     mockApi.getLicence.mockResolvedValue(view());
     fireEvent.click(again);
-    expect((await screen.findAllByText("Community")).length).toBe(2);
+    expect((await screen.findAllByText("Community")).length).toBe(3);
   });
 });
 
@@ -766,5 +778,87 @@ describe("copy guards on this page's own sources", () => {
     for (const token of ["licence_ceiling", "licence_feature", "not_applicable"]) {
       expect(src).not.toContain(`>${token}<`);
     }
+  });
+});
+
+// ── soft overage, the state chip and the over-ceiling device list ───────────
+//
+// These are the 2026-09-05 owner decisions rendered: a paid allowance that does
+// not block, an evaluation licence that says how long is left, and the devices
+// beyond the allowance — LISTED, with the page saying in the server's own words
+// that none of them was disabled.
+
+describe("soft overage on a paid tier", () => {
+  const softCeiling = ceiling({
+    name: "devices", label: "monitored devices", unit: "monitored_devices",
+    limit: 250, current: 262, over: true, soft: true, enforced: true,
+  });
+  const softOverage = {
+    ceiling: "devices", label: "monitored devices", unit: "monitored_devices",
+    current: 262, limit: 250, over: 12, soft: true,
+    since: "2026-09-01T00:00:00Z",
+    message: "12 monitored devices above your Team allowance of 250 (262 in use). " +
+      "Monitoring continues — nothing has been blocked, disabled or deleted; the overage is recorded for true-up",
+  };
+
+  it("says the allowance does not block, and never that anything stopped", async () => {
+    setup({ view: teamView({ ceilings: [softCeiling], overages: [softOverage] }) });
+    render(<Licence />);
+    // The row says it on the bar, where the operator is looking.
+    expect(await screen.findByText("soft — recorded, not blocked")).toBeTruthy();
+    expect(screen.getByText("over the allowance")).toBeTruthy();
+    expect(screen.getByText("262 of 250")).toBeTruthy();
+    expect(screen.getByText(/does not block/)).toBeTruthy();
+    // And the banner is a billing sentence, not a fault. The phrase appears
+    // twice on purpose — once in the summary and once in the server's own
+    // per-ceiling message — so both are asserted rather than one of them.
+    expect(screen.getAllByText(/nothing has been blocked, disabled or deleted/).length).toBe(2);
+    expect(screen.getByText(softOverage.message)).toBeTruthy();
+    expect(screen.getByText("12 above")).toBeTruthy();
+  });
+
+  it("states when the overage began, and invents no deadline", async () => {
+    setup({ view: teamView({ ceilings: [softCeiling], overages: [softOverage] }) });
+    render(<Licence />);
+    expect(await screen.findByText(/Recorded since 2026-09-01/)).toBeTruthy();
+    // How long an overage may run is an order-form term. The page must not
+    // contain a countdown of its own.
+    expect(screen.queryByText(/days remaining/)).toBeNull();
+    expect(screen.queryByText(/will be disabled/)).toBeNull();
+  });
+
+  it("lists WHICH devices are beyond the allowance, and that they are still monitored", async () => {
+    setup({
+      view: teamView({
+        ceilings: [softCeiling],
+        overages: [softOverage],
+        over_ceiling_devices: [
+          { device_id: "leaf-260", name: "leaf-260", reason: "monitored and beyond the licensed allowance of 250 monitored devices — still being collected from; nothing has been disabled, hidden or deleted" },
+        ],
+        over_ceiling_note: "These are the monitored devices beyond the licensed allowance. Correlix does not choose which devices a licence covers.",
+      }),
+    });
+    render(<Licence />);
+    expect(await screen.findByText("1 monitored device(s) beyond the allowance")).toBeTruthy();
+    expect(screen.getByText("leaf-260")).toBeTruthy();
+    expect(screen.getByText("still monitored")).toBeTruthy();
+    expect(screen.getByText(/Correlix does not choose which devices a licence covers/)).toBeTruthy();
+  });
+});
+
+describe("an evaluation licence", () => {
+  it("names itself a trial and counts the days left", async () => {
+    setup({
+      view: teamView({
+        state: state({
+          source: "file", tier: "team", licensed_tier: "team", customer: "Acme Networks",
+          expires_at: "2026-10-01T00:00:00Z", phase: "valid", trial: true, grace_days: 7,
+        }),
+        days_to_expiry: 12,
+      }),
+    });
+    render(<Licence />);
+    expect(await screen.findByText("Team evaluation licence")).toBeTruthy();
+    expect(screen.getByText("Evaluation licence · 12 days left")).toBeTruthy();
   });
 });

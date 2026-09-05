@@ -193,11 +193,27 @@ func TestTeamGrantsSecurityFindingsAndNothingElse(t *testing.T) {
 	if err := entitlement.CheckCeiling(svc, entitlement.CeilingDevices, 25); err != nil {
 		t.Fatalf("the 26th device is admitted under Team: %v", err)
 	}
-	if err := entitlement.CheckCeiling(svc, entitlement.CeilingDevices, 250); err == nil {
-		t.Fatal("the 251st device is refused under Team")
+	// SOFT OVERAGE (owner decision, 2026-09-05): on a paid tier the monitored-
+	// device ceiling does not block. The 251st device is ADMITTED and the
+	// overage recorded — "never a kill switch during an incident". This
+	// assertion is the inverse of what it was before that decision, and the
+	// inversion is the feature.
+	if err := entitlement.CheckCeiling(svc, entitlement.CeilingDevices, 250); err != nil {
+		t.Fatalf("the 251st device must be ADMITTED under Team and recorded as overage, not refused: %v", err)
+	}
+	if !entitlement.SoftCeiling(entitlement.CeilingDevices, entitlement.TierTeam) {
+		t.Fatal("the device ceiling must be soft at Team — that is what makes the admission above deliberate rather than a missing gate")
+	}
+	// The watched-prefix ceiling stays HARD at every tier: the owner's soft
+	// decision names monitored devices and nothing else.
+	if entitlement.SoftCeiling(entitlement.CeilingWatchedPrefixes, entitlement.TierTeam) {
+		t.Fatal("watched prefixes must stay a hard ceiling")
 	}
 	if err := entitlement.CheckCeiling(svc, entitlement.CeilingWatchedPrefixes, 5); err != nil {
 		t.Fatalf("the 6th prefix is admitted under Team: %v", err)
+	}
+	if err := entitlement.CheckCeiling(svc, entitlement.CeilingWatchedPrefixes, 100); err == nil {
+		t.Fatal("the 101st watched prefix is refused under Team — a hard ceiling must still bite")
 	}
 }
 

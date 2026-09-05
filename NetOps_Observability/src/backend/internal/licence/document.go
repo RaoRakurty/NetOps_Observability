@@ -31,20 +31,31 @@
 //     consult this package at all. See internal/entitlement's package doc and
 //     safety_invariant_test.go.
 //
-// # Expiry semantics: OWNER DECISION PENDING
+// # Expiry, grace and overage (owner decision, 2026-09-05)
 //
-// The MECHANISM is built and tested: a document carries `expires_at` and an
-// issuer-set `grace_days`, and the evaluated State reports InGrace / Degraded
-// with a Reason. What is NOT decided, and is therefore NOT invented here:
+// The policy is decided and recorded in docs/design/TIERING_PLAN_2026-09-03.md
+// §9 and the LICENSING_MODEL addendum. Three states, and the file states its
+// own terms:
 //
-//   - there is NO built-in default grace period. A file that omits `grace_days`
-//     gets zero, not thirty. The issuer states the policy explicitly, per file.
-//   - the commercial consequence of running past grace is the honest fallback
-//     to Community ceilings and features. Nothing else changes — in particular
-//     no safety property, and no customer data, ever.
+//	valid       now <= expires_at.
+//	in_grace    expires_at < now <= expires_at + grace_days. NOTHING changes for
+//	            the user; the page and a warning alert say how long is left.
+//	post_grace  past that. The commercial ceilings and features fall back to
+//	            Community for CREATION and CONFIGURATION only: existing data
+//	            stays viewable and exportable (State.LapsedFeatures is what
+//	            entitlement.RequireRead honours), over-ceiling state is LISTED,
+//	            and nothing is disabled or deleted.
 //
-// When the owner decides the commercial policy, it lands in evaluate() and the
-// runbook, and nothing else needs to move.
+// The DEFAULTS live in the issuer (`correlix-licence sign`): 30 days for a paid
+// tier, 7 for a trial, and whatever `--grace-days` says when it is given. There
+// is still no default in the FORMAT — a file that omits `grace_days` carries
+// zero — so a licence issued before the policy existed is never reinterpreted
+// by it.
+//
+// No part of this touches a safety property. Isolation, RLS, authorization,
+// integrity and core authentication do not consult this package
+// (internal/entitlement/safety_invariant_test.go), so there is no expiry state
+// in which they differ.
 package licence
 
 import (
@@ -84,9 +95,28 @@ type Document struct {
 	Ceilings  entitlement.Ceilings  `json:"ceilings"`
 	Features  []entitlement.Feature `json:"features"`
 	Support   Support               `json:"support,omitzero"`
-	// GraceDays is issuer-set. There is NO built-in default (see the package
-	// doc): an omitted value is zero days of grace, not a silently generous one.
+	// GraceDays is issuer-set: the number of days AFTER ExpiresAt during which
+	// the licence keeps working exactly as before.
+	//
+	// There is still no default IN THE FORMAT, and that is deliberate. The
+	// owner's 2026-09-05 policy (30 days for paid tiers, 7 for trials) is
+	// applied by the ISSUER, in `correlix-licence sign`, and lands in the file
+	// as an explicit number. A file that omits the field carries zero, exactly
+	// as it always did — already-issued licences are never reinterpreted by a
+	// later change of policy, which is what keeps a signed document a complete
+	// statement of its own terms.
 	GraceDays int `json:"grace_days"`
+	// Trial marks an EVALUATION licence: a short, signed Team/Enterprise file
+	// issued with no card, which works offline like any other (owner decision,
+	// 2026-09-05, TIERING_PLAN §9 "Trials"). It changes NOTHING about
+	// enforcement — a trial grants exactly what its tier, ceilings and features
+	// say — and exists so the product can say "Evaluation licence, N days left"
+	// instead of leaving a customer to discover the difference at expiry.
+	//
+	// It is `omitempty` in the canonical payload as well as here, so a
+	// non-trial document signs to the byte sequence it always did and every
+	// licence issued before this field existed still verifies.
+	Trial bool `json:"trial,omitempty"`
 
 	// KeyID names the signing key so rotation is diagnosable ("signed by the
 	// retired key", "signed by a key this build does not trust") rather than an
@@ -111,6 +141,13 @@ type canonicalPayload struct {
 	Features  []entitlement.Feature `json:"features"`
 	Support   Support               `json:"support"`
 	GraceDays int                   `json:"grace_days"`
+	// Trial is `omitempty` so a NON-trial document canonicalises to exactly the
+	// bytes it did before this field existed. That is what makes the field a
+	// backward-compatible addition rather than a mass invalidation of every
+	// licence ever issued. A trial document carries `"trial":true` and the
+	// signature covers it, so the flag can be neither added to nor stripped
+	// from a signed file.
+	Trial bool `json:"trial,omitempty"`
 }
 
 // CanonicalPayload is the exact byte sequence the signature covers.
@@ -138,6 +175,7 @@ func CanonicalPayload(d Document) ([]byte, error) {
 		Features:  NormaliseFeatures(d.Features),
 		Support:   d.Support,
 		GraceDays: d.GraceDays,
+		Trial:     d.Trial,
 	}
 	if p.Features == nil {
 		// An explicit empty array, never `null`: "no features" must have one

@@ -1,6 +1,6 @@
 import { fmtDateTime } from "../lib/time";
 import { Suspense, lazy, startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { api, Device, Alert, DeviceLocationRow, SiteRow } from "../services/api";
+import { api, Device, Alert, DeviceLocationRow, SiteRow, type LicenceView } from "../services/api";
 import { takeDrill } from "../theme/drill";
 import DeviceDetailPage from "./DeviceDetailPage";
 
@@ -12,7 +12,7 @@ import Wizard from "../components/Wizard";
 import DataTable, { Column, Sev } from "../components/DataTable";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import UpgradeCard, { licenceRefusalFromError, type LicenceRefusal } from "../components/licence/UpgradeCard";
-import { tierLabel } from "./licence.model";
+import { overageSummary, tierLabel } from "./licence.model";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
@@ -120,6 +120,13 @@ export default function Devices() {
   // MONITORING — a licence refusal is NOT an error: nothing broke and nothing
   // was lost, so it renders as the upgrade card, never in the red error line.
   const [refusal, setRefusal] = useState<LicenceRefusal | null>(null);
+  // The licence view, BEST EFFORT. This page is not an admin page and most of
+  // the people who open it cannot read /api/system/licence at all; a 403 here
+  // must therefore leave the fleet table exactly as it was, with no banner and
+  // no error. What it buys when it does load is the soft-overage banner below —
+  // an operator enabling their 260th device should learn it is being recorded
+  // here, where they are doing it, and not only on a page they never visit.
+  const [licence, setLicence] = useState<LicenceView | null>(null);
   const [busyMonitor, setBusyMonitor] = useState<string | null>(null);
 
   // Selecting a device opens the full-page detail view (Overview · Interfaces ·
@@ -200,6 +207,9 @@ export default function Devices() {
   useEffect(() => {
     load();
     api.features().then((c) => setSshEnabled(!!c.device_ssh)).catch(() => {});
+    // Deliberately swallowed: not being allowed to read the licence is the
+    // normal case for an operator, not an error worth showing them.
+    api.getLicence().then(setLicence).catch(() => setLicence(null));
     const t = setInterval(load, 30_000); // live-ish; status is time-sensitive
     return () => clearInterval(t);
   }, []);
@@ -246,6 +256,17 @@ export default function Devices() {
   // 500 discovered devices with 12 enabled is using 12 of its allowance. The two
   // numbers are shown side by side precisely so nobody reads one as the other.
   const monitoredCount = useMemo(() => devices.filter((d) => d.monitored).length, [devices]);
+
+  // The monitored-device overage, if the licence view loaded and there is one.
+  // SOFT overage (Team/Enterprise) is a billing fact and reads as one: nothing
+  // was blocked, disabled or deleted, and the excess is recorded for true-up
+  // (owner decision, 2026-09-05). A HARD overage — Community, or a licence past
+  // its grace period — says the honest other thing: the devices are here and
+  // they are not covered.
+  const deviceOverage = useMemo(
+    () => (licence?.overages ?? []).filter((o) => o.ceiling === "devices"),
+    [licence],
+  );
 
   const health = useMemo(() => new Map(devices.map((d) => [d.id, deviceHealth(d, alertedDevices)])), [devices, alertedDevices]);
   const counts = useMemo(() => {
@@ -407,6 +428,17 @@ export default function Devices() {
         <p className="empty" role="alert" style={{ color: "var(--warn)", margin: "0 0 10px" }}>
           <strong>Alert correlation unavailable</strong> — device health below is derived from the
           heartbeat alone, so a device shown as <em>Up</em> may still be alerting. ({alertsErr})
+        </p>
+      )}
+
+      {deviceOverage.length > 0 && (
+        <p
+          className="empty"
+          role="note"
+          style={{ color: deviceOverage.every((o) => o.soft) ? "var(--warn)" : "var(--crit)", margin: "0 0 10px" }}
+        >
+          <strong>{deviceOverage.every((o) => o.soft) ? "Above your monitored-device allowance" : "Over the monitored-device ceiling"}</strong>{" "}
+          — {overageSummary(deviceOverage)} Discovery does not consume your monitoring allowance.
         </p>
       )}
 

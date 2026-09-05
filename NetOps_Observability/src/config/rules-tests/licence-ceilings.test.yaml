@@ -1,0 +1,241 @@
+# promtool unit tests for the `licence-ceilings` alert group — the soft-overage
+# warnings at 80 / 90 / 100 % of a licensed allowance (owner decision,
+# 2026-09-05; docs/design/TIERING_PLAN_2026-09-03.md §9).
+#
+# TWO THINGS MUST BE PROVEN HERE, and only one of them is "the rules fire".
+#
+#  1. THE COMMUNITY GUARD. Every rule joins on
+#     `netops_licence_ceiling_soft == 1`. A free-tier deployment publishes 0 —
+#     its ceilings are HARD, the 26th monitored device is refused — so it can
+#     never enter any of these rules however full its fleet is. That guard lives
+#     entirely in a join clause, which is the easiest thing in this repo to
+#     "simplify" out of an expression without noticing what it was holding.
+#     Case (e) below is a Community deployment at 96 % of its allowance and must
+#     stay silent.
+#
+#  2. THE BANDS ARE DISJOINT. 80–90, 90–100, over 100. Exactly one rule fires at
+#     a time, or one commercial fact reads as two problems.
+#
+# Also covered: an unlimited ceiling (-1) fires nothing — a negative ratio is
+# not a percentage — and a ceiling with no usage series fires nothing, which is
+# the deliberate failure direction for a number nobody measured.
+#
+# Paths are as mounted by the preflight docker run.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # (a) 205 of 250 monitored devices on a paid tier = 82 %. Approaching fires
+  #     after the 1h `for`; the other two bands stay silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_licence_ceiling{ceiling="devices",unit="monitored_devices"}'
+        values: "250x120"
+      - series: 'netops_licence_usage{ceiling="devices",unit="monitored_devices"}'
+        values: "205x120"
+      - series: 'netops_licence_ceiling_soft{ceiling="devices"}'
+        values: "1x120"
+      - series: "netops_licence_overage_devices"
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceCeilingApproaching
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              ceiling: devices
+              unit: monitored_devices
+            exp_annotations:
+              summary: "Correlix is using 82% of the licensed devices allowance — nothing is limited yet; this is the point to plan an expansion rather than discover it mid-incident"
+      - eval_time: 1h30m
+        alertname: LicenceCeilingReached
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceOverage
+        exp_alerts: []
+
+  # (b) 240 of 250 = 96 %, still under the allowance. Reached fires; Approaching
+  #     must NOT — the bands are disjoint and 96 % is one situation, not two.
+  - interval: 1m
+    input_series:
+      - series: 'netops_licence_ceiling{ceiling="devices",unit="monitored_devices"}'
+        values: "250x120"
+      - series: 'netops_licence_usage{ceiling="devices",unit="monitored_devices"}'
+        values: "240x120"
+      - series: 'netops_licence_ceiling_soft{ceiling="devices"}'
+        values: "1x120"
+      - series: "netops_licence_overage_devices"
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceCeilingReached
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              ceiling: devices
+              unit: monitored_devices
+            exp_annotations:
+              summary: "Correlix is at 96% of the licensed devices allowance — on your tier this ceiling does not block, so going past it is allowed and recorded for true-up; nothing will be disabled"
+      - eval_time: 1h30m
+        alertname: LicenceCeilingApproaching
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceOverage
+        exp_alerts: []
+
+  # (c) 262 of 250 — OVER. The overage gauge is the thing that fires, so the
+  #     number in the alert is the number on the Licence page. The two band
+  #     rules are silent: a ratio above 1 is outside both.
+  - interval: 1m
+    input_series:
+      - series: 'netops_licence_ceiling{ceiling="devices",unit="monitored_devices"}'
+        values: "250x120"
+      - series: 'netops_licence_usage{ceiling="devices",unit="monitored_devices"}'
+        values: "262x120"
+      - series: 'netops_licence_ceiling_soft{ceiling="devices"}'
+        values: "1x120"
+      - series: "netops_licence_overage_devices"
+        values: "12x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceOverage
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+            exp_annotations:
+              summary: "12 monitored device(s) above the licensed allowance — every one of them is still being collected from and nothing has been blocked, disabled or deleted; the overage is recorded for true-up"
+      - eval_time: 1h30m
+        alertname: LicenceCeilingApproaching
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceCeilingReached
+        exp_alerts: []
+
+  # (d) A HEALTHY paid deployment: 100 of 250 = 40 %. Nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'netops_licence_ceiling{ceiling="devices",unit="monitored_devices"}'
+        values: "250x120"
+      - series: 'netops_licence_usage{ceiling="devices",unit="monitored_devices"}'
+        values: "100x120"
+      - series: 'netops_licence_ceiling_soft{ceiling="devices"}'
+        values: "1x120"
+      - series: "netops_licence_overage_devices"
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceCeilingApproaching
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceCeilingReached
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceOverage
+        exp_alerts: []
+
+  # (e) THE COMMUNITY CASE, and the reason this file exists. 24 of 25 monitored
+  #     devices = 96 %, which is squarely inside the Reached band — and a free
+  #     tier must still hear nothing. The 26th activation is REFUSED on
+  #     Community (a hard, published ceiling), so there is nothing to warn about
+  #     and no true-up to have; the soft=0 join is the only thing making that
+  #     true.
+  - interval: 1m
+    input_series:
+      - series: 'netops_licence_ceiling{ceiling="devices",unit="monitored_devices"}'
+        values: "25x120"
+      - series: 'netops_licence_usage{ceiling="devices",unit="monitored_devices"}'
+        values: "24x120"
+      - series: 'netops_licence_ceiling_soft{ceiling="devices"}'
+        values: "0x120"
+      - series: "netops_licence_overage_devices"
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceCeilingApproaching
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceCeilingReached
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceOverage
+        exp_alerts: []
+
+  # (f) A LAPSED deployment: past grace it runs at Community ceilings, so
+  #     soft=0 and it is over by 175 devices. It must fire NOTHING here —
+  #     LicenceExpired already describes its situation accurately, and a second
+  #     alert saying "you are over" would add noise, not information. This is
+  #     the asymmetry the LicenceOverage rule comment calls out; asserting it
+  #     stops a later edit from "fixing" it.
+  - interval: 1m
+    input_series:
+      - series: 'netops_licence_ceiling{ceiling="devices",unit="monitored_devices"}'
+        values: "25x120"
+      - series: 'netops_licence_usage{ceiling="devices",unit="monitored_devices"}'
+        values: "200x120"
+      - series: 'netops_licence_ceiling_soft{ceiling="devices"}'
+        values: "0x120"
+      - series: "netops_licence_overage_devices"
+        values: "175x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceOverage
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceCeilingApproaching
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceCeilingReached
+        exp_alerts: []
+
+  # (g) AN UNLIMITED ceiling (-1, entitlement.Unlimited) with 4000 devices in
+  #     use. The ratio is negative, not a percentage, and the explicit
+  #     `netops_licence_ceiling > 0` guard is what stops the arithmetic being
+  #     interpreted at all. Nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'netops_licence_ceiling{ceiling="devices",unit="monitored_devices"}'
+        values: "-1x120"
+      - series: 'netops_licence_usage{ceiling="devices",unit="monitored_devices"}'
+        values: "4000x120"
+      - series: 'netops_licence_ceiling_soft{ceiling="devices"}'
+        values: "1x120"
+      - series: "netops_licence_overage_devices"
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceCeilingApproaching
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceCeilingReached
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceOverage
+        exp_alerts: []
+
+  # (h) A ceiling with NO usage series — the watched-prefix count could not be
+  #     measured on this deployment. The ratio has no left-hand side, so nothing
+  #     fires. Silent rather than wrong is the deliberate direction: a
+  #     fabricated 0 would have been divided here.
+  - interval: 1m
+    input_series:
+      - series: 'netops_licence_ceiling{ceiling="watched_prefixes",unit="watched_prefixes"}'
+        values: "100x120"
+      - series: 'netops_licence_ceiling_soft{ceiling="watched_prefixes"}'
+        values: "0x120"
+      - series: "netops_licence_overage_devices"
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceCeilingApproaching
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceCeilingReached
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceOverage
+        exp_alerts: []

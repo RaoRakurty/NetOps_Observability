@@ -299,3 +299,72 @@ func TestClientSuppliedMonitoringStateIsDiscarded(t *testing.T) {
 		t.Fatalf("the claim leaked into the registry: %+v", d)
 	}
 }
+
+// TestMonitoredOverCeiling is the SOFT-overage listing: which monitored devices
+// are beyond the allowance, most recently enabled first.
+//
+// The ordering is presentational and the API says so in words; what this test
+// pins is that it is DETERMINISTIC (two reads never disagree) and that nothing
+// about appearing on the list changes a device's state.
+func TestMonitoredOverCeiling(t *testing.T) {
+	a := discovery.NewDiscoveryAggregator()
+	// Six DECLARED devices: monitored by provenance, no explicit decision.
+	for i := 0; i < 6; i++ {
+		if err := a.Upsert(models.Device{
+			ID: "dev-" + strconv.Itoa(i), Name: "dev-" + strconv.Itoa(i),
+			Address: "10.20.0." + strconv.Itoa(i+1), Source: devmon.SourceStatic,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := a.MonitoredCount(); got != 6 {
+		t.Fatalf("harness: %d monitored, want 6", got)
+	}
+
+	if rows := a.MonitoredOverCeiling(6); len(rows) != 0 {
+		t.Fatalf("exactly at the allowance nothing is over: %+v", rows)
+	}
+	if rows := a.MonitoredOverCeiling(10); len(rows) != 0 {
+		t.Fatalf("under the allowance nothing is over: %+v", rows)
+	}
+	if rows := a.MonitoredOverCeiling(-1); len(rows) != 0 {
+		t.Fatal("there is no `beyond` an unlimited allowance")
+	}
+
+	rows := a.MonitoredOverCeiling(4)
+	if len(rows) != 2 {
+		t.Fatalf("6 monitored against an allowance of 4 is 2 over, got %d: %+v", len(rows), rows)
+	}
+	// Deterministic: the same read twice gives the same answer, or the page
+	// reshuffles under the operator every poll.
+	again := a.MonitoredOverCeiling(4)
+	for i := range rows {
+		if rows[i].DeviceID != again[i].DeviceID {
+			t.Fatalf("the ordering must be stable: %v then %v", rows, again)
+		}
+	}
+	// With no explicit decisions the fallback is the device id, descending, so
+	// the highest-numbered devices are the ones shown as "beyond".
+	if rows[0].DeviceID != "dev-5" || rows[1].DeviceID != "dev-4" {
+		t.Fatalf("want the last-added devices listed first, got %+v", rows)
+	}
+
+	// An OPERATOR decision is newer than any provenance default, so a device
+	// enabled by hand sorts to the front.
+	if _, err := a.SetMonitoring("dev-0", true, "operator@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	rows = a.MonitoredOverCeiling(4)
+	if len(rows) != 2 || rows[0].DeviceID != "dev-0" {
+		t.Fatalf("the most recently ENABLED device leads the list, got %+v", rows)
+	}
+
+	// Nothing about the listing changes any device's state: all six are still
+	// monitored, and none was withheld.
+	if got := a.MonitoredCount(); got != 6 {
+		t.Fatalf("listing must not disable anything: %d monitored, want 6", got)
+	}
+	if got := a.MonitoringWithheldCount(); got != 0 {
+		t.Fatalf("a soft overage withholds nothing: %d withheld", got)
+	}
+}

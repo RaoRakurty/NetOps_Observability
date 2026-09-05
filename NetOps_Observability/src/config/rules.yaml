@@ -763,7 +763,7 @@ groups:
       #
       # The expression is a CLOSED RANGE and both ends carry weight:
       #   >= 0  an already-expired licence is not "expiring soon" — that is what
-      #         LicenceInGrace and LicenceDegraded below say, accurately. Without
+      #         LicenceInGrace and LicenceExpired below say, accurately. Without
       #         this bound a lapsed deployment would fire this rule forever
       #         alongside the rule that actually describes its situation.
       #   < 14  this is ALSO the Community guard. A deployment with no licence
@@ -783,7 +783,7 @@ groups:
 
       # Grace: the licence has expired but its ceilings are still being honoured
       # for a fixed window. Nothing has changed for the user YET — this is the
-      # last quiet moment to install a renewal before LicenceDegraded is the
+      # last quiet moment to install a renewal before LicenceExpired is the
       # rule that fires and the ceilings really have moved.
       #
       # Community guard: this matches on the LABEL and on the VALUE. A Community
@@ -799,21 +799,130 @@ groups:
         annotations:
           summary: "the Correlix licence has expired and the deployment is running on its grace period — the commercial ceilings are still honoured for now, but when grace ends they fall back to Community; nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected; install a renewed licence before grace runs out"
 
-      # Degraded: grace is over. evaluate() has emptied the granted feature set,
-      # so the commercial ceilings ARE Community ceilings from this moment on.
+      # Past grace. evaluate() has emptied the granted feature set, so the
+      # commercial ceilings ARE Community ceilings from this moment on, and
+      # CREATING or CONFIGURING paid capability is refused.
+      #
       # Loud, because the operator's experience changes here (writes start
       # meeting ceilings they have never met), but still not a page: the data is
-      # intact and the platform is serving.
+      # intact, every read and export of what already exists keeps working, and
+      # the platform is serving.
+      #
+      # Named LicenceExpired since 2026-09-05 (it was LicenceDegraded): the
+      # owner's state machine is valid → in_grace → post_grace, and "degraded"
+      # described an internal flag rather than the thing that happened.
       #
       # Community guard: identical to LicenceInGrace — the degraded="true"
       # series exists on a free-tier install but sits at 0, and `== 1` skips it.
-      # Community is the un-degraded resting state, not a degradation of itself.
-      - alert: LicenceDegraded
+      # Community is the un-expired resting state, not an expiry of itself.
+      - alert: LicenceExpired
         expr: netops_licence_state{degraded="true"} == 1
         for: 15m
         labels: { severity: warning, tier: warning }
         annotations:
-          summary: "the Correlix licence has lapsed past its grace period and the deployment is DEGRADED — the commercial ceilings have fallen back to Community and writes above them will now be refused; nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected; install a renewed licence to lift the ceilings again"
+          summary: "the Correlix licence has lapsed past its grace period — the commercial ceilings have fallen back to Community, so creating or configuring paid capability is now refused; everything already here stays visible and exportable, everything over a ceiling is listed, and nothing has been disabled or deleted; isolation, permissions and sign-in are unaffected; install a renewed licence to lift the ceilings again"
+
+  # ----------------------------------------------------------------------------
+  # Licence ceilings — the SOFT-OVERAGE warnings (owner decision, 2026-09-05;
+  # docs/design/TIERING_PLAN_2026-09-03.md §9, Team/Enterprise "Soft overage +
+  # alerts (80/90/100 %)").
+  #
+  # A SEPARATE GROUP from `licence` above, deliberately. That group carries the
+  # standing invariant "a Community deployment must never fire any rule in it",
+  # and these rules have a different guard of their own — stated below — so
+  # mixing them would put two guards under one promise and make both harder to
+  # verify.
+  #
+  # THE SERIES (internal/licence.Service.WriteUsageMetrics, on the api's own
+  # /metrics, every scrape):
+  #
+  #   netops_licence_ceiling{ceiling,unit}      the licensed limit; -1 = unlimited
+  #   netops_licence_usage{ceiling,unit}        current usage. ABSENT for a
+  #                                             ceiling this deployment does not
+  #                                             measure — a fabricated 0 would be
+  #                                             divided below, so silence is the
+  #                                             deliberate failure direction
+  #   netops_licence_ceiling_soft{ceiling}      1 where going over is ALLOWED and
+  #                                             recorded, 0 where it is refused
+  #   netops_licence_overage_devices            monitored devices above the
+  #                                             allowance; always present, 0 when
+  #                                             there is none
+  #
+  # THE COMMUNITY GUARD, and it is the whole reason these can be warnings at
+  # all: every rule joins on `netops_licence_ceiling_soft == 1`. Community
+  # ceilings are HARD — the 26th monitored device is refused, so a free-tier
+  # deployment cannot accumulate an overage and, more to the point, publishes
+  # soft=0 and is excluded by the join before any threshold is considered. The
+  # guard is a label match on a value, not the absence of a series, so it cannot
+  # be defeated by a scrape gap.
+  #
+  # THE DIVISION GUARD: `netops_licence_ceiling > 0` on every rule. An unlimited
+  # ceiling reports -1 (a negative ratio, which no threshold selects) and a
+  # pathological 0 would divide to +Inf and fire everything. Neither is a real
+  # deployment; both are one line of arithmetic away from a false page.
+  #
+  # NOT A PAGE — EVER, for the same reason as the group above: an overage is a
+  # commercial fact. Nothing has been blocked, disabled or deleted; the excess is
+  # recorded for true-up. Waking someone at 3am over an invoice would be absurd.
+  #
+  # THE BANDS are disjoint so exactly one fires: 80–90 %, 90–100 %, over 100 %.
+  # Overlapping bands would page twice for one condition and read as two
+  # problems.
+  # ----------------------------------------------------------------------------
+  - name: licence-ceilings
+    interval: 60s
+    rules:
+      # 80 %. Informational runway: at this point a renewal or an expansion is a
+      # planned purchase rather than a scramble. for: 1h because the underlying
+      # count moves when an operator enables a device, not continuously.
+      - alert: LicenceCeilingApproaching
+        expr: |
+          (
+            (netops_licence_usage / netops_licence_ceiling >= 0.8 < 0.9)
+            and on(ceiling) netops_licence_ceiling_soft == 1
+            and on(ceiling) netops_licence_ceiling > 0
+          )
+        for: 1h
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "Correlix is using {{ $value | humanizePercentage }} of the licensed {{ $labels.ceiling }} allowance — nothing is limited yet; this is the point to plan an expansion rather than discover it mid-incident"
+
+      # 90–100 %. The last band before the allowance is spent. Still nothing is
+      # blocked on a paid tier — that is what SOFT means — so the wording says
+      # what will actually happen next, which is a true-up and not an outage.
+      - alert: LicenceCeilingReached
+        expr: |
+          (
+            (netops_licence_usage / netops_licence_ceiling >= 0.9 <= 1)
+            and on(ceiling) netops_licence_ceiling_soft == 1
+            and on(ceiling) netops_licence_ceiling > 0
+          )
+        for: 1h
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "Correlix is at {{ $value | humanizePercentage }} of the licensed {{ $labels.ceiling }} allowance — on your tier this ceiling does not block, so going past it is allowed and recorded for true-up; nothing will be disabled"
+
+      # Over 100 %. Keyed off the overage gauge rather than the ratio, so the
+      # number in the alert is the number on the Licence page and on the invoice
+      # conversation. `and on()` joins against the single soft series for the
+      # devices ceiling: an empty `on()` matches every series, which is what is
+      # wanted for a metric that carries no labels of its own.
+      #
+      # NOTE the deliberate asymmetry with the two rules above: a deployment
+      # whose licence has LAPSED runs at Community ceilings, publishes soft=0,
+      # and is therefore excluded here — its situation is described by
+      # LicenceExpired, accurately, and a second alert saying "you are over" would
+      # add nothing but noise.
+      - alert: LicenceOverage
+        expr: |
+          (
+            netops_licence_overage_devices > 0
+            and on() netops_licence_ceiling_soft{ceiling="devices"} == 1
+          )
+        for: 1h
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "{{ $value }} monitored device(s) above the licensed allowance — every one of them is still being collected from and nothing has been blocked, disabled or deleted; the overage is recorded for true-up"
 
   # ----------------------------------------------------------------------------
   # Stack self-health

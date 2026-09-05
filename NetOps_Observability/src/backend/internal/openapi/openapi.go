@@ -317,12 +317,22 @@ var apiRoutes = []apiRoute{
 	// provider's commercial or key material.
 	//
 	// Everywhere ELSE in this API, a capability the licence does not include
-	// answers 402 with {error, ceiling|feature, current, limit, tier,
-	// lifted_by, message} — never 403 (authorization is a different question)
-	// and never a silently empty body. Ceilings that are carried in the file
-	// but not enforced by this build say so in the payload rather than being
-	// displayed as limits that bite.
-	{"GET", "/api/system/licence", "Licence", "The licence in force, in ONE of two scopes decided by the caller, never by the request. scope=platform (the cross-tenant platform owner): customer, tier, ceilings with PLATFORM-WIDE usage, the closed feature vocabulary with what is entitled, expiry, grace and degraded state with the over-ceiling items LISTED, the trusted public keys and the offline verification recipe. scope=tenant (any administration:admin caller, including a tenant/org admin, and the owner narrowed with as_tenant): tier, entitled features, the same ceilings with THIS TENANT'S OWN usage beside them, expiry state and managed_by — no customer, no licence id, no key material, no file path. No licence installed is a normal state and reports the Community ceilings, not an error"},
+	// answers 402 with {error, ceiling|feature, unit, current, limit, tier,
+	// lifted_by, licence_state, message} — never 403 (authorization is a
+	// different question) and never a silently empty body. Ceilings that are
+	// carried in the file but not enforced by this build say so in the payload
+	// rather than being displayed as limits that bite.
+	//
+	// EXPIRY, GRACE AND OVERAGE (owner decision, 2026-09-05). `licence_state` on
+	// a 402 is valid | in_grace | post_grace. In grace nothing changes at all.
+	// Past grace, only CREATION and CONFIGURATION of paid capability refuse —
+	// every GET/list/export of a licensed feature keeps working, so existing
+	// data stays viewable and exportable, and the over-ceiling state is listed
+	// rather than acted on. On Team and Enterprise the monitored-device ceiling
+	// is SOFT: activation beyond it is allowed and recorded for true-up, never
+	// refused; Community keeps the hard block at the 26th activation. No licence
+	// state can affect isolation, RLS, authorization, integrity or sign-in.
+	{"GET", "/api/system/licence", "Licence", "The licence in force, in ONE of two scopes decided by the caller, never by the request. scope=platform (the cross-tenant platform owner): customer, tier, ceilings with PLATFORM-WIDE usage and whether each is soft, the closed feature vocabulary with what is entitled, the expiry phase (valid | in_grace | post_grace) with days_to_expiry and grace_days_left, whether the licence is a trial, the over-ceiling items LISTED with when each overage began and the over-ceiling DEVICES named, the trusted public keys and the offline verification recipe. scope=tenant (any administration:admin caller, including a tenant/org admin, and the owner narrowed with as_tenant): tier, entitled features, the same ceilings with THIS TENANT'S OWN usage beside them, expiry state and managed_by — no customer, no licence id, no key material, no file path. No licence installed is a normal state and reports the Community ceilings, not an error"},
 	{"PUT", "/api/system/licence", "Licence", "Install a licence document. The signature is verified BEFORE anything is written, so a refused upload never displaces a working licence and the exact reason is returned verbatim — an unknown signing key, a modified file and a malformed one are three different answers (platform admin, audited on both outcomes)"},
 	{"DELETE", "/api/system/licence", "Licence", "Remove the installed licence and return to the Community ceilings. Nothing is deleted from the platform itself; devices and data over a Community ceiling are listed as not covered, never removed (platform admin, audited)"},
 	{"POST", "/api/graphql", "Query", "GraphQL endpoint (devices/alerts/findings/health)"},

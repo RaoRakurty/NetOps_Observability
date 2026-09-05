@@ -6387,9 +6387,14 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .lic-sp { flex: 1 1 auto; }
 .lic-sec-bd { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 
-/* tone ramp — one place, so a pill, a banner and a bar agree on what warn means */
+/* tone ramp — one place, so a pill, a banner and a bar agree on what warn means.
+   `.lic-near` is the middle step of the 80 / 90 / 100 % usage ramp (owner
+   decision, 2026-09-05): it is NOT a new colour, it is the existing warn token
+   pulled toward crit, so the ramp stays inside the platform's three severity
+   tokens and a themed build recolours all four together. */
 .lic-good  { --lic-tone: var(--ok); }
 .lic-warn  { --lic-tone: var(--warn); }
+.lic-near  { --lic-tone: color-mix(in srgb, var(--warn) 45%, var(--crit)); }
 .lic-bad   { --lic-tone: var(--crit); }
 .lic-muted { --lic-tone: var(--fg-subtle); }
 
