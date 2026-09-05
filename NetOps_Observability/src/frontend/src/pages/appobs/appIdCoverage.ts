@@ -67,6 +67,44 @@ export function precedenceOrigin(isDefault: boolean): string {
   return isDefault ? "platform default order" : "tenant order";
 }
 
+// ── whose numbers these are (CLAUDE.md §3a, tracker 244) ────────────────────
+//
+// /api/appid/status is a TENANT-scoped route, and it now says which reading its
+// counts are: scope "tenant" (this tenant's own firewall/cloud attributions) or
+// "platform" (the platform owner's cross-tenant view — the only reading in
+// which those counts span tenants). The card must never again print
+// "shared platform-wide" over numbers that belong to one tenant.
+
+/** True only for the platform owner's explicit cross-tenant reading. Anything
+ *  else — including an unrecognized value — is treated as the NARROW reading:
+ *  never claim a number covers more than the server said it does. */
+export function isPlatformScope(s: Pick<AppIdStatus, "scope">): boolean {
+  return s.scope === "platform";
+}
+
+/** The sentence under the coverage counts, in the scope the API returned. */
+export function coverageScopeNote(s: Pick<AppIdStatus, "scope" | "tenant">): string {
+  if (isPlatformScope(s)) {
+    return "Platform view: the vendor feeds are public data, and the firewall and cloud attribution counts cover every tenant. Select a tenant to see that tenant's own coverage.";
+  }
+  const who = s.tenant ? ` (${s.tenant})` : "";
+  return `The vendor feeds are public data, identical for every tenant. The firewall and cloud attributions are this tenant's own${who} — as are the overrides below.`;
+}
+
+/** Per-stat hints for the two tenant-partitioned layers, in the same scope. */
+export function attributionHints(s: Pick<AppIdStatus, "scope">): { ngfw: string; cloud: string } {
+  if (isPlatformScope(s)) {
+    return {
+      ngfw: "destinations a firewall has already named, counted across every tenant (platform view)",
+      cloud: "destinations named from the cloud inventory, counted across every tenant (platform view)",
+    };
+  }
+  return {
+    ngfw: "destinations a firewall has already named for this tenant",
+    cloud: "destinations named from this tenant's cloud inventory",
+  };
+}
+
 /** Said when no managed vendor feed directory is configured on the deployment. */
 export const NO_FEEDS_NOTE =
   "No managed vendor feed directory is configured here, so the vendor prefix and domain layers stay empty and identification falls to the layers below them.";

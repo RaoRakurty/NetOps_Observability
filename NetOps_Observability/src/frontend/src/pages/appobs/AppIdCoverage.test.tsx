@@ -12,6 +12,8 @@ import type { AppCatalogEntry, AppIdStatus } from "../../services/api";
 
 const h = vi.hoisted(() => {
   const status = (over: Partial<AppIdStatus> = {}): AppIdStatus => ({
+    scope: "tenant",
+    tenant: "t_acme",
     attribution_precedence: ["operator", "cloud_tag", "firewall_appid", "domain", "ip_catalog"],
     precedence_is_default: true,
     feeds_configured: true,
@@ -58,13 +60,29 @@ describe("AppIdCoverageCard", () => {
     expect(screen.getByText(/platform default order · read-only/)).toBeTruthy();
   });
 
-  it("shows each layer's size, and separates the shared layers from this tenant's", async () => {
+  it("shows each layer's size and says the counts are THIS tenant's, not the platform's", async () => {
     render(<AppIdCoverageCard />);
     expect(await screen.findByText((4120).toLocaleString())).toBeTruthy();
     expect(screen.getByText((918).toLocaleString())).toBeTruthy();
     expect(screen.getByText("27")).toBeTruthy();
     expect(screen.getByText("63")).toBeTruthy();
-    expect(screen.getByText(/shared platform-wide; the counts below are this tenant/)).toBeTruthy();
+    // §3a (tracker 244): the firewall/cloud counts are the caller's tenant's
+    // own, and the card names the tenant instead of claiming a platform total.
+    expect(screen.getByText(/attributions are this tenant's own \(t_acme\)/)).toBeTruthy();
+    expect(screen.queryByText(/shared platform-wide/)).toBeNull();
+    expect(screen.getByTitle(/firewall has already named for this tenant/)).toBeTruthy();
+    expect(screen.getByTitle(/named from this tenant's cloud inventory/)).toBeTruthy();
+  });
+
+  // The one reading that DOES span tenants must say so on its face.
+  it("the platform owner's cross-tenant reading is labelled as one", async () => {
+    mock.appIdStatus.mockResolvedValueOnce(h.status({
+      scope: "platform", tenant: "global", ngfw_attributions: 900, cloud_attributions: 800,
+    }));
+    render(<AppIdCoverageCard />);
+    expect(await screen.findByText(/Platform view: .*cover every tenant/)).toBeTruthy();
+    expect(screen.getAllByTitle(/counted across every tenant \(platform view\)/)).toHaveLength(2);
+    expect(screen.queryByText(/this tenant's own/)).toBeNull();
   });
 
   it("a tenant order is labelled as one rather than as the default", async () => {

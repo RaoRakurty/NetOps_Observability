@@ -50,12 +50,21 @@ func (r *CloudResolver) get() cloudKeyMap {
 	return nil
 }
 
-func (r *CloudResolver) Count() int {
-	n := 0
-	for _, b := range r.get() {
-		n += len(b)
+// CountFor reports the cloud identity-map attributions VISIBLE TO ONE CALLER
+// (CLAUDE.md §3a), mirroring SignalFor's default-closed scoping: a scoped caller
+// counts ONLY its own tenant bucket, so another tenant's inventory size never
+// reaches it; the platform owner (cross) counts every bucket, which the status
+// surface labels scope:"platform".
+func (r *CloudResolver) CountFor(tenant string, cross bool) int {
+	m := r.get()
+	if cross {
+		n := 0
+		for _, b := range m {
+			n += len(b)
+		}
+		return n
 	}
-	return n
+	return len(m[cloudNormTenant(tenant)])
 }
 
 // cloudSrcToAppid maps a cloud attribution source onto the appid resolver's

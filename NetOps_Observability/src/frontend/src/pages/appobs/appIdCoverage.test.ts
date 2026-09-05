@@ -7,8 +7,9 @@ import { describe, expect, it } from "vitest";
 import type { AppCatalogEntry } from "../../services/api";
 import {
   EMPTY_OVERRIDE_DRAFT, MATCH_KIND_LABELS, OPERATOR_CLASS, UNKNOWN_COUNT,
-  deleteOverridePrompt, isIPv4CidrToken, overrideInput, precedenceOrigin,
-  precedenceRows, readCount, sortOverrides, unavailableReason, validateOverride,
+  attributionHints, coverageScopeNote, deleteOverridePrompt, isIPv4CidrToken,
+  isPlatformScope, overrideInput, precedenceOrigin, precedenceRows, readCount,
+  sortOverrides, unavailableReason, validateOverride,
 } from "./appIdCoverage";
 
 describe("readCount (the -1 UNKNOWN sentinel)", () => {
@@ -146,5 +147,48 @@ describe("override list rendering helpers", () => {
     expect(p).toContain("10.0.0.0/8");
     expect(p).toContain("Billing");
     expect(p).toMatch(/falls back to the next source/);
+  });
+});
+
+// CLAUDE.md §3a (tracker 244): /api/appid/status is tenant-scoped, so the card
+// may not describe its counts as platform-wide. The scope the SERVER returns is
+// the only authority for that sentence.
+describe("coverage scope (whose numbers these are)", () => {
+  it("treats only an explicit platform scope as cross-tenant", () => {
+    expect(isPlatformScope({ scope: "platform" })).toBe(true);
+    expect(isPlatformScope({ scope: "tenant" })).toBe(false);
+    // an unrecognized/absent value reads NARROW — never widen a claim.
+    expect(isPlatformScope({ scope: "" as "tenant" })).toBe(false);
+  });
+
+  it("names the tenant, and never says the counts are shared platform-wide", () => {
+    const note = coverageScopeNote({ scope: "tenant", tenant: "t_acme" });
+    expect(note).toMatch(/this tenant's own \(t_acme\)/);
+    expect(note).not.toMatch(/platform-wide|platform view/i);
+    // the vendor-feed clause is the ONLY "every tenant" in the tenant reading —
+    // the attribution counts must not be described that way.
+    expect(note).not.toMatch(/attributions .*every tenant/i);
+    // public vendor feeds are still described as what they are
+    expect(note).toMatch(/vendor feeds are public data/);
+  });
+
+  it("omits an empty tenant id rather than printing an empty parenthesis", () => {
+    expect(coverageScopeNote({ scope: "tenant", tenant: "" })).toMatch(/this tenant's own —/);
+  });
+
+  it("says outright when the reading is the platform owner's cross-tenant one", () => {
+    const note = coverageScopeNote({ scope: "platform", tenant: "global" });
+    expect(note).toMatch(/^Platform view:/);
+    expect(note).toMatch(/cover every tenant/);
+    expect(note).not.toMatch(/this tenant's own/);
+  });
+
+  it("hints follow the same scope as the sentence", () => {
+    const t = attributionHints({ scope: "tenant" });
+    expect(t.ngfw).toMatch(/for this tenant/);
+    expect(t.cloud).toMatch(/this tenant's cloud inventory/);
+    const p = attributionHints({ scope: "platform" });
+    expect(p.ngfw).toMatch(/across every tenant/);
+    expect(p.cloud).toMatch(/across every tenant/);
   });
 });

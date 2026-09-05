@@ -491,6 +491,11 @@ var routeIsolationLedger = map[string]string{
 	// (TestCloudStoreIsolation, appid_isolation_test.go, cloud_appid_resolver_test.go).
 	"/api/appid/resolve":       "scoped",
 	"/api/appid/resolve/batch": "scoped", // #81 P3G — isolation test: appid_batch_isolation_test.go
+	// The coverage read is per-tenant: the firewall + cloud attribution counts
+	// are taken from the CALLER'S bucket (countFor/CountFor) and the response
+	// labels the reading scope:"tenant"|"platform" — the platform-wide sum is
+	// the platform owner's cross view only (tracker 244). Isolation test:
+	// appid_status_isolation_test.go, which also covers the override rows below.
 	"/api/appid/status":        "scoped",
 	"/api/appid/fusion/status": "scoped",
 	"/api/appid/catalog":       "scoped",

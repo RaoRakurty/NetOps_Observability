@@ -176,7 +176,12 @@ runtime dependency** (radix trie + suffix automata are stdlib).
 | **P5 — futuristic** | ML-on-flow-feature residue (explainable); LLM-assisted catalog curation (§15 guardrails); operator-confirm feedback → SoT; Palo Alto CSV (no PAN device) | 📋 roadmap — futuristic / gated |
 
 **Engine coverage is inspectable** at `GET /api/appid/status` (catalog prefixes +
-domains, firewall attributions, per-tenant overrides).
+domains, firewall attributions, per-tenant overrides). The route is tenant-scoped
+(§3a): the firewall and cloud attribution counts are the CALLER'S bucket only,
+and the response carries `scope` — `"tenant"` (with the tenant id) or
+`"platform"`, the platform owner's cross-tenant view, which is the only reading
+in which those counts span tenants. The vendor prefix/domain counts are the
+public feed, owned by no tenant and identical in every reading.
 
 **Dependencies:** none new at runtime (stdlib trie/automata; feed-fetch is opt-in
 background). A commercial IP→app feed (Netify/IPinfo) is an *optional later*

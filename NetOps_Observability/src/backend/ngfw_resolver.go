@@ -47,13 +47,22 @@ func (r *ngfwAppResolver) get() ngfwAppMap {
 	return nil
 }
 
-// count reports the total (tenant,dst) firewall attributions indexed.
-func (r *ngfwAppResolver) count() int {
-	n := 0
-	for _, b := range r.get() {
-		n += len(b)
+// countFor reports the firewall attributions VISIBLE TO ONE CALLER (CLAUDE.md
+// §3a). The index is tenant-partitioned, so a scoped caller counts ONLY its own
+// bucket — another tenant's attribution count never reaches it, not even as a
+// number. The platform owner with no tenant selected (cross) counts the whole
+// index; the caller labels that reading scope:"platform" so a platform-wide
+// total can never be mistaken for one tenant's.
+func (r *ngfwAppResolver) countFor(tenant string, cross bool) int {
+	m := r.get()
+	if cross {
+		n := 0
+		for _, b := range m {
+			n += len(b)
+		}
+		return n
 	}
-	return n
+	return len(m[normTenant(tenant)])
 }
 
 // signalFor returns an authoritative NGFW app-id signal for (tenant,dstIP) if the

@@ -25,8 +25,9 @@ import { operatorError } from "../../lib/errors";
 import { fmtDateTime } from "../../lib/time";
 import {
   EMPTY_OVERRIDE_DRAFT, MATCH_KINDS, MATCH_KIND_LABELS, NO_FEEDS_NOTE,
-  deleteOverridePrompt, overrideInput, precedenceOrigin, precedenceRows,
-  readCount, sortOverrides, unavailableReason, validateOverride,
+  attributionHints, coverageScopeNote, deleteOverridePrompt, overrideInput,
+  precedenceOrigin, precedenceRows, readCount, sortOverrides, unavailableReason,
+  validateOverride,
 } from "./appIdCoverage";
 import type { OverrideDraft } from "./appIdCoverage";
 
@@ -93,16 +94,16 @@ export function AppIdCoverageCard() {
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 18, marginBottom: 8 }}>
             <CoverageStat label="Vendor prefixes" n={status.catalog_prefixes}
-              hint="IPv4 prefixes loaded from the managed vendor feeds — shared by every tenant" />
+              hint="IPv4 prefixes loaded from the managed vendor feeds — public data, the same for every tenant" />
             <CoverageStat label="Vendor domains" n={status.catalog_domains}
-              hint="domain suffixes loaded from the managed vendor feeds — shared by every tenant" />
+              hint="domain suffixes loaded from the managed vendor feeds — public data, the same for every tenant" />
             <CoverageStat label="Firewall attributions" n={status.ngfw_attributions}
-              hint="destinations a firewall has already named, indexed across the platform" />
+              hint={attributionHints(status).ngfw} />
             <CoverageStat label="Cloud attributions" n={status.cloud_attributions}
-              hint="destinations named from the cloud inventory, indexed across the platform" />
+              hint={attributionHints(status).cloud} />
           </div>
           <p className="ao-muted" style={{ fontSize: 12, margin: "0 0 12px" }}>
-            Those four layers are shared platform-wide; the counts below are this tenant&apos;s alone.
+            {coverageScopeNote(status)}
           </p>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 18 }}>

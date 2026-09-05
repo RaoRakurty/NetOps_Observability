@@ -214,9 +214,20 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 	if !customOrder {
 		order = appid.PrecedenceClasses()
 	}
-	// The engine's coverage at a glance (the design's "coverage is INSPECTABLE"):
-	// global vendor catalog + domain matcher (shared), the firewall app-id overlay,
-	// and THIS tenant's operator overrides.
+	// The engine's coverage at a glance (the design's "coverage is INSPECTABLE"),
+	// AS THE CALLER SEES IT (CLAUDE.md §3a, tracker 244). Every count on this
+	// tenant-scoped route is the caller's own view:
+	//   · catalog_prefixes / catalog_domains — the vendor-published feeds
+	//     (AWS/Azure/GCP/M365 ranges). PUBLIC reference data owned by no tenant
+	//     and resolved against in full for every tenant (see keyAppSignals), so
+	//     the caller's view IS the whole feed. Nothing tenant-owned is in there.
+	//   · ngfw_attributions / cloud_attributions — tenant-PARTITIONED indexes;
+	//     counted through countFor/CountFor, which read only the caller's bucket.
+	//     Before this fix they summed every tenant's bucket onto a tenant route.
+	//   · tenant_override_* — this tenant's operator rows (already scoped).
+	// "scope" states which reading the numbers are: "tenant" (the tenant named in
+	// "tenant") or "platform" (the platform owner's cross-tenant view, the only
+	// case in which the attribution counts span tenants).
 	// -1 is the "unknown" sentinel (feedTotal's convention): a store that did not
 	// answer must never render as a tenant with zero overrides on a page whose
 	// whole job is to say what the engine can see.
@@ -228,14 +239,20 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 	if ovErr == nil {
 		total = pfx + dom
 	}
+	scope := "tenant"
+	if cross {
+		scope = "platform"
+	}
 	out := map[string]any{
+		"scope":                  scope,
+		"tenant":                 tenant,
 		"attribution_precedence": order,
 		"precedence_is_default":  !customOrder,
 		"feeds_configured":       s.appCatalog.FeedsDir() != "",
 		"catalog_prefixes":       s.appCatalog.Get().Size(),
 		"catalog_domains":        s.appCatalog.Domains().Size(),
-		"ngfw_attributions":      s.ngfw.count(),
-		"cloud_attributions":     s.cloudApp.Count(),
+		"ngfw_attributions":      s.ngfw.countFor(tenant, cross),
+		"cloud_attributions":     s.cloudApp.CountFor(tenant, cross),
 		"tenant_overrides":       total,
 		"tenant_override_pfx":    pfx,
 		"tenant_override_dom":    dom,

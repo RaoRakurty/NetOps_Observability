@@ -3693,6 +3693,13 @@ export type IncidentTimeMetricRow = {
  *  UNKNOWN sentinel: the override store did not answer, which must never be
  *  rendered as "this tenant declared none". */
 export type AppIdStatus = {
+  /** Whose numbers these are (appid_catalog.go handleAppIDStatus, CLAUDE.md
+   *  §3a): "tenant" — the counts belong to the tenant named in `tenant` alone;
+   *  "platform" — the platform owner's cross-tenant view, the ONLY reading in
+   *  which the firewall/cloud attribution counts span tenants. */
+  scope: "tenant" | "platform";
+  /** The tenant the counts describe ("global" in the platform view). */
+  tenant: string;
   attribution_precedence: string[];
   precedence_is_default: boolean;
   feeds_configured: boolean;
