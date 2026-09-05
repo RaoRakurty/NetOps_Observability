@@ -163,6 +163,16 @@ jobs:
       # artifacts have to exist here, not merely be pinned.
       - name: Materialise the retained corresponding source
         working-directory: NetOps_Observability
+        # RETAINED COPIES FIRST, exactly as supply-chain.yml does it. Everything
+        # in compliance/corresponding-sources/ is taken from the repository and
+        # re-checksummed against the pin table (local provenance is not trusted
+        # provenance); only what is not retained there is fetched from upstream.
+        # This is not an optimisation: eleven of the pinned artifacts are Alpine
+        # aports archives from gitlab.alpinelinux.org, which answers
+        # GitHub-hosted runners with HTTP 418 — a release must not depend on
+        # upstream reachability to prove it ships the source it says it does.
+        env:
+          CORRELIX_SOURCE_MIRROR_DIR: ${{ github.workspace }}/NetOps_Observability/compliance/corresponding-sources
         run: |
           set -euo pipefail
           bash scripts/make-installer.sh --source-offer-only
