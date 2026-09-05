@@ -1,5 +1,15 @@
 # Correlix licensing model (design of record, 2026-09-04)
 
+> **RATIFIED 2026-09-05.** The owner re-affirmed the model as built: the root `LICENSE`
+> stays the concise mixed-licence notice (Apache-2.0 core + Correlix Enterprise
+> commercial/source-available portions) and is never the stock Apache text; the detailed
+> texts stay in `LICENSES/Apache-2.0.txt` and `LICENSES/Correlix-Enterprise.txt`, the
+> latter a placeholder until counsel delivers it. Recorded in `licensing-policy.json`
+> (`decided`) and pinned by `tests/test_licensing_consistency.py`. The Enterprise licence
+> TEXT remains BLOCKED ON COUNSEL: the `enterprise-text-placeholder` release blocker in
+> `licensing-policy.json` keeps `scripts/licensing-gate.py --release` failing, and nothing
+> in this ratification clears it.
+
 Owner decisions this document implements: root licence = **Apache-2.0 open core with
 clearly separated commercial add-ons**; tiers Community / Team / Enterprise with the cut
 lines in `TIERING_PLAN_2026-09-03.md`; the licensing story must be identical in the source
@@ -91,10 +101,22 @@ report" for hosted support later.
 
 ## 6. Consistency guarantee (owner: non-negotiable before rc1)
 `tests/test_licensing_consistency.py` fails the build unless all of these agree: root
-`LICENSE` (Apache-2.0 text), `LICENSING.md` (every top-level directory mapped once),
-`NOTICE`, every Dockerfile's `org.opencontainers.image.licenses` label, the frontend
-About/licences page, README's licence section, the generated `THIRD_PARTY_LICENSES.md`
-header, and the installer bundle's `LICENSES.md`.
+`LICENSE` (the concise MIXED-LICENCE notice — Apache-2.0 core + Correlix Enterprise
+add-ons — **never the stock Apache-2.0 text**, which lives in `LICENSES/Apache-2.0.txt`),
+`LICENSING.md` (every top-level directory mapped once), `NOTICE`, every Dockerfile's
+`org.opencontainers.image.licenses` label, the frontend About/licences page, README's
+licence section, the generated `THIRD_PARTY_LICENSES.md` header, and the installer
+bundle's `LICENSES.md`.
+
+The OCI label is an SPDX License EXPRESSION for what each image CONTAINS, so it has
+exactly two canonical values, defined once in
+`licensing-policy.json` → `container_images.oci_licence_expressions`: `Apache-2.0` for a
+core-only image, and `Apache-2.0 AND LicenseRef-Correlix-Enterprise` for an image that
+also contains commercial code. Today that is `Dockerfile.backend`, because one binary
+carries `src/backend/enterprise/**` (§1). The consistency suite re-derives which value
+each Dockerfile is owed from what it actually `COPY`s, so a label cannot drift from its
+image, and over-claiming the mixed expression on a core-only image fails just as loudly
+as under-claiming it on a mixed one.
 
 ## 7. Build order
 1. Legal + boundary structure: mixed-licence `LICENSE`, `LICENSES/Apache-2.0.txt`, placeholder
@@ -260,3 +282,38 @@ ErrLicence) · `internal/licence` (`policy.go` issuance defaults, `overage.go` t
 (`MonitoredOverCeiling`) · `cmd/correlix-licence` (`--trial`, grace defaults, `show`/`verify`
 output) · `main.go` (the verb-based feature gate, the register wiring, the metrics) ·
 `src/frontend/src/pages/{Licence.tsx,licence.model.ts,Devices.tsx}` · `src/config/rules.yaml`.
+
+---
+
+## 9. Production signing key — GA PREREQUISITE (owner decision 2026-09-05, tracker 259)
+
+**HSM/OFFLINE, TWO-PERSON CONTROL. The ceremony has NOT happened, and it is BLOCKED
+ON CUSTODIANS — custodians: TO BE NAMED BY THE OWNER.** No production signing key
+exists; the only key any build trusts is the LAB key of §3, and **the lab key must
+never be promoted to production** (not by copying it, not by signing a customer
+licence with it, not by relabelling its entry).
+
+**Procedure of record: `docs/runbooks/licence-signing-ceremony.md`** — generation,
+custodianship, backup/recovery, HSM vs sealed-offline storage, the offline signing
+procedure and how the signed file travels, audit logging, rotation, revocation,
+previous-key compatibility and disaster recovery. `docs/runbooks/licensing.md` §6
+stays the everyday custody/rotation reference for the key that exists today.
+
+The rule this adds to §3's mechanism: a signing key now states **what it is allowed
+to sign**. `PublicKey.Purpose` is `lab` or `production` (closed vocabulary; an
+unlabelled key counts as not-production, so the check fails closed), every embedded
+spec in `keys.go` carries one and an unknown value panics at first use, and
+`licence.ReleaseReady()` returns nil only when a production-purpose key is embedded.
+`correlix-licence keys --release-check` is the operator/release surface and exits 1
+while the lab key is the only key the build trusts;
+`internal/licence/keys_release_test.go` pins all of it, including the tripwire that
+fails the day a production key lands.
+
+Two honest limits, recorded so they are not rediscovered at a tag: the tooling has
+**no HSM path** (`correlix-licence sign --key` reads an ed25519 key from a file;
+PKCS#11 would need an allowlist amendment or a detached-signature mode), and the
+guard is a library call + a command + tests — it is **not yet wired into the tag
+workflow** or into `scripts/licensing-gate.py --release`.
+
+GA also remains blocked on the two commercial items already recorded in §7: the
+Correlix Enterprise licence TEXT and the CLA signing process, both awaiting legal.

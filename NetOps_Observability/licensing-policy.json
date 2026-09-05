@@ -20,7 +20,7 @@
     "and correctness properties are never commercial."
   ],
   "version": 1,
-  "decided": "2026-09-04",
+  "decided": "2026-09-04, RATIFIED 2026-09-05",
   "decided_by": "owner",
   "design_of_record": "docs/design/LICENSING_MODEL_2026-09-04.md",
   "tiering_plan": "docs/design/TIERING_PLAN_2026-09-03.md",
@@ -405,11 +405,17 @@
   },
   "container_images": {
     "_why": "Check D. Dockerfiles that build a CORRELIX image must declare the licence in OCI metadata. Dockerfiles that only repackage a third-party image (adding no Correlix source) must NOT: labelling someone else's software with our licence would be a false claim. Every Dockerfile in the tree is classified here exactly once; a new one that nobody classified fails the test.",
+    "oci_licence_expressions": {
+      "_why": "The CANONICAL values of org.opencontainers.image.licenses. The OCI spec defines that label as an SPDX License Expression describing the software the image CONTAINS, so an image is labelled by its contents, not by the project's headline licence. Only these two expressions may appear on a Correlix image; the per-image `licence` fields below must each be one of them, and tests/test_licensing_consistency.py re-derives the right one from what each Dockerfile actually COPIES so the label cannot drift from the image.",
+      "core_only": "Apache-2.0",
+      "mixed": "Apache-2.0 AND LicenseRef-Correlix-Enterprise",
+      "rule": "An image whose build context ingests any commercial_paths directory carries `mixed`. Every other Correlix image carries `core_only`. Over-claiming `mixed` on an image that contains no commercial code would wrongly tell a recipient that Apache-2.0 software is restricted — the same false claim, in the open direction, that the third_party_repackage rule prevents in the other."
+    },
     "ours": [
       {
         "path": "deployment/docker/Dockerfile.backend",
-        "licence": "Apache-2.0",
-        "why": "Builds the Go API from src/backend."
+        "licence": "Apache-2.0 AND LicenseRef-Correlix-Enterprise",
+        "why": "Builds the Go API from src/backend. `COPY src/backend/` takes the WHOLE backend tree, and main.go + ldap_wiring.go link the commercial packages src/backend/enterprise/dialects and src/backend/enterprise/sso/ldap into the one shipped binary (design of record §1: one repository, one binary, tiers are data). The image therefore contains software under both identifiers and its SPDX expression must say so; a bare Apache-2.0 label would understate what the customer receives."
       },
       {
         "path": "deployment/docker/Dockerfile.correlation",

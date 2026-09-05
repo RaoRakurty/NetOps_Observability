@@ -263,6 +263,7 @@ def render(policy: dict) -> str:
 
     # ── container images ────────────────────────────────────────────────────
     ci = policy["container_images"]
+    expr = ci["oci_licence_expressions"]
     out += [
         "## Container images",
         "",
@@ -270,6 +271,14 @@ def render(policy: dict) -> str:
         "(`org.opencontainers.image.licenses`). A Dockerfile that only repackages a third-party",
         "image declares nothing: labelling someone else's software with our licence would be a",
         "false claim.",
+        "",
+        "That label is an SPDX License **expression** for what the image CONTAINS, so exactly two",
+        "values are canonical:",
+        "",
+        f"- `{expr['core_only']}` — the image contains core code only.",
+        f"- `{expr['mixed']}` — the image also contains commercial code.",
+        "",
+        expr["rule"],
         "",
     ]
     rows = [[f"`{e['path']}`", f"`{e['licence']}`", e["why"]] for e in ci["ours"]]

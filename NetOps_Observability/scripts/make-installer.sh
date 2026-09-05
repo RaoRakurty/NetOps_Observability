@@ -21,12 +21,17 @@
 #     LICENSES.md                        third-party distribution notices
 #                                        (GENERATED from docs/THIRD_PARTY_LICENSES.md
 #                                         by scripts/license-audit.py — never hand-written)
-#     LICENSE                            Correlix's OWN licence (Apache-2.0),
+#     LICENSE                            Correlix's OWN licence — the concise
+#                                        mixed-licence notice (Apache-2.0 core +
+#                                        LicenseRef-Correlix-Enterprise), never
+#                                        the bare Apache text,
 #     LICENSING.md                       which directory is core vs commercial,
-#     LICENSES/                          both SPDX texts — copied verbatim from
-#                                        the repo root; LICENSES.md's footer
-#                                        points at all three, so they ship or
-#                                        the footer is a dangling reference
+#     LICENSES/                          both SPDX texts,
+#     NOTICE                             third-party attributions + source offers
+#                                        — all copied verbatim from the repo
+#                                        root; LICENSES.md's footer points at all
+#                                        four, so they ship or the footer is a
+#                                        dangling reference
 #     source-offer/                      corresponding source for the copyleft
 #                                        components we redistribute (GPL/LGPL),
 #                                        mirrored per release — see write_source_offer()
@@ -147,8 +152,9 @@ Correlix is open core (owner decision 2026-09-04). The statement of record is:
 
 Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) — see LICENSING.md.
 
-The full texts ship beside this file: LICENSE (Apache-2.0), LICENSING.md (which
-directory is which) and LICENSES/ (both licence texts, by SPDX id).
+The full texts ship beside this file: LICENSE (the mixed-licence notice),
+LICENSING.md (which directory is which), LICENSES/ (both licence texts, by SPDX
+id) and NOTICE (attributions and written source offers).
 
 No component above places any disclosure, relicensing or network-use obligation
 on Correlix's own code under either licence: nothing under a copyleft licence is
@@ -182,7 +188,12 @@ FTR
   # deliberate omission. Copied, never generated: these are the authoritative
   # texts, and a bundle-local rewrite of a licence is exactly the drift the
   # open-core decision (2026-09-04) exists to prevent.
-  for f in LICENSE LICENSING.md; do
+  # NOTICE travels with them: licensing-policy.json's artifact_requirements
+  # names it as a file the installer bundle MUST ship, and it is the only place
+  # the third-party attributions and written source offers are stated in the
+  # project's own voice. Shipping the licence notice without it would satisfy
+  # the Apache-2.0 §4(d) obligation nowhere the customer can see.
+  for f in LICENSE LICENSING.md NOTICE; do
     [ -f "$ROOT/$f" ] \
       || { echo "FATAL: $ROOT/$f is missing — the bundle's LICENSES.md footer points at it (open-core decision 2026-09-04)" >&2; exit 1; }
     cp "$ROOT/$f" "$BUNDLE_DIR/$f"
@@ -196,7 +207,7 @@ FTR
     [ -s "$BUNDLE_DIR/LICENSES/$t.txt" ] \
       || { echo "FATAL: bundle LICENSES/$t.txt is missing or empty" >&2; exit 1; }
   done
-  echo "   project licence shipped (LICENSE, LICENSING.md, LICENSES/)"
+  echo "   project licence shipped (LICENSE, LICENSING.md, LICENSES/, NOTICE)"
 }
 
 # --- GPL/LGPL corresponding source: MIRRORED, not merely offered ------------
@@ -876,13 +887,13 @@ fi
 # correlix-setup binary (design gui-installer-2026-08.md §5 H6 — a binary
 # outside SHA256SUMS is an unverifiable execution path on the customer host)
 # and, for the same reason, correlix-debug (7c) and correlix-licence (7d).
-# LICENSE and LICENSES/*.txt are listed explicitly: LICENSING.md is caught by
-# ./*.md, but the two licence TEXTS the bundle's notice points at would
-# otherwise sit outside the integrity manifest.
+# LICENSE, NOTICE and LICENSES/*.txt are listed explicitly: LICENSING.md is
+# caught by ./*.md, but the extensionless notices and the two licence TEXTS the
+# bundle's notice points at would otherwise sit outside the integrity manifest.
 # It also covers ./source-offer/* (licence audit D2): the mirrored GPL/LGPL
 # corresponding source is a compliance artifact, and a customer must be able to
 # prove the tarball they received is the one we measured.
-(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md LICENSE ./LICENSES/*.txt MANIFEST install-correlix.sh prepare-host.sh correlix-setup correlix-debug correlix-licence ./source-offer/* > SHA256SUMS)
+(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md LICENSE NOTICE ./LICENSES/*.txt MANIFEST install-correlix.sh prepare-host.sh correlix-setup correlix-debug correlix-licence ./source-offer/* > SHA256SUMS)
 
 if [ -n "$SIGNING_FPR" ]; then
   gpg --batch --yes --local-user "$SIGNING_FPR" --armor \

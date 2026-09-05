@@ -32,10 +32,21 @@ ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown
 # Standard OCI labels, so `docker image inspect` answers the same question the
 # running process does, without starting it.
+#
+# The licences label is an SPDX License EXPRESSION describing what this image
+# CONTAINS, and this image contains both licences: the build above copies the
+# whole src/backend tree and links src/backend/enterprise/** (dialects, sso/ldap
+# — LicenseRef-Correlix-Enterprise) into the single /api binary, because the
+# product ships one binary and gates tiers with data, not with separate builds.
+# A bare "Apache-2.0" here would understate what the customer receives. The
+# canonical expression lives in licensing-policy.json
+# (container_images.oci_licence_expressions.mixed); scripts/licensing-gate.py
+# check D and tests/test_licensing_consistency.py enforce the match, and the
+# test re-derives "mixed vs core-only" from what this file actually copies.
 LABEL org.opencontainers.image.revision="${GIT_SHA}" \
       org.opencontainers.image.created="${BUILD_TIME}" \
       org.opencontainers.image.title="correlix-backend" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-Correlix-Enterprise"
 COPY --from=build /out/api /api
 # SEC-020.1: the declared-transport ledger rides with the binary so the posture
 # metrics and the transport-posture view read the same inventory the preflight

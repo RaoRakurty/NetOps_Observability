@@ -13,7 +13,7 @@ production use without a commercial agreement.
 **The default is open.** A file with no SPDX header, in a directory with no Enterprise
 notice file, is `Apache-2.0`. Nothing becomes commercial by omission.
 
-- Decided 2026-09-04 by the owner.
+- Decided 2026-09-04, RATIFIED 2026-09-05 by the owner.
 - Design of record: [`docs/design/LICENSING_MODEL_2026-09-04.md`](docs/design/LICENSING_MODEL_2026-09-04.md)
 - What each tier gets: [`docs/design/TIERING_PLAN_2026-09-03.md`](docs/design/TIERING_PLAN_2026-09-03.md)
 - Machine-readable policy: [`licensing-policy.json`](NetOps_Observability/licensing-policy.json)
@@ -203,9 +203,17 @@ A Dockerfile that builds a **Correlix** image declares the licence in OCI metada
 image declares nothing: labelling someone else's software with our licence would be a
 false claim.
 
+That label is an SPDX License **expression** for what the image CONTAINS, so exactly two
+values are canonical:
+
+- `Apache-2.0` — the image contains core code only.
+- `Apache-2.0 AND LicenseRef-Correlix-Enterprise` — the image also contains commercial code.
+
+An image whose build context ingests any commercial_paths directory carries `mixed`. Every other Correlix image carries `core_only`. Over-claiming `mixed` on an image that contains no commercial code would wrongly tell a recipient that Apache-2.0 software is restricted — the same false claim, in the open direction, that the third_party_repackage rule prevents in the other.
+
 | Dockerfile | Label | Why |
 | --- | --- | --- |
-| `deployment/docker/Dockerfile.backend` | `Apache-2.0` | Builds the Go API from src/backend. |
+| `deployment/docker/Dockerfile.backend` | `Apache-2.0 AND LicenseRef-Correlix-Enterprise` | Builds the Go API from src/backend. `COPY src/backend/` takes the WHOLE backend tree, and main.go + ldap_wiring.go link the commercial packages src/backend/enterprise/dialects and src/backend/enterprise/sso/ldap into the one shipped binary (design of record §1: one repository, one binary, tiers are data). The image therefore contains software under both identifiers and its SPDX expression must say so; a bare Apache-2.0 label would understate what the customer receives. |
 | `deployment/docker/Dockerfile.correlation` | `Apache-2.0` | Builds the correlation engine from src/correlation. |
 | `deployment/docker/Dockerfile.frontend` | `Apache-2.0` | Bakes the built SPA and docs portal into nginx. |
 | `deployment/docker/Dockerfile.frontend.full` | `Apache-2.0` | Same image, building the SPA inside Docker. |

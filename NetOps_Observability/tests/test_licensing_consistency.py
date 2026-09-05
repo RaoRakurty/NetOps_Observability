@@ -143,6 +143,73 @@ def test_licence_notice_is_identical_at_both_roots_and_states_the_sentence():
     assert "LICENSES/Correlix-Enterprise.txt" in bodies[0]
 
 
+# The opening of the stock Apache-2.0 licence body and its own section heading.
+# Neither can appear in a MIXED-licence notice that is doing its job, and both
+# appear in the first screen of the real text — so they identify a LICENSE file
+# into which somebody has pasted the Apache text.
+STOCK_APACHE_MARKERS = (
+    "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
+    "Version 2.0, January 2004",
+    "http://www.apache.org/licenses/",
+)
+
+
+def test_root_licence_is_the_mixed_notice_and_not_the_stock_apache_text():
+    """RATIFIED 2026-09-05: the root LICENSE is the concise MIXED-licence notice.
+
+    The failure this pins is a specific and very easy one. `LICENSE` is the file
+    every tool, every mirror and every reader treats as the answer to "what is
+    this project", and the reflex when a repository says "Apache-2.0" is to drop
+    the stock 11 KB Apache text into it. Doing that here would be FALSE: it would
+    grant Apache-2.0 over `src/backend/enterprise/**`, which is not licensed to
+    anyone yet. The stock text has one home, `LICENSES/Apache-2.0.txt`, which
+    `test_apache_text_present_at_both_roots_and_matches_upstream` pins byte for
+    byte; `LICENSE` points at it and at the Enterprise text instead.
+
+    Asserted at BOTH roots, because the two copies are byte-identical by
+    contract and a reader may land on either.
+    """
+    for root in (REPO, PROJ):
+        path = root / "LICENSE"
+        body = path.read_text(encoding="utf-8")
+        where = path.relative_to(REPO)
+
+        # (a) It IS the mixed notice: both identifiers, in one statement, with
+        #     the commercial one named as a commercial/source-available add-on.
+        assert CANONICAL_SENTENCE in body, (
+            f"{where} does not state the mixed-licence sentence verbatim"
+        )
+        assert CORE_ID in body and COMMERCIAL_ID in body, (
+            f"{where} must name BOTH SPDX identifiers; a notice that names only one "
+            f"misdescribes the repository"
+        )
+        assert "Correlix Enterprise License" in body
+        # And it routes the reader to the detailed texts rather than inlining one.
+        assert "LICENSES/Apache-2.0.txt" in body
+        assert "LICENSES/Correlix-Enterprise.txt" in body
+
+        # (b) It is NOT the stock Apache-2.0 text — by digest and by content.
+        assert sha256(normalise(body)) != APACHE_2_0_SHA256, (
+            f"{where} IS the stock Apache-2.0 text. That would license the whole "
+            f"repository under Apache-2.0, including the commercial modules. The "
+            f"stock text belongs in LICENSES/Apache-2.0.txt; LICENSE is the mixed "
+            f"notice that points at it."
+        )
+        for marker in STOCK_APACHE_MARKERS:
+            assert marker not in body, (
+                f"{where} contains {marker!r}, which is stock Apache-2.0 licence "
+                f"body text. LICENSE is a concise mixed-licence NOTICE; the licence "
+                f"texts live under LICENSES/."
+            )
+        # Concise, not a licence text. The real Apache text is 11358 bytes; this
+        # notice is a page. The bound is deliberately loose — it fails on a
+        # pasted licence, not on an edited paragraph.
+        assert len(body) < 6000, (
+            f"{where} is {len(body)} bytes. The root notice is meant to be concise "
+            f"and point at LICENSES/; a file this long is probably a licence text."
+        )
+
+
 def test_enterprise_licence_text_is_still_an_undrafted_placeholder(policy):
     """A tripwire in both directions.
 
@@ -154,6 +221,11 @@ def test_enterprise_licence_text_is_still_an_undrafted_placeholder(policy):
     """
     blocker = next(b for b in policy["release_blockers"]["entries"]
                    if b["id"] == "enterprise-text-placeholder")
+    copies = [(root / blocker["file"]).read_text(encoding="utf-8") for root in (REPO, PROJ)]
+    assert copies[0] == copies[1], (
+        f"the two copies of {blocker['file']} differ. Both roots must carry the same "
+        f"file: a reader lands on either, and the release blocker is evaluated at both."
+    )
     for root in (REPO, PROJ):
         body = (root / blocker["file"]).read_text(encoding="utf-8")
         assert blocker["marker"] in body, (
@@ -462,17 +534,167 @@ def test_every_dockerfile_is_classified(policy):
     assert not ghosts, f"classified Dockerfiles that do not exist: {ghosts}"
 
 
+OCI_LABEL = "org.opencontainers.image.licenses"
+
+
+def oci_expressions(policy: dict) -> dict:
+    return policy["container_images"]["oci_licence_expressions"]
+
+
+def test_policy_defines_the_canonical_oci_licence_expressions(policy):
+    """One place defines what may appear in the label, and it is the policy.
+
+    Both values are duplicated here on purpose: a test that reads its expectation
+    from the file under test asserts nothing. Changing the expression is a
+    licensing decision and must break this test.
+    """
+    expr = oci_expressions(policy)
+    assert expr["core_only"] == CORE_ID
+    assert expr["mixed"] == f"{CORE_ID} AND {COMMERCIAL_ID}", (
+        "the mixed expression must be a valid SPDX expression naming both "
+        "identifiers, in the canonical order"
+    )
+    assert expr.get("rule", "").strip(), "the expression rule must be written down"
+
+
+def _logical_lines(body: str) -> list[str]:
+    """Dockerfile instructions with backslash continuations joined."""
+    return re.sub(r"\\\s*\n\s*", " ", body).split("\n")
+
+
+def context_copies(body: str) -> list[str]:
+    """Repo-relative source operands of every COPY that reads the build context.
+
+    `COPY --from=<stage>` reads an earlier stage, not the repository, and an
+    absolute source is likewise not a repo path — both are skipped. A glob is
+    skipped too: no glob in this tree reaches a commercial directory, and
+    guessing at one would make this test's answer depend on shell semantics
+    rather than on the licence boundary.
+    """
+    out: list[str] = []
+    for line in _logical_lines(body):
+        stripped = line.strip()
+        if not stripped.upper().startswith("COPY "):
+            continue
+        if "--from=" in stripped:
+            continue
+        tokens = [t for t in stripped.split()[1:] if not t.startswith("--")]
+        for src in tokens[:-1]:  # the last operand is the destination
+            if src.startswith("/") or any(c in src for c in "*?["):
+                continue
+            out.append(src.rstrip("/"))
+    return out
+
+
+def ingests_commercial_source(body: str, commercial: list[str]) -> bool:
+    """True if this Dockerfile copies a commercial directory into the image."""
+    for src in context_copies(body):
+        for path in commercial:
+            if src == path or path.startswith(src + "/") or src.startswith(path + "/"):
+                return True
+    return False
+
+
 def test_correlix_images_declare_their_licence(policy):
     """Only OUR images. A third-party base image we merely FROM is not ours to
     label; stamping the Correlix licence onto a repackaged OpenSearch or Vector
     image would be a false claim about somebody else's software."""
-    label = "org.opencontainers.image.licenses"
-    for entry in policy["container_images"]["ours"]:
+    ours = policy["container_images"]["ours"]
+    assert ours, "no Correlix images are classified; this test would assert nothing"
+    for entry in ours:
         body = (PROJ / entry["path"]).read_text(encoding="utf-8")
-        expected = f'{label}="{entry["licence"]}"'
+        expected = f'{OCI_LABEL}="{entry["licence"]}"'
         assert expected in body, (
             f"{entry['path']} builds a Correlix image but does not set {expected}"
         )
+
+
+def test_every_dockerfile_label_is_a_canonical_policy_expression(policy):
+    """Every Correlix image's label is EXACTLY one of the two canonical
+    expressions — no paraphrase, no third value, no drift.
+
+    Read off the Dockerfiles themselves rather than off the policy, so a label
+    edited in place without touching `licensing-policy.json` fails here.
+    """
+    expr = oci_expressions(policy)
+    canonical = {expr["core_only"], expr["mixed"]}
+    declared = {e["path"]: e["licence"] for e in policy["container_images"]["ours"]}
+
+    checked = 0
+    for path, licence in sorted(declared.items()):
+        assert licence in canonical, (
+            f"licensing-policy.json gives {path} the licence {licence!r}, which is "
+            f"not one of the canonical OCI expressions {sorted(canonical)}"
+        )
+        body = (PROJ / path).read_text(encoding="utf-8")
+        found = re.findall(rf'{re.escape(OCI_LABEL)}="([^"]*)"', body)
+        assert found, f"{path} builds a Correlix image but sets no {OCI_LABEL}"
+        assert len(set(found)) == 1, (
+            f"{path} sets {OCI_LABEL} more than once, with different values: {found}"
+        )
+        assert found[0] == licence, (
+            f'{path} labels the image "{found[0]}" but licensing-policy.json says '
+            f'"{licence}". The policy is the source of truth: fix the Dockerfile, or '
+            f"change the policy and re-run scripts/gen-licensing-map.py --write."
+        )
+        checked += 1
+
+    assert checked > 0, (
+        "no Dockerfile was checked — the discovery found nothing and this test "
+        "would pass on an empty tree"
+    )
+    # And discovery agrees with the policy: nothing labelled outside the list.
+    assert checked == len(discovered_dockerfiles(policy)) - len(
+        policy["container_images"]["third_party_repackage"]
+    ), "the set of Correlix Dockerfiles checked here is not the set on disk"
+
+
+def test_the_mixed_expression_is_used_exactly_where_the_image_contains_commercial_code(policy):
+    """The three-way check, and the one that cannot be satisfied by editing prose.
+
+    The right expression for an image is a FACT about the image: what does its
+    build copy in? So this derives the answer from each Dockerfile's own COPY
+    instructions and requires the policy and the label to match it.
+
+    It fails in both directions, and both are real risks:
+      * UNDER-claiming — a bare `Apache-2.0` on the api image, which links
+        `src/backend/enterprise/**` into the one shipped binary, tells a customer
+        they received only Apache-2.0 software when they did not.
+      * OVER-claiming — the mixed expression on an image with no commercial code,
+        which wrongly tells a recipient that Apache-2.0 software is restricted.
+        That is the same false claim the third-party-repackage rule prevents, in
+        the open direction.
+    """
+    expr = oci_expressions(policy)
+    commercial = [e["path"] for e in policy["commercial_paths"]["entries"]]
+    assert commercial, "no commercial paths — the derivation would prove nothing"
+
+    seen_mixed, seen_core = [], []
+    for entry in policy["container_images"]["ours"]:
+        body = (PROJ / entry["path"]).read_text(encoding="utf-8")
+        mixed = ingests_commercial_source(body, commercial)
+        want = expr["mixed"] if mixed else expr["core_only"]
+        (seen_mixed if mixed else seen_core).append(entry["path"])
+        assert entry["licence"] == want, (
+            f"{entry['path']} copies "
+            f"{'a commercial directory' if mixed else 'no commercial directory'} into "
+            f'the image, so its {OCI_LABEL} must be "{want}", but the policy declares '
+            f'"{entry["licence"]}".'
+        )
+        assert f'{OCI_LABEL}="{want}"' in body, (
+            f'{entry["path"]} must label the image "{want}"'
+        )
+
+    assert seen_mixed, (
+        "no Correlix image was derived as containing commercial code. Either the "
+        "enterprise/ boundary left the images entirely — in which case this suite "
+        "and licensing-policy.json need rewriting — or the COPY derivation above "
+        "stopped seeing it, which would make this test vacuous."
+    )
+    assert seen_core, (
+        "every Correlix image was derived as mixed; the core_only expression is "
+        "then unused and this test cannot catch over-claiming"
+    )
 
 
 def test_repackaged_images_are_not_falsely_labelled(policy):
@@ -594,8 +816,8 @@ def test_bundle_ships_the_licence_texts_its_footer_points_at():
     LICENSE, LICENSING.md and LICENSES/, so the build must copy all three — and
     must FAIL rather than ship a dangling reference if a source file is gone."""
     body = MAKE_INSTALLER.read_text(encoding="utf-8")
-    assert re.search(r'for f in LICENSE LICENSING\.md; do', body), (
-        "make-installer.sh must copy LICENSE and LICENSING.md into the bundle"
+    assert re.search(r'for f in LICENSE LICENSING\.md NOTICE; do', body), (
+        "make-installer.sh must copy LICENSE, LICENSING.md and NOTICE into the bundle"
     )
     assert re.search(r'cp -R "\$ROOT/LICENSES" "\$BUNDLE_DIR/LICENSES"', body), (
         "make-installer.sh must copy the LICENSES/ SPDX texts into the bundle"
@@ -609,6 +831,56 @@ def test_bundle_ships_the_licence_texts_its_footer_points_at():
     # And both texts must be non-empty in the bundle, by SPDX id.
     assert 'for t in Apache-2.0 Correlix-Enterprise; do' in body, (
         "the build must prove BOTH licence texts landed, by SPDX id"
+    )
+
+
+def test_bundle_ships_every_file_the_policy_says_it_must(policy):
+    """Closes the hole that let NOTICE go missing for a release.
+
+    `licensing-policy.json` names the files the installer bundle MUST carry, and
+    the gate's check H only proves each one EXISTS in the source tree. That is a
+    check about the repository, not about the artifact: NOTICE was listed as
+    required, was present in the tree, and was never copied into a bundle. So
+    this asserts the producer actually ships each named file, and that each one
+    lands inside the integrity manifest — an unmeasured file on the customer's
+    host is unverifiable.
+    """
+    art = next(a for a in policy["artifact_requirements"]["must_ship"]
+               if a["artifact"] == "installer bundle")
+    src = MAKE_INSTALLER.read_text(encoding="utf-8")
+    assert art["produced_by"] == "scripts/make-installer.sh"
+
+    copy_loop = re.search(r"for f in ([^;]+); do", src)
+    assert copy_loop, "make-installer.sh lost its verbatim licence-file copy loop"
+    copied = set(copy_loop.group(1).split())
+
+    sums = re.search(r'^\(cd "\$BUNDLE_DIR" && sha256sum (.+) > SHA256SUMS\)$', src, re.M)
+    assert sums, "make-installer.sh lost its SHA256SUMS line"
+    manifest = sums.group(1)
+
+    required = [r for r in art["requires"] if " " not in r]
+    assert required, "the policy requires no files of the bundle; it would assert nothing"
+    for want in required:
+        if want.startswith("LICENSES/"):
+            # The directory is copied wholesale and both texts are proved
+            # non-empty by the assertions above; the manifest globs them.
+            assert './LICENSES/*.txt' in manifest, (
+                f"{want} is required in the bundle but LICENSES/*.txt is outside "
+                f"SHA256SUMS"
+            )
+            continue
+        assert want in copied or f'"$ROOT/{want}"' in src, (
+            f"licensing-policy.json requires {want} in the installer bundle, but "
+            f"scripts/make-installer.sh never copies it. A required notice that "
+            f"does not reach the customer is not a notice."
+        )
+        assert re.search(rf'(?<![\w/]){re.escape(want)}(?![\w.])', manifest) \
+            or want.endswith(".md"), (   # LICENSING.md and friends: caught by ./*.md
+            f"{want} ships in the bundle but is outside SHA256SUMS"
+        )
+    assert "*.md" in manifest, (
+        "SHA256SUMS no longer globs ./*.md, so the markdown notices it used to "
+        "cover are now unmeasured"
     )
 
 
