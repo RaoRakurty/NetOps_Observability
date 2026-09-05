@@ -42,6 +42,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -88,8 +89,8 @@ CLASS_PROTOCOLS = {
     "bgp", "ospf", "isis", "interface", "l2", "overlay", "mpls", "qos",
     "hardware", "system", "config", "generic",
 }
-PLACEHOLDERS = {"{if}", "{peer}", "{prefix}", "{vrf-scope}", "{rid}", "{area}",
-                "{vlan}", "{vni}"}
+PLACEHOLDERS = {"{if}", "{peer}", "{prefix}", "{vrf-scope}", "{vrf-name}",
+                "{rid}", "{area}", "{vlan}", "{vni}"}
 READ_ONLY_LEAD = {"show", "display", "get", "info"}
 READ_ONLY_FILTER = {
     "include", "i", "exclude", "e", "begin", "b", "section", "count",
@@ -713,7 +714,21 @@ PLACEHOLDER_ALIASES = {
     "neighbour": "{peer}", "peer-address": "{peer}",
     "prefix": "{prefix}", "destination-prefix": "{prefix}", "network": "{prefix}",
     "ip-prefix": "{prefix}", "route": "{prefix}",
-    "vrf": "{vrf-scope}", "vrf-name": "{vrf-scope}", "instance": "{vrf-scope}",
+    # The VRF concept. `<vrf-name>` is written by research that spells the
+    # command with the name AFTER a word that is not the dialect's scoping
+    # keyword ("show route extensive table <vrf-name>"), so it folds onto the
+    # BARE token; everything else takes the keyword-emitting one and
+    # shape_vrf_scope() below decides which of the two the command needs.
+    #
+    # `instance` is DELIBERATELY ABSENT. It is the most overloaded word in the
+    # corpus — an EIGRP instance tag, an MST instance id, an OSPF process tag
+    # and an IS-IS instance name are all written `<instance>` by the research,
+    # and NONE of them is a VRF. Folding it onto the VRF token scoped those
+    # commands by the wrong value (tracker row 261); Correlix has no source for
+    # any of them, so the record is REFUSED and the honest unscoped command is
+    # authored by hand instead. A research file that really means the VRF says
+    # `<routing-instance>`, `<network-instance>` or `<vrf>`.
+    "vrf": "{vrf-scope}", "vrf-name": "{vrf-name}",
     "routing-instance": "{vrf-scope}", "routing-instance-name": "{vrf-scope}",
     "virtual-router": "{vrf-scope}", "logical-router": "{vrf-scope}",
     "ni": "{vrf-scope}", "network-instance": "{vrf-scope}",
@@ -723,6 +738,96 @@ PLACEHOLDER_ALIASES = {
     "vlan": "{vlan}", "vlan-id": "{vlan}",
     "vni": "{vni}",
 }
+
+# ── the VRF-scoping contract (ai/tac/README.md §2, tracker row 261) ──────────
+#
+# `{vrf-scope}` EMITS the dialect's scoping keyword ahead of the instance name.
+# A template must therefore NOT spell that keyword itself, or a scoped
+# collection renders `show ip route vrf vrf CUST-A` — a command every one of
+# those devices rejects. Vendor research is written the way the vendor's own
+# reference PRINTS the command, keyword and all, so the shaping happens HERE,
+# once, on the way in; row 261 is what a merge without it produced.
+#
+# The keyword is not this script's to invent. It is `dialect.vrf_scope_keyword`
+# in internal/vendorprofile/profiles/<vendor>.json — the same field internal/tac
+# resolves onto the plan at load. Re-typing it here would guarantee drift
+# between what the merge writes and what the engine renders.
+
+VENDORPROFILE_DIR = os.path.join(BACKEND, "internal", "vendorprofile", "profiles")
+
+# The scoping words the corpus spells. A literal from this set immediately
+# before the placeholder is a qualifier the research wrote out; anything else is
+# part of the command's name.
+VRF_QUALIFIER_WORDS = {
+    "vrf", "instance", "vpn-instance", "routing-instance", "network-instance",
+    "logical-router", "virtual-router",
+}
+
+_VRF_KEYWORDS: dict = {}
+
+
+def vrf_scope_keyword(dialect: str) -> str:
+    """The keyword `{vrf-scope}` emits on this dialect, read from the registry.
+
+    An EMPTY string is an authored answer, not a missing one: SR Linux, SR OS
+    and PAN-OS carry their own word in the command and take the bare name.
+    """
+    if dialect in _VRF_KEYWORDS:
+        return _VRF_KEYWORDS[dialect]
+    profile = DIALECT_PROFILES.get(dialect)
+    if profile is None:
+        raise Refusal(f"{dialect}: not a dialect this platform recognises, so its VRF "
+                      "scoping keyword cannot be resolved")
+    vendor = profile[0].split("/", 1)[0]
+    path = os.path.join(VENDORPROFILE_DIR, vendor + ".json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except OSError as err:
+        raise Refusal(f"{dialect}: vendor profile {vendor}.json is unreadable ({err}); the "
+                      "VRF scoping keyword is registry data and cannot be guessed") from err
+    kw = str((doc.get("dialect") or {}).get("vrf_scope_keyword", "") or "").strip()
+    _VRF_KEYWORDS[dialect] = kw
+    return kw
+
+
+def shape_vrf_scope(cmd: str, dialect: str) -> str:
+    """Apply the contract to one normalised command.
+
+    Three cases, in order:
+
+      1. the dialect's OWN keyword sits immediately before `{vrf-scope}` — the
+         placeholder emits it, so the literal is DROPPED;
+      2. some OTHER scoping word sits there (`display bgp instance <name>` on
+         VRP, whose keyword is `vpn-instance`) — the command carries its own
+         word, so the placeholder becomes the BARE `{vrf-name}`;
+      3. the keyword is still standing as a literal elsewhere in the command
+         (`show ip vrf detail <name>`), which means it is part of the command's
+         NAME rather than a qualifier — the placeholder becomes `{vrf-name}`.
+
+    A dialect whose authored keyword is empty is returned untouched: its
+    `{vrf-scope}` already renders the bare name.
+    """
+    kw = vrf_scope_keyword(dialect)
+    if not kw or "{vrf-scope}" not in cmd:
+        return cmd
+    out: list = []
+    for tok in cmd.split():
+        if tok == "{vrf-scope}" and out:
+            prev = out[-1].lower()
+            if prev == kw:
+                out.pop()
+                out.append(tok)
+                continue
+            if prev in VRF_QUALIFIER_WORDS:
+                out.append("{vrf-name}")
+                continue
+        out.append(tok)
+    toks = [t.lower() for t in out]
+    if "{vrf-scope}" in out and kw in toks:
+        out = ["{vrf-name}" if t == "{vrf-scope}" else t for t in out]
+    return " ".join(out)
+
 
 # ── (2) the documented-status-read allowlist ─────────────────────────────────
 #
@@ -910,11 +1015,14 @@ class Report:
         return "\n".join(lines)
 
 
-def normalise_command(raw: str, params, what: str) -> str:
+def normalise_command(raw: str, params, what: str, dialect: str) -> str:
     """Turn a research `cmd` into a command-table template.
 
     `<x>` becomes `{x}` for the placeholders Correlix can fill; any other
     `<...>` is a value Correlix has no source for and the record is refused.
+    The VRF placeholder is then SHAPED to the contract for this dialect
+    (shape_vrf_scope): the vendor's own keyword is spelled by exactly one of the
+    template and the placeholder, never by both.
     """
     cmd = " ".join(str(raw).split())
     if not cmd:
@@ -945,6 +1053,7 @@ def normalise_command(raw: str, params, what: str) -> str:
     cmd = re.sub(r"\{([A-Za-z0-9_.-]+)\}", sub_brace, cmd)
     if "<" in cmd or ">" in cmd:
         raise Refusal(f"{what}: unbalanced or unsupported placeholder syntax")
+    cmd = shape_vrf_scope(cmd, dialect)
     # Any {token} that survived must be in the closed set.
     for tok in cmd.split():
         if tok.startswith("{"):
@@ -953,8 +1062,15 @@ def normalise_command(raw: str, params, what: str) -> str:
             if tok not in PLACEHOLDERS:
                 raise Refusal(f"{what}: placeholder {tok!r} is outside the closed substitution grammar")
     if params:
-        declared = {PLACEHOLDER_ALIASES.get(str(p).lower()) for p in params}
-        present = {t for t in cmd.split() if t.startswith("{")}
+        # `{vrf-name}` and `{vrf-scope}` are ONE concept in two renderings (the
+        # bare instance name, with or without the dialect's keyword in front),
+        # and which one a command needs is decided by shape_vrf_scope, not by
+        # the research. Comparing them apart would refuse a correctly shaped
+        # command for disagreeing with its own `params` list.
+        def vrf_fold(tokens):
+            return {"{vrf-scope}" if t == "{vrf-name}" else t for t in tokens}
+        declared = vrf_fold({PLACEHOLDER_ALIASES.get(str(p).lower()) for p in params})
+        present = vrf_fold({t for t in cmd.split() if t.startswith("{")})
         if None not in declared and declared != present and present:
             # A params list that disagrees with the command is a research bug, not
             # something to guess at.
@@ -1106,7 +1222,7 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
                 continue
             writes_file = str(entry.get("writes_file", "")).lower() == "true"
             try:
-                cmd = normalise_command(raw, entry.get("params"), what)
+                cmd = normalise_command(raw, entry.get("params"), what, dialect)
             except Refusal as err:
                 msg = str(err)
                 reason = msg.split(": ", 1)[-1] if ": " in msg else msg

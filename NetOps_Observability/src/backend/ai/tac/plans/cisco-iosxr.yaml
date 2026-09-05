@@ -259,19 +259,19 @@ bindings:
     command: show bgp all all process performance-statistics detail
     verified: doc_claimed
   bgp.vrf.table:
-    command: 'show bgp vrf {vrf-scope} ipv4 unicast'
+    command: 'show bgp {vrf-scope} ipv4 unicast'
     verified: doc_claimed
   bgp.vrf.prefix.entry:
-    command: 'show bgp vrf {vrf-scope} ipv4 unicast {prefix}'
+    command: 'show bgp {vrf-scope} ipv4 unicast {prefix}'
     verified: doc_claimed
   bgp.label.bindings:
     command: show bgp labels
     verified: doc_claimed
   fib.vrf.lookup:
-    command: 'show cef vrf {vrf-scope} ipv4 {prefix} detail'
+    command: 'show cef {vrf-scope} ipv4 {prefix} detail'
     verified: doc_claimed
   mpls.vrf.forwarding:
-    command: 'show mpls forwarding vrf {vrf-scope}'
+    command: 'show mpls forwarding {vrf-scope}'
     verified: doc_claimed
   bgp.summary.vpnv4:
     command: show bgp summary
@@ -486,7 +486,7 @@ bindings:
     command: show rpl extcommunity-set
     verified: doc_claimed
   rib.vrf.lookup:
-    command: 'show route vrf {vrf-scope} ipv4 unicast {prefix}'
+    command: 'show route {vrf-scope} ipv4 unicast {prefix}'
     verified: doc_claimed
   ldp.neighbor.list:
     command: show mpls ldp neighbor

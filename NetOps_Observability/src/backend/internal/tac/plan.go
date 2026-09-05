@@ -413,6 +413,7 @@ func renderCommand(tmpl, vrfKeyword string, tgt Target) string {
 		"{rid}", arg(tgt.RouterID),
 		"{area}", arg(tgt.Area),
 		"{vrf-scope}", vrfScope(vrfKeyword, arg(tgt.VRF)),
+		"{vrf-name}", arg(tgt.VRF),
 	).Replace(tmpl)
 	return strings.Join(strings.Fields(out), " ")
 }
@@ -423,6 +424,14 @@ func renderCommand(tmpl, vrfKeyword string, tgt Target) string {
 // at load) — never a switch here, so a new dialect arrives as profile data
 // rather than a code edit. An empty keyword is the authored "bare name" answer:
 // that dialect's own templates already carry whatever keyword the CLI needs.
+//
+// THE TEMPLATE CONTRACT (ai/tac/README.md §2, tracker row 261): `{vrf-scope}`
+// EMITS the keyword, so a template must NOT spell it as well — `show ip route
+// vrf {vrf-scope}` rendered `show ip route vrf vrf CUST-A`, which every one of
+// those devices rejects. A command whose CLI puts the instance name after a word
+// that is not the dialect's scoping keyword (`show ip vrf detail <name>`,
+// `show route extensive table <name>`) takes `{vrf-name}` — the same value,
+// rendered bare — rather than being bent onto `{vrf-scope}`.
 func vrfScope(keyword, vrf string) string {
 	if vrf == "" {
 		return ""

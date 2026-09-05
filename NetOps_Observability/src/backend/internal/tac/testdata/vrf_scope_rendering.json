@@ -1,12 +1,12 @@
 {
-  "note": "PRE-tracker-248 rendering of every {vrf-scope} plan command, captured from the retired vrfScope() switch in internal/tac/plan.go.",
+  "note": "REVIEWED golden: the rendering of every TAC plan command carrying {vrf-scope} or {vrf-name}, with a VRF and without one. Captured after tracker row 261 removed the doubled scoping keyword from the templates; the retired golden (testdata/vrf_scope_parity.json) pinned that defect, including four PAN-OS rows re-rendered by row 248. Re-capture ONLY with a reviewed data change: every scoped line here is a command that will be typed at someone's device.",
   "rows": [
     {
       "dialect": "arista-eos",
       "intent": "bgp.vrf.routes",
-      "template": "show ip bgp vrf {vrf-scope}",
-      "scoped": "show ip bgp vrf vrf CUST-A",
-      "unscoped": "show ip bgp vrf"
+      "template": "show ip bgp {vrf-scope}",
+      "scoped": "show ip bgp vrf CUST-A",
+      "unscoped": "show ip bgp"
     },
     {
       "dialect": "arista-eos",
@@ -18,142 +18,121 @@
     {
       "dialect": "cisco-iosxe",
       "intent": "bgp.vpnv4.prefix_in_vrf",
-      "template": "show ip bgp vpnv4 vrf {vrf-scope} {prefix}",
-      "scoped": "show ip bgp vpnv4 vrf vrf CUST-A 10.0.0.0/24",
-      "unscoped": "show ip bgp vpnv4 vrf 10.0.0.0/24"
+      "template": "show ip bgp vpnv4 {vrf-scope} {prefix}",
+      "scoped": "show ip bgp vpnv4 vrf CUST-A 10.0.0.0/24",
+      "unscoped": "show ip bgp vpnv4 10.0.0.0/24"
     },
     {
       "dialect": "cisco-iosxe",
       "intent": "vrf.cef.label_stack",
-      "template": "show ip cef vrf {vrf-scope} detail",
-      "scoped": "show ip cef vrf vrf CUST-A detail",
-      "unscoped": "show ip cef vrf detail"
+      "template": "show ip cef {vrf-scope} detail",
+      "scoped": "show ip cef vrf CUST-A detail",
+      "unscoped": "show ip cef detail"
     },
     {
       "dialect": "cisco-iosxe",
       "intent": "vrf.path",
-      "template": "traceroute vrf {vrf-scope} {prefix}",
-      "scoped": "traceroute vrf vrf CUST-A 10.0.0.0/24",
-      "unscoped": "traceroute vrf 10.0.0.0/24"
+      "template": "traceroute {vrf-scope} {prefix}",
+      "scoped": "traceroute vrf CUST-A 10.0.0.0/24",
+      "unscoped": "traceroute 10.0.0.0/24"
     },
     {
       "dialect": "cisco-iosxe",
       "intent": "vrf.rd_and_route_targets",
-      "template": "show ip vrf detail {vrf-scope}",
-      "scoped": "show ip vrf detail vrf CUST-A",
+      "template": "show ip vrf detail {vrf-name}",
+      "scoped": "show ip vrf detail CUST-A",
       "unscoped": "show ip vrf detail"
     },
     {
       "dialect": "cisco-iosxe",
       "intent": "vrf.reachability",
-      "template": "ping vrf {vrf-scope} {prefix}",
-      "scoped": "ping vrf vrf CUST-A 10.0.0.0/24",
-      "unscoped": "ping vrf 10.0.0.0/24"
+      "template": "ping {vrf-scope} {prefix}",
+      "scoped": "ping vrf CUST-A 10.0.0.0/24",
+      "unscoped": "ping 10.0.0.0/24"
     },
     {
       "dialect": "cisco-iosxe",
       "intent": "vrf.rib.lookup",
-      "template": "show ip route vrf {vrf-scope} {prefix}",
-      "scoped": "show ip route vrf vrf CUST-A 10.0.0.0/24",
-      "unscoped": "show ip route vrf 10.0.0.0/24"
+      "template": "show ip route {vrf-scope} {prefix}",
+      "scoped": "show ip route vrf CUST-A 10.0.0.0/24",
+      "unscoped": "show ip route 10.0.0.0/24"
     },
     {
       "dialect": "cisco-iosxr",
       "intent": "bgp.vrf.prefix.entry",
-      "template": "show bgp vrf {vrf-scope} ipv4 unicast {prefix}",
-      "scoped": "show bgp vrf vrf CUST-A ipv4 unicast 10.0.0.0/24",
-      "unscoped": "show bgp vrf ipv4 unicast 10.0.0.0/24"
+      "template": "show bgp {vrf-scope} ipv4 unicast {prefix}",
+      "scoped": "show bgp vrf CUST-A ipv4 unicast 10.0.0.0/24",
+      "unscoped": "show bgp ipv4 unicast 10.0.0.0/24"
     },
     {
       "dialect": "cisco-iosxr",
       "intent": "bgp.vrf.table",
-      "template": "show bgp vrf {vrf-scope} ipv4 unicast",
-      "scoped": "show bgp vrf vrf CUST-A ipv4 unicast",
-      "unscoped": "show bgp vrf ipv4 unicast"
+      "template": "show bgp {vrf-scope} ipv4 unicast",
+      "scoped": "show bgp vrf CUST-A ipv4 unicast",
+      "unscoped": "show bgp ipv4 unicast"
     },
     {
       "dialect": "cisco-iosxr",
       "intent": "fib.vrf.lookup",
-      "template": "show cef vrf {vrf-scope} ipv4 {prefix} detail",
-      "scoped": "show cef vrf vrf CUST-A ipv4 10.0.0.0/24 detail",
-      "unscoped": "show cef vrf ipv4 10.0.0.0/24 detail"
+      "template": "show cef {vrf-scope} ipv4 {prefix} detail",
+      "scoped": "show cef vrf CUST-A ipv4 10.0.0.0/24 detail",
+      "unscoped": "show cef ipv4 10.0.0.0/24 detail"
     },
     {
       "dialect": "cisco-iosxr",
       "intent": "mpls.vrf.forwarding",
-      "template": "show mpls forwarding vrf {vrf-scope}",
-      "scoped": "show mpls forwarding vrf vrf CUST-A",
-      "unscoped": "show mpls forwarding vrf"
+      "template": "show mpls forwarding {vrf-scope}",
+      "scoped": "show mpls forwarding vrf CUST-A",
+      "unscoped": "show mpls forwarding"
     },
     {
       "dialect": "cisco-iosxr",
       "intent": "rib.vrf.lookup",
-      "template": "show route vrf {vrf-scope} ipv4 unicast {prefix}",
-      "scoped": "show route vrf vrf CUST-A ipv4 unicast 10.0.0.0/24",
-      "unscoped": "show route vrf ipv4 unicast 10.0.0.0/24"
+      "template": "show route {vrf-scope} ipv4 unicast {prefix}",
+      "scoped": "show route vrf CUST-A ipv4 unicast 10.0.0.0/24",
+      "unscoped": "show route ipv4 unicast 10.0.0.0/24"
     },
     {
       "dialect": "cisco-nxos",
       "intent": "bgp.summary.vrf",
-      "template": "show bgp all summary vrf {vrf-scope}",
-      "scoped": "show bgp all summary vrf vrf CUST-A",
-      "unscoped": "show bgp all summary vrf"
+      "template": "show bgp all summary {vrf-scope}",
+      "scoped": "show bgp all summary vrf CUST-A",
+      "unscoped": "show bgp all summary"
     },
     {
       "dialect": "cisco-nxos",
       "intent": "bgp.vrf.table",
-      "template": "show bgp vrf {vrf-scope} ipv4 unicast",
-      "scoped": "show bgp vrf vrf CUST-A ipv4 unicast",
-      "unscoped": "show bgp vrf ipv4 unicast"
+      "template": "show bgp {vrf-scope} ipv4 unicast",
+      "scoped": "show bgp vrf CUST-A ipv4 unicast",
+      "unscoped": "show bgp ipv4 unicast"
     },
     {
       "dialect": "cisco-nxos",
       "intent": "eigrp.accounting",
-      "template": "show ip eigrp {vrf-scope} accounting vrf {vrf-scope}",
-      "scoped": "show ip eigrp vrf CUST-A accounting vrf vrf CUST-A",
-      "unscoped": "show ip eigrp accounting vrf"
-    },
-    {
-      "dialect": "cisco-nxos",
-      "intent": "eigrp.interfaces.detail",
-      "template": "show ip eigrp {vrf-scope} interfaces {if} detail",
-      "scoped": "show ip eigrp vrf CUST-A interfaces Ethernet1/1 detail",
-      "unscoped": "show ip eigrp interfaces Ethernet1/1 detail"
-    },
-    {
-      "dialect": "cisco-nxos",
-      "intent": "eigrp.neighbors.detail",
-      "template": "show ip eigrp {vrf-scope} neighbors {if} detail",
-      "scoped": "show ip eigrp vrf CUST-A neighbors Ethernet1/1 detail",
-      "unscoped": "show ip eigrp neighbors Ethernet1/1 detail"
-    },
-    {
-      "dialect": "cisco-nxos",
-      "intent": "eigrp.topology.active",
-      "template": "show ip eigrp {vrf-scope} topology {prefix} active",
-      "scoped": "show ip eigrp vrf CUST-A topology 10.0.0.0/24 active",
-      "unscoped": "show ip eigrp topology 10.0.0.0/24 active"
+      "template": "show ip eigrp accounting {vrf-scope}",
+      "scoped": "show ip eigrp accounting vrf CUST-A",
+      "unscoped": "show ip eigrp accounting"
     },
     {
       "dialect": "cisco-nxos",
       "intent": "eigrp.traffic.counters",
-      "template": "show ip eigrp {vrf-scope} traffic vrf {vrf-scope}",
-      "scoped": "show ip eigrp vrf CUST-A traffic vrf vrf CUST-A",
-      "unscoped": "show ip eigrp traffic vrf"
+      "template": "show ip eigrp traffic {vrf-scope}",
+      "scoped": "show ip eigrp traffic vrf CUST-A",
+      "unscoped": "show ip eigrp traffic"
     },
     {
       "dialect": "cisco-nxos",
       "intent": "evpn.vtep.route",
-      "template": "show bgp l2vpn evpn {prefix} vrf {vrf-scope}",
-      "scoped": "show bgp l2vpn evpn 10.0.0.0/24 vrf vrf CUST-A",
-      "unscoped": "show bgp l2vpn evpn 10.0.0.0/24 vrf"
+      "template": "show bgp l2vpn evpn {prefix} {vrf-scope}",
+      "scoped": "show bgp l2vpn evpn 10.0.0.0/24 vrf CUST-A",
+      "unscoped": "show bgp l2vpn evpn 10.0.0.0/24"
     },
     {
       "dialect": "cisco-nxos",
       "intent": "fib.inconsistency",
-      "template": "show forwarding ipv4 unicast inconsistency vrf {vrf-scope} module all",
-      "scoped": "show forwarding ipv4 unicast inconsistency vrf vrf CUST-A module all",
-      "unscoped": "show forwarding ipv4 unicast inconsistency vrf module all"
+      "template": "show forwarding ipv4 unicast inconsistency {vrf-scope} module all",
+      "scoped": "show forwarding ipv4 unicast inconsistency vrf CUST-A module all",
+      "unscoped": "show forwarding ipv4 unicast inconsistency module all"
     },
     {
       "dialect": "cisco-nxos",
@@ -165,92 +144,85 @@
     {
       "dialect": "cisco-nxos",
       "intent": "pim.grouprange",
-      "template": "show ip pim group-range vrf {vrf-scope}",
-      "scoped": "show ip pim group-range vrf vrf CUST-A",
-      "unscoped": "show ip pim group-range vrf"
+      "template": "show ip pim group-range {vrf-scope}",
+      "scoped": "show ip pim group-range vrf CUST-A",
+      "unscoped": "show ip pim group-range"
     },
     {
       "dialect": "cisco-nxos",
       "intent": "rib.adjacency.detail",
-      "template": "show ip adjacency {prefix} detail vrf {vrf-scope}",
-      "scoped": "show ip adjacency 10.0.0.0/24 detail vrf vrf CUST-A",
-      "unscoped": "show ip adjacency 10.0.0.0/24 detail vrf"
-    },
-    {
-      "dialect": "cisco-nxos",
-      "intent": "stp.mst.port.detail",
-      "template": "show spanning-tree mst {vrf-scope} interface {if} detail",
-      "scoped": "show spanning-tree mst vrf CUST-A interface Ethernet1/1 detail",
-      "unscoped": "show spanning-tree mst interface Ethernet1/1 detail"
+      "template": "show ip adjacency {prefix} detail {vrf-scope}",
+      "scoped": "show ip adjacency 10.0.0.0/24 detail vrf CUST-A",
+      "unscoped": "show ip adjacency 10.0.0.0/24 detail"
     },
     {
       "dialect": "cisco-nxos",
       "intent": "underlay.bgp.advertised",
-      "template": "show ip bgp {prefix} vrf {vrf-scope}",
-      "scoped": "show ip bgp 10.0.0.0/24 vrf vrf CUST-A",
-      "unscoped": "show ip bgp 10.0.0.0/24 vrf"
+      "template": "show ip bgp {prefix} {vrf-scope}",
+      "scoped": "show ip bgp 10.0.0.0/24 vrf CUST-A",
+      "unscoped": "show ip bgp 10.0.0.0/24"
     },
     {
       "dialect": "cisco-nxos",
       "intent": "underlay.route.remote_vtep",
-      "template": "show ip route {prefix} vrf {vrf-scope}",
-      "scoped": "show ip route 10.0.0.0/24 vrf vrf CUST-A",
-      "unscoped": "show ip route 10.0.0.0/24 vrf"
+      "template": "show ip route {prefix} {vrf-scope}",
+      "scoped": "show ip route 10.0.0.0/24 vrf CUST-A",
+      "unscoped": "show ip route 10.0.0.0/24"
     },
     {
       "dialect": "huawei-vrp",
       "intent": "bgp.route.vrf",
-      "template": "display bgp vpnv4 vpn-instance {vrf-scope} routing-table {prefix}",
-      "scoped": "display bgp vpnv4 vpn-instance vpn-instance CUST-A routing-table 10.0.0.0/24",
-      "unscoped": "display bgp vpnv4 vpn-instance routing-table 10.0.0.0/24"
+      "template": "display bgp vpnv4 {vrf-scope} routing-table {prefix}",
+      "scoped": "display bgp vpnv4 vpn-instance CUST-A routing-table 10.0.0.0/24",
+      "unscoped": "display bgp vpnv4 routing-table 10.0.0.0/24"
     },
     {
       "dialect": "huawei-vrp",
       "intent": "config.vrf",
-      "template": "display current-configuration configuration vpn-instance {vrf-scope}",
-      "scoped": "display current-configuration configuration vpn-instance vpn-instance CUST-A",
-      "unscoped": "display current-configuration configuration vpn-instance"
+      "template": "display current-configuration configuration {vrf-scope}",
+      "scoped": "display current-configuration configuration vpn-instance CUST-A",
+      "unscoped": "display current-configuration configuration"
     },
     {
       "dialect": "huawei-vrp",
       "intent": "evpn.routes.filtered",
-      "template": "display bgp instance {vrf-scope} evpn all routing-table | include {prefix}",
-      "scoped": "display bgp instance vpn-instance CUST-A evpn all routing-table | include 10.0.0.0/24",
+      "template": "display bgp instance {vrf-name} evpn all routing-table | include {prefix}",
+      "scoped": "display bgp instance CUST-A evpn all routing-table | include 10.0.0.0/24",
       "unscoped": "display bgp instance evpn all routing-table | include 10.0.0.0/24"
     },
     {
       "dialect": "huawei-vrp",
       "intent": "route.prefix.vrf",
-      "template": "display ip routing-table vpn-instance {vrf-scope} {prefix}",
-      "scoped": "display ip routing-table vpn-instance vpn-instance CUST-A 10.0.0.0/24",
-      "unscoped": "display ip routing-table vpn-instance 10.0.0.0/24"
+      "template": "display ip routing-table {vrf-scope} {prefix}",
+      "scoped": "display ip routing-table vpn-instance CUST-A 10.0.0.0/24",
+      "unscoped": "display ip routing-table 10.0.0.0/24"
     },
     {
       "dialect": "huawei-vrp",
       "intent": "route.prefix.vrf.detail",
-      "template": "display ip routing-table vpn-instance {vrf-scope} {prefix} verbose",
-      "scoped": "display ip routing-table vpn-instance vpn-instance CUST-A 10.0.0.0/24 verbose",
-      "unscoped": "display ip routing-table vpn-instance 10.0.0.0/24 verbose"
+      "template": "display ip routing-table {vrf-scope} {prefix} verbose",
+      "scoped": "display ip routing-table vpn-instance CUST-A 10.0.0.0/24 verbose",
+      "unscoped": "display ip routing-table 10.0.0.0/24 verbose"
     },
     {
       "dialect": "huawei-vrp",
       "intent": "route.table.vrf",
-      "template": "display ip routing-table vpn-instance {vrf-scope}",
-      "scoped": "display ip routing-table vpn-instance vpn-instance CUST-A",
-      "unscoped": "display ip routing-table vpn-instance"
+      "template": "display ip routing-table {vrf-scope}",
+      "scoped": "display ip routing-table vpn-instance CUST-A",
+      "unscoped": "display ip routing-table"
     },
     {
       "dialect": "juniper-junos",
       "intent": "ospf.neighbors.instance",
-      "template": "show ospf neighbor instance {vrf-scope}",
-      "scoped": "show ospf neighbor instance instance CUST-A",
-      "unscoped": "show ospf neighbor instance"
+      "template": "show ospf neighbor {vrf-scope}",
+      "scoped": "show ospf neighbor instance CUST-A",
+      "unscoped": "show ospf neighbor"
     },
     {
       "dialect": "juniper-junos",
       "intent": "vrf.routes.extensive",
-      "template": "show route extensive table {vrf-scope}",
-      "scoped": "show route extensive table instance CUST-A",
+      "template": "show route extensive table {vrf-name}",
+      "scoped": "show route extensive table CUST-A",
       "unscoped": "show route extensive table"
     },
     {
@@ -403,8 +375,8 @@
     {
       "dialect": "nokia-srlinux",
       "intent": "isis.instance.state",
-      "template": "info from state network-instance {vrf-scope} protocols isis instance {vrf-scope}",
-      "scoped": "info from state network-instance CUST-A protocols isis instance CUST-A",
+      "template": "info from state network-instance {vrf-scope} protocols isis instance",
+      "scoped": "info from state network-instance CUST-A protocols isis instance",
       "unscoped": "info from state network-instance protocols isis instance"
     },
     {
@@ -544,37 +516,29 @@
       "dialect": "paloalto-panos",
       "intent": "bgp.peer.detail",
       "template": "show advanced-routing bgp peer status peer-name {peer} logical-router {vrf-scope}",
-      "scoped": "show advanced-routing bgp peer status peer-name 10.1.1.1 logical-router vrf CUST-A",
+      "scoped": "show advanced-routing bgp peer status peer-name 10.1.1.1 logical-router CUST-A",
       "unscoped": "show advanced-routing bgp peer status peer-name 10.1.1.1 logical-router"
     },
     {
       "dialect": "paloalto-panos",
       "intent": "bgp.summary",
       "template": "show advanced-routing bgp summary logical-router {vrf-scope}",
-      "scoped": "show advanced-routing bgp summary logical-router vrf CUST-A",
+      "scoped": "show advanced-routing bgp summary logical-router CUST-A",
       "unscoped": "show advanced-routing bgp summary logical-router"
     },
     {
       "dialect": "paloalto-panos",
       "intent": "route.fib.lookup",
       "template": "show routing fib virtual-router {vrf-scope} | match {prefix}",
-      "scoped": "show routing fib virtual-router vrf CUST-A | match 10.0.0.0/24",
+      "scoped": "show routing fib virtual-router CUST-A | match 10.0.0.0/24",
       "unscoped": "show routing fib virtual-router | match 10.0.0.0/24"
     },
     {
       "dialect": "paloalto-panos",
       "intent": "route.logicalrouter",
       "template": "show advanced-routing logical-router {vrf-scope}",
-      "scoped": "show advanced-routing logical-router vrf CUST-A",
+      "scoped": "show advanced-routing logical-router CUST-A",
       "unscoped": "show advanced-routing logical-router"
     }
-  ],
-  "target_scoped": {
-    "area": "0",
-    "interface": "Ethernet1/1",
-    "peer": "10.1.1.1",
-    "prefix": "10.0.0.0/24",
-    "router_id": "1.1.1.1",
-    "vrf": "CUST-A"
-  }
+  ]
 }

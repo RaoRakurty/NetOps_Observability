@@ -988,7 +988,7 @@ bindings:
     command: 'show network-instance {vrf-scope} protocols isis interface {if} detail'
     verified: doc_claimed
   isis.instance.state:
-    command: 'info from state network-instance {vrf-scope} protocols isis instance {vrf-scope}'
+    command: 'info from state network-instance {vrf-scope} protocols isis instance'
     verified: doc_claimed
   isis.database:
     command: 'show network-instance {vrf-scope} protocols isis database'

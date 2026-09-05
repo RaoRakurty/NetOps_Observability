@@ -130,7 +130,8 @@ const (
 // mirrors internal/protocoldiag/commandtable.go deliberately.
 var placeholders = map[string]struct{}{
 	"{if}": {}, "{peer}": {}, "{prefix}": {}, "{vrf-scope}": {},
-	"{rid}": {}, "{area}": {}, "{vlan}": {}, "{vni}": {},
+	"{vrf-name}": {},
+	"{rid}":      {}, "{area}": {}, "{vlan}": {}, "{vni}": {},
 }
 
 // vrfQualifiers are the dialect keywords a {vrf-scope} may emit ahead of the

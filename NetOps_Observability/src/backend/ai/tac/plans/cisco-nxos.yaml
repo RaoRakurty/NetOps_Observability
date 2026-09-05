@@ -326,7 +326,7 @@ bindings:
     command: show running-config spanning-tree all
     verified: doc_claimed
   stp.mst.port.detail:
-    command: 'show spanning-tree mst {vrf-scope} interface {if} detail'
+    command: 'show spanning-tree mst interface {if} detail'
     verified: doc_claimed
   interface.errdisabled:
     command: show interface status err-disabled
@@ -446,16 +446,16 @@ bindings:
     command: show ip bgp vpnv4 vrf all
     verified: doc_claimed
   bgp.summary.vrf:
-    command: 'show bgp all summary vrf {vrf-scope}'
+    command: 'show bgp all summary {vrf-scope}'
     verified: doc_claimed
   bgp.vrf.table:
-    command: 'show bgp vrf {vrf-scope} ipv4 unicast'
+    command: 'show bgp {vrf-scope} ipv4 unicast'
     verified: doc_claimed
   bgp.config.all:
     command: show running-config bgp all
     verified: doc_claimed
   fib.inconsistency:
-    command: 'show forwarding ipv4 unicast inconsistency vrf {vrf-scope} module all'
+    command: 'show forwarding ipv4 unicast inconsistency {vrf-scope} module all'
     verified: doc_claimed
   fib.cc.unicast:
     command: show consistency-checker forwarding unicast
@@ -605,10 +605,10 @@ bindings:
     command: 'show ip interface brief | exclude down'
     verified: doc_claimed
   underlay.bgp.advertised:
-    command: 'show ip bgp {prefix} vrf {vrf-scope}'
+    command: 'show ip bgp {prefix} {vrf-scope}'
     verified: doc_claimed
   evpn.vtep.route:
-    command: 'show bgp l2vpn evpn {prefix} vrf {vrf-scope}'
+    command: 'show bgp l2vpn evpn {prefix} {vrf-scope}'
     verified: doc_claimed
   vxlan.vni.state:
     command: show nve vni
@@ -647,22 +647,22 @@ bindings:
     command: show logging onboard error-stats
     verified: doc_claimed
   eigrp.neighbors.detail:
-    command: 'show ip eigrp {vrf-scope} neighbors {if} detail'
+    command: 'show ip eigrp neighbors {if} detail'
     verified: doc_claimed
   eigrp.neighbors.allvrf:
     command: show ip eigrp neighbor vrf all
     verified: doc_claimed
   eigrp.interfaces.detail:
-    command: 'show ip eigrp {vrf-scope} interfaces {if} detail'
+    command: 'show ip eigrp interfaces {if} detail'
     verified: doc_claimed
   eigrp.topology.active:
-    command: 'show ip eigrp {vrf-scope} topology {prefix} active'
+    command: 'show ip eigrp topology {prefix} active'
     verified: doc_claimed
   eigrp.traffic.counters:
-    command: 'show ip eigrp {vrf-scope} traffic vrf {vrf-scope}'
+    command: 'show ip eigrp traffic {vrf-scope}'
     verified: doc_claimed
   eigrp.accounting:
-    command: 'show ip eigrp {vrf-scope} accounting vrf {vrf-scope}'
+    command: 'show ip eigrp accounting {vrf-scope}'
     verified: doc_claimed
   eigrp.config.all:
     command: show running-config eigrp all
@@ -686,7 +686,7 @@ bindings:
     command: show vrf interface
     verified: doc_claimed
   rib.adjacency.detail:
-    command: 'show ip adjacency {prefix} detail vrf {vrf-scope}'
+    command: 'show ip adjacency {prefix} detail {vrf-scope}'
     verified: doc_claimed
   rib.clients:
     command: show routing unicast clients
@@ -710,7 +710,7 @@ bindings:
     command: show ip pim rp-hash
     verified: doc_claimed
   pim.grouprange:
-    command: 'show ip pim group-range vrf {vrf-scope}'
+    command: 'show ip pim group-range {vrf-scope}'
     verified: doc_claimed
   mroute.detail:
     command: show ip mroute detail
@@ -1013,7 +1013,7 @@ bindings:
     command: show user-account
     verified: doc_claimed
   underlay.route.remote_vtep:
-    command: 'show ip route {prefix} vrf {vrf-scope}'
+    command: 'show ip route {prefix} {vrf-scope}'
     verified: doc_claimed
   vpc.keepalive.reachability:
     command: 'ping {peer} vrf management'

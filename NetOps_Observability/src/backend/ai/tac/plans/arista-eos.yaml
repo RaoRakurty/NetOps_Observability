@@ -402,7 +402,7 @@ bindings:
     command: 'show ip bgp {prefix}'
     verified: capture
   bgp.vrf.routes:
-    command: 'show ip bgp vrf {vrf-scope}'
+    command: 'show ip bgp {vrf-scope}'
     verified: doc_claimed
   bgp.labeled.unicast:
     command: show bgp labeled-unicast tunnel

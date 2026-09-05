@@ -431,7 +431,7 @@ bindings:
     command: show ospf neighbor extensive
     verified: doc_claimed
   ospf.neighbors.instance:
-    command: 'show ospf neighbor instance {vrf-scope}'
+    command: 'show ospf neighbor {vrf-scope}'
     verified: doc_claimed
   ospf.database.extensive:
     command: show ospf database extensive
@@ -563,7 +563,7 @@ bindings:
     command: show route table bgp.l3vpn.0 hidden
     verified: doc_claimed
   vrf.routes.extensive:
-    command: 'show route extensive table {vrf-scope}'
+    command: 'show route extensive table {vrf-name}'
     verified: doc_claimed
   vxlan.vtep.remote:
     command: show ethernet-switching vxlan-tunnel-end-point remote

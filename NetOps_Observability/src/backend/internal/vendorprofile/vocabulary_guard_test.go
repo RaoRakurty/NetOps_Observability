@@ -52,8 +52,10 @@ package vendorprofile
 //
 // The LAST residual — internal/tac's VRF scope keyword switch — went the same
 // way on tracker row 248: the keyword is now `dialect.vrf_scope_keyword` in the
-// profile data, resolved onto the TAC plan at load, with a pre-move byte-parity
-// golden in internal/tac/testdata/vrf_scope_parity.json.
+// profile data, resolved onto the TAC plan at load, with a reviewed rendering
+// golden in internal/tac/testdata/vrf_scope_rendering.json (row 261 replaced the
+// pre-move parity golden it started as, once the plan templates stopped spelling
+// the keyword a second time themselves).
 //
 // The entries that remain are NOT residuals: each selects Go code or describes
 // the vendor as a support organisation, not a device fact. Each carries its

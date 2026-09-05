@@ -525,7 +525,7 @@ bindings:
     command: show platform hardware qfp active datapath utilization
     verified: doc_claimed
   vrf.rib.lookup:
-    command: 'show ip route vrf {vrf-scope} {prefix}'
+    command: 'show ip route {vrf-scope} {prefix}'
     verified: doc_claimed
   ldp.discovery.hellos:
     command: show mpls ldp discovery
@@ -824,19 +824,19 @@ bindings:
     command: 'show ip route {prefix}'
     verified: doc_claimed
   vrf.rd_and_route_targets:
-    command: 'show ip vrf detail {vrf-scope}'
+    command: 'show ip vrf detail {vrf-name}'
     verified: doc_claimed
   vrf.interface_membership:
     command: show ip vrf interfaces
     verified: doc_claimed
   bgp.vpnv4.prefix_in_vrf:
-    command: 'show ip bgp vpnv4 vrf {vrf-scope} {prefix}'
+    command: 'show ip bgp vpnv4 {vrf-scope} {prefix}'
     verified: doc_claimed
   bgp.vpnv4.table_all:
     command: show ip bgp vpnv4 all
     verified: doc_claimed
   vrf.cef.label_stack:
-    command: 'show ip cef vrf {vrf-scope} detail'
+    command: 'show ip cef {vrf-scope} detail'
     verified: doc_claimed
   ldp.router_id_and_timers:
     command: show mpls ldp parameters
@@ -944,10 +944,10 @@ bindings:
     command: 'ping {peer} size 1500 df-bit'
     verified: doc_claimed
   vrf.reachability:
-    command: 'ping vrf {vrf-scope} {prefix}'
+    command: 'ping {vrf-scope} {prefix}'
     verified: doc_claimed
   vrf.path:
-    command: 'traceroute vrf {vrf-scope} {prefix}'
+    command: 'traceroute {vrf-scope} {prefix}'
     verified: doc_claimed
   path.label_stack:
     command: 'traceroute {prefix}'

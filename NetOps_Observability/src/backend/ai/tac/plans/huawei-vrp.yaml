@@ -696,13 +696,13 @@ bindings:
     command: display alarm information
     verified: doc_claimed
   bgp.route.vrf:
-    command: 'display bgp vpnv4 vpn-instance {vrf-scope} routing-table {prefix}'
+    command: 'display bgp vpnv4 {vrf-scope} routing-table {prefix}'
     verified: doc_claimed
   route.prefix.vrf.detail:
-    command: 'display ip routing-table vpn-instance {vrf-scope} {prefix} verbose'
+    command: 'display ip routing-table {vrf-scope} {prefix} verbose'
     verified: doc_claimed
   config.vrf:
-    command: 'display current-configuration configuration vpn-instance {vrf-scope}'
+    command: 'display current-configuration configuration {vrf-scope}'
     verified: doc_claimed
   isis.errors.interface:
     command: 'display isis error interface {if}'
@@ -714,13 +714,13 @@ bindings:
     command: 'display interface {if} transceiver verbose'
     verified: doc_claimed
   route.table.vrf:
-    command: 'display ip routing-table vpn-instance {vrf-scope}'
+    command: 'display ip routing-table {vrf-scope}'
     verified: doc_claimed
   route.prefix.vrf:
-    command: 'display ip routing-table vpn-instance {vrf-scope} {prefix}'
+    command: 'display ip routing-table {vrf-scope} {prefix}'
     verified: doc_claimed
   evpn.routes.filtered:
-    command: 'display bgp instance {vrf-scope} evpn all routing-table | include {prefix}'
+    command: 'display bgp instance {vrf-name} evpn all routing-table | include {prefix}'
     verified: doc_claimed
   stp.interface:
     command: 'display stp interface {if}'

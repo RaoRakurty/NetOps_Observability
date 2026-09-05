@@ -132,6 +132,86 @@ def test_placeholders_are_normalised_onto_the_closed_set(sandbox, mod):
     assert "show ip ospf interface {if}" in plan, "<if> must become {if}"
 
 
+# ── the VRF-scoping contract (ai/tac/README.md §2, tracker row 261) ──────────
+
+
+@pytest.mark.parametrize("dialect,research,shaped", [
+    # 1. the dialect's own keyword in front of the placeholder is DROPPED —
+    #    {vrf-scope} emits it, and spelling it twice rendered
+    #    `show ip route vrf vrf CUST-A`, which the device rejects.
+    ("cisco-iosxe", "show ip route vrf <vrf> <prefix>", "show ip route {vrf-scope} {prefix}"),
+    ("cisco-iosxr", "show bgp vrf <vrf> ipv4 unicast", "show bgp {vrf-scope} ipv4 unicast"),
+    ("cisco-nxos", "show ip route <prefix> vrf <vrf>", "show ip route {prefix} {vrf-scope}"),
+    ("arista-eos", "show ip bgp vrf <vrf>", "show ip bgp {vrf-scope}"),
+    ("juniper-junos", "show ospf neighbor instance <routing-instance-name>",
+     "show ospf neighbor {vrf-scope}"),
+    ("huawei-vrp", "display ip routing-table vpn-instance <vrf>",
+     "display ip routing-table {vrf-scope}"),
+    # 2. ANOTHER vendor's scoping word in front of it is part of the command, so
+    #    the placeholder becomes the bare name: VRP's BGP instance selector is
+    #    `instance`, while its keyword is `vpn-instance`.
+    ("huawei-vrp", "display bgp instance <vrf> evpn all routing-table",
+     "display bgp instance {vrf-name} evpn all routing-table"),
+    # 3. the keyword standing elsewhere is part of the command's NAME.
+    ("cisco-iosxe", "show ip vrf detail <vrf>", "show ip vrf detail {vrf-name}"),
+    ("juniper-junos", "show route extensive table <vrf-name>",
+     "show route extensive table {vrf-name}"),
+    # 4. a dialect whose authored keyword is EMPTY carries its own word and
+    #    takes the name bare — nothing to shape.
+    ("nokia-srlinux", "show network-instance <network-instance> protocols bgp summary",
+     "show network-instance {vrf-scope} protocols bgp summary"),
+    ("paloalto-panos", "show advanced-routing bgp summary logical-router <logical-router>",
+     "show advanced-routing bgp summary logical-router {vrf-scope}"),
+])
+def test_the_vrf_placeholder_is_shaped_to_the_dialects_keyword(mod, dialect, research, shaped):
+    """The keyword is spelled by exactly ONE of the template and the placeholder.
+
+    Vendor research prints the command the way the vendor's reference does,
+    keyword and all; the merge is the single place that decides which of the two
+    renderings the command needs, so the corpus cannot drift back into
+    `show ip route vrf vrf CUST-A` one merged file at a time.
+    """
+    assert mod.normalise_command(research, None, "x", dialect) == shaped
+
+
+def test_the_scoping_keyword_is_read_from_the_vendor_registry(mod):
+    """Not a table in this script: the same field internal/tac renders from."""
+    assert mod.vrf_scope_keyword("cisco-iosxe") == "vrf"
+    assert mod.vrf_scope_keyword("juniper-junos") == "instance"
+    assert mod.vrf_scope_keyword("huawei-vrp") == "vpn-instance"
+    # An EMPTY keyword is an authored answer, not a missing one.
+    assert mod.vrf_scope_keyword("nokia-srlinux") == ""
+    profile = os.path.join(REPO, "src", "backend", "internal", "vendorprofile",
+                           "profiles", "cisco.json")
+    with open(profile, encoding="utf-8") as fh:
+        assert "vrf_scope_keyword" in fh.read()
+
+
+@pytest.mark.parametrize("research", [
+    "show ip eigrp <instance> neighbors <if> detail",   # an EIGRP instance tag
+    "show spanning-tree mst <instance> interface <if> detail",  # an MST instance id
+])
+def test_a_bare_instance_id_is_refused_because_it_is_not_a_vrf(mod, research):
+    """`<instance>` is an EIGRP tag, an MST id, an OSPF process, an IS-IS
+    instance — never reliably a VRF. Folding it onto the VRF token scoped those
+    commands by the wrong value (row 261), so it is refused and the honest
+    unscoped command is authored by hand."""
+    with pytest.raises(mod.Refusal) as err:
+        mod.normalise_command(research, None, "x", "cisco-nxos")
+    assert "<instance>" in str(err.value)
+
+
+def test_a_scoped_command_merges_without_the_doubled_keyword(sandbox, mod):
+    """End to end: research → plan file, with the keyword spelled once."""
+    write_research(sandbox, "cisco", GOOD.replace(
+        '      - {cmd: "show ip ospf neighbor detail", intent: ospf.neighbors.detail}',
+        '      - {cmd: "show ip route vrf <vrf>", intent: route.table.vrf, params: [vrf]}'))
+    assert run(mod) == 0
+    plan = (sandbox / "plans" / "cisco-iosxe.yaml").read_text()
+    assert "show ip route {vrf-scope}" in plan
+    assert "vrf {vrf-scope}" not in plan
+
+
 def test_a_log_signature_becomes_an_escaped_regex(sandbox, mod):
     write_research(sandbox, "cisco", GOOD)
     assert run(mod) == 0

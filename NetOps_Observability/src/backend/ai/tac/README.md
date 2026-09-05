@@ -135,7 +135,8 @@ operator has supplied the value (an empty value collapses the token away):
 | `{if}` | the incident's interface |
 | `{peer}` | the BGP/IGP neighbour address |
 | `{prefix}` | the prefix under investigation |
-| `{vrf-scope}` | the VRF/routing-instance qualifier, rendered per dialect |
+| `{vrf-scope}` | the VRF/routing-instance name, **with** the dialect's scoping keyword in front of it |
+| `{vrf-name}` | the same name, **bare** — no keyword |
 | `{rid}` | a router / system id |
 | `{area}` | an OSPF area id |
 | `{vlan}` | a VLAN id |
@@ -151,6 +152,56 @@ invalid or fleet-wide.
 Any other `{...}` token is treated as a LITERAL, so a typo fails closed (the
 command simply never matches the closed table) rather than opening a wildcard.
 This mirrors `internal/protocoldiag/commandtable.go`, deliberately.
+
+#### The VRF-scoping contract (ONE rule, tracker row 261)
+
+**`{vrf-scope}` EMITS the keyword. A template MUST NOT spell it as well.**
+
+`{vrf-scope}` renders `<keyword> <name>`, where `<keyword>` is the vendor's own
+scoping word — `vrf` (Cisco, Arista), `instance` (Juniper), `vpn-instance`
+(Huawei) — read from `dialect.vrf_scope_keyword` in
+`internal/vendorprofile/profiles/<vendor>.json` and resolved onto the plan at
+load. For a vendor whose authored keyword is EMPTY (Nokia SR OS / SR Linux,
+PAN-OS) it renders the **bare name**, because those CLIs carry their own word in
+the command itself (`show network-instance <name> …`, `show router <name> …`,
+`logical-router <name>`). Either way an empty VRF collapses the token to
+nothing, so the unscoped form of the command is what renders.
+
+So on a keyword vendor the template is written WITHOUT the keyword:
+
+| Write | Renders (VRF `CUST-A`) | Renders (no VRF) |
+|---|---|---|
+| `show ip route {vrf-scope} {prefix}` | `show ip route vrf CUST-A 10.0.0.0/24` | `show ip route 10.0.0.0/24` |
+| `show ospf neighbor {vrf-scope}` | `show ospf neighbor instance CUST-A` | `show ospf neighbor` |
+| `display ip routing-table {vrf-scope}` | `display ip routing-table vpn-instance CUST-A` | `display ip routing-table` |
+
+Writing `show ip route vrf {vrf-scope} {prefix}` was the row-261 defect: it
+rendered `show ip route vrf vrf CUST-A 10.0.0.0/24`, which the device rejects.
+
+**When the CLI does not put the name after that keyword, use `{vrf-name}`.**
+Some commands take the instance name after a word that is NOT the dialect's
+scoping keyword — the word is part of the command, not a qualifier:
+
+| Dialect | Command | Template |
+|---|---|---|
+| Cisco IOS-XE | `show ip vrf detail <name>` | `show ip vrf detail {vrf-name}` |
+| Juniper Junos | `show route extensive table <name>` | `show route extensive table {vrf-name}` |
+| Huawei VRP | `display bgp instance <name> evpn …` | `display bgp instance {vrf-name} evpn …` |
+
+`{vrf-name}` is the SAME value (`Target.VRF`) rendered bare, and it collapses on
+an empty VRF exactly like `{vrf-scope}`. Bending such a command onto
+`{vrf-scope}` would emit the keyword in a position the CLI has no grammar for.
+
+**`{vrf-scope}` / `{vrf-name}` are for a VRF and nothing else.** An EIGRP
+instance tag, an MST instance id, an OSPF process tag and an IS-IS instance name
+are not VRFs; Correlix has no source for any of them, so the command is authored
+in its UNSCOPED form rather than scoped by the wrong value. The merge script
+refuses a research `<instance>` for exactly that reason.
+
+`internal/tac/plan_vrfscope_test.go` is the gate: it renders every scoped
+command against a reviewed golden (`testdata/vrf_scope_rendering.json`) and
+fails outright if any template spells a scoping keyword in front of
+`{vrf-scope}` or renders a doubled qualifier.
 
 ---
 
