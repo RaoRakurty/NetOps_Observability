@@ -167,7 +167,7 @@ Meters are shown in two groups, and the split is the point:
 - **Entitlement meters** are the numbers a renewal or a true-up conversation uses: unique and peak monitored devices, watched prefixes, tenant and organisation counts, and the retention windows you have configured.
 - **Diagnostic meters** are recorded because they are useful, not because anything is charged for them — metric samples and series, log and flow records accepted after your processors ran, experience checks, AI tokens, and the ratio of what left the pipeline to what entered it. **Telemetry you run yourself is not metered for money.** Correlix does not pay for your disks, network or compute.
 
-A meter this installation has no counter for reads **not measured — <reason>**, never a zero. A zero means we counted and found none; a blank means nobody counted, and the two are different facts.
+A meter this installation has no counter for reads **not measured — \<reason\>**, never a zero. A zero means we counted and found none; a blank means nobody counted, and the two are different facts.
 
 A platform administrator also sees a **by tenant** breakdown, with the installation's own line named as such. That line counts every monitored device on the installation, including any that belong to no tenant, so the tenant lines below it can add up to less. A tenant administrator sees their own tenant only: no other tenant's numbers, no installation totals, no customer name and no licence id.
 
