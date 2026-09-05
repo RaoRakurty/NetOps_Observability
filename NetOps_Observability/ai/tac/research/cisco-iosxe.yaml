@@ -1,0 +1,1495 @@
+# Correlix TAC escalation pack — vendor research (Cisco IOS-XE / classic IOS)
+# Design of record: docs/design/TAC_ESCALATION_2026-09-05.md
+# Every command below appears verbatim on the cited public cisco.com page (or in the
+# IOS-XE/IOS command reference for that feature). Read-only show/ping/traceroute only:
+# no debug, clear, reload, test or configuration commands.
+# NOTE: ai/tac/README.md did not exist when this file was written; the schema used is
+# the one given in the research brief.
+
+vendor: cisco-iosxe
+
+sources:
+  - title: "Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
+  - title: "Cisco IOS XE Software Forensic Data Collection Procedures"
+    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
+  - title: "Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)"
+    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
+  - title: "Troubleshoot High CPU on ASR1000 Series Router"
+    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
+
+tac_baseline:
+  commands:
+    - show tech-support
+    - show version
+    - show running-config
+    - show logging
+    - show interfaces
+    - show platform resources
+    - show platform software status control-processor brief
+    - show processes cpu sorted
+    - show process cpu history
+    - show process memory platform sorted
+    - show memory platform
+    - "show bootflash: | in crash"
+    - "show bootflash: | in core"
+    - show license summary
+  notes: >-
+    216088 asks for "show tech" on essentially every routing/platform case, plus the
+    issue-specific outputs collected AT THE TIME OF THE ISSUE (counters are cumulative,
+    so a single snapshot after the fact rarely proves anything). show tech-support is a
+    privileged-EXEC command whose output can be tens of MB and can take minutes on a
+    loaded box — redirect it to the local file system or an FTP/HTTP/TFTP server rather
+    than paging it over the session. 216088 also asks, in prose, for: when the problem
+    started, what triggered it, frequency, number of users affected, what has already
+    been tried, and the topology of the involved devices — Correlix should supply those
+    from the incident record. Feature-scoped bundles (show tech-support bgp,
+    show tech-support ospf, "show tech-support Licenses") are far smaller than the full
+    bundle and are what 216088 asks for on protocol cases.
+  sources:
+    - https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
+    - https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
+    - https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
+
+issues:
+  - id: ospfv2-neighbor-stuck-init-or-2way
+    class: ospf-adjacency
+    title: "OSPFv2 neighbor stuck in INIT or 2-WAY"
+    symptoms:
+      - "show ip ospf neighbor shows the peer in INIT and it never advances"
+      - "router receives hellos from the neighbor but does not see its own Router ID in them"
+      - "peers sit at 2WAY/DROTHER on a broadcast or NBMA segment"
+      - "neighbor absent from the neighbor list entirely (no valid hellos received)"
+    log_signatures:
+      - "%OSPF-4-BADLSA"
+    likely_causes:
+      - "one-way hellos: neighbor is not echoing our Router ID"
+      - "access list or filter blocking OSPF multicast on the segment"
+      - "layer 1/2 down, or no IP reachability between the neighbors"
+      - "hello parameter mismatch (area number, area type, subnet/mask, hello and dead timers)"
+      - "2-WAY between two DROTHERs on broadcast/NBMA is normal, not a fault"
+    commands:
+      - {cmd: "show ip ospf neighbor", intent: ospf.neighbors.list}
+      - {cmd: "show interface", intent: interface.state}
+      - {cmd: "ping <peer>", intent: reachability.unicast, params: [peer]}
+      - {cmd: "ping 224.0.0.5", intent: reachability.multicast.allspf}
+      - {cmd: "show ip ospf interface <if>", intent: ospf.interface.params, params: [if]}
+      - {cmd: "show ip ospf", intent: ospf.process.summary}
+      - {cmd: "show cdp neighbor <if>", intent: l2.neighbor.identity, params: [if]}
+      - {cmd: "traceroute <peer>", intent: reachability.path, params: [peer]}
+      - {cmd: "show running-config", intent: config.compare}
+    tac_first_look: >-
+      If show ip ospf neighbor reveals nothing for that peer, no VALID hellos are
+      arriving — confirm the interface is up/line protocol up and that the neighbor
+      answers a ping before looking at OSPF at all.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
+
+  - id: ospfv2-neighbor-stuck-exstart-exchange
+    class: ospf-adjacency
+    title: "OSPFv2 neighbor stuck in EXSTART/EXCHANGE (MTU mismatch)"
+    symptoms:
+      - "show ip ospf neighbor shows EXCHANGE/ - or EXSTART/ - with a live dead time"
+      - "adjacency never reaches FULL; DBD packets retransmitted indefinitely"
+      - "sample from the doc: 172.16.7.11 1 EXCHANGE/ - 00:00:36 172.16.7.11 Serial2.7"
+    log_signatures:
+      - "%OSPF-5-ADJCHG"
+    likely_causes:
+      - "MTU mismatch — the most common cause; a router receiving a DBD advertising an MTU larger than it can receive silently ignores it"
+      - "unicast broken during primary/subordinate election (wrong VC mapping on ATM/Frame Relay)"
+      - "access list blocks the unicast packet"
+      - "NAT on the router translates the unicast packet"
+      - "both routers have the same Router-ID (misconfiguration)"
+      - "RFC 2328 sequence number mismatch / BadLSReq"
+    commands:
+      - {cmd: "show ip ospf neighbor", intent: ospf.neighbors.state}
+      - {cmd: "show ip ospf interface <if>", intent: ospf.interface.mtu, params: [if]}
+      - {cmd: "show interface", intent: interface.mtu}
+      - {cmd: "ping <peer> size 1500 df-bit", intent: pathmtu.probe, params: [peer]}
+      - {cmd: "show ip ospf", intent: ospf.routerid.check}
+      - {cmd: "show ip ospf neighbor detail", intent: ospf.neighbors.detail}
+      - {cmd: "show running-config", intent: config.acl_nat_check}
+    tac_first_look: >-
+      Compare the MTU configured on both interfaces of the link first — since IOS
+      12.0(3) OSPF advertises interface MTU in the DBD and a mismatch parks the
+      adjacency in EXSTART/EXCHANGE.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
+
+  - id: ospfv2-adjacency-flap-too-many-retransmissions
+    class: ospf-flapping-link
+    title: "OSPFv2 adjacency flapping — Neighbor Down: Too many retransmissions"
+    symptoms:
+      - "adjacency transitions FULL to DOWN repeatedly"
+      - "retransmission count on the neighbor climbs to the OSPF limit of 25, then the adjacency drops"
+      - "packet loss visible on the link between the two OSPF speakers"
+    log_signatures:
+      - "%OSPF-5-ADJCHG: Process 1, Nbr 10.1.1.1 on TenGigabitEthernet2/1 from FULL to DOWN, Neighbor Down: Too many retransmissions"
+      - "%OSPF-5-ADJCHG"
+    likely_causes:
+      - "packet loss on the link causing OSPF packets to be dropped"
+      - "ip ospf mtu-ignore configured, masking an underlying MTU problem"
+      - "MTU / OSPF packet-size mismatch across the path"
+    commands:
+      - {cmd: "show ip ospf neighbor detail", intent: ospf.neighbors.detail}
+      - {cmd: "show ip ospf neighbor <if> detail", intent: ospf.neighbors.detail.per_interface, params: [if]}
+      - {cmd: "show ip ospf retransmission-list", intent: ospf.retransmit.list}
+      - {cmd: "show ip ospf retransmission-list <if>", intent: ospf.retransmit.list.per_interface, params: [if]}
+      - {cmd: "show interface", intent: interface.errors_and_drops}
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show ip ospf interface <if>", intent: ospf.interface.timers, params: [if]}
+    tac_first_look: >-
+      Check the link for packet loss and validate MTU alignment between neighbors,
+      confirming via show ip ospf neighbor detail that the retransmission count has
+      exceeded the 25-packet threshold.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
+
+  - id: ospfv2-hello-area-network-type-mismatch
+    class: ospf-adjacency
+    title: "OSPFv2 hello / area / stub / NSSA / network-type parameter mismatch (incl. DR-BDR election surprises)"
+    symptoms:
+      - "adjacency never forms although hellos are visibly sent and received"
+      - "peer never appears in show ip ospf neighbor, or appears and immediately disappears"
+      - "neighbors sit at 2WAY on a multi-access segment where a full adjacency was expected"
+      - "no DR elected, or the wrong router is DR; on NBMA no neighbors appear at all"
+    log_signatures: []
+    likely_causes:
+      - "OSPF area number mismatch"
+      - "OSPF area type mismatch (stub / NSSA)"
+      - "subnet and subnet mask mismatch"
+      - "OSPF hello and dead timer mismatch"
+      - "network-type configuration error (one side broadcast, the other non-broadcast or point-to-point)"
+      - "on NBMA the neighbor statement is required (ip ospf network non-broadcast, and non-broadcast point-to-multipoint)"
+      - "two-way state between DROTHERs on broadcast/NBMA is expected and not a fault"
+      - "MTU difference, or duplicate router IDs"
+    commands:
+      - {cmd: "show ip ospf interface <if>", intent: ospf.interface.hello_dead_area, params: [if]}
+      - {cmd: "show ip ospf interface", intent: ospf.interface.all}
+      - {cmd: "show ip ospf", intent: ospf.area.type_and_flags}
+      - {cmd: "show ip ospf neighbor", intent: ospf.neighbors.dr_role}
+      - {cmd: "show running-config", intent: config.area_stub_nssa}
+      - {cmd: "show ip ospf database", intent: ospf.database.type_check}
+      - {cmd: "ping 224.0.0.5", intent: reachability.multicast.allspf}
+      - {cmd: "show ip interface brief", intent: interface.addressing}
+      - {cmd: "show interface", intent: interface.mtu}
+    tac_first_look: >-
+      Run show ip ospf interface on BOTH ends and compare the hello parameters — area
+      number, area type (stub/NSSA), subnet/mask, hello and dead timers, and the network
+      type, which also determines whether a DR is elected at all.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/12151-trouble-main.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
+
+  - id: ospfv2-route-missing-or-lsa-not-installed
+    class: ospf-database
+    title: "OSPFv2 route missing from the routing table / LSA not installed or flushed"
+    symptoms:
+      - "prefix present in the OSPF database but absent from show ip route"
+      - "external routes flapping in and out of the routing table"
+      - "router flushing LSAs it did not originate, or two routers claiming the same LSA ID"
+    log_signatures:
+      - "%OSPF-4-FLOOD_WAR"
+      - "%OSPF-4-CONFLICTING_LSAID"
+      - "%OSPF-4-BADLSA"
+    likely_causes:
+      - "conflicting LSA ID between two advertising routers"
+      - "two routers originating or flushing the same LSA (flood war)"
+      - "duplicate router ID causing conflicting LSA advertisements"
+      - "ABR/ASBR not reachable or absent from the border-router table"
+      - "area type filtering the LSA type (stub/NSSA blocking type-5)"
+    commands:
+      - {cmd: "show ip route", intent: rib.lookup}
+      - {cmd: "show ip ospf database", intent: ospf.database.summary}
+      - {cmd: "show ip ospf database router <rid>", intent: ospf.database.router_lsa, params: [rid]}
+      - {cmd: "show ip ospf database network adv-router <rid>", intent: ospf.database.network_lsa, params: [rid]}
+      - {cmd: "show ip ospf database external adv-router <rid>", intent: ospf.database.external_lsa, params: [rid]}
+      - {cmd: "show ip ospf database asbr-summary", intent: ospf.database.type4}
+      - {cmd: "show ip ospf border-routers", intent: ospf.abr_asbr.reachability}
+      - {cmd: "show ip ospf", intent: ospf.process.areas}
+    tac_first_look: >-
+      Pair the error message with show ip ospf database to identify which two routers
+      are contending for the LSA ID, then show ip route to confirm the resulting
+      reachability loss.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
+
+  - id: ospfv2-spf-churn-duplicate-router-id
+    class: ospf-database
+    title: "OSPFv2 SPF churn and high CPU from a duplicate router ID"
+    symptoms:
+      - "high CPU attributed to OSPF"
+      - "SPF algorithm executing repeatedly, roughly every 10 seconds"
+      - "LSA sequence numbers and link counts changing rapidly"
+      - "external routes flapping in and out of the routing table"
+    log_signatures:
+      - "%OSPF-4-DUP_RTRID1: Detected router with duplicate router ID 100.0.0.2 in area 0"
+      - "%OSPF-4-DUP_RTRID2"
+      - "%OSPF-4-FLOOD_WAR"
+    likely_causes:
+      - "two routers configured with, or auto-selecting, the same OSPF router ID"
+      - "conflicting LSA advertisements from identically-ID'd routers driving continuous SPF"
+      - "unstable links triggering router/network LSA regeneration"
+      - "route churn redistributed into OSPF"
+    commands:
+      - {cmd: "show ip ospf", intent: ospf.process.routerid}
+      - {cmd: "show ip ospf statistics", intent: ospf.spf.statistics}
+      - {cmd: "show processes cpu sorted", intent: cpu.top_processes}
+      - {cmd: "show process cpu history", intent: cpu.trend}
+      - {cmd: "show ip ospf database router <rid>", intent: ospf.database.router_lsa, params: [rid]}
+      - {cmd: "show ip ospf interface", intent: ospf.interface.all}
+      - {cmd: "show ip interface brief", intent: interface.addressing}
+    tac_first_look: >-
+      Use show ip ospf statistics to see whether SPF is running more often than usual
+      (the doc's example recalculates every 10 seconds), then correlate the router IDs
+      reported by show ip ospf on the suspected pair.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
+
+  - id: ospfv3-ipv6-adjacency-not-forming
+    class: ospf-adjacency
+    title: "OSPFv3 (IPv6) adjacency not forming or not reaching FULL"
+    symptoms:
+      - "show ospfv3 neighbor shows no peer, or a peer that never reaches FULL"
+      - "IPv6 routes not learned over the link"
+      - "interface enabled for OSPFv3 but neighbor count is zero"
+    log_signatures: []
+    likely_causes:
+      - "area or address-family mismatch (OSPFv3 is scoped by process, area and address family)"
+      - "interface not enabled for the address family"
+      - "hello/dead timer mismatch"
+      - "authentication or graceful-restart mismatch"
+      - "IPv6 link-local addressing problem on the segment"
+    commands:
+      - {cmd: "show ospfv3 neighbor detail", intent: ospfv3.neighbors.detail}
+      - {cmd: "show ospfv3 interface", intent: ospfv3.interface.params}
+      - {cmd: "show ospfv3 database", intent: ospfv3.database}
+      - {cmd: "show ospfv3 events neighbor", intent: ospfv3.events.neighbor}
+      - {cmd: "show ospfv3 statistic detail", intent: ospfv3.spf.statistics}
+      - {cmd: "show ospfv3 traffic", intent: ospfv3.traffic.counters}
+      - {cmd: "show ospfv3 border-routers", intent: ospfv3.abr_asbr}
+      - {cmd: "show ospfv3 retransmission-list", intent: ospfv3.retransmit.list}
+      - {cmd: "show ospfv3 virtual-links", intent: ospfv3.virtual_links}
+    tac_first_look: >-
+      Start at show ospfv3 neighbor detail for the state, then show ospfv3 interface for
+      the per-interface area and timers — a mismatch in process, area or address family
+      hides the neighbor entirely.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html
+
+  - id: eigrp-neighbor-not-forming
+    class: eigrp-adjacency
+    proposed_class: true
+    title: "EIGRP neighbor does not form"
+    symptoms:
+      - "peer absent from show ip eigrp neighbors"
+      - "interface up and unicast ping succeeds but no adjacency"
+      - "EIGRP does not establish a neighborship properly"
+    log_signatures:
+      - "%DUAL-5-NBRCHANGE"
+    likely_causes:
+      - "MTU mismatch"
+      - "one-way link / multicast delivery problem"
+      - "authentication mismatch (missing or mismatched MD5 key-chain)"
+      - "K-value mismatch"
+      - "autonomous system number mismatch"
+      - "neighbors on secondary networks — mismatched primary IP addressing"
+    commands:
+      - {cmd: "show ip eigrp neighbors", intent: eigrp.neighbors.list}
+      - {cmd: "show ip eigrp neighbors detail", intent: eigrp.neighbors.detail}
+      - {cmd: "show ip eigrp interfaces", intent: eigrp.interfaces.enabled}
+      - {cmd: "show ip protocols", intent: routing.protocol.as_and_kvalues}
+      - {cmd: "show running-config | begin router eigrp", intent: config.eigrp_block}
+      - {cmd: "ping <peer>", intent: reachability.unicast, params: [peer]}
+      - {cmd: "show interface <if>", intent: interface.mtu_and_errors, params: [if]}
+      - {cmd: "show ip eigrp traffic", intent: eigrp.traffic.counters}
+    tac_first_look: >-
+      Start at show ip eigrp neighbors / neighbors detail, then validate the transport
+      with a full-MTU DF-bit unicast ping to the peer before looking at EIGRP config.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/13681-eigrpfaq.html
+
+  - id: eigrp-neighbor-flapping
+    class: eigrp-adjacency
+    proposed_class: true
+    title: "EIGRP neighbors flapping (retry limit exceeded / holding time expired)"
+    symptoms:
+      - "neighbors repeatedly go up and down"
+      - "Q-count on the neighbor is non-zero and rising, sequence numbers advancing"
+      - "reset reasons logged as retry limit exceeded, holding time expired, peer restarted or Interface Goodbye received"
+    log_signatures:
+      - "%DUAL-5-NBRCHANGE"
+    likely_causes:
+      - "retry limit exceeded — unacknowledged reliable packets, i.e. unidirectional loss"
+      - "holding timer expiration"
+      - "peer restarted or graceful shutdown (Interface Goodbye received)"
+      - "authentication mismatch"
+      - "configuration change"
+      - "K-value mismatch"
+    commands:
+      - {cmd: "show ip eigrp neighbors detail", intent: eigrp.neighbors.detail}
+      - {cmd: "show ip eigrp events", intent: eigrp.eventlog}
+      - {cmd: "show ip eigrp traffic", intent: eigrp.traffic.counters}
+      - {cmd: "show interface <if>", intent: interface.resets_and_errors, params: [if]}
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show running-config | begin router eigrp", intent: config.eigrp_block}
+      - {cmd: "show processes cpu sorted", intent: cpu.top_processes}
+    tac_first_look: >-
+      Monitor Q-count and sequence numbers in show ip eigrp neighbors detail — a rising
+      Q-count points at unacknowledged reliable packets, i.e. a one-way or lossy link
+      rather than an EIGRP configuration fault.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/13676-18.html
+
+  - id: eigrp-stuck-in-active-sia
+    class: eigrp-sia
+    proposed_class: true
+    title: "EIGRP route stuck in active (SIA)"
+    symptoms:
+      - "route stuck-in-active state logged for a prefix"
+      - "neighbors cleared automatically when the SIA timer expires (about 3 minutes with no reply to a query)"
+      - "routes beyond the cleared neighbor flushed and reconverging, with packet loss during it"
+    log_signatures:
+      - "%DUAL-3-SIA"
+      - "%DUAL-5-NBRCHANGE"
+    likely_causes:
+      - "a neighbor failed to reply to the query within the allotted time"
+      - "flapping links (rising interface resets) or degraded WAN links (rising errors)"
+      - "incorrect bandwidth configuration on interfaces"
+      - "routing loops"
+      - "resource constraints — CPU, memory, buffers"
+      - "large query diameter with no summarization"
+    commands:
+      - {cmd: "show ip eigrp topology active", intent: eigrp.topology.active}
+      - {cmd: "show ip eigrp neighbors", intent: eigrp.neighbors.list}
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show interface", intent: interface.resets_and_errors}
+      - {cmd: "show ip eigrp events", intent: eigrp.eventlog}
+      - {cmd: "show ip eigrp traffic", intent: eigrp.traffic.counters}
+      - {cmd: "show processes cpu sorted", intent: cpu.top_processes}
+    tac_first_look: >-
+      Answer two questions in order — which router did not reply to the query, and why
+      did the original route disappear; determine which routes are active with
+      show ip eigrp topology active.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/13676-18.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
+
+  - id: eigrp-route-missing-from-rib
+    class: eigrp-route-missing
+    proposed_class: true
+    title: "EIGRP prefix learned but not installed, or absent from the topology table"
+    symptoms:
+      - "prefix present in show ip eigrp topology but absent from show ip route"
+      - "prefix absent from the topology table entirely on the receiving router"
+      - "only a subset of the expected paths visible"
+    log_signatures: []
+    likely_causes:
+      - "another route with a lower administrative distance already installed"
+      - "distribute-list filter"
+      - "split horizon blocking the advertisement"
+      - "mask not specified in the topology query, so the lookup misses the entry"
+      - "non-feasible successors hidden unless all-links is requested"
+      - "with two EIGRP processes offering equal-cost paths, the lower AS number wins"
+    commands:
+      - {cmd: "show ip eigrp topology <prefix> <mask>", intent: eigrp.topology.prefix, params: [prefix, mask]}
+      - {cmd: "show ip eigrp topology all-links", intent: eigrp.topology.all_paths}
+      - {cmd: "show ip eigrp topology zero-successors", intent: eigrp.topology.zero_successors}
+      - {cmd: "show ip route <prefix>", intent: rib.lookup, params: [prefix]}
+      - {cmd: "show ip eigrp topology", intent: eigrp.topology.full}
+      - {cmd: "show ip protocols", intent: routing.filters_and_distance}
+      - {cmd: "show running-config | begin router eigrp", intent: config.distribute_lists}
+    tac_first_look: >-
+      Always include the subnet mask in the topology query (255.255.255.255 for a /32);
+      an unmasked query is the most common reason the prefix appears to be missing.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/13681-eigrpfaq.html
+
+  - id: isis-adjacency-not-forming
+    class: isis-adjacency
+    title: "IS-IS adjacency not forming (level/circuit-type, MTU, area, transport loss)"
+    symptoms:
+      - "adjacency stuck in INIT rather than progressing to Up"
+      - "one router shows the adjacency type as ES-IS while the other expects IS-IS"
+      - "PTP hello counters asymmetric (one side sends 205 and receives 199 while the peer shows 202 of 202)"
+      - "adjacency drops with hold-time expiry"
+    log_signatures:
+      - "%CLNS-5-ADJCHANGE: ISIS: Adjacency to [device] ([interface]) Down, hold time expired"
+      - "%CLNS-5-ADJCHANGE"
+    likely_causes:
+      - "MTU mismatch — padded IS-IS hellos ignored by the smaller-MTU side"
+      - "circuit-type mismatch (Circuit Type: level-1-2 must match on both sides)"
+      - "physical-layer problems — interface errors, light levels"
+      - "packet loss / unreliable transport between the peers"
+      - "area address or system ID mismatch"
+      - "ACLs dropping the traffic"
+    commands:
+      - {cmd: "show isis neighbors detail", intent: isis.neighbors.detail}
+      - {cmd: "show clns neighbors detail", intent: clns.neighbors.detail}
+      - {cmd: "show clns interface <if>", intent: isis.interface.mtu_circuit_type, params: [if]}
+      - {cmd: "ping <peer> size 1500 df-bit", intent: pathmtu.probe, params: [peer]}
+      - {cmd: "show clns traffic interface <if>", intent: isis.hello.counters, params: [if]}
+      - {cmd: "show interface <if>", intent: interface.errors_and_optics, params: [if]}
+      - {cmd: "show running-config | sec router isis", intent: config.isis_block}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Ensure both ends have the same MTU and the same circuit-type along with the state
+      — show clns interface on both sides is the comparison, and a 1500-byte DF-bit ping
+      validates the transport.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/47201-isis-mtu.html
+
+  - id: bgp-peer-stuck-idle-active-connect
+    class: bgp-session
+    title: "BGP peer stuck in Idle / Active / Connect"
+    symptoms:
+      - "show ip bgp summary shows the peer in Active or Idle and it never reaches Established"
+      - "peer's loopback or address not reachable from the local router"
+      - "TCP 179 does not open toward the peer"
+    log_signatures:
+      - "%BGP-3-NOTIFICATION: sent to neighbor 198.51.100.1 passive 2/2 (peer in wrong AS)"
+      - "%BGP-3-NOTIFICATION: sent to neighbor 198.51.100.1 passive 2/3 (BGP identifier wrong)"
+      - "%TCP-6-BADAUTH: Invalid MD5 digest from 198.51.100.1(179)"
+      - "%TCP-6-BADAUTH: No MD5 digest from 198.51.100.1(179)"
+      - "%BGP-5-ADJCHANGE: neighbor 198.51.100.2 passive Down AFI/SAFI not supported"
+    likely_causes:
+      - "neighbor IP does not match the peer's update-source address"
+      - "no route to the neighbor (particularly the loopback in eBGP-multihop designs)"
+      - "missing update-source on one side for loopback-based iBGP peering"
+      - "wrong remote AS, or duplicate/wrong BGP identifier"
+      - "MD5 password missing or mismatched"
+      - "ACL, firewall or NAT blocking TCP 179"
+      - "address family (AFI/SAFI) not enabled on both peers"
+    commands:
+      - {cmd: "show ip bgp summary", intent: bgp.peers.state}
+      - {cmd: "show ip bgp all summary", intent: bgp.peers.state.all_af}
+      - {cmd: "show ip bgp neighbors <peer>", intent: bgp.neighbors.detail, params: [peer]}
+      - {cmd: "show ip route <peer>", intent: rib.peer_reachability, params: [peer]}
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show interface", intent: interface.state}
+      - {cmd: "ping <peer>", intent: reachability.unicast, params: [peer]}
+    tac_first_look: >-
+      Start with show ip bgp all summary to confirm the session state and prefix counts,
+      then check whether the peer address is reachable — if you cannot reach the
+      neighbor the session will not come up regardless of BGP configuration.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/13752-24.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/22166-bgp-trouble-main.html
+
+  - id: bgp-session-flap-hold-time-expired
+    class: bgp-instability
+    title: "BGP session flapping — hold timer expired"
+    symptoms:
+      - "session resets periodically with reset reason holdtimer expired error"
+      - "interface flap correlated with the BGP down event"
+      - "large BGP updates fail while small packets pass (path-MTU black hole)"
+    log_signatures:
+      - "%BGP-3-NOTIFICATION: sent to neighbor 198.51.100.2 4/0 (hold time expired)"
+      - "%BGP-5-ADJCHANGE: neighbor 198.51.100.2 Down Interface flap"
+      - "%BGP-5-ADJCHANGE"
+    likely_causes:
+      - "interface errors / packet loss on the path between peers"
+      - "CPU exhaustion preventing keepalive processing"
+      - "MTU inconsistency across the path so large updates are dropped"
+      - "interface flap tearing the session via fast-external-fallover"
+      - "duplex mismatch"
+      - "memory pressure from very large tables"
+    commands:
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show ip bgp neighbors <peer>", intent: bgp.neighbors.reset_reason, params: [peer]}
+      - {cmd: "show interface", intent: interface.errors_and_flaps}
+      - {cmd: "ping <peer> size 1400 df-bit", intent: pathmtu.probe, params: [peer]}
+      - {cmd: "show processes cpu sorted", intent: cpu.top_processes}
+      - {cmd: "show process cpu history", intent: cpu.trend}
+      - {cmd: "show processes memory sorted", intent: memory.top_consumers}
+      - {cmd: "show platform hardware qfp active datapath utilization", intent: dataplane.qfp.load}
+    tac_first_look: >-
+      For a 4/0 hold-time-expired notification, investigate interface errors, look for
+      packet loss, check CPU utilization and verify MTU consistency across the path —
+      the BGP configuration is rarely the fault.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/22166-bgp-trouble-main.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
+
+  - id: bgp-route-not-advertised-or-received
+    class: bgp-route-missing
+    title: "BGP prefix not advertised to, or not received from, a peer, or an unexpected best path"
+    symptoms:
+      - "prefix present locally but not in the peer's table"
+      - "prefix visible in received-routes but not in routes (dropped by inbound policy)"
+      - "prefix in the BGP table but not installed in the RIB"
+      - "traffic leaves via an unexpected exit; the obvious path is not marked best"
+      - "in a route-reflector topology, clients see a different best path than the RR"
+    log_signatures: []
+    likely_causes:
+      - "outbound or inbound route-map / prefix-list filtering"
+      - "BGP next hop not reachable (needs next-hop-self, or the next hop in the IGP)"
+      - "RIB failure — a route with better administrative distance already installed"
+      - "missing network statement, or the exact prefix/mask not in the IGP"
+      - "soft-reconfiguration not enabled, so received-routes is unavailable"
+      - "best-path order: weight, local-pref, locally originated, AS_PATH, origin, MED, eBGP over iBGP, IGP metric to next hop, oldest external, lowest router ID, minimum cluster list length (route-reflector-specific), lowest neighbor address"
+    commands:
+      - {cmd: "show ip bgp neighbors <peer> advertised-routes", intent: bgp.policy.outbound, params: [peer]}
+      - {cmd: "show ip bgp neighbors <peer> received-routes", intent: bgp.policy.inbound_prefilter, params: [peer]}
+      - {cmd: "show ip bgp neighbors <peer> routes", intent: bgp.policy.inbound_postfilter, params: [peer]}
+      - {cmd: "show ip bgp <prefix>", intent: bgp.prefix.path_attributes, params: [prefix]}
+      - {cmd: "show ip bgp rib-failure", intent: bgp.rib.install_failures}
+      - {cmd: "show ip route <prefix>", intent: rib.installed_path, params: [prefix]}
+      - {cmd: "show route-map <name>", intent: policy.routemap, params: [name]}
+      - {cmd: "show ip prefix-list <name>", intent: policy.prefixlist, params: [name]}
+      - {cmd: "show ip bgp", intent: bgp.table.full}
+      - {cmd: "show ip bgp summary", intent: bgp.peers.state}
+    tac_first_look: >-
+      Walk received-routes then routes then advertised-routes for the specific peer; the
+      point at which the prefix disappears identifies whether the fault is inbound
+      policy, best-path or outbound policy. Add show ip bgp rib-failure when the prefix
+      is in BGP but not in the RIB, and walk the 13 best-path steps in order rather than
+      guessing at a single attribute.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/13753-25.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/22166-bgp-trouble-main.html
+      - https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/220921-verify-mpls-layer-3-vpn-forwarding.html
+
+  - id: mpls-l3vpn-vpnv4-route-missing
+    class: mpls-l3vpn
+    proposed_class: true
+    title: "MPLS L3VPN — VPNv4 route missing between PE and CE"
+    symptoms:
+      - "customer prefix in the local VRF on the ingress PE but absent from the egress PE's VRF"
+      - "prefix present as VPNv4 on the RR/egress PE but not imported into the VRF"
+      - "CE cannot reach the remote CE despite both PEs showing the route"
+    log_signatures: []
+    likely_causes:
+      - "route-target import/export mismatch between the two VRFs"
+      - "non-unique or wrong route distinguisher"
+      - "VRF names are case sensitive — Customer_A is not the same as customer_a"
+      - "missing or broken PE-PE LSP to the remote PE loopback"
+      - "prefix-list or route-map filter on the PE-CE link"
+      - "PE-CE routing protocol not exchanging the prefix"
+    commands:
+      - {cmd: "show ip vrf detail <vrf>", intent: vrf.rd_and_route_targets, params: [vrf]}
+      - {cmd: "show ip vrf interfaces", intent: vrf.interface_membership}
+      - {cmd: "show ip route vrf <vrf> <prefix>", intent: vrf.rib.lookup, params: [vrf, prefix]}
+      - {cmd: "show ip bgp vpnv4 vrf <vrf> <prefix>", intent: bgp.vpnv4.prefix_in_vrf, params: [vrf, prefix]}
+      - {cmd: "show ip bgp vpnv4 all", intent: bgp.vpnv4.table_all}
+      - {cmd: "show ip bgp vpnv4 all tags", intent: bgp.vpnv4.labels}
+      - {cmd: "show ip cef vrf <vrf> detail", intent: vrf.cef.label_stack, params: [vrf]}
+      - {cmd: "ping vrf <vrf> <prefix>", intent: vrf.reachability, params: [vrf, prefix]}
+      - {cmd: "traceroute vrf <vrf> <prefix>", intent: vrf.path, params: [vrf, prefix]}
+    tac_first_look: >-
+      Walk the path in strict order — CE to ingress PE, installed in the local VRF,
+      exported as VPNv4, propagated PE to PE, imported into the egress VRF, propagated
+      to the far CE — and start at the stage where the prefix first disappears.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
+      - https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/220921-verify-mpls-layer-3-vpn-forwarding.html
+
+  - id: mpls-ldp-neighbor-not-established
+    class: mpls-ldp
+    title: "LDP neighbor not established / LSP label missing (Untagged in the LFIB)"
+    symptoms:
+      - "LDP session does not come up between two directly connected LSRs"
+      - "LFIB entry for the BGP next hop shows Untagged — the label path breaks at that router"
+      - "VPN traffic black-holes even though the IGP route is present end to end"
+    log_signatures: []
+    likely_causes:
+      - "CEF not enabled — MPLS will not switch labels without it"
+      - "MPLS/LDP not enabled globally or on the interface"
+      - "the LDP router ID is not reachable from the global routing table"
+      - "an unlabeled connection must be up between each pair of neighbors before LDP can build the LIB/LFIB"
+      - "prefix-mask mismatch between what the IGP advertises and what LDP binds"
+      - "low memory preventing new LDP sessions"
+    commands:
+      - {cmd: "show mpls interfaces", intent: mpls.interface.enabled}
+      - {cmd: "show mpls ldp discovery", intent: ldp.discovery.hellos}
+      - {cmd: "show mpls ldp neighbor", intent: ldp.session.state}
+      - {cmd: "show mpls ldp parameters", intent: ldp.router_id_and_timers}
+      - {cmd: "show mpls ldp bindings", intent: ldp.label_bindings}
+      - {cmd: "show mpls ldp igp sync", intent: ldp.igp_sync_state}
+      - {cmd: "show ip cef summary", intent: cef.enabled}
+      - {cmd: "show ip cef <prefix>", intent: fib.prefix, params: [prefix]}
+      - {cmd: "show ip route <prefix>", intent: rib.ldp_id_reachability, params: [prefix]}
+      - {cmd: "traceroute <prefix>", intent: path.label_stack, params: [prefix]}
+    tac_first_look: >-
+      Issue show mpls interfaces first to confirm MPLS is globally enabled and LDP runs
+      on the requested interfaces; an unlabeled connection must already be up between
+      each pair of neighbors before LDP can establish.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
+      - https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/mpls/command/mp-cr-book/mp-s2.html
+      - https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/23565-troubleshoot-mpls-vpn.html
+
+  - id: pim-neighbor-missing
+    class: multicast-pim
+    proposed_class: true
+    title: "PIM neighbor missing on an interface"
+    symptoms:
+      - "expected upstream/downstream router absent from show ip pim neighbor"
+      - "show ip pim interface shows a neighbor count of 0 on a segment that should have one"
+      - "joins never sent because the RPF neighbor is not a PIM neighbor"
+    log_signatures:
+      - "%PIM-6-INVALID_RP_JOIN"
+    likely_causes:
+      - "PIM not configured on the interface"
+      - "RPF lookup pointing out an interface that is not PIM-enabled — join/prune messages are sent only if the RPF neighbor is a PIM neighbor"
+      - "PIM mode mismatch (dense/sparse) between the two ends"
+      - "layer 1/2 or addressing problem on the segment"
+      - "incorrect or missing RP mapping causing invalid joins"
+    commands:
+      - {cmd: "show ip pim neighbor", intent: pim.neighbors.list}
+      - {cmd: "show ip pim interface", intent: pim.interface.mode_and_count}
+      - {cmd: "show ip pim neighbor <if>", intent: pim.neighbors.per_interface, params: [if]}
+      - {cmd: "show ip pim interface <if> detail", intent: pim.interface.detail, params: [if]}
+      - {cmd: "show ip pim rp mapping", intent: pim.rp.group_mappings}
+      - {cmd: "show ip interface brief", intent: interface.addressing}
+      - {cmd: "show ip traffic", intent: ip.protocol.counters}
+    tac_first_look: >-
+      Confirm with show ip pim interface that PIM is actually configured on the
+      interface with the expected version/mode and neighbor count, before chasing
+      mroute state.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/13726-57.html
+      - https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/ipmulti_pim/configuration/xe-16/imc-pim-xe-16-book/imc-maintain.html
+
+  - id: multicast-rpf-failure-no-sg-entry
+    class: multicast-pim
+    proposed_class: true
+    title: "Multicast RPF failure / no (S,G) entry, empty outgoing interface list"
+    symptoms:
+      - "null entries in the outgoing interface list and pruned entries in the mroute table"
+      - "RPF-failed counter incrementing in show ip mroute <group> count"
+      - "the mroute's incoming interface does not match the unicast path back to the source"
+      - "traffic present on the wire but never forwarded downstream"
+    log_signatures:
+      - "%PIM-6-INVALID_RP_JOIN"
+    likely_causes:
+      - "the multicast routing table points to an incorrect incoming interface due to conflicting static routes"
+      - "multiple equal-cost paths — multicast chooses the PIM neighbor with the highest IP address and prunes the others"
+      - "RPF neighbor is not a PIM neighbor, so no join is sent"
+      - "TTL too low at the source, or a TTL threshold on an interface"
+      - "wrong or unreachable RP"
+    commands:
+      - {cmd: "show ip mroute <group>", intent: mroute.entry_state, params: [group]}
+      - {cmd: "show ip mroute <group> count", intent: mroute.counters, params: [group]}
+      - {cmd: "show ip rpf <source>", intent: rpf.interface_and_neighbor, params: [source]}
+      - {cmd: "show ip route <source>", intent: rib.unicast_path_to_source, params: [source]}
+      - {cmd: "show ip pim neighbor", intent: pim.neighbors.list}
+      - {cmd: "show ip mroute active", intent: mroute.active_sources}
+      - {cmd: "show ip mroute summary", intent: mroute.summary}
+      - {cmd: "show ip pim rp mapping", intent: pim.rp.group_mappings}
+      - {cmd: "show buffers input-interface <if>", intent: interface.buffer_pressure, params: [if]}
+    tac_first_look: >-
+      Use show ip mroute <group> to spot a null OIL or pruned entries, then compare
+      show ip rpf <source> against show ip route <source> — a disagreement between the
+      two IS the RPF failure.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/13726-57.html
+      - https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/ipmulti_pim/configuration/xe-16/imc-pim-xe-16-book/imc-maintain.html
+
+  - id: igmp-snooping-group-not-joining
+    class: multicast-igmp
+    proposed_class: true
+    title: "IGMP snooping — receiver joins but the group is never programmed (no mrouter port)"
+    symptoms:
+      - "receiver sends IGMP reports but the group never appears in the snooping table"
+      - "no mrouter port on the switch for the VLAN"
+      - "multicast flooded or dropped rather than switched to the joining port"
+    log_signatures: []
+    likely_causes:
+      - "no querier present in the broadcast domain"
+      - "missing mrouter port — with none, the switch drops the IGMP report coming in from the port"
+      - "IGMP snooping disabled globally or per-VLAN"
+      - "absent IGMP reports from the client"
+      - "receiver in the wrong VLAN"
+    commands:
+      - {cmd: "show ip igmp snooping mrouter", intent: igmpsnoop.mrouter_ports}
+      - {cmd: "show ip igmp snooping querier", intent: igmpsnoop.querier}
+      - {cmd: "show ip igmp snooping vlan <vlan>", intent: igmpsnoop.vlan_state, params: [vlan]}
+      - {cmd: "show ip igmp snooping group", intent: igmpsnoop.groups}
+      - {cmd: "show interface <if> counters", intent: interface.counters, params: [if]}
+      - {cmd: "show interface <if>", intent: interface.state, params: [if]}
+      - {cmd: "show ip igmp groups", intent: igmp.router_membership}
+      - {cmd: "show ip igmp interface", intent: igmp.interface.version_querier}
+    tac_first_look: >-
+      Verify an mrouter port exists via show ip igmp snooping mrouter; if absent,
+      confirm PIM runs on the upstream router interface, then check
+      show ip igmp snooping querier for an active query source in the VLAN.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/13726-57.html
+
+  - id: interface-input-errors-crc
+    class: interface-errors
+    title: "Input errors / CRC / FCS / alignment / runts on an Ethernet interface"
+    symptoms:
+      - "non-zero and incrementing input errors / CRC on show interfaces"
+      - "non-zero FCS-Err and Rcv-Err in the errors counter table"
+      - "extremely slow or intermittent throughput on the segment"
+      - "late collisions on the half-duplex side of a link"
+    log_signatures:
+      - "%CDP-4-DUPLEX_MISMATCH"
+      - "%SFF8472-3-THRESHOLD_VIOLATION"
+    likely_causes:
+      - "duplex mismatch — named as the cause of alignment errors, FCS errors and late collisions"
+      - "failing or damaged copper, fiber or DAC medium"
+      - "failing transceiver / optic"
+      - "bad patch-panel port, faulty switch port hardware, or malfunctioning host NIC"
+      - "collisions or noise on the LAN segment"
+    commands:
+      - {cmd: "show interfaces <if>", intent: interface.detail, params: [if]}
+      - {cmd: "show interfaces counters errors", intent: interface.counters.errors}
+      - {cmd: "show interfaces <if> status", intent: interface.status.speed_duplex, params: [if]}
+      - {cmd: "show cdp neighbors <if> detail", intent: l2.neighbor.duplex_check, params: [if]}
+      - {cmd: "show controllers ethernet-controller <if> port-info", intent: interface.phy.portinfo, params: [if]}
+      - {cmd: "show interfaces <if> transceiver detail", intent: optics.dom.levels, params: [if]}
+      - {cmd: "show cable-diagnostics tdr interface <if>", intent: cable.tdr, params: [if]}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Confirm the error class (CRC/FCS vs alignment vs late collision) from the counters
+      table, then separate duplex mismatch from a bad physical path using the neighbor's
+      duplex and the optic's DOM/TDR reading.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html
+
+  - id: interface-output-drops-and-qos-queue-drops
+    class: qos-drops
+    title: "Output drops / egress queue drops on an interface or service policy"
+    symptoms:
+      - "incrementing output drops on show interfaces while input counters are clean"
+      - "application slowness or retransmits over a specific egress port"
+      - "per-class drop counters climbing under show policy-map interface"
+      - "drops concentrated on a lower-speed or oversubscribed egress link"
+    log_signatures: []
+    likely_causes:
+      - "switch output buffers filled and packets discarded"
+      - "segment running at an inferior speed and/or duplex"
+      - "more traffic offered than the port can carry"
+      - "high-bandwidth link switching into a lower-bandwidth link"
+      - "many inbound links converging on one outbound link"
+      - "insufficient buffer capacity"
+    commands:
+      - {cmd: "show interfaces <if>", intent: interface.counters.output_drops, params: [if]}
+      - {cmd: "show interfaces counters", intent: interface.counters.traffic}
+      - {cmd: "show interfaces <if> counters", intent: interface.counters.perport, params: [if]}
+      - {cmd: "show interfaces <if> status", intent: interface.status.speed_duplex, params: [if]}
+      - {cmd: "show policy-map interface <if>", intent: qos.policy.counters, params: [if]}
+      - {cmd: "show policy-map", intent: qos.policy.config}
+      - {cmd: "show class-map", intent: qos.classmap.config}
+      - {cmd: "show tech-support qos", intent: qos.techsupport.bundle}
+    tac_first_look: >-
+      Establish whether the drop is a plain egress-buffer overrun (speed /
+      oversubscription) or a policer/queue action inside an attached service policy —
+      the remedy differs entirely.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/qos_commands.html
+
+  - id: interface-link-flap-and-errdisable
+    class: link-flap
+    title: "Link flapping and err-disabled port state (BPDU guard / loop guard / link-flap causes)"
+    symptoms:
+      - "repeated up/down transitions logged for the same port"
+      - "port shows err-disabled in interface status"
+      - "port does not recover until manually bounced"
+      - "packet errors accompany the flapping"
+    log_signatures:
+      - "%LINK-3-UPDOWN"
+      - "%LINEPROTO-5-UPDOWN"
+      - "%PM-4-ERR_DISABLE"
+      - "%PM-SP-4-ERR_DISABLE"
+      - "%SPANTREE-SP-2-BLOCK_BPDUGUARD"
+      - "%SPANTREE-2-LOOPGUARD_BLOCK"
+      - "%PHY-4-SFP_NOT_SUPPORTED"
+      - "%SFF8472-3-THRESHOLD_VIOLATION"
+    likely_causes:
+      - "cable under physical stress functioning only marginally"
+      - "defective or incompatible cable / SFP"
+      - "loose connection or bad patch panel"
+      - "bad port, module, or endpoint device fault"
+      - "duplex mismatch and link-synchronisation failure"
+      - "temperature or voltage anomalies in the optical transceiver"
+      - "an errdisable detect condition firing (bpduguard, udld, link-flap, security-violation, channel-misconfig, storm-control, gbic-invalid, loopback) with no errdisable recovery configured"
+    commands:
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show interfaces status err-disabled", intent: interface.status.errdisable}
+      - {cmd: "show errdisable detect", intent: errdisable.detect.config}
+      - {cmd: "show errdisable recovery", intent: errdisable.recovery.config}
+      - {cmd: "show errdisable flap-values", intent: errdisable.flap.thresholds}
+      - {cmd: "show platform pm interface-flaps <if>", intent: interface.flap.history, params: [if]}
+      - {cmd: "show controllers ethernet-controller <if> link status detail", intent: interface.link.status, params: [if]}
+      - {cmd: "show interfaces <if> transceiver detail", intent: optics.dom.levels, params: [if]}
+      - {cmd: "show cable-diagnostics tdr interface <if>", intent: cable.tdr, params: [if]}
+    tac_first_look: >-
+      Read the syslog first — the %PM-4-ERR_DISABLE line names the detect reason, and
+      that reason (not the flap itself) is what must be fixed before any recovery timer
+      matters.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html
+      - https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/69980-errdisable-recovery.html
+      - https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/10596-84.html
+
+  - id: transceiver-dom-and-unsupported-optics
+    class: optics
+    title: "SFP/QSFP light-level (DOM) problems and unsupported or unrecognised transceivers"
+    symptoms:
+      - "Rx power below the Low Warn threshold or above the High Warn threshold in the DOM table"
+      - "link will not come up, or comes up and drops"
+      - "transceiver reported as not supported and the port is disabled"
+      - "link works at one speed/FEC setting but not another"
+    log_signatures:
+      - "%SFF8472-3-THRESHOLD_VIOLATION"
+      - "%SFF8472-5-THRESHOLD_VIOLATION"
+      - "%PHY-4-SFP_NOT_SUPPORTED"
+      - "%PM_SCP-SP-3-GBIC_BAD"
+    likely_causes:
+      - "defective transceiver at the far end, or a fault in the device hosting it"
+      - "damaged or dirty fibre or DAC between the two transceivers"
+      - "a defect in the DOM sensor values themselves"
+      - "non-compatible or third-party SFP — behaviour is unpredictable and link stability is not guaranteed"
+      - "mismatched polish type, fibre mode, wavelength or signalling method between the two ends"
+      - "FEC or speed capability mismatch"
+    commands:
+      - {cmd: "show interfaces <if> transceiver detail", intent: optics.dom.levels, params: [if]}
+      - {cmd: "show interfaces transceiver supported-list", intent: optics.compatibility.list}
+      - {cmd: "show idprom interface <if>", intent: optics.idprom.raw, params: [if]}
+      - {cmd: "show idprom interface <if> | include PID", intent: optics.idprom.pid, params: [if]}
+      - {cmd: "show idprom interface <if> | include Transceiver Type", intent: optics.idprom.type, params: [if]}
+      - {cmd: "show interfaces <if> capabilities | include Speed", intent: interface.capabilities.speed, params: [if]}
+      - {cmd: "show interfaces <if> capabilities | in FEC", intent: optics.fec.capability, params: [if]}
+      - {cmd: "show idprom interface <if> | include Connector type", intent: optics.idprom.connector, params: [if]}
+    tac_first_look: >-
+      Read Rx/Tx power against the printed warn/alarm thresholds on BOTH ends, then
+      prove the PID/wavelength/connector pair is a legitimate matched Cisco combination
+      before blaming the fibre.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/24053-193.html
+
+  - id: stp-topology-change-churn
+    class: stp-topology
+    proposed_class: true
+    title: "Excessive STP topology changes (TCN) and unexpected root-bridge change"
+    symptoms:
+      - "topology-change counter climbing continuously in show spanning-tree detail"
+      - "periodic network-wide slowness with unicast flooding"
+      - "MAC addresses aging far faster than the configured aging time"
+      - "root bridge no longer the intended device, or the root port moving"
+    log_signatures:
+      - "%UNICAST_FLOOD-4-DETECTED"
+      - "%SW_MATM-4-MACFLAP_NOTIF"
+      - "%SPANTREE-7-RECV_1Q_NON_TRUNK"
+      - "%SPANTREE-7-BLOCK_PORT_TYPE"
+    likely_causes:
+      - "port flapping producing repetitive TCNs and flooding"
+      - "end-device ports without PortFast generating a TCN on every transition, shortening the forwarding-table aging time"
+      - "inconsistent STP timers, incorrect diameter, or PortFast on a switch-to-switch link"
+      - "undocumented extra links between switches"
+      - "topology differing from the documented design"
+      - "forwarding-table (CAM) overflow producing flooding that masquerades as TCN churn"
+    commands:
+      - {cmd: "show spanning-tree vlan <vlan> detail", intent: stp.vlan.topology_changes, params: [vlan]}
+      - {cmd: "show spanning-tree vlan <vlan>", intent: stp.vlan.root_id, params: [vlan]}
+      - {cmd: "show spanning-tree interface <if> detail", intent: stp.port.detail, params: [if]}
+      - {cmd: "show spanning-tree detail", intent: stp.detail.all}
+      - {cmd: "show spanning-tree summary", intent: stp.summary}
+      - {cmd: "show spanning-tree active", intent: stp.active.ports}
+      - {cmd: "show spanning-tree interface <if> portfast", intent: stp.port.portfast, params: [if]}
+      - {cmd: "show mac address-table aging-time vlan <vlan>", intent: l2.mac.aging_time, params: [vlan]}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Take the topology-change count and the "last change from" interface out of
+      show spanning-tree vlan <vlan> detail — that one line names the port generating
+      the churn.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/c9000/lyr2-fwd/stp/stp-configuration-guide/m-stp.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6000-series-switches/23563-143.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
+
+  - id: stp-loop-and-broadcast-storm
+    class: stp-topology
+    proposed_class: true
+    title: "Layer-2 forwarding loop / broadcast storm"
+    symptoms:
+      - "very high broadcast/multicast rate on multiple interfaces at once"
+      - "CPU pegged near 100 percent"
+      - "MAC addresses flapping between ports"
+      - "loss of management access to switches in the affected VLAN"
+    log_signatures:
+      - "%SW_MATM-4-MACFLAP_NOTIF"
+      - "%SPANTREE-2-LOOPGUARD_BLOCK"
+      - "%SPANTREE-2-LOOPGUARD_UNBLOCK"
+      - "%UNICAST_FLOOD-4-DETECTED"
+    likely_causes:
+      - "unidirectional link — one bridge transmits BPDUs but the downstream bridge never receives them"
+      - "bad transceiver/GBIC, cable failure, or defective port/line card preventing BPDU reception"
+      - "CPU overload (over 99 percent) preventing BPDU processing"
+      - "BPDUs corrupted in transit"
+      - "PortFast on a switch-to-switch link or other STP misconfiguration"
+      - "undocumented extra connections between switches creating a loop"
+    commands:
+      - {cmd: "show interfaces | include L2|line|broadcast", intent: interface.rate.broadcast}
+      - {cmd: "show interface <if> counters", intent: interface.counters.perport, params: [if]}
+      - {cmd: "show interface <if> counters errors", intent: interface.counters.errors, params: [if]}
+      - {cmd: "show spanning-tree vlan <vlan> detail", intent: stp.vlan.detail, params: [vlan]}
+      - {cmd: "show spanning-tree interface <if> detail", intent: stp.port.bpdu_counts, params: [if]}
+      - {cmd: "show spanning-tree summary", intent: stp.summary.loopguard}
+      - {cmd: "show processes cpu sorted", intent: cpu.top_processes}
+      - {cmd: "show mac address-table aging-time vlan <vlan>", intent: l2.mac.aging_time, params: [vlan]}
+    tac_first_look: >-
+      Find the ports whose broadcast rate and BPDU counts are anomalous relative to the
+      rest of the VLAN, and check whether any port that should be blocking is instead
+      forwarding.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
+      - https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/10596-84.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
+
+  - id: trunk-vlan-and-vtp-problems
+    class: vlan-trunk
+    proposed_class: true
+    title: "Trunk not forming, allowed-VLAN or native-VLAN mismatch, VTP domain/revision problems"
+    symptoms:
+      - "port stays access instead of trunking, or a VLAN is absent from the allowed/active list"
+      - "two native VLANs merged into one broadcast domain"
+      - "VLANs disappear or are overwritten network-wide after a switch is inserted"
+      - "VTP advertisements ignored by a neighbour"
+    log_signatures:
+      - "%SPANTREE-7-RECV_1Q_NON_TRUNK"
+      - "%SPANTREE-7-BLOCK_PORT_TYPE"
+    likely_causes:
+      - "trunk-encapsulation mismatch (ISL vs 802.1Q)"
+      - "DTP negotiation not possible or unsupported on one side, requiring on / nonegotiate"
+      - "native VLAN configured differently on the two ends, merging two native VLANs"
+      - "VLAN not created/active, or not in the allowed list on ingress and egress"
+      - "VTP domain-name mismatch — an advertisement with a different domain name is ignored"
+      - "VTP password not identical on all switches, or a switch inserted with a higher configuration revision overwriting the VLAN database"
+    commands:
+      - {cmd: "show interfaces trunk", intent: trunk.status.allowed_vlans}
+      - {cmd: "show interface <if> switchport", intent: switchport.mode.native_vlan, params: [if]}
+      - {cmd: "show interfaces <if> trunk", intent: trunk.perport.state, params: [if]}
+      - {cmd: "show vlan brief", intent: vlan.database.summary}
+      - {cmd: "show vlan summary", intent: vlan.database.detail}
+      - {cmd: "show vtp status", intent: vtp.status.revision}
+      - {cmd: "show vtp counters", intent: vtp.counters}
+      - {cmd: "show interfaces <if> capabilities", intent: interface.capabilities.trunk, params: [if]}
+      - {cmd: "show cdp neighbors <if> detail", intent: l2.neighbor.native_vlan, params: [if]}
+    tac_first_look: >-
+      Compare show interfaces trunk on both ends side by side — mode, encapsulation,
+      native VLAN and the allowed/active VLAN lists — before touching VTP, and check the
+      VTP configuration revision number before ever inserting a switch into the domain.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
+      - https://www.cisco.com/c/en/us/support/docs/lan-switching/etherchannel/22422-144.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/vlan_commands.html
+      - https://www.cisco.com/c/en/us/support/docs/lan-switching/vtp/10558-21.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
+
+  - id: etherchannel-not-bundling
+    class: port-channel-lacp
+    proposed_class: true
+    title: "Port-channel not bundling / member ports suspended or stand-alone"
+    symptoms:
+      - "show etherchannel summary shows members flagged s (suspended), I (stand-alone) or D (down) instead of P"
+      - "only part of the intended bandwidth in service"
+      - "port-channel interface stays down"
+      - "EtherChannel misconfiguration err-disables ports"
+    log_signatures:
+      - "%ETC-5-L3DONTBNDL2"
+      - "%SPANTREE-2-CHNMISCFG"
+      - "%SPANTREE-2-CHNL_MISCFG"
+      - "%PM-4-ERR_DISABLE"
+      - "%LINK-3-UPDOWN"
+    likely_causes:
+      - "LACP not enabled on the remote port / no LACP sync-up, so the local port suspends"
+      - "one switch treats the links as a channel while the neighbour treats them as separate connections"
+      - "ports on one side not configured into the channel"
+      - "port speed/duplex mismatch between members (PAgP requires identical configuration)"
+      - "incompatible channel-mode pairing"
+      - "hardware/software programming discrepancy between the control plane and the forwarding ASIC"
+    commands:
+      - {cmd: "show etherchannel <po> summary", intent: portchannel.bundle.state, params: [po]}
+      - {cmd: "show etherchannel <po> detail", intent: portchannel.detail, params: [po]}
+      - {cmd: "show etherchannel <po> protocol", intent: portchannel.protocol, params: [po]}
+      - {cmd: "show lacp <po> internal", intent: lacp.internal.flags, params: [po]}
+      - {cmd: "show lacp <po> neighbor", intent: lacp.neighbor.flags, params: [po]}
+      - {cmd: "show lacp <po> counters", intent: lacp.pdu.counters, params: [po]}
+      - {cmd: "show lacp sys-id", intent: lacp.system.id}
+      - {cmd: "show pagp <po> neighbor", intent: pagp.neighbor, params: [po]}
+      - {cmd: "show run interface <if>", intent: config.interface.channelgroup, params: [if]}
+    tac_first_look: >-
+      Read the per-member flag letter in show etherchannel <n> summary and pair it with
+      the LACP internal/neighbour flag byte — the expected bundled value is 0x3D — to say
+      whether the local side, the peer, or the configuration is at fault.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-series-switches/220367-troubleshoot-etherchannels-on-catalyst-9.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/16-12/command_reference/b_1612_9500_cr/layer_2_3_commands.html
+      - https://www.cisco.com/c/en/us/support/docs/lan-switching/etherchannel/20625-127.html
+
+  - id: hsrp-flapping-and-duplicate-active
+    class: fhrp
+    proposed_class: true
+    title: "HSRP active/standby flapping, duplicate active routers, unexpected state changes"
+    symptoms:
+      - "repeated HSRP state-change messages on one or both peers"
+      - "both routers claiming Active simultaneously"
+      - "duplicate-address errors for the HSRP virtual IP"
+      - "intermittent packet loss for hosts using the virtual IP as gateway"
+    log_signatures:
+      - "%HSRP-5-STATECHANGE"
+      - "%HSRP-6-STATECHANGE"
+      - "%STANDBY-6-STATECHANGE"
+      - "%STANDBY-3-DUPADDR"
+      - "%STANDBY-3-DIFFVIP1"
+      - "%SW_MATM-4-MACFLAP_NOTIF"
+    likely_causes:
+      - "loss of HSRP hellos between peers — the fundamental cause"
+      - "physical-layer problems preventing consistent packet delivery"
+      - "excessive network traffic caused by spanning-tree issues"
+      - "high CPU utilisation preventing timely packet processing"
+      - "input-queue drops requiring SPD and hold-queue tuning"
+      - "STP loop or unidirectional link causing both peers to go active"
+      - "a MAC address moving twice within 15 seconds, so the switch discards that host's packets for about 15 seconds"
+    commands:
+      - {cmd: "show standby", intent: fhrp.hsrp.state}
+      - {cmd: "show ip interface brief", intent: interface.l3.state}
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show interfaces <if> counters", intent: interface.counters.perport, params: [if]}
+      - {cmd: "show interfaces <if> counters errors", intent: interface.counters.errors, params: [if]}
+      - {cmd: "show spanning-tree vlan <vlan>", intent: stp.vlan.state, params: [vlan]}
+      - {cmd: "show mac address-table aging-time vlan <vlan>", intent: l2.mac.aging_time, params: [vlan]}
+      - {cmd: "show run interface vlan <vlan>", intent: config.interface.hsrp, params: [vlan]}
+    tac_first_look: >-
+      Treat %STANDBY-3-DUPADDR as evidence of a Layer-2 problem — the doc states these
+      messages do not necessarily indicate an HSRP problem but a possible STP loop or a
+      router/switch configuration issue.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
+
+  - id: high-cpu-process-or-punt
+    class: high-cpu
+    title: "High CPU on IOS-XE — process-driven vs interrupt/punt-driven"
+    symptoms:
+      - "sustained high 5-second / 1-minute / 5-minute CPU in show processes cpu sorted"
+      - "a named process consuming an unexpected share of cycles"
+      - "high interrupt percentage indicating data-plane punts"
+      - "protocol instability (STP, HSRP, routing) as a secondary effect"
+    log_signatures: []
+    likely_causes:
+      - "a process taking an unexpected volume of CPU cycles (e.g. ARP Input driven by punted broadcast)"
+      - "interrupt utilisation caused by the data plane punting packets"
+      - "ARP requests, ICMP redirects and Layer-2 control protocols exceeding CPU queue capacities"
+      - "aggregate CPU-bound rate exceeded — beyond roughly 19,000 pps punted traffic is policed without weight"
+      - "SISF / device-tracking on trunk interfaces"
+      - "CoPP rate-limiting a queue so packets are dropped while CPU still looks low"
+    commands:
+      - {cmd: "show processes cpu sorted", intent: cpu.top_processes}
+      - {cmd: "show processes cpu history", intent: cpu.trend}
+      - {cmd: "show processes cpu sort | ex 0.00", intent: cpu.process.nonzero}
+      - {cmd: "show processes cpu platform sorted", intent: cpu.platform.linux}
+      - {cmd: "show platform software fed switch active punt cause summary", intent: punt.cause.summary}
+      - {cmd: "show platform software fed switch active punt cpuq all", intent: punt.queue.stats}
+      - {cmd: "show platform software fed switch active punt rates interfaces", intent: punt.rate.per_interface}
+      - {cmd: "show platform software fed switch active cpu-interface", intent: punt.cpu_interface.stats}
+      - {cmd: "show platform hardware fed switch active qos queue stats internal cpu policer", intent: copp.policer.drops}
+    tac_first_look: >-
+      Split process from interrupt in the first line of show processes cpu sorted; if
+      interrupt is the driver, go straight to the punt cause summary and the
+      per-interface punt rates to find the offending source.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html
+
+  - id: copp-and-acl-control-plane-drops
+    class: control-plane-policing
+    proposed_class: true
+    title: "CoPP / control-plane policer drops and ACL-related control-plane punting"
+    symptoms:
+      - "legitimate control traffic (DHCP, ARP, routing hellos) intermittently lost while CPU looks healthy"
+      - "drop counters incrementing in the internal CPU policer table"
+      - "a policed traffic class matching the symptom being troubleshot"
+      - "ICMP-heavy logging"
+    log_signatures: []
+    likely_causes:
+      - "CPU-bound traffic exceeding the aggregate rate, so packets drop FIFO beyond active CoPP policing"
+      - "multiple traffic classes sharing one policer index — the ICMP-redirect queue and the broadcast queue share PlcIdx 0 at 600 pps"
+      - "ICMP redirects generated for packets destined to a remote subnet via an on-link gateway"
+      - "ICMP unreachables generated for ACL-denied packets"
+      - "routing loops generating cascading TTL-exceeded messages"
+    commands:
+      - {cmd: "show policy-map control-plane", intent: copp.policy.counters}
+      - {cmd: "show platform hardware fed switch active qos queue stats internal cpu policer", intent: copp.policer.queue_drops}
+      - {cmd: "show platform software qos copp policy-info", intent: copp.policy.definition}
+      - {cmd: "show platform software qos copp class-info", intent: copp.class.definition}
+      - {cmd: "show platform software fed switch active punt cpuq all", intent: punt.queue.detail}
+      - {cmd: "show access-lists", intent: acl.config.all}
+      - {cmd: "show ip access-list <name>", intent: acl.config.named, params: [name]}
+      - {cmd: "show logging | inc ICMP", intent: logging.filter.icmp}
+    tac_first_look: >-
+      CoPP drops alone are not always a problem — they matter when the policed class is
+      the same class as the traffic being troubleshot, so map the failing protocol to
+      its queue and policer index first.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-series-switches/217429-troubleshoot-slow-or-intermittent-dhcp-o.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html
+
+  - id: memory-leak-low-free-memory
+    class: high-memory
+    title: "Memory leak / low free memory / allocation failure on IOS-XE"
+    symptoms:
+      - "free memory declining monotonically without a matching load increase"
+      - "a platform element warning for memory"
+      - "allocation-failure messages in the log"
+      - "a single process's memory footprint growing continuously"
+    log_signatures:
+      - "%SYS-2-MALLOCFAIL"
+      - "%SYS-SP-2-MALLOCFAIL"
+      - "%PLATFORM-4-ELEMENT_WARNING"
+    likely_causes:
+      - "a high volume of diff calls signalling the system is not releasing memory"
+      - "a specific process holding memory"
+      - "code-level leaks at a callsite that allocates without a matching free"
+      - "memory fragmenting into pieces too small to satisfy a request even when total free memory looks sufficient"
+    commands:
+      - {cmd: "show platform resources", intent: platform.resources.memory}
+      - {cmd: "show processes memory platform sorted", intent: memory.process.top}
+      - {cmd: "show processes memory platform accounting", intent: memory.accounting}
+      - {cmd: "show platform software memory <process> <loc> bri", intent: memory.process.brief, params: [process, loc]}
+      - {cmd: "show platform software memory database <process> <loc> bri | ex _0_", intent: memory.database.diff, params: [process, loc]}
+      - {cmd: "show platform software memory messaging <process> <loc> brief | ex _0_", intent: memory.messaging.diff, params: [process, loc]}
+      - {cmd: "show platform software memory <process> <loc> alloc callsite brief", intent: memory.callsite.alloc, params: [process, loc]}
+      - {cmd: "show platform software memory <process> <loc> alloc backtrace", intent: memory.callsite.backtrace, params: [process, loc]}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Establish the trend first (show platform resources over time), then narrow to the
+      single process and its callsite — the doc is explicit that definitive root cause
+      requires TAC interpretation of the callsite/backtrace data.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-17/225227-troubleshoot-memory-issues-in-ios-xe.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/24053-193.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
+
+  - id: unexpected-reload-and-crash-analysis
+    class: crash-reload
+    proposed_class: true
+    title: "Unexpected reload / crash — reason determination and artefact collection"
+    symptoms:
+      - "device uptime reset without a scheduled change"
+      - "a crashinfo, core or system-report file present in flash or crashinfo:"
+      - "a stack member reloaded while others stayed up"
+      - "last reload reason is not Reload Command"
+    log_signatures: []
+    likely_causes:
+      - "PowerOn — manual power cycle or prolonged outage"
+      - "stack merge due to incompatibility, where the standby lost communication and re-election was triggered"
+      - "explicit reload from the CLI"
+      - "LocalSoft or CPU catastrophic error forcing a reset"
+      - "sudden power-supply failure or UPS interruption"
+      - "redundancy force-switchover, or an image install completing"
+      - "a software crash generating a core/crash file"
+    commands:
+      - {cmd: "show version | include uptime|returned|reload|Version", intent: system.reload.reason}
+      - {cmd: "show logging onboard switch <id> uptime detail", intent: obfl.uptime.per_member, params: [id]}
+      - {cmd: "show logging onboard RP active status", intent: obfl.status}
+      - {cmd: "dir crashinfo: | include .gz", intent: crash.files.crashinfo}
+      - {cmd: "dir flash: | include .gz", intent: crash.files.flash}
+      - {cmd: "dir /recur all-filesystems | inc Directory of|crashinfo_|core.gz|fullcore|system-report", intent: crash.artifacts.sweep}
+      - {cmd: "dir bootflash:/core", intent: crash.files.core}
+      - {cmd: "show tech-support", intent: techsupport.bundle}
+    tac_first_look: >-
+      Pin the exact date/time of the event, read the reset reason per stack member, then
+      sweep every filesystem for crashinfo/core/system-report before anything overwrites
+      them.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/220656-troubleshoot-unexpected-reloads-on-catal.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-bengaluru-1761/217350-troubleshoot-unexpected-reloads-in-ios.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/troubleshooting_the_software_configuration.html
+
+  - id: hardware-environment-power-fan-temperature
+    class: hardware-fault
+    title: "Power supply, fan and temperature environmental alarms"
+    symptoms:
+      - "environmental alarm raised for temperature or voltage"
+      - "fan reported fail, or a red FAN LED"
+      - "a module denied power, or a power supply INPUT OK LED off"
+      - "unexpected module shutdown attributed to thermal or power conditions"
+    log_signatures:
+      - "%C6KPWR-4-POWRDENIED"
+      - "%C6KPWR-SP-4-DISABLED"
+      - "%OIR-SP-6-INSCARD"
+      - "%OIR-SP-6-REMCARD"
+      - "%DIAG-SP-3-MINOR_HW"
+      - "%CONST_DIAG-4-ERROR_COUNTER_WARNING"
+    likely_causes:
+      - "insufficient supply capacity in redundant mode, requiring a higher-wattage supply or combined mode"
+      - "power denied to a module because available power is exhausted"
+      - "power-supply malfunction indicated by the INPUT OK LED"
+      - "fan-fail status requiring assembly replacement — multiple fan failures can trigger automatic shutdown"
+      - "VTT outlet temperature exceeding threshold"
+      - "module inlet/outlet temperature exceeding limits"
+    commands:
+      - {cmd: "show environment all", intent: environment.all}
+      - {cmd: "show env temperature status", intent: environment.temperature}
+      - {cmd: "show env power", intent: environment.power}
+      - {cmd: "show power inline", intent: poe.status}
+      - {cmd: "show logging onboard RP active environment", intent: obfl.environment}
+      - {cmd: "show logging onboard RP active temperature", intent: obfl.temperature}
+      - {cmd: "show logging onboard RP active voltage", intent: obfl.voltage}
+      - {cmd: "show environment alarms", intent: environment.alarms}
+      - {cmd: "show module", intent: hardware.module.status}
+    tac_first_look: >-
+      Correlate the alarm against OBFL environment/temperature/voltage history — a
+      transient thermal or voltage excursion recorded there is what turns an unexplained
+      reload into a diagnosed one.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/troubleshooting_the_software_configuration.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/24053-193.html
+
+  - id: ntp-not-synchronizing
+    class: ntp-sync
+    proposed_class: true
+    title: "NTP client not synchronising to its server"
+    symptoms:
+      - "show ntp status reports the clock is unsynchronised"
+      - "no peer marked as the sync source in the associations table"
+      - "reach value 0 or low"
+      - "large offset or dispersion against the configured server"
+    log_signatures: []
+    likely_causes:
+      - "a reach value of 0 meaning the NTP process received no packet"
+      - "NTP refusing to sync to a machine whose time differs by more than 4000 seconds"
+      - "ACLs not permitting UDP port 123 in both directions"
+      - "dispersion above 16000 ms causing the client to reject the server's time"
+      - "packets failing the authentication test"
+      - "the peer clock itself being unsynchronised"
+    commands:
+      - {cmd: "show ntp status", intent: ntp.sync.state}
+      - {cmd: "show ntp association", intent: ntp.peers.summary}
+      - {cmd: "show ntp association detail", intent: ntp.peers.detail}
+      - {cmd: "show clock", intent: system.clock}
+      - {cmd: "show access-lists", intent: acl.config.udp123}
+      - {cmd: "ping <peer>", intent: reachability.ntp_server, params: [peer]}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Read reach in the detailed associations output — 0 means packets are not arriving
+      at all (path/ACL problem), a low non-zero value means intermittent loss, and 377
+      with no sync means the server's time or stratum is being rejected.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-series-switches/222833-troubleshoot-slp-smart-transport-on-cata.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
+
+  - id: snmp-agent-unresponsive-or-high-cpu
+    class: snmp-agent
+    proposed_class: true
+    title: "SNMP agent not responding, or SNMP polling driving high CPU"
+    symptoms:
+      - "NMS times out polling specific OIDs while the device is otherwise reachable"
+      - "the SNMP ENGINE process dominating show processes cpu sorted"
+      - "CPU spikes correlated with the polling interval"
+      - "delayed-response and input-queue-full messages in the log"
+    log_signatures:
+      - "%SNMP-3-RESPONSE_DELAYED"
+      - "%SNMP-3-INPUT_QFULL_ERR"
+      - "%SNMP-3-CPUHOG"
+      - "%SYS-2-SIGPENDING"
+    likely_causes:
+      - "specific OIDs triggering response times that exceed the client's timeout"
+      - "the Snmp Flash Cache process consuming excessive CPU when MIB caching is enabled"
+      - "heavy NMS polling overwhelming the input queue and causing packet loss"
+      - "the SNMP ENGINE process monopolising CPU for computationally expensive OIDs"
+      - "NMS querying entire route/ARP tables, forcing lexicographic ordering of internally-hashed structures"
+      - "polling of CISCO-FLASH-MIB, notably with ATA flash disks"
+    commands:
+      - {cmd: "show processes cpu sorted", intent: cpu.top_processes}
+      - {cmd: "show snmp stats oid", intent: snmp.oid.last_polled}
+      - {cmd: "show running-config all | include snmp mib flash cache", intent: snmp.mibcache.config}
+      - {cmd: "show processes cpu history", intent: cpu.trend}
+      - {cmd: "show process cpu", intent: cpu.process}
+      - {cmd: "show clock", intent: system.clock}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Capture show snmp stats oid at the moment of the CPU spike — the last OID polled
+      is normally the expensive one, and the fix is an SNMP view excluding it rather
+      than a platform change.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/simple-network-management-protocol-snmp/217632-troubleshoot-snmp-basic-functionality.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/simple-network-management-protocol-snmp/7270-ipsnmphighcpu.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html
+
+  - id: aaa-tacacs-authentication-failure
+    class: aaa-auth
+    proposed_class: true
+    title: "AAA / TACACS+ authentication failures on device login"
+    symptoms:
+      - "login rejected, or falling back to local credentials"
+      - "long delay at the username/password prompt before failure"
+      - "TACACS+ server counters show no successful transactions"
+      - "only some devices in the fleet fail while others succeed"
+    log_signatures: []
+    likely_causes:
+      - "firewall or access list blocking TCP port 49 between device and server"
+      - "mismatched preshared key producing Invalid AUTHEN packet (check keys)"
+      - "the AAA client entry on the TACACS server carrying the wrong IP address or shared key"
+      - "the router's source-interface IP differing from the client IP configured on the server"
+      - "source interface in a VRF without VRF-aware TACACS configuration"
+      - "a restrictive server-side user policy returning FAIL, or an ERROR indicating a daemon/network fault"
+    commands:
+      - {cmd: "show tacacs", intent: aaa.tacacs.server_stats}
+      - {cmd: "show running-config", intent: config.running.aaa}
+      - {cmd: "show ip interface brief", intent: interface.source.candidates}
+      - {cmd: "ping <peer>", intent: reachability.aaa_server, params: [peer]}
+      - {cmd: "show access-lists", intent: acl.config.tcp49}
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show tech-support aaa", intent: aaa.techsupport.bundle}
+    tac_first_look: >-
+      Decide first whether the result is FAIL (server policy — investigate on the
+      server) or ERROR (daemon or network path — investigate reachability on TCP/49 and
+      the source interface); those lead to opposite teams.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html
+      - https://www.cisco.com/c/en/us/support/docs/security-vpn/terminal-access-controller-access-control-system-tacacs-/200467-Troubleshoot-TACACS-Authentication-Issue.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-series-switches/215914-useful-outputs-from-catalyst-9000-switch.html
+
+  - id: dhcp-relay-ip-helper-failure
+    class: dhcp-relay
+    proposed_class: true
+    title: "DHCP relay / ip helper-address failure or intermittent slow DHCP"
+    symptoms:
+      - "clients on a relayed SVI fail to obtain an address, or only after multiple DISCOVER retries"
+      - "Discovers arriving on the switch but no unicast forwarded to the server"
+      - "DHCP works on some VLANs and not others"
+      - "broadcast-queue drops incrementing in the internal CPU policer table"
+    log_signatures: []
+    likely_causes:
+      - "ip helper-address missing on the client VLAN's SVI"
+      - "DHCP service disabled — it must be enabled when the switch is a relay agent"
+      - "no unicast connectivity from the client VLAN to the DHCP server"
+      - "more than one relay agent on the path modifying the packet"
+      - "Layer-2 path problem — VLAN not created, not active, or not permitted on the ingress/egress interfaces"
+      - "DHCP snooping trust boundary wrong"
+      - "broadcast punt starved by the ICMP-redirect queue sharing the same policer index at 600 pps"
+    commands:
+      - {cmd: "show run all | in dhcp", intent: dhcp.config.global}
+      - {cmd: "show running-config interface vlan <vlan>", intent: dhcp.relay.helper_config, params: [vlan]}
+      - {cmd: "show ip interface vlan <vlan>", intent: dhcp.helper.address, params: [vlan]}
+      - {cmd: "show vlan brief", intent: vlan.database.active}
+      - {cmd: "show interfaces trunk", intent: trunk.vlan.path}
+      - {cmd: "show mac address interface <if>", intent: l2.mac.client_port, params: [if]}
+      - {cmd: "show access-lists <name>", intent: acl.dhcp.filter, params: [name]}
+      - {cmd: "show platform hardware fed switch active qos queue stats internal cpu policer", intent: copp.broadcast_queue.drops}
+      - {cmd: "show logging | inc ICMP", intent: logging.filter.icmp}
+    tac_first_look: >-
+      Prove the Discover reaches the SVI and that a unicast relayed copy leaves toward
+      the helper address; if both are true, the failure is the broadcast punt queue
+      being starved, not DHCP configuration.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-series-switches/217429-troubleshoot-slow-or-intermittent-dhcp-o.html
+
+  - id: smart-licensing-trust-or-comm-failure
+    class: licensing
+    proposed_class: true
+    title: "Smart Licensing Using Policy — registration / trust / CSSM communication failure"
+    symptoms:
+      - "show license status shows no Trust Code Installed"
+      - "communication-failed messages recurring at the report interval"
+      - "show license history message shows empty response fields"
+      - "policy or authorization install failing after an upgrade"
+    log_signatures:
+      - "%SMART_LIC-3-COMM_FAILED"
+      - "%SMART_LIC-3-COMM_RESTORED"
+      - "%SMART_LIC-3-TRUST_CODE_INSTALL_FAILED"
+      - "%SMART_LIC-3-POLICY_INSTALL_FAILED"
+      - "%SMART_LIC-3-AUTHORIZATION_INSTALL_FAILED"
+      - "%SMART_LIC-4-REPORTING_NOT_SUPPORTED"
+    likely_causes:
+      - "network unreachability to CSSM / CSLU / SSM On-Prem"
+      - "DNS failing to resolve the Smart Transport URL or the proxy hostname"
+      - "connection attempted but no response — proxy or firewall blocking HTTPS"
+      - "missing client certificate or incorrect transport URL"
+      - "a trust code already present on the node"
+      - "Smart Account / Virtual Account mismatch — the token does not include this product instance"
+      - "inaccurate system clock producing a signature or timestamp mismatch with CSSM"
+    commands:
+      - {cmd: "show license status", intent: license.status.trust}
+      - {cmd: "show license all", intent: license.all}
+      - {cmd: "show license tech support", intent: license.techsupport}
+      - {cmd: "show license tech support | sec Trust", intent: license.trust.section}
+      - {cmd: "show license history message", intent: license.message.history}
+      - {cmd: "show license eventlog 1", intent: license.eventlog}
+      - {cmd: "show license udi", intent: license.udi}
+      - {cmd: "show license authorization", intent: license.authorization}
+      - {cmd: "show clock", intent: system.clock}
+    tac_first_look: >-
+      Check the system clock and show license history message together — an empty
+      response field with a skewed clock is a signature/timestamp rejection, not a
+      reachability problem.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-series-switches/222833-troubleshoot-slp-smart-transport-on-cata.html
+
+  - id: unintended-configuration-drift
+    class: config-change
+    title: "Unintended configuration change / configuration drift"
+    symptoms:
+      - "behaviour changed with no recorded change ticket"
+      - "running configuration differs from the archived or startup copy"
+      - "configuration-change messages in the log"
+      - "a configuration session held open by another user"
+    log_signatures:
+      - "%SYS-5-CONFIG_I"
+    likely_causes:
+      - "an unrecorded interactive change by an operator or automation"
+      - "running configuration never written, so a reload silently reverted the intent"
+      - "a configuration session lock held or contended"
+      - "a config-replace/rollback applied without a matching archive entry"
+      - "the device reloaded onto a different image or startup configuration"
+    commands:
+      - {cmd: "show archive", intent: config.archive.versions}
+      - {cmd: "show configuration lock", intent: config.lock.state}
+      - {cmd: "show running-config", intent: config.running}
+      - {cmd: "show configuration", intent: config.startup}
+      - {cmd: "show run interface <if>", intent: config.interface.scoped, params: [if]}
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show version | include uptime|returned|reload|Version", intent: system.uptime}
+      - {cmd: "show boot", intent: boot.variable}
+    tac_first_look: >-
+      Anchor the drift in time by comparing %SYS-5-CONFIG_I timestamps against device
+      uptime and the archive versions, so it is clear whether the change was made, lost
+      on reload, or rolled back.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/24053-193.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/220656-troubleshoot-unexpected-reloads-on-catal.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/troubleshooting_the_software_configuration.html

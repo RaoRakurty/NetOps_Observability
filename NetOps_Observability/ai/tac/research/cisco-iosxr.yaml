@@ -1,0 +1,1454 @@
+# Correlix TAC escalation pack — vendor research (Cisco IOS-XR)
+# Design of record: docs/design/TAC_ESCALATION_2026-09-05.md
+# Every command below appears verbatim on the cited public cisco.com page (or in the
+# IOS-XR command reference for that feature). Read-only show/ping/traceroute/dir only:
+# no debug, clear, reload, config, monitor or `run` shell commands.
+# NOTE: ai/tac/README.md did not exist when this file was written; the schema used is
+# the one given in the research brief.
+
+vendor: cisco-iosxr
+
+sources:
+  - title: "Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)"
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+  - title: "Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands"
+    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
+  - title: "Transfer Show Tech-Support Files to XR VM on Routers Running eXR"
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
+  - title: "Troubleshoot Input Drops in Cisco IOS XR"
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
+
+tac_baseline:
+  commands:
+    - show version
+    - show platform
+    - show inventory
+    - show install active summary
+    - show install log
+    - show hw-module fpd
+    - show diag
+    - show logging
+    - show running
+    - show configuration failed
+    - show configuration commit changes all
+    - show configuration history
+    - show environment
+    - show led
+    - show alarms brief system active
+    - show pfm location all
+    - show processes
+    - show processes cpu
+    - show processes blocked location all
+    - show watchdog memory-state
+    - show context location all
+    - show controllers np counters all
+    - show drops
+    - show redundancy
+    - show redundancy summary
+    - show reboot history
+    - show snmp mib access
+    - show snmp interface
+    - show interfaces description
+    - show ospf neighbor
+    - show bgp sessions
+    - show bgp summary
+    - show rib update-groups
+    - show tcp brief
+    - show l2vpn xconnect
+    - show mpls traffic-eng tunnels
+    - show bfd session
+  notes: >-
+    215365 publishes a per-platform command list (ASR9K classic, ASR9K eXR, NCS/whitebox,
+    CRS, Cisco 8xxx) that TAC asks for on essentially every case; the list above is the
+    eXR/NCS common core. Platform deltas worth honouring: classic ASR9K/CRS use
+    `admin show platform`, `admin show environment`, `admin show led` and
+    `show hw-module fpd location all`; NCS adds `show asic-errors all detail location <loc>`;
+    Cisco 8xxx adds `show reboot history`. `term length 0` heads the published list but is
+    a terminal setting, not a diagnostic, and Correlix's runner sets pagination itself.
+    show tech-support on IOS-XR writes a .tgz to the router's hard disk rather than
+    streaming to the session, and the command reference repeats that it "can generate a
+    very large amount of output" — always prefer a feature-scoped bundle
+    (show tech-support routing ospf | routing isis | routing bfd | routing rpl |
+    mpls ldp | mpls traffic-eng | l2vpn | platform | qos | ethernet | fabric | install |
+    cef | rib | multicast | snmp) over the unscoped form. On eXR, the .tgz lands in the
+    XR VM and 221131 covers moving it off-box.
+  sources:
+    - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+    - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
+    - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
+
+issues:
+  - id: ospf-adjacency-stuck-exstart-mtu
+    class: ospf-adjacency
+    title: "OSPF adjacency stuck in EXSTART/EXCHANGE (IP MTU mismatch across the link)"
+    symptoms:
+      - "show ospf neighbor shows the peer permanently in EXSTART or EXCHANGE, never FULL"
+      - "adjacency count on the interface stays 0 while hellos are exchanged"
+      - "small pings succeed but large DBD/LSU packets are characterized as giants and dropped"
+      - "the peer's prefixes never install in the RIB"
+    log_signatures: []
+    likely_causes:
+      - "IP MTU mismatch — large database descriptor (DBD) packets characterized as giants and dropped"
+      - "IOS vs IOS-XR mtu semantics: XR `mtu` INCLUDES the 14-byte L2 header, IOS excludes it, so XR 9026 equals IOS 9012"
+      - "unexpected DBD sequence number"
+      - "duplicate or mismatched router IDs"
+      - "sub-interface inheriting a different MTU than the main interface"
+    commands:
+      - {cmd: "show ospf neighbor", intent: ospf.neighbor.list}
+      - {cmd: "show ospf interface <if>", intent: ospf.interface.detail, params: [if]}
+      - {cmd: "show ipv4 interface <if> | i MTU", intent: interface.ipv4.mtu, params: [if]}
+      - {cmd: "show im database interface <if>", intent: interface.im.database, params: [if]}
+      - {cmd: "show ospf", intent: ospf.process.summary}
+      - {cmd: "show ospf database", intent: ospf.database.list}
+      - {cmd: "ping 224.0.0.5", intent: ospf.multicast.reachability}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Compare show ipv4 interface <if> | i MTU on both ends before anything else — on
+      IOS-XR the configured mtu includes the L2 header, so an apparently identical number
+      across an IOS/XR link is a real 14-byte mismatch.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: ospf-adjacency-flap
+    class: ospf-flapping-link
+    title: "OSPF adjacency flapping (dead-timer expiry, link or CPU instability)"
+    symptoms:
+      - "neighbor cycles FULL to DOWN to INIT to FULL repeatedly"
+      - "route churn and repeated SPF runs; traffic blackholes for seconds at a time"
+      - "retransmission and flood lists non-empty during the flap window"
+      - "interface error/drop counters climbing on the transit link"
+    log_signatures: []
+    likely_causes:
+      - "dead timer expiration / lost hellos"
+      - "physical-layer or one-way media failure on the link"
+      - "high CPU starving protocol packet processing"
+      - "a BFD session bouncing (detect timer expired / echo failure) and tearing the client protocol down"
+      - "corrupted LSA exchange keeping the peer out of FULL"
+    commands:
+      - {cmd: "show ospf neighbor", intent: ospf.neighbor.list}
+      - {cmd: "show ospf interface <if>", intent: ospf.interface.timers, params: [if]}
+      - {cmd: "show ospf message-queue", intent: ospf.messagequeue.depth}
+      - {cmd: "show ospf retransmission-list", intent: ospf.retransmit.list}
+      - {cmd: "show ospf flood-list", intent: ospf.flood.list}
+      - {cmd: "show bfd session", intent: bfd.session.list}
+      - {cmd: "show controllers <if> all", intent: interface.controller.stats, params: [if]}
+      - {cmd: "show processes cpu", intent: cpu.processes}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Establish whether the flap is protocol-driven or link-driven by lining up show
+      logging timestamps against show controllers <if> all error counters and show bfd
+      session state.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/220364-troubleshoot-bidirectional-forwarding-de.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: ospf-route-missing-lsa
+    class: ospf-database
+    title: "OSPF prefix missing from RIB/FIB despite a FULL adjacency (LSA / area type / redistribution)"
+    symptoms:
+      - "neighbor is FULL but the prefix is absent from show route ipv4 <prefix>"
+      - "prefix present in show ospf database but not in show ospf routes"
+      - "prefix in the RIB but not programmed in show cef ipv4 <prefix> detail"
+      - "ABR/ASBR not listed in show ospf border-routers"
+    log_signatures: []
+    likely_causes:
+      - "parameter mismatch — area id, stub/area-type flag, subnet mask"
+      - "ABR not present, so the inter-area summary LSA is never generated"
+      - "virtual link to area 0 down"
+      - "redistribution or outbound route-policy filtering the prefix"
+      - "prefix installed by a lower-administrative-distance protocol so the OSPF copy loses"
+    commands:
+      - {cmd: "show ospf routes", intent: ospf.route.table}
+      - {cmd: "show ospf database", intent: ospf.database.lsa}
+      - {cmd: "show ospf border-routers", intent: ospf.abr.list}
+      - {cmd: "show ospf summary-prefix", intent: ospf.summary.prefix}
+      - {cmd: "show ospf virtual-links", intent: ospf.virtuallink.state}
+      - {cmd: "show route ipv4 <prefix>", intent: rib.route.lookup, params: [prefix]}
+      - {cmd: "show cef ipv4 <prefix> detail", intent: fib.cef.lookup, params: [prefix]}
+      - {cmd: "show rpl active route-policy", intent: rpl.policy.active}
+    tac_first_look: >-
+      Walk database then OSPF route table then RIB then FIB in that order; the first hop
+      where the prefix disappears names the layer at fault.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_0100.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_0101.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/ip-addresses/b-ip-addresses-cr-ncs5500/cef-commands.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/15986-admin-distance.html
+
+  - id: ospfv3-adjacency-not-forming
+    class: ospf-adjacency
+    title: "OSPFv3 (IPv6) adjacency not forming or stuck"
+    symptoms:
+      - "show ospfv3 neighbor empty, or the peer stuck below FULL while OSPFv2 on the same link is FULL"
+      - "interface listed in show ospfv3 interface with 0 adjacencies"
+      - "IPv6 MTU differs from the IPv4 MTU on the same interface"
+      - "no IPv6 link-local next hops installed"
+    log_signatures: []
+    likely_causes:
+      - "IPv6 MTU mismatch — XR keeps `ipv6 mtu` independent of the L2-inclusive `mtu` value"
+      - "missing or duplicate 32-bit router ID for the OSPFv3 process"
+      - "instance-id, area-id or hello/dead timer mismatch"
+      - "interface not enabled for OSPFv3, or configured passive"
+      - "IPv6 link-local address missing on the segment"
+    commands:
+      - {cmd: "show ospfv3 neighbor", intent: ospfv3.neighbor.list}
+      - {cmd: "show ospfv3 neighbor <if> detail", intent: ospfv3.neighbor.detail, params: [if]}
+      - {cmd: "show ospfv3 interface <if>", intent: ospfv3.interface.detail, params: [if]}
+      - {cmd: "show ospfv3", intent: ospfv3.process.summary}
+      - {cmd: "show ipv6 interface <if> | i MTU", intent: interface.ipv6.mtu, params: [if]}
+      - {cmd: "show ospfv3 database", intent: ospfv3.database.lsa}
+      - {cmd: "show ospfv3 message-queue", intent: ospfv3.messagequeue.depth}
+      - {cmd: "show ospfv3 routes", intent: ospfv3.route.table}
+    tac_first_look: >-
+      Confirm a valid 32-bit router ID and matching ipv6 mtu on both ends — OSPFv3 fails
+      for IPv6-specific reasons even when the parallel OSPFv2 adjacency is healthy.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
+
+  - id: isis-adjacency-not-forming
+    class: isis-adjacency
+    title: "IS-IS adjacency not forming (MTU / hello padding / circuit-type / level mismatch)"
+    symptoms:
+      - "show isis adjacency empty, or the neighbor sits in INIT and never reaches UP"
+      - "adjacency comes up for one level only (L1 up, L2 absent, or the reverse)"
+      - "interface counters show IIH transmit but no receive"
+      - "adjacency drops with hold time expired and reforms in a loop"
+    log_signatures: []
+    likely_causes:
+      - "MTU mismatch — padded IS-IS hellos dropped as giants by the device with the lower MTU"
+      - "circuit-type mismatch: incompatible L1 / L2 / L1L2 configuration"
+      - "an intermediate device that does not allow the hello packets through"
+      - "unreliable transport / packet loss causing inconsistent hello delivery"
+      - "router isis configuration mismatch between peers — area/NET address, authentication"
+    commands:
+      - {cmd: "show isis adjacency", intent: isis.adjacency.list}
+      - {cmd: "show isis adjacency <if> detail", intent: isis.adjacency.detail, params: [if]}
+      - {cmd: "show isis interface <if> detail", intent: isis.interface.detail, params: [if]}
+      - {cmd: "show isis protocol", intent: isis.process.summary}
+      - {cmd: "show isis neighbors", intent: isis.neighbor.list}
+      - {cmd: "show isis adjacency-log", intent: isis.adjacency.log}
+      - {cmd: "show isis statistics", intent: isis.protocol.counters}
+      - {cmd: "show ipv4 interface <if> | i MTU", intent: interface.ipv4.mtu, params: [if]}
+      - {cmd: "show im database interface <if>", intent: interface.im.database, params: [if]}
+    tac_first_look: >-
+      show isis adjacency <if> detail plus an MTU comparison on both ends — padded IIHs
+      make IS-IS the first protocol to expose an MTU mismatch that OSPF might survive.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_01.html
+
+  - id: isis-lsp-overload-or-route-missing
+    class: isis-lsp
+    title: "IS-IS route missing — LSP not received/refreshed, or the overload bit is set"
+    symptoms:
+      - "adjacency is UP but the remote prefix is absent from show isis route / show route ipv4 <prefix>"
+      - "router used only as a leaf, never as transit — traffic detours around it"
+      - "LSP for the originating system missing or aged out of show isis database"
+      - "repeated SPF runs in show isis spf-log after each LSP change"
+    log_signatures: []
+    likely_causes:
+      - "overload bit set — signals the router is not available for transit traffic (startup, serious errors, maintenance)"
+      - "LSP not refreshed or aged out — routers refresh LSPs every 15 minutes and retain them for 20 minutes"
+      - "corrupted LSP lifetime triggering error messages"
+      - "level mismatch: prefix originated at L1 only with no L1L2 router leaking it to L2"
+      - "prefix present in IS-IS but beaten in the RIB by a lower administrative distance"
+    commands:
+      - {cmd: "show isis database", intent: isis.lsdb.list}
+      - {cmd: "show isis database-log", intent: isis.lsdb.log}
+      - {cmd: "show isis route", intent: isis.route.table}
+      - {cmd: "show isis topology", intent: isis.topology.list}
+      - {cmd: "show isis spf-log", intent: isis.spf.log}
+      - {cmd: "show isis lsp-log", intent: isis.lsp.log}
+      - {cmd: "show isis hostname", intent: isis.hostname.map}
+      - {cmd: "show route ipv4 <prefix>", intent: rib.route.lookup, params: [prefix]}
+      - {cmd: "show cef ipv4 <prefix> detail", intent: fib.cef.lookup, params: [prefix]}
+    tac_first_look: >-
+      Check the originating system's LSP in show isis database for presence, age and the
+      overload bit before chasing SPF or the RIB.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_01.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_0100.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/ip-addresses/b-ip-addresses-cr-ncs5500/cef-commands.html
+
+  - id: bgp-peer-stuck-idle-active
+    class: bgp-session
+    title: "BGP peer stuck in Idle or Active (no TCP session)"
+    symptoms:
+      - "show bgp summary shows the neighbor in Idle or Active, never Established"
+      - "no TCP 179 socket to the peer in show tcp brief"
+      - "peer address unreachable, or reachable only via a path other than the update source"
+      - "session never advances even after the connect-retry timer"
+    log_signatures: []
+    likely_causes:
+      - "no connectivity: absent connected route to the peer, or a Layer-1 issue (interface, SFP, cable)"
+      - "firewall or access list blocking TCP 179"
+      - "wrong peer IP address or wrong remote AS"
+      - "duplicate router ID"
+      - "missing or incorrect BGP update source, or TTL/multihop misconfiguration for eBGP"
+      - "MD5 authentication mismatch"
+    commands:
+      - {cmd: "show bgp summary", intent: bgp.summary}
+      - {cmd: "show bgp sessions", intent: bgp.session.list}
+      - {cmd: "show bgp neighbors <peer>", intent: bgp.neighbor.detail, params: [peer]}
+      - {cmd: "show tcp brief", intent: tcp.socket.list}
+      - {cmd: "show route ipv4 <prefix>", intent: rib.route.lookup.peer, params: [prefix]}
+      - {cmd: "ping <peer>", intent: reachability.ping, params: [peer]}
+      - {cmd: "traceroute <peer>", intent: reachability.traceroute, params: [peer]}
+      - {cmd: "show bgp process", intent: bgp.process.state}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Prove L3 reachability to the peer from the correct update source first, then check
+      for a TCP 179 socket in show tcp brief; without the socket the problem is below BGP.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/bgp/b-ncs5500-bgp-cli-reference/b-ncs5500-bgp-cli-reference_chapter_01.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-software-releases-121-mainline/12778-ping-traceroute.html
+
+  - id: bgp-session-flap-hold-timer
+    class: bgp-instability
+    title: "BGP session flapping — hold timer expired"
+    symptoms:
+      - "neighbor repeatedly leaves and re-enters Established; prefix count resets each cycle"
+      - "a hold timer expired notification logged against the peer"
+      - "large-scale route churn / convergence storms downstream of the flap"
+      - "flap correlates with interface errors or a CPU spike"
+    log_signatures: []
+    likely_causes:
+      - "interface flaps or physical problems on the path"
+      - "hold timer expiration caused by packet loss, high CPU or MTU mismatch"
+      - "AFI/SAFI capability mismatch causing repeated resets"
+      - "TCP or MD5 authentication problems"
+      - "a BFD client session bouncing and resetting the BGP neighbor"
+    commands:
+      - {cmd: "show bgp summary", intent: bgp.summary}
+      - {cmd: "show bgp neighbors <peer>", intent: bgp.neighbor.detail, params: [peer]}
+      - {cmd: "show bgp sessions", intent: bgp.session.list}
+      - {cmd: "show tcp brief", intent: tcp.socket.list}
+      - {cmd: "show bfd session", intent: bfd.session.list}
+      - {cmd: "show processes cpu", intent: cpu.processes}
+      - {cmd: "show im database interface <if>", intent: interface.im.database, params: [if]}
+      - {cmd: "show controllers np counters all", intent: np.drop.counters}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Read the last notification and reset reason out of show bgp neighbors <peer>, then
+      decide between path loss (interface / NP drops) and local overload (CPU, memory).
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/220364-troubleshoot-bidirectional-forwarding-de.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
+
+  - id: bgp-route-not-advertised-rpl
+    class: bgp-route-missing
+    title: "BGP route not advertised to a peer (outbound RPL policy, best-path or missing component route)"
+    symptoms:
+      - "prefix is in the local BGP table but the peer never receives it"
+      - "prefix absent from the advertised set for that neighbor"
+      - "the local BGP entry is not marked best"
+      - "an aggregate is configured but no aggregate is sent"
+    log_signatures: []
+    likely_causes:
+      - "missing component route — an exact route in the routing table is required for a network statement with a mask"
+      - "aggregation with no more-specific route present in the BGP table"
+      - "BGP synchronization: iBGP-learned routes not advertised to eBGP peers without IGP validation"
+      - "route not selected as best path — only best paths received from BGP peers are propagated"
+      - "outbound route-policy on the neighbor address-family dropping the prefix"
+      - "auto-summary enabled without a matching classful/component route"
+    commands:
+      - {cmd: "show bgp ipv4 unicast <prefix>", intent: bgp.prefix.entry, params: [prefix]}
+      - {cmd: "show bgp advertised", intent: bgp.advertised.set}
+      - {cmd: "show bgp neighbors <peer>", intent: bgp.neighbor.detail, params: [peer]}
+      - {cmd: "show bgp policy", intent: bgp.policy.effect}
+      - {cmd: "show rpl route-policy <name>", intent: rpl.policy.definition, params: [name]}
+      - {cmd: "show rpl route-policy attachpoints", intent: rpl.policy.attachpoints}
+      - {cmd: "show bgp update-group", intent: bgp.updategroup.membership}
+      - {cmd: "show route ipv4 <prefix>", intent: rib.route.lookup, params: [prefix]}
+      - {cmd: "show bgp process", intent: bgp.process.state}
+    tac_first_look: >-
+      Confirm the prefix is BEST locally before blaming policy — a non-best path is never
+      propagated regardless of the outbound route-policy.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_0101.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/bgp/b-ncs5500-bgp-cli-reference/b-ncs5500-bgp-cli-reference_chapter_01.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html
+
+  - id: bgp-route-not-received-inbound-policy
+    class: bgp-route-missing
+    title: "BGP route not received, or dropped by inbound RPL policy"
+    symptoms:
+      - "peer confirms it advertises the prefix but it is absent from the local BGP table"
+      - "accepted-prefix count for the neighbor far below the advertised count"
+      - "prefix visible only when the inbound policy is bypassed"
+      - "malformed-update counters incrementing for the neighbor"
+    log_signatures: []
+    likely_causes:
+      - "inbound route-policy on the neighbor address-family denying the prefix"
+      - "prefix-set / community-set referenced by the inbound policy does not match"
+      - "address family not negotiated — AFI/SAFI capability mismatch"
+      - "update malformed or rejected on receipt"
+      - "prefix received but not installed because a lower-administrative-distance protocol owns it"
+      - "the peer is not in fact advertising it — verify against the sender's advertised set"
+    commands:
+      - {cmd: "show bgp summary", intent: bgp.summary}
+      - {cmd: "show bgp neighbors <peer>", intent: bgp.neighbor.detail, params: [peer]}
+      - {cmd: "show bgp ipv4 unicast <prefix>", intent: bgp.prefix.entry, params: [prefix]}
+      - {cmd: "show bgp policy", intent: bgp.policy.effect}
+      - {cmd: "show bgp route-policy", intent: bgp.policy.evaluate}
+      - {cmd: "show bgp update in error process", intent: bgp.update.inbound.errors}
+      - {cmd: "show rpl route-policy <name>", intent: rpl.policy.definition, params: [name]}
+      - {cmd: "show rpl active prefix-set", intent: rpl.prefixset.active}
+      - {cmd: "show route ipv4 <prefix>", intent: rib.route.lookup, params: [prefix]}
+    tac_first_look: >-
+      Compare the neighbor's received versus accepted prefix counts in show bgp neighbors
+      <peer> — a large gap points squarely at the inbound route-policy rather than the peer.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_0101.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/bgp/b-ncs5500-bgp-cli-reference/b-ncs5500-bgp-cli-reference_chapter_01.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
+
+  - id: bgp-maximum-prefix-shutdown
+    class: bgp-session
+    title: "BGP neighbor shut down by the maximum-prefix limit"
+    symptoms:
+      - "neighbor drops to Idle and stays there; prefix count was at or above the configured limit"
+      - "a warning at the configured threshold percentage, then a hard limit-exceeded message"
+      - "session recovers only after manual intervention or the restart timer"
+      - "with `discard extra paths`, prefixes silently disappear but the session does NOT flap"
+    log_signatures: []
+    likely_causes:
+      - "received prefix count exceeded the configured maximum — the session is terminated after a cease notification"
+      - "session parked in Idle (PfxCt) until manual intervention or the restart interval elapses"
+      - "peer leaked a full table or a de-aggregated block into a limited session"
+      - "`discard extra paths` configured — excess prefixes dropped silently with no session flap"
+      - "`warning-only` configured, so the limit is logged but the peer is not disconnected"
+    commands:
+      - {cmd: "show bgp summary", intent: bgp.summary}
+      - {cmd: "show bgp neighbors <peer>", intent: bgp.neighbor.maxprefix, params: [peer]}
+      - {cmd: "show bgp sessions", intent: bgp.session.list}
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show bgp process", intent: bgp.process.state}
+      - {cmd: "show bgp instance all scale", intent: bgp.scale.instance}
+      - {cmd: "show bgp scale", intent: bgp.scale.summary}
+      - {cmd: "show bgp update-group", intent: bgp.updategroup.membership}
+    tac_first_look: >-
+      Read the configured limit, threshold and current count out of show bgp neighbors
+      <peer> and decide whether the peer genuinely over-advertised or the limit is simply
+      undersized for the design.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/25160-bgp-maximum-prefix.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: bgp-virtual-memory-rlimit
+    class: high-memory
+    title: "BGP virtual-memory RLIMIT reached on IOS-XR (BGP process at its address-space ceiling)"
+    symptoms:
+      - "memory usage spikes (the doc's example: to 90 percent) after a BGP peer connection is established"
+      - "the BGP process restarts or crashes; bpm may need a manual restart"
+      - "convergence stalls, sessions bounce under load, watchdog memory state degraded"
+      - "a virtual-memory threshold-reached message logged against the BGP process"
+    log_signatures:
+      - "%HA-HA_WD_LIB-4-RLIMIT"
+      - "%ROUTING-BGP-4-VIRTUAL_MEMORY_LIMIT_THRESHOLD_REACHED"
+    likely_causes:
+      - "RLIMIT is a per-process resource limit fixed by shared-memory and kernel allocations — not configurable via CLI"
+      - "32-bit cXR has roughly a 2.5 GB BGP ceiling versus roughly 7.4 GB on 64-bit eXR"
+      - "scale growth: total paths/prefixes across instances beyond what the platform's BGP heap can hold"
+      - "physical memory exhaustion — the bgp process exits and bpm must be restarted manually"
+      - "excessive per-neighbor state (soft-reconfiguration inbound tables, many update groups) inflating the BGP heap"
+    commands:
+      - {cmd: "show bgp process performance-statistics | i RLIMIT", intent: bgp.rlimit.check}
+      - {cmd: "show bgp all all process performance-statistics detail", intent: bgp.process.perfstats}
+      - {cmd: "show bgp instance all scale", intent: bgp.scale.instance}
+      - {cmd: "show bgp scale", intent: bgp.scale.summary}
+      - {cmd: "show memory summary location all", intent: memory.summary}
+      - {cmd: "show processes memory detail <jid> location <loc>", intent: process.memory.detail, params: [jid, loc]}
+      - {cmd: "show memory heap <jid> location <loc>", intent: process.heap.detail, params: [jid, loc]}
+      - {cmd: "show watchdog memory-state", intent: watchdog.memory.state}
+      - {cmd: "show processes blocked location all", intent: process.blocked.list}
+    tac_first_look: >-
+      Run show bgp process performance-statistics | i RLIMIT and compare the value against
+      the platform ceiling (about 2.5 GB on 32-bit cXR, about 7.4 GB on 64-bit eXR) — that
+      one line decides whether this is a scale-versus-platform mismatch or a leak.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: l3vpn-vpnv4-route-missing-rt-import-export
+    class: mpls-l3vpn
+    proposed_class: true
+    title: "L3VPN customer prefix missing on the PE — VPNv4 propagation or route-target import/export problem"
+    symptoms:
+      - "prefix present in the originating PE's VRF but absent from the remote PE's show bgp vrf <vrf> ipv4 unicast"
+      - "VPNv4 path visible in BGP but never installed into the VRF RIB"
+      - "CE-to-CE traffic blackholes while PE-PE iBGP is Established"
+      - "the local VRF exports route targets that no remote VRF imports"
+    log_signatures: []
+    likely_causes:
+      - "import list mismatch — the VRF's import list of route-target extended communities does not match what is advertised"
+      - "export list mismatch — routes carry the RT set from the originating VRF's export list"
+      - "route distinguisher misconfigured, so customer addresses are not uniquely identified"
+      - "route reflector not reflecting VPNv4 to all members of the VPN community"
+      - "PE-CE routing protocol not redistributed into the VRF address family"
+      - "local VPN label / forwarding entry missing, so the imported route is unusable"
+    commands:
+      - {cmd: "show bgp vrf <vrf> ipv4 unicast", intent: bgp.vrf.table, params: [vrf]}
+      - {cmd: "show bgp vrf <vrf> ipv4 unicast <prefix>", intent: bgp.vrf.prefix.entry, params: [vrf, prefix]}
+      - {cmd: "show bgp labels", intent: bgp.label.bindings}
+      - {cmd: "show rpl extcommunity-set", intent: rpl.extcommunity.rt}
+      - {cmd: "show rpl route-policy <name>", intent: rpl.policy.definition, params: [name]}
+      - {cmd: "show route vrf <vrf> ipv4 unicast <prefix>", intent: rib.vrf.lookup, params: [vrf, prefix]}
+      - {cmd: "show cef vrf <vrf> ipv4 <prefix> detail", intent: fib.vrf.lookup, params: [vrf, prefix]}
+      - {cmd: "show mpls forwarding vrf <vrf>", intent: mpls.vrf.forwarding, params: [vrf]}
+      - {cmd: "show bgp summary", intent: bgp.summary.vpnv4}
+    tac_first_look: >-
+      Diff the exporting VRF's export RT set against the importing VRF's import RT set
+      before touching BGP — an RT typo is the single most common cause of a VPNv4 prefix
+      that exists everywhere except where it is needed.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/bgp/b-ncs5500-bgp-cli-reference/b-ncs5500-bgp-cli-reference_chapter_01.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_0101.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/ip-addresses/b-ip-addresses-cr-ncs5500/cef-commands.html
+
+  - id: mpls-ldp-neighbor-not-established
+    class: mpls-ldp
+    title: "MPLS LDP neighbor / session not established"
+    symptoms:
+      - "show mpls ldp neighbor empty while the IGP adjacency on the same link is up"
+      - "hellos seen in show mpls ldp discovery but no session forms"
+      - "no labels learned for the peer's prefixes; the LSP breaks at this hop"
+      - "no TCP 646 socket toward the peer"
+    log_signatures: []
+    likely_causes:
+      - "unstable or missing router ID — a stable router ID is required at either end of the link"
+      - "transport address not reachable or not explicitly configured (recommended, particularly for IPv6)"
+      - "MPLS/LDP not enabled on the interface"
+      - "targeted session configured on one end only — targeted sessions require manual configuration on both ends"
+      - "TCP 646 blocked, or LDP-IGP synchronization holding the link at max metric until LDP converges"
+      - "label-space / LDP-ID mismatch between the peers"
+    commands:
+      - {cmd: "show mpls ldp neighbor", intent: ldp.neighbor.list}
+      - {cmd: "show mpls ldp neighbor <peer> detail", intent: ldp.neighbor.detail, params: [peer]}
+      - {cmd: "show mpls ldp discovery", intent: ldp.discovery.hellos}
+      - {cmd: "show mpls ldp interface <if>", intent: ldp.interface.state, params: [if]}
+      - {cmd: "show mpls ldp parameters", intent: ldp.parameters}
+      - {cmd: "show mpls ldp igp sync", intent: ldp.igp.sync}
+      - {cmd: "show mpls ldp summary", intent: ldp.summary}
+      - {cmd: "show mpls interfaces <if> detail", intent: mpls.interface.state, params: [if]}
+      - {cmd: "show tcp brief", intent: tcp.socket.list}
+    tac_first_look: >-
+      If show mpls ldp discovery shows hellos but show mpls ldp neighbor is empty, the
+      failure is at TCP / transport-address level, not at discovery level.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-ldp.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: mpls-forwarding-label-broken
+    class: mpls-forwarding
+    proposed_class: true
+    title: "MPLS label imposition / forwarding broken (LSP black-holes although LDP is up)"
+    symptoms:
+      - "LDP session up and bindings present, but no forwarding entry for the prefix"
+      - "show cef ipv4 <prefix> detail shows an unlabelled/native path where a label was expected"
+      - "transit traffic dropped or punted at one specific LSR"
+      - "the label table has no entry for the advertised local label"
+    log_signatures: []
+    likely_causes:
+      - "label binding learned but not selected — the prefix's next hop is not the LDP peer that advertised it"
+      - "MPLS not enabled on the outgoing interface"
+      - "MTU / label-stack overhead: XR `mpls mtu` is independent of the L2-inclusive `mtu`, so labelled frames exceed the path MTU"
+      - "LSD / label-manager client not connected, so no label is programmed"
+      - "label-security or label-range configuration rejecting the label"
+      - "RIB-to-FIB programming failure at the node"
+    commands:
+      - {cmd: "show mpls forwarding", intent: mpls.forwarding.table}
+      - {cmd: "show mpls forwarding prefix <prefix>", intent: mpls.forwarding.prefix, params: [prefix]}
+      - {cmd: "show mpls ldp bindings <prefix>", intent: ldp.label.bindings, params: [prefix]}
+      - {cmd: "show mpls ldp forwarding", intent: ldp.forwarding.table}
+      - {cmd: "show mpls label table <table-index> detail", intent: mpls.labeltable.detail, params: [table-index]}
+      - {cmd: "show mpls label range", intent: mpls.label.range}
+      - {cmd: "show mpls lsd clients", intent: mpls.lsd.clients}
+      - {cmd: "show mpls interfaces <if> detail", intent: mpls.interface.state, params: [if]}
+      - {cmd: "show cef ipv4 <prefix> detail", intent: fib.cef.lookup, params: [prefix]}
+    tac_first_look: >-
+      Compare show mpls ldp bindings <prefix> against show mpls forwarding prefix <prefix>
+      — a binding that exists but is not in the forwarding table means the label was not
+      selected because the IGP next hop points elsewhere.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-ldp.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/ip-addresses/b-ip-addresses-cr-ncs5500/cef-commands.html
+
+  - id: mpls-te-tunnel-down
+    class: mpls-te
+    proposed_class: true
+    title: "MPLS-TE tunnel down (path computation, RSVP signalling or admission control)"
+    symptoms:
+      - "show mpls traffic-eng tunnels shows the tunnel Down or with no active path option"
+      - "no RSVP session for the tunnel in show rsvp session"
+      - "signalling error counters rising after each retry"
+      - "autoroute-announced prefixes disappear from the RIB when the tunnel drops"
+    log_signatures: []
+    likely_causes:
+      - "path option / CSPF failure — no path satisfying the constraints in the TE topology database"
+      - "admission-control rejection: insufficient reservable bandwidth on a link in the path"
+      - "TE not enabled or misconfigured on a transit link"
+      - "IGP TE extensions not flooding link attributes, leaving a stale or incomplete topology database"
+      - "RSVP neighbor loss or signalling failure along the path"
+      - "affinity / attribute-set mismatch excluding every candidate link"
+    commands:
+      - {cmd: "show mpls traffic-eng tunnels", intent: te.tunnel.state}
+      - {cmd: "show mpls traffic-eng topology", intent: te.topology.db}
+      - {cmd: "show mpls traffic-eng link-management admission-control", intent: te.admission.control}
+      - {cmd: "show mpls traffic-eng link-management interfaces", intent: te.link.interfaces}
+      - {cmd: "show mpls traffic-eng counters signaling", intent: te.signaling.counters}
+      - {cmd: "show mpls traffic-eng autoroute", intent: te.autoroute.announce}
+      - {cmd: "show rsvp session", intent: rsvp.session.list}
+      - {cmd: "show rsvp neighbor detail", intent: rsvp.neighbor.detail}
+      - {cmd: "show rsvp interface <if> detail", intent: rsvp.interface.bandwidth, params: [if]}
+    tac_first_look: >-
+      Separate "no path computed" from "path computed but signalling failed" — show mpls
+      traffic-eng topology answers the first, show rsvp session plus the signalling
+      counters the second.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-rsvp.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-te.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: pim-neighbor-or-mroute-rpf-failure
+    class: multicast-pim
+    proposed_class: true
+    title: "PIM neighbor missing or multicast RPF failure (mroute with no incoming interface)"
+    symptoms:
+      - "show pim neighbor empty on a link where the unicast IGP adjacency is up"
+      - "show mrib route entry exists but with no accepting / incoming interface"
+      - "receivers join but no traffic arrives; packets silently discarded to prevent loops"
+      - "RP mapping absent or inconsistent in show pim group-map"
+    log_signatures:
+      - "%ROUTING-IPV4_IGMP-4-OOR_LIMIT_REACHED"
+    likely_causes:
+      - "no PIM neighbor on the RPF interface — two PIM routers are neighbors only over a direct connection"
+      - "RPF check failure: packets not arriving on the RPF interface are silently discarded to prevent loops"
+      - "the unicast route toward the source/RP points at an interface with no PIM enabled, so RPF and PIM disagree"
+      - "RP not learned, or inconsistent group-to-RP mapping"
+      - "source-tree versus shared-tree state difference changing how the RPF check is performed"
+      - "IGMP/PIM state out-of-resource limit reached"
+    commands:
+      - {cmd: "show pim neighbor <if>", intent: pim.neighbor.list, params: [if]}
+      - {cmd: "show pim interface <if>", intent: pim.interface.state, params: [if]}
+      - {cmd: "show pim rpf <prefix>", intent: pim.rpf.lookup, params: [prefix]}
+      - {cmd: "show pim group-map", intent: pim.rp.mapping}
+      - {cmd: "show pim topology", intent: pim.topology.state}
+      - {cmd: "show pim traffic", intent: pim.traffic.counters}
+      - {cmd: "show mrib route", intent: mrib.route.table}
+      - {cmd: "show mfib route", intent: mfib.route.table}
+      - {cmd: "show route ipv4 <prefix>", intent: rib.route.lookup.source, params: [prefix]}
+    tac_first_look: >-
+      Check that the unicast next hop toward the source is an interface that actually has
+      a PIM neighbor — RPF failures are almost always a unicast/PIM topology disagreement.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/ncs5500/software/multicast/command/reference/b-multicast-cr-ncs5500/mcast-pim-commands.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/ncs5500/software/multicast/command/reference/b-multicast-cr-ncs5500/mcast-routing-forwarding-commands.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_0100.html
+
+  - id: bfd-session-down
+    class: bfd-session
+    proposed_class: true
+    title: "BFD session down, taking client protocols with it"
+    symptoms:
+      - "show bfd session shows DOWN, or the session flapping UP/DOWN"
+      - "the client protocol (OSPF/IS-IS/BGP) resets in lockstep with the BFD transition"
+      - "detect-timer expiry or echo failure recorded against the session"
+      - "session never comes up although the link and the IGP are fine"
+    log_signatures: []
+    likely_causes:
+      - "DETECT TIMER EXPIRED — the router stops receiving keepalive traffic"
+      - "ECHO FAILURE — the router no longer receives BFD echo responses"
+      - "RX DOWN / RX ADMINDOWN — neighbor offline, or BFD administratively disabled on the neighbor"
+      - "intervals/multiplier set too low for the link's delay characteristics"
+      - "BFD packets filtered in the path, or a CPU/forwarding failure on the device"
+      - "one-way media failure"
+      - "OSPF strict-mode holding the neighbor at awaiting-BFD-session-up until BFD comes up"
+    commands:
+      - {cmd: "show bfd session", intent: bfd.session.list}
+      - {cmd: "show bfd session interface <if> detail", intent: bfd.session.detail, params: [if]}
+      - {cmd: "show bfd client", intent: bfd.client.list}
+      - {cmd: "show bfd label session", intent: bfd.label.session}
+      - {cmd: "show controllers <if> all", intent: interface.controller.stats, params: [if]}
+      - {cmd: "show ospf neighbor", intent: ospf.neighbor.list}
+      - {cmd: "show bgp summary", intent: bgp.summary}
+      - {cmd: "show processes cpu", intent: cpu.processes}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Read the down reason (detect-timer expiry vs echo failure vs RX DOWN) from show bfd
+      session interface <if> detail — it distinguishes a real path failure from an
+      over-aggressive timer configuration.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/220364-troubleshoot-bidirectional-forwarding-de.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bfd.html
+      - https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_0111.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: interface-input-output-errors-crc
+    class: interface-errors
+    title: "Interface input/output errors and incrementing CRC on IOS-XR"
+    symptoms:
+      - "input errors / CRC counters climb under show interfaces; Input error CRC and Input MIB CRC increasing"
+      - "interface stays up but application traffic is corrupted or retransmitting"
+      - "errors follow the optic or the cable when swapped, not the port"
+    log_signatures:
+      - "%PKT_INFRA-LINK-3-UPDOWN"
+      - "%FABRIC-NPU_DRVR-3-PLUGGABLE_MODULE_ERROR"
+    likely_causes:
+      - "damaged physical media (cables, DACs, fiber)"
+      - "failing transceivers/optics (SFP, SFP+, QSFP)"
+      - "faulty patch-panel ports"
+      - "defective device hardware (line cards, ASICs, MACs)"
+      - "malfunctioning NIC on the remote device"
+      - "MTU size mismatch between devices truncating large packets"
+    commands:
+      - {cmd: "show interfaces <if>", intent: interface.counters, params: [if]}
+      - {cmd: "show controllers <if> stats", intent: interface.controller.stats, params: [if]}
+      - {cmd: "show controllers <if> all", intent: interface.controller.all, params: [if]}
+      - {cmd: "show controllers <if> phy", intent: interface.controller.phy, params: [if]}
+      - {cmd: "show interfaces <if> detail", intent: interface.detail, params: [if]}
+      - {cmd: "show controllers optics <if>", intent: optics.levels, params: [if]}
+      - {cmd: "show im database interface <if>", intent: interface.im.state, params: [if]}
+      - {cmd: "show inventory", intent: hardware.inventory}
+    tac_first_look: >-
+      Establish whether the CRCs are local-port or far-end by comparing show controllers
+      <if> stats before and after an optic or cable swap, then attach show controllers
+      <if> all plus the optics readings.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/interfaces/command/reference/b-interfaces-hardware-component-cr-asr9000/ethernet-interface-commands.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/interfaces/command/reference/b-interfaces-hardware-component-cr-asr9000/global-interface-commands.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
+
+  - id: interface-input-drops
+    class: forwarding-drops
+    proposed_class: true
+    title: "Input drops counting on an IOS-XR interface"
+    symptoms:
+      - "show interfaces shows a rising input drops count with no matching input errors"
+      - "drops appear only for certain protocols or VLANs while transit traffic is otherwise fine"
+      - "on ASR 9000, NP counters increment in step with the interface drop counter"
+    log_signatures: []
+    likely_causes:
+      - "controller drops — runts, FCS errors, aborts, FIFO overflows, giants, POS drops"
+      - "unknown destination MAC, or an unmatched dot1q VLAN tag"
+      - "unrecognised upper-level protocol (BPDU, IS-IS, IPv6, UDLD, CDP, VTP, DTP, LLDP)"
+      - "NP (network-processor) drops on ASR 9000, reported up as input drops"
+      - "netio drops — MPLS TTL expiry, fragmentation, punted multicast"
+    commands:
+      - {cmd: "show interfaces <if> | i \"input drops\"", intent: interface.drops.counter, params: [if]}
+      - {cmd: "show controllers <if> stats", intent: interface.controller.stats, params: [if]}
+      - {cmd: "show controllers plim asic statistics interface <if> location <loc>", intent: platform.plim.stats, params: [if, loc]}
+      - {cmd: "show controllers np ports all location <loc>", intent: platform.np.ports, params: [loc]}
+      - {cmd: "show controllers np counters np<npu> location <loc>", intent: platform.np.counters, params: [npu, loc]}
+      - {cmd: "show netio idb <if>", intent: forwarding.netio.idb, params: [if]}
+      - {cmd: "show drops", intent: forwarding.drops.summary}
+    tac_first_look: >-
+      Correlate the interface input-drops delta against show controllers np counters
+      np<npu> location <loc> to decide whether the drop is a physical-layer controller
+      drop or an NP forwarding-decision drop.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: interface-link-flap-and-err-disable
+    class: link-flap
+    title: "Link flapping, interface stuck down, or port in err-disable on IOS-XR"
+    symptoms:
+      - "repeated up/down transitions logged for the same port"
+      - "port shows err-disable admin-down and will not recover after the physical fault is fixed"
+      - "Link is shutdown / Operational state Down / Remote Fault seen in controller output"
+      - "interfaces or whole slices missing from show controllers np all"
+    log_signatures:
+      - "%PKT_INFRA-LINK-3-UPDOWN"
+      - "%PKT_INFRA-ERRDIS-6-ERROR_DISABLE"
+      - "%FABRIC-NPU_DRVR-3-PLUGGABLE_MODULE_ERROR"
+      - "%PKT_INFRA-LINK-5-CHANGED"
+      - "%PLATFORM-APM-6-INFO"
+      - "INFRA-ESD-6-PORT_STATE_CHANGE_LINK_DOWN"
+    likely_causes:
+      - "physical-layer errors (CRC, bad optics, defective cables) causing the NPU to err-disable the port"
+      - "RX-LOS / RX-LOL — loss of receive signal or lock from the peer"
+      - "TX-LOS / TX-LOL originating in the local NPU or PHY"
+      - "FEC configuration mismatch between the two ends; unsupported transceiver"
+      - "internal control-Ethernet switch port down on the module (ESD)"
+      - "power-saving-mode removal leaving a slice or NP absent"
+    commands:
+      - {cmd: "show ip interface brief", intent: interface.state.summary}
+      - {cmd: "show controllers <if>", intent: interface.controller.state, params: [if]}
+      - {cmd: "show controllers <if> internal", intent: interface.controller.internal, params: [if]}
+      - {cmd: "show controllers <if> phy", intent: interface.phy.state, params: [if]}
+      - {cmd: "show alarms brief", intent: alarms.active}
+      - {cmd: "show im dampening interface <if>", intent: interface.dampening, params: [if]}
+      - {cmd: "show controllers np all location <loc>", intent: platform.np.slices, params: [loc]}
+      - {cmd: "show controller switch reachable", intent: platform.esd.switch}
+      - {cmd: "show controllers switch statistics location <loc>", intent: platform.esd.stats, params: [loc]}
+    tac_first_look: >-
+      Decide first whether the port is down for a FRONT-PANEL reason (optics, FEC, peer)
+      or an INTERNAL one (err-disabled by the NPU, ESD control-Ethernet port, missing
+      slice) — the recovery paths are completely different.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/8000-series-routers/220996-resolve-the-port-from-the-err-disable-st.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/8808-router/221204-troubleshoot-the-error-message-infra-esd.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/221067-recover-the-missing-interface-from-the-p.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/interfaces/command/reference/b-interfaces-hardware-component-cr-asr9000/global-interface-commands.html
+
+  - id: optics-transceiver-light-levels
+    class: optics
+    title: "Optics / transceiver light levels and optical alarms on IOS-XR"
+    symptoms:
+      - "RX power below the documented threshold, or link loss / low light reported"
+      - "Detected Alarms populated with RX-LOS-P / TX-POWER-FAIL-LOW / laser-shut conditions"
+      - "link comes up only after cleaning, reseating or swapping the pluggable"
+    log_signatures:
+      - "%FABRIC-NPU_DRVR-3-PLUGGABLE_MODULE_ERROR"
+      - "%PKT_INFRA-LINK-3-UPDOWN"
+    likely_causes:
+      - "receive signal degradation or loss of light from the peer (RX-LOS, RX-LOL)"
+      - "local transmit failure from the NPU or PHY (TX-LOS, TX-LOL)"
+      - "transceiver not on the supported Cisco compatibility matrix"
+      - "FEC configuration inconsistency between the two ends"
+      - "power levels below threshold; failing optic"
+      - "optical SNR below the configured threshold (coherent optics)"
+    commands:
+      - {cmd: "show controllers optics <if> summary", intent: optics.summary, params: [if]}
+      - {cmd: "show controllers optics <if>", intent: optics.levels, params: [if]}
+      - {cmd: "show controllers optics <if> pm current 15-min optics 1", intent: optics.pm.history, params: [if]}
+      - {cmd: "show controllers coherentDSP <if>", intent: optics.dsp.state, params: [if]}
+      - {cmd: "show controllers coherentDSP <if> pm current 15-min fec", intent: optics.dsp.fec, params: [if]}
+      - {cmd: "show inventory details", intent: optics.pid.serial}
+      - {cmd: "show controllers <if> phy", intent: optics.phy.readout, params: [if]}
+      - {cmd: "show tech-support optics", intent: optics.techsupport.bundle}
+    tac_first_look: >-
+      Read the RX/TX power and the Detected Alarms block from show controllers optics
+      <if> on BOTH ends before touching anything — that single pair of outputs decides
+      local optic versus far-end versus fiber plant.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/interfaces/command/reference/b-interfaces-hardware-component-cr-asr9000/coherent-optics-commands.html
+
+  - id: np-asic-forwarding-punt-drops
+    class: forwarding-drops
+    proposed_class: true
+    title: "NP/ASIC forwarding drops, punt drops, and ASIC/parity errors"
+    symptoms:
+      - "total input drops or output errors climb with no interface-level error"
+      - "NPU trap/VOQ counters increment; traffic lost only for particular flows or classes"
+      - "card resets or NP recovery events after cache/memory error logs"
+      - "diagnostic packets fail to return from specific NPs; alarms name (slot, NP) pairs"
+    log_signatures:
+      - "%PLATFORM-NP-0-NON_RECOVERABLE_SOFT_ERROR"
+      - "%PLATFORM-NP-3-ECC"
+      - "%PLATFORM-PFM-0-CARD_RESET_REQ"
+      - "%PLATFORM-DIAGS-3-PUNT_FABRIC_DATA_PATH_FAILED"
+      - "%PLATFORM-NP-0-NP_DIAG"
+      - "%FABRIC-FIA-0-ASIC_FATAL_FAULT"
+      - "%PLATFORM-PFM_DIAGS-2-LC_NP_LOOPBACK_FAILED"
+      - "%PLATFORM-FABMGR-5-FABRIC_TRANSIENT_FAULT"
+      - "%PLATFORM-FABMGR-1-SPINE_UNAVAILABLE"
+    likely_causes:
+      - "packets discarded at NPU processing stages (IRE, IDR, IQM, EGQ)"
+      - "VOQ drops from congestion or buffer exhaustion"
+      - "trap-based drops (LPTS, dot1x authentication failures) and SPP classification-node drops"
+      - "ERPP filtering — VLAN membership, LAG pruning"
+      - "parity / bit-flip errors (DCPERR/ICPERR) from background radiation, EMI, ESD or defective memory cells"
+      - "double-bit ECC on the FIA, SERDES link errors, NP init/DDR-training failure, fabric congestion, arbiter sync problems"
+    commands:
+      - {cmd: "show controller npu stats counters-all instance <npu> location <loc>", intent: platform.npu.counters, params: [npu, loc]}
+      - {cmd: "show controllers npu stats traps-all instance <npu> location <loc>", intent: platform.npu.traps, params: [npu, loc]}
+      - {cmd: "show controllers npu voq-usage interface all instance all location <loc>", intent: platform.npu.voq, params: [loc]}
+      - {cmd: "show drops all ongoing location <loc>", intent: forwarding.drops.ongoing, params: [loc]}
+      - {cmd: "show spp node-counters location <loc>", intent: punt.spp.counters, params: [loc]}
+      - {cmd: "show asic-errors all detail location <loc>", intent: platform.asic.errors, params: [loc]}
+      - {cmd: "show pfm location all", intent: platform.pfm.faults}
+      - {cmd: "show controllers np counters all", intent: platform.np.counters}
+      - {cmd: "show controllers fabric health location <loc>", intent: fabric.health, params: [loc]}
+      - {cmd: "show diagnostic result location <loc> test all detail", intent: platform.diag.result, params: [loc]}
+    tac_first_look: >-
+      Separate a CONGESTION drop (VOQ/EGQ counters on one interface) from a HARDWARE
+      error (asic-errors, PFM faults, ECC/parity syslogs) — the second is an RMA
+      conversation, the first is a design one.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/223141-troubleshoot-packet-drops-on-ncs-5500.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/211255-Parity-errors-seen-on-ASR9k.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/116727-troubleshoot-punt-00.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/220131-troubleshoot-punt-fabric-data-path-failu.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/117718-technote-asr9000-00.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_monitoring/command/reference/b-sysmon-cr-asr9k/b-sysmon-cr-asr9k_chapter_01000.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: lpts-control-plane-policing-drops
+    class: control-plane-policing
+    proposed_class: true
+    title: "LPTS control-plane policing dropping punted protocol traffic"
+    symptoms:
+      - "protocol sessions (BGP/OSPF/IS-IS/SSH/ping to the box) flap or fail while transit traffic is clean"
+      - "LPTS pifib hardware police counters show non-zero drop counts for a flow type"
+      - "NPU trap counters increment for punted, rate-limited traffic"
+    log_signatures: []
+    likely_causes:
+      - "punted protocol traffic exceeding its LPTS policer rate for that flow type"
+      - "trap-based (non-rate-limited) punt path saturating the NPU-to-CPU boundary"
+      - "too many bindings/flows for a client, so entries land in a coarser policer class"
+      - "control-plane traffic arriving on the wrong interface or VRF and hitting a default entry"
+    commands:
+      - {cmd: "show lpts pifib hardware police location <loc>", intent: lpts.police.rates, params: [loc]}
+      - {cmd: "show lpts pifib hardware entry brief location <loc>", intent: lpts.entries.brief, params: [loc]}
+      - {cmd: "show lpts pifib hardware usage location <loc>", intent: lpts.tcam.usage, params: [loc]}
+      - {cmd: "show lpts pifib statistics location <loc>", intent: lpts.statistics, params: [loc]}
+      - {cmd: "show lpts bindings brief", intent: lpts.bindings}
+      - {cmd: "show lpts flows brief", intent: lpts.flows}
+      - {cmd: "show controllers npu stats traps-all instance <npu> location <loc>", intent: punt.traps, params: [npu, loc]}
+      - {cmd: "show spp node-counters location <loc>", intent: punt.spp.counters, params: [loc]}
+    tac_first_look: >-
+      Pull show lpts pifib hardware police location <loc> and identify which flow-type
+      policer is dropping — that names the punted protocol before any packet capture is
+      needed.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/ip-addresses/command/reference/b-ip-addresses-cr-asr9000/b-ipaddr-cr-asr9k_chapter_0111.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217276-ncs5500-life-of-a-packet-transit-punt.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/8000-series-routers/222295-capture-for-us-traffic-with-the-8000-ser.html
+
+  - id: acl-hardware-drops
+    class: acl-drops
+    proposed_class: true
+    title: "Traffic dropped by a configured ACL (hardware programming does not match intent)"
+    symptoms:
+      - "all traffic on an interface is dropped after an IPv6 ACL is applied, regardless of the real source/destination"
+      - "ACE hit counters in hardware do not match the software ACL expectation"
+      - "the drop starts at a commit boundary rather than a traffic change"
+    log_signatures:
+      - "%MGBL-CONFIG-6-DB_COMMIT"
+      - "%MGBL-SYS-5-CONFIG_I"
+    likely_causes:
+      - "an IPv6 ACE of ::/128 matching every packet under ACL compression level 2 or 3"
+      - "ACL applied in the wrong direction or on the wrong sub-interface"
+      - "hardware programming diverging from the configured ACL"
+      - "an implicit deny reached because an expected permit was filtered out at compile time"
+    commands:
+      - {cmd: "show access-lists ipv6 <name> hardware ingress location <loc>", intent: acl.hardware.hits.v6, params: [name, loc]}
+      - {cmd: "show access-lists ipv4 <name> hardware ingress location <loc>", intent: acl.hardware.hits.v4, params: [name, loc]}
+      - {cmd: "show access-lists ipv4 <name> hardware egress location <loc>", intent: acl.hardware.hits.v4.egress, params: [name, loc]}
+      - {cmd: "show access-lists ipv6 <name>", intent: acl.software.definition, params: [name]}
+      - {cmd: "show configuration commit changes all", intent: config.commit.diff}
+      - {cmd: "ping <prefix> count 100", intent: reachability.probe, params: [prefix]}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: >-
+      Compare the HARDWARE ACL programming (show access-lists ... hardware ingress
+      location <loc>) against the configured intent — the mismatch, not the config, is
+      the finding.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221046-resolve-the-full-ipv6-packet-drop-where.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/ip-addresses/command/reference/b-ip-addresses-cr-asr9000/b-ipaddr-cr-asr9k_chapter_01.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: qos-policy-drops
+    class: qos-drops
+    title: "Traffic dropped or shaped unexpectedly by a QoS service policy on IOS-XR"
+    symptoms:
+      - "policy-map class counters show drops or exceeds under load"
+      - "policy rejected or only partially applied at commit"
+      - "queue/policer resource exhaustion reported on -TR cards"
+      - "VOQ drop counters climb on the egress NPU"
+    log_signatures:
+      - "%MGBL-CONFIG-6-DB_COMMIT"
+    likely_causes:
+      - "a policer combined with set discard-class, or L2 (COS/DEI) and L3 (MPLS EXP) marking in the same policy-map"
+      - "the sum of bandwidth or bandwidth-remaining statements exceeding 100 percent"
+      - "a priority class configured without a rate limit (shaper), or more than four priority levels"
+      - "queue/policer resource exhaustion on -TR cards: Ran out of 8 Queues for the port"
+      - "invalid egress policy-map: qos-group required for marking, traffic-class for queueing"
+    commands:
+      - {cmd: "show policy-map interface <if>", intent: qos.policy.counters, params: [if]}
+      - {cmd: "show policy-map interface <if> output location <loc>", intent: qos.policy.counters.egress, params: [if, loc]}
+      - {cmd: "show qos interface <if> output", intent: qos.interface.program, params: [if]}
+      - {cmd: "show policy-map targets pmap-name <name> location <loc>", intent: qos.policy.targets, params: [name, loc]}
+      - {cmd: "show controllers npu stats voq base <base> instance <npu> location <loc>", intent: qos.voq.drops, params: [base, npu, loc]}
+      - {cmd: "show configuration failed", intent: config.commit.failure}
+      - {cmd: "show tech-support qos", intent: qos.techsupport.bundle}
+    tac_first_look: >-
+      Compare the hardware QoS programming (show qos interface <if> output) against the
+      configured policy — on -TR cards a silently rejected class is far more common than
+      a genuine congestion drop.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217222-qos-troubleshooting-guide-for-ncs-5500-s.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/qos/command/reference/b-qos-cr-asr9k/Congestion_Management_Commands.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/213255-asr-9000-ethernet-line-cards-tr-and-se.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
+
+  - id: high-cpu-utilization
+    class: high-cpu
+    title: "High CPU utilisation on an IOS-XR RP or line card"
+    symptoms:
+      - "one process pinned high in show processes cpu"
+      - "logging buffer filling with a repeating error message"
+      - "processes appearing in the blocked list; CLI sluggish while forwarding is unaffected"
+    log_signatures:
+      - "%SECURITY-TACACSD-7-GENERIC_ERROR"
+      - "%SECURITY-TACACSD-6-SERVER_UP"
+      - "%SECURITY-TACACSD-6-SERVER_DOWN"
+      - "%SECURITY-TACACSD-6-TIMEOUT_IGNORED"
+    likely_causes:
+      - "a flood of syslog messages filling the alarm-logger buffer, which the process then keeps re-handling"
+      - "a misbehaving client process (for example tacacsd) generating the message flood"
+      - "blocked processes waiting on a peer, holding CPU"
+      - "a software defect fixed in a later release"
+    commands:
+      - {cmd: "show processes cpu", intent: cpu.processes}
+      - {cmd: "show processes cpu | ex \"0% 0% 0%\"", intent: cpu.processes.nonzero}
+      - {cmd: "show processes blocked location all", intent: process.blocked}
+      - {cmd: "show processes alarm-logger", intent: process.detail.alarmlogger}
+      - {cmd: "show logging", intent: logging.buffer}
+      - {cmd: "show context location all", intent: process.crash.context}
+      - {cmd: "show processes", intent: process.list}
+    tac_first_look: >-
+      Name the top process, then check whether show logging is being flooded by a
+      DIFFERENT process — the CPU hog is often the victim, not the cause.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_monitoring/command/reference/b-sysmon-cr-asr9k/b-sysmon-cr-asr9k_chapter_0100.html
+
+  - id: memory-exhaustion-watchdog-and-shmwin
+    class: high-memory
+    title: "Memory exhaustion / leak, watchdog memory-state, and OS-SHMWIN shared-memory errors"
+    symptoms:
+      - "System memory state is severe, please check the availability of the system memory"
+      - "watchdog memory-state reports a degraded or severe level on a node"
+      - "a process (fib_mgr, l2fib, bgp) grows steadily; mutex operation failed reported"
+      - "BGP virtual memory reaching 90 percent of the platform maximum"
+    log_signatures:
+      - "%OS-SHMWIN-2-ERROR_ENCOUNTERED"
+      - "%HA-HA_WD_LIB-4-RLIMIT"
+      - "%ROUTING-BGP-4-VIRTUAL_MEMORY_LIMIT_THRESHOLD_REACHED"
+    likely_causes:
+      - "severe shared-memory depletion across processes"
+      - "memory leaks in system processes"
+      - "excessive consumption by a specific process (BGP, routing protocols)"
+      - "insufficient available system memory overall"
+      - "the per-process RLIMIT virtual-memory ceiling, worsened by NSR, additional-paths, maximum-path and soft-reconfiguration inbound always"
+      - "an RSP/LC memory bank not recognised, so the node has less DRAM than its PID implies"
+    commands:
+      - {cmd: "show watchdog memory-state location <loc>", intent: memory.watchdog.state, params: [loc]}
+      - {cmd: "show memory summary location <loc>", intent: memory.summary, params: [loc]}
+      - {cmd: "show memory-top-consumers location <loc>", intent: memory.top.consumers, params: [loc]}
+      - {cmd: "show processes memory location <loc>", intent: process.memory, params: [loc]}
+      - {cmd: "show shared-memory location <loc>", intent: memory.shared, params: [loc]}
+      - {cmd: "show shmwin summary location <loc>", intent: memory.shmwin.summary, params: [loc]}
+      - {cmd: "show memory compare report", intent: memory.leak.compare}
+      - {cmd: "show processes memory detail <jid> location <loc>", intent: process.memory.detail, params: [jid, loc]}
+      - {cmd: "show memory heap <jid> location <loc>", intent: process.memory.heap, params: [jid, loc]}
+      - {cmd: "show platform summary location <loc>", intent: hardware.memory.installed, params: [loc]}
+    tac_first_look: >-
+      Take show memory summary and show memory-top-consumers on the affected node, then
+      run show memory compare start / end / report across an interval to prove leak
+      versus legitimate scale.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221183-troubleshoot-os-shmwin-2-error-encounter.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/213960-troubleshoot-memory-mismatch-on-some-rsp.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/process-and-memory-management-commands.html
+
+  - id: process-crash-restart-and-unexpected-reload
+    class: crash-reload
+    proposed_class: true
+    title: "Process crash/restart or an unexpected node reload on IOS-XR"
+    symptoms:
+      - "a coredump/context entry appears for a process that restarted"
+      - "a card or the whole node reloads without an operator action"
+      - "card cycling through reset with repeating postcodes; FAILED/FAILED state"
+      - "reboot history shows a reason the operator did not initiate"
+    log_signatures:
+      - "%PLATFORM-PFM-0-CARD_RESET_REQ"
+      - "%PLATFORM-NP-0-NON_RECOVERABLE_SOFT_ERROR"
+      - "%PLATFORM-NP-3-ECC"
+      - "%HA-HA_WD_LIB-4-RLIMIT"
+      - "%INFRA-SHELF_MGR-5-CARD_REMOVAL"
+      - "%INFRA-SHELF_MGR-5-CARD_INSERTION"
+      - "%INFRA-SHELF_MGR-6-CARD_HW_OPERATIONAL"
+      - "%PLATFORM-CANB_SERVER-7-CBC_POST_RESET_NOTIFICATION"
+    likely_causes:
+      - "non-recoverable parity / ECC soft error triggering a card reset request"
+      - "a process hitting its RLIMIT virtual-memory ceiling and crashing"
+      - "kernel panic in data or instruction cache (DCPERR / ICPERR)"
+      - "card boot/FSM failure — BIOS or platform install problem, reset loop"
+      - "fabric or NP hardware fault escalating to a reload"
+    commands:
+      - {cmd: "show reboot history", intent: reload.history}
+      - {cmd: "show reboot-history card location <loc>", intent: reload.history.card, params: [loc]}
+      - {cmd: "show context location all", intent: process.crash.context}
+      - {cmd: "show exception", intent: process.core.config}
+      - {cmd: "show logging onboard error location <loc>", intent: logging.obfl, params: [loc]}
+      - {cmd: "show pfm location all", intent: platform.pfm.faults}
+      - {cmd: "show controllers card-mgr event-history detail location <loc>", intent: platform.cardmgr.events, params: [loc]}
+      - {cmd: "show logging", intent: logging.buffer}
+      - {cmd: "dir harddisk:/showtech", intent: files.showtech.list}
+    tac_first_look: >-
+      Pin the reload reason from show reboot history / show reboot-history card location
+      <loc> and check show context location all for a coredump in the same window — that
+      pairing says whether the reload was software-initiated or a hardware reset request.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217243-analyze-triaging-fretta-platform-depende.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/process-and-memory-management-commands.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_monitoring/command/reference/b-sysmon-cr-asr9k/b-sysmon-cr-asr9k_chapter_0101.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
+
+  - id: environment-alarms-fan-psu-temperature
+    class: hardware-fault
+    title: "Environmental alarms on IOS-XR — fan tray, power supply, temperature"
+    symptoms:
+      - "fan module/tray reported Non-Operational; individual fans showing - or markedly lower RPM"
+      - "power module shows FAILED or NO PWR, or zero voltage and amperage"
+      - "line cards fail to boot, or drivers initialise late after a power fault"
+      - "active alarms present in show alarms brief system active"
+    log_signatures:
+      - "%PLATFORM-CANB_SERVER-3-ALARM_INDICATION"
+      - "CBC_ALRM_AT_LEAST_ONE_FAN_FAILED"
+      - "%INFRA-SHELF_MGR-5-CARD_REMOVAL"
+      - "%INFRA-SHELF_MGR-5-CARD_INSERTION"
+      - "%INFRA-SHELF_MGR-6-CARD_HW_OPERATIONAL"
+      - "%PKT_INFRA-FM-6-FAULT_INFO"
+      - "%PKT_INFRA-FM-3-FAULT_MAJOR"
+    likely_causes:
+      - "failed or failing individual fans within a tray; clogged dust filters restricting airflow"
+      - "dust or debris obstruction, loose wiring, physical damage"
+      - "ambient temperature exceeding operational limits"
+      - "hardware failure in the power tray, power module or PEM; damaged or loose power cabling"
+      - "known software or hardware defects"
+    commands:
+      - {cmd: "show alarms brief system active", intent: alarms.active}
+      - {cmd: "show alarms detail system active", intent: alarms.detail}
+      - {cmd: "admin show environment fan", intent: environment.fan}
+      - {cmd: "show environment power", intent: environment.power}
+      - {cmd: "show environment temperatures", intent: environment.temperature}
+      - {cmd: "show environment voltages", intent: environment.voltage}
+      - {cmd: "show logging | include FAN", intent: logging.filter.fan}
+      - {cmd: "show logging | include Power", intent: logging.filter.power}
+      - {cmd: "show inventory location <loc>", intent: hardware.inventory.node, params: [loc]}
+      - {cmd: "admin show led", intent: platform.led}
+    tac_first_look: >-
+      Take show alarms brief system active plus the matching show environment view and
+      show inventory location <loc> for the failed FRU — serial number plus alarm text is
+      what an RMA needs.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225782-troubleshoot-power-supply-module.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_monitoring/command/reference/b-sysmon-cr-asr9k/b-sysmon-cr-asr9k_chapter_01.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/interfaces/command/reference/b-interfaces-hardware-component-cr-asr9000/hardware-redundancy-and-node-administration-commands.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: platform-node-not-in-xr-run-state
+    class: platform-boot
+    proposed_class: true
+    title: "show platform node not in IOS-XR RUN state (SW_INACTIVE / FAILED / boot loop)"
+    symptoms:
+      - "module displays SW_INACTIVE in show platform / admin show platform"
+      - "boot loop with repeated power cycles and resets"
+      - "module stuck synchronising with the active Route Processor"
+      - "card in FAILED/FAILED state, cycling postcodes"
+    log_signatures:
+      - "%PLATFORM-CANB_SERVER-7-CBC_POST_RESET_NOTIFICATION"
+      - "%INFRA-SHELF_MGR-6-HW_EVENT"
+      - "%INFRA-SHELF_MGR-6-CARD_HW_OPERATIONAL"
+      - "%INFRA-INSTAGENT-4-XR_PART_PREP_REQ"
+      - "%INFRA-INSTAGENT-4-XR_PART_PREP_IMG"
+      - "%PKT_INFRA-FM-3-FAULT_MAJOR"
+    likely_causes:
+      - "boot files in /misc/disk1/tftpboot missing or corrupted, so the active RP cannot share the boot set"
+      - "missing or incorrect DHCP configuration, so the line card gets no internal IP"
+      - "Golden FPGA below minimum version, requiring a force FPD upgrade"
+      - "active Route Processor unable to distribute boot information to a newly inserted module"
+    commands:
+      - {cmd: "show platform", intent: platform.node.state}
+      - {cmd: "admin show platform", intent: platform.node.state.admin}
+      - {cmd: "show hw-module fpd location all", intent: fpd.status}
+      - {cmd: "show platform slices", intent: platform.slices}
+      - {cmd: "show controllers card-mgr event-history brief location <loc>", intent: platform.cardmgr.events, params: [loc]}
+      - {cmd: "show controller card-mgr inventory summary", intent: platform.cardmgr.inventory}
+      - {cmd: "show install active summary", intent: install.active}
+      - {cmd: "show tech install one-showtech", intent: install.techsupport.bundle}
+      - {cmd: "show version", intent: software.version}
+    tac_first_look: >-
+      Confirm the state in admin show platform, then check the FPD level and the
+      install/boot-file set on the active RP — SW_INACTIVE is almost always a boot-image
+      or FPD delivery problem, not a dead card.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217243-analyze-triaging-fretta-platform-depende.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: fpd-out-of-date
+    class: fpd-firmware
+    proposed_class: true
+    title: "FPD out of date / field-programmable device needs upgrade"
+    symptoms:
+      - "show hw-module fpd reports a FRU whose running FPD version is below the package version"
+      - "card refuses to come to RUN, or comes up with reduced function, after an upgrade"
+      - "Golden FPGA below the minimum version required by the running image"
+    log_signatures:
+      - "%INFRA-INSTAGENT-4-XR_PART_PREP_IMG"
+      - "%INFRA-INSTAGENT-4-XR_PART_PREP_REQ"
+    likely_causes:
+      - "software upgrade delivering a newer FPD package than the hardware carries"
+      - "Golden FPGA below the minimum version, requiring a force FPD upgrade"
+      - "a newly inserted FRU shipped with older firmware than the chassis baseline"
+      - "FPD upgrade interrupted, leaving a partial state"
+    commands:
+      - {cmd: "show hw-module fpd", intent: fpd.status}
+      - {cmd: "show hw-module fpd location all", intent: fpd.status.all}
+      - {cmd: "show fpd package", intent: fpd.package.baseline}
+      - {cmd: "show platform", intent: platform.node.state}
+      - {cmd: "show inventory", intent: hardware.inventory}
+      - {cmd: "show install active summary", intent: install.active}
+      - {cmd: "show tech-support fpd", intent: fpd.techsupport.bundle}
+    tac_first_look: >-
+      Diff show hw-module fpd location all against show fpd package for the running image
+      — every row where running is below package is the upgrade list.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/interfaces/command/reference/b-interfaces-hardware-component-cr-asr9000/hardware-redundancy-and-node-administration-commands.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217243-analyze-triaging-fretta-platform-depende.html
+
+  - id: rp-redundancy-and-switchover
+    class: redundancy-switchover
+    proposed_class: true
+    title: "RP/RSP redundancy state wrong or an unexpected switchover"
+    symptoms:
+      - "standby RP not in a ready/hot-standby state, or the redundancy pair not synchronised"
+      - "unplanned switchover with sessions reset at the moment of the switch"
+      - "configuration inconsistency reported on the standby node"
+    log_signatures: []
+    likely_causes:
+      - "active Route Processor failure, unable to distribute boot information"
+      - "standby node still in a non-RUN platform state"
+      - "software levels not matching between the pair after an install operation"
+      - "fabric or card faults escalating to a reset request on the active RP"
+    commands:
+      - {cmd: "show redundancy", intent: redundancy.state}
+      - {cmd: "show redundancy summary", intent: redundancy.summary}
+      - {cmd: "show platform", intent: platform.node.state}
+      - {cmd: "show configuration inconsistency replica", intent: config.standby.consistency}
+      - {cmd: "show install committed", intent: install.committed}
+      - {cmd: "show reboot history", intent: reload.history}
+      - {cmd: "show pfm location all", intent: platform.pfm.faults}
+      - {cmd: "show version", intent: software.version}
+    tac_first_look: >-
+      show redundancy plus show platform establishes whether the standby is genuinely
+      ready; if a switchover already happened, show reboot history on the former active
+      names the trigger.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/configuration-management-commands.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/software-package-management-commands.html
+
+  - id: software-install-smu-and-commit-failure
+    class: software-install
+    proposed_class: true
+    title: "Software install / SMU activation or commit failure"
+    symptoms:
+      - "install operation does not report Install operation completed successfully"
+      - "activation warns that some SMU packages will be superseded, or that nodes will reload in parallel"
+      - "packages active but not committed, so they do not survive a reload"
+      - "a node left out of step with the rest of the chassis after the operation"
+    log_signatures:
+      - "%INFRA-INSTAGENT-4-XR_PART_PREP_REQ"
+      - "%INFRA-INSTAGENT-4-XR_PART_PREP_IMG"
+    likely_causes:
+      - "an SMU superseded by another SMU already active on the box"
+      - "package/PIE integrity or signing problems (certificate expiry, corrupt PIE, RPM signage on 64-bit eXR)"
+      - "the operation requires a parallel reload of nodes that were not ready"
+      - "activated but uncommitted packages lost across a reload"
+      - "a node not in RUN state at activation time, so it never receives the package"
+    commands:
+      - {cmd: "show install log", intent: install.log}
+      - {cmd: "show install active summary", intent: install.active}
+      - {cmd: "show install committed", intent: install.committed}
+      - {cmd: "show install superceded", intent: install.superseded}
+      - {cmd: "show install package pie detail", intent: install.package.detail}
+      - {cmd: "show install request", intent: install.request.state}
+      - {cmd: "show install audit", intent: install.audit}
+      - {cmd: "show install boot-options location all", intent: install.boot.options}
+      - {cmd: "show system verify", intent: system.verify}
+      - {cmd: "show tech-support install", intent: install.techsupport.bundle}
+    tac_first_look: >-
+      show install log for the failing operation id, cross-checked with show install
+      active summary versus show install committed — the gap between active and committed
+      is the most common "it came back wrong after reload" cause.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/software-package-management-commands.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
+
+  - id: config-commit-audit
+    class: config-change
+    title: "Config commit failed, or a change needs to be audited against an outage"
+    symptoms:
+      - "Failed to commit one or more configuration items during a pseudo-atomic operation. All changes made have been reverted."
+      - "warning conditions at commit, e.g. InPlace Modify Error detected the warning condition"
+      - "Ran out of 8 Queues for the port reported by prm_ezhal at commit"
+      - "the configuration present after a reload differs from what was intended"
+    log_signatures:
+      - "%MGBL-CONFIG-6-DB_COMMIT"
+      - "%MGBL-SYS-5-CONFIG_I"
+    likely_causes:
+      - "platform resource limits exceeded (queues, policers, EFPs differ between -TR and -SE cards)"
+      - "unsupported combination of queues at the leaf level of a queuing hierarchy"
+      - "configuration syntactically valid but rejected by a feature manager at apply time"
+      - "a change committed and then reverted, leaving a startup-config failure at the next boot"
+    commands:
+      - {cmd: "show configuration failed", intent: config.commit.failure}
+      - {cmd: "show configuration failed inheritance", intent: config.commit.failure.detail}
+      - {cmd: "show configuration failed startup", intent: config.startup.failure}
+      - {cmd: "show configuration history", intent: config.change.history}
+      - {cmd: "show configuration commit changes all", intent: config.commit.diff}
+      - {cmd: "show configuration commit list", intent: config.commit.list}
+      - {cmd: "show configuration rollback changes", intent: config.rollback.preview}
+      - {cmd: "show configuration sessions", intent: config.sessions}
+      - {cmd: "show cli history detail", intent: cli.history}
+    tac_first_look: >-
+      show configuration commit list then show configuration commit changes all bounds
+      the change window; show configuration failed gives the exact rejected stanza and
+      the feature manager that rejected it.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+      - https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/213255-asr-9000-ethernet-line-cards-tr-and-se.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/configuration-management-commands.html
+
+  - id: ntp-not-synchronising
+    class: ntp-sync
+    proposed_class: true
+    title: "NTP not synchronising / clock unsynchronised on IOS-XR"
+    symptoms:
+      - "show ntp status reports the clock unsynchronised, or a stratum that never settles"
+      - "associations never reach a reachable/candidate state"
+      - "log timestamps drift between nodes, making correlation unreliable"
+    log_signatures: []
+    likely_causes:
+      - "server unreachable from the node's own location (NTP state is per node, hence the location keyword)"
+      - "association configured but never selected as a peer or candidate"
+      - "local calendar/clock diverged from the NTP-derived time"
+      - "control-plane path to the NTP server policed or filtered (LPTS or ACL)"
+    commands:
+      - {cmd: "show ntp status location <loc>", intent: ntp.sync.state, params: [loc]}
+      - {cmd: "show ntp associations detail location <loc>", intent: ntp.associations, params: [loc]}
+      - {cmd: "show calendar", intent: clock.calendar}
+      - {cmd: "show lpts pifib hardware police location <loc>", intent: lpts.police.rates, params: [loc]}
+      - {cmd: "show access-lists ipv4 <name> hardware ingress location <loc>", intent: acl.hardware.hits.v4, params: [name, loc]}
+      - {cmd: "show logging location <loc>", intent: logging.buffer.filtered, params: [loc]}
+      - {cmd: "show tcp brief", intent: transport.sessions}
+    tac_first_look: >-
+      Run show ntp status location <loc> and show ntp associations detail location <loc>
+      on the SPECIFIC node that is out of sync, not just the active RP.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/ntp-commands.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/ip-addresses/command/reference/b-ip-addresses-cr-asr9000/b-ipaddr-cr-asr9k_chapter_0111.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/ip-addresses/command/reference/b-ip-addresses-cr-asr9000/b-ipaddr-cr-asr9k_chapter_01.html
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_monitoring/command/reference/b-sysmon-cr-asr9k/b-sysmon-cr-asr9k_chapter_0100.html
+
+  - id: snmp-polling-and-trap-problems
+    class: snmp-agent
+    proposed_class: true
+    title: "SNMP polling slow or failing, or traps not arriving, on IOS-XR"
+    symptoms:
+      - "NMS polls time out or return partial data while the CLI is responsive"
+      - "linkUp/linkDown notifications missing for some interfaces"
+      - "ifIndex values change, or do not match the NMS's cached map"
+      - "duplicate PDUs being dropped; incoming request queue backing up"
+    log_signatures: []
+    likely_causes:
+      - "slow OIDs or heavy polling saturating the SNMP request queue, after which duplicate PDUs are dropped"
+      - "notification not enabled for the interface subset being watched"
+      - "ifIndex mapping mismatch between the device and the NMS"
+      - "view/group/user configuration excluding the polled subtree"
+      - "trap host or UDP port not configured as the NMS expects"
+      - "control-plane policing of the SNMP punt path"
+    commands:
+      - {cmd: "show snmp", intent: snmp.status}
+      - {cmd: "show snmp interface", intent: snmp.ifindex.map}
+      - {cmd: "show snmp interface notification <if>", intent: snmp.linkupdown.state, params: [if]}
+      - {cmd: "show snmp request incoming-queue detail", intent: snmp.queue.depth}
+      - {cmd: "show snmp request duplicates", intent: snmp.duplicate.drops}
+      - {cmd: "show snmp statistics slow oid", intent: snmp.slow.oids}
+      - {cmd: "show snmp statistics pdu", intent: snmp.pdu.stats}
+      - {cmd: "show snmp traps details", intent: snmp.traps}
+      - {cmd: "show snmp host", intent: snmp.receivers}
+      - {cmd: "show snmp view", intent: snmp.views}
+    tac_first_look: >-
+      show snmp request incoming-queue detail plus show snmp statistics slow oid tells
+      you in one pass whether the box is being over-polled or a specific OID is the
+      bottleneck.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
+  - id: aaa-tacacs-problems
+    class: aaa-auth
+    proposed_class: true
+    title: "AAA / TACACS+ authentication or authorization failures on IOS-XR"
+    symptoms:
+      - "logins fail or hang while the console/local account still works"
+      - "TACACS server repeatedly marked down then up"
+      - "repeated Failed to get request for: key ... session ... messages filling the log buffer"
+      - "alarm-logger CPU climbing as a side effect of the message flood"
+    log_signatures:
+      - "%SECURITY-TACACSD-7-GENERIC_ERROR"
+      - "%SECURITY-TACACSD-6-SERVER_UP"
+      - "%SECURITY-TACACSD-6-SERVER_DOWN"
+      - "%SECURITY-TACACSD-6-TIMEOUT_IGNORED"
+    likely_causes:
+      - "tacacsd generating an overwhelming volume of syslog messages (a known defect fixed in later releases)"
+      - "server timeouts being ignored or retried, so sessions never complete"
+      - "server-group or source-interface configuration not matching the server's expectation"
+      - "reachability to the AAA server broken, or policed on the control plane"
+    commands:
+      - {cmd: "show tacacs", intent: aaa.tacacs.servers}
+      - {cmd: "show tacacs counters", intent: aaa.tacacs.counters}
+      - {cmd: "show tacacs details", intent: aaa.tacacs.detail}
+      - {cmd: "show tacacs server-groups", intent: aaa.tacacs.groups}
+      - {cmd: "show tacacs source-interface", intent: aaa.tacacs.source}
+      - {cmd: "show aaa", intent: aaa.config.state}
+      - {cmd: "show aaa trace", intent: aaa.trace}
+      - {cmd: "show user", intent: aaa.current.user}
+      - {cmd: "show processes tacacsd", intent: process.detail.tacacsd}
+      - {cmd: "show logging", intent: logging.buffer}
+    tac_first_look: >-
+      show tacacs counters and show tacacs details against show logging — a server
+      flapping UP/DOWN with TIMEOUT_IGNORED messages is a reachability/timeout problem,
+      not a credential problem.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html

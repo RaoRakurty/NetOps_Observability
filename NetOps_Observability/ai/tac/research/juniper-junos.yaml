@@ -1,0 +1,1192 @@
+# TAC escalation research — Juniper Junos OS
+# Design of record: docs/design/TAC_ESCALATION_2026-09-05.md
+# Schema: as specified in the research brief (no ai/tac/README.md existed at time of writing).
+# Sourcing rule: every command below appears verbatim on a cited public juniper.net page.
+# Read-only only: no clear / restart / request system / configure / monitor traffic / traceoptions.
+# `request support information` and `show log messages` are read-only and are included.
+vendor: juniper-junos
+
+sources:
+  - title: "Data Collection for Customer Support (JTAC)"
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
+  - title: "request support information — Junos CLI reference"
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
+  - title: "Troubleshooting BGP Sessions"
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+  - title: "BGP Session Flaps"
+    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
+  - title: "Understanding Hidden Routes"
+    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
+  - title: "Understanding the Layered MPLS Troubleshooting Model"
+    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+  - title: "Troubleshooting MPLS"
+    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+  - title: "Layer 3 VPNs Troubleshooting"
+    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
+  - title: "Troubleshoot Interfaces"
+    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+  - title: "Troubleshooting an EX Series Virtual Chassis"
+    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
+  - title: "System Troubleshooting (core files)"
+    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
+  - title: "Understand Chassis Alarms"
+    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
+  - title: "EVPN Type-2 and Type-5 route coexistence"
+    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
+  - title: "Junos OS CLI reference (command pages cited per issue)"
+    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
+
+tac_baseline:
+  commands:
+    - {cmd: "request support information", intent: techsupport.bundle}
+    - {cmd: "request support information | save /var/tmp/rsi-CURRENT-DATE.log", intent: techsupport.bundle.save}
+    - {cmd: "file list /var/tmp/logs-CURRENT-DATE.tgz detail", intent: file.list}
+    - {cmd: "show version", intent: version.info}
+    - {cmd: "show chassis hardware", intent: inventory.hardware}
+    - {cmd: "show chassis environment", intent: environment.all}
+    - {cmd: "show chassis alarms", intent: alarms.chassis}
+    - {cmd: "show system alarms", intent: alarms.system}
+    - {cmd: "show system uptime", intent: uptime}
+    - {cmd: "show log messages", intent: logging.recent}
+    - {cmd: "show interfaces extensive", intent: interface.counters.extensive}
+    - {cmd: "show configuration | except SECRET-DATA", intent: config.running.redacted}
+  notes: >-
+    Juniper's Data Collection for Customer Support topic gives the JTAC baseline as
+    three steps: "request support information | save /var/tmp/rsi-CURRENT-DATE.log",
+    then "file archive compress source /var/log/* destination
+    /var/tmp/logs-CURRENT-DATE.tgz", then "file list /var/tmp/logs-CURRENT-DATE.tgz
+    detail", and upload both to the case. The archive step is EXCLUDED from the
+    command list above because it writes a file rather than reading state — the
+    collector should either be granted that one write explicitly or pull /var/log
+    another way. The request-support-information reference documents that the
+    command runs a large set of show commands internally (on MX it includes "show
+    chassis alarms no-forwarding", "show interfaces extensive no-forwarding", "show
+    chassis environment no-forwarding", "show configuration | except SECRET-DATA",
+    "show version detail no-forwarding" and roughly two dozen more chassis, system,
+    KRT and PFE commands), that output should be redirected to a file such as
+    /var/log/rsi.log, and that the default file path on QFX with Junos OS Evolved is
+    /var/tmp. RSI raises CPU load and can be slow on a busy Routing Engine — check
+    utilization first and avoid peak traffic. Core files live under /var/crash/ and
+    /var/tmp/ (Junos OS), /var/core/ for RE cores and /var/lib/ftp/in/ for FPC cores
+    on Junos OS Evolved.
+  sources:
+    - https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
+    - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
+    - https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
+    - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-core-dumps.html
+
+issues:
+  - id: bgp-session-idle-active
+    class: bgp-session
+    title: "BGP peer stuck in Idle / Active / Connect — session never establishes"
+    symptoms:
+      - "Neighbor flip-flops between Connect and Active (a transport-layer problem)"
+      - "State stuck in Idle: TCP 179 not open, wrong peer address, wrong AS number, or a BGP config error"
+      - "State stuck in Active: the TCP connection was initiated but never completed"
+      - "show bgp summary lists the peer as Active or Idle rather than Established"
+    log_signatures: []
+    likely_causes:
+      - "TCP retransmissions or the peer address unreachable at the transport layer"
+      - "Missing local-address, so BGP packets are sourced from the outgoing interface instead of the loopback"
+      - "BGP next-hop address not matching the LSP destination address"
+      - "Router ID not configured, risking duplicate router IDs"
+      - "Peer AS number or peer address mismatch between the two routers"
+    commands:
+      - {cmd: "show bgp summary", intent: bgp.summary}
+      - {cmd: "show bgp neighbor <neighbor-address>", intent: bgp.neighbor.detail, params: [neighbor]}
+      - {cmd: "show configuration", intent: config.running}
+      - {cmd: "show route resolution unresolved detail", intent: route.resolution.unresolved}
+      - {cmd: "show route forwarding-table", intent: fib.table}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Read the peer's exact state plus the Last State and Last Error fields from show bgp neighbor, then confirm transport reachability and next-hop resolution before touching BGP configuration."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-bgp-neighbor.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-bgp-summary.html
+
+  - id: bgp-session-flapping
+    class: bgp-instability
+    title: "BGP session flapping — hold time expiry, resets after commit"
+    symptoms:
+      - "Sessions go down and come back up repeatedly"
+      - "Sessions reset immediately after a configuration commit"
+      - "Recurring Established to Idle cycling visible in show bgp neighbor and the log"
+      - "Downstream route churn tracking the resets"
+    log_signatures: []
+    likely_causes:
+      - "Hold timer expiry — no keepalive, update or notification received within the hold time (three times the keepalive interval)"
+      - "Scheduler slips delaying keepalive generation with a short hold time configured and no precision-timers"
+      - "Commit actions that reset sessions by design: adding a cluster ID, creating a route reflector group with the same AS number, or changing the family statement under protocols bgp"
+      - "Route damping being mistaken for session flapping"
+    commands:
+      - {cmd: "show bgp summary", intent: bgp.summary}
+      - {cmd: "show bgp neighbor", intent: bgp.neighbor.detail}
+      - {cmd: "show bgp group", intent: bgp.group}
+      - {cmd: "show route damping suppressed", intent: bgp.damping.suppressed}
+      - {cmd: "show route damping suppressed detail", intent: bgp.damping.suppressed.detail}
+      - {cmd: "show policy damping", intent: bgp.damping.policy}
+      - {cmd: "show system commit", intent: config.commit.history}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Correlate the flap timestamps against the commit log first — Juniper documents specific commit actions that reset every session by design, which rules out a link fault immediately."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-commit.html
+
+  - id: bgp-routes-not-received
+    class: bgp-route-missing
+    title: "BGP routes not received from a peer — import policy, damping, hidden routes"
+    symptoms:
+      - "Expected prefixes absent from the local RIB although the session is Established"
+      - "show route receive-protocol bgp <neighbor> shows the prefix but show route does not"
+      - "The prefix is only visible under show route hidden"
+    log_signatures: []
+    likely_causes:
+      - "An import policy rejects the route"
+      - "The next hop cannot be resolved using the current indirect next-hop resolution rule"
+      - "A damping policy suppresses the route"
+      - "The AS path contains illegal or invalid confederation or transitive attributes, is empty, or contains a zero"
+      - "The next hop is the local routing device, a multicast address, or an IPv6 link-local address"
+      - "The route prefix or its next hop is a martian address"
+    commands:
+      - {cmd: "show route receive-protocol bgp <neighbor-address>", intent: bgp.routes.received, params: [neighbor]}
+      - {cmd: "show route receive-protocol bgp <neighbor-address> hidden", intent: bgp.routes.received.hidden, params: [neighbor]}
+      - {cmd: "show route hidden detail", intent: route.hidden.detail}
+      - {cmd: "show route resolution unresolved detail", intent: route.resolution.unresolved}
+      - {cmd: "show route damping suppressed", intent: bgp.damping.suppressed}
+      - {cmd: "show policy damping", intent: bgp.damping.policy}
+      - {cmd: "show bgp neighbor <neighbor-address>", intent: bgp.neighbor.detail, params: [neighbor]}
+    tac_first_look: "Check show route hidden and the hidden form of receive-protocol first — that separates received-but-rejected (policy, damping, next hop) from never-sent-by-the-peer."
+    sources:
+      - https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
+      - https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+
+  - id: bgp-routes-not-advertised
+    class: bgp-route-missing
+    title: "BGP routes not advertised to a peer — export policy or unresolved next hop"
+    symptoms:
+      - "Prefix active locally but absent from show route advertising-protocol bgp <neighbor>"
+      - "The peer never sees the route although the session is Established"
+      - "Only BGP-learned routes reach the peer; static and IGP routes do not"
+    log_signatures: []
+    likely_causes:
+      - "Only active routes are exported from the routing table"
+      - "By default BGP exports only BGP-learned routes; static, direct and IGP routes need an explicit export policy"
+      - "The route is hidden because it is unreachable or its next hop cannot be resolved"
+      - "Outbound policy rewriting attributes so the receiver rejects the route"
+    commands:
+      - {cmd: "show route advertising-protocol bgp <neighbor-address>", intent: bgp.routes.advertised, params: [neighbor]}
+      - {cmd: "show route receive-protocol bgp <neighbor-address>", intent: bgp.routes.received, params: [neighbor]}
+      - {cmd: "show route protocol bgp", intent: route.protocol.bgp}
+      - {cmd: "show route protocol static", intent: route.protocol.static}
+      - {cmd: "show route protocol direct", intent: route.protocol.direct}
+      - {cmd: "show route forwarding-table", intent: fib.table}
+      - {cmd: "show bgp neighbor <neighbor-address>", intent: bgp.neighbor.detail, params: [neighbor]}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Run show route advertising-protocol bgp <neighbor> first, then decide between export-policy filtering (is the route even BGP-exportable?) and a hidden or unresolved next hop."
+    sources:
+      - https://www.juniper.net/documentation/en_US/junos/topics/usage-guidelines/routing-applying-policies-to-bgp-routes.html
+      - https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+      - https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
+
+  - id: bgp-prefix-limit-teardown
+    class: bgp-session
+    title: "BGP prefix-limit exceeded — peer torn down by the configured maximum"
+    symptoms:
+      - "Session drops shortly after the prefix count from one peer crosses a threshold"
+      - "Session re-establishes quickly, or stays down indefinitely when idle-timeout forever is configured"
+      - "Accepted-prefix count sitting at the configured maximum"
+    log_signatures: []
+    likely_causes:
+      - "The peer advertises more prefixes than the configured prefix-limit maximum (route leak or growth)"
+      - "teardown configured without a warning percentage, so there is a hard cutoff with no early warning"
+      - "idle-timeout forever configured, so the router will not re-establish on its own"
+      - "Missing or loose import policy allowing an unexpectedly large prefix set"
+    commands:
+      - {cmd: "show bgp neighbor <neighbor-address>", intent: bgp.neighbor.detail, params: [neighbor]}
+      - {cmd: "show bgp summary", intent: bgp.summary}
+      - {cmd: "show route receive-protocol bgp <neighbor-address>", intent: bgp.routes.received, params: [neighbor]}
+      - {cmd: "show route summary", intent: route.summary}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Compare the accepted-prefix count in show bgp neighbor with the configured prefix-limit maximum before deciding whether to raise the limit or investigate the peer's advertisement."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/prefix-limit-edit-protocols-bgp.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-bgp-neighbor.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-route-summary.html
+
+  - id: bgp-route-selection-unexpected
+    class: bgp-route-missing
+    title: "BGP route selection unexpected — the active path is not the expected one"
+    symptoms:
+      - "A prefix is reachable over several BGP paths but the wrong one is active"
+      - "show route detail marks the expected path inactive"
+      - "Traffic egresses via an unexpected neighbour"
+    log_signatures: []
+    likely_causes:
+      - "Local preference decides before anything else — a higher local preference wins even against a better AIGP metric"
+      - "AIGP metric, then MED, then IGP metric acting as successive tie-breakers"
+      - "MED comparison rules across neighbour ASes"
+      - "IGP cost to the next hop differing from the operator's expectation"
+    commands:
+      - {cmd: "show route <destination-prefix> detail", intent: route.prefix.detail, params: [prefix]}
+      - {cmd: "show route <destination-prefix> extensive", intent: route.prefix.extensive, params: [prefix]}
+      - {cmd: "show route advertising-protocol bgp <neighbor-address>", intent: bgp.routes.advertised, params: [neighbor]}
+      - {cmd: "show route receive-protocol bgp <neighbor-address>", intent: bgp.routes.received, params: [neighbor]}
+      - {cmd: "show route forwarding-table", intent: fib.table}
+    tac_first_look: "Read the Inactive reason string that Junos attaches to each non-selected path in show route detail (for example Local Preference, AIGP, Route Metric or MED comparison, IGP metric) instead of guessing which attribute decided."
+    sources:
+      - https://www.juniper.net/documentation/en_US/junos12.3/topics/reference/general/bgp-aigp-path-selection-algorithm-understanding.html
+      - https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-route.html
+
+  - id: bgp-evpn-routes-missing
+    class: evpn-vxlan
+    title: "BGP EVPN routes missing or rejected (Type-2 / Type-5)"
+    symptoms:
+      - "A remote MAC, MAC+IP or IP-prefix route is expected in the EVPN table but absent"
+      - "A route is present in show evpn database but never installed in the forwarding table"
+      - "show evpn ip-prefix-database shows the prefix as Rejected rather than Accepted"
+    log_signatures: []
+    likely_causes:
+      - "Type-2 / Type-5 coexistence preference suppressing one route in favour of the other for the same prefix"
+      - "A platform reject reason such as Asymmetric-vni rejected"
+      - "Route-target or route-distinguisher mismatch so the route is never imported"
+      - "The EVPN BGP session itself not established"
+    commands:
+      - {cmd: "show evpn ip-prefix-database", intent: evpn.ipprefix.db}
+      - {cmd: "show evpn ip-prefix-database extensive", intent: evpn.ipprefix.db.extensive}
+      - {cmd: "show evpn database extensive", intent: evpn.database.extensive}
+      - {cmd: "show evpn instance extensive", intent: evpn.instance.extensive}
+      - {cmd: "show ethernet-switching mac-ip-table", intent: evpn.macip.table}
+      - {cmd: "show route forwarding-table", intent: fib.table}
+      - {cmd: "show bgp summary", intent: bgp.summary}
+    tac_first_look: "show evpn ip-prefix-database for Accepted/Rejected status and the reject reason, then show evpn database extensive to see whether a competing Type-2 entry for the same prefix is winning under the coexistence rules."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-database.html
+      - https://www.juniper.net/documentation/us/en/software/junos/evpn-vxlan/topics/ref/command/show-evpn-instance.html
+      - https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
+
+  - id: ospf-adjacency-stuck
+    class: ospf-adjacency
+    title: "OSPF adjacency stuck in Init / ExStart / Exchange / Loading"
+    symptoms:
+      - "Neighbor state stays at Init, ExStart, Exchange or Loading and never reaches Full"
+      - "The Database Description exchange never completes"
+      - "Routes from that neighbour never install"
+    log_signatures:
+      - "RPD_OSPF_NBRDOWN"
+    likely_causes:
+      - "MTU mismatch between the two OSPF interfaces, so DBD packets are dropped and the adjacency hangs in ExStart"
+      - "A firewall filter or security policy dropping fragments"
+      - "Hello or dead interval, area, or authentication mismatch"
+      - "High interface scale slowing adjacency establishment"
+    commands:
+      - {cmd: "show ospf neighbor extensive", intent: ospf.neighbor.detail}
+      - {cmd: "show ospf interface", intent: ospf.interfaces}
+      - {cmd: "show ospf neighbor instance <routing-instance-name>", intent: ospf.neighbors.instance, params: [routing-instance]}
+      - {cmd: "show ospf database", intent: ospf.database}
+      - {cmd: "show interfaces extensive", intent: interface.counters.extensive}
+      - {cmd: "show log messages", intent: logging.recent}
+      - {cmd: "request support information", intent: techsupport.bundle}
+    tac_first_look: "Read the stuck state, then compare interface MTU on both ends — an ExStart or Exchange hang is, by Juniper's own KB naming, overwhelmingly MTU or DBD fragmentation."
+    sources:
+      - https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+      - https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
+      - https://www.juniper.net/documentation/us/en/software/junos/ospf/topics/ref/command/show-ospf-database.html
+      - https://supportportal.juniper.net/s/article/OSPF-neighbors-remain-in-INIT-state-with-RPD-OSPF-NBRDOWN
+
+  - id: ospf-route-missing
+    class: ospf-database
+    title: "OSPF route missing / LSA database problem"
+    symptoms:
+      - "Expected external or inter-area route absent although the adjacency is Full"
+      - "LSA present in show ospf database but no route derived from it"
+      - "Route appears and disappears as LSAs age and refresh"
+    log_signatures: []
+    likely_causes:
+      - "LSA not flooded to this router — area boundary filtering, or a stub/NSSA area type mismatch"
+      - "LSA aged out without being refreshed"
+      - "SPF not yet recalculated after a topology change"
+      - "Route hidden because its next hop cannot be resolved"
+    commands:
+      - {cmd: "show ospf database", intent: ospf.database}
+      - {cmd: "show ospf database extensive", intent: ospf.database.extensive}
+      - {cmd: "show ospf neighbor extensive", intent: ospf.neighbor.detail}
+      - {cmd: "show ospf interface", intent: ospf.interfaces}
+      - {cmd: "show route hidden detail", intent: route.hidden.detail}
+      - {cmd: "show route resolution unresolved detail", intent: route.resolution.unresolved}
+    tac_first_look: "Confirm the LSA exists with a current age and sequence in show ospf database extensive before assuming an SPF or routing-table fault — a missing LSA and an unused LSA are very different root causes."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/ospf/topics/ref/command/show-ospf-database.html
+      - https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
+      - https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+
+  - id: ospf-neighbor-flapping
+    class: ospf-flapping-link
+    title: "OSPF neighbors flapping with an unstable interface"
+    symptoms:
+      - "OSPF neighbor cycles Full to down to Full"
+      - "Flaps correlate with physical carrier transitions"
+      - "SPF recalculates on every flap, producing transient route churn"
+    log_signatures: []
+    likely_causes:
+      - "Physical layer flapping tearing the adjacency down each time"
+      - "Hello or dead timer mismatch causing intermittent loss under marginal conditions"
+      - "Intermittent MTU or DBD problems rather than permanent ones"
+      - "Optic or cable degradation"
+    commands:
+      - {cmd: "show interfaces extensive", intent: interface.counters.extensive}
+      - {cmd: "show ospf neighbor extensive", intent: ospf.neighbor.detail}
+      - {cmd: "show ospf interface", intent: ospf.interfaces}
+      - {cmd: "show interfaces diagnostics optics", intent: transceiver.dom}
+      - {cmd: "show chassis alarms", intent: alarms.chassis}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Check carrier-transition and error counters in show interfaces extensive first — an OSPF flap is usually a symptom of a physical-layer flap, not an OSPF misconfiguration."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-extensive.html
+      - https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-diagnostics-optics-ex-series.html
+
+  - id: isis-adjacency-down
+    class: isis-adjacency
+    title: "IS-IS adjacency not forming (level, area/NET, MTU, authentication)"
+    symptoms:
+      - "show isis adjacency reports a state other than Up — Down, New, One-way, Initializing or Rejected"
+      - "An exclamation mark before the level number, meaning the adjacency is missing an IP address"
+      - "Adjacency never progresses past the initial hello exchange"
+    log_signatures: []
+    likely_causes:
+      - "Level mismatch — a Level-1-only router will not adjacency with a Level-2-only neighbour"
+      - "Level 1 area address mismatch between neighbours"
+      - "Interface MTU mismatch"
+      - "NET or system-ID misconfiguration, or a duplicate system ID"
+      - "Authentication key or type mismatch on the interface or level"
+    commands:
+      - {cmd: "show isis adjacency extensive", intent: isis.adjacency.detail}
+      - {cmd: "show isis adjacency", intent: isis.adjacency}
+      - {cmd: "show isis interface", intent: isis.interfaces}
+      - {cmd: "show isis overview", intent: isis.overview}
+      - {cmd: "show interfaces extensive", intent: interface.counters.extensive}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "show isis adjacency extensive for the exact reported state — Rejected or One-way points at a level, area or authentication mismatch rather than plain connectivity."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-adjacency.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-interface.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-overview.html
+      - https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+
+  - id: isis-lsp-route-missing
+    class: isis-lsp
+    title: "IS-IS route missing / LSP or database problem"
+    symptoms:
+      - "Expected prefix missing from the routing table although adjacencies are Up"
+      - "An LSP shows an unusually low remaining lifetime or high sequence churn"
+      - "SPF recalculating repeatedly without settling"
+    log_signatures: []
+    likely_causes:
+      - "LSP not flooded to this router, or purged and aged out before refresh"
+      - "The route lives in the other level's LSP database"
+      - "Overload bit set on a router, removing it from transit SPF"
+      - "Flex-algorithm or SRv6 TLV inconsistency in advanced deployments"
+    commands:
+      - {cmd: "show isis database extensive", intent: isis.database.extensive}
+      - {cmd: "show isis database", intent: isis.database}
+      - {cmd: "show isis overview", intent: isis.overview}
+      - {cmd: "show isis spf log", intent: isis.spf.log}
+      - {cmd: "show isis spf results", intent: isis.spf.results}
+      - {cmd: "show route protocol isis", intent: route.protocol.isis}
+    tac_first_look: "show isis database extensive for the LSP's sequence number and remaining lifetime, plus show isis overview to rule out a locally set overload bit, before assuming a flooding failure."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-overview.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-spf.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-route.html
+
+  - id: rpd-health
+    class: high-cpu
+    title: "rpd high CPU or memory growth — routing protocol daemon health"
+    symptoms:
+      - "Sustained high CPU attributed to rpd in show system processes"
+      - "Routing Engine CPU and memory utilization climbing"
+      - "Convergence slowing, protocol timers slipping"
+      - "An rpd core file present"
+    log_signatures: []
+    likely_causes:
+      - "Large-scale route churn — mass flap or a large BGP update burst"
+      - "A malformed protocol message triggering a known rpd defect"
+      - "A memory leak in one rpd task, visible as steady growth in show task memory"
+      - "Routing Engine undersized for the current route and adjacency scale"
+    commands:
+      - {cmd: "show system processes extensive", intent: process.list.extensive}
+      - {cmd: "show chassis routing-engine", intent: cpu.utilization}
+      - {cmd: "show task memory", intent: rpd.task.memory}
+      - {cmd: "show task memory detail", intent: rpd.task.memory.detail}
+      - {cmd: "show system core-dumps", intent: core.dumps}
+      - {cmd: "show route summary", intent: route.summary}
+      - {cmd: "show log messages", intent: logging.recent}
+      - {cmd: "request support information", intent: techsupport.bundle}
+    tac_first_look: "show system processes extensive plus show chassis routing-engine for the CPU and memory trend, then show system core-dumps — an existing rpd core turns this from a tuning case into a defect case immediately."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-processes.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-routing-engine.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-task-memory.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-core-dumps.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
+
+  - id: ldp-session-down
+    class: mpls-ldp
+    title: "LDP session not establishing / LDP neighbor down"
+    symptoms:
+      - "show ldp session reports state Nonexistent or connection Closed instead of Operational and Open"
+      - "Expected LDP neighbour missing from show ldp neighbor"
+      - "LSPs signalled by LDP never come up"
+    log_signatures: []
+    likely_causes:
+      - "MPLS not enabled on the interface, so LDP has no enabled circuit"
+      - "IGP adjacency down, so the transport address is unreachable"
+      - "Transport address not reachable or not advertised (loopback not in the IGP)"
+      - "Hello or hold timer, authentication, or label-space mismatch"
+    commands:
+      - {cmd: "show ldp session", intent: mpls.ldp.session}
+      - {cmd: "show ldp session detail", intent: mpls.ldp.session.detail}
+      - {cmd: "show ldp neighbor", intent: mpls.ldp.neighbor}
+      - {cmd: "show mpls interface", intent: mpls.interface}
+      - {cmd: "show interfaces extensive", intent: interface.counters.extensive}
+      - {cmd: "show ospf neighbor extensive", intent: ospf.neighbor.detail}
+      - {cmd: "show isis adjacency extensive", intent: isis.adjacency.detail}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "A state of Operational with connection Open is the pass condition; Nonexistent or Closed means walk the layered model down — MPLS enabled on the interface, then IGP, then the transport address."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ldp-session.html
+      - https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/ref/command/show-ldp-neighbor.html
+      - https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+      - https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+
+  - id: ldp-label-binding-missing
+    class: mpls-ldp
+    title: "LDP label bindings missing — LSP not installed in mpls.0 or inet.3"
+    symptoms:
+      - "LDP session Operational but no route for the FEC in inet.3"
+      - "mpls.0 has no label entry for a transit LSP"
+      - "BGP next hops fail to resolve over the LSP"
+    log_signatures: []
+    likely_causes:
+      - "Egress not advertising a binding for the FEC (loopback mask not /32)"
+      - "Egress-policy or import policy filtering the binding"
+      - "MPLS family not configured on the transit interface"
+      - "IGP route for the FEC missing, so the binding cannot be used"
+    commands:
+      - {cmd: "show ldp session detail", intent: mpls.ldp.session.detail}
+      - {cmd: "show route table inet.3", intent: mpls.inet3}
+      - {cmd: "show route table mpls.0", intent: mpls.table}
+      - {cmd: "show mpls interface", intent: mpls.interface}
+      - {cmd: "show route forwarding-table", intent: fib.table}
+      - {cmd: "show mpls lsp", intent: mpls.lsp}
+    tac_first_look: "Check inet.3 on the ingress and mpls.0 on the transit — a healthy LDP session with an empty inet.3 points at the egress binding or an IGP hole, not at LDP itself."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+      - https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+      - https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/ref/command/show-mpls-lsp.html
+
+  - id: rsvp-lsp-down-or-flapping
+    class: mpls-rsvp
+    proposed_class: true
+    title: "RSVP-TE LSP down, or flapping and re-optimising"
+    symptoms:
+      - "show mpls lsp reports the LSP down"
+      - "show mpls lsp extensive shows a failure reason and state history"
+      - "The LSP repeatedly re-signals or re-optimises onto a new path"
+      - "RSVP neighbour missing from show rsvp neighbor"
+    log_signatures: []
+    likely_causes:
+      - "CSPF cannot find a path meeting the bandwidth or constraint requirements"
+      - "RSVP not enabled on a transit interface, or no reservable bandwidth left"
+      - "IGP or TE database inconsistency along the path"
+      - "Underlying link flapping causing repeated re-signalling"
+      - "Protection or bypass path churn"
+    commands:
+      - {cmd: "show mpls lsp", intent: mpls.lsp}
+      - {cmd: "show mpls lsp extensive", intent: mpls.lsp.extensive}
+      - {cmd: "show mpls lsp name <lsp-name>", intent: mpls.lsp.named, params: [lsp-name]}
+      - {cmd: "show rsvp session", intent: rsvp.session}
+      - {cmd: "show rsvp neighbor", intent: rsvp.neighbor}
+      - {cmd: "show rsvp interface", intent: rsvp.interface}
+      - {cmd: "show rsvp interface extensive", intent: rsvp.interface.extensive}
+      - {cmd: "show mpls lsp statistics", intent: mpls.lsp.statistics}
+      - {cmd: "show interfaces extensive", intent: interface.counters.extensive}
+    tac_first_look: "show mpls lsp extensive carries the state history and the failure reason for each attempt — read it before checking RSVP interfaces for exhausted reservable bandwidth."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+      - https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-rsvp-session.html
+      - https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/ref/command/show-mpls-lsp.html
+
+  - id: l3vpn-route-missing-or-blackhole
+    class: l3vpn
+    proposed_class: true
+    title: "L3VPN route missing, or traffic blackholed with routes present"
+    symptoms:
+      - "A VRF route expected from a remote PE never appears in the VRF table"
+      - "Routes present in bgp.l3vpn.0 but hidden rather than imported"
+      - "PE-CE protocol adjacency not up inside the routing instance"
+      - "Ping between CEs fails although both PEs hold the route"
+    log_signatures: []
+    likely_causes:
+      - "Route-target import/export mismatch between the two VRFs"
+      - "The VPN route is hidden because its next hop cannot be resolved over an LSP"
+      - "No LSP between the PEs, so inet.3 cannot resolve the BGP next hop"
+      - "PE-CE protocol not running or not exporting into the VPN"
+      - "MPLS label or vrf-table-label misconfiguration causing a forwarding-plane blackhole"
+    commands:
+      - {cmd: "show route table bgp.l3vpn.0 extensive", intent: l3vpn.bgp.table}
+      - {cmd: "show route table bgp.l3vpn.0 hidden", intent: l3vpn.bgp.table.hidden}
+      - {cmd: "show route table mpls", intent: mpls.table}
+      - {cmd: "show route extensive table <vrf-name>", intent: vrf.routes.extensive, params: [vrf]}
+      - {cmd: "show ospf neighbor instance <routing-instance-name>", intent: ospf.neighbors.instance, params: [routing-instance]}
+      - {cmd: "show route table inet.3", intent: mpls.inet3}
+      - {cmd: "show route forwarding-table", intent: fib.table}
+      - {cmd: "show interfaces", intent: interface.list}
+    tac_first_look: "Look in bgp.l3vpn.0 first: a route present there but hidden is an RT-import or next-hop-resolution problem, while an absent route is a remote-PE advertisement or export-policy problem."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
+      - https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
+      - https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
+
+  - id: evpn-vtep-missing
+    class: evpn-vxlan
+    title: "EVPN-VXLAN: remote VTEP not established"
+    symptoms:
+      - "An expected remote VXLAN tunnel endpoint is missing from the VTEP list"
+      - "No remote MAC addresses learned over VXLAN for a VNI"
+      - "EVPN instance shows no neighbours"
+    log_signatures: []
+    likely_causes:
+      - "Underlay route to the remote VTEP loopback missing"
+      - "EVPN BGP session between the loopbacks not established"
+      - "VNI not configured or not mapped in the EVPN instance on one side"
+      - "Route-target mismatch preventing import of the EVPN routes that create the tunnel"
+    commands:
+      - {cmd: "show ethernet-switching vxlan-tunnel-end-point remote", intent: vxlan.vtep.remote}
+      - {cmd: "show evpn instance extensive", intent: evpn.instance.extensive}
+      - {cmd: "show evpn database", intent: evpn.database}
+      - {cmd: "show bgp summary", intent: bgp.summary}
+      - {cmd: "show route forwarding-table", intent: fib.table}
+      - {cmd: "show interfaces terse", intent: interface.terse}
+    tac_first_look: "Confirm the remote VTEP appears at all before chasing MAC learning — an empty remote-VTEP list is an underlay or EVPN-session problem, not a data-plane one."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ethernet-switching-vxlan-tunnel-end-point-remote.html
+      - https://www.juniper.net/documentation/us/en/software/junos/evpn-vxlan/topics/ref/command/show-evpn-instance.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-database.html
+
+  - id: evpn-type2-missing
+    class: evpn-vxlan
+    title: "EVPN Type-2 MAC/MAC-IP routes missing — host unreachable across the fabric"
+    symptoms:
+      - "A host's MAC or MAC+IP is present on the local leaf but absent on remote leaves"
+      - "The MAC-IP table shows the route skipped in favour of another route type"
+      - "ARP resolves locally but traffic to the host is dropped remotely"
+    log_signatures: []
+    likely_causes:
+      - "Route-target or route-distinguisher mismatch between MAC-VRFs"
+      - "The device prefers a Type-5 route with a matching prefix over the remote Type-2 route"
+      - "EVPN BGP session between the leaves not established"
+      - "MAC mobility or host flap suppressing re-advertisement"
+    commands:
+      - {cmd: "show evpn database extensive", intent: evpn.database.extensive}
+      - {cmd: "show evpn database mac-address <mac>", intent: evpn.database.mac, params: [mac]}
+      - {cmd: "show evpn instance extensive", intent: evpn.instance.extensive}
+      - {cmd: "show ethernet-switching mac-ip-table", intent: evpn.macip.table}
+      - {cmd: "show ethernet-switching vxlan-tunnel-end-point remote", intent: vxlan.vtep.remote}
+      - {cmd: "show bgp summary", intent: bgp.summary}
+    tac_first_look: "show evpn database extensive on the originating and the importing leaf — if the entry exists locally and not remotely, the case is route-target import, not MAC learning."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-database.html
+      - https://www.juniper.net/documentation/us/en/software/junos/evpn-vxlan/topics/ref/command/show-evpn-instance.html
+      - https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
+
+  - id: evpn-type5-missing
+    class: evpn-vxlan
+    title: "EVPN Type-5 IP-prefix routes missing — inter-VNI routing broken"
+    symptoms:
+      - "An IP prefix expected from a remote L3 gateway never reaches the local IP-VRF"
+      - "show evpn ip-prefix-database shows the prefix Rejected"
+      - "Host routes work but summarised prefixes do not"
+    log_signatures: []
+    likely_causes:
+      - "Route-target mismatch between the two IP-VRFs (L3 contexts)"
+      - "A reject reason such as Asymmetric-vni rejected where VNI symmetry is enforced"
+      - "The L3 context not bound to the VNI on one side"
+      - "Type-2 / Type-5 coexistence preference installing the other route type instead"
+    commands:
+      - {cmd: "show evpn ip-prefix-database extensive", intent: evpn.ipprefix.db.extensive}
+      - {cmd: "show evpn ip-prefix-database direction imported", intent: evpn.ipprefix.db.imported}
+      - {cmd: "show evpn ip-prefix-database direction exported", intent: evpn.ipprefix.db.exported}
+      - {cmd: "show evpn instance extensive", intent: evpn.instance.extensive}
+      - {cmd: "show route forwarding-table", intent: fib.table}
+      - {cmd: "show bgp summary", intent: bgp.summary}
+    tac_first_look: "Compare the exported view on the originating device with the imported view on the receiving one, and read the reject reason before touching configuration."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html
+      - https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
+      - https://www.juniper.net/documentation/us/en/software/junos/evpn-vxlan/topics/ref/command/show-evpn-instance.html
+
+  - id: virtual-chassis-member-not-joining
+    class: virtual-chassis
+    proposed_class: true
+    title: "Virtual Chassis member not joining, or VCP link down"
+    symptoms:
+      - "A member's status shows NotPrsnt (member ID assigned but not connected) or Unprvsnd (interconnected but not in the preprovisioned configuration)"
+      - "A member switch is Inactive or NotPrsnt in a mixed Virtual Chassis"
+      - "A Virtual Chassis port shows down or absent"
+      - "A disconnected member's ID is not available for reassignment"
+    log_signatures: []
+    likely_causes:
+      - "Virtual Chassis mode not set to mixed mode where the topology requires it"
+      - "PIC mode on a dedicated VCP set to Intraconnect instead of virtual-chassis"
+      - "VCP cable or port failure — the VCP link is down"
+      - "Member ID retained by the primary after a disconnect, so the new unit is not admitted"
+      - "Preprovisioned configuration missing the member's serial number"
+    commands:
+      - {cmd: "show virtual-chassis", intent: vc.status}
+      - {cmd: "show virtual-chassis vc-port", intent: vc.ports}
+      - {cmd: "show virtual-chassis vc-port all-members", intent: vc.ports.all}
+      - {cmd: "show virtual-chassis vc-port member <member-id>", intent: vc.ports.member, params: [member-id]}
+      - {cmd: "show chassis hardware", intent: inventory.hardware}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Read the member status string first — NotPrsnt, Unprvsnd or Inactive each point at a different cause (cabling, preprovisioning, or mixed-mode/PIC mode) before any port-level work."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-virtual-chassis.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-virtual-chassis-vc-port.html
+
+  - id: ae-lacp-not-bundling
+    class: lacp-bundle
+    proposed_class: true
+    title: "Aggregated Ethernet / LACP link not bundling"
+    symptoms:
+      - "A member reports Detached rather than Collecting Distributing"
+      - "Actor or partner state shown as Defaulted or Expired"
+      - "The ae interface is down although members are physically up"
+      - "LACP statistics show PDUs sent but none received"
+    log_signatures: []
+    likely_causes:
+      - "LACP not enabled, or both ends passive, so no PDUs are exchanged"
+      - "Speed or duplex mismatch between members"
+      - "Minimum-links threshold not met"
+      - "Member assigned to the wrong ae bundle, or missing from the far end's bundle"
+      - "Partner stopped sending LACPDUs and the state expired"
+    commands:
+      - {cmd: "show lacp interfaces", intent: lacp.interfaces}
+      - {cmd: "show lacp statistics interfaces", intent: lacp.counters}
+      - {cmd: "show interfaces terse", intent: interface.terse}
+      - {cmd: "show interfaces extensive", intent: interface.counters.extensive}
+      - {cmd: "show chassis alarms", intent: alarms.chassis}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Compare actor and partner state in show lacp interfaces on both ends — Defaulted or Expired means PDUs are not arriving, which is a very different case from a bundle that is up but under minimum-links."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-lacp-interfaces.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-lacp-statistics-interfaces.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-terse.html
+
+  - id: interface-errors
+    class: interface-errors
+    title: "Interface errors — input/output errors, framing errors, drops"
+    symptoms:
+      - "Connectivity problems including input errors and packet loss"
+      - "Packets not received or transmitted over an Ethernet physical interface"
+      - "Errors climbing while the physical link stays up"
+      - "Unable to transmit and receive packets despite a correctly connected cable"
+    log_signatures: []
+    likely_causes:
+      - "Cable or connector fault"
+      - "Failing optic or dirty fibre"
+      - "Speed or duplex mismatch"
+      - "Framing or encapsulation mismatch with the far end"
+      - "Congestion causing drops rather than errors"
+    commands:
+      - {cmd: "show interfaces <interface-name> extensive", intent: interface.counters.extensive, params: [interface]}
+      - {cmd: "show interfaces <interface-name> terse", intent: interface.terse, params: [interface]}
+      - {cmd: "show interfaces <interface-name> media", intent: interface.media, params: [interface]}
+      - {cmd: "show chassis alarms", intent: alarms.chassis}
+      - {cmd: "show interfaces diagnostics optics", intent: transceiver.dom}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "show interfaces <if> extensive for the error and drop breakdown, then show interfaces <if> media to separate a physical-layer fault from an encapsulation or protocol mismatch."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-extensive.html
+
+  - id: optics-dom-alarm
+    class: optics
+    title: "Optics / transceiver fault — DOM alarms and light levels"
+    symptoms:
+      - "Laser rx power high or low alarm, or Rx loss of signal alarm"
+      - "Laser bias current high or low alarm"
+      - "Module temperature or voltage high alarm"
+      - "Tx laser disabled or Tx laser fault alarm; module fault or module not ready"
+    log_signatures:
+      - "Rx loss of signal alarm"
+      - "Laser output power low alarm"
+      - "Laser bias current high alarm"
+      - "Module temperature high alarm"
+      - "Tx laser fault alarm"
+    likely_causes:
+      - "Dirty or damaged fibre, or excessive span loss"
+      - "Failing or ageing laser in the transceiver"
+      - "Unsupported or unqualified optic for the platform"
+      - "Thermal problem in the chassis raising module temperature"
+    commands:
+      - {cmd: "show interfaces diagnostics optics", intent: transceiver.dom}
+      - {cmd: "show interfaces diagnostics optics <interface-name>", intent: transceiver.dom.one, params: [interface]}
+      - {cmd: "show interfaces <interface-name> extensive", intent: interface.counters.extensive, params: [interface]}
+      - {cmd: "show chassis alarms", intent: alarms.chassis}
+      - {cmd: "show chassis hardware", intent: inventory.hardware}
+    tac_first_look: "Read the DOM alarm and warning flags — a high or low alarm generally means the optic is not operating properly, and the vendor thresholds in the output are the decision boundary."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-diagnostics-optics-ex-series.html
+      - https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+
+  - id: link-flap
+    class: link-flap
+    title: "Link flapping — interface repeatedly going up and down"
+    symptoms:
+      - "Physical link alternating between Physical link is Up and Physical link is Down"
+      - "Carrier transitions incrementing rapidly"
+      - "Protocol adjacencies bouncing in step with the interface"
+      - "An Ethernet Link Down alarm raised and cleared repeatedly"
+    log_signatures:
+      - "Ethernet Link Down"
+      - "Physical link is Down"
+      - "Physical link is Up"
+    likely_causes:
+      - "Marginal cable or connector"
+      - "Failing optic with light near the alarm threshold"
+      - "Autonegotiation mismatch"
+      - "Far-end device or line card resetting"
+      - "Copper cable fault (TDR can localise it, but the TDR test itself is not read-only)"
+    commands:
+      - {cmd: "show interfaces <interface-name> extensive", intent: interface.counters.extensive, params: [interface]}
+      - {cmd: "show interfaces <interface-name> media", intent: interface.media, params: [interface]}
+      - {cmd: "show interfaces diagnostics optics <interface-name>", intent: transceiver.dom.one, params: [interface]}
+      - {cmd: "show chassis alarms", intent: alarms.chassis}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Count carrier transitions in show interfaces extensive and correlate them with the optics DOM readings before replacing anything."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-diagnostics-optics-ex-series.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-extensive.html
+
+  - id: interface-not-coming-up
+    class: interface-down
+    proposed_class: true
+    title: "Interface down / not coming up at the physical layer"
+    symptoms:
+      - "Physical interface not working despite the cable being connected"
+      - "Interface shows down in show interfaces terse"
+      - "Management interface (em0 / fxp0) unreachable"
+      - "An Ethernet Link Down alarm raised on a management interface"
+    log_signatures:
+      - "Ethernet Link Down"
+      - "Physical link is Down"
+    likely_causes:
+      - "Cable not seated, wrong cable type, or a cable fault"
+      - "Far-end port administratively down"
+      - "Optic absent, unsupported, or failed"
+      - "Interface administratively disabled"
+      - "Line card or PIC not online"
+    commands:
+      - {cmd: "show interfaces terse", intent: interface.terse}
+      - {cmd: "show interfaces <interface-name> extensive", intent: interface.counters.extensive, params: [interface]}
+      - {cmd: "show interfaces <interface-name> media", intent: interface.media, params: [interface]}
+      - {cmd: "show chassis alarms", intent: alarms.chassis}
+      - {cmd: "show chassis fpc", intent: chassis.fpc}
+      - {cmd: "show chassis hardware", intent: inventory.hardware}
+    tac_first_look: "Establish whether the failure is at the link layer or above: an interface with Link listed as an active defect is a physical problem, and the FPC/PIC state has to be ruled out before the cable."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-fpc.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-terse.html
+
+  - id: fpc-hardware-fault
+    class: hardware-fault
+    title: "FPC / line card fault — offline, errors, excessive resets"
+    symptoms:
+      - "FPC state reported as Dead, Fault, Offline or Offlining rather than Online"
+      - "An alarm raised when the FPC state is dead"
+      - "FPC offlined after repeated resets or a major/fatal error"
+      - "Traffic through one slot lost while the rest of the chassis is healthy"
+    log_signatures: []
+    likely_causes:
+      - "A major or fatal FPC error triggering the configured recovery action (alarm, log, restart, offline or reset)"
+      - "Excessive resets causing the FPC to be offlined"
+      - "ASIC or memory error on the card"
+      - "Card not seated correctly, or a power or thermal problem"
+    commands:
+      - {cmd: "show chassis fpc", intent: chassis.fpc}
+      - {cmd: "show chassis fpc detail", intent: chassis.fpc.detail}
+      - {cmd: "show chassis fpc errors", intent: chassis.fpc.errors}
+      - {cmd: "show chassis alarms", intent: alarms.chassis}
+      - {cmd: "show chassis hardware", intent: inventory.hardware}
+      - {cmd: "show chassis firmware", intent: inventory.firmware}
+      - {cmd: "show log messages", intent: logging.recent}
+      - {cmd: "request support information", intent: techsupport.bundle}
+    tac_first_look: "Read the FPC state and the offline reason from show chassis fpc, then show chassis fpc errors for the error scope, category and the recovery action that fired."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-fpc.html
+      - https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/ref/command/show-chassis-fpc-errors.html
+      - https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
+      - https://www.juniper.net/documentation/en_US/release-independent/junos/topics/task/verification/fpc-status-nog.html
+
+  - id: chassis-environment-fault
+    class: environment
+    proposed_class: true
+    title: "Chassis environment fault — PSU, fan, or temperature alarm"
+    symptoms:
+      - "Chassis alarm raised by a physical condition such as a power supply failure or excessive component temperature"
+      - "Fan tray failure or fans running at maximum"
+      - "Temperature sensors above the warning threshold"
+      - "System alarms present alongside the chassis alarms"
+    log_signatures: []
+    likely_causes:
+      - "Power supply failed or removed"
+      - "Fan or fan tray failure"
+      - "Blocked airflow or high ambient temperature"
+      - "A component reporting a hardware fault to the chassis daemon"
+    commands:
+      - {cmd: "show chassis alarms", intent: alarms.chassis}
+      - {cmd: "show system alarms", intent: alarms.system}
+      - {cmd: "show chassis environment", intent: environment.all}
+      - {cmd: "show chassis hardware", intent: inventory.hardware}
+      - {cmd: "show chassis firmware", intent: inventory.firmware}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Chassis alarms are triggered by physical conditions and are distinct from system alarms — read both, then show chassis environment for the sensor that is out of range."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-alarms.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-alarms.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-environment.html
+      - https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
+
+  - id: re-high-cpu
+    class: high-cpu
+    title: "High CPU on the Routing Engine"
+    symptoms:
+      - "CPU utilization high across the 5 second, 1 minute, 5 minute and 15 minute windows"
+      - "Idle percentage low in show chassis routing-engine"
+      - "Slow CLI, delayed commits"
+      - "One process at the top of show system processes consistently"
+    log_signatures: []
+    likely_causes:
+      - "High route churn from frequent protocol updates"
+      - "Interface flapping generating repeated events"
+      - "A user process consuming excessive resources"
+      - "Interrupt load from punted traffic"
+      - "Device temperature or hardware issues raising CPU"
+    commands:
+      - {cmd: "show chassis routing-engine", intent: cpu.utilization}
+      - {cmd: "show system processes extensive", intent: process.list.extensive}
+      - {cmd: "show system processes summary", intent: process.list.summary}
+      - {cmd: "show system uptime", intent: uptime}
+      - {cmd: "show log messages", intent: logging.recent}
+      - {cmd: "request support information", intent: techsupport.bundle}
+    tac_first_look: "show chassis routing-engine for the User/Background/Kernel/Interrupt/Idle split across the four windows, then show system processes extensive to name the process — kernel or interrupt load points somewhere very different from a user process."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-routing-engine.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-processes.html
+      - https://www.juniper.net/documentation/en_US/junos/topics/task/verification/routing-engine-memory-usage.html
+
+  - id: re-high-memory
+    class: high-memory
+    title: "High memory utilization or a memory leak on the Routing Engine"
+    symptoms:
+      - "Memory utilization climbing steadily in show chassis routing-engine"
+      - "A process's resident memory growing without bound"
+      - "Swap in use"
+      - "Processes killed under memory pressure"
+    log_signatures: []
+    likely_causes:
+      - "A leak in one daemon, visible as steady resident-memory growth"
+      - "Routing table or session scale beyond what the RE is sized for"
+      - "Long uptime accumulating state"
+      - "A specific rpd task growing (show task memory does not display all rpd memory, so absence of growth there is not proof)"
+    commands:
+      - {cmd: "show chassis routing-engine", intent: memory.utilization}
+      - {cmd: "show system processes extensive", intent: process.list.extensive}
+      - {cmd: "show task memory summary", intent: rpd.task.memory.summary}
+      - {cmd: "show task memory history", intent: rpd.task.memory.history}
+      - {cmd: "show system storage", intent: storage.usage}
+      - {cmd: "request support information", intent: techsupport.bundle}
+    tac_first_look: "Trend resident memory per process from show system processes extensive against the RE memory utilization figure; remember show task memory does not account for all rpd memory."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-routing-engine.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-processes.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-task-memory.html
+      - https://www.juniper.net/documentation/en_US/junos/topics/task/verification/routing-engine-memory-usage.html
+
+  - id: daemon-core-dump
+    class: process-crash
+    proposed_class: true
+    title: "Daemon or kernel crash — core dump present"
+    symptoms:
+      - "A core file listed by show system core-dumps"
+      - "A daemon restarted with a new PID"
+      - "The feature owned by that daemon briefly stopped working"
+      - "A chassis or system alarm raised at the same moment"
+    log_signatures: []
+    likely_causes:
+      - "A software defect hit by a specific configuration, scale or packet"
+      - "Resource exhaustion (memory or file descriptors)"
+      - "Hardware error surfacing as a process fault"
+      - "An FPC crash producing an FPC core rather than an RE core"
+    commands:
+      - {cmd: "show system core-dumps", intent: core.dumps}
+      - {cmd: "show system alarms", intent: alarms.system}
+      - {cmd: "show chassis alarms", intent: alarms.chassis}
+      - {cmd: "show system uptime", intent: uptime}
+      - {cmd: "show version", intent: version.info}
+      - {cmd: "show log messages", intent: logging.recent}
+      - {cmd: "request support information", intent: techsupport.bundle}
+    tac_first_look: "A core file changes the case from performance analysis to defect analysis — list the cores, note their paths (/var/crash/, /var/tmp/, or /var/core/ and /var/lib/ftp/in/ on Junos OS Evolved) and attach them with the RSI."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-core-dumps.html
+      - https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
+      - https://www.juniper.net/documentation/us/en/software/junos/junos-overview/topics/task/junos-software-processes-core-files-viewing.html
+
+  - id: storage-full
+    class: storage-full
+    proposed_class: true
+    title: "File system full — /var or /var/tmp out of space"
+    symptoms:
+      - "A file system at or near 100 percent in show system storage"
+      - "RSI cannot be saved to /var/tmp"
+      - "Commits failing or logs not rotating"
+      - "Core files accumulating and consuming the partition"
+    log_signatures: []
+    likely_causes:
+      - "Accumulated core files under /var/crash or /var/tmp"
+      - "Old software images or snapshots left on disk"
+      - "Log files not rotating, or traceoptions files left enabled by a previous investigation"
+      - "A large RSI or archive left behind after an earlier case"
+    commands:
+      - {cmd: "show system storage", intent: storage.usage}
+      - {cmd: "show system core-dumps", intent: core.dumps}
+      - {cmd: "show log", intent: logging.files}
+      - {cmd: "show system uptime", intent: uptime}
+      - {cmd: "show version", intent: version.info}
+    tac_first_look: "show system storage names the full partition; cores and stale log files are the usual occupants, so list them before anything is deleted."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-storage.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-core-dumps.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-log.html
+
+  - id: config-change-commit
+    class: config-change
+    title: "Configuration change — who committed what, and when"
+    symptoms:
+      - "Behaviour changed with no known operational trigger"
+      - "An incident starts immediately after a commit"
+      - "Sessions reset at a commit boundary"
+      - "The running configuration disagrees with the expected intent"
+    log_signatures: []
+    likely_causes:
+      - "An operator or automation commit that changed protocol or interface configuration"
+      - "A commit that resets sessions by design (cluster ID, route reflector group, family statement)"
+      - "A partially applied or rolled-back change"
+      - "A configuration pushed to the wrong device or instance"
+    commands:
+      - {cmd: "show system commit", intent: config.commit.history}
+      - {cmd: "show configuration", intent: config.running}
+      - {cmd: "show configuration | except SECRET-DATA", intent: config.running.redacted}
+      - {cmd: "show system users", intent: session.users}
+      - {cmd: "show system uptime", intent: uptime}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Line the commit history up against the incident timeline before any protocol analysis — Junos documents commit actions that reset sessions on purpose."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-commit.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-configuration.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-users.html
+      - https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
+
+  - id: ddos-protection-drops
+    class: control-plane-policing
+    proposed_class: true
+    title: "Control-plane DDoS protection policer violations"
+    symptoms:
+      - "Policer violations reported for one or more protocol groups"
+      - "Control-plane protocol adjacencies dropping under load"
+      - "Violations reported on a queue for every protocol mapped to it"
+      - "Arrival rate above the configured bandwidth for a packet type"
+    log_signatures: []
+    likely_causes:
+      - "A genuine traffic surge or attack toward the control plane"
+      - "Default policer bandwidth too low for the deployed scale"
+      - "Several protocols sharing one queue, so a violation is reported for all of them"
+      - "A misbehaving neighbour flooding a control protocol"
+    commands:
+      - {cmd: "show ddos-protection protocols violations", intent: ddos.violations}
+      - {cmd: "show ddos-protection protocols", intent: ddos.protocols}
+      - {cmd: "show ddos-protection protocols statistics", intent: ddos.protocols.statistics}
+      - {cmd: "show ddos-protection statistics", intent: ddos.statistics}
+      - {cmd: "show ddos-protection protocols culprit-flows", intent: ddos.culprit.flows}
+      - {cmd: "show chassis routing-engine", intent: cpu.utilization}
+    tac_first_look: "show ddos-protection protocols violations names the protocol group, packet type, arrival and peak rate and the FPC slot — but remember a shared queue reports the violation for every protocol mapped to it, so identify the culprit flow before blaming a protocol."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-statistics.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-culprit-flows.html
+
+  - id: ntp-not-synchronized
+    class: ntp-sync
+    proposed_class: true
+    title: "NTP not synchronized / clock offset"
+    symptoms:
+      - "No peer selected or reachable in show ntp associations"
+      - "Large offset or dispersion reported by show ntp status"
+      - "Log timestamps disagree with other devices, breaking correlation"
+      - "Certificate or authentication features failing because of clock skew"
+    log_signatures: []
+    likely_causes:
+      - "NTP server unreachable — routing or firewall filter"
+      - "NTP source address or routing instance misconfigured"
+      - "Authentication key mismatch"
+      - "Stratum too high, so the server is rejected"
+    commands:
+      - {cmd: "show ntp status", intent: ntp.status}
+      - {cmd: "show ntp associations", intent: ntp.associations}
+      - {cmd: "show system uptime", intent: uptime}
+      - {cmd: "show configuration", intent: config.running}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "show ntp associations for per-peer reachability and selection, then show ntp status for the internal variables the peers returned."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ntp-status.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ntp-associations.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-uptime.html
+
+  - id: snmp-poll-or-trap-failure
+    class: snmp
+    proposed_class: true
+    title: "SNMP polling failing or traps not delivered"
+    symptoms:
+      - "Poller times out; no SNMP response packets counted"
+      - "Traps never arrive at the NMS"
+      - "Packets received but errors or dropped counters increasing"
+      - "Only some OIDs answer"
+    log_signatures: []
+    likely_causes:
+      - "Firewall filter or client list blocking the poller"
+      - "Wrong community or SNMPv3 credentials"
+      - "Trap target or source address misconfigured, or in the wrong routing instance"
+      - "SNMP subagent not responding for a particular MIB"
+    commands:
+      - {cmd: "show snmp statistics", intent: snmp.stats}
+      - {cmd: "show snmp statistics subagents", intent: snmp.stats.subagents}
+      - {cmd: "show configuration", intent: config.running}
+      - {cmd: "show system processes extensive", intent: process.list.extensive}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "show snmp statistics separates never-arrived (zero packets received) from arrived-and-rejected (errors and drops counted), which decides whether this is a network or a credentials problem."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-snmp-statistics.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-configuration.html
+
+  - id: aaa-auth-failure
+    class: aaa-auth
+    proposed_class: true
+    title: "AAA failure — RADIUS / TACACS+ authentication denied"
+    symptoms:
+      - "Login denied despite correct credentials"
+      - "Unexpected fallback to local authentication"
+      - "RADIUS statistics show requests sent but no accepts"
+      - "User authenticates but has no permissions"
+    log_signatures: []
+    likely_causes:
+      - "AAA server unreachable or wrong shared secret"
+      - "Wrong source address or routing instance for AAA traffic"
+      - "Login class or template user missing, so authorization fails after authentication"
+      - "Accounting or address-assignment failures blocking the session"
+    commands:
+      - {cmd: "show network-access aaa statistics", intent: aaa.stats}
+      - {cmd: "show system users", intent: session.users}
+      - {cmd: "show configuration", intent: config.running}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "show network-access aaa statistics distinguishes an unreachable server from a rejecting one, and separates authentication failure from authorization failure."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-network-access-aaa-statistics.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-users.html
+
+  - id: dhcp-relay-not-forwarding
+    class: dhcp-relay
+    proposed_class: true
+    title: "DHCP relay not forwarding client requests"
+    symptoms:
+      - "Clients get no address; no offer returned"
+      - "DHCP relay statistics show packets dropped"
+      - "Messages received from clients but none sent to the server"
+      - "Server responses received but not returned to the client"
+    log_signatures: []
+    likely_causes:
+      - "Relay not enabled on the client-facing interface, or in the wrong routing instance"
+      - "Server address unreachable from the relay's routing table"
+      - "A firewall filter blocking UDP 67/68"
+      - "Option-82 or source-address policy causing the server to discard the request"
+    commands:
+      - {cmd: "show dhcp relay statistics", intent: dhcp.relay.stats}
+      - {cmd: "show route forwarding-table", intent: fib.table}
+      - {cmd: "show interfaces terse", intent: interface.terse}
+      - {cmd: "show configuration", intent: config.running}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Read the relay statistics for messages received versus sent and the drop reasons — that immediately separates a client-side problem from a server-reachability problem."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-dhcp-relay-statistics.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-terse.html
+
+  - id: cos-queue-drops
+    class: qos-drops
+    title: "Class-of-service queue drops — tail, RED and rate-limit drops"
+    symptoms:
+      - "Tail-dropped packets or RED-dropped packets climbing on a queue"
+      - "RL-dropped packets counted where a rate limit applies"
+      - "One forwarding class starved while the link is not fully utilised"
+      - "Latency-sensitive traffic degraded under bursts"
+    log_signatures: []
+    likely_causes:
+      - "Scheduler transmit rate or buffer allocation too small for the class"
+      - "Misclassification, so traffic lands in the wrong forwarding class"
+      - "Rate limiter configured tighter than the offered load"
+      - "Egress congestion at a speed step-down"
+    commands:
+      - {cmd: "show interfaces queue", intent: qos.queue.counters}
+      - {cmd: "show interfaces queue <interface-name>", intent: qos.queue.counters.one, params: [interface]}
+      - {cmd: "show class-of-service interface", intent: qos.interface.map}
+      - {cmd: "show class-of-service interface <interface-name> detail", intent: qos.interface.detail, params: [interface]}
+      - {cmd: "show interfaces <interface-name> extensive", intent: interface.counters.extensive, params: [interface]}
+    tac_first_look: "Separate tail drops from RED drops and rate-limit drops in show interfaces queue — each points at a different part of the scheduler or classifier configuration."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-queue.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-class-of-service-interface.html
+
+  - id: multicast-not-forwarded
+    class: multicast
+    proposed_class: true
+    title: "Multicast not forwarded — no PIM neighbor or missing IGMP membership"
+    symptoms:
+      - "No PIM neighbour on an interface that should have one"
+      - "No IGMP group membership recorded for an active receiver"
+      - "Receivers on one interface get the stream while others do not"
+      - "RP unreachable"
+    log_signatures: []
+    likely_causes:
+      - "PIM not enabled on a transit interface"
+      - "RP misconfigured or unreachable"
+      - "IGMP version mismatch with the hosts"
+      - "A firewall filter blocking PIM or IGMP"
+      - "Unicast route to the source missing, so the RPF check fails"
+    commands:
+      - {cmd: "show pim neighbors", intent: multicast.pim.neighbors}
+      - {cmd: "show igmp group", intent: multicast.igmp.groups}
+      - {cmd: "show route", intent: route.table}
+      - {cmd: "show interfaces terse", intent: interface.terse}
+      - {cmd: "show log messages", intent: logging.recent}
+    tac_first_look: "Confirm PIM neighbours exist on the transit interfaces and that the unicast route toward the source is present for the RPF check before looking at group state."
+    sources:
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-pim-neighbors.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-igmp-group.html
+      - https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-route.html

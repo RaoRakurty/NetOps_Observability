@@ -1,0 +1,1686 @@
+# Correlix TAC escalation pack — vendor research (Cisco NX-OS, Nexus 9000/7000/5000)
+# Design of record: docs/design/TAC_ESCALATION_2026-09-05.md
+# Every command below appears verbatim on the cited public cisco.com page (or in the
+# Nexus 9000 NX-OS command reference). Read-only show/ping/traceroute/dir only: no
+# debug, clear, reload, config, ethanalyzer or attach-module commands.
+# NOTE: ai/tac/README.md did not exist when this file was written; the schema used is
+# the one given in the research brief.
+
+vendor: cisco-nxos
+
+sources:
+  - title: "Quick Reference Guide to collect TAC requested outputs from Nexus switches"
+    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+  - title: "Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support"
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+  - title: "Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC"
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
+  - title: "Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology"
+    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
+
+tac_baseline:
+  commands:
+    - show clock
+    - show inventory
+    - show version
+    - show module
+    - show run
+    - show logging log
+    - show log nvram
+    - show accounting log
+    - show cdp nei
+    - show lldp nei
+    - show copp status
+    - show policy-map interface control-plane
+    - show hardware rate-limiter
+    - show system reset-reason
+    - show span summary
+    - show vpc
+    - show int status
+    - show port-channel summary
+    - show ip int bri vrf all
+    - show cores
+    - show diagnostic result mod all
+    - show ip route vrf all summary
+    - show mac address-table count
+    - show vlan summary
+    - show module internal exceptionlog
+    - show processes cpu history
+    - show processes memory sort
+    - show interface counters errors
+    - show fex
+    - show license usage
+    - show ip eigrp neighbor vrf all
+    - show ip ospf neighbor vrf all
+    - show ip bgp vpnv4 vrf all
+    - "dir logflash:"
+    - show tech-support details
+    - show logging logfile
+    - show install all status
+    - show system cores
+  notes: >-
+    214107 publishes this exact list per platform (N3K / N5K-N6K / N7K / N9K) as one
+    paste-able block; commands for features that are not enabled will error out, which the
+    doc says is expected and harmless. On Nexus 7000 collect the outputs FROM THE ADMIN
+    VDC AND THE VDC IN QUESTION, and add `show vdc`. The N9K troubleshooting guide's
+    "Before Contacting Technical Support" chapter asks for `show tech-support details`
+    (Release 9.3(1)+ also offers the `space-optimized` and `time-optimized` variants, and
+    the command is NOT supported on devices with less than 4 GB of RAM), plus
+    `show install all status` and `show log nvram` for upgrade problems and
+    `show system cores` to confirm where core dumps are written. The `tac-pac
+    bootflash://<file>` EXEC action redirects `show tech-support details` to a gzipped
+    file (default `volatile:show_tech_out.gz`) and is what TAC prefers to receive — it is
+    a file-writing action, not a read-only show, so Correlix should collect the underlying
+    show commands and bundle them itself. Caveat from the guide: the SSH timeout period
+    must be longer than the tac-pac generation time or the collection is truncated.
+  sources:
+    - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+    - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+    - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
+
+issues:
+  - id: vpc-peer-link-down
+    class: mlag-vpc-peer
+    title: "vPC peer-link down — secondary suspends vPC member ports and SVIs"
+    symptoms:
+      - "the secondary vPC device suspends its vPC member ports and shuts down the associated SVIs; traffic is redirected to the primary"
+      - "vPC status shows peer link down while peer-keepalive remains operational"
+      - "the peer-link port-channel reports no operational members"
+      - "orphan ports on the secondary lose connectivity"
+    log_signatures:
+      - "%ETHPORT-5-IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN"
+      - "%PORT-5-IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN"
+      - "%ETH_PORT_CHANNEL-5-PORT_DOWN"
+      - "%ETH_PORT_CHANNEL-5-FOP_CHANGED"
+    likely_causes:
+      - "vPC peer-link failure while the keepalive remains operational"
+      - "all peer-link port-channel members down (link failure or err-disable)"
+      - "a Type-1 configuration element mismatch suspending the vPC"
+      - "the returning peer reintroduced with an incorrect sticky bit, causing a role change and roughly a 40-second outage"
+      - "VLANs allowed on the vPC not allowed on the peer link"
+    commands:
+      - {cmd: "show vpc", intent: vpc.status.summary}
+      - {cmd: "show vpc brief", intent: vpc.status.brief}
+      - {cmd: "show vpc role", intent: vpc.role.current}
+      - {cmd: "show vpc peer-keepalive", intent: vpc.keepalive.status}
+      - {cmd: "show port-channel summary", intent: portchannel.bundle.state}
+      - {cmd: "show system internal vpcm info global | include ignore-case sticky", intent: vpc.role.sticky}
+      - {cmd: "show vpc consistency-parameters global", intent: vpc.consistency.global}
+      - {cmd: "show spanning-tree", intent: stp.state.overall}
+    tac_first_look: >-
+      Confirm from show vpc whether the peer-link is down while the keepalive is up (the
+      classic "secondary suspends everything" case), then prove whether the peer-link
+      went down for a physical/member reason or was suspended by a Type-1 mismatch.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/212589-understanding-vpc-election-process.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0110.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0101.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
+
+  - id: vpc-peer-keepalive-unreachable
+    class: mlag-vpc-peer
+    title: "vPC peer-keepalive unreachable — keepalive path down, vPC still forwarding"
+    symptoms:
+      - "show vpc reports peer-keepalive status not alive while the vPC itself remains operational"
+      - "no member-port suspension occurs — the keepalive alone does not suspend vPCs"
+      - "keepalive statistics show no received messages"
+      - "the domain is one peer-link failure away from a dual-active split"
+    log_signatures: []
+    likely_causes:
+      - "management/keepalive VRF interface down or misrouted"
+      - "the peer's mgmt0 or keepalive source interface down"
+      - "VRF selection mismatch between peers"
+      - "an intervening L3 path or ACL blocking the keepalive"
+      - "peer device reloaded, or its control plane is unresponsive"
+    commands:
+      - {cmd: "show vpc peer-keepalive", intent: vpc.keepalive.status}
+      - {cmd: "show vpc statistics peer-keepalive", intent: vpc.keepalive.counters}
+      - {cmd: "show vpc", intent: vpc.status.summary}
+      - {cmd: "show vpc role", intent: vpc.role.current}
+      - {cmd: "show ip int bri vrf all", intent: ip.interface.brief}
+      - {cmd: "ping <peer> vrf management", intent: vpc.keepalive.reachability, params: [peer]}
+      - {cmd: "show system internal vpcm info global | include ignore-case sticky", intent: vpc.role.sticky}
+      - {cmd: "show logging logfile", intent: logging.recent}
+    tac_first_look: >-
+      Establish that only the keepalive is dead (the vPC is still up) and prove L3
+      reachability of the keepalive destination in its VRF before anyone touches the
+      peer-link.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/212589-understanding-vpc-election-process.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010101.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/218096-troubleshoot-nexus-cheat-sheet-for-begin.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: vpc-consistency-check-failure
+    class: mlag-vpc-peer
+    title: "vPC consistency-check failure — Type-1 (suspends the vPC) or Type-2 (flagged only)"
+    symptoms:
+      - "the vPC or its member ports are suspended on a Type-1 mismatch"
+      - "show vpc brief reports a Type-1 configuration element mismatch"
+      - "the vPC remains operational but a Type-2 inconsistency is flagged"
+      - "SVI configuration mismatches between peers cause Type-2 failures"
+    log_signatures:
+      - "%VPC-2-L3_VPC_UNEQUAL_WEIGHT"
+    likely_causes:
+      - "Type-1: STP mode, Bridge Assurance, Loopguard, Port Type or MST settings mismatch"
+      - "Type-1: interface type, LACP mode, speed, duplex, MTU, port mode or native VLAN mismatch"
+      - "Type-1: lag-id or vPC card-type mismatch; incompatible Ethernet module hardware"
+      - "Type-2: interface-VLAN admin status or routing capability mismatch"
+      - "Type-2: QoS (CoS), network-QoS (MTU and Pause), or input/output queuing mismatch"
+      - "unequal L3 configuration across the peers with layer3 peer-router enabled"
+    commands:
+      - {cmd: "show vpc brief", intent: vpc.status.brief}
+      - {cmd: "show vpc consistency-parameters global", intent: vpc.consistency.global}
+      - {cmd: "show vpc consistency-parameters", intent: vpc.consistency.all}
+      - {cmd: "show vpc consistency-parameters interface port-channel <po>", intent: vpc.consistency.interface, params: [po]}
+      - {cmd: "show vpc consistency-parameters vlans", intent: vpc.consistency.vlans}
+      - {cmd: "show running-config vpc", intent: vpc.config}
+      - {cmd: "show running-config spanning-tree", intent: stp.config}
+      - {cmd: "show spanning-tree summary", intent: stp.mode.summary}
+      - {cmd: "show queuing interface", intent: qos.queuing.interface}
+      - {cmd: "show module", intent: hardware.module.compat}
+    tac_first_look: >-
+      Diff show vpc consistency-parameters global between the two peers — the first
+      Type-1 row that differs is the suspension cause; a Type-2 flag suspends nothing, so
+      go straight to the SVI admin/routing state and the QoS queuing rows for those.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217274-understand-virtual-port-channel-vpc-en.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0110.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html
+
+  - id: vpc-vlans-suspended
+    class: mlag-vpc-peer
+    title: "VLANs on a vPC moved to suspend state"
+    symptoms:
+      - "VLANs on a vPC move to suspend state; ports associated with the VLAN become inactive and the VLAN passes no traffic"
+      - "the vPC is up but a subset of VLANs black-holes"
+      - "the consistency check flags a VLAN-scope mismatch"
+    log_signatures: []
+    likely_causes:
+      - "VLANs allowed on the vPC were not allowed on the peer link"
+      - "the VLAN is administratively suspended, so its ports become inactive"
+      - "the VLAN was removed from the trunk allowed list, shutting down only that VLAN"
+      - "native VLAN or port-mode Type-1 mismatch between peers"
+      - "the VLAN was never created on one of the two peers"
+    commands:
+      - {cmd: "show vpc brief", intent: vpc.status.brief}
+      - {cmd: "show vpc consistency-parameters vlans", intent: vpc.consistency.vlans}
+      - {cmd: "show vlan brief", intent: vlan.list}
+      - {cmd: "show vlan summary", intent: vlan.summary}
+      - {cmd: "show interface trunk", intent: trunk.allowed.vlans}
+      - {cmd: "show running-config vpc", intent: vpc.config}
+      - {cmd: "show spanning-tree vlan <vlan>", intent: stp.vlan.state, params: [vlan]}
+    tac_first_look: >-
+      Compare the vPC's allowed-VLAN list against the peer-link's allowed-VLAN list first
+      — that single mismatch explains most vPC VLAN suspensions.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0110.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: portchannel-not-bundling-member-suspended
+    class: port-channel-lacp
+    proposed_class: true
+    title: "Port-channel member not bundling / vPC member port suspended on compatibility failure"
+    symptoms:
+      - "member port stuck Individual (I) or Suspended (s) instead of bundled (P)"
+      - "vPC member ports down with Compatibility check failed"
+      - "show port-channel summary shows the channel with no operational members"
+      - "LACP counters show no PDUs received from the peer"
+    log_signatures:
+      - "%PORT_CHANNEL-3-COMPAT_CHECK_FAILURE"
+      - "%PORT_CHANNEL-5-PORT_ADDED"
+      - "%PORT_CHANNEL-5-CREATED"
+      - "%PORT-5-IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN"
+      - "%ETH_PORT_CHANNEL-5-PORT_DOWN"
+      - "%ETHPORT-5-IF_DOWN_CHANNEL_ERR_DISABLED"
+    likely_causes:
+      - "speed not compatible between the two member ports"
+      - "zero LACP PDUs received from the far end, so the port stays individual or suspended"
+      - "the far end sends LACPDUs with a dot1q header and VLAN ID 0, which older NX-OS does not recognise and drops"
+      - "Type-1 mismatch (LACP mode, interface type, duplex, MTU, port mode, native VLAN) on the vPC"
+      - "remote-side incompatibility, dedicated port-group constraints, or a missing/suspended VLAN"
+    commands:
+      - {cmd: "show port-channel summary", intent: portchannel.bundle.state}
+      - {cmd: "show lacp interface <if>", intent: lacp.interface.state, params: [if]}
+      - {cmd: "show lacp neighbor", intent: lacp.neighbor}
+      - {cmd: "show lacp counters", intent: lacp.pdu.counters}
+      - {cmd: "show interface capabilities", intent: interface.capabilities}
+      - {cmd: "show interface status", intent: interface.status}
+      - {cmd: "show vpc consistency-parameters interface port-channel <po>", intent: vpc.consistency.interface, params: [po]}
+      - {cmd: "show vpc", intent: vpc.status.summary}
+      - {cmd: "show logging logfile", intent: logging.recent}
+    tac_first_look: >-
+      Read the suspension reason from show port-channel summary plus the LACP
+      internal/neighbour flag byte (0x3D is the bundled value), then decide between "no
+      PDUs arriving" (far-end/LACP problem) and "compat check failed" (parameter
+      mismatch) — the two have disjoint fixes.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0101.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01011.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html
+
+  - id: stp-topology-change-churn-and-flooding
+    class: stp-topology
+    proposed_class: true
+    title: "STP topology-change churn driving excessive unknown-unicast flooding"
+    symptoms:
+      - "excessive packet flooding across the VLAN"
+      - "MAC addresses continuously relearned; forwarding tables repeatedly flushed"
+      - "topology-change counters climbing in show spanning-tree summary totals"
+      - "frames for unknown destination MACs flooded to all LAN ports of the VLAN except the ingress port"
+    log_signatures:
+      - "%ETHPORT-5-IF_DOWN_LINK_FAILURE"
+      - "%ETHPORT-5-IF_UP"
+      - "%ETHPORT-5-IF_DOWN_INITIALIZING"
+      - "%ETH_PORT_CHANNEL-5-FOP_CHANGED"
+    likely_causes:
+      - "unstable topology changes"
+      - "link flaps on a non-edge port"
+      - "port state changes to forwarding"
+      - "designated-to-root role transitions"
+      - "on topology change Rapid PVST+ starts the TC While timer on all non-edge root and designated ports and flushes the MAC addresses associated with them"
+      - "legacy 802.1D TCN interop causing repeated TCA/TCN handling"
+    commands:
+      - {cmd: "show spanning-tree summary totals", intent: stp.tcn.totals}
+      - {cmd: "show spanning-tree vlan <vlan> detail", intent: stp.tcn.detail, params: [vlan]}
+      - {cmd: "show spanning-tree detail", intent: stp.detail}
+      - {cmd: "show spanning-tree interface <if> detail", intent: stp.port.detail, params: [if]}
+      - {cmd: "show mac address-table dynamic vlan <vlan>", intent: l2.mac.dynamic, params: [vlan]}
+      - {cmd: "show mac address-table aging-time", intent: l2.mac.aging}
+      - {cmd: "show interface counters", intent: interface.counters}
+      - {cmd: "show logging logfile", intent: logging.recent}
+    tac_first_look: >-
+      Use the topology-change counters to name the originating port, then prove that port
+      is flapping — flooding is the symptom, the flapping non-edge port is the defect.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_011.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
+
+  - id: stp-loop-broadcast-storm
+    class: stp-topology
+    proposed_class: true
+    title: "STP data loop / broadcast storm on NX-OS"
+    symptoms:
+      - "high link utilization, up to 100 percent"
+      - "high CPU and backplane traffic utilization"
+      - "constant MAC address relearning and flapping"
+      - "excessive output drops"
+    log_signatures:
+      - "%L2FM-4-L2FM_MAC_MOVE2"
+      - "%L2FM-2-L2FM_MAC_FLAP_DISABLE_LEARN"
+      - "%L2FM-2-L2FM_MAC_FLAP_RE_ENABLE_LEARN"
+    likely_causes:
+      - "bridging loop — inconsistent root bridge across switches, or BPDUs not being received"
+      - "misconfigured Cisco STP extension features: bridge assurance, root guard, BPDU guard"
+      - "timer or diameter misconfiguration, CPU overload, or a software defect"
+      - "broadcast, multicast or unknown-unicast traffic exceeding the storm-control threshold over the 3.9 ms interval"
+      - "a loop condition between ports driving repeated MAC moves"
+    commands:
+      - {cmd: "show spanning-tree vlan <vlan>", intent: stp.vlan.state, params: [vlan]}
+      - {cmd: "show spanning-tree blockedports", intent: stp.blocked.ports}
+      - {cmd: "show spanning-tree interface <if> detail", intent: stp.port.detail, params: [if]}
+      - {cmd: "show interface counters errors", intent: interface.errors}
+      - {cmd: "show interface counters storm-control", intent: stormcontrol.counters}
+      - {cmd: "show mac address-table dynamic vlan <vlan>", intent: l2.mac.dynamic, params: [vlan]}
+      - {cmd: "show processes cpu history", intent: cpu.history}
+      - {cmd: "show interface counters", intent: interface.counters}
+    tac_first_look: >-
+      Find the interfaces at roughly 100 percent utilization, then confirm from show
+      spanning-tree blockedports and the per-VLAN root bridge whether STP believes the
+      topology is loop-free while the data plane says otherwise.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01110.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_011.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: stp-bridge-assurance-inconsistent-port
+    class: stp-topology
+    proposed_class: true
+    title: "STP bridge assurance / guard-inconsistent port blocking traffic"
+    symptoms:
+      - "vPC in blocking state because bridge assurance detects BPDU disputes on a single port-channel link"
+      - "a network-type port enters the blocking state after failing to receive BPDUs for the required period"
+      - "ports listed as inconsistent or blocked"
+      - "recovery takes about 2 s on regular links but about 84 s on vPC peer-links"
+    log_signatures: []
+    likely_causes:
+      - "bridge assurance (default-on for network ports) stops receiving BPDUs on an operational network port"
+      - "a bridge assurance BPDU dispute on a single-link vPC port-channel"
+      - "loop guard placing a root/alternate port into blocking when BPDU reception ceases"
+      - "root guard blocking a port on receipt of a superior BPDU"
+      - "BPDU guard shutting down an interface that receives BPDUs, requiring manual intervention"
+      - "STP port type / bridge assurance / loopguard mismatch across a vPC (Type-1 parameters)"
+    commands:
+      - {cmd: "show spanning-tree summary", intent: stp.extensions.summary}
+      - {cmd: "show spanning-tree inconsistentports", intent: stp.inconsistent.ports}
+      - {cmd: "show spanning-tree blockedports", intent: stp.blocked.ports}
+      - {cmd: "show running-config spanning-tree all", intent: stp.config.all}
+      - {cmd: "show spanning-tree interface <if> detail", intent: stp.port.detail, params: [if]}
+      - {cmd: "show spanning-tree mst <instance> interface <if> detail", intent: stp.mst.port.detail, params: [instance, if]}
+      - {cmd: "show interface status err-disabled", intent: interface.errdisabled}
+      - {cmd: "show vpc", intent: vpc.status.summary}
+    tac_first_look: >-
+      show spanning-tree inconsistentports names the guard that fired; from there the only
+      question is whether BPDUs stopped arriving (bridge assurance / loop guard) or a
+      superior BPDU arrived (root guard).
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01011.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0110.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010010.html
+
+  - id: vlan-trunk-not-forming-allowed-vlan-mismatch
+    class: vlan-trunk
+    proposed_class: true
+    title: "VLAN trunk not forming / allowed-VLAN mismatch on NX-OS"
+    symptoms:
+      - "the trunk forms but a given VLAN carries no traffic"
+      - "VLAN in suspended state — associated ports inactive and no traffic passes"
+      - "an interface cannot be enabled because of a missing or suspended VLAN"
+      - "per-VLAN STP shows the VLAN not present on the trunk"
+    log_signatures: []
+    likely_causes:
+      - "VLAN suspended, or not created, on one side"
+      - "VLAN deleted from the trunk allowed list, so only that VLAN is shut down while other VLANs keep flowing"
+      - "native VLAN or port-mode mismatch (Type-1 parameters in a vPC context)"
+      - "a missing or suspended VLAN preventing the interface coming up"
+      - "inner and outer VLAN both on the trunk allowed list where inner/outer VLAN is configured"
+      - "an attempt to suspend an extended VLAN (1006-3967), which is not supported"
+    commands:
+      - {cmd: "show interface trunk", intent: trunk.state.allowed}
+      - {cmd: "show interface switchport", intent: switchport.mode}
+      - {cmd: "show vlan brief", intent: vlan.list}
+      - {cmd: "show vlan id <vlan>", intent: vlan.detail, params: [vlan]}
+      - {cmd: "show vlan summary", intent: vlan.summary}
+      - {cmd: "show running-config vlan <vlan>", intent: vlan.config, params: [vlan]}
+      - {cmd: "show interface status err-vlans", intent: interface.errvlans}
+      - {cmd: "show spanning-tree vlan <vlan>", intent: stp.vlan.state, params: [vlan]}
+    tac_first_look: >-
+      show interface trunk on both ends side by side — the allowed / active / forwarding
+      columns split the three distinct failures (not allowed, not created, STP-pruned).
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0101.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: interface-crc-input-errors
+    class: interface-errors
+    title: "Interface CRC / input errors on NX-OS (including stomped-CRC pass-through)"
+    symptoms:
+      - "CRC and FCS counters incrementing on an interface"
+      - "non-zero error counters in show interface counters errors non-zero"
+      - "multiple downstream interfaces show CRCs because they are forwarding stomped frames rather than sourcing them"
+      - "internal fabric / iEth link CRCs on a modular chassis"
+    log_signatures:
+      - "%DEVICE_TEST-SLOT22-3-INTERNAL_PORT_MONITOR_CRC_ERRORS_DETECTED"
+    likely_causes:
+      - "failing or damaged physical medium (copper or fiber) or direct-attach cables"
+      - "failing or damaged transceivers/optics"
+      - "failing or damaged patch-panel ports"
+      - "faulty network device hardware — ports, line cards, ASICs, MACs, fabric modules"
+      - "malfunctioning network interface cards in hosts"
+      - "MTU configuration mismatches between devices"
+    commands:
+      - {cmd: "show interface", intent: interface.detail}
+      - {cmd: "show interface counters errors", intent: interface.errors}
+      - {cmd: "show interface counters errors non-zero", intent: interface.errors.nonzero}
+      - {cmd: "show interface hardware-mappings", intent: interface.asic.mapping}
+      - {cmd: "show interface counters errors module <slot> non-zero", intent: interface.errors.module, params: [slot]}
+      - {cmd: "show hardware internal errors module <slot>", intent: asic.internal.errors, params: [slot]}
+      - {cmd: "show system internal fabric connectivity stats module <slot>", intent: fabric.link.crc, params: [slot]}
+      - {cmd: "show interface <if> transceiver details", intent: optics.dom.readings, params: [if]}
+      - {cmd: "show cdp neighbors", intent: neighbor.discovery}
+    tac_first_look: >-
+      Separate "RX Frm with FCS Err" (this link is the source) from "RX Frm CRC
+      Err(Stomp)" (this link is only forwarding someone else's corruption) before
+      replacing any hardware.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217554-understand-cyclic-redundancy-check-crc.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/216239-nexus-9000-cloud-scale-asic-crc-identifi.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/220133-troubleshoot-nexus-9000-interface-crc-er.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
+
+  - id: interface-output-discards-and-qos-drops
+    class: qos-drops
+    title: "Interface output discards / ASIC buffer exhaustion and QoS queue drops"
+    symptoms:
+      - "Output Discards counter incrementing on an egress interface"
+      - "buffer-threshold syslog fired when ASIC slice buffers reached 90 percent utilization"
+      - "sustained egress oversubscription with no interface errors"
+      - "Dropped Pkts / Dropped Byts rising for a specific QoS group"
+    log_signatures:
+      - "%TAHUSD-SLOTX-4-BUFFER_THRESHOLD_EXCEEDED"
+      - "%ACLQOS-SLOT#-2-ACLQOS_BURST_DETECT_OVER_THRESHOLD"
+      - "%ACLQOS-SLOT#-2-ACLQOS_BUFFER_DRAIN_FAILURE"
+      - "%ACLQOS-SLOT#-2-ACLQOS_QUEUE_LIMIT_MAX"
+    likely_causes:
+      - "total egress traffic exceeding interface bandwidth for long enough to fill the ASIC slice buffers, after which additional traffic is dropped"
+      - "speed step-down flows, for example 10G ingress to 1G egress"
+      - "an oversubscribed SPAN destination port"
+      - "traffic hairpin scenarios"
+      - "exceeding line rate on the ingress interface"
+      - "port state transitions during STP forwarding"
+    commands:
+      - {cmd: "show interface", intent: interface.detail}
+      - {cmd: "show interface counters errors", intent: interface.errors}
+      - {cmd: "show queuing interface <if>", intent: qos.queuing.interface, params: [if]}
+      - {cmd: "show policy-map interface", intent: qos.policy.counters}
+      - {cmd: "show policy-map interface brief", intent: qos.policy.brief}
+      - {cmd: "show interface <if> counters detailed", intent: interface.counters.detailed, params: [if]}
+      - {cmd: "show hardware internal buffer info pkt-stats", intent: buffer.pktstats}
+      - {cmd: "show hardware internal buffer info pkt-stats peak", intent: buffer.pktstats.peak}
+      - {cmd: "show system internal interface counters peak module <slot>", intent: interface.peak.counters, params: [slot]}
+      - {cmd: "show interface hardware-mappings", intent: interface.asic.mapping}
+    tac_first_look: >-
+      Correlate the buffer-threshold syslog's module/instance with the egress interface's
+      Output Discards — this is congestion, not corruption, so error counters will be
+      clean.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/213871-nexus-9500-r-nexus-3000-r-troubleshoo.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/222901-troubleshoot-packet-drops-with-interface.html
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/qos/cisco-nexus-9000-series-nx-os-quality-of-service-configuration-guide-106x/m-monitoring-qos-statistics.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+
+  - id: link-flap-err-disabled-interface
+    class: link-flap
+    title: "Link flapping and err-disabled interface on NX-OS"
+    symptoms:
+      - "interface repeatedly transitions down/up; bandwidth, speed and duplex change messages accompany each cycle"
+      - "port in ErrDisabled state after flapping is detected"
+      - "the port-channel first-operational-port changes on each flap"
+      - "port remains down after the flap (link failure / initializing)"
+    log_signatures:
+      - "%ETHPORT-5-IF_DOWN_LINK_FAILURE"
+      - "%ETHPORT-5-IF_DOWN_INITIALIZING"
+      - "%ETHPORT-5-IF_UP"
+      - "%ETHPORT-5-SPEED"
+      - "%ETHPORT-5-IF_DUPLEX"
+      - "%ETHPORT-5-IF_BANDWIDTH_CHANGE"
+      - "%ETHPORT-5-IF_DOWN_ERROR_DISABLED"
+      - "%ETHPORT-5-IF_DOWN_CHANNEL_ERR_DISABLED"
+      - "%ETHPORT-5-IF_DOWN_CFG_CHANGE"
+      - "%ETH_PORT_CHANNEL-5-FOP_CHANGED"
+      - "%PORT-5-IF_DOWN_ADMIN_DOWN"
+    likely_causes:
+      - "protocol-triggered: LACP or vPC issues, protocol misconfiguration, or lost packets"
+      - "Layer 1: damaged, loose or aging cables; malfunctioning interfaces"
+      - "bit rate exceeding threshold; hardware/software packet drops; erroneous control frames"
+      - "port flapping detected, so the port is placed in the ErrDisabled state"
+      - "faulty SFP, bad connection, or point-to-point initialization issues"
+      - "a storm-control shutdown action putting the port into the error-disabled state"
+    commands:
+      - {cmd: "show interface status", intent: interface.status}
+      - {cmd: "show interface status err-disabled", intent: interface.errdisabled}
+      - {cmd: "show logging logfile", intent: logging.recent}
+      - {cmd: "show system internal ethpm event-history interface <if>", intent: ethpm.event.history, params: [if]}
+      - {cmd: "show pie interface <if> link-flap-rca", intent: pie.linkflap.rca, params: [if]}
+      - {cmd: "show pie interface <if> link-down-rca", intent: pie.linkdown.rca, params: [if]}
+      - {cmd: "show interface <if> transceiver details", intent: optics.dom.readings, params: [if]}
+      - {cmd: "show interface debounce", intent: interface.debounce}
+      - {cmd: "show udld", intent: udld.state}
+    tac_first_look: >-
+      On NX-OS 10.2.1 and later, show pie interface <if> link-flap-rca names the flap
+      reason directly; below that release, read the ethpm event-history together with the
+      debounce timer to decide L1 versus protocol.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0101.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01110.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html
+
+  - id: optics-transceiver-light-levels
+    class: optics
+    title: "Optics / transceiver light levels out of range (DOM) on NX-OS"
+    symptoms:
+      - "DOM readings (temperature, voltage, current, Tx power, Rx power) outside acceptable ranges"
+      - "transceiver-insights reports the optic as BAD"
+      - "CRC / input errors accompanying marginal optical power"
+      - "port will not come up, or comes up and immediately fails"
+    log_signatures:
+      - "%ETHPORT-5-IF_DOWN_LINK_FAILURE"
+      - "%ETHPORT-5-IF_DOWN_INITIALIZING"
+    likely_causes:
+      - "failing or damaged transceivers/optics"
+      - "failing or damaged fiber or direct-attach cable"
+      - "failing or damaged patch-panel ports"
+      - "incorrect SFP / media-type mismatch preventing the interface being enabled"
+      - "faulty SFP requiring reseat or replacement"
+    commands:
+      - {cmd: "show interface <if> transceiver details", intent: optics.dom.readings, params: [if]}
+      - {cmd: "show interface transceiver", intent: optics.inventory}
+      - {cmd: "show pie interface <if> transceiver-insights", intent: pie.optics.health, params: [if]}
+      - {cmd: "show interface counters errors non-zero", intent: interface.errors.nonzero}
+      - {cmd: "show interface capabilities", intent: interface.capabilities}
+      - {cmd: "show interface <if>", intent: interface.detail, params: [if]}
+      - {cmd: "show interface status", intent: interface.status}
+      - {cmd: "show inventory", intent: hardware.inventory}
+    tac_first_look: >-
+      Capture DOM Tx/Rx power on both ends of the same fiber pair in one collection; on
+      10.2.1 and later, transceiver-insights gives Cisco's own GOOD/BAD verdict and
+      short-circuits the swap test.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217554-understand-cyclic-redundancy-check-crc.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0101.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01001.html
+
+  - id: mac-move-mac-flapping
+    class: mac-learning
+    proposed_class: true
+    title: "MAC move / MAC flapping and learn-disable"
+    symptoms:
+      - "the same MAC address seen moving between interfaces repeatedly"
+      - "MAC learning disabled on the VLAN and re-enabled 120 s later"
+      - "hardware learn disable/enable events on the line card"
+      - "endpoints intermittently unreachable during the learn-disable window"
+    log_signatures:
+      - "%L2FM-4-L2FM_MAC_MOVE2"
+      - "%L2FM-2-L2FM_MAC_FLAP_DISABLE_LEARN"
+      - "%L2FM-2-L2FM_MAC_FLAP_RE_ENABLE_LEARN"
+      - "%ETH_PORT_CHANNEL-5-PORT_DOWN"
+      - "%ETH_PORT_CHANNEL-5-FOP_CHANGED"
+      - "%ETHPORT-5-IF_DOWN_NONE"
+    likely_causes:
+      - "too many MAC moves, flaps or loops, or new MAC learns/moves exceeding a threshold"
+      - "frames with an identical source MAC arriving on multiple interfaces at high rates"
+      - "loop conditions between ports"
+      - "10 or more moves in 1 second (Broadcom ASIC), or 10 or more in 10 seconds (9300-EX/FX/GX, 9500), disabling learning on the VLAN for 120 seconds"
+      - "a dual-homed endpoint or NIC teaming presenting the same MAC on two paths"
+      - "a vPC orphan-port or peer-link misforwarding re-presenting the MAC"
+    commands:
+      - {cmd: "show mac address-table notification mac-move", intent: mac.move.notification}
+      - {cmd: "show mac address-table address <mac>", intent: mac.lookup.address, params: [mac]}
+      - {cmd: "show mac address-table vlan <vlan>", intent: mac.table.vlan, params: [vlan]}
+      - {cmd: "show mac address-table loop-detect", intent: mac.loopdetect.state}
+      - {cmd: "show system internal l2fm l2dbg macdb address <mac> vlan <vlan>", intent: l2fm.macdb.history, params: [mac, vlan]}
+      - {cmd: "show logging level l2fm", intent: logging.level.l2fm}
+      - {cmd: "show interface snmp-ifindex", intent: interface.ifindex.map}
+      - {cmd: "show mac address-table count", intent: mac.table.count}
+    tac_first_look: >-
+      Take the two interfaces named in %L2FM-4-L2FM_MAC_MOVE2 and the l2fm macdb history
+      — that pair identifies either a genuine dual-homed host or the two legs of a loop,
+      and nothing else matters until that is settled.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_011.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/213962-nexus-9000-arp-mac-table-sync-behavio.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: vxlan-nve-peer-down-underlay-unreachable
+    class: evpn-vxlan
+    title: "VXLAN NVE peer down / VTEP fabric (underlay) unreachable"
+    symptoms:
+      - "expected remote VTEP absent from show nve peers"
+      - "remote VTEP loopback missing from the routing table, or present with a wrong next hop"
+      - "ping between VTEP loopbacks fails"
+      - "NVE interface up but no peers established"
+    log_signatures: []
+    likely_causes:
+      - "VTEP loopback not advertised into the underlay (missing network <loopback>/32 under the IPv4 unicast address family)"
+      - "remote loopback route not present, or its next hop does not point at the remote VTEP fabric address"
+      - "EVPN updates from the remote VTEP peer not received in the L2VPN EVPN table"
+      - "NVE source-interface (loopback) down, or not reachable in the correct VRF"
+      - "BGP EVPN session to the spine / route reflector down"
+      - "underlay L3 path broken between leaf and spine"
+    commands:
+      - {cmd: "show nve peers", intent: vxlan.nve.peers}
+      - {cmd: "show nve interface", intent: vxlan.nve.interface}
+      - {cmd: "show nve vxlan-params", intent: vxlan.global.params}
+      - {cmd: "show ip interface brief | exclude down", intent: underlay.interfaces}
+      - {cmd: "show ip bgp <prefix> vrf <vrf>", intent: underlay.bgp.advertised, params: [prefix, vrf]}
+      - {cmd: "show ip route <prefix> vrf <vrf>", intent: underlay.route.remote_vtep, params: [prefix, vrf]}
+      - {cmd: "ping <prefix> source-interface <if>", intent: underlay.reachability, params: [prefix, if]}
+      - {cmd: "show bgp l2vpn evpn <prefix> vrf <vrf>", intent: evpn.vtep.route, params: [prefix, vrf]}
+    tac_first_look: >-
+      Walk the documented five-step ladder — local advertisement, EVPN propagation, remote
+      reception, RIB resolution, then loopback-sourced ping — and stop at the first rung
+      that fails.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/215780-troubleshoot-evpn-vxlan-in-multisite-env.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01101.html
+
+  - id: vxlan-vni-down-evpn-mac-not-learned
+    class: evpn-vxlan
+    title: "VXLAN VNI down / MAC not learned in EVPN"
+    symptoms:
+      - "VNI not in an up state on the NVE interface"
+      - "local MAC present in the MAC address-table but absent from show l2route evpn mac evi <vni>"
+      - "EVPN Type-2 routes not advertised to, or not received from, the remote VTEP"
+      - "east-west traffic for that VNI black-holes while the underlay is healthy"
+    log_signatures: []
+    likely_causes:
+      - "VNI not configured or not associated on the NVE interface"
+      - "L2VNI-to-VLAN mapping missing or mismatched between VTEPs"
+      - "MAC not learned locally on the access port, so there is nothing to advertise"
+      - "BGP EVPN neighbor down, so Type-2 routes never propagate"
+      - "Type-2 route advertised but not accepted at the remote VTEP (route-target / import policy)"
+      - "NVE peer not established for the VNI"
+    commands:
+      - {cmd: "show nve vni", intent: vxlan.vni.state}
+      - {cmd: "show nve vni counters", intent: vxlan.vni.counters}
+      - {cmd: "show vxlan", intent: vxlan.summary}
+      - {cmd: "show mac address-table vlan <vlan>", intent: mac.table.vlan.local, params: [vlan]}
+      - {cmd: "show l2route evpn mac evi <vni>", intent: evpn.l2route.mac, params: [vni]}
+      - {cmd: "show l2route evpn mac-ip evi <vni>", intent: evpn.l2route.macip, params: [vni]}
+      - {cmd: "show bgp l2vpn evpn vni-id <vni>", intent: evpn.bgp.byvni, params: [vni]}
+      - {cmd: "show bgp l2vpn evpn summary", intent: evpn.bgp.sessions}
+      - {cmd: "show bgp l2vpn evpn neighbors <peer> advertised-routes", intent: evpn.bgp.advertised, params: [peer]}
+    tac_first_look: >-
+      Prove the MAC exists locally first (show mac address-table vlan <vlan>), then follow
+      it up the stack — l2route, then BGP EVPN — and the layer where it disappears is the
+      defect.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01101.html
+      - https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/215780-troubleshoot-evpn-vxlan-in-multisite-env.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01011.html
+
+  - id: ospf-neighbor-not-forming
+    class: ospf-adjacency
+    title: "OSPFv2 neighbor stuck in INIT/EXSTART, or never appears, on NX-OS"
+    symptoms:
+      - "show ip ospf neighbor shows no neighbor, or one stuck below FULL (INIT / 2-WAY / EXSTART)"
+      - "routes learned via OSPF absent from show ip route"
+      - "interface is up/up but OSPF hellos are not reciprocated"
+    log_signatures:
+      - "%OSPF-4-AREA_ERR"
+      - "%OSPF-4-AUTH_ERR"
+      - "%OSPF-4-DUPRID"
+      - "%OSPF-4-NEIGH_ERR"
+      - "%OSPF-4-PKTTYPE_ERR"
+      - "%OSPF-4-VERSION_ERR"
+      - "%OSPF-4-CKSM_ERR"
+    likely_causes:
+      - "neighbor MTU does not match the local interface MTU (unless mtu-ignore is configured)"
+      - "mismatched authentication configuration or keys across neighbors"
+      - "passive-interface configuration suppressing routing updates"
+      - "incompatible RFC-compliance modes between routers"
+      - "the OSPF feature/process not enabled, or the interface in the wrong VRF"
+      - "duplicate router ID"
+    commands:
+      - {cmd: "show feature", intent: feature.enabled}
+      - {cmd: "show ip ospf neighbor", intent: ospf.neighbors}
+      - {cmd: "show ip ospf neighbor vrf all", intent: ospf.neighbors.allvrf}
+      - {cmd: "show ip ospf interface <if>", intent: ospf.interface.detail, params: [if]}
+      - {cmd: "show ip ospf <instance>", intent: ospf.process, params: [instance]}
+      - {cmd: "show running-config ospf", intent: ospf.config}
+      - {cmd: "show ip ospf traffic", intent: ospf.traffic.counters}
+      - {cmd: "show ip ospf statistics", intent: ospf.statistics}
+      - {cmd: "show vrf interface <if>", intent: interface.vrf, params: [if]}
+    tac_first_look: >-
+      Compare show ip ospf interface <if> on both ends for area, MTU, hello/dead timers,
+      network type and authentication before collecting anything else.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
+
+  - id: ospf-adjacency-flap
+    class: ospf-flapping-link
+    title: "OSPFv2 adjacency repeatedly goes FULL to DOWN to FULL on NX-OS"
+    symptoms:
+      - "repeating %OSPF-5-ADJCHANGE pairs in show logging logfile"
+      - "OSPF routes churn; SPF runs continuously"
+      - "neighbor uptime in show ip ospf neighbor resets constantly"
+    log_signatures:
+      - "%OSPF-5-ADJCHANGE"
+      - "%OSPF-5-NBRSTATE"
+      - "%OSPF-5-BFD_DOWN"
+      - "%OSPF-5-NBR_RETRANSMISSIONS"
+      - "%OSPF-3-MAXLSAS"
+      - "%OSPF-4-OSPF_MAX_LSA"
+      - "%ETHPORT-5-IF_DOWN_LINK_FAILURE"
+    likely_causes:
+      - "physical link failure or a flapping port"
+      - "repeated LSU retransmissions to a neighbour"
+      - "a BFD session teardown driving the adjacency down"
+      - "control-plane starvation — hellos dropped by CoPP"
+      - "LSA overload: maximum number of LSAs in the domain reached"
+      - "CPU or memory pressure on the supervisor"
+    commands:
+      - {cmd: "show ip ospf neighbor", intent: ospf.neighbors}
+      - {cmd: "show logging logfile", intent: logging.recent}
+      - {cmd: "show logging last 200", intent: logging.tail}
+      - {cmd: "show interface counters errors", intent: interface.errors}
+      - {cmd: "show interface <if>", intent: interface.detail, params: [if]}
+      - {cmd: "show ip ospf traffic", intent: ospf.traffic.counters}
+      - {cmd: "show policy-map interface control-plane", intent: copp.stats}
+      - {cmd: "show errdisable flap", intent: interface.flap.errdisable}
+      - {cmd: "show logging onboard error-stats", intent: obfl.errorstats}
+    tac_first_look: >-
+      Correlate the %OSPF-5-ADJCHANGE timestamps against %ETHPORT-5-IF_DOWN_* and CoPP
+      drop counters — a link-layer or control-plane-policing cause is far more common
+      than an OSPF defect.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: eigrp-neighbor-problem
+    class: eigrp-adjacency
+    proposed_class: true
+    title: "EIGRP neighbor not forming, flapping, or route stuck-in-active on NX-OS"
+    symptoms:
+      - "peer absent from show ip eigrp neighbors, or the adjacency bouncing"
+      - "EIGRP-learned prefixes missing from show ip route"
+      - "a prefix remains active in show ip eigrp topology"
+    log_signatures:
+      - "%EIGRP-5-NBRCHANGE_DUAL"
+      - "%EIGRP-5-WRONG_SUBNET"
+      - "%EIGRP-3-DUP_ADDR"
+      - "%EIGRP-3-SIA_DUAL"
+      - "%EIGRP-6-UNEQUAL_METRICS"
+      - "%EIGRP-3-PFXLIMIT_DUAL"
+    likely_causes:
+      - "AS-number mismatch — routes are not exchanged between different autonomous systems"
+      - "K-value / metric-weight mismatch across routers"
+      - "MD5 authentication digest mismatch"
+      - "passive-interface suppressing EIGRP hellos, which prevents neighbors from forming"
+      - "MTU mismatch between the two interfaces"
+      - "neighbours not on the same subnet"
+    commands:
+      - {cmd: "show ip eigrp <instance> neighbors <if> detail", intent: eigrp.neighbors.detail, params: [instance, if]}
+      - {cmd: "show ip eigrp neighbor vrf all", intent: eigrp.neighbors.allvrf}
+      - {cmd: "show ip eigrp <instance> interfaces <if> detail", intent: eigrp.interfaces.detail, params: [instance, if]}
+      - {cmd: "show ip eigrp <instance> topology <prefix> active", intent: eigrp.topology.active, params: [instance, prefix]}
+      - {cmd: "show ip eigrp <instance> traffic vrf <vrf>", intent: eigrp.traffic.counters, params: [instance, vrf]}
+      - {cmd: "show ip eigrp <instance> accounting vrf <vrf>", intent: eigrp.accounting, params: [instance, vrf]}
+      - {cmd: "show running-config eigrp all", intent: eigrp.config.all}
+      - {cmd: "show ip route", intent: rib.routes}
+    tac_first_look: >-
+      Check AS number, K-values and authentication in show running-config eigrp all on
+      both ends, then show ip eigrp <instance> interfaces <if> detail for MTU and passive
+      state.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m-n9k-configuring-eigrp-93x.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: bgp-peer-not-established
+    class: bgp-session
+    title: "BGP peer never reaches Established on NX-OS (Idle / Active / Connect / OpenSent)"
+    symptoms:
+      - "show bgp sessions / show bgp all summary shows the peer not in Established state"
+      - "no prefixes received from the peer"
+      - "the TCP 179 session never completes"
+    log_signatures:
+      - "%BGP-3-BADPEERAS"
+      - "%BGP-3-BADPEERRID"
+      - "%BGP-3-BADPEERHOLDTIME"
+      - "%BGP-4-SAMERID"
+      - "%BGP-3-BADOPENCAP"
+      - "%BGP-3-MD5PASS"
+      - "%BGP-3-EBGPTTL"
+      - "%BGP-4-MAXPEERS"
+    likely_causes:
+      - "wrong IP address or AS configured"
+      - "duplicate router ID"
+      - "no connected route to the peer, or no route at all"
+      - "Layer 1 issue: physical interface, SFP, cable, or an external problem"
+      - "firewall or access lists blocking the connection"
+      - "wrong update-source, or missing ebgp-multihop / TTL setting"
+    commands:
+      - {cmd: "show bgp sessions", intent: bgp.sessions}
+      - {cmd: "show bgp all summary", intent: bgp.summary.all}
+      - {cmd: "show bgp ipv4 unicast neighbors", intent: bgp.neighbors}
+      - {cmd: "show bgp neighbors <peer>", intent: bgp.neighbors.detail, params: [peer]}
+      - {cmd: "show bgp process", intent: bgp.process}
+      - {cmd: "show running-config bgp", intent: bgp.config}
+      - {cmd: "show ip route <peer>", intent: rib.route.peer, params: [peer]}
+      - {cmd: "show logging logfile", intent: logging.recent}
+      - {cmd: "show bgp statistics", intent: bgp.statistics}
+    tac_first_look: >-
+      Read the last-error / notification text in show bgp neighbors <peer> and match it to
+      %BGP-3-BADPEERAS / BADPEERRID / BADOPENCAP before touching configuration.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/configuring-bgp.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
+
+  - id: bgp-session-flap
+    class: bgp-instability
+    title: "BGP session repeatedly establishes and drops on NX-OS"
+    symptoms:
+      - "repeating %BGP-5-ADJCHANGE up/down pairs in the log"
+      - "peer uptime in show bgp all summary keeps resetting"
+      - "route churn or dampened prefixes downstream"
+    log_signatures:
+      - "%BGP-5-ADJCHANGE"
+      - "%BGP-3-BADPEERHOLDTIME"
+      - "%BGP-4-PFXEXCEED"
+      - "%BGP-4-PFXWARN"
+      - "%BGP-4-SELF_RESTART"
+      - "%ETHPORT-5-IF_DOWN_LINK_FAILURE"
+    likely_causes:
+      - "an interface flap tearing the TCP session down"
+      - "hold-timer expiry because keepalives are lost"
+      - "max-prefix limit reached, so the peer is shut down by policy"
+      - "MD5 / TCP authentication mismatch"
+      - "CPU or memory exhaustion starving the BGP process"
+      - "CoPP dropping BGP control traffic"
+    commands:
+      - {cmd: "show bgp all summary", intent: bgp.summary.all}
+      - {cmd: "show bgp neighbors flap-statistics", intent: bgp.neighbors.flapstats}
+      - {cmd: "show bgp neighbors <peer>", intent: bgp.neighbors.detail, params: [peer]}
+      - {cmd: "show logging logfile", intent: logging.recent}
+      - {cmd: "show interface counters errors", intent: interface.errors}
+      - {cmd: "show processes cpu history", intent: cpu.history}
+      - {cmd: "show policy-map interface control-plane", intent: copp.stats}
+      - {cmd: "show bgp convergence detail", intent: bgp.convergence}
+      - {cmd: "show system resources", intent: system.resources}
+    tac_first_look: >-
+      Bracket the %BGP-5-ADJCHANGE timestamps against interface events and CoPP class
+      drops — a flapping BGP session is nearly always a transport or
+      control-plane-policing symptom.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: bgp-route-not-advertised-or-received
+    class: bgp-route-missing
+    title: "Expected BGP prefix not advertised to, or not received from, a peer on NX-OS"
+    symptoms:
+      - "prefix present locally but absent from show bgp ipv4 unicast neighbors <peer> advertised-routes"
+      - "the peer's prefix absent from show bgp ipv4 unicast"
+      - "prefix in the BGP table but not installed in show ip route"
+    log_signatures:
+      - "%BGP-3-BADNEXTHOP"
+      - "%BGP-4-PFXEXCEED"
+      - "%BGP-4-PFXWARN"
+      - "%BGP-4-PATH_ATTR_FILTER"
+      - "%BGP-4-ERR_TREAT_AS_WITHDRAW"
+      - "%BGP-3-UNSUPPORTED_NEXTHOP"
+    likely_causes:
+      - "the next hop must be reachable for the route to be installed"
+      - "RIB failure — the prefix is already in the RIB via a protocol with a lower administrative distance"
+      - "a race condition where the IGP is preferred over eBGP during mutual redistribution"
+      - "an outbound or inbound route-policy filtering the prefix"
+      - "max-prefix limit reached"
+      - "the prefix was never originated (missing network statement, default-originate or aggregate)"
+    commands:
+      - {cmd: "show bgp ipv4 unicast", intent: bgp.table.ipv4}
+      - {cmd: "show bgp ipv4 unicast neighbors <peer> advertised-routes", intent: bgp.neighbors.advertised, params: [peer]}
+      - {cmd: "show bgp ipv4 unicast <prefix>", intent: bgp.prefix.detail, params: [prefix]}
+      - {cmd: "show bgp all summary", intent: bgp.summary.all}
+      - {cmd: "show ip route <prefix>", intent: rib.route.lookup, params: [prefix]}
+      - {cmd: "show ip bgp rib-failure", intent: bgp.ribfailure}
+      - {cmd: "show running-config bgp", intent: bgp.config}
+      - {cmd: "show bgp statistics", intent: bgp.statistics}
+      - {cmd: "show bgp neighbors paths", intent: bgp.neighbors.paths}
+    tac_first_look: >-
+      Confirm origination first (show bgp ipv4 unicast <prefix>), then whether policy
+      blocked it (advertised-routes), then whether the RIB rejected it (show ip bgp
+      rib-failure).
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/configuring-bgp.html
+      - https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
+
+  - id: bgp-evpn-vpnv4-route-missing
+    class: bgp-route-missing
+    title: "BGP VPNv4 / L2VPN EVPN route missing in a VRF or on a VTEP"
+    symptoms:
+      - "VRF prefix absent from show ip route vrf <vrf> although the VPNv4/EVPN peer is Established"
+      - "Type-2 or Type-5 route absent from show bgp l2vpn evpn"
+      - "remote VTEP reachable but no host or prefix routes imported"
+    log_signatures:
+      - "%BGP-3-UNSUPPORTED_NEXTHOP"
+      - "%BGP-3-BRIB_RDCLASH"
+      - "%BGP-3-BRIB_RDADD"
+      - "%BGP-5-NO_RD"
+      - "%BGP-3-MISSING_ROUTERID"
+      - "%BGP-3-IMPORT_VRF_EXCEED"
+      - "%BGP-4-DUAL_RD_GENERATION_FAILED"
+      - "%BGP-4-CFG_EVPN_ORIG_MAP_MISSING"
+    likely_causes:
+      - "route distinguisher missing or clashing"
+      - "router ID removed, invalidating the auto-generated RD"
+      - "route-target import/export mismatch, or the VRF import limit exceeded"
+      - "the address family not negotiated with the peer (no supported AFI/SAFI)"
+      - "next hop not reachable, or a VTEP address-family mismatch"
+      - "the wrong VRF on the interface"
+    commands:
+      - {cmd: "show bgp l2vpn evpn", intent: bgp.evpn.table}
+      - {cmd: "show bgp vpnv4 unicast", intent: bgp.vpnv4.table}
+      - {cmd: "show ip bgp vpnv4 vrf all", intent: bgp.vpnv4.allvrf}
+      - {cmd: "show bgp all summary vrf <vrf>", intent: bgp.summary.vrf, params: [vrf]}
+      - {cmd: "show bgp vrf <vrf> ipv4 unicast", intent: bgp.vrf.table, params: [vrf]}
+      - {cmd: "show ip route vrf all summary", intent: rib.summary.allvrf}
+      - {cmd: "show vrf", intent: vrf.list}
+      - {cmd: "show vrf interface", intent: vrf.interfaces}
+      - {cmd: "show running-config bgp all", intent: bgp.config.all}
+    tac_first_look: >-
+      Verify the RD/RT pair and that the L2VPN EVPN (or VPNv4) address family is actually
+      negotiated with the peer before looking at the overlay data plane.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/configuring-bgp.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: unicast-rib-fib-inconsistency
+    class: rib-fib-inconsistency
+    proposed_class: true
+    title: "Unicast RIB and module FIB disagree (routing table versus forwarding table)"
+    symptoms:
+      - "prefix present in show ip route but traffic is black-holed or takes the wrong path"
+      - "the consistency checker reports inconsistencies"
+      - "the per-module forwarding entry differs from the RIB entry"
+    log_signatures:
+      - "%UFDM-3-PROACTIVE_CC_INCONSISTENCY_FOUND"
+      - "%UFDM-2-FIB_ROUTE_UPDATE_ERR"
+      - "%UFDM-3-UFDM_PRO_CC_SESSION_TIMEDOUT"
+      - "%IPFIB-SLOT#-2-IPFIB_IP_FIRST_HOP_TCAM_SIZE_FULL"
+      - "%U6RIB-3-INCONSISTENT_ROUTE"
+      - "%U6RIB-3-INCONSISTENT_RNH"
+      - "%U6RIB-3-INCONSISTENT_SUMMARY"
+    likely_causes:
+      - "the Layer 3 consistency checker finds a missing prefix, an extra prefix, a wrong next-hop address, or an incorrect Layer 2 rewrite string in the ARP/ND cache"
+      - "a FIB route-update error returned by a line card"
+      - "the hardware TCAM region is exhausted, so the entry cannot be programmed"
+      - "a RIB client not registered or not converged"
+    commands:
+      - {cmd: "show forwarding ipv4 unicast inconsistency vrf <vrf> module all", intent: fib.inconsistency, params: [vrf]}
+      - {cmd: "show consistency-checker forwarding unicast", intent: fib.cc.unicast}
+      - {cmd: "show consistency-checker forwarding single-route", intent: fib.cc.singleroute}
+      - {cmd: "show ip route <prefix>", intent: rib.route.lookup, params: [prefix]}
+      - {cmd: "show forwarding ipv4 route module <slot>", intent: fib.route.module, params: [slot]}
+      - {cmd: "show forwarding ipv4 adjacency module <slot>", intent: fib.adjacency.module, params: [slot]}
+      - {cmd: "show ip adjacency <prefix> detail vrf <vrf>", intent: rib.adjacency.detail, params: [prefix, vrf]}
+      - {cmd: "show forwarding distribution fib-state", intent: fib.distribution.state}
+      - {cmd: "show routing unicast clients", intent: rib.clients}
+      - {cmd: "show hardware capacity forwarding", intent: hw.capacity.forwarding}
+    tac_first_look: >-
+      Run show forwarding ipv4 unicast inconsistency vrf <vrf> module all and compare the
+      specific prefix in show ip route <prefix> against show forwarding ipv4 route module
+      <slot>.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01000.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+
+  - id: pim-neighbor-or-mroute-problem
+    class: multicast-pim
+    proposed_class: true
+    title: "PIM neighbor missing, or multicast mroute not built / RPF failing, on NX-OS"
+    symptoms:
+      - "expected PIM neighbor absent from show ip pim neighbor"
+      - "show ip mroute detail shows no outgoing interface, or the (S,G) is never created"
+      - "receivers get no traffic although the source is active"
+    log_signatures:
+      - "%PIM-5-NBR_CHANGE"
+      - "%PIM-5-DR_CHANGE"
+      - "%PIM-4-HELLO_INT"
+      - "%PIM-3-STATE_LIMIT"
+      - "%PIM-4-DUP_VPC_NBR"
+      - "%PIM-6-MAX_RPS"
+    likely_causes:
+      - "RP misconfiguration — the RP address with the best priority, or a software RP hash, is not what was intended"
+      - "PIM must be configured on all L3 interfaces between sources, receivers and RPs"
+      - "RPF failure — RPF-failed traffic is dropped and sent to the CPU"
+      - "no unicast route toward the source or the RP"
+      - "a domain border preventing message forwarding, or an unexpected DR election by priority/IP address"
+      - "the PIM state limit for the VRF exceeded"
+    commands:
+      - {cmd: "show ip pim neighbor", intent: pim.neighbors}
+      - {cmd: "show ip pim interface <if>", intent: pim.interface, params: [if]}
+      - {cmd: "show ip pim interface brief vrf all", intent: pim.interface.brief}
+      - {cmd: "show ip pim rp", intent: pim.rp}
+      - {cmd: "show ip pim rp-hash", intent: pim.rp.hash}
+      - {cmd: "show ip pim group-range vrf <vrf>", intent: pim.grouprange, params: [vrf]}
+      - {cmd: "show ip mroute detail", intent: mroute.detail}
+      - {cmd: "show ip mroute summary", intent: mroute.summary}
+      - {cmd: "show ip pim route", intent: pim.route}
+      - {cmd: "show ip pim statistics", intent: pim.statistics}
+      - {cmd: "show ip route <prefix>", intent: rpf.unicast.lookup, params: [prefix]}
+    tac_first_look: >-
+      Confirm PIM is enabled on every L3 hop and that the unicast route toward the source
+      or RP exists — RPF failure and a missing PIM interface account for most "no mroute"
+      cases.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
+
+  - id: igmp-snooping-problem
+    class: multicast-igmp
+    proposed_class: true
+    title: "IGMP snooping not programming groups — multicast flooded or black-holed in a VLAN"
+    symptoms:
+      - "the receiver's group absent from show ip igmp snooping groups"
+      - "multicast flooded to all ports in the VLAN"
+      - "no querier, or no mrouter port, learned for the VLAN"
+    log_signatures:
+      - "%IGMP-3-SNOOP_CONFIG_ERROR"
+      - "%IGMP-3-GROUP_LIMIT"
+      - "%IGMP-3-STATE_LIMIT"
+      - "%IGMP-6-RECEIVE_QUERY"
+      - "%IGMP-4-QUERY_DROP_ON_SAT_PORT"
+      - "%IGMP-3-GROUP_RANGE_IGNORE"
+    likely_causes:
+      - "IGMP snooping disabled, causing reduced multicast performance from excessive false flooding within the device"
+      - "vPC pair configuration mismatch, which can cause traffic loss, extended forwarding periods, or differences in multicast state expiration timing"
+      - "multicast-router-port behaviour across trunked VLANs sending VLAN X traffic out the multicast router ports in both VLAN X and VLAN Y"
+      - "missing querier in an L2-only VLAN"
+      - "group or state limit exceeded"
+      - "IGMP version mismatch between querier and host"
+    commands:
+      - {cmd: "show ip igmp snooping vlan <vlan>", intent: igmpsnoop.vlan, params: [vlan]}
+      - {cmd: "show ip igmp snooping groups vlan <vlan> detail", intent: igmpsnoop.groups.detail, params: [vlan]}
+      - {cmd: "show ip igmp snooping querier vlan <vlan>", intent: igmpsnoop.querier, params: [vlan]}
+      - {cmd: "show ip igmp snooping mroute vlan <vlan>", intent: igmpsnoop.mrouterports, params: [vlan]}
+      - {cmd: "show ip igmp snooping explicit-tracking vlan <vlan> detail", intent: igmpsnoop.tracking, params: [vlan]}
+      - {cmd: "show ip igmp snooping statistics vlan", intent: igmpsnoop.statistics}
+      - {cmd: "show ip igmp groups", intent: igmp.groups}
+      - {cmd: "show ip igmp interface", intent: igmp.interface}
+      - {cmd: "show vlan summary", intent: vlan.summary}
+    tac_first_look: >-
+      Check that a querier exists for the VLAN and that an mrouter port is learned before
+      suspecting the ASIC.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: hsrp-duplicate-active-or-state-change
+    class: fhrp
+    proposed_class: true
+    title: "HSRP dual-active, unexpected state change, or virtual-IP conflict on NX-OS"
+    symptoms:
+      - "both peers report Active in show hsrp brief"
+      - "repeated group state transitions in the log"
+      - "hosts behind the HSRP gateway intermittently lose their default gateway, or cannot reach beyond the VLAN"
+      - "the HSRP flap coincides with SVI or member-port flaps"
+    log_signatures:
+      - "%HSRP_ENGINE-5-GRPSTATECHANGE"
+      - "%HSRP_ENGINE-6-STATECHANGE"
+      - "%HSRP_ENGINE-5-ACTIVE_CHANGE"
+      - "%HSRP_ENGINE-4-BADAUTH"
+      - "%HSRP_ENGINE-4-DUPADDR"
+      - "%HSRP_ENGINE-4-DIFFVIP1"
+      - "%HSRP_ENGINE-5-PRIORITY"
+      - "%HSRP_ENGINE-5-MACADDRESS_CHANGE"
+    likely_causes:
+      - "authentication mismatch — different authentication configurations between peers"
+      - "HSRP version mismatch — version 2 does not interoperate with version 1"
+      - "misconfigured priority or preemption"
+      - "vPC configuration issues — mismatched virtual MAC addresses on vPC peers"
+      - "the host gateway MAC mapped to the physical peer device MAC, tripping vPC loop prevention (use the HSRP address, or the peer-gateway feature)"
+      - "link failures affecting tracked objects, or a virtual-IP mismatch between peers"
+    commands:
+      - {cmd: "show hsrp brief", intent: hsrp.brief}
+      - {cmd: "show hsrp interface <if> group <group> detail", intent: hsrp.group.detail, params: [if, group]}
+      - {cmd: "show hsrp summary", intent: hsrp.summary}
+      - {cmd: "show hsrp delay interface <if>", intent: hsrp.delay, params: [if]}
+      - {cmd: "show hsrp bfd-sessions interface <if>", intent: hsrp.bfd, params: [if]}
+      - {cmd: "show running-config hsrp", intent: hsrp.config}
+      - {cmd: "show mac address-table vlan <vlan>", intent: hsrp.vmac.location, params: [vlan]}
+      - {cmd: "show vpc role", intent: vpc.role.current}
+      - {cmd: "show logging logfile", intent: logging.recent}
+    tac_first_look: >-
+      Diff show running-config hsrp on both peers for version, authentication, virtual IP
+      and priority/preempt, then read the reason field in %HSRP_ENGINE-5-GRPSTATECHANGE.
+      Note the NX-OS facility is HSRP_ENGINE, not HSRP.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01000.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217274-understand-virtual-port-channel-vpc-en.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0110.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+
+  - id: vrrp-problem
+    class: fhrp
+    proposed_class: true
+    title: "VRRP master/backup election wrong, VR will not start, or bad advertisements"
+    symptoms:
+      - "the VR stays in Init, or both nodes claim Master"
+      - "show vrrp shows an unexpected priority or state"
+      - "advertisements counted as invalid in show vrrp statistics"
+    log_signatures:
+      - "%VRRP-ENG-5-VR_STATE_CHANGE"
+      - "%VRRP-ENG-4-BAD_ADV"
+      - "%VRRP-ENG-5-INVALID_CONFIG"
+      - "%VRRP-ENG-5-INTERFACE_DOWN"
+      - "%VRRP-ENG-5-INTERFACE_STATE_CHANGE"
+      - "%VRRP-ENG-2-VR_FAILURE"
+    likely_causes:
+      - "authentication mismatch — authentication schemes or text strings differ between router and incoming packet"
+      - "priority issues — if priorities match, the higher IP address is selected as the new primary"
+      - "advertisement-interval mismatch between devices"
+      - "duplicate VRID or virtual IP — multiple groups cannot share identical virtual IP addresses on the same interface"
+      - "the interface IP not in the same subnet as the VR address"
+      - "the interface is down"
+    commands:
+      - {cmd: "show vrrp <group>", intent: vrrp.group, params: [group]}
+      - {cmd: "show vrrp statistics", intent: vrrp.statistics}
+      - {cmd: "show vrrpv3 detail", intent: vrrpv3.detail}
+      - {cmd: "show vrrpv3 statistics", intent: vrrpv3.statistics}
+      - {cmd: "show fhrp <if>", intent: fhrp.state, params: [if]}
+      - {cmd: "show running-config vrrp", intent: vrrp.config}
+      - {cmd: "show interface <if>", intent: interface.detail, params: [if]}
+      - {cmd: "show logging logfile", intent: logging.recent}
+    tac_first_look: >-
+      Read the reason string in %VRRP-ENG-4-BAD_ADV / %VRRP-ENG-5-INVALID_CONFIG and
+      confirm both nodes carry identical VRID, advertisement interval and authentication.
+      Note the NX-OS facilities are VRRP-ENG and VRRP-CFG, not VRRP.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010101.html
+
+  - id: copp-and-rate-limiter-drops
+    class: control-plane-policing
+    proposed_class: true
+    title: "Control-plane traffic dropped by CoPP or by a hardware rate limiter"
+    symptoms:
+      - "protocol adjacencies flap or management sessions time out under load"
+      - "non-zero DropPackets in show policy-map interface control-plane"
+      - "non-zero dropped counters in show hardware rate-limiter"
+    log_signatures:
+      - "%COPP-1-COPP_DROPS1"
+      - "%COPP-2-COPP_DROPS2"
+      - "%COPP-5-COPP_DROPS5"
+      - "%COPP-2-COPP_DEFAULT_POLICY"
+      - "%COPP-2-COPP_RATELIMIT_DISABLED"
+      - "%COPP-2-COPP_NO_POLICY"
+      - "%ACLQOS-SLOT#-5-ACLQOS_NON_ATOMIC"
+    likely_causes:
+      - "exception classes hitting CoPP: IP option exceptions, IP ICMP unreachable, TTL-failure, IPv6 option exceptions, IPv6 ICMP unreachable, MTU-failure"
+      - "a packet exceeding the configured rate, so it is dropped per the violate action (DropPackets versus OutPackets)"
+      - "hardware rate-limiter classes: ACL log packets, BFD, exception catch-all, FEX traffic, L3 glean, L3 multicast data, SPAN egress, sFlow, VXLAN-OAM, Netflow"
+      - "no CoPP policy applied, leaving the control plane unprotected"
+    commands:
+      - {cmd: "show copp status", intent: copp.status}
+      - {cmd: "show policy-map interface control-plane", intent: copp.stats}
+      - {cmd: "show policy-map type control-plane expand name <policy>", intent: copp.policy.expand, params: [policy]}
+      - {cmd: "show class-map type control-plane", intent: copp.classmaps}
+      - {cmd: "show copp profile strict", intent: copp.profile.reference}
+      - {cmd: "show copp diff profile strict", intent: copp.profile.diff}
+      - {cmd: "show hardware rate-limiter", intent: ratelimiter.stats}
+      - {cmd: "show hardware rate-limiter access-list-log", intent: ratelimiter.acllog}
+      - {cmd: "show hardware rate-limiter module <slot>", intent: ratelimiter.module, params: [slot]}
+      - {cmd: "show running-config copp all", intent: copp.config}
+      - {cmd: "show consistency-checker copp", intent: copp.cc}
+    tac_first_look: >-
+      Read the class name carried in %COPP-2-COPP_DROPS2 and pull the matching class
+      counters from show policy-map interface control-plane — that identifies which
+      protocol is being policed.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-rate-limits.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01011.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+
+  - id: nxos-high-cpu
+    class: high-cpu
+    title: "High CPU utilisation on a Nexus supervisor"
+    symptoms:
+      - "sustained high CPU in show processes cpu"
+      - "slow CLI, delayed protocol convergence, control-plane timeouts"
+      - "a single process dominating the CPU history graph"
+    log_signatures:
+      - "%COPP-2-COPP_DROPS2"
+      - "%SYSMGR-2-SRV_MAJOR_MEMORY_ALERT"
+    likely_causes:
+      - "excessive punt to CPU from RPF failure — RPF-failed traffic is dropped and sent to the CPU"
+      - "continuous SNMP polling of a troublesome OID, including window timeouts when parsing the MIB tree at specific OIDs"
+      - "a high number of running processes because of the number of features enabled"
+      - "control-plane flooding visible as CoPP drops"
+    commands:
+      - {cmd: "show processes cpu", intent: cpu.processes}
+      - {cmd: "show processes cpu history", intent: cpu.history}
+      - {cmd: "show processes cpu module <slot>", intent: cpu.module, params: [slot]}
+      - {cmd: "show system resources", intent: system.resources}
+      - {cmd: "show processes", intent: processes.list}
+      - {cmd: "show policy-map interface control-plane", intent: copp.stats}
+      - {cmd: "show hardware rate-limiter", intent: ratelimiter.stats}
+      - {cmd: "show logging onboard error-stats", intent: obfl.errorstats}
+      - {cmd: "show clock", intent: system.clock}
+      - {cmd: "show version", intent: system.version}
+    tac_first_look: >-
+      Take show processes cpu history first to establish whether the spike is sustained or
+      periodic, then identify the top process with show processes cpu.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: nxos-memory-threshold-exceeded
+    class: high-memory
+    title: "Memory threshold exceeded / low-memory condition on NX-OS"
+    symptoms:
+      - "show system resources shows very little free memory"
+      - "one process dominating show processes memory"
+      - "memory-alert syslogs; services restarting or refusing new state"
+    log_signatures:
+      - "%PLATFORM-2-MEMORY_ALERT"
+      - "%PLATFORM-2-MEMORY_ALERT_RECOVERED"
+      - "%SYSMGR-2-SRV_MAJOR_MEMORY_ALERT"
+      - "%SYSMGR-2-SRV_MINOR_MEMORY_ALERT"
+      - "%PLATFORM-2-PFM_LOW_MEMORY_CONDITION"
+      - "%SYSMGR-0-ACTIVE_SUP_LESS_MEMORY"
+      - "%BGP-3-LOWMEM"
+      - "%OSPF-1-LOWMEM"
+    likely_causes:
+      - "high page-cache usage — cached pages can be released by the kernel if memory is needed by other processes"
+      - "kernel memory allocation for its own text, data and kernel loadable modules"
+      - "utilization high because some user processes are taking up too much memory"
+      - "a high number of running processes because of the number of features enabled"
+    commands:
+      - {cmd: "show system resources", intent: system.resources}
+      - {cmd: "show processes memory", intent: memory.processes}
+      - {cmd: "show processes memory sort", intent: memory.processes.sorted}
+      - {cmd: "show system internal kernel meminfo", intent: memory.kernel}
+      - {cmd: "show processes memory shared detail", intent: memory.shared}
+      - {cmd: "show routing ip unicast memory estimate", intent: rib.memory.estimate}
+      - {cmd: "show processes cpu history", intent: cpu.history}
+      - {cmd: "show logging logfile", intent: logging.recent}
+      - {cmd: "show system uptime", intent: system.uptime}
+    tac_first_look: >-
+      Separate kernel/page-cache memory from process memory (show system internal kernel
+      meminfo versus show processes memory sort) before assuming a leak.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01111.html
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: process-crash-and-unexpected-reload
+    class: crash-reload
+    proposed_class: true
+    title: "NX-OS process crash / core file, or an unexpected switch or module reload"
+    symptoms:
+      - "a core file listed by show cores"
+      - "a feature stops working while the box stays up; process restart count increasing"
+      - "show system uptime shows a recent restart nobody scheduled"
+      - "a reset-history entry present for a module"
+    log_signatures:
+      - "%SYSMGR-2-SERVICE_CRASHED"
+      - "%SYSMGR-3-SERVICE_TERMINATED"
+      - "%SYSMGR-3-SERVICE_BACKTRACE"
+      - "%SYSMGR-2-HAP_FAILURE_SUP_RESET"
+      - "%SYSMGR-3-COREDUMP_TIMEOUT"
+      - "%PLATFORM-2-PFM_SYSTEM_RESET"
+      - "%PLATFORM-2-PFM_SYSTEM_SHUTDOWN_TRIGGER"
+      - "%PLATFORM-2-MOD_TEMPSHUTDOWN"
+      - "%PLATFORM-2-PFM_MODULE_RESET"
+      - "%SYSMGR-2-STANDBY_BOOT_FAILED"
+    likely_causes:
+      - "critical process failure (non-restartable)"
+      - "process restart threshold exceeded"
+      - "HA-policy (hap) failure for the service"
+      - "memory exhaustion for the service"
+      - "corrupted bootflash file system, corrupted BIOS, or a corrupted NX-OS image"
+      - "incorrect boot parameters, or a clock module failure"
+    commands:
+      - {cmd: "show cores", intent: cores.list}
+      - {cmd: "show system cores", intent: cores.config}
+      - {cmd: "show processes log", intent: process.log}
+      - {cmd: "show processes log details", intent: process.log.details}
+      - {cmd: "show process log pid <pid>", intent: process.log.pid, params: [pid]}
+      - {cmd: "show system reset-reason", intent: system.resetreason}
+      - {cmd: "show system reset-reason module <slot>", intent: system.resetreason.module, params: [slot]}
+      - {cmd: "show system uptime", intent: system.uptime}
+      - {cmd: "show log nvram", intent: logging.nvram}
+      - {cmd: "show module internal exceptionlog", intent: module.exceptionlog}
+      - {cmd: "show logging onboard error-stats", intent: obfl.errorstats}
+    tac_first_look: >-
+      show system reset-reason plus show log nvram survive the reload and say whether it
+      was operator-initiated, thermal, or a process HA failure; for a live crash,
+      show cores then show process log pid <pid> names the service and signal.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/m_troubleshooting_service_failures_9x.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: hardware-environment-alarm-and-module-diagnostics
+    class: hardware-fault
+    title: "Fan / power-supply / temperature alarm, or a module failing GOLD diagnostics"
+    symptoms:
+      - "PSU or fan reported failed/absent in show environment"
+      - "a temperature sensor over the major or minor threshold"
+      - "a module reported failed, or a diagnostic test showing a Fail result"
+    log_signatures:
+      - "%PLATFORM-2-PS_FAIL"
+      - "%PLATFORM-2-PS_ABSENT"
+      - "%PLATFORM-2-PS_FANFAIL"
+      - "%PLATFORM-1-FAN_FAIL"
+      - "%PLATFORM-2-FANMOD_FAN_FAIL"
+      - "%PLATFORM-2-MOD_TEMPMAJALRM"
+      - "%PLATFORM-2-MOD_TEMPMINALRM"
+      - "%MODULE-2-MOD_DIAG_FAIL"
+      - "%MODULE-2-MOD_FAIL"
+      - "%DIAGCLIENT-2-DIAG_HM_FAIL"
+      - "%DIAGCLIENT-2-PER_PORT_TEST_FAIL"
+    likely_causes:
+      - "a failed or removed fan module leading to overheating and temperature alarms"
+      - "power supply failed or shut down; missing power input; single-input operation"
+      - "module runtime diagnostic failure, after which module manager power-cycles the module"
+      - "line card not firmly seated — ensure it is firmly in the slot and reseat if necessary"
+      - "per-port BootupPortLoopback failure putting the port into the error-disabled state"
+      - "ACT2 / ASICRegisterCheck failures escalating after repeated consecutive failures"
+    commands:
+      - {cmd: "show environment", intent: env.all}
+      - {cmd: "show environment power detail", intent: env.power.detail}
+      - {cmd: "show environment fan detail", intent: env.fan.detail}
+      - {cmd: "show environment temperature module <slot>", intent: env.temperature.module, params: [slot]}
+      - {cmd: "show module", intent: module.status}
+      - {cmd: "show diagnostic result mod all", intent: diag.result.all}
+      - {cmd: "show diagnostic result module <slot> test all detail", intent: diag.result.detail, params: [slot]}
+      - {cmd: "show diagnostic status module <slot>", intent: diag.status, params: [slot]}
+      - {cmd: "show diagnostic events error", intent: diag.events.error}
+      - {cmd: "show hardware capacity power", intent: hw.capacity.power}
+      - {cmd: "show inventory", intent: hw.inventory}
+      - {cmd: "show sprom", intent: hw.sprom}
+    tac_first_look: >-
+      Run show environment and show diagnostic result mod all together — the syslog's own
+      recommended action for %PLATFORM-2-PS_FAIL and %PLATFORM-2-MOD_TEMPMAJALRM is
+      exactly the show environment output.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-online-diagnostics.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01000.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: acl-tcam-exhaustion
+    class: acl-drops
+    proposed_class: true
+    title: "ACL / TCAM region exhaustion — ACL update fails or entries are not programmed"
+    symptoms:
+      - "an ACL update fails with an error after a configuration change"
+      - "TCAM almost full warnings for an ACL region"
+      - "ACL statistics not collected because the stats region is full"
+      - "traffic permitted or denied contrary to the configured ACL"
+    log_signatures:
+      - "%ACLQOS-SLOT#-2-ACLQOS_TCAM_CARVING_FAILURE"
+      - "%ACLQOS-SLOT#-4-ACLQOS_3K_OVER_THRESHOLD"
+      - "%ACLQOS-SLOT#-0-ACLQOS_ACL_STATS_FULL"
+      - "%IPFIB-SLOT#-2-IPFIB_IP_FIRST_HOP_TCAM_SIZE_FULL"
+      - "%NPACL-2-IPT_WARNING"
+    likely_causes:
+      - "when atomic updates are enabled and sufficient TCAM resources are unavailable, the device generates an error and the ACL update fails"
+      - "TCAM carving does not leave enough space in the region the feature needs"
+      - "too many ACEs for the carved region size"
+      - "several features competing for the same TCAM region"
+    commands:
+      - {cmd: "show hardware access-list resource utilization", intent: acl.tcam.utilization}
+      - {cmd: "show hardware access-list tcam region", intent: acl.tcam.regions}
+      - {cmd: "show system internal access-list resource utilization", intent: acl.tcam.internal}
+      - {cmd: "show hardware access-list resource pooling", intent: acl.tcam.pooling}
+      - {cmd: "show hardware capacity forwarding", intent: hw.capacity.forwarding}
+      - {cmd: "show running-config aclmgr", intent: acl.config}
+      - {cmd: "show logging logfile", intent: logging.recent}
+    tac_first_look: >-
+      Read the carved region sizes and current utilisation together — the region that is
+      full, not the ACL itself, is what has to change, and re-carving requires a reload.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01000.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+
+  - id: ntp-not-synchronised
+    class: ntp-sync
+    proposed_class: true
+    title: "NTP not synchronised on NX-OS"
+    symptoms:
+      - "peer status never reaches a synchronised/candidate state"
+      - "clock drifting between switches, making log correlation unreliable"
+      - "NTP statistics show no valid responses from the server"
+    log_signatures:
+      - "%NTP-2-NTP_SYSLOG_CRIT_ERR"
+      - "%NTP-3-NTP_SYSLOG_ERR"
+      - "%NTP-6-NTP_SYSLOG_WARN"
+    likely_causes:
+      - "authentication key mismatch between client and server"
+      - "VRF reachability — the NTP server and peers must be able to reach each other through the configured VRFs"
+      - "Cisco Nexus 9000 switches do not sync with stratum 14 and 15"
+      - "the source interface or source address not matching what the server expects"
+      - "an access group blocking the association"
+    commands:
+      - {cmd: "show ntp peer-status", intent: ntp.peer.status}
+      - {cmd: "show ntp peers", intent: ntp.peers}
+      - {cmd: "show ntp statistics peer ipaddr <peer>", intent: ntp.peer.statistics, params: [peer]}
+      - {cmd: "show ntp authentication-status", intent: ntp.auth.status}
+      - {cmd: "show ntp trusted-keys", intent: ntp.trusted.keys}
+      - {cmd: "show ntp source", intent: ntp.source}
+      - {cmd: "show ntp source-interface", intent: ntp.source.interface}
+      - {cmd: "show ntp access-groups", intent: ntp.access.groups}
+      - {cmd: "show ntp logging-status", intent: ntp.logging.status}
+      - {cmd: "show running-config ntp", intent: ntp.config}
+      - {cmd: "show clock", intent: system.clock}
+    tac_first_look: >-
+      Check show ntp peer-status for the selected source, then prove the server is
+      reachable in the configured VRF and that the stratum is one the switch will accept.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01101.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+
+  - id: snmp-polling-problems
+    class: snmp-agent
+    proposed_class: true
+    title: "SNMP polling failures, timeouts, or SNMP-driven CPU load on NX-OS"
+    symptoms:
+      - "the NMS times out polling specific OIDs while the switch is otherwise reachable"
+      - "CPU spikes correlated with the polling interval"
+      - "traps not arriving at the configured host"
+      - "ifIndex values not matching the NMS's cached map"
+    log_signatures:
+      - "%SNMPD-3-ERROR"
+      - "%SNMPD-4-WARNING"
+    likely_causes:
+      - "window timeouts when parsing the MIB tree at specific OIDs"
+      - "continuous polling for a troublesome OID triggering alerts that are neither necessary nor impactful"
+      - "NX-OS has no SNMP views feature, so OID exclusion has to be done with RBAC roles"
+      - "trap host, community/user, or source interface not configured as the NMS expects"
+      - "SNMP punt path policed by CoPP"
+    commands:
+      - {cmd: "show snmp", intent: snmp.status}
+      - {cmd: "show snmp community", intent: snmp.communities}
+      - {cmd: "show snmp user", intent: snmp.users}
+      - {cmd: "show snmp group", intent: snmp.groups}
+      - {cmd: "show snmp host", intent: snmp.receivers}
+      - {cmd: "show snmp session", intent: snmp.sessions}
+      - {cmd: "show snmp trap", intent: snmp.traps}
+      - {cmd: "show snmp source-interface", intent: snmp.source.interface}
+      - {cmd: "show interface snmp-ifindex", intent: interface.ifindex.map}
+      - {cmd: "show running-config snmp all", intent: snmp.config}
+      - {cmd: "show processes cpu history", intent: cpu.history}
+    tac_first_look: >-
+      Correlate the CPU spike with the polling interval, then narrow to the OID subtree —
+      on NX-OS the remedy is an RBAC role that denies the OID, not an SNMP view.
+    sources:
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-simple_network_management_protocol.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010010.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+
+  - id: aaa-tacacs-failure
+    class: aaa-auth
+    proposed_class: true
+    title: "AAA / TACACS+ authentication or authorization failures on NX-OS"
+    symptoms:
+      - "logins fail, or hang, while local accounts still work"
+      - "TACACS server marked dead then alive repeatedly"
+      - "authorization succeeds for some roles and not others"
+    log_signatures:
+      - "%TACACS-5-TACACS_SERVER_STATUS"
+    likely_causes:
+      - "an unresponsive server delaying AAA requests"
+      - "wrong shared key between switch and server"
+      - "dead-time or timeout values too aggressive for the path"
+      - "VRF reachability to the AAA server broken"
+      - "TLS peer-certificate validation failure where TLS is in use"
+    commands:
+      - {cmd: "show tacacs-server", intent: aaa.tacacs.servers}
+      - {cmd: "show tacacs-server groups", intent: aaa.tacacs.groups}
+      - {cmd: "show tacacs-server statistics <host>", intent: aaa.tacacs.statistics, params: [host]}
+      - {cmd: "show tacacs-server directed-request", intent: aaa.tacacs.directed}
+      - {cmd: "show tacacs+ status", intent: aaa.tacacs.status}
+      - {cmd: "show aaa authentication", intent: aaa.authentication}
+      - {cmd: "show aaa authorization all", intent: aaa.authorization}
+      - {cmd: "show aaa accounting", intent: aaa.accounting}
+      - {cmd: "show running-config tacacs all", intent: aaa.config}
+      - {cmd: "show logging logfile", intent: logging.recent}
+    tac_first_look: >-
+      Read %TACACS-5-TACACS_SERVER_STATUS for the dead/alive transitions and the total
+      dead time, then check reachability in the AAA VRF before suspecting credentials.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+
+  - id: dhcp-relay-failure
+    class: dhcp-relay
+    proposed_class: true
+    title: "DHCP relay failure on NX-OS — clients get no address"
+    symptoms:
+      - "clients on a relayed SVI never obtain an address"
+      - "DISCOVER seen on the switch but nothing relayed toward the server"
+      - "an interface error-disabled for excessive ingress DHCP packet rate"
+      - "DHCP works on some VLANs and not others"
+    log_signatures:
+      - "%DHCP_SNOOP-3-DHCPRATELIMIT"
+    likely_causes:
+      - "the DHCP relay agent not enabled"
+      - "a helper address required for smart relay but not configured"
+      - "VRF deployments requiring Option 82"
+      - "DHCP subnet broadcast is not supported"
+      - "DHCP snooping trust boundary wrong, so relayed packets are dropped"
+      - "no unicast connectivity from the client VLAN to the DHCP server"
+    commands:
+      - {cmd: "show ip dhcp relay", intent: dhcp.relay.state}
+      - {cmd: "show ip dhcp relay address", intent: dhcp.relay.addresses}
+      - {cmd: "show ip dhcp relay interface <if>", intent: dhcp.relay.interface, params: [if]}
+      - {cmd: "show ip dhcp relay information trusted-sources", intent: dhcp.relay.trusted}
+      - {cmd: "show ip dhcp snooping", intent: dhcp.snooping.state}
+      - {cmd: "show ip dhcp snooping binding", intent: dhcp.snooping.bindings}
+      - {cmd: "show ip dhcp option82 info interface <if>", intent: dhcp.option82, params: [if]}
+      - {cmd: "show ip dhcp global statistics", intent: dhcp.global.statistics}
+      - {cmd: "show running-config dhcp", intent: dhcp.config}
+    tac_first_look: >-
+      Confirm the relay agent is enabled and the helper address is present on the client
+      SVI, then check the snooping trust boundary — a trusted-source mismatch silently
+      drops the relayed packet.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+
+  - id: licensing-failure
+    class: licensing
+    proposed_class: true
+    title: "Licensing failure on Nexus — smart licensing communication or a missing/invalid license"
+    symptoms:
+      - "a feature license listed as missing after an RMA or supervisor replacement"
+      - "smart licensing reports a communication failure or a TLS certificate that cannot be validated"
+      - "could not resolve host, or fail to send out Call Home HTTP message"
+      - "an invalid license host-id reported for a feature"
+    log_signatures:
+      - "%LICMGR-3-LOG_LIC_INVALID_HOSTID"
+      - "%LICMGR-3-LOG_LIC_SERVER_DOWN"
+      - "%LICMGR-2-LOG_LIC_NO_LIC"
+      - "%LICMGR-0-LOG_LIC_GRACE_EXPIRED"
+    likely_causes:
+      - "a license meant for another chassis installed on this one (invalid license hostid)"
+      - "incorrect FQDN configured with license smart url, or SSL inspection replacing the Cisco CA certificate"
+      - "DNS not configured in the VRF used for smart licensing, so the host cannot be resolved"
+      - "a firewall blocking outbound HTTPS, or HTTP used instead of HTTPS"
+      - "chassis RMA or supervisor replacement changing the serial the license is bound to"
+      - "corrupted bootflash losing the license file"
+    commands:
+      - {cmd: "show license", intent: license.installed}
+      - {cmd: "show license host-id", intent: license.hostid}
+      - {cmd: "show license usage", intent: license.usage}
+      - {cmd: "show license usage <package>", intent: license.usage.package, params: [package]}
+      - {cmd: "ping smartreceiver.cisco.com vrf management", intent: license.cssm.reachability}
+      - {cmd: "show running-config | include license", intent: license.config}
+      - {cmd: "show logging logfile", intent: logging.recent}
+    tac_first_look: >-
+      Compare show license host-id against the serial the license was issued for; if they
+      match, the problem is transport (DNS, proxy, TLS interception) rather than
+      entitlement.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/222725-troubleshoot-licensing-failures-on-nexus.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+
+  - id: configuration-change-audit
+    class: config-change
+    title: "Unintended configuration change on NX-OS — who changed what, and when"
+    symptoms:
+      - "behaviour changed with no recorded change ticket"
+      - "the running configuration differs from the last known-good copy"
+      - "configuration-change notifications in the log around the incident window"
+      - "the change was never saved, so a reload silently reverted it"
+    log_signatures:
+      - "%VSHD-5-VSHD_SYSLOG_CONFIG_CHANGE"
+      - "%VSHD-5-VSHD_SYSLOG_CONFIG_I"
+      - "%SYSMGR-5-CFGWRITE_DONE"
+      - "%SYSMGR-5-CFGWRITE_STARTED"
+    likely_causes:
+      - "an unrecorded interactive change by an operator or automation"
+      - "a change applied but never copied to startup, so a reload reverted it"
+      - "a rollback or config-replace applied without a matching change record"
+      - "a switch profile or configuration session committing on both vPC peers"
+    commands:
+      - {cmd: "show accounting log", intent: audit.accounting}
+      - {cmd: "show accounting log start-time <time>", intent: audit.accounting.window, params: [time]}
+      - {cmd: "show running-config diff", intent: config.running.diff}
+      - {cmd: "show rollback log exec", intent: config.rollback.log}
+      - {cmd: "show rollback status", intent: config.rollback.status}
+      - {cmd: "show user-account", intent: audit.users}
+      - {cmd: "show system uptime", intent: system.uptime}
+      - {cmd: "show logging logfile", intent: logging.recent}
+      - {cmd: "show run", intent: config.running}
+    tac_first_look: >-
+      Bound the change window with show accounting log around the incident time, then
+      show running-config diff to see whether the running and startup configurations have
+      already diverged.
+    sources:
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010001.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html
+      - https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+      - https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html

@@ -1,0 +1,1169 @@
+# TAC escalation research — Arista EOS
+# Design of record: docs/design/TAC_ESCALATION_2026-09-05.md
+# Schema: as specified in the research brief (no ai/tac/README.md existed at time of writing).
+# Sourcing rule: every command below appears verbatim on a cited public arista.com page.
+# Read-only only: no debug / clear / reload / restart / config-mode commands.
+vendor: arista-eos
+
+sources:
+  - title: "EOS User Manual — Border Gateway Protocol (BGP)"
+    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+  - title: "EOS User Manual — Open Shortest Path First Version 2"
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+  - title: "EOS User Manual — Open Shortest Path First Version 3"
+    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
+  - title: "EOS User Manual — IS-IS"
+    url: https://www.arista.com/en/um-eos/eos-is-is
+  - title: "EOS User Manual — ACLs and Route Maps"
+    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+  - title: "EOS User Manual — Multi-Chassis Link Aggregation (MLAG)"
+    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+  - title: "EOS User Manual — Port Channels and LACP"
+    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
+  - title: "EOS User Manual — Spanning Tree Protocol"
+    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
+  - title: "EOS User Manual — Virtual LANs (VLANs)"
+    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
+  - title: "EOS User Manual — Data Transfer (MAC address table, port security)"
+    url: https://www.arista.com/en/um-eos/eos-data-transfer
+  - title: "EOS User Manual — VXLAN Configuration"
+    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
+  - title: "EOS User Manual — Configuring EVPN"
+    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
+  - title: "EOS User Manual — EVPN and VCS Commands"
+    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
+  - title: "EOS User Manual — VRRP and VARP"
+    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
+  - title: "EOS 4.36.2F User Manual (index)"
+    url: https://www.arista.com/en/um-eos
+
+tac_baseline:
+  commands:
+    - {cmd: "show tech-support", intent: techsupport.bundle}
+    - {cmd: "show version", intent: version.info}
+    - {cmd: "show running-config", intent: config.running}
+    - {cmd: "show logging", intent: logging.recent}
+    - {cmd: "show system environment all", intent: environment.all}
+    - {cmd: "show interfaces status", intent: interface.status}
+    - {cmd: "show agent logs crash", intent: agent.logs.crash}
+  notes: >-
+    The Arista Support & Community Guide states verbatim that a case should carry
+    "A detailed description of the problem you are experiencing", "The output of
+    'show tech-support' (ideally compressed), which includes the product serial
+    number, software level, and diagnostic information", "Any additional helpful
+    information, such as network diagrams", and contact details. For an RMA it adds
+    "Show version (output includes product serial number, which determines SLA)"
+    plus "Any additional logs as may be requested". Upload paths documented in the
+    same guide: Support Portal attachment (10 GB), email attachment (25 MB, must
+    reference the case Ref ID), or FTP to ftp.arista.com (cd support, cd <case
+    number>, put <filename>). CAVEATS: the exact "show tech-support | gzip" piping
+    syntax is NOT stated on any public page found — the guide only says "ideally
+    compressed"; the logGrab helper script referenced in community material could
+    not be confirmed on a fetchable official page, so it is not listed as a command
+    here. show logging is documented in the System Event Logging chapter; show
+    running-config appears verbatim in the OSPFv2 chapter's command examples.
+  sources:
+    - https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf
+    - https://www.arista.com/en/um-eos/eos-system-event-logging
+    - https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+    - https://www.arista.com/en/um-eos/eos-configuring-and-viewing-environment-settings
+    - https://www.arista.com/en/um-eos/eos-ethernet-ports
+
+issues:
+  - id: bgp-session-idle
+    class: bgp-session
+    title: "BGP session stuck in Idle/Active — peer never reaches Established"
+    symptoms:
+      - "Neighbor never reaches Established in show ip bgp summary / show ip bgp neighbors"
+      - "Session cycles Idle -> Connect -> Active without completing the FSM"
+      - "Peer reported in an Idle(MaxPath) variant rather than a plain TCP/OPEN failure"
+      - "Peer counters show no messages received"
+    log_signatures: []
+    likely_causes:
+      - "TCP session cannot establish (reachability, ACL or firewall between the peers)"
+      - "AS number / remote-as mismatch or neighbor address typo"
+      - "maximum-routes threshold already exceeded, forcing the peer into Idle(MaxPath)"
+      - "Peer-group listen-range misconfiguration for dynamic peers"
+      - "Neighbor references an empty or non-existent route-map / peer-filter"
+    commands:
+      - {cmd: "show ip bgp summary", intent: bgp.summary}
+      - {cmd: "show ip bgp neighbors", intent: bgp.neighbor.detail}
+      - {cmd: "show ip bgp peer-group", intent: bgp.peergroup}
+      - {cmd: "show peer-filter", intent: bgp.peerfilter}
+      - {cmd: "show route-map", intent: policy.routemap}
+      - {cmd: "show ip bgp <prefix>", intent: bgp.route.prefix, params: [prefix]}
+    tac_first_look: "Read show ip bgp summary and show ip bgp neighbors first to see which FSM state the peer is stuck in — TCP vs OPEN vs capability negotiation vs a route-limit idle."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+
+  - id: bgp-session-flapping
+    class: bgp-instability
+    title: "BGP session flapping — repeated resets, hold timer expiry, NOTIFICATION"
+    symptoms:
+      - "Session repeatedly transitions Established -> Idle and re-establishes"
+      - "Message and reset counters in show ip bgp summary increment steadily"
+      - "Established state is torn down mid-session rather than never being reached"
+      - "Route churn downstream correlates with the resets"
+    log_signatures: []
+    likely_causes:
+      - "Hold timer expiry — a peer that stops sending messages within the hold time (default keepalive 60s / hold 180s) is declared dead"
+      - "An UPDATE error in Established state makes the router send a NOTIFICATION and return to Idle"
+      - "Underlying link instability churning the TCP session (link flap damping / BFD damping exist to bound this)"
+      - "Mismatched or overridden timers bgp keepalive/hold values between the peers"
+    commands:
+      - {cmd: "show ip bgp summary", intent: bgp.summary}
+      - {cmd: "show ip bgp neighbors", intent: bgp.neighbor.detail}
+      - {cmd: "show ip bgp peer-group", intent: bgp.peergroup}
+      - {cmd: "show route-map", intent: policy.routemap}
+    tac_first_look: "Check show ip bgp neighbors for last reset reason and uptime pattern, then compare configured timers bgp on both ends before blaming the path."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+
+  - id: bgp-prefix-not-received
+    class: bgp-route-missing
+    title: "BGP prefix not received from a peer — inbound policy or prefix limit"
+    symptoms:
+      - "Peer is Established but expected prefixes are absent from the local BGP table"
+      - "Received-prefix count for the neighbor is low or zero"
+      - "Prefix is present on the remote side but never appears locally"
+    log_signatures: []
+    likely_causes:
+      - "Inbound route-map / prefix-list filtering the prefix — every route-map ends in an implicit deny, so an unmatched prefix is silently dropped"
+      - "Prefix-list definition excludes the address space"
+      - "maximum-routes limit for that neighbor already reached, so further prefixes are not accepted"
+      - "Peer-group inheritance applying a different route-map or peer-filter than intended"
+    commands:
+      - {cmd: "show ip bgp summary", intent: bgp.summary}
+      - {cmd: "show ip bgp neighbors", intent: bgp.neighbor.detail}
+      - {cmd: "show ip bgp <prefix>", intent: bgp.route.prefix, params: [prefix]}
+      - {cmd: "show route-map", intent: policy.routemap}
+      - {cmd: "show peer-filter", intent: bgp.peerfilter}
+      - {cmd: "show ip bgp vrf <vrf>", intent: bgp.vrf.routes, params: [vrf]}
+    tac_first_look: "Confirm the prefix is known to BGP at all with show ip bgp <prefix>, then walk the inbound route-map/prefix-list chain remembering the implicit trailing deny."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+      - https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+
+  - id: bgp-prefix-not-advertised
+    class: bgp-route-missing
+    title: "BGP prefix not advertised to a peer — outbound policy or best-path"
+    symptoms:
+      - "Local BGP table holds the prefix but the peer never receives it"
+      - "Session is Established, advertised-prefix count is missing the route"
+      - "The prefix is present but is not the selected best path"
+    log_signatures: []
+    likely_causes:
+      - "Outbound route-map filters the prefix"
+      - "Documented trap: a neighbor or peer group configured with a MISCONFIGURED route-map (empty, or referencing a non-existent route-map) defaults to permit/accept all routes"
+      - "The prefix is not the BGP best path locally, so it is never a candidate for advertisement"
+      - "Outbound policy rewriting next-hop / local-preference / MED so the receiver rejects or de-prefers it"
+      - "send-community not configured where the receiving policy or EVPN import depends on communities"
+    commands:
+      - {cmd: "show ip bgp <prefix>", intent: bgp.route.prefix, params: [prefix]}
+      - {cmd: "show ip bgp summary", intent: bgp.summary}
+      - {cmd: "show ip bgp neighbors", intent: bgp.neighbor.detail}
+      - {cmd: "show route-map", intent: policy.routemap}
+      - {cmd: "show peer-filter", intent: bgp.peerfilter}
+    tac_first_look: "Verify with show ip bgp <prefix> that the route is actually the locally selected best path before treating this as an outbound policy problem, then audit the route-map for the empty/non-existent = permit-all trap."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+      - https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+
+  - id: bgp-max-routes-exceeded
+    class: bgp-session
+    title: "BGP maximum-routes exceeded — peer idled by the prefix limit"
+    symptoms:
+      - "Peer drops to Idle abruptly after having been Established, correlated with a route influx"
+      - "Neighbor is idled rather than cycling through a normal TCP/OPEN failure"
+      - "Prefix count from that peer at or above the configured limit"
+    log_signatures: []
+    likely_causes:
+      - "neighbor <peer> maximum-routes <N> threshold exceeded — exceeding the configured number disables peering with that neighbor"
+      - "An accepted-routes threshold configured to enforce rather than warn, forcing the peer to IDLE"
+      - "No outbound filtering on a peer sending a full or near-full table"
+      - "idle-restart-timer governing how long the peer stays idled before an automatic reconnect attempt"
+    commands:
+      - {cmd: "show ip bgp summary", intent: bgp.summary}
+      - {cmd: "show ip bgp neighbors", intent: bgp.neighbor.detail}
+      - {cmd: "show ip bgp peer-group", intent: bgp.peergroup}
+    tac_first_look: "Confirm from show ip bgp neighbors whether the neighbor is idled specifically by a route-count limit, then compare the configured maximum-routes against the peer's actual prefix volume."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+
+  - id: bgp-bestpath-unexpected
+    class: bgp-route-missing
+    title: "BGP best path unexpected — traffic leaves via the wrong peer"
+    symptoms:
+      - "Traffic egresses toward an unexpected next-hop despite several valid paths"
+      - "ECMP not installing all expected equal-cost paths"
+      - "show ip bgp <prefix> flags a best path that is not the expected one"
+    log_signatures: []
+    likely_causes:
+      - "AS-path length differences — BGP evaluates criteria in order and applies the next criterion only on a tie"
+      - "bgp bestpath as-path ignore in effect, removing AS-path length as a differentiator"
+      - "bgp bestpath as-path multipath-relax changing which paths are ECMP-eligible"
+      - "bgp always-compare-med changing MED comparison across neighbor ASes"
+      - "Administrative distance (distance bgp) losing to another protocol at the RIB level"
+      - "Route resolution over an MPLS/SR tunnel selecting a different underlying tunnel"
+    commands:
+      - {cmd: "show ip bgp <prefix>", intent: bgp.route.prefix, params: [prefix]}
+      - {cmd: "show ip route <prefix>", intent: route.prefix, params: [prefix]}
+      - {cmd: "show ip bgp summary", intent: bgp.summary}
+      - {cmd: "show tunnel rib brief", intent: tunnel.rib}
+      - {cmd: "show bgp labeled-unicast tunnel", intent: bgp.labeled.unicast}
+      - {cmd: "show mpls lfib route", intent: mpls.forwarding}
+      - {cmd: "show isis segment-routing tunnel", intent: isis.sr.tunnel}
+    tac_first_look: "Start with show ip bgp <prefix> to see the full candidate path list and which criterion decided the winner before suspecting the forwarding plane."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
+
+  - id: bgp-evpn-no-routes
+    class: evpn-vxlan
+    title: "BGP EVPN address family not exchanging routes (Type-2 / Type-5 absent)"
+    symptoms:
+      - "Underlay/IP peering Established but no EVPN NLRI exchanged"
+      - "show bgp evpn empty or missing expected MAC-IP or IP-Prefix routes"
+      - "MAC-VRF / VLAN not importing routes despite a healthy session"
+    log_signatures: []
+    likely_causes:
+      - "address-family evpn not activated under the neighbor or peer-group"
+      - "Route-target mismatch — a receiving switch that has no matching RT configured ignores the EVPN route"
+      - "Missing or wrong route distinguisher per EVPN instance"
+      - "send-community not set on the peer group, so EVPN extended communities are not sent"
+      - "EVPN next-hop (VTEP) not resolvable in DCI / gateway designs"
+    commands:
+      - {cmd: "show bgp evpn sanity detail", intent: evpn.sanity}
+      - {cmd: "show bgp evpn sanity", intent: evpn.sanity}
+      - {cmd: "show bgp evpn", intent: evpn.routes}
+      - {cmd: "show bgp evpn route-type mac-ip", intent: evpn.routes.type2}
+      - {cmd: "show bgp evpn instance", intent: evpn.instance}
+      - {cmd: "show ip bgp summary", intent: bgp.summary}
+    tac_first_look: "Run show bgp evpn sanity detail first — it is purpose-built to surface missing RT import/export, RD, neighbor and VXLAN-mapping misconfiguration before any manual config diff."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
+      - https://www.arista.com/en/um-eos/eos-configuring-evpn
+
+  - id: ospf-adjacency-stuck
+    class: ospf-adjacency
+    title: "OSPF adjacency stuck below FULL (Init / 2-Way / ExStart / Exchange)"
+    symptoms:
+      - "Neighbor visibly stuck at a state below FULL in show ip ospf neighbor"
+      - "Adjacency never progresses past database-description exchange"
+      - "show ip ospf neighbor state full lists fewer neighbors than expected"
+    log_signatures: []
+    likely_causes:
+      - "Documented prerequisite unmet: neighbours must share a segment and have the same area, hello interval, dead interval and authentication parameters"
+      - "Dead interval mismatch — it must be identical on all OSPFv2 neighbours and longer than any neighbour's hello interval"
+      - "Network-type mismatch (point-to-point vs broadcast) breaking DR/BDR election"
+      - "MTU mismatch during Database Description exchange (default L3 MTU 1500)"
+      - "Retransmit-interval tuning delaying progress through Exchange/Loading"
+    commands:
+      - {cmd: "show ip ospf neighbor", intent: ospf.neighbors}
+      - {cmd: "show ip ospf neighbor <interface> detail", intent: ospf.neighbor.detail, params: [interface]}
+      - {cmd: "show ip ospf neighbor <interface> adjacency-changes", intent: ospf.neighbor.changes, params: [interface]}
+      - {cmd: "show ip ospf neighbor summary", intent: ospf.neighbors.summary}
+      - {cmd: "show ip ospf interface", intent: ospf.interfaces}
+      - {cmd: "show ip ospf interface brief", intent: ospf.interfaces.brief}
+      - {cmd: "show ip ospf", intent: ospf.process}
+    tac_first_look: "show ip ospf neighbor for the exact stuck state, then show ip ospf interface on both ends to diff hello/dead timers, area, network type and MTU."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+
+  - id: ospf-route-missing
+    class: ospf-database
+    title: "OSPF route missing / LSDB inconsistency"
+    symptoms:
+      - "Expected destination absent from show ip route ospf"
+      - "LSA present in one router's database but not in another's"
+      - "LSDB approaching the configured maximum-LSA threshold"
+    log_signatures:
+      - "OSPF MAXLSAWARNING"
+    likely_causes:
+      - "LSDB nearing the configured maximum LSA limit (documented default 12000, warning threshold configurable; a MAXLSAWARNING is logged at 40% of 20000)"
+      - "Adjacency not FULL with the LSA originator — only adjacent neighbours share database information"
+      - "DR/BDR relay failure on a broadcast segment orphaning routes for other members"
+      - "Route present in the LSDB but not installed because of distance or a tie with another protocol"
+    commands:
+      - {cmd: "show ip ospf <instance> <area> database", intent: ospf.database, params: [instance, area]}
+      - {cmd: "show ip ospf <instance> <area> database database-summary", intent: ospf.database.summary, params: [instance, area]}
+      - {cmd: "show ip ospf <instance> <area> database router", intent: ospf.database.router, params: [instance, area]}
+      - {cmd: "show ip route ospf", intent: route.protocol.ospf}
+      - {cmd: "show ip ospf neighbor", intent: ospf.neighbors}
+      - {cmd: "show ip ospf interface", intent: ospf.interfaces}
+      - {cmd: "show ip ospf", intent: ospf.process}
+    tac_first_look: "Confirm the adjacency toward the LSA originator is FULL, then diff show ip ospf database between the two routers for a stale or missing LSA before assuming a filter."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+
+  - id: ospf-spf-churn
+    class: ospf-flapping-link
+    title: "OSPF SPF churn — repeated recomputation driven by a flapping link"
+    symptoms:
+      - "Frequent SPF recalculation events in the SPF log"
+      - "Adjacencies bouncing in step with a flapping physical or logical link"
+      - "Elevated control-plane load during churn windows"
+    log_signatures: []
+    likely_causes:
+      - "Physical link flapping causing repeated LSA origination and SPF runs (EOS bounds this with an SPF hold time of 5000 ms, minimum LSA interval 5 s, minimum LSA arrival 1000 ms)"
+      - "Link Flap Damping not enabled — it holds a continuously flapping interface link-down to smooth churn"
+      - "Documented side effect: OSPF links flap if the administrative distance is adjusted while OSPF is running (distance ospf via CLI or a config file)"
+      - "BFD damping absent, so adjacencies re-form before the link is genuinely stable"
+    commands:
+      - {cmd: "show ip ospf spf-log", intent: ospf.spf.log}
+      - {cmd: "show ip ospf neighbor", intent: ospf.neighbors}
+      - {cmd: "show ip ospf interface", intent: ospf.interfaces}
+      - {cmd: "show ip route ospf", intent: route.protocol.ospf}
+      - {cmd: "show ipv6 ospf spf-log", intent: ospfv3.spf.log}
+      - {cmd: "show ipv6 ospf lsa-log", intent: ospfv3.lsa.log}
+      - {cmd: "show ipv6 ospf neighbor", intent: ospfv3.neighbors}
+    tac_first_look: "show ip ospf spf-log to quantify recomputation frequency, then correlate its timestamps against the flapping interface's link counters before touching SPF throttles."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
+      - https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
+
+  - id: isis-adjacency-down
+    class: isis-adjacency
+    title: "IS-IS adjacency not forming (level, area/NET, MTU)"
+    symptoms:
+      - "Expected neighbour missing, or stuck in a non-UP state, in show isis neighbors"
+      - "Interface enabled for IS-IS but no adjacency forms"
+      - "Adjacency held in INIT while waiting for BFD"
+    log_signatures: []
+    likely_causes:
+      - "Peers must share a common network segment, be in the same area, and have the same hello interval, dead interval and authentication parameters"
+      - "NET misconfiguration — the NET defines the IS-IS area address and the system ID; an area mismatch blocks the adjacency"
+      - "Level mismatch between the two circuits (Level-1 vs Level-2 vs Level-1-2)"
+      - "IS-IS routing instance not instantiated and assigned to the interface"
+      - "BFD damping deliberately holding the adjacency in INIT until the link is stable"
+    commands:
+      - {cmd: "show isis neighbors", intent: isis.adjacency}
+      - {cmd: "show isis interface", intent: isis.interfaces}
+      - {cmd: "show isis database detail", intent: isis.database}
+      - {cmd: "show isis segment-routing adjacency-segments", intent: isis.sr.adjsids}
+      - {cmd: "show isis segment-routing prefix-segments", intent: isis.sr.prefixsids}
+    tac_first_look: "show isis neighbors and show isis interface first, to see the adjacency state and confirm both ends agree on area/NET and level before suspecting MTU."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-is-is
+
+  - id: isis-lsp-route-missing
+    class: isis-lsp
+    title: "IS-IS route missing / LSP or database inconsistency"
+    symptoms:
+      - "Expected prefix absent from the IS-IS-derived routing table"
+      - "LSP for a system ID missing, stale, or inconsistent between routers"
+      - "Route present at one level's database but not visible at the other"
+    log_signatures: []
+    likely_causes:
+      - "LSP not present or not synchronised in the relevant level database — the documented check is show isis database detail to confirm the route shows up in the exported level"
+      - "Segment-routing / TI-LFA tunnel not programmed even though the LSP-level route exists"
+      - "Level-1 to Level-2 leaking/redistribution misconfigured"
+      - "By design: Level-1 routers see only a default route toward an attached Level-1-2 router — a common false positive"
+    commands:
+      - {cmd: "show isis database detail", intent: isis.database}
+      - {cmd: "show isis neighbors", intent: isis.adjacency}
+      - {cmd: "show isis interface", intent: isis.interfaces}
+      - {cmd: "show isis segment-routing tunnel", intent: isis.sr.tunnel}
+      - {cmd: "show isis ti-lfa path", intent: isis.tilfa.path}
+      - {cmd: "show isis ti-lfa tunnel", intent: isis.tilfa.tunnel}
+      - {cmd: "show isis local-convergence-delay", intent: isis.convergence.delay}
+      - {cmd: "show mpls lfib route", intent: mpls.forwarding}
+      - {cmd: "show tunnel fib", intent: tunnel.fib}
+    tac_first_look: "show isis database detail for the relevant level first — confirm the originating system ID's LSP exists and is current before chasing a forwarding-plane problem."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-is-is
+
+  - id: mlag-peer-down
+    class: mlag-vpc-peer
+    title: "MLAG peer-link down / MLAG state inconsistent"
+    symptoms:
+      - "show mlag reports a state other than a formed primary/secondary pair"
+      - "Port-channels show active-partial or inactive instead of active-full"
+      - "MLAG disabled after a peer failed to receive a keepalive within 2.5x the heartbeat interval"
+      - "Only MLAG control-PDU VLAN traffic crosses the peer-link while the state is not primary/secondary"
+    log_signatures: []
+    likely_causes:
+      - "Peer-link interface or cable down, breaking the inter-peer control session"
+      - "MTU mismatch between the peer-link SVI and the L2 MTU"
+      - "Heartbeat/keepalive path also down, so true peer death cannot be distinguished"
+      - "VLAN, switchport mode, trunk, STP or LACP configuration differing between the peers"
+    commands:
+      - {cmd: "show mlag", intent: mlag.status}
+      - {cmd: "show mlag config-sanity", intent: mlag.config.sanity}
+      - {cmd: "show mlag interfaces", intent: mlag.interfaces}
+      - {cmd: "show mlag interfaces detail", intent: mlag.interfaces.detail}
+      - {cmd: "show mlag interfaces states", intent: mlag.interfaces.states}
+      - {cmd: "show mlag interfaces members", intent: mlag.interfaces.members}
+      - {cmd: "show port-channel", intent: portchannel.summary}
+    tac_first_look: "Run show mlag with show mlag config-sanity together — they separate a physical peer-link/heartbeat failure from a latent config mismatch that only surfaces when the link bounces."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+
+  - id: mlag-dual-primary
+    class: mlag-vpc-peer
+    title: "MLAG dual-primary (split brain) and peer-link recovery"
+    symptoms:
+      - "Both peers report the primary role simultaneously"
+      - "Each peer independently assumes its own STP forwarding role after the peer-link is severed"
+      - "Dual-attached device sessions drop and re-establish as STP reconverges"
+      - "Oscillation on peer-link restoration"
+    log_signatures: []
+    likely_causes:
+      - "Peer-link severed while an independent heartbeat path stays up, so both peers believe they are alone"
+      - "Dual-primary detection/action not configured, so no automatic errdisable happens on the secondary"
+      - "Recovery delay untuned, causing flapping when the peer-link returns"
+    commands:
+      - {cmd: "show mlag", intent: mlag.status}
+      - {cmd: "show mlag interfaces states", intent: mlag.interfaces.states}
+      - {cmd: "show spanning-tree instance detail", intent: stp.instance.detail}
+      - {cmd: "show port-channel", intent: portchannel.summary}
+    tac_first_look: "Confirm each peer's role with show mlag before touching cabling — two primaries means split brain, and the fix is deciding which peer to force secondary, not reseating the peer-link."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+
+  - id: mlag-port-inactive
+    class: mlag-vpc-peer
+    title: "MLAG port-channel inactive on one peer — configuration mismatch"
+    symptoms:
+      - "show mlag interfaces shows inactive, active-partial or disabled-ignored on one peer"
+      - "show mlag config-sanity lists interface configuration inconsistencies with local/peer columns"
+      - "Traffic black-holed only through the peer with the mismatched port-channel"
+    log_signatures: []
+    likely_causes:
+      - "Allowed-VLAN list differs between the peers for the same MLAG ID"
+      - "LACP mode or STP settings differ between peers for that port-channel"
+      - "MTU or peer-link inconsistency propagating into subinterface config"
+      - "MLAG ID assigned inconsistently between the two switches"
+    commands:
+      - {cmd: "show mlag config-sanity", intent: mlag.config.sanity}
+      - {cmd: "show mlag interfaces", intent: mlag.interfaces}
+      - {cmd: "show mlag interfaces detail", intent: mlag.interfaces.detail}
+      - {cmd: "show mlag interfaces members", intent: mlag.interfaces.members}
+      - {cmd: "show mlag subinterfaces", intent: mlag.subinterfaces}
+      - {cmd: "show mlag", intent: mlag.status}
+      - {cmd: "show port-channel", intent: portchannel.summary}
+    tac_first_look: "Diff show mlag config-sanity between the peers for the affected MLAG ID — it names the exact mismatched attribute instead of requiring a side-by-side config diff."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+
+  - id: lacp-member-not-bundling
+    class: lacp-bundle
+    proposed_class: true
+    title: "LACP port-channel member not bundling (suspended / no partner)"
+    symptoms:
+      - "Member shows Suspended or Individual rather than Bundled"
+      - "Link down while waiting for LACP response on a static/dynamic mismatch"
+      - "Both ends configured LACP passive, so neither initiates PDUs"
+      - "Port-channel goes down once active members fall below min-links"
+      - "Partner interface recorded as failed and removed after roughly 90 s without LACPDUs"
+    log_signatures:
+      - "LAG-4-MINLINK_INTF_INSUFFICIENT"
+      - "LAG-4-MINLINK_INTF_NORMAL"
+    likely_causes:
+      - "Both ends configured LACP passive"
+      - "Static versus dynamic (LACP) mode mismatch between the switches"
+      - "min-links threshold not met after a member failure"
+      - "Partner stopped sending LACPDUs (remote link or hardware issue)"
+      - "Physical interface not connected"
+    commands:
+      - {cmd: "show lacp interface", intent: lacp.interfaces}
+      - {cmd: "show lacp internal", intent: lacp.internal}
+      - {cmd: "show lacp peer", intent: lacp.peer}
+      - {cmd: "show lacp counters", intent: lacp.counters}
+      - {cmd: "show lacp aggregates", intent: lacp.aggregates}
+      - {cmd: "show lacp sys-id", intent: lacp.sysid}
+      - {cmd: "show port-channel", intent: portchannel.summary}
+      - {cmd: "show port-channel dense", intent: portchannel.dense}
+      - {cmd: "show port-channel limits", intent: portchannel.limits}
+      - {cmd: "show interfaces status", intent: interface.status}
+    tac_first_look: "show lacp interface on both ends to compare actor and partner flags — a Suspended member is almost always a passive/passive pairing or a static/dynamic mismatch, not hardware."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
+
+  - id: stp-topology-churn
+    class: stp-topology
+    proposed_class: true
+    title: "Spanning tree topology-change churn / unexpected root bridge"
+    symptoms:
+      - "Frequent topology change notifications correlated with a flapping link or host NIC"
+      - "Root bridge is not the intended switch"
+      - "show spanning-tree topology status and counters show repeated TC events"
+      - "A PortFast port that receives a BPDU leaves its operating PortFast state"
+    log_signatures: []
+    likely_causes:
+      - "Unstable link or repeatedly flapping host generating TCNs"
+      - "Root priority not tuned, so a lower bridge ID elsewhere wins the election"
+      - "PortFast enabled on a port that is actually a switch uplink"
+      - "No explicit bridge priority set, so ties resolve on MAC address"
+    commands:
+      - {cmd: "show spanning-tree root", intent: stp.root}
+      - {cmd: "show spanning-tree counters", intent: stp.counters}
+      - {cmd: "show spanning-tree topology status", intent: stp.topology.status}
+      - {cmd: "show spanning-tree", intent: stp.summary}
+      - {cmd: "show spanning-tree instance", intent: stp.instance}
+      - {cmd: "show spanning-tree instance detail", intent: stp.instance.detail}
+      - {cmd: "show spanning-tree interface", intent: stp.interface}
+    tac_first_look: "Pull show spanning-tree root with show spanning-tree counters — one names today's root, the other names the interface generating the churn."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
+
+  - id: stp-port-blocked
+    class: stp-topology
+    proposed_class: true
+    title: "Spanning tree port blocked or err-disabled by a guard"
+    symptoms:
+      - "Port discarding/blocking in show spanning-tree interface or show spanning-tree blockedports"
+      - "Port error-disabled with cause listed as bpduguard after exceeding the BPDU rate limit"
+      - "Loop Guard transitions a port to loop-inconsistent discarding state"
+      - "Root Guard blocks a port in root-inconsistent state"
+      - "Bridge Assurance blocks a port that stops receiving BPDUs within a hello time"
+    log_signatures: []
+    likely_causes:
+      - "BPDU Guard on an edge/PortFast port that received a BPDU (rogue device or accidental loop)"
+      - "Loop Guard tripped by a unidirectional link failure"
+      - "Root Guard tripped by a downstream device advertising a superior BPDU"
+      - "Bridge Assurance port stopped receiving BPDUs within the hello interval"
+      - "BPDU rate-limit threshold exceeded"
+    commands:
+      - {cmd: "show spanning-tree blockedports", intent: stp.blockedports}
+      - {cmd: "show spanning-tree interface", intent: stp.interface}
+      - {cmd: "show spanning-tree instance detail", intent: stp.instance.detail}
+      - {cmd: "show spanning-tree mst interface", intent: stp.mst.interface}
+      - {cmd: "show loop-protection", intent: stp.loopprotection}
+    tac_first_look: "show spanning-tree blockedports names which guard actually fired (bpduguard / rootguard / loopguard) instead of guessing."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
+
+  - id: vlan-trunk-mismatch
+    class: vlan-trunk
+    proposed_class: true
+    title: "VLAN or trunk mismatch — one VLAN dark across an up trunk"
+    symptoms:
+      - "VLAN in the allowed list on one trunk end but not the other"
+      - "show interfaces trunk shows the VLAN missing from one side's allowed set"
+      - "VLAN not created or not active on one of the switches"
+      - "Native VLAN differs between the trunk ends, so untagged frames land in the wrong VLAN"
+    log_signatures: []
+    likely_causes:
+      - "switchport trunk allowed vlan lists not matched on both ends"
+      - "switchport trunk native vlan mismatched"
+      - "VLAN not created or inactive on one switch"
+      - "Trunk-group membership inconsistent with the STP topology (documented as producing unpredictable results)"
+      - "One side left in access mode while the other is a trunk"
+    commands:
+      - {cmd: "show interfaces trunk", intent: vlan.trunk}
+      - {cmd: "show vlan", intent: vlan.list}
+      - {cmd: "show vlan brief count", intent: vlan.count}
+      - {cmd: "show vlan trunk group", intent: vlan.trunkgroup}
+      - {cmd: "show interfaces switchport", intent: interface.switchport}
+      - {cmd: "show interfaces <interface> vlans", intent: interface.vlans, params: [interface]}
+    tac_first_look: "Compare show interfaces trunk on both ends of the link — a VLAN missing from only one allowed set is the single most common cause of trunk up, one VLAN dark."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
+
+  - id: mac-flap-or-not-learned
+    class: mac-learning
+    proposed_class: true
+    title: "MAC address table problem — MAC flapping or MAC not learned"
+    symptoms:
+      - "High or incrementing Moves count with a recent Last Move for an entry in show mac address-table"
+      - "A MAC pinned STATIC on the wrong port blocking correct dynamic learning"
+      - "A relocated secure MAC refused on its new port"
+      - "MAC entry absent from the expected VLAN/port"
+    log_signatures: []
+    likely_causes:
+      - "Physical loop or misconfigured redundant path presenting the same MAC on two ports"
+      - "Port security: secure MAC addresses do not move between interfaces by default"
+      - "Stale static MAC entry overriding dynamic learning"
+      - "MAC aging interacting with a genuinely re-homed host"
+    commands:
+      - {cmd: "show mac address-table", intent: mac.table}
+      - {cmd: "show mac address-table static", intent: mac.table.static}
+      - {cmd: "show port-security", intent: portsecurity.status}
+      - {cmd: "show port-security mac-address", intent: portsecurity.macs}
+    tac_first_look: "show mac address-table first — a climbing Moves count on a MAC/VLAN pair confirms flapping and names the two ports fighting over it."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-data-transfer
+
+  - id: vxlan-tunnel-not-established
+    class: evpn-vxlan
+    title: "VXLAN tunnel not established / VTEP not learning"
+    symptoms:
+      - "No or stale entries in show vxlan address-table for a remote VTEP's MACs"
+      - "Expected remote VTEP not listed by show vxlan vtep"
+      - "VXLAN routing silently failing on 7280E/7280R/7500R platforms"
+      - "Duplicate VNI mapping rejected at configuration time"
+    log_signatures: []
+    likely_causes:
+      - "VTEP source interface (loopback) not configured or not reachable in the underlay — there is no default source-interface assignment"
+      - "Underlay routing to the remote VTEP's loopback broken"
+      - "vxlan-routing hardware TCAM profile not applied on R/R2-series hardware that needs it for VXLAN routing"
+      - "vxlan learn-restrict inadvertently disabling MAC learning from the source range"
+      - "VNI-to-VLAN mapping missing or duplicated"
+    commands:
+      - {cmd: "show vxlan vtep", intent: vxlan.vtep}
+      - {cmd: "show interface vxlan 1", intent: vxlan.interface}
+      - {cmd: "show vxlan address-table", intent: vxlan.address.table}
+      - {cmd: "show vxlan vni", intent: vxlan.vni}
+      - {cmd: "show vxlan flood vtep", intent: vxlan.flood.list}
+      - {cmd: "show vxlan counters software", intent: vxlan.counters}
+      - {cmd: "show arp interface VXLAN 1", intent: vxlan.arp}
+      - {cmd: "show vxlan learn-restrict vtep", intent: vxlan.learnrestrict}
+      - {cmd: "show l2Rib input vxlan-dynamic", intent: vxlan.l2rib}
+    tac_first_look: "show vxlan vtep first, to confirm the remote VTEP is discovered at the control-plane level before chasing MAC learning or TCAM profiles."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-vxlan-configuration
+
+  - id: evpn-type2-missing
+    class: evpn-vxlan
+    title: "EVPN Type-2 MAC-IP routes missing — host unreachable across the fabric"
+    symptoms:
+      - "Expected host MAC-IP absent when filtering show bgp evpn route-type mac-ip on a remote leaf"
+      - "show bgp evpn sanity flags MAC-VRF route-target or route-distinguisher inconsistencies"
+      - "Host-flap detection triggered by the same MAC moving between VTEPs"
+      - "ESI / multi-homing routes for the host's segment missing"
+    log_signatures: []
+    likely_causes:
+      - "Route-target mismatch between the originating and importing leaf's MAC-VRF"
+      - "BGP EVPN session between the loopbacks down or not established"
+      - "Route distinguisher misconfiguration preventing import despite a healthy session"
+      - "Genuine MAC mobility / host flap suppressing re-advertisement"
+      - "ESI misconfiguration for a dual-attached host"
+    commands:
+      - {cmd: "show bgp evpn sanity", intent: evpn.sanity}
+      - {cmd: "show bgp evpn route-type mac-ip <ip>", intent: evpn.routes.type2, params: [ip]}
+      - {cmd: "show bgp evpn", intent: evpn.routes}
+      - {cmd: "show bgp evpn route-type ethernet-segment esi", intent: evpn.routes.type4}
+      - {cmd: "show bgp evpn instance", intent: evpn.instance}
+      - {cmd: "show vxlan address-table", intent: vxlan.address.table}
+    tac_first_look: "show bgp evpn sanity first — RT/RD inconsistency between MAC-VRFs is the dominant reason a Type-2 route exists on the originating leaf and never lands on the importing one."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
+      - https://www.arista.com/en/um-eos/eos-configuring-evpn
+      - https://www.arista.com/en/um-eos/eos-vxlan-configuration
+
+  - id: evpn-type5-missing
+    class: evpn-vxlan
+    title: "EVPN Type-5 IP-prefix routes missing — L3 VXLAN routing broken"
+    symptoms:
+      - "Expected prefix absent from show bgp evpn route-type ip-prefix on the importing leaf"
+      - "Type-2 host routes work but inter-subnet routing does not"
+      - "Summarised or external prefixes never appear in the remote IP-VRF"
+    log_signatures: []
+    likely_causes:
+      - "Route-target/RD mismatch between the two IP-VRFs"
+      - "IP-VRF not correctly bound to the VNI in an interface-less / symmetric IRB deployment"
+      - "Router-MAC extended community missing or wrong, breaking inner-frame MAC rewrite"
+      - "BGP EVPN session between the loopbacks down"
+    commands:
+      - {cmd: "show bgp evpn route-type ip-prefix", intent: evpn.routes.type5}
+      - {cmd: "show bgp evpn sanity", intent: evpn.sanity}
+      - {cmd: "show bgp evpn instance", intent: evpn.instance}
+      - {cmd: "show bgp evpn", intent: evpn.routes}
+    tac_first_look: "Run show bgp evpn route-type ip-prefix on both the originating and importing leaf and diff against show bgp evpn sanity — an IP-VRF RT/RD mismatch is the dominant Type-2-works/Type-5-doesn't failure."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-configuring-evpn
+      - https://www.arista.com/en/um-eos/eos-vxlan-configuration
+      - https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
+
+  - id: vrrp-dual-master
+    class: fhrp-anycast-gw
+    proposed_class: true
+    title: "VRRP/VARP first-hop redundancy broken — dual master, flapping, or anycast gateway not answering ARP"
+    symptoms:
+      - "show vrrp interface vlan <n> brief shows both peers as Master for the same group"
+      - "Mastership changing whenever a tracked object flaps"
+      - "Group parameters inconsistent between members"
+      - "VARP: one switch stops answering ARP/GARP for the virtual router IP, so hosts homed to it lose their gateway"
+    log_signatures: []
+    likely_causes:
+      - "Mismatched VRRP group parameters (virtual address, authentication) between the routers"
+      - "A tracked object flapping and dragging the local priority, and therefore mastership, with it"
+      - "Priority values tied or misconfigured so no deterministic winner exists"
+      - "Underlying VLAN/trunk reachability between the peers intermittently down"
+      - "VARP: ip virtual-router address missing or inconsistent on one peer, or the virtual MAC not applied consistently across VLAN interfaces"
+      - "VARP: an underlying MLAG peer-link or state problem stopping one peer from answering"
+    commands:
+      - {cmd: "show vrrp interface vlan <vlan> brief", intent: vrrp.brief, params: [vlan]}
+      - {cmd: "show vrrp", intent: vrrp.status}
+      - {cmd: "show vrrp interface vlan <vlan>", intent: vrrp.interface, params: [vlan]}
+      - {cmd: "show vrrp interface vlan <vlan> all", intent: vrrp.interface.all, params: [vlan]}
+      - {cmd: "show vrrp interface vlan <vlan> group <group>", intent: vrrp.group, params: [vlan, group]}
+      - {cmd: "show ip virtual-router", intent: varp.status}
+      - {cmd: "show ipv6 virtual-router", intent: varp.status.v6}
+      - {cmd: "show mlag", intent: mlag.status}
+    tac_first_look: "Compare show vrrp interface vlan <n> brief on both routers — if both are Master, check tracked-object state and L2 reachability before touching VRRP config. For VARP, show ip virtual-router on both MLAG peers must show an identical virtual IP/MAC binding before you suspect a host-side ARP problem."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-vrrp-and-varp
+      - https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
+
+  - id: interface-errors-crc
+    class: interface-errors
+    title: "Interface input/output errors — CRC/FCS errors and discards"
+    symptoms:
+      - "Rising input errors, CRC and FCS counters on show interfaces"
+      - "Frames dropped before reaching the forwarding pipeline"
+      - "Intermittent packet loss with the link never going down"
+      - "MRU-violation drops attributed to a specific forwarding chip"
+    log_signatures: []
+    likely_causes:
+      - "Bad cable or connector"
+      - "Dirty or failing optic"
+      - "Duplex or speed mismatch"
+      - "Faulty ASIC lane on the forwarding chip"
+      - "MRU exceeded on the ingress chip"
+    commands:
+      - {cmd: "show interfaces status", intent: interface.status}
+      - {cmd: "show interfaces <interface> status", intent: interface.status.one, params: [interface]}
+      - {cmd: "show interface", intent: interface.counters}
+      - {cmd: "show hardware counter drop", intent: hardware.drop.counters}
+      - {cmd: "show interfaces <interface> phy detail", intent: interface.phy.detail, params: [interface]}
+      - {cmd: "show interfaces et1,2 interactions", intent: interface.interactions}
+      - {cmd: "show platform fap mapping interface Ethernet 1", intent: platform.fap.mapping}
+    tac_first_look: "show interfaces status plus show hardware counter drop, to localise the error to one link versus a shared forwarding-chip resource before swapping cable or optic."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-ethernet-ports
+
+  - id: optics-dom-threshold
+    class: optics
+    title: "Transceiver / optics fault — DOM thresholds crossed, unsupported optic"
+    symptoms:
+      - "Rx or Tx power below the Low Alarm or above the High Alarm threshold"
+      - "High laser bias current or module temperature out of range"
+      - "Transceiver not recognised, or wrong power class for the port"
+      - "Errors on the link that follow the optic when it is moved"
+    log_signatures: []
+    likely_causes:
+      - "Dirty or damaged fibre"
+      - "Excessive attenuation or insertion loss on the span"
+      - "Incompatible or unqualified optic"
+      - "Wrong power class for the port"
+      - "Ageing laser"
+    commands:
+      - {cmd: "show interfaces transceiver dom", intent: transceiver.dom}
+      - {cmd: "show interfaces transceiver dom thresholds", intent: transceiver.dom.thresholds}
+      - {cmd: "show interfaces transceiver performance-monitoring", intent: transceiver.perfmon}
+      - {cmd: "show interfaces transceiver performance-monitoring thresholds", intent: transceiver.perfmon.thresholds}
+      - {cmd: "show interfaces status", intent: interface.status}
+    tac_first_look: "show interfaces transceiver dom thresholds first — Rx power below Low Alarm makes this a physical-layer/optic case, not a protocol one. Note that 100GBASE-FR/LR/DR do not carry enhanced DOM thresholds."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-transceiver-performance-monitoring
+      - https://www.arista.com/en/um-eos/eos-ethernet-ports
+
+  - id: link-flap-errdisable
+    class: link-flap
+    title: "Link flapping and error-disabled interfaces"
+    symptoms:
+      - "One interface repeatedly transitions up/down"
+      - "STP or routing reconverges on every transition"
+      - "Port ends up error-disabled, with a reason shown next to the status"
+      - "Port stays down after a config push"
+    log_signatures:
+      - "link-interrupt-storm error detected"
+    likely_causes:
+      - "Bad cable or transceiver, or dirty fibre"
+      - "Autonegotiation or duplex mismatch"
+      - "Speed misconfiguration (errdisable reason speed-misconfigured)"
+      - "Excessive link-flap threshold exceeded, tripping link-flap damping"
+      - "PFC stuck-queue condition (errdisable reason stuck-queue)"
+      - "ACL hardware programming failure — EOS error-disables the port by default when ACL programming fails"
+      - "Parent port-channel shut down, propagating to members"
+    commands:
+      - {cmd: "show interfaces status", intent: interface.status}
+      - {cmd: "show interfaces <interface> status errdisabled", intent: interface.errdisabled, params: [interface]}
+      - {cmd: "show interfaces <interface> phy detail", intent: interface.phy.detail, params: [interface]}
+      - {cmd: "show interfaces transceiver dom", intent: transceiver.dom}
+      - {cmd: "show hardware counter drop", intent: hardware.drop.counters}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: "Get the exact errdisable reason from show interfaces <if> status errdisabled and match it against the documented cause list rather than guessing; for pure flapping, correlate with transceiver DOM and PHY counters."
+    sourcing_note: "The errdisabled status form and the link-interrupt-storm string come from Arista TOI / community pages whose bodies render only in a JavaScript portal; they were captured from Arista's own indexed page text, not from a directly rendered page. Verify the exact form on-box before quoting it to a customer."
+    sources:
+      - https://www.arista.com/en/support/toi/tag/interface-state-errdisable
+      - https://www.arista.com/en/support/toi/tag/error-disable
+      - https://www.arista.com/en/support/toi/tag/link-flap
+      - https://www.arista.com/en/um-eos/eos-ethernet-ports
+
+  - id: hardware-resource-exhaustion
+    class: hardware-fault
+    title: "Hardware resource exhaustion / forwarding-chip programming failure"
+    symptoms:
+      - "TCAM programming failures for ACL, PBR or Flowspec rules"
+      - "A feature silently stops working because a shared hardware resource is full"
+      - "Per-ASIC utilisation climbing toward its limit"
+      - "Ports error-disabled because an ACL could not be programmed"
+    log_signatures: []
+    likely_causes:
+      - "ACL, PBR and QoS features contending for the same hardware banks"
+      - "Rule count exceeding the per-ASIC TCAM capacity"
+      - "TCAM profile not sized for the workload"
+      - "Genuine chip or FPGA fault (rarer than resource contention)"
+    commands:
+      - {cmd: "show hardware counter drop", intent: hardware.drop.counters}
+      - {cmd: "show l1 modules profile status", intent: platform.l1.profile}
+      - {cmd: "show ip access-lists summary", intent: acl.summary}
+      - {cmd: "show interfaces status", intent: interface.status}
+      - {cmd: "show system environment all", intent: environment.all}
+    tac_first_look: "Rule out resource contention between features before concluding a chip defect — most TCAM-exhaustion cases are ACL/PBR/QoS sharing one bank, not failing hardware."
+    sourcing_note: "A platform/chip-family specific TCAM utilisation command exists (referenced on Arista's TCAM TOI index) but its exact syntax could not be confirmed on a directly fetchable page, so it is deliberately omitted rather than guessed."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-layer-1-configuration
+      - https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+      - https://www.arista.com/en/support/toi/tag/tcam
+
+  - id: environment-psu-fan-temp
+    class: environment
+    proposed_class: true
+    title: "Environment fault — PSU failure, fan failure, over-temperature"
+    symptoms:
+      - "Power supply reporting failed or absent"
+      - "Fan tray down or running below expected speed"
+      - "Temperature sensor over the alert or critical threshold"
+      - "Switch shuts down on overheat (the default behaviour)"
+    log_signatures:
+      - "WARNING: Overriding the system shutdown behavior when the system is overheating is unsupported"
+      - "WARNING: Overriding the system shutdown behavior when the system has insufficient fans inserted is unsupported"
+    likely_causes:
+      - "Failed or removed power supply"
+      - "Failed fan module"
+      - "Blocked airflow, dust or filter blockage"
+      - "Ambient temperature too high for the platform"
+    commands:
+      - {cmd: "show system environment all", intent: environment.all}
+      - {cmd: "show environment power", intent: environment.power}
+      - {cmd: "show environment temperature", intent: environment.temperature}
+      - {cmd: "show system environment cooling", intent: environment.cooling}
+      - {cmd: "show version", intent: version.info}
+    tac_first_look: "show system environment all gives the combined power, cooling and temperature view in one shot — triage from there."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-configuring-and-viewing-environment-settings
+      - https://www.arista.com/en/um-eos/eos-environment-commands
+      - https://www.arista.com/en/um-eos/eos-switch-environment-control
+
+  - id: high-cpu
+    class: high-cpu
+    title: "High CPU utilization on the switch"
+    symptoms:
+      - "Sustained high CPU percentage, or one core pegged"
+      - "Slow CLI response"
+      - "Load average climbing"
+      - "Control-plane protocol timers slipping"
+    log_signatures: []
+    likely_causes:
+      - "Control-plane churn — routing convergence storm, LACP or STP churn, heavy SNMP polling"
+      - "A runaway agent"
+      - "Excessive traffic punted to the CPU that CoPP is not bounding"
+      - "Interrupt storm from a flapping interface"
+    commands:
+      - {cmd: "show processes top", intent: cpu.processes}
+      - {cmd: "show version", intent: version.info}
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show policy-map interface <interface> input counters", intent: copp.counters, params: [interface]}
+      - {cmd: "show hardware counter drop", intent: hardware.drop.counters}
+    tac_first_look: "Separate load average from CPU percentage before assuming a CPU-bound pathology, then identify which agent or punt path is responsible."
+    sourcing_note: "show processes top is taken from Arista's own community articles on CPU utilization, whose bodies render only in a JavaScript portal; the command text came from Arista's indexed page content rather than a directly rendered page."
+    sources:
+      - https://eos.arista.com/troubleshooting-high-cpu-utilization/
+      - https://eos.arista.com/understanding-cpu-utilization/
+      - https://www.arista.com/en/um-eos/eos-quality-of-service
+
+  - id: high-memory-agent-leak
+    class: high-memory
+    title: "High memory utilization or a leaking EOS agent"
+    symptoms:
+      - "One agent's memory grows without bound over time"
+      - "System-wide free memory falling"
+      - "An agent killed and restarted under low-memory conditions"
+      - "Symptoms appear only after long uptime"
+    log_signatures: []
+    likely_causes:
+      - "A specific agent leaking on one code path"
+      - "Very long uptime without a restart"
+      - "A feature generating unusually large internal state"
+      - "Undersized platform for the current scale"
+    commands:
+      - {cmd: "show agent", intent: agent.status}
+      - {cmd: "show version", intent: version.info}
+      - {cmd: "show processes top", intent: cpu.processes}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: "Identify which agent is growing with per-agent memory first (RssAnon / VmSize), then trend it against system-wide free memory from show version."
+    sourcing_note: "show agent per-process memory fields are from an Arista community article that renders only in a JavaScript portal; captured from Arista's indexed page content, not a directly rendered page."
+    sources:
+      - https://eos.arista.com/monitoring-some-agents-memory-utilisation/
+      - https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf
+
+  - id: agent-crash-core
+    class: process-crash
+    proposed_class: true
+    title: "EOS agent crash or restart, and core files after a crash"
+    symptoms:
+      - "An agent (Sysdb, Fru, Rib and so on) disappears and restarts under a new PID"
+      - "The feature the agent owns briefly stops working"
+      - "Several agents cascade-restart"
+      - "A core file appears after the crash"
+    log_signatures:
+      - "PROCMGR-4-TERMINATE_PROCESS_SIGQUIT"
+      - "PROCMGR-6-PROCESS_RESTART"
+    likely_causes:
+      - "Unhandled exception or segfault in the agent"
+      - "Sysdb schema mismatch after a bad upgrade"
+      - "Memory or file-descriptor exhaustion"
+      - "A defect triggered by a specific configuration or traffic pattern"
+    commands:
+      - {cmd: "show agent logs crash", intent: agent.logs.crash}
+      - {cmd: "show agent", intent: agent.status}
+      - {cmd: "show logging", intent: logging.recent}
+      - {cmd: "show tech-support", intent: techsupport.bundle}
+      - {cmd: "show version", intent: version.info}
+    tac_first_look: "show agent logs crash first; a crash case must be escalated with show tech-support plus the core file, not just the restart message."
+    sourcing_note: "The PROCMGR message fragments and show agent logs crash come from Arista community articles that render only in a JavaScript portal; captured from Arista's indexed page content. Core files are collected from the filesystem, which is outside this read-only CLI plan."
+    sources:
+      - https://eos.arista.com/restarting-eos-agents/
+      - https://eos.arista.com/debugging-eos-agents/
+      - https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf
+
+  - id: unexpected-state-change
+    class: config-change
+    title: "Unexpected state or configuration change — what changed and when"
+    symptoms:
+      - "A running value differs from what the operator expects"
+      - "Routes, ARP or MAC entries churning without an obvious trigger"
+      - "STP reported unstable"
+      - "An incident starts immediately after an automation run"
+    log_signatures: []
+    likely_causes:
+      - "An unaudited CLI or API change"
+      - "Automation pushing an unintended configuration"
+      - "A config session left partially applied"
+      - "Genuine state-table churn rather than a config edit"
+    commands:
+      - {cmd: "show event-monitor route", intent: eventmonitor.route}
+      - {cmd: "show event-monitor arp", intent: eventmonitor.arp}
+      - {cmd: "show event-monitor mac", intent: eventmonitor.mac}
+      - {cmd: "show event-monitor neighbor", intent: eventmonitor.neighbor}
+      - {cmd: "show event-monitor stpunstable", intent: eventmonitor.stp}
+      - {cmd: "show event-monitor sqlite", intent: eventmonitor.sqlite}
+      - {cmd: "show running-config", intent: config.running}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: "Event Monitor answers state-table churn (routes, ARP, MAC, STP) with a queryable history; a genuine running-config edit has to be established from the config itself and the logs."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-event-monitor
+      - https://www.arista.com/en/um-eos/eos-switch-administration-commands
+
+  - id: upgrade-boot-extension
+    class: software-upgrade
+    proposed_class: true
+    title: "Upgrade / boot problem, or an extension that does not load"
+    symptoms:
+      - "Switch does not boot into the intended image"
+      - "An installed extension is not active after reload"
+      - "Redundancy or switchover state inconsistent between supervisors"
+      - "Unexpected reboot with no obvious cause"
+    log_signatures:
+      - "INSTALL_ERROR"
+      - "SIGNATURE_INVALID"
+      - "LOAD_ERROR"
+    likely_causes:
+      - "Extension not copied to boot-extensions, so it does not survive a reboot"
+      - "Missing extension dependency (INSTALL_ERROR)"
+      - "Invalid or unsigned extension package (SIGNATURE_INVALID)"
+      - "Extension will not load with the current configuration (LOAD_ERROR)"
+      - "boot-config pointing at the wrong image, or a BIOS/Aboot mismatch"
+      - "Supervisor file replication out of sync"
+    commands:
+      - {cmd: "show extensions", intent: extensions.list}
+      - {cmd: "show boot-extensions", intent: extensions.boot}
+      - {cmd: "show boot-config", intent: boot.config}
+      - {cmd: "show reload cause", intent: reload.cause}
+      - {cmd: "show reload", intent: reload.status}
+      - {cmd: "show platform bios", intent: platform.bios}
+      - {cmd: "show platform bios history", intent: platform.bios.history}
+      - {cmd: "show redundancy status", intent: redundancy.status}
+      - {cmd: "show redundancy file-replication", intent: redundancy.filerepl}
+      - {cmd: "show version", intent: version.info}
+    tac_first_look: "Diff show extensions against show boot-extensions to catch installed-but-not-persisted extensions, and read show reload cause for any unexplained reboot."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-managing-eos-extensions
+      - https://www.arista.com/en/um-eos/eos-switch-booting-commands
+      - https://www.arista.com/en/um-eos/eos-booting-the-switch
+      - https://www.arista.com/en/um-eos/eos-upgrades-and-downgrades
+
+  - id: acl-copp-drops
+    class: control-plane-policing
+    proposed_class: true
+    title: "ACL not matching, or control-plane policing dropping traffic"
+    symptoms:
+      - "Traffic is not permitted or denied as the ACL intends"
+      - "ACL counters not incrementing where expected"
+      - "Control-plane traffic dropped under load"
+      - "One high-rate flow starving its policer class"
+    log_signatures: []
+    likely_causes:
+      - "ACL not applied to the intended interface or direction"
+      - "Hardware programming failure so the ACL is not actually in the forwarding path"
+      - "Implicit deny catching traffic the author did not consider"
+      - "Policer rate too low for legitimate control-plane traffic"
+      - "A single flow or LAG member monopolising its class"
+    commands:
+      - {cmd: "show ip access-lists", intent: acl.list}
+      - {cmd: "show ip access-lists <name>", intent: acl.detail, params: [name]}
+      - {cmd: "show ip access-lists summary", intent: acl.summary}
+      - {cmd: "show ipv6 access-lists", intent: acl.list.v6}
+      - {cmd: "show mac access-lists", intent: acl.list.mac}
+      - {cmd: "show access-lists", intent: acl.all}
+      - {cmd: "show policy-map interface <interface> input counters", intent: copp.counters, params: [interface]}
+      - {cmd: "show policy-map type qos <name> input counters", intent: qos.policy.counters, params: [name]}
+      - {cmd: "show hardware counter drop", intent: hardware.drop.counters}
+    tac_first_look: "Confirm the ACL is actually programmed in hardware before assuming a logic error; for control-plane drops, check whether one flow is monopolising its class."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-acls-and-route-maps
+      - https://www.arista.com/en/um-eos/eos-quality-of-service
+      - https://www.arista.com/en/support/toi/tag/copp
+
+  - id: ntp-not-synchronized
+    class: ntp-sync
+    proposed_class: true
+    title: "NTP not synchronized / clock offset"
+    symptoms:
+      - "show ntp status reports unsynchronised"
+      - "Large offset from the reference clock"
+      - "No server reachable or selected in show ntp associations"
+      - "Log timestamps disagree with other devices, breaking correlation"
+    log_signatures: []
+    likely_causes:
+      - "No reachable NTP server — network path or firewall"
+      - "Server hostname resolved only at service start, so a re-addressed server is never re-resolved"
+      - "NTP client bound to the wrong VRF"
+      - "Stratum or authentication mismatch"
+      - "Clock drift beyond the step threshold"
+    commands:
+      - {cmd: "show ntp status", intent: ntp.status}
+      - {cmd: "show ntp associations", intent: ntp.associations}
+      - {cmd: "show clock", intent: clock.now}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: "show ntp status for the sync state and show ntp associations for per-server reachability and stratum; remember a re-addressed server hostname may need the service to restart before it is re-resolved."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-system-clock-and-time-protocols
+      - https://www.arista.com/en/um-eos/eos-switch-administration-commands
+      - https://www.arista.com/en/support/toi/tag/ntp
+
+  - id: snmp-poll-or-trap-failure
+    class: snmp
+    proposed_class: true
+    title: "SNMP polling failing or traps not delivered"
+    symptoms:
+      - "Poller times out or receives no response"
+      - "Expected trap never arrives at the NMS"
+      - "Only some OIDs respond"
+      - "SNMPv3 users fail to authenticate"
+    log_signatures: []
+    likely_causes:
+      - "SNMP ACL blocking the poller's source address"
+      - "Wrong community string or SNMPv3 credentials"
+      - "Notification host not configured, or configured in the wrong VRF"
+      - "engineID mismatch for SNMPv3"
+      - "MIB or OID not supported for the counter being polled"
+    commands:
+      - {cmd: "show snmp", intent: snmp.status}
+      - {cmd: "show snmp community", intent: snmp.community}
+      - {cmd: "show snmp user", intent: snmp.user}
+      - {cmd: "show snmp group", intent: snmp.group}
+      - {cmd: "show snmp view", intent: snmp.view}
+      - {cmd: "show snmp engineID", intent: snmp.engineid}
+      - {cmd: "show snmp notification", intent: snmp.notification}
+      - {cmd: "show snmp notification host", intent: snmp.notification.host}
+      - {cmd: "show snmp local-interface", intent: snmp.localif}
+      - {cmd: "show snmp mib", intent: snmp.mib}
+      - {cmd: "show snmp ipv4 access-list detail", intent: snmp.acl.detail}
+      - {cmd: "show snmp ipv4 access-list summary", intent: snmp.acl.summary}
+    tac_first_look: "show snmp for engine, community and host state, then show snmp ipv4 access-list detail to rule out an ACL silently dropping the poller."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-snmp
+
+  - id: aaa-auth-failure
+    class: aaa-auth
+    proposed_class: true
+    title: "AAA failure — TACACS+ / RADIUS authentication denied"
+    symptoms:
+      - "Login denied despite correct credentials"
+      - "Unexpected fallback to local authentication"
+      - "Server appears unreachable to the switch"
+      - "Login succeeds but the user has no privileges"
+    log_signatures: []
+    likely_causes:
+      - "TACACS+ or RADIUS server unreachable, or wrong shared secret"
+      - "Server group misconfigured"
+      - "No fallback method defined"
+      - "Role or privilege mapping missing, so authorization fails after authentication"
+    commands:
+      - {cmd: "show tacacs", intent: aaa.tacacs}
+      - {cmd: "show radius", intent: aaa.radius}
+      - {cmd: "show monitor server radius", intent: aaa.radius.monitor}
+      - {cmd: "show monitor server radius detail", intent: aaa.radius.monitor.detail}
+      - {cmd: "show users roles", intent: aaa.roles}
+      - {cmd: "show users accounts", intent: aaa.accounts}
+      - {cmd: "show users detail", intent: aaa.users.detail}
+      - {cmd: "show logging", intent: logging.recent}
+    tac_first_look: "show tacacs and show radius for server reachability and configuration, then the live probe health, before assuming a credential problem."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-user-security
+      - https://www.arista.com/en/um-eos/eos-security
+
+  - id: qos-queue-drops
+    class: qos-drops
+    title: "QoS output queue drops / buffer pressure"
+    symptoms:
+      - "Egress drops climbing while the link is not saturated end to end"
+      - "One traffic class starved"
+      - "Queue depth or buffer alarms"
+      - "Latency-sensitive traffic misbehaving under load"
+    log_signatures: []
+    likely_causes:
+      - "Oversubscribed egress queue for a given priority"
+      - "Wrong trust mode causing misclassification"
+      - "ECN not enabled, so the queue tail-drops instead of marking"
+      - "Policer or shaper set too aggressively for the class"
+    commands:
+      - {cmd: "show qos interfaces", intent: qos.interfaces}
+      - {cmd: "show qos interfaces trust", intent: qos.trust}
+      - {cmd: "show qos maps", intent: qos.maps}
+      - {cmd: "show policy-map interface <interface> input counters", intent: qos.policy.interface.counters, params: [interface]}
+      - {cmd: "show policy-map type qos <name> input counters", intent: qos.policy.counters, params: [name]}
+      - {cmd: "show interface", intent: interface.counters}
+    tac_first_look: "show qos interfaces to confirm queue and shaper configuration matches intent, then the policy-map counters for conform/exceed/drop on the specific class."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-quality-of-service
+
+  - id: multicast-not-forwarded
+    class: multicast
+    proposed_class: true
+    title: "Multicast not forwarded — no PIM neighbor or missing IGMP state"
+    symptoms:
+      - "No PIM neighbour on an interface that should have one"
+      - "IGMP group present on the access side but no forwarding"
+      - "RP unreachable"
+      - "Receivers on one switch get the stream while others do not"
+    log_signatures: []
+    likely_causes:
+      - "PIM not enabled on a transit interface"
+      - "RP misconfigured or unreachable (static RP, BSR or Auto-RP failure)"
+      - "IGMP snooping mrouter port not learned"
+      - "ACL or underlay blocking PIM hellos"
+      - "Interface configuration mismatch flagged by config-sanity"
+    commands:
+      - {cmd: "show ip pim neighbor", intent: multicast.pim.neighbors}
+      - {cmd: "show ip pim interface", intent: multicast.pim.interfaces}
+      - {cmd: "show ip pim config-sanity", intent: multicast.pim.sanity}
+      - {cmd: "show ip pim rp", intent: multicast.pim.rp}
+      - {cmd: "show ip pim bsr", intent: multicast.pim.bsr}
+      - {cmd: "show ip pim upstream joins", intent: multicast.pim.joins}
+      - {cmd: "show ip pim protocol counters", intent: multicast.pim.counters}
+      - {cmd: "show ip igmp groups", intent: multicast.igmp.groups}
+      - {cmd: "show ip igmp interface", intent: multicast.igmp.interfaces}
+      - {cmd: "show ip igmp statistics", intent: multicast.igmp.stats}
+      - {cmd: "show ip igmp snooping", intent: multicast.igmpsnooping}
+      - {cmd: "show ip igmp snooping mrouter", intent: multicast.igmpsnooping.mrouter}
+      - {cmd: "show ip igmp snooping groups", intent: multicast.igmpsnooping.groups}
+    tac_first_look: "show ip pim neighbor with show ip pim config-sanity first, to rule out a basic adjacency or configuration mismatch before chasing the RP or snooping."
+    sources:
+      - https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
+      - https://www.arista.com/en/um-eos/eos-igmp-and-igmp-snooping
+      - https://www.arista.com/en/um-eos/eos-multicast
