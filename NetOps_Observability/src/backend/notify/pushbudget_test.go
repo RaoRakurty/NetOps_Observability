@@ -317,15 +317,31 @@ func TestBudgetRefusalIsNotRetried(t *testing.T) {
 	d.SetLogger(logs.log)
 	d.Register(NewNtfy(url, "topic", "").WithBudget(reg.For(url)))
 
+	// The two sends are ORDERED deliberately. The dispatcher runs eight delivery
+	// workers, so dispatching both at once lets the refusal be logged before the
+	// accepted push has reached the server — the assertion below then reads
+	// `requests = 0` and the test fails for a reason that has nothing to do with
+	// the budget (observed on CI under -race, which widens that window).
+	//
+	// So: dispatch the first, and wait for the server to have SEEN it. The token
+	// is taken before the request is built (Ntfy.Push takes it first), so once
+	// the request has arrived the bucket is provably empty — and the clock is a
+	// frozen budgetClock, so nothing refills it.
 	d.Dispatch(models.Alert{ID: "b1", Rule: "CollectorDown", Severity: "warning"})
+	waitUntil(t, "the first push to reach the server", func() bool { return s.calls.Load() == 1 })
+
+	// Only now is the second attempted, and it must be refused LOCALLY: no
+	// request, no retry ladder.
 	d.Dispatch(models.Alert{ID: "b2", Rule: "CollectorDown", Severity: "warning"})
-	waitUntil(t, "the refusal to be reported", func() bool { return logs.contains("FAILED") })
+	waitUntil(t, "the local refusal to be reported", func() bool {
+		return logs.contains("reason=budget_exhausted")
+	})
 
 	if got := s.calls.Load(); got != 1 {
 		t.Fatalf("requests = %d, want exactly 1 — the second was refused locally", got)
 	}
-	if !logs.contains("reason=budget_exhausted") {
-		t.Fatalf("a local refusal must be classified as budget_exhausted:\n%s", logs.text())
+	if !logs.contains("FAILED") {
+		t.Fatalf("a local refusal must be reported as a delivery failure:\n%s", logs.text())
 	}
 }
 

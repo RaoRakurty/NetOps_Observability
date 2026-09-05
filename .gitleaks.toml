@@ -28,6 +28,20 @@ regexes = [
   '''VAULT_MIGRATE_LEGACY_WRAPPED''',
   # docs placeholder for the API-key examples (docs-portal + its ai/docs_corpus mirror)
   '''ntk_YOUR_KEY''',
+  # ── reviewed 2026-09-05, commit 6d94f363 (internal/dataprotect extraction) ──
+  # The fabricated operation id in the "unknown id ⇒ 404" table shared by
+  # data_protection_routes_test.go and internal/dataprotect/ops_test.go. It sits
+  # in a slice next to "../../etc/passwd" (the path-traversal probe), which is
+  # what makes the generic-api-key heuristic read the pair as key=value. It is a
+  # well-formed-but-nonexistent id, matched only against a 404 — never a
+  # credential, and it must NOT be an OID/token that exists.
+  '''op-00112233445566778899''',
+  # The planted credential in the backup remote-destination URL fixture
+  # (internal/dataprotect/coverage_test.go): the assertion is that
+  # GET /api/system/backup REDACTS it, so the test cannot exist without a
+  # credential-shaped string in it. Fabricated throughout — RFC 2606
+  # `nas.example.net`, `backupuser:sup3rs3cret`, and this ascending-hex token.
+  '''token=abcdef123456''',
 ]
 # Test fixtures that DELIBERATELY look like secrets — reviewed 2026-09-04:
 #   ErrorBoundary.test.tsx: a synthetic error string carrying a fake token/api_key

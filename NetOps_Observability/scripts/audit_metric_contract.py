@@ -25,6 +25,7 @@ ROOT = os.path.normpath(os.path.join(HERE, ".."))
 FRONTEND = os.path.join(ROOT, "src", "frontend", "src")
 BACKEND = os.path.join(ROOT, "src", "backend")
 GNMIC_YAML = os.path.join(ROOT, "deployment", "docker", "gnmic", "gnmic.yaml")
+PROFILES_GO = os.path.join(BACKEND, "collectors", "profiles.go")
 
 
 def _read(path: str) -> str:
@@ -122,6 +123,52 @@ def emitted_metrics() -> set[str]:
     return names
 
 
+def snmp_family_owners() -> tuple[dict[str, dict[str, str]], list[str]]:
+    """{family: {profile: owner}} parsed out of builtinProfiles() in profiles.go.
+
+    `SNMPMetric.Owner` is the PER-DEVICE hand-back: a metric marked
+    Owner: "gnmi" is withheld by the SNMP poller on any device labelled
+    `gnmi: "true"`, so gNMI owns it there and SNMP still serves it everywhere
+    else. The absent/empty owner defaults to "snmp" (SNMP emits it always).
+
+    Reads the Go source rather than a transcription of it, and reports a problem
+    (never a silent empty map) if the literal's shape changes — a vacuous "no
+    owners parsed" would make the double-produce check below pass for free.
+    """
+    problems: list[str] = []
+    if not os.path.exists(PROFILES_GO):
+        return {}, [f"profiles.go not found at {PROFILES_GO} — the SNMP ownership "
+                    "half of the single-contract guard cannot be checked"]
+    src = _read(PROFILES_GO)
+    block = re.search(r"func builtinProfiles\(\) \[\]SNMPProfile \{(.*?)\n\}\n", src, re.DOTALL)
+    if not block:
+        return {}, ["profiles.go: builtinProfiles() not found — the ownership parse "
+                    "went stale and the double-produce guard would pass vacuously"]
+
+    out: dict[str, dict[str, str]] = {}
+    profile: str | None = None
+    for line in block.group(1).split("\n"):
+        m = re.search(r'Name:\s+"([a-z0-9]+)",\s*$', line)
+        if m:
+            profile = m.group(1)
+            continue
+        m = re.search(r'\{Name: "(device_[a-z0-9_]+)",\s*OID:(.*)$', line)
+        if not m:
+            continue
+        family, rest = m.group(1), m.group(2)
+        if profile is None:
+            problems.append(f"profiles.go: metric {family} parsed before any profile "
+                            "name — the literal's shape changed")
+            continue
+        owner = re.search(r'Owner:\s*"([a-z]*)"', rest)
+        out.setdefault(family, {})[profile] = (owner.group(1) if owner else "") or "snmp"
+    if not out:
+        problems.append("profiles.go: no metrics parsed out of builtinProfiles() — the "
+                        "literal's shape changed and the double-produce guard would "
+                        "pass vacuously")
+    return out, problems
+
+
 def gnmi_canonical_lane(snmp_emitted: set[str]) -> tuple[set[str], list[str]]:
     """Parse the gnmic canonical-lane normalization (deployment/docker/gnmic.yaml).
 
@@ -158,14 +205,26 @@ def gnmi_canonical_lane(snmp_emitted: set[str]) -> tuple[set[str], list[str]]:
 
     # ownership-gate: the value-names delete-list (anchored regexes). Extract the
     # block between `ownership-gate:` and the next 2-space-indented processor key.
+    #
+    # The gate is EMPTY BY DESIGN since bb76e8e7 (tracker 230): the hand-back to
+    # SNMP now happens per DEVICE, via `Owner: "gnmi"` in collectors/profiles.go,
+    # because the global gate cost the gNMI-only SR Linux spines their interface,
+    # CPU and temperature series entirely. So an empty list is no longer a
+    # failure in itself — but the double-produce guarantee it used to carry still
+    # has to hold, and it is now proven against profiles.go below.
+    #
+    # What IS still fatal is the processor going missing: it is the only
+    # mechanism for handing a family back, and an empty processor is exactly the
+    # kind of thing that gets deleted as dead config.
     gate_block = ""
     m = re.search(r"^  ownership-gate:\n(.*?)(?=^  [a-z])", txt, re.DOTALL | re.MULTILINE)
     if m:
         gate_block = m.group(1)
+    else:
+        problems.append("ownership-gate: the processor is not in gnmic.yaml — it is the "
+                        "ONLY mechanism for handing a canonical family back to SNMP; "
+                        "removing it makes a future hand-back silently do nothing.")
     gate_patterns = re.findall(r'-\s*"([^"]+)"', gate_block)
-    if not gate_patterns:
-        problems.append("ownership-gate: no value-names delete patterns parsed — "
-                        "gate may be empty (every family would double-produce).")
     gate_res = [re.compile(p) for p in gate_patterns]
 
     def gated(name: str) -> bool:
@@ -181,6 +240,40 @@ def gnmi_canonical_lane(snmp_emitted: set[str]) -> tuple[set[str], list[str]]:
 
     # What gNMI actually emits = mapped targets minus gated ones.
     gnmi_emitted = {t for t in targets if not gated(t)}
+
+    # ── the double-produce guarantee, now carried by profiles.go ─────────────
+    #
+    # A family that LEAVES the gNMI canonical lane and is ALSO emitted by an SNMP
+    # profile is produced twice on a dual-transport device, from two label
+    # shapes. The gate used to prevent that globally; `Owner: "gnmi"` now does it
+    # per device. So every ungated family with an SNMP counterpart must carry
+    # that owner in EVERY profile defining it — that, and only that, is what
+    # makes an empty gate a valid state.
+    #
+    # This mirrors tests/test_gnmi_ownership_contract.py
+    # (test_ungated_families_are_gnmi_owned_everywhere), re-implemented here in
+    # stdlib regex because this script is dependency-free by contract (the CI job
+    # installs nothing) while that test parses YAML with PyYAML. The two read the
+    # same two files, so neither can go stale against a transcription.
+    owners, owner_problems = snmp_family_owners()
+    problems.extend(owner_problems)
+    double_produced: list[str] = []
+    for fam in sorted(gnmi_emitted):
+        for profile, owner in sorted(owners.get(fam, {}).items()):
+            if owner != "gnmi":
+                double_produced.append(f"{fam} (profile {profile}: Owner {owner!r})")
+    for row in double_produced:
+        problems.append(
+            f"double-produce: {row} leaves the gNMI canonical lane (not in the "
+            f"ownership gate) while the SNMP profile still owns it — a device "
+            f"carrying both transports emits the same canonical series twice. "
+            f"Gate the family in gnmic.yaml or set Owner: \"gnmi\" on it.")
+    if not gate_patterns and not owner_problems and double_produced:
+        problems.append(
+            "the ownership gate is EMPTY and the profiles.go owner mirror above is "
+            "inconsistent — with neither mechanism withholding them, those families "
+            "double-produce. An empty gate is only valid while every gnmic-mapped "
+            "family with an SNMP counterpart carries Owner: \"gnmi\".")
 
     # Single-contract invariant: gNMI-emitted names ⊆ SNMP-emitted names, modulo
     # documented gNMI-owned families.
