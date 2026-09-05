@@ -9,13 +9,32 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // ── a fake backend ──────────────────────────────────────────────────────────
 
+// fakeBackend is the injected seam set every test runs the debug API over.
+//
+// IT IS SHARED WITH GOROUTINES, and that is why every field below is behind a
+// mutex. A trace does not finish inside the request that starts it: POST
+// /api/debug/trace returns a receipt and leaves a FOLLOW goroutine polling the
+// stores for up to the TTL, so the Search / CHSelect / inject / audit closures
+// keep running while the test body reads what they recorded. The fixture used
+// to let both sides touch the same map, slice and string unsynchronised, which
+// the race detector reported (and which could also make an assertion read a
+// half-appended slice).
+//
+// The rule the fixture now enforces:
+//   - the closures take f.mu for every read AND write;
+//   - a test READS recorded state through f.snap(), which copies under the lock;
+//   - a test that has to change the fake AFTER a follow may be running does it
+//     through f.set(...). Seeding before the request stays the normal case.
 type fakeBackend struct {
+	// mu guards every field below. See the type comment.
+	mu        sync.Mutex
 	principal Principal
 	authOK    bool
 
@@ -58,20 +77,65 @@ func newFakeBackend() *fakeBackend {
 	}
 }
 
+// fakeSnapshot is a value copy of everything the fake RECORDS. Slices are
+// copied, not aliased: an assertion must never observe a slice the follow
+// goroutine is still appending to.
+type fakeSnapshot struct {
+	injectedSyslog []string
+	injectedTrap   [][]byte
+	injectedFlow   [][]byte
+	osIndex        string
+	chSeen         []string
+	vmMatch        string
+	uiCalls        []Kind
+	audits         []map[string]any
+}
+
+// snap copies the recorded calls under the lock.
+func (f *fakeBackend) snap() fakeSnapshot {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return fakeSnapshot{
+		injectedSyslog: append([]string(nil), f.injectedSyslog...),
+		injectedTrap:   append([][]byte(nil), f.injectedTrap...),
+		injectedFlow:   append([][]byte(nil), f.injectedFlow...),
+		osIndex:        f.osIndex,
+		chSeen:         append([]string(nil), f.chSeen...),
+		vmMatch:        f.vmMatch,
+		uiCalls:        append([]Kind(nil), f.uiCalls...),
+		audits:         append([]map[string]any(nil), f.audits...),
+	}
+}
+
+// set changes the fake under the lock. Use it when a test must change the fake
+// after a request that may have left a follow goroutine running; plain field
+// assignment before the first request is still fine.
+func (f *fakeBackend) set(fn func(*fakeBackend)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(f)
+}
+
 func (f *fakeBackend) deps() Deps {
 	return Deps{
 		Authz: func(w http.ResponseWriter, _ *http.Request) (Principal, bool) {
-			if !f.authOK {
+			f.mu.Lock()
+			ok, p := f.authOK, f.principal
+			f.mu.Unlock()
+			if !ok {
 				http.Error(w, "platform administrator required", http.StatusForbidden)
 				return Principal{}, false
 			}
-			return f.principal, true
+			return p, true
 		},
 		Search: func(_, path string, _ any) (*http.Response, error) {
+			f.mu.Lock()
 			f.osIndex = path
+			status, body := f.osStatus, f.osBody
+			f.mu.Unlock()
 			return &http.Response{
-				StatusCode: f.osStatus,
-				Body:       io.NopCloser(strings.NewReader(f.osBody)),
+				StatusCode: status,
+				Body:       io.NopCloser(strings.NewReader(body)),
 			}, nil
 		},
 		OSIndexPattern: func(signal, tenant string, cross bool) string {
@@ -81,6 +145,8 @@ func (f *fakeBackend) deps() Deps {
 			return "netops-" + signal + "-" + tenant + "-*"
 		},
 		CHSelect: func(_ context.Context, scope, sql string, _ ...string) ([]map[string]any, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			f.chSeen = append(f.chSeen, scope+"|"+sql)
 			return f.chRows, f.chErr
 		},
@@ -91,6 +157,8 @@ func (f *fakeBackend) deps() Deps {
 			return p.Tenant
 		},
 		KafkaPeek: func(context.Context, PeekRequest) (PeekResult, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			return f.peek, f.peekErr
 		},
 		CorrHealth: func(context.Context) (map[string]any, error) {
@@ -100,9 +168,13 @@ func (f *fakeBackend) deps() Deps {
 			return LevelChange{Module: ModuleAPI, Applied: true, Level: l, RevertAt: time.Now().Add(w)}
 		},
 		CorrLogLevel: func(context.Context, Level, time.Duration) (LevelChange, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			return f.corrLevel, nil
 		},
 		InjectSyslog: func(_ context.Context, frame string) error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			if f.injectErr != nil {
 				return f.injectErr
 			}
@@ -110,6 +182,8 @@ func (f *fakeBackend) deps() Deps {
 			return nil
 		},
 		InjectTrap: func(_ context.Context, pdu []byte) error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			if f.injectErr != nil {
 				return f.injectErr
 			}
@@ -117,6 +191,8 @@ func (f *fakeBackend) deps() Deps {
 			return nil
 		},
 		InjectFlow: func(_ context.Context, pkt []byte) error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			if f.injectErr != nil {
 				return f.injectErr
 			}
@@ -124,16 +200,22 @@ func (f *fakeBackend) deps() Deps {
 			return nil
 		},
 		VictoriaExport: func(_ context.Context, match string, _, _ time.Time) ([]byte, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			f.vmMatch = match
 			return f.vmBody, f.vmErr
 		},
 		UIQueryRun: func(_ *http.Request, kind Kind, _ string, _ PassiveSpec, _ string) (UIProbe, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			f.uiCalls = append(f.uiCalls, kind)
 			return f.uiProbe, f.uiErr
 		},
 		ParseFilter: f.parseFilter,
 		Ring:        f.ring,
 		Audit: func(_ *http.Request, tenant, action string, detail map[string]any) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			f.audits = append(f.audits, map[string]any{"tenant": tenant, "action": action, "detail": detail})
 		},
 		WriteJSON: func(w http.ResponseWriter, status int, body any) {
@@ -198,7 +280,7 @@ func TestEveryDebugRouteRefusesAnUnauthorizedCaller(t *testing.T) {
 			t.Errorf("%s: unauthorized caller got %d, want 403", rt.name, w.Code)
 		}
 	}
-	if len(f.injectedSyslog) != 0 || len(f.chSeen) != 0 {
+	if len(f.snap().injectedSyslog) != 0 || len(f.snap().chSeen) != 0 {
 		t.Error("a denied request still injected or queried — the gate must run first")
 	}
 }
@@ -229,10 +311,10 @@ func TestTraceInjectsATaggedSyntheticRecordAndReturnsAMarker(t *testing.T) {
 	if !ValidMarker(got.Marker) || !got.Injected || !got.Synthetic {
 		t.Fatalf("bad receipt: %+v", got)
 	}
-	if len(f.injectedSyslog) != 1 {
-		t.Fatalf("want 1 injected frame, got %d", len(f.injectedSyslog))
+	if len(f.snap().injectedSyslog) != 1 {
+		t.Fatalf("want 1 injected frame, got %d", len(f.snap().injectedSyslog))
 	}
-	frame := f.injectedSyslog[0]
+	frame := f.snap().injectedSyslog[0]
 	if !strings.Contains(frame, MarkerTag(got.Marker)) {
 		t.Error("the injected frame does not carry the returned marker")
 	}
@@ -251,8 +333,8 @@ func TestTrapKindInjectsABinaryPDUNotASyslogFrame(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
-	if len(f.injectedTrap) != 1 || len(f.injectedSyslog) != 0 {
-		t.Fatalf("trap kind used the wrong injector: %d traps, %d frames", len(f.injectedTrap), len(f.injectedSyslog))
+	if len(f.snap().injectedTrap) != 1 || len(f.snap().injectedSyslog) != 0 {
+		t.Fatalf("trap kind used the wrong injector: %d traps, %d frames", len(f.snap().injectedTrap), len(f.snap().injectedSyslog))
 	}
 }
 
@@ -325,10 +407,10 @@ func TestTraceIsAudited(t *testing.T) {
 	f := newFakeBackend()
 	api := New(f.deps())
 	post(t, api.HandleTrace, "/api/debug/trace", `{"kind":"syslog","device":"spine1","tenant":"t1"}`)
-	if len(f.audits) != 1 || f.audits[0]["action"] != "debug.trace" {
-		t.Fatalf("the trace was not audited: %+v", f.audits)
+	if len(f.snap().audits) != 1 || f.snap().audits[0]["action"] != "debug.trace" {
+		t.Fatalf("the trace was not audited: %+v", f.snap().audits)
 	}
-	detail, _ := f.audits[0]["detail"].(map[string]any)
+	detail, _ := f.snap().audits[0]["detail"].(map[string]any)
 	if detail["synthetic"] != true || detail["device"] != "spine1" {
 		t.Errorf("the audit record does not say what was injected: %+v", detail)
 	}
@@ -344,7 +426,7 @@ func TestAScopedPrincipalCannotNameAnotherTenant(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("a scoped principal widened its scope: %d %s", w.Code, w.Body.String())
 	}
-	if len(f.injectedSyslog) != 0 {
+	if len(f.snap().injectedSyslog) != 0 {
 		t.Error("a refused request still injected a record")
 	}
 }
@@ -372,11 +454,14 @@ func TestTraceStatusIs404ForAnotherTenantsMarkerAndForAnUnknownOne(t *testing.T)
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	f.principal = Principal{Subject: "other", Tenant: "t_b", Cross: false}
+	// The trace POST above left a follow goroutine running, so the switch of
+	// identity goes through the lock — this is the one test that has to change
+	// the fake AFTER a run has started.
+	f.set(func(s *fakeBackend) { s.principal = Principal{Subject: "other", Tenant: "t_b", Cross: false} })
 	if w := call(t, api.HandleTraceStatus, http.MethodGet, "/api/debug/trace/"+got.Marker, ""); w.Code != http.StatusNotFound {
 		t.Errorf("cross-tenant status read got %d, want 404", w.Code)
 	}
-	f.principal = Principal{Subject: "owner", Cross: true}
+	f.set(func(s *fakeBackend) { s.principal = Principal{Subject: "owner", Cross: true} })
 	unknown := NewMarker(time.Now())
 	if w := call(t, api.HandleTraceStatus, http.MethodGet, "/api/debug/trace/"+unknown, ""); w.Code != http.StatusNotFound {
 		t.Errorf("unknown marker got %d, want 404", w.Code)
@@ -448,8 +533,8 @@ func TestLogLevelIsAudited(t *testing.T) {
 	f := newFakeBackend()
 	api := New(f.deps())
 	call(t, api.HandleLogLevel, http.MethodPut, "/api/debug/loglevel", `{"module":"api","level":"debug"}`)
-	if len(f.audits) != 1 || f.audits[0]["action"] != "debug.loglevel" {
-		t.Fatalf("the level change was not audited: %+v", f.audits)
+	if len(f.snap().audits) != 1 || f.snap().audits[0]["action"] != "debug.loglevel" {
+		t.Fatalf("the level change was not audited: %+v", f.snap().audits)
 	}
 }
 

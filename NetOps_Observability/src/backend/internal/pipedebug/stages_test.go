@@ -78,10 +78,10 @@ func TestOpenSearchStageQueriesTheTenantScopedIndex(t *testing.T) {
 	f.principal = Principal{Subject: "owner", Tenant: "t_own", Cross: false}
 	api := New(f.deps())
 	stageOf(t, api, "/api/debug/stage/opensearch?marker="+testMarker)
-	if !strings.Contains(f.osIndex, "netops-syslog-t_own-*") {
-		t.Errorf("a scoped principal's stage query did not name its own tenant index: %q", f.osIndex)
+	if !strings.Contains(f.snap().osIndex, "netops-syslog-t_own-*") {
+		t.Errorf("a scoped principal's stage query did not name its own tenant index: %q", f.snap().osIndex)
 	}
-	if strings.Contains(f.osIndex, "netops-syslog-*") {
+	if strings.Contains(f.snap().osIndex, "netops-syslog-*") {
 		t.Error("a scoped principal's stage query named the cross-tenant pattern")
 	}
 }
@@ -90,8 +90,8 @@ func TestOpenSearchStageUsesTheTrapIndexForTheTrapKind(t *testing.T) {
 	f := newFakeBackend()
 	api := New(f.deps())
 	stageOf(t, api, "/api/debug/stage/opensearch?marker="+testMarker+"&kind=trap")
-	if !strings.Contains(f.osIndex, "snmptrap") {
-		t.Errorf("trap kind queried %q", f.osIndex)
+	if !strings.Contains(f.snap().osIndex, "snmptrap") {
+		t.Errorf("trap kind queried %q", f.snap().osIndex)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestVictoriaAndClickHouseAreHonestlyNotObservableForLogKinds(t *testing.T) 
 			t.Errorf("clickhouse/%s = %s (%q)", kind, ch.Verdict, ch.Reason)
 		}
 	}
-	if len(f.chSeen) != 0 {
+	if len(f.snap().chSeen) != 0 {
 		t.Error("the ClickHouse stage ran a query for a kind that has no raw table")
 	}
 }
@@ -192,11 +192,11 @@ func TestCorrelationStageQueriesCorrEvidenceUnderTheCallersScopeAndChecksTheDLQ(
 	if e.Verdict != VerdictNotSeen {
 		t.Fatalf("verdict %s", e.Verdict)
 	}
-	if len(f.chSeen) != 1 || !strings.HasPrefix(f.chSeen[0], "t_own|") {
-		t.Fatalf("the query did not carry the caller's ClickHouse scope: %v", f.chSeen)
+	if len(f.snap().chSeen) != 1 || !strings.HasPrefix(f.snap().chSeen[0], "t_own|") {
+		t.Fatalf("the query did not carry the caller's ClickHouse scope: %v", f.snap().chSeen)
 	}
-	if !strings.Contains(f.chSeen[0], "netops.corr_evidence") || !strings.Contains(f.chSeen[0], MarkerTag(testMarker)) {
-		t.Errorf("the correlation query is wrong: %s", f.chSeen[0])
+	if !strings.Contains(f.snap().chSeen[0], "netops.corr_evidence") || !strings.Contains(f.snap().chSeen[0], MarkerTag(testMarker)) {
+		t.Errorf("the correlation query is wrong: %s", f.snap().chSeen[0])
 	}
 	// The DLQ check distinguishes "the engine dropped it" from "the engine
 	// could not persist it".
@@ -251,7 +251,7 @@ func TestAPIStageServesTheInProcessRingNotTheApplogsIndex(t *testing.T) {
 	if !strings.Contains(e.Query, "in-process debug ring") {
 		t.Errorf("the api stage claims a source it does not use: %q", e.Query)
 	}
-	if f.osIndex != "" {
+	if f.snap().osIndex != "" {
 		t.Error("the api stage read OpenSearch — it must not depend on the pipeline under test")
 	}
 }

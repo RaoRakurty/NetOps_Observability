@@ -21,17 +21,17 @@ func TestFlowTraceInjectsANetFlowV5Packet(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("flow trace -> %d: %s", w.Code, w.Body.String())
 	}
-	if len(f.injectedFlow) != 1 {
-		t.Fatalf("injected %d flow packets, want 1", len(f.injectedFlow))
+	if len(f.snap().injectedFlow) != 1 {
+		t.Fatalf("injected %d flow packets, want 1", len(f.snap().injectedFlow))
 	}
-	if len(f.injectedSyslog) != 0 || len(f.injectedTrap) != 0 {
+	if len(f.snap().injectedSyslog) != 0 || len(f.snap().injectedTrap) != 0 {
 		t.Fatal("a flow trace also injected on another lane")
 	}
 	var receipt traceReceipt
 	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	pkt := f.injectedFlow[0]
+	pkt := f.snap().injectedFlow[0]
 	fp := NewFlowFingerprint(receipt.Marker)
 	if len(pkt) != 72 || pkt[0] != 0 || pkt[1] != 5 {
 		t.Fatalf("the injected packet is not a one-record NetFlow v5 export (%d bytes, version bytes %v)", len(pkt), pkt[:2])
@@ -51,11 +51,11 @@ func TestFlowClickHouseStageIsScopedAndExact(t *testing.T) {
 	if e.Verdict != VerdictSeen {
 		t.Fatalf("verdict %s: %s", e.Verdict, e.Reason)
 	}
-	if len(f.chSeen) == 0 || !strings.HasPrefix(f.chSeen[0], "t_own|") {
-		t.Fatalf("the flow stage query was not run under the caller's tenant scope: %v", f.chSeen)
+	if len(f.snap().chSeen) == 0 || !strings.HasPrefix(f.snap().chSeen[0], "t_own|") {
+		t.Fatalf("the flow stage query was not run under the caller's tenant scope: %v", f.snap().chSeen)
 	}
-	if !strings.Contains(f.chSeen[0], "netops.flows") {
-		t.Fatalf("the flow stage did not query the canonical flow table: %s", f.chSeen[0])
+	if !strings.Contains(f.snap().chSeen[0], "netops.flows") {
+		t.Fatalf("the flow stage did not query the canonical flow table: %s", f.snap().chSeen[0])
 	}
 	if e.FirstSeen.IsZero() {
 		t.Error("the row's own ts was not carried, so the timeline cannot compute a latency")
@@ -119,7 +119,7 @@ func TestFlowCorrelationStageIsHonestAboutHavingNoTextMarker(t *testing.T) {
 	if e.Verdict != VerdictNotObservable {
 		t.Fatalf("verdict %s, want not_observable", e.Verdict)
 	}
-	if len(f.chSeen) != 0 {
+	if len(f.snap().chSeen) != 0 {
 		t.Fatal("a query was run that could never have matched")
 	}
 }
@@ -143,7 +143,7 @@ func TestPassiveTraceInjectsNothing(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("passive gnmi -> %d: %s", w.Code, w.Body.String())
 	}
-	if len(f.injectedSyslog)+len(f.injectedTrap)+len(f.injectedFlow) != 0 {
+	if len(f.snap().injectedSyslog)+len(f.snap().injectedTrap)+len(f.snap().injectedFlow) != 0 {
 		t.Fatal("a --passive request injected a record the operator declined")
 	}
 	var receipt traceReceipt
@@ -163,8 +163,8 @@ func TestPassiveVictoriaStageIsTheLoadBearingEvidence(t *testing.T) {
 	if e.Verdict != VerdictSeen {
 		t.Fatalf("verdict %s: %s", e.Verdict, e.Reason)
 	}
-	if !strings.Contains(f.vmMatch, `source="spine1"`) || !strings.Contains(f.vmMatch, "gnmi_") {
-		t.Fatalf("the selector does not query the device's raw gNMI lane: %q", f.vmMatch)
+	if !strings.Contains(f.snap().vmMatch, `source="spine1"`) || !strings.Contains(f.snap().vmMatch, "gnmi_") {
+		t.Fatalf("the selector does not query the device's raw gNMI lane: %q", f.snap().vmMatch)
 	}
 	if e.Detail["samples"] != 2 {
 		t.Errorf("samples = %v, want 2", e.Detail["samples"])
@@ -398,7 +398,7 @@ func TestParseMarkerRouteArmsBoundedAndDisarms(t *testing.T) {
 	// The needle must NOT be audited verbatim: an operator may trace by a
 	// message fragment, and a customer's log text in the immutable trail is a
 	// PII leak.
-	last := f.audits[len(f.audits)-1]
+	last := f.snap().audits[len(f.snap().audits)-1]
 	detail, _ := last["detail"].(map[string]any)
 	for _, v := range detail {
 		if s, ok := v.(string); ok && strings.Contains(s, testMarker) {

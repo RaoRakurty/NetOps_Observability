@@ -108,8 +108,8 @@ func TestSessionRoutesRefuseAnUnauthorizedCaller(t *testing.T) {
 			t.Errorf("%s: unauthorized caller got %d, want 403", rt.name, w.Code)
 		}
 	}
-	if len(f.audits) != 0 {
-		t.Errorf("a refused caller produced audit records: %v", f.audits)
+	if len(f.snap().audits) != 0 {
+		t.Errorf("a refused caller produced audit records: %v", f.snap().audits)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestEverySessionReadIsAudited(t *testing.T) {
 		"debug.sessions.module": false, "debug.sessions.bundle": false,
 		"debug.loglevel.status": false,
 	}
-	for _, a := range f.audits {
+	for _, a := range f.snap().audits {
 		if _, ok := want[a["action"].(string)]; ok {
 			want[a["action"].(string)] = true
 		}
