@@ -37,6 +37,12 @@ func Load(fsys fs.FS) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The command policy is loaded BEFORE any plan, because every plan is
+	// validated against it: a build whose data carries a config / restart /
+	// daemon command must not boot (owner decision, 2026-09-05).
+	if c.policy, err = LoadPolicy(fsys); err != nil {
+		return nil, err
+	}
 	names, err := fs.Glob(fsys, "plans/*.yaml")
 	if err != nil {
 		return nil, fmt.Errorf("tac: plans: %w", err)
@@ -386,7 +392,7 @@ func loadPlan(c *Catalog, slug, src string) (*DialectPlan, error) {
 		return nil, fmt.Errorf("`bindings` is required (a plan with no commands is not a plan)")
 	}
 	for _, intent := range bn.keys {
-		b, berr := loadBinding(c, intent, bn.m[intent], planSources)
+		b, berr := loadBinding(c, dialect, intent, bn.m[intent], planSources)
 		if berr != nil {
 			return nil, berr
 		}
@@ -434,7 +440,7 @@ func loadPlan(c *Catalog, slug, src string) (*DialectPlan, error) {
 	return p, nil
 }
 
-func loadBinding(c *Catalog, intent string, n *ynode, planSources []Source) (Binding, error) {
+func loadBinding(c *Catalog, dialect, intent string, n *ynode, planSources []Source) (Binding, error) {
 	if _, ok := c.intents[intent]; !ok {
 		return Binding{}, fmt.Errorf("binding %q names an intent that is not in the classes.yaml vocabulary", intent)
 	}
@@ -442,7 +448,7 @@ func loadBinding(c *Catalog, intent string, n *ynode, planSources []Source) (Bin
 		return Binding{}, fmt.Errorf("binding %q must be a mapping", intent)
 	}
 	if err := yonly(n, "binding "+intent, "command", "verified", "sources", "max_bytes",
-		"timeout_s", "consent", "consent_note", "read_only_exception"); err != nil {
+		"timeout_s", "consent", "consent_note", "read_only_exception", "teardown"); err != nil {
 		return Binding{}, err
 	}
 	cmd, err := ystr(n, "command")
@@ -457,7 +463,45 @@ func loadBinding(c *Catalog, intent string, n *ynode, planSources []Source) (Bin
 	if err != nil {
 		return Binding{}, err
 	}
-	if err := ValidateCommandWithException(cmd, exception); err != nil {
+	// THE OWNER'S RULE (2026-09-05), applied to authored data BEFORE the grammar:
+	// a command in the config / restart / daemon families is not something
+	// Correlix carries at all. The research corpus is purged of them and the
+	// merge refuses them at the door; this is the layer that makes a hand-edited
+	// plan file fail the LOAD rather than reach a device.
+	if rule, hit := c.policy.Match(dialect, cmd); hit {
+		return Binding{}, fmt.Errorf("binding %q: command %q is in the %s family of the output-only "+
+			"command policy (rule %q: %s) — Correlix does not carry it",
+			intent, cmd, rule.Family, rule.String(), rule.Why)
+	}
+	teardown, err := ystr(n, "teardown")
+	if err != nil {
+		return Binding{}, err
+	}
+	teardown = strings.Join(strings.Fields(teardown), " ")
+	scope, scoped := c.policy.SessionScope(dialect, cmd)
+	switch {
+	case scoped && teardown == "":
+		return Binding{}, fmt.Errorf("binding %q is a session-scoped setter and carries no `teardown` — "+
+			"it is allowed only because Correlix undoes it, so %q is required", intent, scope.Teardown)
+	case scoped && teardown != scope.Teardown:
+		return Binding{}, fmt.Errorf("binding %q declares teardown %q; the policy's documented teardown for this setter is %q",
+			intent, teardown, scope.Teardown)
+	case !scoped && teardown != "":
+		return Binding{}, fmt.Errorf("binding %q declares a teardown but its command is not a documented "+
+			"session-scoped setter; a teardown is not a way to run a second command", intent)
+	}
+	if scoped {
+		// A documented session-scoped setter is not a read, so the read-only
+		// grammar can never admit it. It is admitted by the POLICY instead — the
+		// same way a cited read-only exception is — and every structural rule
+		// still applies to both it and its teardown.
+		if verr := ValidateScopedSetter(cmd); verr != nil {
+			return Binding{}, fmt.Errorf("binding %q: %w", intent, verr)
+		}
+		if verr := ValidateScopedSetter(teardown); verr != nil {
+			return Binding{}, fmt.Errorf("binding %q teardown: %w", intent, verr)
+		}
+	} else if err := ValidateCommandWithException(cmd, exception); err != nil {
 		return Binding{}, fmt.Errorf("binding %q: %w", intent, err)
 	}
 	ver, err := ystr(n, "verified")
@@ -503,7 +547,11 @@ func loadBinding(c *Catalog, intent string, n *ynode, planSources []Source) (Bin
 	b := Binding{
 		Intent: intent, Command: cmd, Verified: Verified(ver), Sources: srcs,
 		Consent: consent, ConsentNote: consentNote, ReadOnlyException: exception,
-		tokens: tokenize(cmd),
+		Teardown: teardown,
+		tokens:   tokenize(cmd),
+	}
+	if teardown != "" {
+		b.teardownTokens = tokenize(teardown)
 	}
 	if raw, verr := ystr(n, "max_bytes"); verr != nil {
 		return Binding{}, verr
@@ -554,6 +602,16 @@ func ValidateCommand(cmd string) error { return ValidateCommandWithException(cmd
 // match.
 func ValidateCommandWithException(cmd, exception string) error {
 	if err := protocoldiag.ValidateReadOnly(cmd); err != nil {
+		// A bounded reachability probe is the one thing that is not a read and
+		// is still allowed (owner, 2026-09-05: "Ping and traceroute are good
+		// examples, should be allowed"). It has its OWN grammar rather than a
+		// hole in the read-only one, and every parameter must be in bounds.
+		if protocoldiag.IsProbeCommand(cmd) {
+			if perr := protocoldiag.ValidateBoundedProbe(cmd); perr != nil {
+				return fmt.Errorf("command %q is a probe outside the bounded-probe grammar: %w", cmd, perr)
+			}
+			return validatePlaceholders(cmd)
+		}
 		if exception == "" {
 			return fmt.Errorf("command %q is not a read-only show: %w", cmd, err)
 		}
@@ -563,6 +621,13 @@ func ValidateCommandWithException(cmd, exception string) error {
 			return fmt.Errorf("command %q claims a read-only exception but %w", cmd, err)
 		}
 	}
+	return validatePlaceholders(cmd)
+}
+
+// validatePlaceholders enforces the CLOSED substitution grammar on one command:
+// every `{token}` it carries must be one Correlix can actually fill from an
+// incident. A malformed or unknown placeholder fails closed.
+func validatePlaceholders(cmd string) error {
 	for _, tok := range tokenize(cmd) {
 		if !strings.HasPrefix(tok, "{") {
 			continue
@@ -601,6 +666,24 @@ func DialectForPlatform(platform string) (string, string, bool) {
 		return "", "", false
 	}
 	return DialectSlug(prof.ID), prof.DisplayName, true
+}
+
+// ValidateScopedSetter is the grammar a DOCUMENTED SESSION-SCOPED SETTER must
+// pass. Such a command narrows what a read prints and dies with the CLI session;
+// it changes no configuration and clears nothing, which is why the owner's
+// 2026-09-05 rule leaves it open. It is admitted by ai/tac/forbidden.yaml's
+// `session_scoped:` list and by nothing else — there is no prefix match and no
+// wildcard — and every structural rule the read-only grammar carries still
+// applies: no chaining, no redirection, no substitution, display-only pipe
+// filters, closed placeholders.
+func ValidateScopedSetter(cmd string) error {
+	if strings.TrimSpace(cmd) == "" {
+		return fmt.Errorf("empty command")
+	}
+	if err := validateStructure(cmd); err != nil {
+		return fmt.Errorf("command %q is a session-scoped setter but %w", cmd, err)
+	}
+	return validatePlaceholders(cmd)
 }
 
 // validateStructure applies the read-only grammar's STRUCTURAL half — the rules

@@ -43,10 +43,41 @@ func TestEveryPlannedCommandIsReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	exceptions := 0
+	exceptions, probes, scoped := 0, 0, 0
 	for _, d := range c.Dialects() {
 		p, _ := c.PlanFor(d)
 		for intent, b := range p.Bindings {
+			// A BOUNDED REACHABILITY PROBE is not a read and is still allowed
+			// (owner, 2026-09-05). It passes its own grammar, every parameter
+			// inside the bound, and it may never carry a teardown.
+			if protocoldiag.IsProbeCommand(b.Command) {
+				probes++
+				if err := protocoldiag.ValidateBoundedProbe(b.Command); err != nil {
+					t.Errorf("%s/%s: %q is outside the bounded-probe grammar: %v", d, intent, b.Command, err)
+				}
+				if err := ValidateCommand(b.Command); err != nil {
+					t.Errorf("%s/%s: %v", d, intent, err)
+				}
+				if b.Teardown != "" {
+					t.Errorf("%s/%s: a probe carries a teardown", d, intent)
+				}
+				continue
+			}
+			// A DOCUMENTED SESSION-SCOPED SETTER is admitted by the policy and
+			// by nothing else, and only WITH the teardown the policy documents.
+			if scope, ok := c.Policy().SessionScope(d, b.Command); ok {
+				scoped++
+				if err := ValidateScopedSetter(b.Command); err != nil {
+					t.Errorf("%s/%s: %v", d, intent, err)
+				}
+				if b.Teardown != scope.Teardown {
+					t.Errorf("%s/%s: teardown is %q, the policy documents %q", d, intent, b.Teardown, scope.Teardown)
+				}
+				continue
+			}
+			if b.Teardown != "" {
+				t.Errorf("%s/%s: carries a teardown but is not a session-scoped setter", d, intent)
+			}
 			if b.ReadOnlyException != "" {
 				// The narrow, CITED documented-status-read path. It must still
 				// pass every structural rule, and it must say where the
@@ -79,7 +110,14 @@ func TestEveryPlannedCommandIsReadOnly(t *testing.T) {
 		t.Errorf("%d read-only exceptions are shipped; the allowlist is a footnote to the "+
 			"grammar, not a second grammar — review them", exceptions)
 	}
-	t.Logf("shipped bindings carry %d cited read-only exceptions", exceptions)
+	// The two non-read admissions are meant to stay small and enumerable: a
+	// probe per concept a vendor documents, and the two FortiOS scope setters.
+	if scoped > 8 {
+		t.Errorf("%d session-scoped setters are shipped; the exemption is two documented FortiOS "+
+			"setters, not a category", scoped)
+	}
+	t.Logf("shipped bindings carry %d cited read-only exceptions, %d bounded probes and %d session-scoped setters",
+		exceptions, probes, scoped)
 }
 
 // TestEveryReferencedIntentIsDeclared proves the vocabulary is closed in both

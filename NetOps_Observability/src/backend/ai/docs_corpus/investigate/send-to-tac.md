@@ -99,6 +99,21 @@ addresses, AS numbers and prefixes are the evidence and stay in the file. Read
 it before sending it to a third party.
 :::
 
+## What Correlix will never run
+
+Correlix collects **outputs only**. A command that changes configuration, that
+restarts or reboots the device, or that addresses a daemon or a process is not
+merely refused at run time — it is not carried at all: it is removed from the
+research corpus, never merged into a plan, never rendered and never sent. Only a
+count survives, which is what Iris → Knowledge shows as "excluded by policy",
+grouped as configuration, restart and daemon. Matching is on the command's own
+words, so `show reload cause` and `show system processes` remain ordinary reads.
+The one thing Correlix runs that is not a read is a **bounded ping or
+traceroute** — at most five echoes, 1500 bytes, 30 hops, three probes per hop,
+and never a flood, a sweep or a rapid — plus, on FortiOS, the documented session
+filters that narrow what a read prints, which Correlix always clears again before
+it disconnects.
+
 ## Related
 
 - [Diagnose a BGP, OSPF or IS-IS issue](/investigate/protocol-diagnostics)

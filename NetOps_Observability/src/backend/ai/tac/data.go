@@ -10,9 +10,14 @@ package tacdata
 
 import "embed"
 
-// FS carries the taxonomy and every authored dialect plan. research/*.yaml is
-// deliberately NOT embedded: it is merge INPUT (scripts/tac-merge-research.py),
-// never something the running platform reads.
+// FS carries the taxonomy, the OUTPUT-ONLY command policy and every authored
+// dialect plan. research/*.yaml is deliberately NOT embedded: it is merge INPUT
+// (scripts/tac-merge-research.py), never something the running platform reads.
 //
-//go:embed classes.yaml plans/*.yaml
+// forbidden.yaml is the owner's 2026-09-05 command policy (config / restart /
+// daemon are not knowledge Correlix carries). It is embedded because the LOADER
+// and the GATE both re-apply it at runtime — the purge that keeps the corpus
+// clean is the first layer, not the only one.
+//
+//go:embed classes.yaml forbidden.yaml plans/*.yaml
 var FS embed.FS

@@ -35,6 +35,12 @@ import (
 // bounded time and output) over THIS table.
 type Gate struct {
 	byDialect map[string][][]string
+	// policy is the owner's OUTPUT-ONLY command policy, re-applied here. It is a
+	// SEPARATE authority from the table: the table says "an authored plan could
+	// have produced this", the policy says "Correlix does not do this at all".
+	// Keeping both is what makes the rule structural — a hand-edited plan file
+	// widens the table, and the policy still refuses the command.
+	policy *Policy
 }
 
 // NewGate compiles the closed table from a catalog. It is built once and never
@@ -44,16 +50,24 @@ func NewGate(c *Catalog) *Gate {
 	if c == nil {
 		return g
 	}
+	g.policy = c.policy
 	for _, d := range c.planOrder {
 		p := c.plans[d]
 		seen := map[string]bool{}
-		for _, b := range p.Bindings {
-			key := strings.Join(b.tokens, " ")
+		add := func(toks []string) {
+			key := strings.Join(toks, " ")
 			if key == "" || seen[key] {
-				continue
+				return
 			}
 			seen[key] = true
-			g.byDialect[d] = append(g.byDialect[d], append([]string(nil), b.tokens...))
+			g.byDialect[d] = append(g.byDialect[d], append([]string(nil), toks...))
+		}
+		for _, b := range p.Bindings {
+			add(b.tokens)
+			// A session-scoped setter's teardown is run by the collector, so it
+			// must be in the table too — the runner gates every string it puts
+			// on a wire, and an ungated teardown would simply never run.
+			add(b.teardownTokens)
 		}
 	}
 	return g
@@ -72,9 +86,21 @@ func (g *Gate) Allows(dev protocoldiag.Device, command string) bool {
 }
 
 // AllowsDialect is Allows for a dialect slug the caller already resolved.
+//
+// THE POLICY IS APPLIED FIRST, and it is applied to the RENDERED string. A
+// command in the config / restart / daemon families is refused here even if the
+// plan data somehow carried it, and a probe is refused unless every one of its
+// parameters is inside the bounded-probe grammar — a `count 5` template that
+// rendered as `count 5000` never reaches a device.
 func (g *Gate) AllowsDialect(dialect, command string) bool {
 	cmd := strings.Fields(command)
 	if len(cmd) == 0 {
+		return false
+	}
+	if _, forbidden := g.policy.Match(dialect, command); forbidden {
+		return false
+	}
+	if protocoldiag.IsProbeCommand(command) && protocoldiag.ValidateBoundedProbe(command) != nil {
 		return false
 	}
 	for _, tmpl := range g.byDialect[dialect] {

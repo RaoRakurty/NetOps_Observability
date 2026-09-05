@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"netops/backend/internal/protocoldiag"
 )
 
 // Section groups a plan step for the preview.
@@ -62,7 +64,11 @@ type Step struct {
 	// a plain missing capability.
 	NeedsConsent bool     `json:"needs_consent,omitempty"`
 	Sources      []Source `json:"sources,omitempty"`
-	MaxBytes     int64    `json:"max_bytes,omitempty"`
+	// Teardown is the command that undoes a session-scoped setter. When it is
+	// set the collector ALWAYS runs it after the step, including after a failure
+	// or a cancellation, so scope is never left behind on someone's device.
+	Teardown string `json:"teardown,omitempty"`
+	MaxBytes int64  `json:"max_bytes,omitempty"`
 	// TimeoutSeconds is the per-command deadline this step will run under.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
@@ -253,10 +259,23 @@ func (c *Catalog) Plan(classID string, dev Device, opt PlanOptions) (*Plan, erro
 		if mb <= 0 {
 			mb = defaultMaxOutputBytes
 		}
+		cmd := renderCommand(b.Command, dialect, opt.Target)
+		// A bounded probe whose destination did not render is NOT run: on several
+		// platforms a bare ping opens an interactive dialog, and an unscoped
+		// probe is meaningless anyway. It is reported as unbound, with the
+		// reason, which is the honest outcome.
+		if protocoldiag.IsProbeCommand(cmd) && protocoldiag.ValidateBoundedProbe(cmd) != nil {
+			if !seen[intent] {
+				seen[intent] = true
+				p.Unbound = append(p.Unbound, c.unboundStep(intent, sec,
+					"this dialect binds a reachability probe for it, but the incident supplied no address to probe"))
+			}
+			return
+		}
 		p.Steps = append(p.Steps, Step{
 			Intent: intent, Title: in.Title, Section: sec, Bound: true,
-			Command: renderCommand(b.Command, dialect, opt.Target), Verified: b.Verified,
-			Note: note, Sources: b.Sources, MaxBytes: mb, TimeoutSeconds: to,
+			Command: cmd, Verified: b.Verified,
+			Note: note, Sources: b.Sources, Teardown: b.Teardown, MaxBytes: mb, TimeoutSeconds: to,
 		})
 	}
 	addUnbound := func(intent string, sec Section) {

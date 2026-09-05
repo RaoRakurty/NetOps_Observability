@@ -14,6 +14,10 @@
 //     answer, by name;
 //   · platforms Correlix recognises and has authored NO plan for are listed in
 //     their own section rather than omitted;
+//   · what the owner's output-only command policy EXCLUDED is stated as a count
+//     per family — and only as a count. A config / restart / daemon command is
+//     not knowledge Correlix holds (owner, 2026-09-05), and this page is
+//     knowledge, so the command text is never rendered here or anywhere else;
 //   · the unknown-output backlog is NOT counted anywhere yet, so it renders as
 //     an explicit "not yet tracked" — a zero there would read as "there is
 //     none", which is a claim nobody has earned.
@@ -28,6 +32,8 @@ import { api, type TacDialectCoverage, type TacKnowledge } from "../../services/
 import WindowedList from "../../components/WindowedList";
 import {
   BACKLOG_NOT_TRACKED,
+  COMMAND_POLICY_NO_EXCLUSIONS,
+  COMMAND_POLICY_NOTE,
   KNOWLEDGE_FAILED,
   KNOWLEDGE_GROWTH_NOTE,
   NO_UNPLANNED_DIALECTS,
@@ -38,6 +44,9 @@ import {
 /** Row pitch of the intent table. Fixed, because that is what lets the list
  *  stay flat in the DOM however long the intent vocabulary grows. */
 const INTENT_ROW_PX = 30;
+
+/** The owner's three families, in the order the policy states them. */
+const FAMILY_ORDER = ["config", "restart", "daemon"] as const;
 
 export default function IrisKnowledge() {
   const [data, setData] = useState<TacKnowledge | null>(null);
@@ -106,6 +115,9 @@ export default function IrisKnowledge() {
                   </span>
                   <span className="mini-meta">
                     {d.plan_version ? `plan ${d.plan_version}` : "no plan version recorded"}
+                    {(d.excluded_by_policy?.total ?? 0) > 0
+                      ? ` · ${d.excluded_by_policy.total} excluded by policy`
+                      : ""}
                   </span>
                 </button>
                 {open === d.dialect && <DialectDetail d={d} />}
@@ -136,6 +148,34 @@ export default function IrisKnowledge() {
             ))}
           </ul>
         )}
+      </section>
+
+      <section className="tac-step" aria-labelledby="tac-know-policy-h">
+        <h2 id="tac-know-policy-h" className="tac-step-h">What Correlix will not learn</h2>
+        <p className="mini-meta tac-note">{COMMAND_POLICY_NOTE}</p>
+        <p className="mini-meta tac-note">
+          Policy <code className="tac-id">{data.command_policy?.version || "not loaded"}</code>
+          {data.command_policy?.generated ? ` · census ${data.command_policy.generated}` : ""}
+        </p>
+        {(data.command_policy?.total ?? 0) === 0 ? (
+          <p className="mini-meta tac-note" data-testid="tac-policy-excluded">
+            {COMMAND_POLICY_NO_EXCLUSIONS}
+          </p>
+        ) : (
+          <p className="mini-meta tac-note" data-testid="tac-policy-excluded">
+            <strong>Excluded by policy: {data.command_policy.total}</strong>{" "}
+            ({FAMILY_ORDER.map((f) => `${f} ${data.command_policy.by_family?.[f] ?? 0}`).join(" · ")})
+          </p>
+        )}
+        <ul className="tac-policy-families">
+          {(data.command_policy?.families ?? []).map((f) => (
+            <li key={f.id}>
+              <span className="tac-alt-t">{f.title}</span>{" "}
+              <code className="tac-id">{f.id}</code>{" "}
+              <span className="mini-meta">{f.rule}</span>
+            </li>
+          ))}
+        </ul>
       </section>
 
       <section className="tac-step" aria-labelledby="tac-know-grow-h">

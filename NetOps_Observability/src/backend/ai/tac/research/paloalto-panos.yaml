@@ -366,7 +366,6 @@ issues:
       - {cmd: "show vpn ike-sa gateway {gateway}", intent: vpn.ipsec.ike.sa, params: [gateway]}
       - {cmd: "show vpn gateway", intent: vpn.ipsec.gateways, params: []}
       - {cmd: "show vpn flow", intent: vpn.ipsec.flow, params: []}
-      - {cmd: "test vpn ike-sa gateway {gateway}", intent: vpn.ipsec.test, params: [gateway]}
       - {cmd: "show counter global filter delta yes {counter}", intent: dataplane.counters, params: [counter]}
     tac_first_look: "TAC opens `show vpn ike-sa gateway <gateway>` to confirm there is no phase-1 SA at all, reads the configured proposal from `show vpn gateway`, and then triggers one negotiation with `test vpn ike-sa gateway <gateway>` while watching the delta counters, so the failure point is captured on a single attempt."
     sources:
@@ -393,7 +392,6 @@ issues:
       - {cmd: "show vpn flow", intent: vpn.ipsec.flow, params: []}
       - {cmd: "show vpn flow name {tunnel}", intent: vpn.ipsec.tunnel.detail, params: [tunnel]}
       - {cmd: "show vpn ike-sa gateway {gateway}", intent: vpn.ipsec.ike.sa, params: [gateway]}
-      - {cmd: "test vpn ipsec-sa tunnel {tunnel}", intent: vpn.ipsec.test, params: [tunnel]}
     tac_first_look: "With phase-1 up, TAC compares `show vpn tunnel` (the configured proxy-IDs and crypto profile) against `show vpn ipsec-sa` (what actually came up) — a proxy-ID that does not exactly mirror the peer's selector is the single most common cause."
     sources:
       - "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start/cli-cheat-sheets/cli-cheat-sheet-networking"
@@ -940,8 +938,6 @@ issues:
       - "Certificate or connectivity failure on the log path"
     commands:
       - {cmd: "show logging-status device {serial}", intent: logging.status, params: [serial]}
-      - {cmd: "debug log-collector log-collection-stats show incoming-logs", intent: logging.rate, params: []}
-      - {cmd: "debug log-collector log-collection-stats show log-forwarding-stats", intent: logging.rate, params: []}
       - {cmd: "show devicegroups name {device-group}", intent: panorama.devicegroups, params: [device-group]}
       - {cmd: "show templates name {template}", intent: panorama.templates, params: [template]}
       - {cmd: "show system info | match system-mode", intent: platform.mode, params: []}
@@ -1087,7 +1083,6 @@ issues:
       - {cmd: "show dns-proxy all", intent: dns.proxy.status, params: []}
       - {cmd: "show dns-proxy settings all", intent: dns.proxy.config, params: []}
       - {cmd: "show dns-proxy statistics all", intent: dns.proxy.stats, params: []}
-      - {cmd: "debug dnsproxyd show sys-statistics", intent: dns.proxy.stats, params: []}
       - {cmd: "ping host {dst}", intent: connectivity.ping, params: [dst]}
       - {cmd: "show netstat statistics yes", intent: network.netstat, params: []}
     tac_first_look: "`show dns-proxy all` names the configured upstream servers and the proxy's state; `show dns-proxy statistics all` then shows whether queries are arriving and being answered, which separates a client-side problem from an upstream one."

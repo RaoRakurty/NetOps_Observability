@@ -280,6 +280,15 @@ func (c *Collector) Collect(ctx context.Context, p *Plan, supplied []SuppliedOut
 		cc := c.runOne(ctx, dev, st)
 		capt.Commands = append(capt.Commands, cc)
 		capt.TotalBytes += int64(cc.Bytes)
+		if st.Teardown != "" {
+			// A session-scoped setter is allowed ONLY because Correlix undoes
+			// it, so the teardown runs unconditionally — after a failure, and
+			// after a cancellation too. It is recorded like any other command:
+			// a teardown that did not work is not something to hide.
+			td := c.runTeardown(ctx, dev, st)
+			capt.Commands = append(capt.Commands, td)
+			capt.TotalBytes += int64(td.Bytes)
+		}
 		ph := "done"
 		if cc.Err != "" {
 			ph = "error"
@@ -322,6 +331,32 @@ func (c *Collector) runOne(ctx context.Context, dev protocoldiag.Device, st Step
 	if int64(len(out)) > st.MaxBytes && st.MaxBytes > 0 {
 		out = out[:st.MaxBytes]
 		cc.Err = "output exceeded this command's size cap and was truncated"
+	}
+	cc.Output = protocoldiag.RedactOutput(out)
+	cc.Bytes = len(cc.Output)
+	return cc
+}
+
+// runTeardown runs a step's session-scope teardown. It deliberately does NOT
+// inherit the operator's cancellation: the whole basis for allowing a
+// session-scoped setter is that Correlix clears it again, and a cancelled
+// collection is exactly when leaving scope behind would be worst.
+func (c *Collector) runTeardown(ctx context.Context, dev protocoldiag.Device, st Step) CollectedCommand {
+	start := c.now().UTC()
+	cc := CollectedCommand{
+		Intent: st.Intent, Title: st.Title + " — session scope cleared",
+		Section: st.Section, Command: st.Teardown, Verified: st.Verified, StartedAt: start,
+	}
+	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultCommandTimeout)
+	defer cancel()
+	out, err := c.runner.Run(runCtx, dev, st.Teardown)
+	cc.DurationMS = c.now().UTC().Sub(start).Milliseconds()
+	if err != nil {
+		cc.Err = protocoldiag.RedactOutput(err.Error())
+		return cc
+	}
+	if int64(len(out)) > defaultMaxOutputBytes {
+		out = out[:defaultMaxOutputBytes]
 	}
 	cc.Output = protocoldiag.RedactOutput(out)
 	cc.Bytes = len(cc.Output)

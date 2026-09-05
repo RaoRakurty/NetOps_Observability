@@ -256,8 +256,18 @@ type Binding struct {
 	// citation is a load error.
 	ReadOnlyException string `json:"read_only_exception,omitempty"`
 
+	// Teardown is the command that UNDOES a session-scoped setter — the one
+	// class of non-read command the owner's 2026-09-05 rule leaves open, because
+	// it changes no configuration and dies with the CLI session. The loader
+	// requires it on any binding whose command is a documented setter
+	// (ai/tac/forbidden.yaml `session_scoped:`), and the collector runs it right
+	// after the read, so a Correlix collection never leaves scope on a device.
+	Teardown string `json:"teardown,omitempty"`
+
 	// tokens is the command's template token list, precompiled for the gate.
 	tokens []string
+	// teardownTokens is Teardown's token list, precompiled for the gate.
+	teardownTokens []string
 }
 
 // DialectPlan is one CLI dialect's authored command set.
@@ -292,6 +302,18 @@ type Catalog struct {
 	classOrder  []string
 	plans       map[string]*DialectPlan
 	planOrder   []string
+	// policy is the owner's OUTPUT-ONLY command policy (ai/tac/forbidden.yaml).
+	// It is loaded before any plan, because a plan is validated against it.
+	policy *Policy
+}
+
+// Policy returns the loaded command policy. It is never nil on a catalog that
+// loaded, because Load refuses a build whose policy file is missing.
+func (c *Catalog) Policy() *Policy {
+	if c == nil {
+		return nil
+	}
+	return c.policy
 }
 
 // Classes returns every class in authoring order.

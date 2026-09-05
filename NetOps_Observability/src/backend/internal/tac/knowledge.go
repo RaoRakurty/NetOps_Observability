@@ -49,6 +49,10 @@ type DialectCoverage struct {
 	TotalIntents    int `json:"total_intents"`
 	Verified        int `json:"verified_commands"`
 	DocClaimed      int `json:"doc_claimed_commands"`
+	// ExcludedByPolicy is how many of this dialect's researched commands the
+	// owner's output-only policy kept out of the knowledge base. COUNTS ONLY —
+	// the count is known, the command is not (see ai/tac/forbidden.yaml).
+	ExcludedByPolicy DialectExclude `json:"excluded_by_policy"`
 
 	Classes []ClassCoverage  `json:"classes"`
 	Intents []IntentCoverage `json:"intents"`
@@ -64,6 +68,22 @@ type Knowledge struct {
 	// UnplannedDialects are vendorprofile platforms Correlix recognises but has
 	// authored NO plan for. Naming them is the honest half of coverage.
 	UnplannedDialects []DialectCoverage `json:"unplanned_dialects"`
+	// CommandPolicy is the owner's 2026-09-05 output-only rule as the coverage
+	// view states it: the three families, and how many researched commands each
+	// one excluded. It carries NO command text, by design — a command in one of
+	// those families is not knowledge Correlix holds, and a coverage page is
+	// knowledge.
+	CommandPolicy CommandPolicySummary `json:"command_policy"`
+}
+
+// CommandPolicySummary is the policy, rendered for the coverage view.
+type CommandPolicySummary struct {
+	Version  string         `json:"version"`
+	Families []PolicyFamily `json:"families"`
+	Total    int            `json:"total"`
+	ByFamily map[string]int `json:"by_family"`
+	// Generated is the date the census was last recomputed by the purge.
+	Generated string `json:"generated,omitempty"`
 }
 
 // Knowledge builds the coverage document. It is pure and cheap; the caller may
@@ -73,6 +93,7 @@ func (c *Catalog) Knowledge(knownDialects []DialectRef) Knowledge {
 		CatalogVersion: c.Version, EngineVersion: Version,
 		Classes: c.Classes(), Intents: c.Intents(),
 		Dialects: []DialectCoverage{}, UnplannedDialects: []DialectCoverage{},
+		CommandPolicy: c.commandPolicySummary(),
 	}
 	planned := map[string]bool{}
 	for _, d := range c.planOrder {
@@ -87,6 +108,7 @@ func (c *Catalog) Knowledge(knownDialects []DialectRef) Knowledge {
 			Dialect: ref.Slug, Display: ref.Display, Profile: ref.Profile,
 			HasPlan: false, TotalIntents: len(c.intentOrder),
 			Classes: []ClassCoverage{}, Intents: []IntentCoverage{},
+			ExcludedByPolicy: c.dialectExclusions(ref.Slug),
 		}
 		for _, cl := range c.Classes() {
 			if cl.ID == GenericClassID {
@@ -114,6 +136,41 @@ type DialectRef struct {
 	Profile string
 }
 
+// commandPolicySummary renders the policy for the coverage view: the rule in
+// the data's own words, plus the census. It never carries a command.
+func (c *Catalog) commandPolicySummary() CommandPolicySummary {
+	sum := CommandPolicySummary{Families: []PolicyFamily{}, ByFamily: map[string]int{}}
+	p := c.Policy()
+	if p == nil {
+		return sum
+	}
+	sum.Version = p.Version
+	sum.Families = append(sum.Families, p.Families...)
+	sum.Total = p.Census.Total
+	sum.Generated = p.Census.Generated
+	for _, f := range forbiddenFamilies {
+		sum.ByFamily[f] = p.Census.ByFamily[f]
+	}
+	return sum
+}
+
+// dialectExclusions is one dialect's census row, or a zeroed one. A dialect the
+// census does not mention excluded nothing, which is stated as zeros rather than
+// omitted — an absent number reads as "unknown", and it is not unknown.
+func (c *Catalog) dialectExclusions(dialect string) DialectExclude {
+	row := DialectExclude{Dialect: dialect}
+	p := c.Policy()
+	if p == nil {
+		return row
+	}
+	for _, r := range p.Census.ByDialect {
+		if r.Dialect == dialect {
+			return r
+		}
+	}
+	return row
+}
+
 func (c *Catalog) coverage(p *DialectPlan) DialectCoverage {
 	cov := DialectCoverage{
 		Dialect: p.Dialect, Display: p.Display, Profile: p.Profile,
@@ -121,6 +178,7 @@ func (c *Catalog) coverage(p *DialectPlan) DialectCoverage {
 		BaselineIntents: len(p.Baseline), OptionalIntents: len(p.Optional),
 		TotalIntents: len(c.intentOrder),
 		Classes:      []ClassCoverage{}, Intents: []IntentCoverage{},
+		ExcludedByPolicy: c.dialectExclusions(p.Dialect),
 	}
 	for _, id := range c.intentOrder {
 		in := c.intents[id]

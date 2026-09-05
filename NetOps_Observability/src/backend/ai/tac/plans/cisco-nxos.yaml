@@ -1015,3 +1015,12 @@ bindings:
   underlay.route.remote_vtep:
     command: 'show ip route {prefix} vrf {vrf-scope}'
     verified: doc_claimed
+  vpc.keepalive.reachability:
+    command: 'ping {peer} vrf management'
+    verified: doc_claimed
+  underlay.reachability:
+    command: 'ping {prefix} source-interface {if}'
+    verified: doc_claimed
+  license.cssm.reachability:
+    command: ping smartreceiver.cisco.com vrf management
+    verified: doc_claimed

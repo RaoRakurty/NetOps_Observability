@@ -163,8 +163,21 @@ func (g batteryGate) name() string { return "state battery" }
 func (r *SSHCommandRunner) Run(ctx context.Context, device Device, command string) (string, error) {
 	// (1) read-only shape — belt to the Collector's braces: this runner is also
 	// reachable from any future call site, so it re-validates rather than trust.
+	//
+	// A BOUNDED REACHABILITY PROBE is the single exception (owner decision,
+	// 2026-09-05: ping and traceroute are allowed). It is not a read, so it can
+	// never pass ValidateReadOnly; it passes its OWN grammar instead, which caps
+	// every count, size, timeout and hop and refuses the flood/sweep/rapid
+	// modifiers. Widening this step does not widen what any caller can run: the
+	// closed table at step (2) still has to contain the command, and only a
+	// feature that authored a probe template has one.
 	if err := ValidateReadOnly(command); err != nil {
-		return "", fmt.Errorf("%w: %s", ErrNotReadOnly, err.Error())
+		if !IsProbeCommand(command) {
+			return "", fmt.Errorf("%w: %s", ErrNotReadOnly, err.Error())
+		}
+		if perr := ValidateBoundedProbe(command); perr != nil {
+			return "", fmt.Errorf("%w: %s", ErrNotReadOnly, perr.Error())
+		}
 	}
 	// (2) closed table for THIS device's dialect.
 	if !r.gate.allows(device, command) {

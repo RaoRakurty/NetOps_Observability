@@ -3784,6 +3784,57 @@ intents:
   - id: route.logicalrouter
     area: route
     title: route logicalrouter
+  - id: reachability.unicast
+    area: reachability
+    title: reachability unicast
+  - id: reachability.multicast.allspf
+    area: reachability
+    title: reachability multicast allspf
+  - id: reachability.path
+    area: reachability
+    title: reachability path
+  - id: pathmtu.probe
+    area: pathmtu
+    title: pathmtu probe
+  - id: vrf.reachability
+    area: vrf
+    title: vrf reachability
+  - id: vrf.path
+    area: vrf
+    title: vrf path
+  - id: path.label_stack
+    area: path
+    title: path label stack
+  - id: reachability.ntp_server
+    area: reachability
+    title: reachability ntp server
+  - id: reachability.aaa_server
+    area: reachability
+    title: reachability aaa server
+  - id: ospf.multicast.reachability
+    area: ospf
+    title: ospf multicast reachability
+  - id: reachability.ping
+    area: reachability
+    title: reachability ping
+  - id: reachability.traceroute
+    area: reachability
+    title: reachability traceroute
+  - id: vpc.keepalive.reachability
+    area: vpc
+    title: vpc keepalive reachability
+  - id: underlay.reachability
+    area: underlay
+    title: underlay reachability
+  - id: license.cssm.reachability
+    area: license
+    title: license cssm reachability
+  - id: logging.filter
+    area: logging
+    title: logging filter
+  - id: session.filter
+    area: session
+    title: session filter
 
 # ── the issue-class taxonomy ───────────────────────────────────────────────
 classes:
@@ -3917,6 +3968,11 @@ classes:
       - ospfv3.virtual_links
       - vrf.config
       - vrf.interfaces
+      - reachability.unicast
+      - reachability.multicast.allspf
+      - reachability.path
+      - pathmtu.probe
+      - ospf.multicast.reachability
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2'
         url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
@@ -4252,6 +4308,7 @@ classes:
       - isis.errors.interface
       - config.interface
       - isis.instance.state
+      - pathmtu.probe
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-is-is'
         url: https://www.arista.com/en/um-eos/eos-is-is
@@ -4489,6 +4546,10 @@ classes:
       - bgp.neighbor.received-routes
       - bgp.routes.summary
       - bgp.peer.detail
+      - reachability.unicast
+      - reachability.ping
+      - reachability.traceroute
+      - session.filter
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp'
         url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
@@ -4776,6 +4837,7 @@ classes:
       - bgp.statistics
       - bgp.graceful-restart
       - bgp.damping.prefix
+      - pathmtu.probe
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp'
         url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
@@ -5605,6 +5667,7 @@ classes:
       - vlan.summary
       - trunk.allowed.vlans
       - alarms.active
+      - vpc.keepalive.reachability
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation'
         url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
@@ -5763,6 +5826,7 @@ classes:
       - evpn.route-type5.detail
       - arp.entries.interface
       - vrf.interfaces
+      - underlay.reachability
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands'
         url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
@@ -5967,6 +6031,7 @@ classes:
       - mpls.aft
       - ldp.bindings.prefix
       - mpls.tunneltable
+      - path.label_stack
     sources:
       - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
         url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
@@ -6083,6 +6148,7 @@ classes:
       - ha.status
       - session.users
       - aaa.sessions
+      - logging.filter
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-event-monitor'
         url: https://www.arista.com/en/um-eos/eos-event-monitor
@@ -6666,6 +6732,7 @@ classes:
       - ntp.servers
       - ntp.sntp
       - vrf.interfaces
+      - reachability.ntp_server
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-system-clock-and-time-protocols'
         url: https://www.arista.com/en/um-eos/eos-system-clock-and-time-protocols
@@ -6868,6 +6935,7 @@ classes:
       - vrf.interfaces
       - route.prefix
       - ssh-server.config
+      - reachability.aaa_server
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-user-security'
         url: https://www.arista.com/en/um-eos/eos-user-security
@@ -6970,6 +7038,7 @@ classes:
       - interface.mtu_and_errors
       - interface.resets_and_errors
       - cpu.top_processes
+      - reachability.unicast
     sources:
       - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
         url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
@@ -7119,6 +7188,8 @@ classes:
       - route.table.vrf
       - config.vrf
       - interface.detail
+      - vrf.reachability
+      - vrf.path
     sources:
       - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html'
         url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
@@ -7502,6 +7573,8 @@ classes:
       - license.config
       - fortiguard.webfilter.status
       - jobs.status
+      - license.cssm.reachability
+      - reachability.ping
     sources:
       - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html'
         url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html
@@ -8015,6 +8088,7 @@ classes:
       - platform.version
       - policy.list
       - jobs.status
+      - logging.filter
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used'
         url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used
@@ -8099,6 +8173,7 @@ classes:
       - vpn.ipsec.flow
       - vpn.ipsec.sa
       - vpn.ipsec.tunnel.list
+      - logging.filter
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands'
         url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands
@@ -8137,6 +8212,7 @@ classes:
       - user.mapping.list
       - session.stats
       - dataplane.resources
+      - logging.filter
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues'
         url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues
@@ -8189,6 +8265,7 @@ classes:
       - dataplane.counters
       - ha.session.sync
       - network.netstat
+      - logging.filter
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation'
         url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation
@@ -8364,6 +8441,7 @@ classes:
     intents:
       - system.health
       - system.crashlog
+      - logging.filter
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode'
         url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode
@@ -8401,6 +8479,7 @@ classes:
       - fortiguard.webfilter.status
       - utm.webfilter.stats
       - jobs.status
+      - reachability.ping
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates'
         url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates
@@ -8485,6 +8564,8 @@ classes:
       - fortiguard.servers
       - fortiguard.webfilter.status
       - utm.webfilter.stats
+      - logging.filter
+      - reachability.ping
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet'
         url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
@@ -8524,6 +8605,7 @@ classes:
       - system.health
       - platform.version
       - dataplane.resources
+      - session.filter
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet'
         url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
@@ -8564,6 +8646,7 @@ classes:
       - user.groupmapping.stats
       - user.groups
       - user.agent.status
+      - logging.filter
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet'
         url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
@@ -8599,6 +8682,7 @@ classes:
       - dns.proxy.config
       - dns.proxy.stats
       - network.netstat
+      - session.filter
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/126629/dns-troubleshooting'
         url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/126629/dns-troubleshooting
@@ -8670,6 +8754,7 @@ classes:
       - platform.version
       - admin.sessions
       - interface.config
+      - logging.filter
     sources:
       - title: 'https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings'
         url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings

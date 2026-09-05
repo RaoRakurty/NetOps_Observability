@@ -1,0 +1,419 @@
+# forbidden.yaml — the OUTPUT-ONLY command policy for the TAC escalation pack.
+#
+# Owner decision, 2026-09-05, verbatim:
+#
+#   "Rules in executing commands, any command changing the config should be
+#    blocked or not even known to Correlix. Any command trying to restart or
+#    reboot should be unknown to Correlix. TAC usually need outputs to
+#    understand what is going on, not that we have to execute something and
+#    change."
+#   "Ping and traceroute are good examples, should be allowed."
+#   "Any commands that is touching at daemon level block them."
+#
+# This file is that rule as DATA. It is the vocabulary Correlix refuses to
+# learn: a command whose leading tokens hit a rule here is not merged, not
+# stored, not planned, not rendered and not run — it is purged from the research
+# corpus too, so the platform does not even carry it as knowledge. Only the
+# COUNT survives, per family, which is what `census:` below records.
+#
+# Three readers implement the same matcher and must stay in lockstep:
+#   · internal/tac/forbidden.go        — the Go loader + matcher (runtime)
+#   · scripts/tac_forbidden.py         — the Python matcher (merge + purge)
+#   · internal/tac/gate.go             — the second, data-independent layer:
+#     the gate re-applies this policy at the moment a command would go on a
+#     wire, so a tampered plan file still cannot reach a device.
+#
+# ── how a rule matches ──────────────────────────────────────────────────────
+#
+# On COMMAND TOKENS, never on substrings. A rule's `tokens` are matched against
+# the command's LEADING tokens: rule `reload` matches `reload in 5`, and does
+# NOT match `show reload cause`. `show` / `display` / `get` / `info` commands
+# therefore stay allowed by construction — they can only be hit by a rule that
+# itself begins with one of those words, and there is none.
+#
+# `except:` lists token prefixes that are exempt from that one rule. A longer
+# rule wins over a shorter one (`execute reboot` beats `execute`), and a
+# DIALECT rule wins over a `common:` rule at equal length, so a vendor can name
+# the family its own spelling belongs to.
+#
+# Families (the owner's three, and nothing else):
+#   config  — enters configuration mode, or changes configuration/state that
+#             outlives the session, INCLUDING state-clearing (`clear …`).
+#   restart — restarts, reboots, halts or powers off the box.
+#   daemon  — addresses a named daemon/process: its debug level, its lifetime,
+#             its internals.
+#
+# Adding a rule is a data change reviewed like a skill. REMOVING one is an owner
+# decision: it widens what Correlix may learn.
+
+schema_version: 1
+version: correlix-tac-forbidden-2026-09-05
+
+families:
+  - id: config
+    title: changes configuration or persistent state
+    rule: >-
+      Entering configuration mode, writing/copying/saving/installing, and
+      clearing counters or protocol state. TAC needs outputs; it does not need
+      Correlix to change the device.
+  - id: restart
+    title: restarts, reboots, halts or powers off the device
+    rule: >-
+      Nothing that can take a device out of service may be part of an evidence
+      collection, at any privilege level, on any platform.
+  - id: daemon
+    title: addresses a named daemon or process
+    rule: >-
+      Per-process debug levels, process lifetime and process internals. Some
+      of these read and some of them restart the daemon; the boundary is not
+      legible from the command line, so the whole family is refused.
+
+# Citations for the common rules. Per-dialect rules carry the vendor's own
+# reference beside them.
+sources:
+  - title: Cisco IOS Configuration Fundamentals Command Reference
+    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref.html
+    retrieved: 2026-09-05
+
+# ── common: every dialect, unless a dialect rule names the same tokens ───────
+common:
+  # config — entering configuration mode / changing configuration
+  - {family: config, tokens: 'configure', why: 'enters configuration mode'}
+  - {family: config, tokens: 'config', why: 'enters configuration mode (abbreviated form)'}
+  - {family: config, tokens: 'conf', why: 'enters configuration mode (abbreviated form)'}
+  - {family: config, tokens: 'system-view', why: 'enters the Huawei/H3C configuration view'}
+  - {family: config, tokens: 'edit', why: 'enters an editable configuration context'}
+  - {family: config, tokens: 'set', why: 'sets a configuration statement'}
+  - {family: config, tokens: 'unset', why: 'removes a configuration statement'}
+  - {family: config, tokens: 'delete', why: 'deletes configuration or a stored file'}
+  - {family: config, tokens: 'undo', why: 'negates a configuration statement (Huawei/H3C)'}
+  - {family: config, tokens: 'no', why: 'negates a configuration statement (Cisco/Arista)'}
+  - {family: config, tokens: 'default', why: 'resets a configuration statement to its default'}
+  - {family: config, tokens: 'commit', why: 'commits a candidate configuration'}
+  - {family: config, tokens: 'rollback', why: 'replaces the running configuration with a stored one'}
+  - {family: config, tokens: 'replace', why: 'replaces the running configuration'}
+  - {family: config, tokens: 'load', why: 'loads a configuration into the candidate'}
+  - {family: config, tokens: 'activate', why: 'activates a configuration element'}
+  - {family: config, tokens: 'deactivate', why: 'deactivates a configuration element'}
+  - {family: config, tokens: 'write', why: 'writes the running configuration to storage'}
+  - {family: config, tokens: 'save', why: 'saves the running configuration to storage'}
+  - {family: config, tokens: 'copy', why: 'copies a file or configuration, overwriting the target'}
+  - {family: config, tokens: 'move', why: 'moves a file on the device'}
+  - {family: config, tokens: 'rename', why: 'renames a file on the device'}
+  - {family: config, tokens: 'mkdir', why: 'creates a directory on the device'}
+  - {family: config, tokens: 'rmdir', why: 'removes a directory on the device'}
+  - {family: config, tokens: 'install', why: 'installs software or a patch'}
+  - {family: config, tokens: 'upgrade', why: 'upgrades software'}
+  - {family: config, tokens: 'downgrade', why: 'downgrades software'}
+  - {family: config, tokens: 'format', why: 'formats a filesystem on the device'}
+  - {family: config, tokens: 'erase', why: 'erases configuration or a filesystem'}
+  - {family: config, tokens: 'license', why: 'installs or removes a licence'}
+  - {family: config, tokens: 'boot', why: 'changes the boot image or boot order'}
+  - {family: config, tokens: 'startup', why: 'changes the startup image or configuration'}
+  - {family: config, tokens: 'clear', why: 'clears counters, tables or protocol state'}
+  - {family: config, tokens: 'reset', why: 'clears or re-establishes protocol state (Huawei spelling of clear)'}
+  - {family: config, tokens: 'bash', why: 'drops to a host shell, where nothing above is enforceable'}
+  - {family: config, tokens: 'shell', why: 'drops to a host shell, where nothing above is enforceable'}
+  - {family: config, tokens: 'start', why: 'starts a shell or a subsystem (`start shell`)'}
+  - {family: config, tokens: 'run', why: 'runs a host command from the CLI'}
+  - {family: config, tokens: 'tools', why: 'the SR Linux action branch: every leaf performs an action'}
+  # restart — taking the device out of service
+  - {family: restart, tokens: 'reload', why: 'reloads the device'}
+  - {family: restart, tokens: 'reboot', why: 'reboots the device'}
+  - {family: restart, tokens: 'restart', why: 'restarts the device or one of its processes'}
+  - {family: restart, tokens: 'halt', why: 'halts the device'}
+  - {family: restart, tokens: 'shutdown', why: 'shuts the device or an interface down'}
+  - {family: restart, tokens: 'power-off', why: 'powers the device off'}
+  - {family: restart, tokens: 'poweroff', why: 'powers the device off'}
+  - {family: restart, tokens: 'power-cycle', why: 'power-cycles the device or a module'}
+  - {family: restart, tokens: 'hw-module', why: 'reloads or power-cycles a hardware module'}
+  - {family: restart, tokens: 'microcode', why: 'reloads microcode, which resets forwarding hardware'}
+  - {family: restart, tokens: 'switchover', why: 'forces a supervisor/CPM switchover'}
+  - {family: restart, tokens: 'redundancy', why: 'drives the redundancy state machine (force-switchover)'}
+  - {family: restart, tokens: 'zeroize', why: 'erases keys and reboots'}
+  # daemon — addressing a named daemon or process
+  - {family: daemon, tokens: 'debug', why: 'enables a per-process debug level on the device'}
+  - {family: daemon, tokens: 'undebug', why: 'manipulates per-process debug levels'}
+  - {family: daemon, tokens: 'kill', why: 'signals a process'}
+  - {family: daemon, tokens: 'killall', why: 'signals every instance of a process'}
+  - {family: daemon, tokens: 'service', why: 'drives a service/daemon lifecycle'}
+  - {family: daemon, tokens: 'systemctl', why: 'drives a systemd unit''s lifecycle'}
+  - {family: daemon, tokens: 'process', why: 'addresses a named process (restart, shutdown, core)'}
+  - {family: daemon, tokens: 'agent', why: 'addresses a named agent process'}
+  - {family: daemon, tokens: 'pads', why: 'Huawei''s protocol-daemon diagnostic branch (`pads diagnose`)'}
+
+# ── per-dialect rules ────────────────────────────────────────────────────────
+dialects:
+  - dialect: cisco-ios
+    sources:
+      - title: Cisco IOS Configuration Fundamentals Command Reference
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref.html
+        retrieved: 2026-09-05
+    rules:
+      - {family: config, tokens: 'archive', why: 'writes a configuration archive to storage'}
+      - {family: daemon, tokens: 'test', why: 'the platform test harness drives hardware and processes directly'}
+
+  - dialect: cisco-iosxe
+    sources:
+      - title: Cisco IOS XE Configuration Fundamentals Command Reference
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref.html
+        retrieved: 2026-09-05
+    rules:
+      - {family: config, tokens: 'archive', why: 'writes a configuration archive to storage'}
+      - {family: config, tokens: 'request', why: 'IOS-XE `request platform software …` performs platform actions'}
+      - {family: daemon, tokens: 'test', why: 'the platform test harness drives hardware and processes directly'}
+      - {family: config, tokens: 'monitor', why: 'configures an EPC/SPAN capture session that lives on the device'}
+
+  - dialect: cisco-iosxr
+    sources:
+      - title: Cisco IOS XR System Management Command Reference
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/system-management/b-system-management-cr-ncs5500.html
+        retrieved: 2026-09-05
+    rules:
+      - {family: config, tokens: 'install', why: '`install add|activate|commit` changes the running software'}
+      - family: config
+        tokens: admin
+        why: 'the admin plane carries install, reload and hardware actions'
+        except:
+          # `admin show …` is the admin plane's READ half — the platform,
+          # environment and LED state an XR TAC engineer opens first.
+          - admin show
+      - {family: config, tokens: 'monitor', why: 'configures an on-device monitor session'}
+
+  - dialect: cisco-nxos
+    sources:
+      - title: Cisco Nexus 9000 Series NX-OS System Management Configuration Guide
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/104x/configuration/system-management/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-104x.html
+        retrieved: 2026-09-05
+    rules:
+      - {family: daemon, tokens: 'system internal', why: '`system internal … restart` restarts a platform process'}
+      - {family: config, tokens: 'system', why: 'the `system` branch changes platform-wide settings'}
+      - {family: config, tokens: 'install', why: '`install all` performs an ISSU/software change'}
+      - {family: daemon, tokens: 'test', why: 'the platform test harness drives hardware and processes directly'}
+      - {family: config, tokens: 'monitor', why: 'configures an on-device ERSPAN/SPAN monitor session'}
+      - {family: config, tokens: 'attach', why: 'attaches to a module''s shell, where nothing above is enforceable'}
+
+  - dialect: cisco-asa
+    sources:
+      - title: Cisco Secure Firewall ASA Series Command Reference
+        url: https://www.cisco.com/c/en/us/td/docs/security/asa/asa-command-reference/A-H/cmdref1.html
+        retrieved: 2026-09-05
+    rules:
+      - {family: config, tokens: 'failover', why: 'drives the failover state machine (`failover active`)'}
+      - {family: daemon, tokens: 'test', why: 'the platform test harness drives hardware and processes directly'}
+      - {family: config, tokens: 'crashinfo', why: 'writes or erases the crashinfo file; the read form is `show`'}
+
+  - dialect: arista-eos
+    sources:
+      - title: Arista EOS User Manual — Command-Line Interface
+        url: https://www.arista.com/en/um-eos/eos-command-line-interface
+        retrieved: 2026-09-05
+    rules:
+      - {family: daemon, tokens: 'agent', why: '`agent <name> terminate` kills a named EOS agent'}
+      - {family: config, tokens: 'zerotouch', why: 'changes the ZTP state, which reboots into provisioning'}
+      - {family: config, tokens: 'monitor', why: 'configures an on-device monitor session'}
+
+  - dialect: juniper-junos
+    sources:
+      - title: Junos OS CLI Reference — Operational Mode Commands
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/topic-map/junos-cli-operational-mode-commands.html
+        retrieved: 2026-09-05
+    rules:
+      - {family: daemon, tokens: 'restart', why: '`restart <process>` restarts a named Junos daemon'}
+      - {family: daemon, tokens: 'request system process', why: 'addresses a named process by pid or name'}
+      - {family: restart, tokens: 'request system reboot', why: 'reboots the routing engine'}
+      - {family: restart, tokens: 'request system halt', why: 'halts the routing engine'}
+      - {family: restart, tokens: 'request system power-off', why: 'powers the routing engine off'}
+      - {family: restart, tokens: 'request vmhost reboot', why: 'reboots the VM host'}
+      - {family: restart, tokens: 'request vmhost halt', why: 'halts the VM host'}
+      - {family: restart, tokens: 'request vmhost power-off', why: 'powers the VM host off'}
+      - {family: restart, tokens: 'request chassis', why: 'restarts/offlines chassis hardware (`request chassis fpc restart`)'}
+      - {family: config, tokens: 'request system software', why: 'adds, deletes or rolls back software'}
+      - {family: config, tokens: 'request system zeroize', why: 'erases configuration and keys'}
+      - {family: config, tokens: 'request system snapshot', why: 'writes a snapshot to the alternate media'}
+      - {family: config, tokens: 'request system storage', why: '`request system storage cleanup` deletes files'}
+      - {family: config, tokens: 'request system configuration', why: 'writes the rescue configuration'}
+      - {family: config, tokens: 'request system license', why: 'adds or deletes a licence'}
+      - {family: config, tokens: 'request routing-engine', why: 'forces a routing-engine mastership change'}
+      - {family: config, tokens: 'request message', why: 'writes a message to logged-in users'}
+      - {family: config, tokens: 'request security', why: 'installs/clears security material (PKI, IDP)'}
+      - {family: config, tokens: 'request pfe', why: 'the PFE request branch performs forwarding-plane actions'}
+      - {family: config, tokens: 'request interface', why: 'toggles interface state (`request interface rpm …`)'}
+      - {family: daemon, tokens: 'request routing', why: 'restarts or reconfigures the routing daemon'}
+
+  - dialect: nokia-sros
+    sources:
+      - title: Nokia 7750 SR OS Basic System Configuration Guide
+        url: https://documentation.nokia.com/sr/
+        retrieved: 2026-09-05
+    rules:
+      - {family: restart, tokens: 'admin reboot', why: 'reboots the system'}
+      - {family: daemon, tokens: 'admin restart', why: 'restarts a named system application'}
+      - {family: config, tokens: 'admin save', why: 'writes the running configuration to storage'}
+      - {family: config, tokens: 'admin set-time', why: 'changes the system clock'}
+      - {family: config, tokens: 'admin redundancy', why: 'forces a CPM switchover'}
+      - {family: config, tokens: 'admin system', why: 'the admin system branch performs system actions'}
+      - {family: config, tokens: 'admin update', why: 'updates software or the boot loader'}
+      - {family: config, tokens: 'admin enable-tech', why: 'enables the vendor engineering shell'}
+      - {family: config, tokens: 'admin debug-save', why: 'writes a debug configuration file to storage'}
+      - {family: config, tokens: 'exec', why: 'executes a stored command file, contents unknown to Correlix'}
+
+  - dialect: nokia-srlinux
+    sources:
+      - title: Nokia SR Linux Software Documentation
+        url: https://documentation.nokia.com/srlinux/
+        retrieved: 2026-09-05
+    rules:
+      - {family: daemon, tokens: 'tools system app-management', why: 'starts, stops, restarts, reloads a named SR Linux application'}
+      - {family: restart, tokens: 'tools system reboot', why: 'reboots the system'}
+      - {family: config, tokens: 'tools', why: 'the SR Linux action branch: every leaf performs an action'}
+      - {family: config, tokens: 'enter', why: 'enters candidate configuration mode (`enter candidate`)'}
+
+  - dialect: huawei-vrp
+    sources:
+      - title: Huawei VRP — Basic Configuration Command Reference
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260
+        retrieved: 2026-09-05
+    rules:
+      - {family: daemon, tokens: 'pads', why: '`pads diagnose` drives Huawei''s protocol daemons directly'}
+      - {family: daemon, tokens: 'diagnose', why: 'enters the Huawei diagnostic view, whose commands are undocumented actions'}
+      - {family: config, tokens: 'reset', why: 'Huawei''s spelling of clear: resets counters and protocol sessions'}
+      - {family: config, tokens: 'schedule', why: 'schedules a future reboot or upgrade'}
+      - {family: config, tokens: 'patch', why: 'loads or activates a patch'}
+      - {family: config, tokens: 'refresh', why: 'refreshes BGP routes by re-advertising them'}
+
+  - dialect: fortinet-fortios
+    sources:
+      - title: FortiOS CLI Reference — execute commands
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/cli-reference
+        retrieved: 2026-09-05
+      - title: FortiOS CLI troubleshooting cheat sheet
+        url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
+        retrieved: 2026-09-05
+    rules:
+      # `execute` runs an ACTION on FortiOS. The exceptions are the documented
+      # output-only leaves TAC actually asks for; everything else is unknown.
+      - family: config
+        tokens: execute
+        why: 'FortiOS `execute` performs an action; only the documented output-only leaves are exempt'
+        except:
+          - execute ping
+          - execute ping6
+          - execute traceroute
+          - execute traceroute6
+          - execute log display
+          - execute log filter
+          - execute time
+          - execute dhcp lease-list
+          - execute disk list
+          - execute vpn sslvpn list
+      - {family: restart, tokens: 'execute reboot', why: 'reboots the unit'}
+      - {family: restart, tokens: 'execute shutdown', why: 'shuts the unit down'}
+      - {family: config, tokens: 'execute restore', why: 'restores configuration or firmware from a file'}
+      - {family: config, tokens: 'execute factoryreset', why: 'erases the configuration'}
+      - {family: config, tokens: 'execute factoryreset2', why: 'erases the configuration and the logs'}
+      - {family: config, tokens: 'execute formatlogdisk', why: 'formats the log disk'}
+      - {family: config, tokens: 'execute cfg', why: 'saves or reloads the configuration (`execute cfg save`)'}
+      - {family: config, tokens: 'execute usb-disk', why: 'formats or writes the USB disk'}
+      - {family: config, tokens: 'execute disconnect-admin-session', why: 'terminates another administrator''s session'}
+      - {family: config, tokens: 'execute set-next-reboot', why: 'selects the partition the unit next boots'}
+      # daemon-level FortiOS branches
+      - {family: daemon, tokens: 'diagnose test application', why: 'selects a named daemon''s debug level; some levels restart the daemon'}
+      - {family: daemon, tokens: 'diagnose sys kill', why: 'signals a named FortiOS process'}
+      - {family: daemon, tokens: 'diagnose sys process', why: 'addresses a named FortiOS process'}
+      - {family: daemon, tokens: 'diagnose debug application', why: 'sets a named daemon''s debug level'}
+      - {family: daemon, tokens: 'diagnose debug enable', why: 'turns device-side debug output on'}
+      - {family: daemon, tokens: 'diagnose debug disable', why: 'turns device-side debug output off'}
+      - {family: daemon, tokens: 'diagnose debug reset', why: 'resets every debug level'}
+      - {family: daemon, tokens: 'diagnose debug console', why: 'redirects debug output to the console'}
+      - {family: daemon, tokens: 'diagnose debug flow', why: 'starts a daemon-side flow trace that keeps running'}
+      - {family: daemon, tokens: 'diagnose debug cli', why: 'sets the CLI debug level'}
+
+  - dialect: paloalto-panos
+    sources:
+      - title: PAN-OS CLI Quick Start — CLI Cheat Sheets
+        url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start
+        retrieved: 2026-09-05
+    rules:
+      - {family: daemon, tokens: 'debug', why: 'the PAN-OS debug branch addresses named daemons (dnsproxyd, log-collector, …)'}
+      - {family: config, tokens: 'test vpn', why: '`test vpn ike-sa` initiates an IKE/IPsec SA — it changes state'}
+      - {family: restart, tokens: 'request restart', why: 'restarts the system or a named process'}
+      - {family: restart, tokens: 'request shutdown', why: 'shuts the system down'}
+      - {family: config, tokens: 'request system', why: 'the system request branch performs system actions'}
+      - {family: config, tokens: 'request content', why: 'installs a content update'}
+      - family: config
+        tokens: request license
+        why: 'fetches or installs a licence'
+        except:
+          # `request license info` prints the installed licences; it fetches
+          # nothing and installs nothing.
+          - request license info
+      - {family: config, tokens: 'request commit', why: 'commits the candidate configuration'}
+      - {family: config, tokens: 'request high-availability', why: 'drives the HA state machine'}
+
+  - dialect: mikrotik-routeros
+    sources:
+      - title: RouterOS documentation — Console
+        url: https://help.mikrotik.com/docs/spaces/ROS/pages/328155/Console
+        retrieved: 2026-09-05
+    rules:
+      - {family: restart, tokens: '/system reboot', why: 'reboots the router'}
+      - {family: restart, tokens: '/system shutdown', why: 'shuts the router down'}
+      - {family: config, tokens: '/system reset-configuration', why: 'erases the configuration'}
+      - {family: config, tokens: '/system package', why: 'installs or downgrades packages'}
+
+# ── session-scoped setters ───────────────────────────────────────────────────
+#
+# These change NO configuration and clear nothing: they narrow what a read
+# command prints, and the scope dies with the CLI session. The owner's rule bites
+# on config change, restart and daemon lifetime — none of which these do — so
+# they are ALLOWED, on one condition the loader enforces: the binding must carry
+# the matching teardown, and the collector runs it immediately after the read, so
+# a Correlix collection never leaves scope behind on someone's firewall.
+session_scoped:
+  - dialect: fortinet-fortios
+    tokens: diagnose sys session filter
+    teardown: diagnose sys session filter clear
+    why: >-
+      Narrows what `diagnose sys session list` prints. It is the documented way
+      to read one flow's session out of a table with a million entries, it
+      writes no configuration, and the filter is per-session state that FortiOS
+      drops when the CLI session ends.
+    sources:
+      - title: FortiOS Administration Guide — Using a session table
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table
+        retrieved: 2026-09-05
+  - dialect: fortinet-fortios
+    tokens: execute log filter
+    teardown: execute log filter reset
+    why: >-
+      Narrows what `execute log display` prints. Same shape: no configuration
+      change, no state cleared, scope dies with the session.
+    sources:
+      - title: FortiOS Administration Guide — Log-related diagnostic commands
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands
+        retrieved: 2026-09-05
+
+# ── census ───────────────────────────────────────────────────────────────────
+#
+# What the policy excluded from the corpus, BY COUNT ONLY. The count is known;
+# the command is not — that is the whole point of the purge. Regenerated by
+# `scripts/tac-purge-forbidden.py`, and `--check` fails if it drifts.
+census:
+  generated: 2026-09-05
+  total: 38
+  by_family:
+    config: 6
+    restart: 0
+    daemon: 32
+  by_dialect:
+    - dialect: fortinet-fortios
+      config: 4
+      restart: 0
+      daemon: 29
+      total: 33
+    - dialect: paloalto-panos
+      config: 2
+      restart: 0
+      daemon: 3
+      total: 5

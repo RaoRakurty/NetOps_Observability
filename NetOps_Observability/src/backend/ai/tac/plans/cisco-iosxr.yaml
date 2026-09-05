@@ -744,3 +744,12 @@ bindings:
   process.detail.tacacsd:
     command: show processes tacacsd
     verified: doc_claimed
+  ospf.multicast.reachability:
+    command: ping 224.0.0.5
+    verified: doc_claimed
+  reachability.ping:
+    command: 'ping {peer}'
+    verified: doc_claimed
+  reachability.traceroute:
+    command: 'traceroute {peer}'
+    verified: doc_claimed

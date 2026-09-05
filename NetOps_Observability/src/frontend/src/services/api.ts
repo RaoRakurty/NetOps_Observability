@@ -3289,8 +3289,32 @@ export type TacDialectCoverage = {
   total_intents: number;
   verified_commands: number;
   doc_claimed_commands: number;
+  /** How many researched commands the owner's output-only policy kept out of
+   *  this dialect's knowledge. COUNTS ONLY — the count is known, the command is
+   *  not (src/backend/ai/tac/forbidden.yaml). */
+  excluded_by_policy: TacPolicyExclusion;
   classes: TacClassCoverage[];
   intents: TacIntentCoverage[];
+};
+
+/** One dialect's policy-exclusion counts. No command text, by design. */
+export type TacPolicyExclusion = {
+  dialect: string;
+  config: number;
+  restart: number;
+  daemon: number;
+  total: number;
+};
+
+/** The owner's 2026-09-05 output-only command policy, as the coverage view
+ *  states it: the three families in the policy's own words, and how many
+ *  researched commands each one excluded. Never a command. */
+export type TacCommandPolicy = {
+  version: string;
+  families: { id: string; title: string; rule: string }[];
+  total: number;
+  by_family: Record<string, number>;
+  generated?: string;
 };
 
 export type TacKnowledgeIntent = { id: string; area: string; title: string; note?: string };
@@ -3303,6 +3327,7 @@ export type TacKnowledge = {
   dialects: TacDialectCoverage[];
   /** Platforms Correlix recognises and has authored NO plan for. */
   unplanned_dialects: TacDialectCoverage[];
+  command_policy: TacCommandPolicy;
 };
 
 // ---- OSPF / IS-IS advanced monitoring (Project 4 D item 11) ---------------

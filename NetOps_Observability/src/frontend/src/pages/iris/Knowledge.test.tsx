@@ -21,7 +21,13 @@ const mocks = vi.hoisted(() => ({ tacKnowledge: vi.fn() }));
 vi.mock("../../services/api", () => ({ api: { ...mocks } }));
 
 import IrisKnowledge from "./Knowledge";
-import { BACKLOG_NOT_TRACKED, DOC_CLAIMED_LABEL, KNOWLEDGE_FAILED, VERIFIED_LABEL } from "../troubleshoot/tacModel";
+import {
+  BACKLOG_NOT_TRACKED,
+  COMMAND_POLICY_NO_EXCLUSIONS,
+  DOC_CLAIMED_LABEL,
+  KNOWLEDGE_FAILED,
+  VERIFIED_LABEL,
+} from "../troubleshoot/tacModel";
 
 const knowledge = (over: Partial<TacKnowledge> = {}): TacKnowledge => ({
   catalog_version: "correlix-tac-classes-2026-09-05",
@@ -41,6 +47,7 @@ const knowledge = (over: Partial<TacKnowledge> = {}): TacKnowledge => ({
       has_plan: true, plan_version: "correlix-tac-plan-cisco-iosxe-2026-09-05",
       baseline_intents: 6, optional_intents: 1, bound_intents: 2, total_intents: 3,
       verified_commands: 1, doc_claimed_commands: 1,
+      excluded_by_policy: { dialect: "cisco-iosxe", config: 2, restart: 1, daemon: 4, total: 7 },
       classes: [
         {
           class_id: "ospf-adjacency", title: "OSPF adjacency will not form or is stuck",
@@ -63,12 +70,24 @@ const knowledge = (over: Partial<TacKnowledge> = {}): TacKnowledge => ({
       dialect: "nokia-srlinux", display: "Nokia SR Linux", profile: "nokia/srlinux",
       has_plan: false, baseline_intents: 0, optional_intents: 0, bound_intents: 0, total_intents: 3,
       verified_commands: 0, doc_claimed_commands: 0,
+      excluded_by_policy: { dialect: "nokia-srlinux", config: 0, restart: 0, daemon: 0, total: 0 },
       classes: [
         { class_id: "ospf-adjacency", title: "OSPF adjacency will not form or is stuck", protocol: "ospf", bound: 0, total: 2, missing: ["ospf.interfaces", "ospf.database.router"] },
       ],
       intents: [],
     },
   ],
+  command_policy: {
+    version: "correlix-tac-forbidden-2026-09-05",
+    generated: "2026-09-05",
+    total: 38,
+    by_family: { config: 6, restart: 0, daemon: 32 },
+    families: [
+      { id: "config", title: "changes configuration or persistent state", rule: "Entering configuration mode, writing, and clearing counters or protocol state." },
+      { id: "restart", title: "restarts, reboots, halts or powers off the device", rule: "Nothing that can take a device out of service." },
+      { id: "daemon", title: "addresses a named daemon or process", rule: "Per-process debug levels, process lifetime and process internals." },
+    ],
+  },
   ...over,
 });
 
@@ -168,5 +187,55 @@ describe("how the knowledge grows", () => {
     const backlog = screen.getByTestId("tac-backlog");
     expect(backlog).toHaveTextContent(BACKLOG_NOT_TRACKED);
     expect(backlog.textContent).not.toMatch(/\b0\b/);
+  });
+});
+
+// ── the owner's output-only command policy (2026-09-05) ─────────────────────
+//
+// The page must say what Correlix WILL NOT LEARN, and must say it as a COUNT.
+// A config / restart / daemon command is not knowledge Correlix holds, and this
+// page is knowledge — so the count is rendered and the command never is.
+
+describe("the output-only command policy", () => {
+  it("states the excluded total and the three family counts, and nothing else", async () => {
+    await show();
+    const line = screen.getByTestId("tac-policy-excluded");
+    expect(line).toHaveTextContent("Excluded by policy: 38");
+    expect(line).toHaveTextContent("config 6");
+    expect(line).toHaveTextContent("restart 0");
+    expect(line).toHaveTextContent("daemon 32");
+  });
+
+  it("names the three families and pins the policy version", async () => {
+    await show();
+    expect(screen.getByRole("heading", { name: "What Correlix will not learn", level: 2 })).toBeInTheDocument();
+    expect(screen.getByText("changes configuration or persistent state")).toBeInTheDocument();
+    expect(screen.getByText("restarts, reboots, halts or powers off the device")).toBeInTheDocument();
+    expect(screen.getByText("addresses a named daemon or process")).toBeInTheDocument();
+    expect(screen.getByText(/correlix-tac-forbidden-2026-09-05/)).toBeInTheDocument();
+  });
+
+  it("never renders a forbidden command anywhere on the page", async () => {
+    const { container } = await show();
+    for (const command of ["configure terminal", "reload", "diagnose test application", "write memory"]) {
+      expect(container.textContent).not.toContain(command);
+    }
+  });
+
+  it("says so plainly when nothing was excluded, rather than showing a bare 0", async () => {
+    await show(knowledge({
+      command_policy: {
+        version: "correlix-tac-forbidden-2026-09-05",
+        total: 0,
+        by_family: { config: 0, restart: 0, daemon: 0 },
+        families: [],
+      },
+    }));
+    expect(screen.getByTestId("tac-policy-excluded")).toHaveTextContent(COMMAND_POLICY_NO_EXCLUSIONS);
+  });
+
+  it("shows a dialect's own exclusion count on its row, as a count", async () => {
+    await show();
+    expect(screen.getByTestId("tac-dialect-cisco-iosxe")).toHaveTextContent("7 excluded by policy");
   });
 });

@@ -105,3 +105,82 @@ through the existing runner; bundle with problem statement; download + portal-te
 mode; the page rebuilt around it; Iris → Knowledge view; tests + scenario proof on the lab.
 W2: ServiceNow/Jira case opening with attachment; Cisco Support Case API; feedback loop.
 W3: remaining classes (hardware, EVPN, MLAG, QoS, MPLS), learning from unknown outputs.
+
+## 7. Command policy — OUTPUT ONLY (owner decision, 2026-09-05)
+
+The owner's rule, verbatim:
+
+> "Rules in executing commands, any command changing the config should be blocked
+> or not even known to Correlix. Any command trying to restart or reboot should be
+> unknown to Correlix. TAC usually need outputs to understand what is going on,
+> not that we have to execute something and change."
+>
+> "Ping and traceroute are good examples, should be allowed."
+>
+> "Any commands that is touching at daemon level block them."
+
+**"Not even known" is the operative half.** Refusing a command at merge time still
+leaves it sitting in the research corpus, which is knowledge Correlix carries. So
+the vocabulary is *purged*, and only the COUNT survives.
+
+### The three families (`src/backend/ai/tac/forbidden.yaml`)
+
+| Family | What it covers |
+|---|---|
+| `config` | enters configuration mode, or changes configuration/state that outlives the session — `configure`/`conf t`/`system-view`/`edit`/`set`/`delete`/`undo`/`commit`/`write`/`copy`/`save`/`install`/`upgrade`/`format`/`erase`, FortiOS `execute …`, Junos `request system software`, **and state-clearing**: `clear …`, Huawei `reset …` |
+| `restart` | `reload`/`reboot`/`restart`/`halt`/`shutdown`/`power-off`, `request system reboot\|halt\|power-off`, `execute reboot\|shutdown\|restore\|factoryreset\|formatlogdisk`, `admin reboot`, `tools system reboot` |
+| `daemon` | anything addressing a named daemon/process — FortiOS `diagnose test application <daemon> <level>` (**all** levels) and `diagnose sys kill`, Huawei `pads diagnose` and the `diagnose` view, Junos `restart <process>` / `request system process`, `kill`, per-process `debug`, EOS `agent … terminate`, NX-OS `system internal … restart`, SR OS `admin … restart`, SR Linux `tools system app-management` |
+
+Matching is on **command tokens**, never substrings: a rule's tokens must be the
+command's LEADING tokens. `show reload cause`, `show system processes` and
+`show ip bgp` therefore stay allowed by construction — no rule may begin with
+`show`/`display`/`get`/`info`, and the loader refuses one that does. `except:`
+lists the documented output-only leaves of an action branch (`execute ping`,
+`admin show …`, `request license info`).
+
+### Enforced in four places, none of them redundant
+
+1. **Ingestion** — `scripts/tac-merge-research.py` refuses a forbidden record at
+   the door and reports **only a count per family**; the command text is never
+   printed, written or kept.
+2. **Purge** — `scripts/tac-purge-forbidden.py` removes forbidden records from
+   `classes.yaml`, `plans/*.yaml` **and `research/*.yaml`**, and keeps the census
+   (counts per family and per dialect) in `forbidden.yaml`. `--check` is the CI
+   mode and fails if anything forbidden is present.
+3. **Load** — `internal/tac` refuses a plan file carrying a forbidden command:
+   the api does not boot with one.
+4. **Gate** — `internal/tac.Gate` re-applies the policy to the RENDERED string at
+   the moment it would go on a wire, so a hand-edited plan file still cannot reach
+   a device. This is the layer that makes the rule structural rather than
+   procedural, and `internal/tac/forbidden_test.go` proves it with a deliberately
+   tampered table.
+
+### What IS allowed
+
+- **Bounded ping and traceroute** (`internal/protocoldiag/probe.go`), not consent
+  gated. They are not reads, so they get their own grammar rather than a hole in
+  the read-only one: count/repeat ≤ 5, size ≤ 1500, timeout ≤ 5 s, traceroute
+  TTL/max-hops ≤ 30, probes ≤ 3; `flood`/`-f`/`sweep`/`rapid`/`pattern`/
+  `interval`/`continuous` refused by name; a probe with no destination refused
+  (a bare `ping` opens an interactive dialog on several platforms). `df-bit` is
+  allowed — with size ≤ 1500 and count ≤ 5 it cannot be a flood, and the DF probe
+  is the standard path-MTU test every vendor's TAC asks for.
+- **FortiOS session-scoped setters** — `diagnose sys session filter …` and
+  `execute log filter …`. They change no configuration and clear nothing: they
+  narrow what a READ prints, and the scope dies with the CLI session. They are
+  admitted only from `forbidden.yaml`'s `session_scoped:` list, only WITH the
+  documented teardown (`… clear` / `… reset`), and the collector runs that
+  teardown immediately afterwards — including after a failure or a cancellation.
+- **PAN-OS tech-support** has no read-only CLI form (`scp/tftp export` pushes a
+  file to a third-party host, which is a different trust model). It stays
+  unbound: the plan shows the intent as unbound rather than inventing a command,
+  and the operator generates the bundle from the PAN-OS GUI or the XML API
+  (`type=export&category=tech-support`) with their own key. Correlix does not hold
+  a PAN-OS API key for this, and will not guess one.
+
+### What the operator sees
+
+Iris → Knowledge states the policy and the census: **"Excluded by policy: N
+(config · restart · daemon)"**, per build and per dialect. Counts only — a
+command in one of the three families is not knowledge Correlix holds, and the
+coverage page is knowledge.

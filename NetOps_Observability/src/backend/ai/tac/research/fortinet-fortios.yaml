@@ -71,7 +71,6 @@ tac_baseline:
     - {cmd: "diagnose debug crashlog read", intent: system.crashlog, params: []}
     - {cmd: "diagnose debug config-error-log read", intent: config.errors, params: []}
     - {cmd: "diagnose sys session list", intent: session.table, params: []}
-    - {cmd: "execute tac report", intent: support.techsupport, params: [], writes_file: false}
   notes: >-
     Fortinet's own "gather information for technical support" checklist
     (troubleshooting-methodologies) asks for: the firmware build version from
@@ -1035,8 +1034,6 @@ issues:
       - {cmd: "diagnose sys top-all {interval} {lines}", intent: system.cpu.threads, params: [interval, lines]}
       - {cmd: "diagnose sys mpstat {interval}", intent: system.cpu.percore, params: [interval]}
       - {cmd: "diagnose hardware sysinfo cpu", intent: hardware.cpu, params: []}
-      - {cmd: "diagnose sys process pidof {daemon}", intent: system.process.pid, params: [daemon]}
-      - {cmd: "diagnose test application ipsmonitor 1", intent: utm.ips.engine.info, params: []}
     tac_first_look: "TAC reads the U/S/I split on the second line of `diagnose sys top` (user vs system vs idle) and then the named process at the top of `get system performance top`; a system-heavy profile points at kernel/forwarding load, a user-heavy one at a named daemon."
     sources:
       - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage"
@@ -1062,8 +1059,6 @@ issues:
       - {cmd: "get hardware memory", intent: system.memory, params: []}
       - {cmd: "diagnose hardware sysinfo memory", intent: system.memory, params: []}
       - {cmd: "diagnose sys top {interval} {lines}", intent: system.cpu, params: [interval, lines]}
-      - {cmd: "diagnose test application wad 2", intent: proxy.wad.memory, params: []}
-      - {cmd: "diagnose test application wad 1000", intent: proxy.wad.processes, params: []}
       - {cmd: "get ips session", intent: utm.ips.memory, params: []}
     tac_first_look: "TAC reads the Memory line of `get system performance status` (used vs freeable) against the 90% guidance, then sorts `diagnose sys top` by memory to find the owning daemon."
     sources:
@@ -1154,7 +1149,6 @@ issues:
       - {cmd: "diagnose autoupdate versions", intent: update.status, params: []}
       - {cmd: "diagnose autoupdate status", intent: update.status, params: []}
       - {cmd: "get webfilter status", intent: fortiguard.webfilter.status, params: []}
-      - {cmd: "diagnose test application dnsproxy 3", intent: dns.proxy.status, params: []}
       - {cmd: "execute ping fds1.fortinet.com", intent: reachability.ping, params: []}
       - {cmd: "execute ping directregistration.fortinet.com", intent: reachability.ping, params: []}
     tac_first_look: "TAC reads the licence/expiry lines out of `diagnose autoupdate versions` and the FGD_DNS_SERVICE_LICENSE block of `diagnose test application dnsproxy 3`; both carry an explicit expiry date and expired flag."
@@ -1180,14 +1174,6 @@ issues:
       - "Log filter severity or category excluding the logs the customer expects"
       - "FortiAnalyzer disk quota exhausted so logging is not allowed"
       - "Remote log queue full and dropping"
-    commands:
-      - {cmd: "diagnose test application fgtlogd 1", intent: logging.faz.status, params: []}
-      - {cmd: "diagnose test application fgtlogd 3", intent: logging.faz.stats, params: []}
-      - {cmd: "diagnose test application fgtlogd 41", intent: logging.queue, params: []}
-      - {cmd: "diagnose test application fgtlogd 20", intent: logging.cloud.status, params: []}
-      - {cmd: "execute log fortianalyzer test-connectivity", intent: logging.faz.test, params: []}
-      - {cmd: "diagnose test application miglogd 6", intent: logging.stats, params: []}
-      - {cmd: "diagnose test application locallogd 3", intent: logging.local.stats, params: []}
     tac_first_look: "TAC reads `diagnose test application fgtlogd 1`: it shows state=connected/disconnected, server_log_status (whether logging is allowed), conn_verified, the configured severity/category filter and the current queue length - which is usually the whole diagnosis in one screen."
     sources:
       - "https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands"
@@ -1208,11 +1194,6 @@ issues:
       - "Per-VDOM syslog override sending logs somewhere unexpected"
       - "Log rate exceeding what the transport can carry"
     commands:
-      - {cmd: "diagnose test application syslogd 4", intent: logging.syslog.stats, params: []}
-      - {cmd: "diagnose test application fgtlogd 3", intent: logging.faz.stats, params: []}
-      - {cmd: "diagnose test application fgtlogd 41", intent: logging.queue, params: []}
-      - {cmd: "diagnose test application miglogd 6", intent: logging.stats, params: []}
-      - {cmd: "diagnose test application miglogd 15", intent: logging.miglogd.children, params: []}
       - {cmd: "execute ping {syslog-ip}", intent: reachability.ping, params: [syslog-ip]}
     tac_first_look: "TAC reads the per-device `sent=/failed=/cached=/dropped=` counters from `diagnose test application syslogd 4`; non-zero dropped on a specific syslog index names both the failing destination and the failure mode."
     sources:
@@ -1234,8 +1215,6 @@ issues:
       - "Disk almost full - a nearly full disk consumes resources finding free space"
       - "Local disk logging on a platform that should log remotely"
     commands:
-      - {cmd: "diagnose test application locallogd 3", intent: logging.local.stats, params: []}
-      - {cmd: "diagnose test application miglogd 6", intent: logging.stats, params: []}
       - {cmd: "diagnose hardware deviceinfo disk", intent: hardware.disk, params: []}
       - {cmd: "execute disk list", intent: hardware.disk, params: []}
       - {cmd: "diagnose sys flash list", intent: hardware.flash, params: []}
@@ -1263,9 +1242,7 @@ issues:
       - "IPS engine restarted or unhealthy"
       - "Traffic scanned twice because it re-enters the FortiGate"
     commands:
-      - {cmd: "diagnose test application ipsmonitor 1", intent: utm.ips.engine.info, params: []}
       - {cmd: "diagnose ips session list", intent: utm.ips.sessions, params: []}
-      - {cmd: "diagnose test application ipsmonitor 13", intent: utm.ips.sessions, params: []}
       - {cmd: "get ips session", intent: utm.ips.memory, params: []}
       - {cmd: "get system performance status", intent: system.health, params: []}
       - {cmd: "diagnose hardware sysinfo conserve", intent: system.memory.conserve, params: []}
@@ -1350,8 +1327,6 @@ issues:
     commands:
       - {cmd: "diagnose sys session filter dport 443", intent: session.filter, params: []}
       - {cmd: "diagnose sys session list", intent: session.table, params: []}
-      - {cmd: "diagnose test application wad 1000", intent: proxy.wad.processes, params: []}
-      - {cmd: "diagnose test application wad 2", intent: proxy.wad.memory, params: []}
       - {cmd: "diagnose wad user list", intent: proxy.users, params: []}
       - {cmd: "diagnose firewall iprope show 100004 {policy-id}", intent: policy.hitcount, params: [policy-id]}
       - {cmd: "get system performance status", intent: system.health, params: []}
@@ -1433,10 +1408,6 @@ issues:
       - "ZTNA proxy policy ordering or the wrong ZTNA tag referenced"
     commands:
       - {cmd: "diagnose endpoint fctems test-connectivity {ems}", intent: ztna.ems.connectivity, params: [ems]}
-      - {cmd: "execute fctems verify {ems}", intent: ztna.ems.certificate, params: [ems]}
-      - {cmd: "diagnose test application fcnacd 2", intent: ztna.ems.status, params: []}
-      - {cmd: "diagnose test application fcnacd 7", intent: ztna.cache, params: []}
-      - {cmd: "diagnose test application fcnacd 8", intent: ztna.route.cache, params: []}
       - {cmd: "diagnose firewall dynamic list", intent: firewall.dynamic.addresses, params: []}
       - {cmd: "diagnose endpoint record list {endpoint-ip}", intent: ztna.endpoint.record, params: [endpoint-ip]}
       - {cmd: "diagnose wad dev query-by ipv4 {endpoint-ip}", intent: ztna.endpoint.query, params: [endpoint-ip]}
@@ -1462,8 +1433,6 @@ issues:
       - "A deny policy blocking DNS"
       - "DoT/DoH configured to a server that is filtered upstream"
     commands:
-      - {cmd: "diagnose test application dnsproxy 3", intent: dns.proxy.status, params: []}
-      - {cmd: "diagnose test application dnsproxy 7", intent: dns.cache, params: []}
       - {cmd: "show sys dns", intent: dns.config, params: []}
       - {cmd: "execute ping {dns-server-ip}", intent: reachability.ping, params: [dns-server-ip]}
       - {cmd: "execute traceroute {dst-fqdn}", intent: reachability.traceroute, params: [dst-fqdn]}
@@ -1547,9 +1516,6 @@ issues:
       - "Certificate verification enabled with an untrusted CA chain"
       - "Device not authorised on the FortiAnalyzer side"
     commands:
-      - {cmd: "diagnose test application fgtlogd 1", intent: logging.faz.status, params: []}
-      - {cmd: "execute log fortianalyzer test-connectivity", intent: logging.faz.test, params: []}
-      - {cmd: "diagnose test application fgtlogd 41", intent: logging.queue, params: []}
       - {cmd: "get system status", intent: platform.version, params: []}
       - {cmd: "execute time", intent: system.clock, params: []}
     tac_first_look: "TAC reads the `conn_verified` flag and the SN list from `diagnose test application fgtlogd 1`, and checks the device clock - an out-of-date clock is a common cause of certificate validation failures."

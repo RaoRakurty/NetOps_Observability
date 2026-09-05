@@ -46,6 +46,15 @@ import os
 import re
 import sys
 
+# scripts/ is not a package, so make the sibling module importable however this
+# file is loaded: run directly, or read through importlib by the purge script
+# and by tests/test_tac_merge_research.py.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# The OUTPUT-ONLY command policy (ai/tac/forbidden.yaml) and the bounded-probe
+# grammar, shared with scripts/tac-purge-forbidden.py so there is one matcher.
+import tac_forbidden
+
 # ── locations ────────────────────────────────────────────────────────────────
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -53,6 +62,7 @@ REPO = os.path.dirname(HERE)                       # NetOps_Observability/
 TAC = os.path.join(REPO, "src", "backend", "ai", "tac")
 RESEARCH_DIR = os.path.join(TAC, "research")
 CLASSES = os.path.join(TAC, "classes.yaml")
+FORBIDDEN = os.path.join(TAC, "forbidden.yaml")
 PLANS_DIR = os.path.join(TAC, "plans")
 BACKEND = os.path.join(REPO, "src", "backend")
 CONFIG = os.path.join(REPO, "src", "config")
@@ -422,10 +432,20 @@ def only_fields(record: dict, allowed: set, what: str) -> None:
 
 
 def validate_command(command: str, what: str) -> str:
-    """The read-only grammar, byte-for-byte the one internal/tac applies."""
+    """The read-only grammar, byte-for-byte the one internal/tac applies.
+
+    A BOUNDED REACHABILITY PROBE is the one shape that is not a read and is
+    still allowed (owner, 2026-09-05). It has its own grammar rather than a hole
+    in this one, and every count, size, timeout and hop must be inside the bound.
+    """
     cmd = " ".join(command.split())
     if not cmd:
         raise Refusal(f"{what}: empty command")
+    if tac_forbidden.is_probe_command(cmd):
+        try:
+            return tac_forbidden.validate_bounded_probe(cmd)
+        except tac_forbidden.ProbeRefusal as err:
+            raise Refusal(f"{what}: probe is outside the bounded-probe grammar — {err}") from err
     for bad in FORBIDDEN_CHARS:
         if bad in cmd:
             raise Refusal(f"{what}: command contains the disallowed metacharacter {bad!r}")
@@ -590,6 +610,8 @@ def render_plan(doc: dict) -> str:
         if binding.get("read_only_exception"):
             out.append("    read_only_exception: >-")
             out += emit_block(binding["read_only_exception"], "      ")
+        if binding.get("teardown"):
+            out.append("    teardown: " + emit_scalar(binding["teardown"]))
         if binding.get("sources"):
             out.append("    sources:")
             for src in binding["sources"]:
@@ -743,12 +765,47 @@ EXCEPTION_SOURCE = {
                    "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/c4073c75/collecting-fault-information"),
 }
 
+# ── (3a) the OUTPUT-ONLY command policy ──────────────────────────────────────
+#
+# Owner decision, 2026-09-05: a command that changes configuration, that restarts
+# or reboots, or that touches a daemon must not merely be refused — it must not
+# be KNOWN to Correlix at all. ai/tac/forbidden.yaml is that vocabulary; this
+# merge applies it AT THE DOOR, before anything else, and reports ONLY A COUNT
+# PER FAMILY. The command text is never printed, never written and never kept:
+# the count is known, the command is not.
+#
+# The corpus itself is kept clean by scripts/tac-purge-forbidden.py, so in a
+# healthy tree these counters read zero. They are still here because a research
+# file added tomorrow may carry one, and it must die at this door rather than in
+# a code review.
+
+_POLICY = None
+
+
+def policy() -> tac_forbidden.Policy:
+    """The compiled command policy, read once.
+
+    A policy that will not load is a HARD STOP: merging against no policy would
+    silently admit exactly the commands the owner's rule excludes.
+    """
+    global _POLICY
+    if _POLICY is None:
+        try:
+            _POLICY = tac_forbidden.load_policy(parse_yaml(_read(FORBIDDEN)))
+        except tac_forbidden.PolicyError as err:
+            raise Refusal(f"forbidden.yaml: {err}") from err
+    return _POLICY
+
+
 # ── (4) the explicit refusals ────────────────────────────────────────────────
 #
 # Each is a documented command that this collector will NOT run in W1, with the
 # reason. They are listed in the merge report rather than silently dropped: the
 # point of the report is that an operator can see what Correlix decided not to
 # do and why.
+#
+# The config / restart / daemon families are NOT here: they are the policy above,
+# which refuses them earlier and reports them without their text.
 EXPLICIT_REFUSALS = [
     (re.compile(r"^\s*test\s+authentication\b.*\bpassword\b", re.IGNORECASE),
      ("takes a cleartext credential on the command line; an evidence collector must never "
@@ -759,21 +816,8 @@ EXPLICIT_REFUSALS = [
     (re.compile(r"^\s*diagnose\s+sniffer\s+packet\b", re.IGNORECASE),
      ("is a live packet capture with an operator-supplied BPF; it belongs behind the Packet "
      "Capture module's existing closed BPF grammar, not the read-only command table")),
-    (re.compile(r"^\s*diagnose\s+test\s+application\b", re.IGNORECASE),
-     ("selects a daemon debug LEVEL, and some levels restart the daemon; it needs a per-daemon, "
-     "per-level allowlist, not a prefix match")),
     (re.compile(r"^\s*diagnose\s+test\s+authserver\b", re.IGNORECASE),
      "takes a cleartext credential on the command line"),
-    (re.compile(r"^\s*diagnose\s+sys\s+session\s+filter\b", re.IGNORECASE),
-     ("sets daemon-side read scope; it changes no configuration and clears nothing, but it does "
-     "leave state behind on the device — pending a product decision on scope-setters")),
-    (re.compile(r"^\s*execute\s+log\s+filter\b", re.IGNORECASE),
-     "sets daemon-side read scope; pending the same product decision as the session filter"),
-    (re.compile(r"^\s*(ping|traceroute|tracert|tracepath)\b", re.IGNORECASE),
-     ("transmits from the device rather than reading it. W1's collector reads state; an active "
-     "probe is a different act with a different blast radius and needs its own consent path")),
-    (re.compile(r"^\s*(clear|reload|reset|restart|write|copy|delete|erase|configure|conf)\b", re.IGNORECASE),
-     "is a state-changing command; it can never be part of a read-only collection"),
 ]
 
 # Commands whose vendor documentation says they are NOT routine. They bind, but
@@ -798,6 +842,13 @@ CONSENT_PATTERNS = [
 ]
 
 
+def _families_line(counts: dict) -> str:
+    """`N (config a · restart b · daemon c)` — counts only, never a command."""
+    total = sum(counts.get(f, 0) for f in tac_forbidden.FAMILIES)
+    detail = " · ".join(f"{f} {counts.get(f, 0)}" for f in tac_forbidden.FAMILIES)
+    return f"{total} ({detail})"
+
+
 class Report:
     """One research file's outcome. Refusals are the point, not an afterthought."""
 
@@ -816,9 +867,19 @@ class Report:
         self.exception_bindings: list[str] = []
         self.refused: dict[str, list[str]] = {}
         self.dropped_cues: list[str] = []
+        self.scoped_bindings: list[str] = []
+        # Excluded by the owner's output-only policy. A COUNT PER FAMILY and
+        # nothing else — the command text is deliberately not held here.
+        self.excluded = tac_forbidden.empty_counts()
 
     def refuse(self, reason: str, what: str) -> None:
         self.refused.setdefault(reason, []).append(what)
+
+    def exclude(self, family: str) -> None:
+        self.excluded[family] = self.excluded.get(family, 0) + 1
+
+    def excluded_count(self) -> int:
+        return sum(self.excluded.values())
 
     def refused_count(self) -> int:
         return sum(len(v) for v in self.refused.values())
@@ -833,7 +894,9 @@ class Report:
                  f"    bindings added    : {len(self.bindings_added)}",
                  f"    consent bindings  : {len(self.consent_bindings)}",
                  f"    cited exceptions  : {len(self.exception_bindings)}",
+                 f"    scoped setters    : {len(self.scoped_bindings)} (each with its teardown)",
                  f"    binding conflicts : {self.bindings_conflicted} (existing binding kept)",
+                 "    excluded by policy: " + _families_line(self.excluded),
                  f"    commands refused  : {self.refused_count()}"]
         for reason in sorted(self.refused):
             examples = self.refused[reason]
@@ -906,11 +969,26 @@ def classify_command(cmd: str, dialect: str, writes_file: bool):
         "ok"        — binds normally
         "consent"   — binds, but needs the operator's explicit approval (detail = caveat)
         "exception" — binds under a cited read-only exception (detail = reason)
+        "scoped"    — a session-scoped setter; binds WITH its teardown (detail = teardown)
         "refuse"    — never binds (detail = why)
+        "forbidden" — the owner's output-only policy excludes it (detail = family);
+                      it is counted and NEVER named
     """
+    # (0) THE OWNER'S RULE, first and without appeal. A config / restart /
+    # daemon command is not knowledge Correlix carries, so it is not merged, not
+    # reported by name and not kept — only counted, by family.
+    rule = policy().match(dialect, cmd)
+    if rule is not None:
+        return "forbidden", rule.family
     for pattern, reason in EXPLICIT_REFUSALS:
         if pattern.search(cmd):
             return "refuse", reason
+    # A documented SESSION-SCOPED SETTER narrows what a read prints and dies with
+    # the CLI session: no configuration change, nothing cleared. It binds with
+    # the teardown the policy documents, which the collector always runs.
+    scope = policy().session_scope(dialect, cmd)
+    if scope is not None:
+        return "scoped", scope.teardown
     exceptions = READ_ONLY_EXCEPTIONS.get(dialect, {})
     if cmd in exceptions:
         return "exception", exceptions[cmd]
@@ -981,6 +1059,10 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
             title, url = EXCEPTION_SOURCE.get(dialect, ("vendor documentation", ""))
             if url and not sources:
                 sources = [{"title": title, "url": url, "retrieved": ""}]
+        if verdict == "scoped":
+            # The teardown is what makes the setter allowed at all, so it is
+            # written into the binding, not left to the runner to remember.
+            record["teardown"] = detail
         if sources:
             record["sources"] = sources
         if existing is None:
@@ -990,6 +1072,8 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
                 rep.consent_bindings.append(intent_id)
             if verdict == "exception":
                 rep.exception_bindings.append(intent_id)
+            if verdict == "scoped":
+                rep.scoped_bindings.append(intent_id)
             return
         if existing.get("command") == cmd:
             return
@@ -1029,6 +1113,12 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
                 rep.refuse(reason, str(raw)[:70])
                 continue
             verdict, detail = classify_command(cmd, dialect, writes_file)
+            if verdict == "forbidden":
+                # COUNTED, NEVER NAMED. Printing the command here would defeat
+                # the point of the purge: the owner's rule is that Correlix does
+                # not know it, and a merge report is knowledge.
+                rep.exclude(detail)
+                continue
             if verdict == "refuse":
                 rep.refuse(detail, cmd)
                 continue
@@ -1278,6 +1368,14 @@ def main() -> int:
 
     refused = sum(len(r.refused) for r in reports)
     dropped = sum(len(r.dropped_cues) for r in reports)
+    excluded = sum(r.excluded_count() for r in reports)
+    if excluded:
+        by_family = " · ".join(
+            f"{f} {sum(r.excluded.get(f, 0) for r in reports)}"
+            for f in tac_forbidden.FAMILIES)
+        print(f"  {excluded} record(s) excluded by the output-only command policy ({by_family}). "
+              "They are counted, never named: run scripts/tac-purge-forbidden.py to take them "
+              "out of the research corpus as well.")
     if refused or dropped:
         # Refusals are REPORTED, not fatal: a research file may legitimately
         # carry a command a vendor documents that is not a read-only show, and

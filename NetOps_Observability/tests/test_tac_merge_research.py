@@ -150,32 +150,93 @@ def test_unknown_field_is_refused(sandbox, mod, capsys):
 
 
 def test_a_write_command_never_lands(sandbox, mod, capsys):
+    """A config-mode command is EXCLUDED BY POLICY, counted and never named.
+
+    Owner decision 2026-09-05: it must not be known to Correlix, and a merge
+    report is knowledge — so the family count is printed and the command is not.
+    """
     write_research(sandbox, "cisco", GOOD.replace(
         "show ip ospf neighbor detail", "configure terminal"))
     run(mod)
     out = capsys.readouterr().out
-    assert "state-changing command" in out or "read-only verb" in out
+    assert "excluded by policy: 1 (config 1" in out
+    assert "configure terminal" not in out, "the merge report named the command"
     assert "configure terminal" not in (sandbox / "plans" / "cisco-iosxe.yaml").read_text()
 
 
 @pytest.mark.parametrize("command,why", [
     ("show version; reload", "metacharacter"),
     ("show version | tee /tmp/x", "display-only filter"),
-    ("debug ip ospf", "read-only verb"),
-    ("ping 10.0.0.1", "transmits from the device"),
-    ("test authentication authentication-profile p username u password s", "cleartext credential"),
+    ("less mp-log authd.log", "read-only verb"),
     ("scp export logdb to a@b:/c", "external host"),
-    ("diagnose sniffer packet port1 'tcp' 4 10 l", "BPF grammar"),
-    ("diagnose test application ipsmonitor 99", "restart the daemon"),
-    ("diagnose sys session filter dst 10.0.0.1", "daemon-side read scope"),
+    ("diagnose sniffer packet port1 \'tcp\' 4 10 l", "BPF grammar"),
+    ("ping 10.0.0.1 repeat 5000", "bounded-probe grammar"),
+    ("ping 10.0.0.1 flood", "bounded-probe grammar"),
 ])
 def test_unsafe_commands_are_refused(sandbox, mod, capsys, command, why):
     write_research(sandbox, "cisco", GOOD.replace(
-        '"show ip ospf neighbor detail"', '"%s"' % command))
+        '"show ip ospf neighbor detail"', f'"{command}"'))
     run(mod)
     out = capsys.readouterr().out
     assert why in out, out
     assert command not in (sandbox / "plans" / "cisco-iosxe.yaml").read_text()
+
+
+def test_a_command_taking_a_cleartext_credential_is_refused(mod):
+    """Refused with its REASON — this one is not in the owner's three families,
+    so it is named in the report like any other refusal.
+
+    It is asserted on PAN-OS because Cisco's own `test` branch is a daemon-level
+    harness the policy excludes first, and a policy exclusion is never named.
+    """
+    verdict, detail = mod.classify_command(
+        "test authentication authentication-profile p username u password s",
+        "paloalto-panos", False)
+    assert verdict == "refuse"
+    assert "cleartext credential" in detail
+
+
+@pytest.mark.parametrize("command,family", [
+    ("configure terminal", "config"),
+    ("clear ip bgp 10.0.0.1", "config"),
+    ("write memory", "config"),
+    ("reload in 5", "restart"),
+    ("debug ip ospf", "daemon"),
+    ("restart routing", "restart"),
+])
+def test_forbidden_commands_are_counted_but_never_named(sandbox, mod, capsys, command, family):
+    """The owner's rule at the door: counted by family, never written, never printed."""
+    write_research(sandbox, "cisco", GOOD.replace(
+        '"show ip ospf neighbor detail"', f'"{command}"'))
+    run(mod)
+    out = capsys.readouterr().out
+    assert "excluded by policy: 1" in out
+    assert f"{family} 1" in out
+    assert command not in out, "the merge report named a command the owner said must be unknown"
+    assert command not in (sandbox / "plans" / "cisco-iosxe.yaml").read_text()
+
+
+def test_a_bounded_probe_binds(sandbox, mod):
+    """Ping and traceroute are allowed (owner, 2026-09-05) — inside the bounds."""
+    write_research(sandbox, "cisco", GOOD.replace(
+        '"show ip ospf neighbor detail", intent: ospf.neighbors.detail',
+        '"ping <peer> count 5", intent: reachability.gateway, params: [peer]'))
+    assert run(mod) == 0
+    plan = (sandbox / "plans" / "cisco-iosxe.yaml").read_text()
+    assert "ping {peer} count 5" in plan
+
+
+def test_a_session_scoped_setter_is_admitted_with_its_teardown(mod):
+    """The one exemption from the owner's rule: it changes no configuration, it
+    clears nothing, and Correlix always undoes it."""
+    verdict, detail = mod.classify_command(
+        "diagnose sys session filter dport 179", "fortinet-fortios", False)
+    assert verdict == "scoped"
+    assert detail == "diagnose sys session filter clear"
+    # On a dialect the setter was not documented for, it is simply not a read.
+    verdict, _ = mod.classify_command(
+        "diagnose sys session filter dport 179", "cisco-iosxe", False)
+    assert verdict == "refuse"
 
 
 def test_a_placeholder_correlix_cannot_fill_is_refused(sandbox, mod, capsys):
@@ -258,6 +319,6 @@ def test_a_source_must_be_https(sandbox, mod, capsys):
 
 def test_the_script_runs_as_a_subprocess_on_the_real_tree():
     """The shipped invocation must work with no arguments and no research files."""
-    proc = subprocess.run([sys.executable, SCRIPT, "--check"],
+    proc = subprocess.run([sys.executable, SCRIPT, "--check"], check=False,
                           capture_output=True, text=True, timeout=120, cwd=REPO)
     assert proc.returncode == 0, proc.stderr

@@ -931,3 +931,30 @@ bindings:
   copp.broadcast_queue.drops:
     command: show platform hardware fed switch active qos queue stats internal cpu policer
     verified: doc_claimed
+  reachability.unicast:
+    command: 'ping {peer}'
+    verified: doc_claimed
+  reachability.multicast.allspf:
+    command: ping 224.0.0.5
+    verified: doc_claimed
+  reachability.path:
+    command: 'traceroute {peer}'
+    verified: doc_claimed
+  pathmtu.probe:
+    command: 'ping {peer} size 1500 df-bit'
+    verified: doc_claimed
+  vrf.reachability:
+    command: 'ping vrf {vrf-scope} {prefix}'
+    verified: doc_claimed
+  vrf.path:
+    command: 'traceroute vrf {vrf-scope} {prefix}'
+    verified: doc_claimed
+  path.label_stack:
+    command: 'traceroute {prefix}'
+    verified: doc_claimed
+  reachability.ntp_server:
+    command: 'ping {peer}'
+    verified: doc_claimed
+  reachability.aaa_server:
+    command: 'ping {peer}'
+    verified: doc_claimed

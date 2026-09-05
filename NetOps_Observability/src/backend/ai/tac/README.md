@@ -5,11 +5,12 @@ Loader + engine: `src/backend/internal/tac` (Go). **Nothing in this directory is
 code.** Everything here is reviewed data: a closed issue-class taxonomy, a
 vendor-neutral intent vocabulary, and one command-plan file per CLI dialect.
 
-Three files matter:
+Four files matter:
 
 | File | What it holds |
 |------|---------------|
 | `classes.yaml` | the intent vocabulary + the issue-class taxonomy with its detection rules |
+| `forbidden.yaml` | the OUTPUT-ONLY command policy (owner, 2026-09-05): the vocabulary Correlix refuses to learn, plus the two session-scoped setters that are exempt and the exclusion census |
 | `plans/<dialect>.yaml` | one dialect's baseline plan and its intent → command bindings |
 | `research/<vendor>.yaml` | raw vendor-documentation research, merged into the two above by `scripts/tac-merge-research.py` |
 
@@ -277,6 +278,113 @@ bindings:
 
 ---
 
+## 4a. `forbidden.yaml` — the output-only command policy
+
+**Owner decision, 2026-09-05, verbatim:**
+
+> "Rules in executing commands, any command changing the config should be blocked
+> or not even known to Correlix. Any command trying to restart or reboot should be
+> unknown to Correlix. TAC usually need outputs to understand what is going on,
+> not that we have to execute something and change."
+> · "Ping and traceroute are good examples, should be allowed."
+> · "Any commands that is touching at daemon level block them."
+
+`forbidden.yaml` is that rule as DATA. Three families — `config`, `restart`,
+`daemon` — with per-dialect rules and a cross-vendor `common:` block:
+
+```yaml
+common:
+  - {family: 'restart', tokens: 'reload', why: 'reloads the device'}
+dialects:
+  - dialect: fortinet-fortios
+    sources: [...]                      # a per-vendor rule MUST cite the vendor
+    rules:
+      - family: config
+        tokens: execute                 # the FortiOS ACTION branch
+        why: '…only the documented output-only leaves are exempt'
+        except:                         # …and here they are, by name
+          - execute ping
+          - execute traceroute
+          - execute log display
+```
+
+### How a rule matches
+
+On **command tokens**, never on substrings. A rule's `tokens` must be the
+command's LEADING tokens, so `reload` refuses `reload in 5` and leaves
+`show reload cause` alone. `show` / `display` / `get` / `info` commands are
+therefore safe by construction — **no rule may begin with a read verb, and the
+loader refuses one that does.** A longer rule wins over a shorter one
+(`execute reboot` beats `execute`); a DIALECT rule beats a `common:` rule of the
+same length; an unrecognised dialect still gets every common rule.
+
+### Where it is enforced (four places, none redundant)
+
+| Where | What it does |
+|---|---|
+| `scripts/tac-merge-research.py` | refuses a forbidden record AT THE DOOR and reports **only a count per family** — the command text is never printed, written or kept |
+| `scripts/tac-purge-forbidden.py` | removes forbidden records from `classes.yaml`, `plans/*.yaml` **and `research/*.yaml`**, and rewrites the `census:` block. `--check` is the CI mode |
+| `internal/tac` loader | a plan carrying a forbidden command fails the load: the api does not boot with one |
+| `internal/tac.Gate` | re-applies the policy to the RENDERED string as it would go on a wire, so a hand-edited plan file still cannot reach a device |
+
+### `census:` — the count is known, the command is not
+
+The purge writes what it excluded, per family and per dialect, and nothing else.
+It is CUMULATIVE (a purge removes the commands, so a per-run count would fall
+back to zero and claim the policy excluded nothing). Iris → Knowledge renders it
+as "excluded by policy: N (config · restart · daemon)".
+
+### `session_scoped:` — the one exemption
+
+FortiOS `diagnose sys session filter …` and `execute log filter …` narrow what a
+READ prints. They change no configuration, clear nothing, and the scope dies with
+the CLI session, so the owner's rule does not bite. They are admitted ONLY from
+this list, ONLY with the documented teardown, and a binding that uses one MUST
+carry it:
+
+```yaml
+  session.filter:
+    command: diagnose sys session filter dport 179
+    verified: doc_claimed
+    teardown: diagnose sys session filter clear     # required; the loader checks it
+```
+
+The collector runs the teardown right after the read — including after a failure
+and after a cancellation — so a Correlix collection never leaves scope behind on
+someone's firewall.
+
+### Bounded probes — `ping` and `traceroute`
+
+Allowed, NOT consent-gated, because the owner said so. They are not reads, so
+they pass their own grammar (`internal/protocoldiag/probe.go`) rather than a hole
+in the read-only one:
+
+| Bound | Value |
+|---|---|
+| `count` · `repeat` · `-c` | ≤ 5 |
+| `size` · `packet-size` · `datalen` · `-s` | ≤ 1500 |
+| `timeout` · `wait-time` · `-w` | ≤ 5 s |
+| `ttl` · `max-hops` · `hop-limit` · `-m` | ≤ 30 |
+| `probe` · `probes` · `queries` · `-q` | ≤ 3 |
+
+`flood`, `-f`, `sweep`, `rapid`, `pattern`, `interval`, `-i`, `continuous` are
+refused **by name**. A probe with NO destination is refused — a bare `ping` opens
+an interactive dialog on several platforms and would hang the session. `df-bit` /
+`do-not-fragment` IS allowed: with the size capped at 1500 and the count at 5 it
+cannot be a flood, and the DF probe is the standard path-MTU test. A bare number
+(`ping 10.0.0.1 100`) is refused, because whether it is a count or a size cannot
+be told from the string.
+
+### PAN-OS tech-support
+
+There is no read-only CLI form: `scp/tftp export tech-support` pushes a file to a
+third-party host, which is a different trust model from a read. The intent stays
+**unbound** — the plan says so rather than inventing a command — and the operator
+generates the bundle from the PAN-OS GUI, or through the XML API
+(`type=export&category=tech-support`) with their own key.
+
+---
+
 ## 5. Citations (`sources`)
 
 Allowed on a class, on a plan file (as the dialect's default set), on a single
@@ -371,10 +479,12 @@ rather than guesses:
 | `test authentication … password`, `diagnose test authserver` | takes a cleartext credential on the command line |
 | `scp export …`, `tftp export …` | pushes a file to an arbitrary external host instead of returning output over Correlix's own channel |
 | `diagnose sniffer packet` | a live capture with an operator-supplied BPF; belongs behind the Packet Capture module's closed BPF grammar |
-| `diagnose test application <daemon> <n>` | some levels restart the daemon; needs a per-daemon, per-level allowlist |
-| `diagnose sys session filter`, `execute log filter` | sets daemon-side read scope — no config change, but state left on the device; pending a product decision |
-| `clear`/`reload`/`reset`/`write`/`configure`/… | state-changing |
 | a placeholder with no alias | Correlix has no value for it, so the command could only run unscoped |
+| a probe outside the bounds (`ping … repeat 100`, `… flood`, `… sweep`) | it is a packet generator, not a question |
+
+Everything in the `config` / `restart` / `daemon` families (§4a) is handled
+EARLIER and differently: the record is EXCLUDED, counted by family, and **never
+named** — not in the report, not in the data, not in the research corpus.
 
 Run it as `python3 scripts/tac-merge-research.py [--check]`. `--check` is the CI
 mode: it exits non-zero if a merge would change anything, so the checked-in
@@ -397,10 +507,13 @@ taxonomy is always the merged one.
 
 ## 8. Non-negotiables
 
-- **Read-only, always.** No `debug`, no `clear`, no `configure`, no `request`,
-  no `test`, no `monitor`, no shell. The loader enforces it; so does the runner;
-  so does the SSH gateway's closed table. Three independent guards, all
-  load-bearing.
+- **Output only, always** (owner, 2026-09-05). No `debug`, no `clear`, no
+  `configure`, no `request`, no `reload`, no shell, and nothing that addresses a
+  daemon — and not merely refused: **not carried**. §4a is the vocabulary; the
+  merge, the purge, the loader and the gate are the four places it is enforced.
+  The two things that are NOT reads and are still allowed are a bounded
+  ping/traceroute and the two documented FortiOS session-scoped setters, each
+  with its teardown.
 - **No invented commands.** `doc_claimed` is the honest label for "the vendor
   documents it, we have not run it". Guessing is worse than an unbound intent.
 - **No invented ids.** See rule zero.

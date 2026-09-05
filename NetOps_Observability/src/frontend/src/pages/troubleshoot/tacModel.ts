@@ -100,6 +100,13 @@ export const BACKLOG_NOT_TRACKED =
   "Not yet tracked — outputs the parsers do not recognise are not counted anywhere yet, so no number is shown here.";
 export const NO_UNPLANNED_DIALECTS =
   "Every platform Correlix recognises carries an authored plan.";
+/** The owner's 2026-09-05 output-only command rule, as the coverage page states
+ *  it. The page shows COUNTS and never a command: a command in one of the three
+ *  families is not knowledge Correlix holds, and this page is knowledge. */
+export const COMMAND_POLICY_NOTE =
+  "Correlix collects outputs only. A command that changes configuration, that restarts or reboots the device, or that addresses a daemon is not merely refused — it is not carried at all: it is removed from the research corpus, never merged, and never rendered. Only the count is kept. Ping and traceroute are allowed, with bounded parameters.";
+export const COMMAND_POLICY_NO_EXCLUSIONS =
+  "Nothing has been excluded on this build.";
 
 // ── bounds (the server's own, mirrored so the UI refuses before the wire) ────
 

@@ -121,7 +121,8 @@
 
 /* plan steps */
 .tac-plan { display: flex; flex-direction: column; gap: 6px; }
-.tac-steps, .tac-topo, .tac-bundles, .tac-connectors, .tac-dialects, .tac-unplanned, .tac-classes {
+.tac-steps, .tac-topo, .tac-bundles, .tac-connectors, .tac-dialects, .tac-unplanned, .tac-classes,
+.tac-policy-families {
   list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px;
 }
 .tac-step-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 3px 0; border-bottom: 1px dashed var(--border); }
@@ -164,6 +165,8 @@
 .tac-dialect-t { font-weight: 650; font-size: 13px; }
 .tac-dialect-body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; border-top: 1px solid var(--border); padding-top: 6px; }
 .tac-classes li.partial { border-left: 2px solid var(--warn, #f59e0b); padding-left: 6px; }
+/* The output-only command policy: the three families, stated as counts only. */
+.tac-policy-families li { border-left: 2px solid var(--border); padding-left: 6px; }
 .tac-intent-head, .tac-intent {
   display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1.6fr) minmax(0, .8fr);
   gap: 8px; align-items: center; font-size: 12px;
