@@ -209,9 +209,12 @@ func TestListenerAcceptsAKnownRouterAndStoresItsFeed(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	f.waitFor("the feed to be stored", func() bool {
+	// The stream ends with a statistics report that lands AFTER the third
+	// route-monitoring update; waiting on the update count alone raced it
+	// (CI 2026-09-05: messages = map[initiation:1 peer_up:1 route_monitoring:3]).
+	f.waitFor("the feed and its statistics report to be stored", func() bool {
 		s := f.sessions()
-		return len(s) == 1 && s[0].Updates == 3
+		return len(s) == 1 && s[0].Updates == 3 && s[0].Messages["statistics_report"] == 1
 	})
 	s := f.sessions()[0]
 	if s.TenantOf() != "acme" {

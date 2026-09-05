@@ -1,6 +1,6 @@
 {
   "_README": [
-    "licensing-policy.json \u2014 THE machine-readable source of truth for which parts of",
+    "licensing-policy.json — THE machine-readable source of truth for which parts of",
     "Correlix are Apache-2.0 core and which are commercial add-ons.",
     "",
     "Three consumers read this file and nothing else:",
@@ -24,7 +24,7 @@
   "decided_by": "owner",
   "design_of_record": "docs/design/LICENSING_MODEL_2026-09-04.md",
   "tiering_plan": "docs/design/TIERING_PLAN_2026-09-03.md",
-  "canonical_sentence": "Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) \u2014 see LICENSING.md.",
+  "canonical_sentence": "Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) — see LICENSING.md.",
   "identifiers": {
     "core": "Apache-2.0",
     "commercial": "LicenseRef-Correlix-Enterprise"
@@ -84,7 +84,7 @@
     ]
   },
   "excluded_paths": {
-    "_why": "Directory names never classified and never scanned, anywhere in the tree. Each is generated, vendored, or local state \u2014 none of it is Correlix source whose licence we declare. The consistency test derives its exclusion list from THIS array, so adding a build directory means adding it here with a reason.",
+    "_why": "Directory names never classified and never scanned, anywhere in the tree. Each is generated, vendored, or local state — none of it is Correlix source whose licence we declare. The consistency test derives its exclusion list from THIS array, so adding a build directory means adding it here with a reason.",
     "entries": [
       {
         "name": "data",
@@ -133,6 +133,10 @@
       {
         "name": ".claude",
         "why": "Local Claude Code configuration. Gitignored, per-developer, never shipped."
+      },
+      {
+        "name": "compliance",
+        "why": "Retained corresponding-source archives of third-party GPL/LGPL components we ship in images (tracker 238; owner: Correlix keeps its own copy). Third-party code under its own licences, pinned by sha256 in scripts/source-mirror.json and shipped in every bundle's source-offer/ — not Correlix source whose licence we declare."
       }
     ]
   },
@@ -197,7 +201,7 @@
         "path": ".github",
         "licence": "Apache-2.0",
         "state": "core",
-        "reason": "CI workflows enforcing the \u00a712 gate for the whole repository."
+        "reason": "CI workflows enforcing the §12 gate for the whole repository."
       },
       {
         "path": "NetOps_Observability",
@@ -248,13 +252,13 @@
     ]
   },
   "commercial_paths": {
-    "_why": "Directories that are CLEANLY commercial: every file in them implements a locked commercial entitlement and nothing else. Each gets a LICENSE notice file and an SPDX header on every source file. They live under src/backend/enterprise/ \u2014 the PHYSICAL boundary the owner's 2026-09-04 spec requires \u2014 and core never imports them (check E); only the assembly layer does, inside ENTERPRISE-ASSEMBLY markers. A directory that merely CONTAINS some commercial code does not belong here \u2014 it belongs in mixed_directories.",
+    "_why": "Directories that are CLEANLY commercial: every file in them implements a locked commercial entitlement and nothing else. Each gets a LICENSE notice file and an SPDX header on every source file. They live under src/backend/enterprise/ — the PHYSICAL boundary the owner's 2026-09-04 spec requires — and core never imports them (check E); only the assembly layer does, inside ENTERPRISE-ASSEMBLY markers. A directory that merely CONTAINS some commercial code does not belong here — it belongs in mixed_directories.",
     "entries": [
       {
         "path": "src/backend/enterprise/dialects",
         "entitlement": "security_dialects",
         "tier": "Enterprise",
-        "reason": "The device-hardening DIALECTS beyond the core one: Juniper Junos, Nokia SR OS, Arista EOS and Nokia SR Linux. Each is a DialectPack \u2014 rule id -> per-vendor detection + remediation \u2014 merged into the Apache-2.0 catalogue through hardening.DialectPack. The catalogue, the engine, the benchmark provenance, the exposure evaluator and the core Cisco IOS-XE dialect stay core in internal/hardening. Moved 2026-09-05 (tracker 240) out of internal/hardening (dialect_fabric.go + 34 non-core vendor bindings in catalog.go).",
+        "reason": "The device-hardening DIALECTS beyond the core one: Juniper Junos, Nokia SR OS, Arista EOS and Nokia SR Linux. Each is a DialectPack — rule id -> per-vendor detection + remediation — merged into the Apache-2.0 catalogue through hardening.DialectPack. The catalogue, the engine, the benchmark provenance, the exposure evaluator and the core Cisco IOS-XE dialect stay core in internal/hardening. Moved 2026-09-05 (tracker 240) out of internal/hardening (dialect_fabric.go + 34 non-core vendor bindings in catalog.go).",
         "notice_file": "src/backend/enterprise/dialects/LICENSE",
         "verified_clean": "2026-09-05"
       },
@@ -274,15 +278,15 @@
     "steps": [
       "1. rm -r src/backend/enterprise",
       "2. In every file listed in import_boundary.assembly_allowances, delete each line between an ENTERPRISE-ASSEMBLY-BEGIN marker and its matching ENTERPRISE-ASSEMBLY-END (markers included). The blocks are self-contained; nothing else in those files refers to a commercial package.",
-      "3. security_dialects needs nothing further: the packs reach the engine only as seclane.Deps.Dialects, whose marked line went in step 2. The hardening engine then assesses the core Cisco IOS-XE dialect and reports every other platform NotApplicable \u2014 never a false Pass.",
+      "3. security_dialects needs nothing further: the packs reach the engine only as seclane.Deps.Dialects, whose marked line went in step 2. The hardening engine then assesses the core Cisco IOS-XE dialect and reports every other platform NotApplicable — never a false Pass.",
       "4. ldap is a FEATURE, not just a dependency: removing the module removes LDAP sign-in. Delete src/backend/ldap_wiring.go, ldap_env_test.go and ldap_live_test.go; the `LDAP config store` section of auth_config.go (from its banner comment to the `TACACS+ config store` banner); mapLDAP and fieldLDAPBindPass in secrets_config.go; the `ldap *ldapConfigStore` field, its newLDAPConfigStore construction and the three /api/auth/ldap/* routes in main.go; and make handleAuthMethods report ldap.enabled=false instead of reading s.ldap. Then drop the LDAP rows from route_isolation_test.go, platform_config_authz_test.go, licence_routes_test.go and resource_bounds_test.go, and the LDAP test functions from auth_config_test.go, secrets_config_test.go and federated_local_account_test.go. Local sign-in, OIDC and TACACS+ are untouched.",
       "5. Lower rootPackageCeiling in package_growth_guard_test.go by one (ldap_wiring.go left the root package). The ratchet asserts equality in both directions on purpose.",
       "6. Update this file: move each commercial_paths entry out, and re-run `python3 scripts/gen-licensing-map.py --write` and `python3 scripts/licensing-gate.py`."
     ],
-    "guarantee": "After those steps `go build ./...`, `go vet ./...` and `go test ./...` are green, and every remaining file is Apache-2.0. Nothing about tenant or organisation isolation, RLS, authorization, integrity or core authentication changes \u2014 by construction, because none of it is in enterprise/."
+    "guarantee": "After those steps `go build ./...`, `go vet ./...` and `go test ./...` are green, and every remaining file is Apache-2.0. Nothing about tenant or organisation isolation, RLS, authorization, integrity or core authentication changes — by construction, because none of it is in enterprise/."
   },
   "mixed_directories": {
-    "_why": "Directories that STILL mix Apache-2.0 core code with code implementing a locked commercial entitlement. They stay Apache-2.0 in full until the commercial part is extracted, because over-claiming commercial on a shared package would wrongly restrict core code. Each names what must move and where, and \u2014 where an extraction was attempted and did not hold \u2014 what the attempt proved. Tracked by TRACKER.md row 240. Two of the original seven were separated on 2026-09-05 and now appear in commercial_paths: internal/hardening -> enterprise/dialects, internal/ldap -> enterprise/sso/ldap.",
+    "_why": "Directories that STILL mix Apache-2.0 core code with code implementing a locked commercial entitlement. They stay Apache-2.0 in full until the commercial part is extracted, because over-claiming commercial on a shared package would wrongly restrict core code. Each names what must move and where, and — where an extraction was attempted and did not hold — what the attempt proved. Tracked by TRACKER.md row 240. Two of the original seven were separated on 2026-09-05 and now appear in commercial_paths: internal/hardening -> enterprise/dialects, internal/ldap -> enterprise/sso/ldap.",
     "tracker_row": 240,
     "target_layout": "src/backend/enterprise/<module>/",
     "entries": [
@@ -316,15 +320,15 @@
         "tier": "Team",
         "core_part": "Lane health and operator visibility.",
         "commercial_part": "The security evidence lane as a paid entitlement.",
-        "why_not_split_today": "Re-verified 2026-09-05. The lane is ALREADY physically removable \u2014 the recipe in its package doc and security_lane_removability_test.go delete it wholesale \u2014 but its boundary is FEATURE-FLAG shaped (the whole producer on or off), not entitlement shaped: it produces the Community hardening and exposure evidence in the same pass as the Team threat and advisory evidence. Moving it to enterprise/ would move Community's own entitlement with it."
+        "why_not_split_today": "Re-verified 2026-09-05. The lane is ALREADY physically removable — the recipe in its package doc and security_lane_removability_test.go delete it wholesale — but its boundary is FEATURE-FLAG shaped (the whole producer on or off), not entitlement shaped: it produces the Community hardening and exposure evidence in the same pass as the Team threat and advisory evidence. Moving it to enterprise/ would move Community's own entitlement with it."
       },
       {
         "path": "src/backend/internal/tenant",
         "entitlement": "msp_management",
         "tier": "Enterprise",
-        "core_part": "Tenant ISOLATION, the tenant store, the collection and routing scope, and \u2014 as of the 2026-09-05 attempt \u2014 the ORG STORE as well. Core forever, explicitly never commercial.",
-        "commercial_part": "org.go's OrgStore and governance.go \u2014 the organisation hierarchy above tenants and its governance registry, which is the MSP fleet-management surface.",
-        "why_not_split_today": "ATTEMPTED 2026-09-05 and REVERTED on the evidence. The extraction was built end to end \u2014 a tenant.OrgDirectory interface in core, an Apache-2.0 SingleOrgDirectory default, the many-organisation OrgStore in enterprise/msp with an entitlement gate \u2014 and then the removability proof failed it: with enterprise/ deleted, 79 CORE tests fail, because almost every tenant- and cross-org isolation test builds its fixture by POSTing two organisations. The org store is therefore load-bearing for the ISOLATION MODEL'S OWN TESTS, not just for fleet management, and a core that cannot create a second organisation cannot prove it keeps two apart. governance.go is a second, independent reason: internal/rca (core) imports tenant.SeamOwnerClasses and tenant.SeamOwnerEntry for RCA ownership, so the governance registry is core vocabulary. What org-hierarchy MANAGEMENT actually is, if it is commercial at all, is a CEILING on the number of organisations (entitlement.CheckCeiling) \u2014 which belongs in the Apache-2.0 licence machinery, not in a separate package."
+        "core_part": "Tenant ISOLATION, the tenant store, the collection and routing scope, and — as of the 2026-09-05 attempt — the ORG STORE as well. Core forever, explicitly never commercial.",
+        "commercial_part": "org.go's OrgStore and governance.go — the organisation hierarchy above tenants and its governance registry, which is the MSP fleet-management surface.",
+        "why_not_split_today": "ATTEMPTED 2026-09-05 and REVERTED on the evidence. The extraction was built end to end — a tenant.OrgDirectory interface in core, an Apache-2.0 SingleOrgDirectory default, the many-organisation OrgStore in enterprise/msp with an entitlement gate — and then the removability proof failed it: with enterprise/ deleted, 79 CORE tests fail, because almost every tenant- and cross-org isolation test builds its fixture by POSTing two organisations. The org store is therefore load-bearing for the ISOLATION MODEL'S OWN TESTS, not just for fleet management, and a core that cannot create a second organisation cannot prove it keeps two apart. governance.go is a second, independent reason: internal/rca (core) imports tenant.SeamOwnerClasses and tenant.SeamOwnerEntry for RCA ownership, so the governance registry is core vocabulary. What org-hierarchy MANAGEMENT actually is, if it is commercial at all, is a CEILING on the number of organisations (entitlement.CheckCeiling) — which belongs in the Apache-2.0 licence machinery, not in a separate package."
       }
     ]
   },
@@ -475,7 +479,7 @@
       },
       {
         "path": "tests/fixtures/oci-regression/Dockerfile.inherited-other-version",
-        "why": "The same fixture on Alpine 3.20, whose BusyBox is a different version from the one Correlix retains source for \u2014 it must FAIL the compliance gate. Contains no Correlix source and is never shipped."
+        "why": "The same fixture on Alpine 3.20, whose BusyBox is a different version from the one Correlix retains source for — it must FAIL the compliance gate. Contains no Correlix source and is never shipped."
       }
     ]
   },

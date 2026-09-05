@@ -39,8 +39,9 @@ import logging
 import time
 from datetime import timedelta
 
-import main
 import pytest
+
+import main
 import signals as S
 import timing_gate
 from test_prune_buffer_156 import T0

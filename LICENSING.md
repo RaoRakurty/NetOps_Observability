@@ -106,6 +106,7 @@ licence we are entitled to declare.
 | `.ruff_cache` | ruff cache. Generated. |
 | `.mypy_cache` | mypy cache. Generated. |
 | `.claude` | Local Claude Code configuration. Gitignored, per-developer, never shipped. |
+| `compliance` | Retained corresponding-source archives of third-party GPL/LGPL components we ship in images (tracker 238; owner: Correlix keeps its own copy). Third-party code under its own licences, pinned by sha256 in scripts/source-mirror.json and shipped in every bundle's source-offer/ — not Correlix source whose licence we declare. |
 
 ### Repository root
 

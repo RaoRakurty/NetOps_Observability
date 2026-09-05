@@ -166,6 +166,15 @@ jobs:
       # pin table, and this step needed no change to mirror it.
       - name: Materialise the retained corresponding source
         working-directory: NetOps_Observability
+        # The RETAINED copies live in the repository (compliance/corresponding-sources)
+        # and are taken first; the installer re-verifies their sha256 against the pin
+        # table exactly as it would a fresh download ("local provenance is not trusted
+        # provenance"). Only files not retained there are fetched from the pinned
+        # upstream URL. gitlab.alpinelinux.org answers GitHub-hosted runners with
+        # HTTP 418 (2026-09-05), which is one more reason retention must not depend
+        # on upstream reachability.
+        env:
+          CORRELIX_SOURCE_MIRROR_DIR: ${{ github.workspace }}/NetOps_Observability/compliance/corresponding-sources
         run: |
           set -euo pipefail
           bash scripts/make-installer.sh --source-offer-only

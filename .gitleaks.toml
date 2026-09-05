@@ -12,6 +12,9 @@ regexes = [
   '''(auth|priv)-secret-\d+''',
   # The publicly-known dev signing fallback (SR-017) — intentionally in source.
   '''dev-only-do-not-use-in-production''',
+  # tests/test_store_backend_defaults.py: the fabricated app-role password the
+  # installer role-provisioning tests pass to a FakeRunner — never a real credential.
+  '''pw123456789012345678''',
   # RFC 6238 published TOTP test seed (base32 of "12345678901234567890"), used in
   # totp_test.go to pin our implementation against the spec — not a real secret.
   '''GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ''',
