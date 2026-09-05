@@ -517,9 +517,11 @@ func newTplTestAPI(t *testing.T) *tplTestAPI {
 		Audit: func(_ *http.Request, _ TemplatePrincipal, action string, _ map[string]any) {
 			h.audits = append(h.audits, action)
 		},
-		WriteJSON:  func(w http.ResponseWriter, status int, body any) { writeTestJSON(w, status, body) },
-		WriteError: func(w http.ResponseWriter, status int, err error) { writeTestJSON(w, status, map[string]any{"error": err.Error()}) },
-		Now:        func() time.Time { return time.Unix(0, 0).UTC() },
+		WriteJSON: func(w http.ResponseWriter, status int, body any) { writeTestJSON(w, status, body) },
+		WriteError: func(w http.ResponseWriter, status int, err error) {
+			writeTestJSON(w, status, map[string]any{"error": err.Error()})
+		},
+		Now: func() time.Time { return time.Unix(0, 0).UTC() },
 	})
 	if err != nil {
 		t.Fatalf("api: %v", err)

@@ -39,9 +39,8 @@ import logging
 import time
 from datetime import timedelta
 
-import pytest
-
 import main
+import pytest
 import signals as S
 import timing_gate
 from test_prune_buffer_156 import T0
@@ -59,7 +58,7 @@ _YIELD_BUDGET_MS = 50.0
 # Growing the DEVICE COUNT is the axis that keeps the per-device shape — the
 # pair of signals, their 1 s gap, the fold to one object — exactly as it is.
 _STORM_DEVICES = 700
-_STORM_MAX_DEVICES = 8_000     # ~11 s of grind at 2 500 on the 4-core lab box; a GitHub-hosted runner outran 2 500 (1.055 s vs a 1.132 s floor, 2026-09-05) so the cap
+_STORM_MAX_DEVICES = 32_000    # ~11 s of grind at 2 500 on the 4-core lab box; GitHub-hosted runners outran 2 500 and then 8 000 (1.017 s vs a 1.125 s floor, 2026-09-05) so the cap
 _DET_DEVICES = 300     # equality needs no scale; keep the determinism run quick
 
 # The un-yielded baseline must freeze the heartbeat proxy for at least this long
@@ -234,6 +233,7 @@ def test_reconciliation_loop_yields_under_single_tenant_storm():
 
     gate = timing_gate.calibrated_stall(
         grind, size=_STORM_DEVICES, floor=floor, max_size=_STORM_MAX_DEVICES,
+        attempts=4,  # a fast runner needs one more doubling than the lab box
         name="single-tenant storm grind (yield budget disabled)", unit="s")
     assert gate.ok, gate.report()
     worst_off, objs_off = gate.value, objs[gate.size]

@@ -332,7 +332,10 @@ OFFERFTR
       command -v curl >/dev/null || { echo "FATAL: curl is required to mirror $name's corresponding source (or set CORRELIX_SOURCE_MIRROR_DIR to a directory holding $file)" >&2; exit 1; }
       # Bounded + retried (§16.3 / CLAUDE.md §9). stderr stays visible so a real
       # network failure is readable rather than inferred from a missing file.
-      curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+      # A named User-Agent: gitlab.alpinelinux.org answers curl's default UA with
+      # HTTP 418 (bot filter, seen on GitHub-hosted runners 2026-09-05).
+      curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+           -A "correlix-source-mirror/1.0 (corresponding-source fetch; +https://github.com/correlix)" \
            --connect-timeout 20 --max-time 600 -o "$dest" "$url" \
         || { echo "FATAL: could not fetch $name $version corresponding source from $url. A GPL/LGPL binary must never ship without its source (licence audit D2). Fix the network, or pre-fetch the file and set CORRELIX_SOURCE_MIRROR_DIR." >&2; exit 1; }
     fi
