@@ -128,3 +128,13 @@ header, and the installer bundle's `LICENSES.md`.
    commercial code shares packages with core code — `LICENSING.md` lists them).
 5. Signer tooling (offline key ceremony, `correlix-licence sign`), docs-portal "Licensing"
    page, pricing copy.
+
+---
+**2026-09-05 addendum (owner feedback):** the commercial strategy of record is
+`docs/design/research/LICENSING_TIERING_STRATEGY_2026-09-05.md`, summarised in
+`docs/design/TIERING_PLAN_2026-09-03.md` §9. It KEEPS everything in this document (Apache-2.0 open core +
+`enterprise/` boundary, one binary, signed offline entitlement, semantic features, three runtime tiers, the
+safety invariant) and adds: the monitored-device unit (C4), an Enterprise MSP contract profile on the
+Enterprise entitlement (no fourth tier in code), the paid expiry/grace policy, trial issuance, metering as
+a separate data contract, and production signing-key ceremony as a GA prerequisite (the lab key must never
+sign a production release).

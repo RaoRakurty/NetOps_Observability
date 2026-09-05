@@ -63,3 +63,30 @@ per-tenant paid service (see the capacity-and-pricing memo and the VulnHunter no
 Not before the ship-readiness items (release, licence audit, docs). Then: licence file +
 ceilings (1 wave), metering + admin page (1 wave), tier docs + pricing page copy. The
 cut lines above are the owner's call; everything else in this doc is executable as is.
+
+## 9. Commercial strategy of record (owner feedback, 2026-09-05) — supersedes §§2–4 where they differ
+Source: `docs/design/research/LICENSING_TIERING_STRATEGY_2026-09-05.md` (owner-supplied; market
+anchors: Datadog NDM $7/device, SolarWinds self-hosted $8/node, LogicMonitor HU $16, New Relic /
+Grafana perpetual free tiers). Decisions:
+
+| Topic | Decision |
+|---|---|
+| Runtime tiers | Community / Team / Enterprise ONLY in code, plus an **Enterprise MSP contract profile** on the Enterprise entitlement (pooled monitored devices across tenants). No Starter/Pro/Business tiers. |
+| Unit | **Monitored device** (C4, landed 1feb8fad): a canonical device with ≥1 qualifying collector intentionally enabled; counted once whatever the telemetry mix; discovery/inventory never consume; configured intent, not recent telemetry. Supersedes "enforced at discovery admission". |
+| Community | $0 forever, no expiry, no phone-home, 25 monitored devices, unlimited discovery, 1 tenant, 7-day retention, 5 watched prefixes; full discovery/topology/correlation/RCA/diagnostics; **processors and redaction free**; OIDC; evidence-only Iris. Hard block at the 26th activation (published free ceiling). |
+| Team | 250 devices, 1 org / 5 tenants, 30 days, 100 prefixes; findings, frameworks, drift, pcap, reports, all notification channels, shared investigations, BMP, threat/advisory lane, BYO AI, limited owner-doc skills. **Soft overage + alerts (80/90/100 %)**, never a kill switch during an incident. |
+| Enterprise | contracted capacity, org hierarchy, 90 days + archive, unlimited prefixes; dialects, SIEM export, SAML/SCIM/LDAP, hosted AI quota, governance/export, session policy, archival/restorability, 24×7. Soft overage as Team. |
+| Enterprise MSP | pooled monitored devices, many tenants, fleet console, delegated admin, pooled entitlement, customer reports, provider API, optional branding. Tenant count = broad plan ceiling, never a per-tenant tax. Tenant ISOLATION is never an MSP feature. |
+| Never gated | discovery, topology, correlation/RCA, coverage/"not collected" honesty, **all processors** (filter/redact/mask/transform/route/sample), sensitive-data protection (encryption, isolation, RLS, authz, deletion, transport), OIDC. Premium data-protection = governance workflows only (audited reveal, CMK, legal hold, classification policy, approval workflows, compliance reporting). |
+| Retention | keep 7/30/90 for launch; TEST in interviews; fallback on-prem monetization = retention lifecycle/archive/restore drills/legal hold. |
+| SAML | stays Enterprise for launch; record `lost_due_to_saml_gate` in win/loss; move to Team if it costs deals. |
+| Pricing (hypotheses, order-form only — NEVER in the licence file) | Team $4–6 / monitored device / month annual, preferably **starter pack $249/mo incl. 50 devices then ~$4/device to 250**; Enterprise $6–9/device-equivalent, $18k–30k ARR floor, volume discounts; MSP $3–6 pooled, $24k+ floor (e.g. 500 pooled devices, 25–50 tenants). Design partners: 12-month price protection, 30–40 % expiring launch discount, never a permanently low list. |
+| Paid expiry / grace (adopted) | paid: 30-day administrative grace; trials: shorter; after grace, paid-only creation/configuration actions become unavailable, existing data stays viewable/exportable, over-ceiling state is listed; **never delete data or weaken a security property; never silently pick which devices disappear**. |
+| Trials | 30-day signed Team/Enterprise evaluation licence, no card, offline after issuance; Community and trial coexist. |
+| Metering (separate from entitlement) | daily per-tenant: unique + peak monitored devices, tenants/orgs, watched prefixes, effective retention; diagnostic meters for samples/log/flow/trace bytes, DEM checks, AI tokens, processor in/out ratio; **signed downloadable usage report**, no phone-home; customer and Correlix derive the same counts. |
+| SaaS (future) | device entitlement + included telemetry envelope + narrow overage (logs, flows, DEM, hosted AI), metered on **post-processor accepted** data; region as a first-class tenant property before production; migration: $0 transfer, 100 % unused-term credit, free config migration, one 60–90-day dual run, optional history. |
+| Onboarding message | "Inventory: N discovered · Monitoring: M / 25 Community monitored devices · Discovery does not consume your monitoring allowance." Measure time-to-first-useful-RCA. |
+
+Implementation workstreams from this decision are tracker rows 257–260 (grace/expiry + trial issuance +
+usage warnings; metering + signed usage report; production signing-key ceremony; pricing/GTM copy). Legal
+boundary (counsel-approved commercial licence + CLA) remains the owner's, never drafted here.
