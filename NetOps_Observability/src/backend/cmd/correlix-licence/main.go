@@ -5,6 +5,7 @@
 //	                         [--trial] [--ceilings k=v,…] [--features a,b] [--grace-days N] [--out <file>]
 //	correlix-licence verify  [--pubkey <base64>] [--at <time>] <file>
 //	correlix-licence show    <file>
+//	correlix-licence usage-verify [--pubkey <base64>] <file>
 //
 // CLAUDE.md §2: an entrypoint holds NO business logic. Everything below is
 // argument parsing and printing; key generation, signing and verification live
@@ -19,6 +20,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -32,6 +34,7 @@ import (
 	"netops/backend/internal/entitlement"
 	"netops/backend/internal/licence"
 	"netops/backend/internal/licence/signer"
+	"netops/backend/internal/metering"
 )
 
 func main() {
@@ -76,6 +79,19 @@ const usage = `correlix-licence — issue and inspect Correlix licence files
   show <file>
       Print a licence's contents WITHOUT verifying it. For inspecting a file
       that will not verify — which is usually why you are looking at it.
+
+  usage-verify [--pubkey <base64>] <file>
+      Verify a downloaded USAGE REPORT offline and re-derive its totals from
+      its own daily rows. Two checks, both independent of us:
+        * the ed25519 signature over the report's canonical bytes, against the
+          public key embedded in the document (or the one given with --pubkey,
+          which is how you confirm WHICH installation produced it);
+        * the period totals, recomputed from the daily rows in the file — so
+          the summary a customer quotes is arithmetic anyone can repeat, not a
+          number to be taken on trust.
+      Exit 1 if either check fails. A usage report is signed by the
+      INSTALLATION's own key, generated on that host; it is not, and must never
+      be, the key Correlix signs licences with.
 `
 
 func run(args []string, out *os.File) error {
@@ -92,6 +108,8 @@ func run(args []string, out *os.File) error {
 		return cmdVerify(args[1:], out)
 	case "show":
 		return cmdShow(args[1:], out)
+	case "usage-verify":
+		return cmdUsageVerify(args[1:], out)
 	case "-h", "--help", "help":
 		fmt.Fprint(out, usage)
 		return nil
@@ -380,6 +398,96 @@ func cmdVerify(args []string, out *os.File) error {
 	fmt.Fprintf(out, "  %s\n", st.Summary())
 	printState(out, st)
 	return nil
+}
+
+// ── usage-verify ─────────────────────────────────────────────────────────────
+
+// cmdUsageVerify checks a downloaded usage report: the signature, and the
+// arithmetic.
+//
+// Both halves matter and they answer different questions. The signature says
+// the file is exactly what the installation produced. Re-deriving the totals
+// from the daily rows says the summary follows from the detail — which is the
+// half a true-up conversation actually turns on, and the reason the report
+// carries the daily rows at all.
+func cmdUsageVerify(args []string, out *os.File) error {
+	fs := flag.NewFlagSet("usage-verify", flag.ContinueOnError)
+	pubkey := fs.String("pubkey", "", "verify against this base64 public key instead of the one embedded in the report")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage-verify: exactly one usage-report file is required")
+	}
+	raw, err := os.ReadFile(fs.Arg(0)) // #nosec G304 -- the file the operator named IS the argument of this command
+	if err != nil {
+		return err
+	}
+	var pub ed25519.PublicKey
+	if strings.TrimSpace(*pubkey) != "" {
+		parsed, perr := licence.ParsePublicKey(*pubkey)
+		if perr != nil {
+			return perr
+		}
+		pub = parsed
+	}
+	rep, err := metering.VerifyReport(raw, pub)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "VERIFIED  %s\n", fs.Arg(0))
+	scope := rep.Scope
+	if rep.Tenant != "" {
+		scope += " " + rep.Tenant
+	}
+	fmt.Fprintf(out, "  period:     %s .. %s (%d daily row(s))\n", rep.From, rep.To, len(rep.Days))
+	fmt.Fprintf(out, "  scope:      %s\n", scope)
+	fmt.Fprintf(out, "  tier:       %s (device ceiling %s)\n", orNone(rep.Licence.Tier), ceilingText(rep.Licence.Devices))
+	if rep.Licence.Customer != "" {
+		fmt.Fprintf(out, "  customer:   %s\n", rep.Licence.Customer)
+	}
+	if *pubkey != "" {
+		fmt.Fprintf(out, "  signed by:  %s (matches the key supplied with --pubkey)\n", rep.Key.ID)
+	} else {
+		fmt.Fprintf(out, "  signed by:  %s (the key embedded in the report — supply --pubkey to confirm WHICH installation)\n", rep.Key.ID)
+	}
+	fmt.Fprintf(out, "  generated:  %s\n\n", rep.GeneratedAt.UTC().Format(time.RFC3339))
+
+	derived, disagree := metering.RecomputeTotals(rep)
+	fmt.Fprintf(out, "Totals, RE-DERIVED from the daily rows in this file:\n")
+	for _, mv := range derived {
+		if mv.Value == nil {
+			fmt.Fprintf(out, "  %-38s not measured — %s\n", mv.Meter, mv.Reason)
+			continue
+		}
+		fmt.Fprintf(out, "  %-38s %v %s\n", mv.Meter, *mv.Value, mv.Unit)
+	}
+	if len(disagree) > 0 {
+		fmt.Fprintf(out, "\nThe totals stated in the file do NOT follow from its own daily rows:\n")
+		for _, d := range disagree {
+			fmt.Fprintf(out, "  %s\n", d)
+		}
+		return errors.New("usage-verify: the report's totals disagree with its daily rows")
+	}
+	fmt.Fprintf(out, "\nThe totals stated in the file match the ones re-derived above.\n")
+	for _, n := range rep.Notes {
+		fmt.Fprintf(out, "  · %s\n", n)
+	}
+	return nil
+}
+
+func orNone(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "(none stated)"
+	}
+	return s
+}
+
+func ceilingText(n int) string {
+	if n == entitlement.Unlimited {
+		return "unlimited"
+	}
+	return strconv.Itoa(n)
 }
 
 // ── show ─────────────────────────────────────────────────────────────────────

@@ -6518,6 +6518,18 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .lic-file { font-size: 12px; color: var(--fg); }
 .lic-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 
+/* 2b — recorded usage (metering, tracker 258) */
+.lic-subhead {
+  margin: 14px 0 6px; font-size: 11.5px; font-weight: 650; color: var(--fg);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.lic-subhead:first-child { margin-top: 0; }
+.lic-meter-name { display: block; }
+.lic-meter-doc { display: block; font-weight: 400; margin-top: 2px; max-width: 46ch; }
+.lic-spark { display: block; width: 160px; height: 28px; color: var(--accent, currentColor); opacity: 0.85; }
+.lic-usage-actions { align-items: center; justify-content: flex-start; }
+.lic-usage-actions .lic-input { width: auto; min-width: 140px; }
+
 /* 5 — verification */
 .lic-cmdwrap { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
 .lic-cmd {

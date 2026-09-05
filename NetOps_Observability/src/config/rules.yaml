@@ -925,6 +925,100 @@ groups:
           summary: "{{ $value }} monitored device(s) above the licensed allowance — every one of them is still being collected from and nothing has been blocked, disabled or deleted; the overage is recorded for true-up"
 
   # ----------------------------------------------------------------------------
+  # Usage metering (tracker 258).
+  #
+  # A SEPARATE GROUP from the two licence groups above, deliberately: those
+  # watch what a customer is ENTITLED to and how close they are to it; this one
+  # watches whether we are still writing down what they USED. The series and the
+  # failure mode are different, and mixing them would put a bookkeeping problem
+  # in the same panel as a commercial one.
+  #
+  #   netops_metering_snapshot_timestamp_seconds
+  #       unix time of the last usage snapshot folded into the daily rows.
+  #       0 means NONE YET — a value, not a gap. The api takes one immediately
+  #       at boot and then hourly, so 0 is a window of seconds on a fresh start
+  #       and a permanent state only if the recorder never ran at all.
+  #
+  #   netops_metering_daily_rows        rows currently persisted
+  #   netops_metering_snapshot_failures_total   snapshots that did not land
+  #
+  # NOT A PAGE — EVER, and this one is the clearest case in the file. Metering
+  # gates NOTHING: no admission path reads a meter, so a stopped recorder cannot
+  # refuse a device, break a query or affect isolation. What it costs is
+  # precision in a usage report — an office-hours problem, and one that keeps
+  # costing until someone looks, which is exactly what a digested warning is for.
+  #
+  # NO `layer` LABEL, deliberately: this is a product-notifier warning, not stack
+  # self-health, so it must not be normalised onto the platform paging lane.
+  #
+  # NO TENANT LABEL either — the metering SERIES carry none. A per-tenant label
+  # on an outbound alert is refused by the platform route as a cross-tenant
+  # disclosure, and there would be nothing to gain: the recorder either runs for
+  # every tenant or for none.
+  # ----------------------------------------------------------------------------
+  - name: metering
+    interval: 60s
+    rules:
+      # No snapshot in over 3 hours. Three, not one, because the cadence is
+      # hourly: a single missed hour is a restart or a slow store and self-heals,
+      # while three consecutive misses means the recorder is not running.
+      #
+      # `and on()` is required, not decorative: `time() - metric` drops __name__
+      # while `metric > 0` keeps it, so a bare `and` would never match. The
+      # `> 0` guard is what separates NEVER from STALE — `time() - 0` is ~57
+      # years, so without it every fresh install would fire for ever, in the
+      # seconds before the boot snapshot lands. A recorder that genuinely never
+      # runs is caught by MeteringNeverRecorded below, which says something an
+      # operator can act on rather than mislabelling a boot as a stall.
+      - alert: MeteringSnapshotStale
+        expr: |
+          (time() - netops_metering_snapshot_timestamp_seconds) > 10800
+          and on() (netops_metering_snapshot_timestamp_seconds > 0)
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "no usage snapshot has been recorded in over 3 hours — the daily usage roll-up is missing hours, so a usage report for today will understate what was in use; nothing about collection, alerting or isolation is affected"
+          description: >-
+            Usage metering samples hourly and folds each sample into that day's
+            per-tenant rows. A stale timestamp means the recorder is not
+            completing: check netops_metering_snapshot_failures_total and the
+            api log for "metering". Metering gates nothing — no device, query or
+            permission depends on it — so this is an office-hours fix, but it
+            keeps costing precision in the usage report until it is made.
+          runbook: "docs/runbooks/licensing.md#usage-metering-is-not-recording"
+
+      # Never recorded at all. Separate from the staleness rule because the two
+      # have different causes and different fixes: this one means the recorder
+      # never started (a wiring or store problem), not that it stalled. for: 1h
+      # is generous on purpose — a boot snapshot lands in seconds, so an hour of
+      # zero is a real absence and not a slow start.
+      - alert: MeteringNeverRecorded
+        expr: netops_metering_snapshot_timestamp_seconds == 0
+        for: 1h
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "no usage snapshot has EVER been recorded on this installation — usage reports will be empty; check that the metering store is writable"
+          description: >-
+            The api takes a usage snapshot immediately at start-up, so a
+            timestamp still at zero an hour later means the recorder never
+            completed one. The usual cause is a metering store that cannot be
+            written (a file backend with no permission on /data/api, or a
+            Postgres backend whose migration has not applied). Metering gates
+            nothing, so nothing else is degraded.
+          runbook: "docs/runbooks/licensing.md#usage-metering-is-not-recording"
+
+      # Snapshots are being attempted and failing. Distinct from staleness: a
+      # partial failure can leave the timestamp fresh (some hours land) while
+      # hours go missing, which the staleness rule cannot see.
+      - alert: MeteringSnapshotsFailing
+        expr: increase(netops_metering_snapshot_failures_total[3h]) >= 3
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "usage snapshots are failing — hours are missing from the daily usage roll-up even though some are still landing; a usage report for the period will understate what was in use"
+          runbook: "docs/runbooks/licensing.md#usage-metering-is-not-recording"
+
+  # ----------------------------------------------------------------------------
   # Stack self-health
   # ----------------------------------------------------------------------------
   - name: noc-self-health

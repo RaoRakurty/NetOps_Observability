@@ -72,6 +72,30 @@ func (b *DailyBudget) Charge(tenant string, tokens int) {
 	b.used[tenant] += tokens
 }
 
+// UsedByTenant is a READ of today's charged totals, tenant → estimated tokens.
+//
+// It exists so usage metering (internal/metering) can record what a hosted
+// provider was asked for without a second counter that could disagree with the
+// one the budget already keeps. It is a read and nothing else: nothing here
+// admits, refuses or charges, and a metering caller cannot move the budget.
+//
+// The numbers are the budget's own coarse chars/4 estimate and reset at UTC
+// midnight, which is exactly the UTC day the metering roll-up uses — so the
+// day's peak reading IS the day's total. Nil-safe.
+func (b *DailyBudget) UsedByTenant() map[string]int {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rollover()
+	out := make(map[string]int, len(b.used))
+	for t, n := range b.used {
+		out[t] = n
+	}
+	return out
+}
+
 func (b *DailyBudget) rollover() {
 	today := time.Now().UTC().Format("2006-01-02")
 	if b.day != today {

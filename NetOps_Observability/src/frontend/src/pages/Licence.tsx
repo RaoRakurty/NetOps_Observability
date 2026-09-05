@@ -63,7 +63,13 @@
 // was given.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, type LicenceCeiling, type LicenceKey, type LicenceView } from "../services/api";
+import {
+  api,
+  type LicenceCeiling,
+  type LicenceKey,
+  type LicenceUsageView,
+  type LicenceView,
+} from "../services/api";
 import { useAuth } from "../hooks/useAuth";
 import Icon from "../components/Icon";
 import { operatorError } from "../lib/errors";
@@ -93,6 +99,19 @@ import {
   bandLabel,
   bandTone,
   ceilingConsequence,
+  DEFAULT_USAGE_PERIOD,
+  INSTALLATION_TENANT,
+  NOT_MEASURED_FALLBACK,
+  NO_SNAPSHOT_TEXT,
+  USAGE_PERIODS,
+  meterSeries,
+  meterUnitText,
+  monitoringLine,
+  periodFor,
+  periodLabel,
+  snapshotAge,
+  usageRows,
+  type UsageMeterRow,
   type Measured,
   type Tone,
 } from "./licence.model";
@@ -444,6 +463,220 @@ function Usage({ rows, note }: { rows: readonly LicenceCeiling[]; note?: string 
   );
 }
 
+// ── 2b · recorded usage (metering, tracker 258) ─────────────────────────────
+//
+// A SEPARATE section from "Current usage" above, deliberately. That one answers
+// "where do I stand against my ceilings RIGHT NOW"; this one answers "what did
+// this installation actually use over a period, and can I prove it to someone
+// else". They are different questions with different data behind them, and one
+// table trying to be both would answer neither.
+
+/** A meter's number, or the reason there is none. */
+function MeterAmount({ row }: { row: UsageMeterRow }) {
+  if (!row.amount.measured) {
+    return <span className="lic-absent">{notMeasuredText(row.amount.reason)}</span>;
+  }
+  const unit = meterUnitText(row.unit);
+  return (
+    <span className="mono">
+      {row.text}
+      {unit ? <span className="lic-sub"> {unit}</span> : null}
+    </span>
+  );
+}
+
+/**
+ * A day-by-day sparkline. Drawn only from days that HAVE a number: a day the
+ * recorder did not run leaves a gap in the line rather than a dip to zero,
+ * because those are different facts and a chart that merged them would invent a
+ * quiet day out of a missed one.
+ */
+function MeterSparkline({ points, label }: { points: Array<{ day: string; value: number | null }>; label: string }) {
+  const measuredPts = points.filter((p) => p.value !== null);
+  if (measuredPts.length < 2) return null;
+  const values = measuredPts.map((p) => p.value as number);
+  const max = Math.max(...values, 1);
+  const w = 160;
+  const h = 28;
+  const step = points.length > 1 ? w / (points.length - 1) : w;
+  let d = "";
+  points.forEach((p, i) => {
+    if (p.value === null) { d += ""; return; }
+    const x = i * step;
+    const y = h - (p.value / max) * (h - 2) - 1;
+    d += `${d.endsWith(" ") || d === "" ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)} `;
+  });
+  return (
+    <svg className="lic-spark" viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${label} over the period, peak ${max}`}>
+      <path d={d.trim()} fill="none" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function MeterTable({ rows, view, tenant }: { rows: UsageMeterRow[]; view: LicenceUsageView; tenant?: string }) {
+  if (rows.length === 0) {
+    return <p className="lic-sub">Nothing was recorded for this period.</p>;
+  }
+  return (
+    <div className="lic-tblwrap">
+      <table className="lic-tbl">
+        <thead>
+          <tr><th>Meter</th><th>Period</th><th>Trend</th><th>Samples</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.name}>
+              <th scope="row">
+                <span className="lic-meter-name">{r.label}</span>
+                <span className="lic-sub lic-meter-doc">{r.doc}</span>
+                {r.note && <span className="lic-sub lic-meter-doc">{r.note}</span>}
+              </th>
+              <td><MeterAmount row={r} /></td>
+              <td><MeterSparkline points={meterSeries(view, r.name, tenant)} label={r.label} /></td>
+              <td className="mono">{r.samples}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** The platform-only per-tenant breakdown. */
+function TenantBreakdown({ view }: { view: LicenceUsageView }) {
+  const rows = view.tenants ?? [];
+  if (rows.length === 0) return null;
+  const defs = new Map((view.meter_definitions ?? []).map((d) => [d.name, d]));
+  const primary = "monitored_devices_unique";
+  const label = defs.get(primary)?.label ?? "Monitored devices";
+  return (
+    <div className="lic-tblwrap">
+      <table className="lic-tbl">
+        <thead>
+          <tr><th>Tenant</th><th>{label}</th><th>Days recorded</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((t) => {
+            const m = (t.meters ?? []).find((x) => x.meter === primary);
+            return (
+              <tr key={t.tenant_id || "installation"}>
+                <th scope="row">
+                  {t.label}
+                  {t.tenant_id === INSTALLATION_TENANT && (
+                    <span className="lic-sub lic-meter-doc">
+                      Every monitored device on this installation, including any that belong to no tenant — so the tenant lines below can add up to less.
+                    </span>
+                  )}
+                </th>
+                <td>
+                  {!m || m.value === null || m.value === undefined
+                    ? <span className="lic-absent">{notMeasuredText(m?.reason ?? NOT_MEASURED_FALLBACK)}</span>
+                    : <span className="mono">{Math.round(m.value).toLocaleString()}</span>}
+                </td>
+                <td className="mono">{t.days}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RecordedUsage({
+  view, period, onPeriod, onDownload, downloading, downloadError,
+}: {
+  view: LicenceUsageView;
+  period: string;
+  onPeriod: (id: string) => void;
+  onDownload: () => void;
+  downloading: boolean;
+  downloadError: string | null;
+}) {
+  const entitlement = useMemo(() => usageRows(view, "entitlement"), [view]);
+  const diagnostic = useMemo(() => usageRows(view, "diagnostic"), [view]);
+  const tenant = view.scope === "tenant" ? view.tenant : INSTALLATION_TENANT;
+  const line = monitoringLine(view);
+  const age = snapshotAge(view);
+
+  return (
+    <>
+      {view.store_error && (
+        <HonestState
+          tone="warn"
+          headline="The recorded usage could not be read."
+          remedy={`${view.store_error} What is shown below is not the whole period.`}
+        />
+      )}
+
+      {/* The headline the tiering plan fixes the wording for: what is monitored,
+          against what is licensed, and the sentence that stops a customer
+          believing discovery costs them devices. */}
+      {line && (
+        <div className="lic-honest lic-muted" role="note">
+          <strong>{line}</strong>
+          <span>{age ?? NO_SNAPSHOT_TEXT}</span>
+        </div>
+      )}
+      {!line && !view.last_snapshot && (
+        <HonestState tone="muted" headline="Nothing recorded yet." remedy={NO_SNAPSHOT_TEXT} />
+      )}
+
+      <p className="lic-sub">{view.snapshot_note}</p>
+
+      <h3 className="lic-subhead">Entitlement meters</h3>
+      <MeterTable rows={entitlement} view={view} tenant={tenant} />
+
+      {/* DIAGNOSTIC meters are labelled as such on the page, not only in the
+          document: an operator seeing byte counts beside a device count must
+          know at a glance which of them anything is charged for. */}
+      <h3 className="lic-subhead">Diagnostic meters</h3>
+      <p className="lic-sub">
+        Recorded because they are useful, not because anything is charged for them. Telemetry you run yourself is not metered for money.
+      </p>
+      <MeterTable rows={diagnostic} view={view} tenant={tenant} />
+
+      {view.scope === "platform" && (view.tenants?.length ?? 0) > 0 && (
+        <>
+          <h3 className="lic-subhead">By tenant</h3>
+          <TenantBreakdown view={view} />
+        </>
+      )}
+
+      <h3 className="lic-subhead">Signed usage report</h3>
+      <p className="lic-sub">{view.report_hint}</p>
+      {view.key ? (
+        <p className="lic-sub">
+          Signed by this installation&rsquo;s own key <span className="mono">{view.key.id}</span>. {view.key.note}
+        </p>
+      ) : (
+        <p className="lic-sub">{view.key_note}</p>
+      )}
+      <div className="lic-actions lic-usage-actions">
+        <label className="lic-sub" htmlFor="lic-usage-period">Period</label>
+        <select
+          id="lic-usage-period"
+          className="lic-input"
+          value={period}
+          onChange={(e) => onPeriod(e.target.value)}
+        >
+          {USAGE_PERIODS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
+        <button type="button" className="btn sm" onClick={onDownload} disabled={downloading || !view.key}>
+          <Icon name="download" size={13} /> {downloading ? "Preparing…" : "Download signed usage report"}
+        </button>
+      </div>
+      {downloadError && (
+        <HonestState
+          tone="bad"
+          headline="The usage report was not produced."
+          remedy={downloadError}
+        />
+      )}
+    </>
+  );
+}
+
 // ── 3 · features ────────────────────────────────────────────────────────────
 
 function Features({ view }: { view: LicenceView }) {
@@ -775,6 +1008,39 @@ export default function Licence() {
     "The licence could not be read.",
   );
   const view = panel.data;
+
+  // RECORDED USAGE is its own read, on its own period. It is a second contract
+  // (src/backend/internal/metering), and keeping it a second panel means a
+  // metering store that cannot be read leaves the licence sections intact and
+  // says so in one place, instead of blanking the page.
+  const [period, setPeriod] = useState<string>(DEFAULT_USAGE_PERIOD);
+  const span = useMemo(() => periodFor(period), [period]);
+  const readUsage = useCallback(() => api.licenceUsage({ from: span.from, to: span.to }), [span.from, span.to]);
+  const [usage, reloadUsage] = usePanel<LicenceUsageView>(readUsage, "The recorded usage could not be read.");
+  // usePanel deliberately reads ONCE and only re-reads when asked, so that a
+  // re-render cannot turn into a request storm. A period change is exactly such
+  // an ask, and it has to be made explicitly. The first run is skipped because
+  // the panel's own mount read has already happened with these same bounds —
+  // reading the same period twice on open would be a wasted round trip, not a
+  // safer one.
+  const firstUsageRead = useRef(true);
+  useEffect(() => {
+    if (firstUsageRead.current) {
+      firstUsageRead.current = false;
+      return;
+    }
+    reloadUsage();
+  }, [span.from, span.to, reloadUsage]);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const downloadReport = useCallback(() => {
+    setDownloading(true);
+    setDownloadError(null);
+    api
+      .downloadLicenceUsageReport({ from: span.from, to: span.to })
+      .catch((e: unknown) => setDownloadError(operatorError(e, "The usage report could not be produced.")))
+      .finally(() => setDownloading(false));
+  }, [span.from, span.to]);
   // What the SERVER answered, not what the SPA believes about the caller. Until
   // the read lands we know nothing, and the page claims nothing.
   const provider = view?.scope === "platform";
@@ -826,6 +1092,36 @@ export default function Licence() {
         }
       >
         {body("the ceilings", (v) => <Usage rows={v.ceilings} note={v.scope_note} />)}
+      </Section>
+
+      {/* RECORDED USAGE — what was actually consumed, and the signed document
+          that proves it. Placed after "Current usage" because it answers the
+          next question an operator has, and before "Features" because it is
+          still about consumption rather than capability. */}
+      <Section
+        id="metering"
+        title="Usage"
+        note={`Recorded usage, ${periodLabel(span)} (UTC)`}
+        actions={
+          <button type="button" className="btn sm" onClick={reloadUsage}>
+            <Icon name="refresh" size={13} /> Re-read
+          </button>
+        }
+      >
+        {usage.error
+          ? <PanelError text={usage.error} onRetry={reloadUsage} />
+          : !usage.data
+            ? <Loading what="the recorded usage" />
+            : (
+              <RecordedUsage
+                view={usage.data}
+                period={period}
+                onPeriod={setPeriod}
+                onDownload={downloadReport}
+                downloading={downloading}
+                downloadError={downloadError}
+              />
+            )}
       </Section>
 
       <Section

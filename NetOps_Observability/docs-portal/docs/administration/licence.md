@@ -152,6 +152,47 @@ Three alert rules watch those gauges: `LicenceExpiringSoon` at 14 days, `Licence
 
 Four more series carry usage: `netops_licence_ceiling{ceiling,unit}` (the limit; `-1` means unlimited), `netops_licence_usage{ceiling,unit}` (present only for a ceiling this deployment actually measures), `netops_licence_ceiling_soft{ceiling}` (`1` where going over is recorded rather than refused) and `netops_licence_overage_devices`. Three more warning rules divide them — `LicenceCeilingApproaching` at 80 %, `LicenceCeilingReached` at 90 %, and `LicenceOverage` past 100 % — and every one of them joins on the soft flag, so a Community deployment fires none of them however full its fleet is.
 
+## Usage
+
+The **Usage** section answers a different question from **Current usage** above it. That one says where you stand against your ceilings right now; this one says what the installation actually consumed over a period, and gives you a document you can check without trusting this page.
+
+Usage is recorded as its own data, kept apart from the licence on purpose: the licence says what you are allowed to do, and usage says what you used. Nothing in the product gates on a usage number — no device, query or permission depends on it — so a metering problem can lose you precision in a report and can never refuse anything.
+
+**Monitored devices are counted from configuration**, never from recent traffic: a device with at least one collector enabled counts, whether or not it answered in the last hour. A device that stopped responding during an incident still counts, and discovery does not consume your monitoring allowance. The section leads with that line — *Monitoring: N / 25 Community monitored devices. Discovery does not consume your monitoring allowance.*
+
+Samples are taken hourly and rolled up by UTC day, so today's row grows through the day and the last hour may not be in it yet. The page says when the numbers were last recorded rather than implying they are live. Thirteen months of daily rows are kept.
+
+Meters are shown in two groups, and the split is the point:
+
+- **Entitlement meters** are the numbers a renewal or a true-up conversation uses: unique and peak monitored devices, watched prefixes, tenant and organisation counts, and the retention windows you have configured.
+- **Diagnostic meters** are recorded because they are useful, not because anything is charged for them — metric samples and series, log and flow records accepted after your processors ran, experience checks, AI tokens, and the ratio of what left the pipeline to what entered it. **Telemetry you run yourself is not metered for money.** Correlix does not pay for your disks, network or compute.
+
+A meter this installation has no counter for reads **not measured — <reason>**, never a zero. A zero means we counted and found none; a blank means nobody counted, and the two are different facts.
+
+A platform administrator also sees a **by tenant** breakdown, with the installation's own line named as such. That line counts every monitored device on the installation, including any that belong to no tenant, so the tenant lines below it can add up to less. A tenant administrator sees their own tenant only: no other tenant's numbers, no installation totals, no customer name and no licence id.
+
+### Download a signed usage report
+
+Pick a period and select **Download signed usage report**. The file is JSON and carries:
+
+- the **daily rows**, not just the totals, so the arithmetic can be redone by hand;
+- the **meter definitions**, so the document explains its own columns years later;
+- an **ed25519 signature** over its canonical bytes, made by a key this installation generated the first time a report was produced and has never sent anywhere.
+
+That key is **not** the key Correlix signs licences with, and that key does not exist on your host. The two answer different questions: whether Correlix issued a licence, and whether this installation produced a report.
+
+Check a report offline, with nothing but the file:
+
+```bash
+correlix-licence usage-verify correlix-usage-2026-08-01_2026-08-31.json
+```
+
+It runs two independent checks. The signature says the file is exactly what the installation produced and has not been edited. Then it **re-derives the period totals from the daily rows in the file** and compares them: a report whose summary does not follow from its own detail is refused, naming the meter that disagrees. Add `--pubkey <base64>` to confirm *which* installation produced it against a key you hold separately.
+
+Nothing in any of this is sent to Correlix. There is no phone-home, opt-in or otherwise. If we need your numbers, you send us the file.
+
+Four series carry the recorder's own health: `netops_metering_snapshot_timestamp_seconds` (`0` means none yet, which is a value rather than a gap), `netops_metering_daily_rows`, `netops_metering_snapshot_failures_total` and `netops_metering_pruned_rows_total`. Three warning rules watch them — `MeteringSnapshotStale` at 3 hours, `MeteringNeverRecorded`, and `MeteringSnapshotsFailing` — and none of them pages, because a stopped recorder costs a report some precision and nothing else.
+
 ## What happens at expiry
 
 Correlix settled this on 5 September 2026, and the page states it on every visit.

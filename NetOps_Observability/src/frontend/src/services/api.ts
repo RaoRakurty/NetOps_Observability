@@ -2186,6 +2186,20 @@ async function downloadResponse(res: Response, filename: string): Promise<void> 
   URL.revokeObjectURL(url);
 }
 
+// reportFileNameFrom pulls the server's chosen filename out of a
+// Content-Disposition header. The SERVER names a usage report — it encodes the
+// period and the scope — so the client uses that name rather than inventing a
+// second convention that could disagree with what the file says inside.
+function reportFileNameFrom(header: string | null): string | null {
+  if (!header) return null;
+  const m = /filename="?([^";]+)"?/i.exec(header);
+  if (!m) return null;
+  // Path separators are stripped: a filename is a leaf name, and a header is
+  // remote input like any other.
+  const name = m[1].trim().replace(/[/\\]/g, "-");
+  return name.length > 0 && name.length <= 200 ? name : null;
+}
+
 export interface CloudIngestionSource {
   source_type: string;
   status: string;
@@ -4802,6 +4816,51 @@ export const api = {
   // Removes the installed licence. Nothing is deleted but the licence itself:
   // the platform falls back to Community ceilings and lists what is over them.
   deleteLicence: () => request<LicenceView>(`/api/system/licence`, { method: "DELETE" }),
+
+  // ── Usage metering (tracker 258) ──────────────────────────────────────────
+  // Contract: src/backend/internal/metering/api.go. A SEPARATE data contract
+  // from the licence: the licence says what a customer may do, this says what
+  // they actually used. The SERVER decides the scope from the caller — a tenant
+  // admin gets their own tenant, the platform owner gets every tenant plus the
+  // installation row — and `tenant` may only NARROW, for a caller who already
+  // reads across tenants.
+
+  // contract: openapi.go GET /api/system/licence/usage
+  // `from`/`to` are UTC days (YYYY-MM-DD) and default, when omitted, to the last
+  // 30 days ending today. A meter with `value: null` was NOT measured and its
+  // `reason` says why — never coerce that null to 0 on the way in.
+  licenceUsage: (opts: { from?: string; to?: string; tenant?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.from) p.set("from", opts.from);
+    if (opts.to) p.set("to", opts.to);
+    if (opts.tenant) p.set("tenant", opts.tenant);
+    const q = p.toString();
+    return request<LicenceUsageView>(`/api/system/licence/usage${q ? `?${q}` : ""}`);
+  },
+
+  // contract: openapi.go GET /api/system/licence/usage/report
+  // The SIGNED usage report, as a file. It is fetched by hand rather than
+  // through `request` because the response is a document to save, not JSON to
+  // render — the same shape every other download on this API uses.
+  downloadLicenceUsageReport: async (opts: { from?: string; to?: string; tenant?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.from) p.set("from", opts.from);
+    if (opts.to) p.set("to", opts.to);
+    if (opts.tenant) p.set("tenant", opts.tenant);
+    const q = p.toString();
+    const token = getToken();
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    const scope = getActiveScope();
+    if (scope) headers["X-Acting-Tenant"] = scope;
+    const res = await fetch(`/api/system/licence/usage/report${q ? `?${q}` : ""}`, { headers });
+    if (!res.ok) {
+      throw new Error(`The usage report could not be produced: ${res.status} ${await res.text().catch(() => "")}`);
+    }
+    const name = reportFileNameFrom(res.headers.get("Content-Disposition")) ??
+      `correlix-usage-${opts.from ?? "period"}_${opts.to ?? "period"}.json`;
+    await downloadResponse(res, name);
+    return name;
+  },
 
   testSystemNetwork: (host?: string) =>
     request<SystemNetworkStatus>(`/api/system/network/test${host ? `?host=${encodeURIComponent(host)}` : ""}`, { method: "POST" }),
@@ -8658,6 +8717,123 @@ export type LicenceOverCeilingDevice = {
   tenant_id?: string;
   name?: string;
   reason: string;
+};
+
+// ── Usage metering (tracker 258) ─────────────────────────────────────────────
+//
+// These mirror src/backend/internal/metering one-for-one. The governing rule is
+// the Licence page's, applied to a second contract: A METER WITH NO COUNTER IS
+// `value: null` WITH A SIBLING `reason`. Never coerce that null to 0 — a zero
+// means "we counted and found none" and a blank means "nobody counted", and the
+// screen must be able to tell them apart.
+
+/** Where a recorded number came from. Closed vocabulary. */
+export type MeterSource = "configuration" | "counter" | "not_measured";
+
+/** Which row a meter belongs on: one tenant's, the installation's, or both. */
+export type MeterScope = "tenant" | "installation" | "any";
+
+/** Whether a meter bounds an entitlement or is recorded because it is useful. */
+export type MeterKind = "entitlement" | "diagnostic";
+
+/** How a day's hourly samples become one daily number. */
+export type MeterAggregation = "peak" | "unique" | "sum" | "last";
+
+/** One meter's declaration, carried in the payload so the page never hard-codes
+ *  a label, a unit or an explanation. */
+export type MeterDefinition = {
+  name: string;
+  label: string;
+  unit: string;
+  kind: MeterKind;
+  aggregation: MeterAggregation;
+  scope: MeterScope;
+  /** What the meter means and, where it matters, what it is not. */
+  doc: string;
+};
+
+/** One meter's state over a day or a period. */
+export type MeterValue = {
+  meter: string;
+  /** null = NOT MEASURED on this installation; `reason` says why. */
+  value: number | null;
+  unit: string;
+  source: MeterSource;
+  reason?: string;
+  /** How many hourly samples contributed. 0 on an unmeasured meter. */
+  samples: number;
+};
+
+/** One (UTC day, tenant) row. */
+export type MeteringDay = {
+  day: string;
+  /** The owning tenant; "" is the installation row (platform scope only). */
+  tenant_id: string;
+  meters: Record<string, MeterValue>;
+  samples: number;
+  updated_at: string;
+};
+
+/** The period roll-up. */
+export type MeteringTotals = {
+  from: string;
+  to: string;
+  days: number;
+  meters?: MeterValue[];
+};
+
+/** One tenant's line in the platform breakdown. */
+export type MeteringTenant = {
+  tenant_id: string;
+  /** "the installation" for the installation row — never a blank id on screen. */
+  label: string;
+  days: number;
+  meters?: MeterValue[];
+};
+
+/** The entitlement context the usage is read against. */
+export type MeteringLicence = {
+  tier: string;
+  /** Provider scope only. */
+  customer?: string;
+  licence_id?: string;
+  /** -1 = no limit. */
+  device_ceiling: number;
+};
+
+/** The installation's usage-report signing identity. NOT the licence key. */
+export type MeteringKey = {
+  id: string;
+  base64: string;
+  created_at: string;
+  note: string;
+};
+
+/** GET /api/system/licence/usage. */
+export type LicenceUsageView = {
+  /** Which payload this is. The SERVER decides it from the caller's scope. */
+  scope: LicenceScope;
+  /** The tenant the usage was counted for. Absent in the platform view. */
+  tenant?: string;
+  from: string;
+  to: string;
+  meter_definitions: MeterDefinition[];
+  days: MeteringDay[];
+  totals: MeteringTotals;
+  /** Provider-only: absent, never empty, in the tenant projection. */
+  tenants?: MeteringTenant[];
+  licence: MeteringLicence;
+  /** When the numbers were last refreshed. null = no snapshot has been taken. */
+  last_snapshot: string | null;
+  snapshot_note: string;
+  notes: string[];
+  key?: MeteringKey;
+  /** Why there is no signing identity, when there is none. */
+  key_note?: string;
+  scope_note?: string;
+  report_hint: string;
+  /** The usage history could not be read — different from "there is none". */
+  store_error?: string;
 };
 
 /** A trusted public signing key, as the page displays and offers it. */

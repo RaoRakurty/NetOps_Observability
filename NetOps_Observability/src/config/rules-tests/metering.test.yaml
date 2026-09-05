@@ -1,0 +1,154 @@
+# promtool unit tests for the `metering` alert group (tracker 258).
+#
+# Three rules, three DIFFERENT conditions, and the whole value of this file is
+# that they stay different:
+#
+#   MeteringSnapshotStale     recorded before, has not recorded recently
+#   MeteringNeverRecorded     has never recorded at all
+#   MeteringSnapshotsFailing  is recording, and losing hours while it does
+#
+# The failure this guards against is the obvious one: someone simplifies the
+# staleness expression by dropping the `> 0` guard, and every fresh install
+# starts firing "no usage snapshot in over 3 hours" in the seconds before its
+# boot snapshot lands — the metering equivalent of mailing a free-tier customer
+# a renewal warning. Case (c) below is that guard, and it must stay silent.
+#
+# TIMEBASE. promtool's synthetic clock starts at Unix epoch 0, so `time()` at
+# `eval_time: T` is exactly T seconds. A snapshot stamped at 600 (epoch + 10m)
+# is therefore 3h stale at eval_time 3h10m and not before.
+#
+# Paths are as mounted by the preflight docker run.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # (a) FIRES: a recorder that WAS working and stopped. Stamped at epoch+10m and
+  #     never refreshed; 3h stale at 3h10m, so with for: 15m it is firing by
+  #     3h30m and not at 3h20m.
+  - interval: 1m
+    input_series:
+      - series: 'netops_metering_snapshot_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "600x400"
+    alert_rule_test:
+      # Not yet: 3h stale only at 3h10m, and the `for` has not elapsed.
+      - eval_time: 3h20m
+        alertname: MeteringSnapshotStale
+        exp_alerts: []
+      - eval_time: 3h30m
+        alertname: MeteringSnapshotStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "no usage snapshot has been recorded in over 3 hours — the daily usage roll-up is missing hours, so a usage report for today will understate what was in use; nothing about collection, alerting or isolation is affected"
+              description: "Usage metering samples hourly and folds each sample into that day's per-tenant rows. A stale timestamp means the recorder is not completing: check netops_metering_snapshot_failures_total and the api log for \"metering\". Metering gates nothing — no device, query or permission depends on it — so this is an office-hours fix, but it keeps costing precision in the usage report until it is made."
+              runbook: "docs/runbooks/licensing.md#usage-metering-is-not-recording"
+
+  # (b) SILENT: a recorder that is keeping up. The timestamp advances with the
+  #     clock, so `time() - stamp` never approaches the threshold.
+  - interval: 1m
+    input_series:
+      - series: 'netops_metering_snapshot_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "0+60x400"
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: MeteringSnapshotStale
+        exp_alerts: []
+
+  # (c) THE FRESH-INSTALL GUARD. A timestamp of 0 means "none yet". `time() - 0`
+  #     is enormous, so WITHOUT the `and on() (… > 0)` clause the staleness rule
+  #     would fire on every new deployment. It must stay silent here; the
+  #     never-recorded case is the NEXT rule's job, with a different sentence.
+  - interval: 1m
+    input_series:
+      - series: 'netops_metering_snapshot_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "0x400"
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: MeteringSnapshotStale
+        exp_alerts: []
+
+  # (d) NEVER RECORDED: the same zero series, seen by the rule that is actually
+  #     about it. Fires after the generous 1h `for`, and not before — a boot
+  #     snapshot lands in seconds, so an hour of zero is a real absence.
+  - interval: 1m
+    input_series:
+      - series: 'netops_metering_snapshot_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "0x400"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MeteringNeverRecorded
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: MeteringNeverRecorded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "no usage snapshot has EVER been recorded on this installation — usage reports will be empty; check that the metering store is writable"
+              description: "The api takes a usage snapshot immediately at start-up, so a timestamp still at zero an hour later means the recorder never completed one. The usual cause is a metering store that cannot be written (a file backend with no permission on /data/api, or a Postgres backend whose migration has not applied). Metering gates nothing, so nothing else is degraded."
+              runbook: "docs/runbooks/licensing.md#usage-metering-is-not-recording"
+
+  # (e) NEVER RECORDED stays silent once the first snapshot lands: the series
+  #     leaves zero and the rule stops selecting it.
+  - interval: 1m
+    input_series:
+      - series: 'netops_metering_snapshot_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "0+60x400"
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: MeteringNeverRecorded
+        exp_alerts: []
+
+  # (f) FAILING WHILE RUNNING: the timestamp keeps advancing (some hours land),
+  #     so staleness cannot see it — but the failure counter climbs. Three
+  #     failures in three hours is the threshold.
+  - interval: 1m
+    input_series:
+      - series: 'netops_metering_snapshot_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "0+60x400"
+      - series: 'netops_metering_snapshot_failures_total{job="netops-api",instance="api:8080"}'
+        values: "0+1x400"
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: MeteringSnapshotStale
+        exp_alerts: []
+      - eval_time: 4h
+        alertname: MeteringSnapshotsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "usage snapshots are failing — hours are missing from the daily usage roll-up even though some are still landing; a usage report for the period will understate what was in use"
+              runbook: "docs/runbooks/licensing.md#usage-metering-is-not-recording"
+
+  # (g) A HEALTHY RECORDER fires nothing at all: no failures, a fresh timestamp.
+  - interval: 1m
+    input_series:
+      - series: 'netops_metering_snapshot_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "0+60x400"
+      - series: 'netops_metering_snapshot_failures_total{job="netops-api",instance="api:8080"}'
+        values: "0x400"
+      - series: 'netops_metering_daily_rows{job="netops-api",instance="api:8080"}'
+        values: "42x400"
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: MeteringSnapshotStale
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: MeteringNeverRecorded
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: MeteringSnapshotsFailing
+        exp_alerts: []

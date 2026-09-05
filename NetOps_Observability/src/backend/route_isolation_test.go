@@ -688,25 +688,35 @@ var routeIsolationLedger = map[string]string{
 	// Gate + grammar tests: licence_routes_test.go. Cross-org isolation:
 	// TestLicenceTenantViewCrossOrgIsolation (tenant A's usage never counts
 	// tenant B's devices or prefixes; as_tenant into another org is ignored).
-	"/api/system/licence":         "scoped", // GET: tenant projection (requireAdmin); PUT/DELETE: requirePlatformAdmin
-	"/api/system/network/test":    "platform",
-	"/api/automation/netbox":      "platform",
-	"/api/automation/netbox/sync": "platform",
-	"/api/discovery/config":       "platform", // subnet-scan scope: directs the platform prober (#91)
-	"/api/notify/smtp":            "platform",
-	"/api/notify/smtp/test":       "platform",
-	"/api/notify/slack":           "platform",
-	"/api/notify/slack/test":      "platform",
-	"/api/notify/twilio":          "platform",
-	"/api/notify/twilio/test":     "platform",
-	"/api/notify/ntfy":            "platform",
-	"/api/notify/ntfy/test":       "platform",
-	"/api/notify/pagerduty":       "platform",
-	"/api/notify/pagerduty/test":  "platform",
-	"/api/notify/teams":           "platform",
-	"/api/notify/teams/test":      "platform",
-	"/api/notify/sns":             "platform",
-	"/api/notify/sns/test":        "platform",
+	"/api/system/licence": "scoped", // GET: tenant projection (requireAdmin); PUT/DELETE: requirePlatformAdmin
+	// METERING (tracker 258) — recorded per-tenant USAGE, and its signed report.
+	// Per-tenant DATA: the store takes a (tenant, cross) pair on every read and
+	// has NO unscoped "list all", so a handler cannot forget the filter; the
+	// installation row's key is the empty string, which a tenant-scoped read can
+	// never match. `?tenant=` may only NARROW and only for a cross-tenant
+	// caller — a scoped caller naming another tenant gets 404, never a 403 that
+	// would confirm the other tenant exists. Cross-org isolation proven by
+	// metering_isolation_test.go.
+	"/api/system/licence/usage":        "scoped",
+	"/api/system/licence/usage/report": "scoped",
+	"/api/system/network/test":         "platform",
+	"/api/automation/netbox":           "platform",
+	"/api/automation/netbox/sync":      "platform",
+	"/api/discovery/config":            "platform", // subnet-scan scope: directs the platform prober (#91)
+	"/api/notify/smtp":                 "platform",
+	"/api/notify/smtp/test":            "platform",
+	"/api/notify/slack":                "platform",
+	"/api/notify/slack/test":           "platform",
+	"/api/notify/twilio":               "platform",
+	"/api/notify/twilio/test":          "platform",
+	"/api/notify/ntfy":                 "platform",
+	"/api/notify/ntfy/test":            "platform",
+	"/api/notify/pagerduty":            "platform",
+	"/api/notify/pagerduty/test":       "platform",
+	"/api/notify/teams":                "platform",
+	"/api/notify/teams/test":           "platform",
+	"/api/notify/sns":                  "platform",
+	"/api/notify/sns/test":             "platform",
 	// The channel enumeration is over the SAME platform-global notify integrations
 	// as /api/notify/* — a tenant admin must not enumerate operator channel names
 	// (requirePlatformAdmin; report_scheduler.go handleReportChannels).

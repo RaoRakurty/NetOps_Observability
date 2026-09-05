@@ -31,7 +31,11 @@ import type {
   LicencePhase,
   LicenceState,
   LicenceTier,
+  LicenceUsageView,
   LicenceView,
+  MeterDefinition,
+  MeterValue,
+  MeteringDay,
 } from "../services/api";
 
 // ── measured-or-not ─────────────────────────────────────────────────────────
@@ -576,4 +580,196 @@ export function sortedCeilings(rows: readonly LicenceCeiling[]): LicenceCeiling[
     .map((row, i) => ({ row, i }))
     .sort((a, b) => Number(b.row.enforced) - Number(a.row.enforced) || a.i - b.i)
     .map((x) => x.row);
+}
+
+
+// ── usage metering (tracker 258) ────────────────────────────────────────────
+//
+// The same three rules as above, applied to the second contract. In particular
+// rule 1 again, because it is the one a metering screen is most tempted to
+// break: a meter with `value: null` was NOT MEASURED and says why. There is no
+// path below that turns it into a 0, a dash or an empty bar.
+
+/** The period a reader asked for, as the picker offers it. */
+export type UsagePeriod = { from: string; to: string };
+
+/** The named periods on the picker. Days INCLUSIVE of today. */
+export const USAGE_PERIODS: ReadonlyArray<{ id: string; label: string; days: number }> = [
+  { id: "7d", label: "Last 7 days", days: 7 },
+  { id: "30d", label: "Last 30 days", days: 30 },
+  { id: "90d", label: "Last 90 days", days: 90 },
+];
+
+/** The period the page opens on. Thirty days is the window every billing
+ *  conversation uses, and it is what the server defaults to, so an unchanged
+ *  picker and an unparameterised read agree. */
+export const DEFAULT_USAGE_PERIOD = "30d";
+
+/** A UTC day key, YYYY-MM-DD. The whole contract is UTC — a local date here
+ *  would put a customer's numbers in the wrong day either side of midnight. */
+export function utcDay(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** The inclusive period for a named span, ending today. */
+export function periodFor(id: string, now: Date = new Date()): UsagePeriod {
+  const span = USAGE_PERIODS.find((p) => p.id === id) ?? USAGE_PERIODS[1];
+  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const from = new Date(to);
+  from.setUTCDate(from.getUTCDate() - (span.days - 1));
+  return { from: utcDay(from), to: utcDay(to) };
+}
+
+/** The label for a period, for the section note. */
+export function periodLabel(p: UsagePeriod): string {
+  return p.from === p.to ? p.from : `${p.from} to ${p.to}`;
+}
+
+/**
+ * A meter's number as it reaches the screen: a value, or the reason there is
+ * none. This is the ONLY door a nullable meter comes through.
+ */
+export function meterMeasured(m: MeterValue | undefined): Measured<number> {
+  if (!m || m.value === null || m.value === undefined) {
+    return { measured: false, reason: m?.reason ?? NOT_MEASURED_FALLBACK };
+  }
+  return { measured: true, value: m.value };
+}
+
+/**
+ * A meter's number, formatted. Counts are whole; a ratio keeps two decimals,
+ * because the difference between 0.31 and 0.34 is the whole point of a ratio.
+ */
+export function fmtMeter(value: number, unit: string): string {
+  if (unit === "ratio") return value.toFixed(2);
+  if (!Number.isFinite(value)) return "—";
+  return Math.round(value).toLocaleString();
+}
+
+/** The unit, written out beside a number. "" for a bare count. */
+export function meterUnitText(unit: string): string {
+  switch (unit) {
+    case "monitored_devices": return "monitored devices";
+    case "watched_prefixes": return "watched prefixes";
+    case "tenants": return "tenants";
+    case "orgs": return "organisations";
+    case "days": return "days";
+    case "records": return "records";
+    case "samples": return "samples";
+    case "series": return "series";
+    case "checks": return "checks";
+    case "tokens": return "tokens";
+    case "ratio": return "";
+    default: return "";
+  }
+}
+
+/** One meter, joined to its definition, ready to render. */
+export type UsageMeterRow = {
+  name: string;
+  label: string;
+  unit: string;
+  kind: MeterDefinition["kind"];
+  doc: string;
+  source: MeterValue["source"];
+  amount: Measured<number>;
+  /** Formatted number, or "" when nothing was measured. */
+  text: string;
+  /** Hourly samples behind the number. */
+  samples: number;
+  /** A qualifier on a MEASURED number (today: the period-unique caveat). */
+  note?: string;
+};
+
+/**
+ * Joins the period totals to the meter definitions the payload carries.
+ *
+ * A meter the server DEFINED but did not report is dropped rather than shown as
+ * an empty row: it was not part of this answer, and inventing a line for it
+ * would suggest a measurement that was never attempted. A meter the server
+ * REPORTED without a value is kept, because that is the honest "not measured"
+ * case the whole contract exists for.
+ */
+export function usageRows(view: LicenceUsageView | null, kind?: MeterDefinition["kind"]): UsageMeterRow[] {
+  if (!view) return [];
+  const defs = new Map((view.meter_definitions ?? []).map((d) => [d.name, d]));
+  return (view.totals?.meters ?? [])
+    .map((m): UsageMeterRow | null => {
+      const d = defs.get(m.meter);
+      if (!d) return null;
+      if (kind && d.kind !== kind) return null;
+      const amount = meterMeasured(m);
+      return {
+        name: m.meter,
+        label: d.label,
+        unit: d.unit,
+        kind: d.kind,
+        doc: d.doc,
+        source: m.source,
+        amount,
+        text: amount.measured ? fmtMeter(amount.value, d.unit) : "",
+        samples: m.samples ?? 0,
+        note: amount.measured ? m.reason : undefined,
+      };
+    })
+    .filter((r): r is UsageMeterRow => r !== null);
+}
+
+/**
+ * The daily series for one meter, oldest first — the sparkline's input.
+ *
+ * A day with no value for the meter is `null`, NOT 0: a day the recorder did
+ * not run is not a day of zero usage, and a chart that flattened the two would
+ * be the same lie as a reassuring zero on a table.
+ */
+export function meterSeries(view: LicenceUsageView | null, meter: string, tenant?: string): Array<{ day: string; value: number | null }> {
+  if (!view) return [];
+  const rows: MeteringDay[] = (view.days ?? []).filter((d) => (tenant === undefined ? true : d.tenant_id === tenant));
+  const byDay = new Map<string, number | null>();
+  for (const d of rows) {
+    const m = d.meters?.[meter];
+    const v = m && m.value !== null && m.value !== undefined ? m.value : null;
+    const prev = byDay.get(d.day);
+    // Several tenants can report the same day; the platform view shows the
+    // installation row, so the LARGEST value for the day is the right answer
+    // and a missing value never displaces a real one.
+    byDay.set(d.day, v === null ? (prev ?? null) : Math.max(v, prev ?? 0));
+  }
+  return [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([day, value]) => ({ day, value }));
+}
+
+/** The installation row's tenant key. Empty by contract, so it needs a name. */
+export const INSTALLATION_TENANT = "";
+
+/** How current the numbers are, in one sentence. Null when nothing has been
+ *  recorded yet — which is a different fact from "recorded a long time ago". */
+export function snapshotAge(view: LicenceUsageView | null, now: Date = new Date()): string | null {
+  if (!view || !view.last_snapshot) return null;
+  const at = new Date(view.last_snapshot);
+  if (Number.isNaN(at.getTime())) return null;
+  const mins = Math.max(0, Math.floor((now.getTime() - at.getTime()) / 60000));
+  if (mins < 1) return "Recorded just now.";
+  if (mins < 60) return `Recorded ${mins} minute${mins === 1 ? "" : "s"} ago.`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `Recorded ${hours} hour${hours === 1 ? "" : "s"} ago.`;
+  return `Recorded ${Math.floor(hours / 24)} days ago.`;
+}
+
+/** The sentence shown when no snapshot has ever been recorded. */
+export const NO_SNAPSHOT_TEXT =
+  "No usage has been recorded on this installation yet. The first sample is taken within the hour; until then there is nothing to report, which is not the same as nothing being in use.";
+
+/** The wording the tiering plan fixes for the monitoring allowance
+ *  (TIERING_PLAN_2026-09-03.md §9, "Onboarding message"). */
+export const DISCOVERY_NOTE = "Discovery does not consume your monitoring allowance.";
+
+/** The monitored-device line: usage against the ceiling, in the plan's words. */
+export function monitoringLine(view: LicenceUsageView | null): string | null {
+  if (!view) return null;
+  const rows = usageRows(view);
+  const peak = rows.find((r) => r.name === "monitored_devices_peak");
+  if (!peak || !peak.amount.measured) return null;
+  const ceiling = view.licence?.device_ceiling ?? UNLIMITED;
+  const limit = ceiling === UNLIMITED ? "no limit" : `${ceiling} ${tierLabel(view.licence.tier as LicenceTier)} monitored devices`;
+  return `Monitoring: ${fmtMeter(peak.amount.value, peak.unit)} / ${limit}. ${DISCOVERY_NOTE}`;
 }

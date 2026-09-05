@@ -14,10 +14,21 @@
 import { describe, it, expect } from "vitest";
 import type { LicenceCeiling, LicenceFeature, LicenceOverage, LicenceState } from "../services/api";
 import {
+  DEFAULT_USAGE_PERIOD,
   EXPIRY_SOON_DAYS,
   MAX_DOCUMENT_BYTES,
   NOT_MEASURED_FALLBACK,
   UNLIMITED,
+  USAGE_PERIODS,
+  fmtMeter,
+  meterMeasured,
+  meterSeries,
+  meterUnitText,
+  monitoringLine,
+  periodFor,
+  periodLabel,
+  snapshotAge,
+  usageRows,
   bandLabel,
   bandTone,
   ceilingConsequence,
@@ -586,5 +597,236 @@ describe("overageSince — states the start, and stops", () => {
   it("is null when the platform is not keeping a register", () => {
     expect(overageSince({})).toBeNull();
     expect(overageSince({ since: "not a date" })).toBeNull();
+  });
+});
+
+// ── usage metering (tracker 258) ────────────────────────────────────────────
+//
+// Rule 1 again, on the second contract, plus the two arithmetic decisions a
+// customer will check by hand: which UTC days a period covers, and what a
+// missing day in a series means.
+
+describe("usage periods", () => {
+  it("covers the named span INCLUSIVE of today, in UTC", () => {
+    const now = new Date("2026-09-05T23:30:00Z");
+    expect(periodFor("30d", now)).toEqual({ from: "2026-08-07", to: "2026-09-05" });
+    expect(periodFor("7d", now)).toEqual({ from: "2026-08-30", to: "2026-09-05" });
+    expect(periodFor("90d", now)).toEqual({ from: "2026-06-08", to: "2026-09-05" });
+  });
+
+  it("uses UTC days, not local ones", () => {
+    // 23:30 UTC and 00:30 UTC the next day are DIFFERENT days, and a local-date
+    // implementation would put one of them in the wrong one either side of
+    // midnight — which moves a customer's numbers between billing days.
+    expect(periodFor("7d", new Date("2026-09-05T23:59:59Z")).to).toBe("2026-09-05");
+    expect(periodFor("7d", new Date("2026-09-06T00:00:01Z")).to).toBe("2026-09-06");
+  });
+
+  it("falls back to the 30-day span for an unknown id, rather than an empty period", () => {
+    expect(periodFor("whenever", new Date("2026-09-05T00:00:00Z"))).toEqual({ from: "2026-08-07", to: "2026-09-05" });
+  });
+
+  it("labels a single-day period as one day", () => {
+    expect(periodLabel({ from: "2026-09-05", to: "2026-09-05" })).toBe("2026-09-05");
+    expect(periodLabel({ from: "2026-09-01", to: "2026-09-05" })).toBe("2026-09-01 to 2026-09-05");
+  });
+
+  it("opens on the same period the platform defaults to", () => {
+    expect(DEFAULT_USAGE_PERIOD).toBe("30d");
+    expect(USAGE_PERIODS.some((p) => p.id === DEFAULT_USAGE_PERIOD)).toBe(true);
+  });
+});
+
+describe("a meter with no counter", () => {
+  const unmeasured = {
+    meter: "trace_accepted_spans", value: null, unit: "records",
+    source: "not_measured" as const, samples: 0,
+    reason: "no trace pipeline is configured",
+  };
+
+  it("is never a zero", () => {
+    const m = meterMeasured(unmeasured);
+    expect(m.measured).toBe(false);
+    expect(m.measured === false && m.reason).toBe("no trace pipeline is configured");
+  });
+
+  it("still says something when the platform sent no reason", () => {
+    const m = meterMeasured({ ...unmeasured, reason: undefined });
+    expect(m.measured === false && m.reason).toBe(NOT_MEASURED_FALLBACK);
+  });
+
+  it("and an absent meter is not measured either", () => {
+    expect(meterMeasured(undefined).measured).toBe(false);
+  });
+
+  it("keeps a real zero a real zero", () => {
+    const m = meterMeasured({ ...unmeasured, value: 0, source: "counter" });
+    expect(m).toEqual({ measured: true, value: 0 });
+  });
+});
+
+describe("meter formatting", () => {
+  it("rounds counts and keeps two decimals on a ratio", () => {
+    expect(fmtMeter(1234.6, "records")).toBe((1235).toLocaleString());
+    expect(fmtMeter(0.3125, "ratio")).toBe("0.31");
+  });
+
+  it("writes the unit out, and says nothing for a bare ratio", () => {
+    expect(meterUnitText("monitored_devices")).toBe("monitored devices");
+    expect(meterUnitText("ratio")).toBe("");
+    expect(meterUnitText("something-new")).toBe("");
+  });
+});
+
+describe("the daily series behind the trend", () => {
+  const view = {
+    scope: "platform" as const, from: "2026-09-01", to: "2026-09-03",
+    meter_definitions: [],
+    days: [
+      {
+        day: "2026-09-01", tenant_id: "", samples: 24, updated_at: "",
+        meters: { devices: { meter: "devices", value: 5, unit: "monitored_devices", source: "configuration" as const, samples: 24 } },
+      },
+      // 2026-09-02 was NOT recorded — the recorder was down.
+      {
+        day: "2026-09-02", tenant_id: "", samples: 0, updated_at: "",
+        meters: { devices: { meter: "devices", value: null, unit: "monitored_devices", source: "not_measured" as const, samples: 0, reason: "the recorder did not run" } },
+      },
+      {
+        day: "2026-09-03", tenant_id: "", samples: 24, updated_at: "",
+        meters: { devices: { meter: "devices", value: 9, unit: "monitored_devices", source: "configuration" as const, samples: 24 } },
+      },
+    ],
+    totals: { from: "2026-09-01", to: "2026-09-03", days: 3 },
+    licence: { tier: "team", device_ceiling: 250 },
+    last_snapshot: null, snapshot_note: "", notes: [], report_hint: "",
+  };
+
+  it("leaves a day the recorder missed as null, never as a zero", () => {
+    expect(meterSeries(view, "devices")).toEqual([
+      { day: "2026-09-01", value: 5 },
+      { day: "2026-09-02", value: null },
+      { day: "2026-09-03", value: 9 },
+    ]);
+  });
+
+  it("is empty for a meter nobody recorded", () => {
+    expect(meterSeries(view, "no_such_meter")).toEqual([
+      { day: "2026-09-01", value: null },
+      { day: "2026-09-02", value: null },
+      { day: "2026-09-03", value: null },
+    ]);
+  });
+
+  it("is empty with nothing to read", () => {
+    expect(meterSeries(null, "devices")).toEqual([]);
+  });
+});
+
+describe("the monitoring line", () => {
+  const base = {
+    scope: "platform" as const, from: "2026-09-01", to: "2026-09-05",
+    meter_definitions: [{
+      name: "monitored_devices_peak", label: "Monitored devices (peak)",
+      unit: "monitored_devices", kind: "entitlement" as const,
+      aggregation: "peak" as const, scope: "any" as const, doc: "",
+    }],
+    days: [],
+    totals: {
+      from: "2026-09-01", to: "2026-09-05", days: 5,
+      meters: [{ meter: "monitored_devices_peak", value: 12, unit: "monitored_devices", source: "configuration" as const, samples: 5 }],
+    },
+    licence: { tier: "community", device_ceiling: 25 },
+    last_snapshot: null, snapshot_note: "", notes: [], report_hint: "",
+  };
+
+  it("reads the way the tiering plan words it", () => {
+    expect(monitoringLine(base)).toBe(
+      "Monitoring: 12 / 25 Community monitored devices. Discovery does not consume your monitoring allowance.",
+    );
+  });
+
+  it("says there is no limit rather than printing the -1 sentinel", () => {
+    const line = monitoringLine({ ...base, licence: { tier: "enterprise", device_ceiling: UNLIMITED } });
+    expect(line).toContain("no limit");
+    expect(line).not.toContain("-1");
+  });
+
+  it("says nothing at all when the count was not measured", () => {
+    expect(monitoringLine({
+      ...base,
+      totals: {
+        ...base.totals,
+        meters: [{ meter: "monitored_devices_peak", value: null, unit: "monitored_devices", source: "not_measured" as const, samples: 0, reason: "the registry is unavailable" }],
+      },
+    })).toBeNull();
+    expect(monitoringLine(null)).toBeNull();
+  });
+});
+
+describe("how current the numbers are", () => {
+  const at = (iso: string | null) => ({
+    scope: "platform" as const, from: "", to: "", meter_definitions: [], days: [],
+    totals: { from: "", to: "", days: 0 },
+    licence: { tier: "team", device_ceiling: 250 },
+    last_snapshot: iso, snapshot_note: "", notes: [], report_hint: "",
+  });
+  const now = new Date("2026-09-05T12:00:00Z");
+
+  it("says how long ago, in the unit that reads naturally", () => {
+    expect(snapshotAge(at("2026-09-05T11:59:40Z"), now)).toBe("Recorded just now.");
+    expect(snapshotAge(at("2026-09-05T11:10:00Z"), now)).toBe("Recorded 50 minutes ago.");
+    expect(snapshotAge(at("2026-09-05T11:00:00Z"), now)).toBe("Recorded 1 hour ago.");
+    expect(snapshotAge(at("2026-09-05T08:00:00Z"), now)).toBe("Recorded 4 hours ago.");
+    expect(snapshotAge(at("2026-09-01T12:00:00Z"), now)).toBe("Recorded 4 days ago.");
+  });
+
+  it("returns nothing when nothing has been recorded — a different fact from 'long ago'", () => {
+    expect(snapshotAge(at(null), now)).toBeNull();
+    expect(snapshotAge(at("not a time"), now)).toBeNull();
+    expect(snapshotAge(null, now)).toBeNull();
+  });
+});
+
+describe("joining the totals to the meter definitions", () => {
+  const view = {
+    scope: "platform" as const, from: "2026-09-01", to: "2026-09-05",
+    meter_definitions: [
+      { name: "a", label: "Meter A", unit: "records", kind: "entitlement" as const, aggregation: "sum" as const, scope: "installation" as const, doc: "what A means" },
+      { name: "b", label: "Meter B", unit: "records", kind: "diagnostic" as const, aggregation: "sum" as const, scope: "installation" as const, doc: "what B means" },
+    ],
+    days: [],
+    totals: {
+      from: "2026-09-01", to: "2026-09-05", days: 5,
+      meters: [
+        { meter: "a", value: 10, unit: "records", source: "counter" as const, samples: 5 },
+        { meter: "b", value: null, unit: "records", source: "not_measured" as const, samples: 0, reason: "no counter" },
+        // A meter the platform reported but never DEFINED: dropped, because a
+        // row nobody can explain is worse than a row that is not there.
+        { meter: "undeclared", value: 1, unit: "records", source: "counter" as const, samples: 5 },
+      ],
+    },
+    licence: { tier: "team", device_ceiling: 250 },
+    last_snapshot: null, snapshot_note: "", notes: [], report_hint: "",
+  };
+
+  it("carries the label, the unit and the explanation from the payload", () => {
+    const rows = usageRows(view);
+    expect(rows.map((r) => r.name)).toEqual(["a", "b"]);
+    expect(rows[0].label).toBe("Meter A");
+    expect(rows[0].doc).toBe("what A means");
+    expect(rows[0].text).toBe((10).toLocaleString());
+  });
+
+  it("keeps an unmeasured meter, with no number and its reason", () => {
+    const b = usageRows(view).find((r) => r.name === "b");
+    expect(b?.text).toBe("");
+    expect(b?.amount.measured).toBe(false);
+  });
+
+  it("splits entitlement meters from diagnostic ones", () => {
+    expect(usageRows(view, "entitlement").map((r) => r.name)).toEqual(["a"]);
+    expect(usageRows(view, "diagnostic").map((r) => r.name)).toEqual(["b"]);
+    expect(usageRows(null)).toEqual([]);
   });
 });

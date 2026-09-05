@@ -72,7 +72,16 @@ import (
 	"netops/backend/internal/entitlement"
 	"netops/backend/internal/licence"
 	// LICENCE-END
+	"netops/backend/internal/chschema"
 	"netops/backend/internal/loginguard"
+	// METERING-BEGIN — usage metering (tracker 258). A SEPARATE data contract
+	// from the licence: entitlement answers "what may this customer do", this
+	// answers "what did they use". Deleting this import, the METERING marker
+	// blocks in this file and the package removes metering entirely — a
+	// supported state in which the two Usage routes 404 and nothing else
+	// changes, because nothing gates on a meter.
+	"netops/backend/internal/metering"
+	// METERING-END
 	"netops/backend/internal/metricval"
 	// PACKET-CAPTURE-BEGIN
 	"netops/backend/internal/pcap"
@@ -94,6 +103,7 @@ import (
 	// SECURITY-LANE-BEGIN
 	"netops/backend/internal/seclane"
 	// SECURITY-LANE-END
+	"math"
 	"netops/backend/internal/secobs"
 	"netops/backend/internal/secprofile"
 	"netops/backend/internal/selfheal"
@@ -289,6 +299,19 @@ type server struct {
 	// is one definition of "monitored" and one lock protecting it.
 	devmonAPI *devmon.API
 	// MONITORING-END
+	// METERING-BEGIN — usage metering (tracker 258). `meteringStore` holds the
+	// daily per-tenant rows, `meteringRecorder` samples hourly and owns the
+	// module's metrics, `meteringKey` is this INSTALLATION's usage-report
+	// signing identity (never Correlix's licence key, which does not exist on a
+	// customer host), and `meteringAPI` serves the two Usage routes.
+	//
+	// NOTHING GATES ON ANY OF IT. No admission path reads a meter, so a
+	// metering outage costs a usage report and can never refuse a device.
+	meteringStore    metering.Store
+	meteringRecorder *metering.Recorder
+	meteringKey      *metering.ReportKey
+	meteringAPI      *metering.API
+	// METERING-END
 	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
 	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
@@ -1026,6 +1049,35 @@ func newServer() *server {
 	})
 	srv.logLicenceState()
 	// LICENCE-END
+	// METERING-BEGIN — usage metering (tracker 258). Built here, after srv
+	// exists, because every seam it takes is a method on *server: the sampler
+	// reads the monitored set, the tenant register and the watchlist; the read
+	// gate is the licence page's gate.
+	//
+	// Construction NEVER fails and never touches the disk. The Postgres backend
+	// is used when it is active (migration 0046, FORCE-RLS), the file backend
+	// otherwise — the same selection the DEM catalogue and the security control
+	// plane make.
+	srv.meteringStore = newMeteringStore()
+	srv.meteringKey = metering.NewReportKey(
+		metering.ReportKeyPathFor(srv.licenceStore.Path()),
+		func(msg string, err error) {
+			if err != nil {
+				logWarn("metering", msg, errf(err))
+				return
+			}
+			logWarn("metering", msg, nil)
+		})
+	srv.meteringRecorder = metering.NewRecorder(srv.meteringStore, srv.meteringSample,
+		func(msg string, err error) {
+			if err != nil {
+				logWarn("metering", msg, errf(err))
+				return
+			}
+			logWarn("metering", msg, nil)
+		})
+	srv.meteringAPI = metering.New(srv.meteringDeps())
+	// METERING-END
 	// MONITORING-BEGIN — the monitoring switch's route. Built here, after srv
 	// exists, because every seam it takes is a method on *server (the two
 	// permission gates, the device-visibility rule, the audit sink) — the same
@@ -2123,6 +2175,19 @@ func Run() {
 	// killable with SNAPSHOT_PROBE_ENABLED=false (in which case the metric says
 	// so rather than reporting a fake pass).
 	workers.start("snapshot-restorability-probe", func() { srv.dataProtect.StartRestorabilityProbe(ctx) })
+	// METERING-BEGIN — the hourly usage snapshot (tracker 258). It takes one
+	// reading immediately and then every hour: immediately, because otherwise
+	// the staleness rule spends its first hour unable to tell "just booted" from
+	// "stopped recording". It joins the drain group, so a snapshot in flight at
+	// shutdown finishes its write instead of being abandoned mid-file.
+	//
+	// A failed snapshot is counted and logged, never fatal: metering gates
+	// nothing, so an hour missing from a roll-up costs a usage report some
+	// precision and costs collection nothing at all.
+	workers.start("metering-snapshot", func() {
+		srv.meteringRecorder.Run(ctx, durationOr("METERING_INTERVAL", metering.DefaultInterval))
+	})
+	// METERING-END
 	// DEM-BEGIN — publish the prober's experience work queue. Only under
 	// FEATURE_DEM (the projector is nil otherwise), and the published entry
 	// carries a short TTL so a prober that loses the api stops measuring a stale
@@ -2989,6 +3054,15 @@ func (s *server) routes(mux *http.ServeMux) {
 	// in route_isolation_test.go.
 	mux.HandleFunc("/api/system/licence", s.licenceAPI.Handle)
 	// LICENCE-END
+	// METERING-BEGIN — the Usage surface (tracker 258). Both are per-tenant
+	// READS: a tenant/org admin sees their OWN usage, the platform owner sees
+	// every tenant plus the installation row, and `?tenant=` may only NARROW —
+	// a scoped caller naming another tenant gets 404, never a 403 that would
+	// confirm the other tenant exists. Cross-org proof:
+	// metering_isolation_test.go.
+	mux.HandleFunc("/api/system/licence/usage", s.meteringAPI.HandleUsage)
+	mux.HandleFunc("/api/system/licence/usage/report", s.meteringAPI.HandleReport)
+	// METERING-END
 	mux.HandleFunc("/api/settings/attribution-precedence", s.handleAttributionPrecedenceSettings)
 	mux.HandleFunc("/api/settings/seam-owners", s.handleSeamOwnersSettings) // #113: owner class → tenant's actual responsible party
 	mux.HandleFunc("/api/settings/governance-audit", s.handleGovernanceAudit)
@@ -3837,6 +3911,12 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// come from one observation and cannot disagree.
 	s.entitlements.WriteUsageMetrics(w, s.licenceUsage(r.Context()), time.Now().UTC())
 	// LICENCE-END
+	// METERING-BEGIN — the usage-metering series. Rendered from atomics the
+	// hourly recorder already updated, so the scrape never blocks on a store,
+	// and emitted even when nothing is wired (as zeros) so a vanished series
+	// means a scrape failure rather than "we are fine".
+	s.meteringRecorder.WriteMetrics(w)
+	// METERING-END
 	// IGP-MONITORING-BEGIN
 	s.igpAPI.Metrics().Write(w) // nil-safe on both the API and the counter set
 	// IGP-MONITORING-END
@@ -5501,6 +5581,417 @@ func (s *server) licenceFeature(f entitlement.Feature, next http.HandlerFunc) ht
 		next(w, r)
 	}
 }
+
+// METERING-BEGIN — the internal/metering wiring (tracker 258).
+//
+// Deleting this block, the other METERING marker blocks in this file and the
+// package removes usage metering entirely. That is a SUPPORTED state and a
+// boring one: the two Usage routes stop being registered, the four metering
+// series stop being emitted, and NOTHING else changes — because nothing in the
+// product gates on a meter. Metering observes; it never admits and never
+// refuses.
+//
+// The division of labour is the one internal/licence set: this file holds the
+// integration seam (backend selection, the sampler that reads the platform's
+// own state, the gate mapping) and internal/metering holds the data contract.
+// The package reads no environment and reaches nothing it was not handed.
+
+// newMeteringStore picks the metering backend, exactly as the DEM catalogue and
+// the security control plane do: Postgres (migration 0046, FORCE-RLS) when it
+// is active, the file store otherwise.
+//
+// A corrupt file still SERVES (an empty history) but says so — a history that
+// failed to load must never look like one nobody has written to, because the
+// visible consequence of both is an empty chart.
+func newMeteringStore() metering.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return metering.NewPGStore(ps.DB())
+	}
+	fs := metering.NewFileStore(envOr(metering.EnvFile, metering.DefaultFile))
+	if err := fs.LoadErr(); err != nil {
+		logError("metering", "the usage history could not be read — it starts EMPTY and the recorded past will not be in a usage report until the file is repaired or removed",
+			map[string]any{"err": err.Error()})
+	}
+	return fs
+}
+
+// meteringDeps assembles the Usage routes' injected collaborators.
+func (s *server) meteringDeps() metering.Deps {
+	return metering.Deps{
+		Store:    s.meteringStore,
+		Key:      s.meteringKey,
+		Recorder: s.meteringRecorder,
+		// The SAME read gate the Licence page uses: administration:admin at
+		// whatever scope the caller holds it, with the tenant resolved by
+		// principalTenant. A tenant/org admin gets their own tenant's usage; the
+		// platform owner gets every tenant's plus the installation row. The
+		// narrowing selector is applied to the claims by the auth middleware and
+		// can only ever NARROW.
+		ReadGate:   s.meteringReadGate,
+		Audit:      meteringAudit{s},
+		Licence:    s.meteringLicence,
+		Now:        func() time.Time { return time.Now().UTC() },
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+	}
+}
+
+// meteringReadGate binds the READ gate (§3a rule 1 — scope by the principal,
+// default-closed).
+func (s *server) meteringReadGate(w http.ResponseWriter, r *http.Request) (metering.Principal, bool) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return metering.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	if cross {
+		// The platform owner's tenant is the GLOBAL pseudo-tenant, which is not
+		// a metering row key. A cross-tenant read carries no tenant at all, so
+		// the value can never be mistaken for a narrowing.
+		tenant = ""
+	}
+	return metering.Principal{Subject: claims.Sub, Tenant: tenant, CrossTenant: cross}, true
+}
+
+// meteringAudit adapts the platform audit repo for the report download. The
+// request envelope (method, path, client IP) is filled HERE so the module never
+// has to know how this platform derives a client address behind its proxy.
+type meteringAudit struct{ s *server }
+
+func (a meteringAudit) Record(r *http.Request, ev metering.AuditRecord) {
+	if a.s == nil || a.s.audit == nil {
+		return
+	}
+	a.s.audit.Record(AuditEvent{
+		Actor: ev.Actor, Method: r.Method, Path: r.URL.Path,
+		Status: ev.Status, Decision: ev.Decision, Remote: auditClientIP(r),
+		Detail: ev.Detail,
+	})
+}
+
+// meteringLicence is the entitlement context a usage report is read against.
+// The commercial identity is supplied only for the PLATFORM scope; the module
+// drops it again for a tenant, so a wiring mistake here cannot leak it.
+func (s *server) meteringLicence(_ context.Context, cross bool) metering.ReportLicence {
+	out := metering.ReportLicence{Devices: entitlement.Unlimited}
+	if s.entitlements == nil {
+		return out
+	}
+	st := s.entitlements.State()
+	out.Tier = string(st.Tier)
+	limit, _ := s.entitlements.Ceiling(entitlement.CeilingDevices)
+	out.Devices = limit
+	if cross {
+		out.Customer, out.LicenceID = st.Customer, st.LicenceID
+	}
+	return out
+}
+
+// meteringSample takes ONE reading of everything this installation can honestly
+// measure, for every tenant plus the installation itself.
+//
+// TWO RULES GOVERN EVERY LINE BELOW, and they are why this function is long
+// rather than clever:
+//
+//  1. THE PRIMARY METER COMES FROM CONFIGURATION. Monitored devices are counted
+//     from the monitored set — a device with at least one collector enabled —
+//     and never from recent telemetry (owner decision, 2026-09-05). A device
+//     that stopped answering still counts, so an outage never moves the number
+//     a customer is billed on.
+//  2. A METER WITH NO COUNTER IS RECORDED AS not_measured WITH ITS REASON,
+//     never as a zero. Every branch that cannot produce a number says why, in a
+//     sentence an operator can act on.
+//
+// SCOPE. Tenant rows carry that tenant's own numbers; the installation row
+// carries the platform-wide totals and the meters that describe the deployment
+// (tenant and org counts, the configured retention windows, the pipeline
+// counters). The two are not addends: a device nobody has assigned to a tenant
+// is platform-owned and appears only in the installation total, so the tenant
+// rows can sum to less than it.
+func (s *server) meteringSample(ctx context.Context) map[string][]metering.Reading {
+	out := map[string][]metering.Reading{}
+	inst := metering.ScopeInstallation
+	add := func(tenant string, r metering.Reading) { out[tenant] = append(out[tenant], r) }
+
+	// Every known tenant gets a row even with nothing on it, so a tenant that
+	// monitored nothing this month appears in the report as a zero rather than
+	// as a gap somebody has to explain.
+	tenants := []string{}
+	if s.tenants != nil {
+		for _, t := range s.tenants.List() {
+			id := strings.ToLower(strings.TrimSpace(t.ID))
+			if id == "" || id == TenantGlobal {
+				continue
+			}
+			tenants = append(tenants, id)
+			out[id] = nil
+		}
+	}
+
+	s.meterDevices(out, add, inst, tenants)
+	s.meterRegistry(add, inst)
+	s.meterWatchlist(ctx, add, inst, tenants)
+	s.meterRetention(add, inst)
+	s.meterAITokens(add, inst, tenants)
+	s.meterTelemetry(ctx, add, inst, tenants)
+	return out
+}
+
+// meterDevices records the PRIMARY meter from the monitored set.
+func (s *server) meterDevices(out map[string][]metering.Reading, add func(string, metering.Reading), inst string, tenants []string) {
+	if s.discovery == nil {
+		const why = "the device registry is not available on this build, so no device count was taken"
+		add(inst, metering.NotMeasured(metering.MeterMonitoredDevicesUnique, inst, why))
+		add(inst, metering.NotMeasured(metering.MeterMonitoredDevicesPeak, inst, why))
+		add(inst, metering.NotMeasured(metering.MeterMonitoredWithheld, inst, why))
+		return
+	}
+	all := []string{}
+	byTenant := map[string][]string{}
+	for _, d := range s.discovery.Devices() {
+		if !d.Monitored {
+			// Discovery does not consume the monitoring allowance: an inventory
+			// row nobody enabled is not a metered device.
+			continue
+		}
+		all = append(all, d.ID)
+		if t := deviceTenant(d); t != "" {
+			byTenant[t] = append(byTenant[t], d.ID)
+		}
+	}
+	add(inst, metering.Unique(metering.MeterMonitoredDevicesUnique, inst, all))
+	add(inst, metering.Measured(metering.MeterMonitoredDevicesPeak, inst, float64(len(all))))
+	add(inst, metering.Measured(metering.MeterMonitoredWithheld, inst, float64(s.discovery.MonitoringWithheldCount())))
+	for _, t := range tenants {
+		ids := byTenant[t]
+		add(t, metering.Unique(metering.MeterMonitoredDevicesUnique, t, ids))
+		add(t, metering.Measured(metering.MeterMonitoredDevicesPeak, t, float64(len(ids))))
+	}
+	// A tenant that owns monitored devices but is not in the register still gets
+	// its row: dropping it would lose devices from the per-tenant breakdown
+	// while leaving them in the installation total, which is exactly the kind of
+	// silent disagreement a signed report must not contain.
+	known := map[string]bool{}
+	for _, t := range tenants {
+		known[t] = true
+	}
+	for t, ids := range byTenant {
+		if known[t] {
+			continue
+		}
+		if _, seen := out[t]; !seen {
+			out[t] = nil
+		}
+		add(t, metering.Unique(metering.MeterMonitoredDevicesUnique, t, ids))
+		add(t, metering.Measured(metering.MeterMonitoredDevicesPeak, t, float64(len(ids))))
+	}
+}
+
+// meterRegistry records the tenant and org counts. Installation scope only:
+// how many tenants an installation has is the provider's number.
+func (s *server) meterRegistry(add func(string, metering.Reading), inst string) {
+	if s.tenants == nil {
+		add(inst, metering.NotMeasured(metering.MeterTenants, inst, "the tenant register is not available on this build"))
+	} else {
+		add(inst, metering.Measured(metering.MeterTenants, inst, float64(len(s.tenants.List()))))
+	}
+	if s.orgs == nil {
+		add(inst, metering.NotMeasured(metering.MeterOrgs, inst, "the organisation register is not available on this build"))
+		return
+	}
+	add(inst, metering.Measured(metering.MeterOrgs, inst, float64(len(s.orgs.List()))))
+}
+
+// meterWatchlist records the watched-prefix count, per tenant and platform-wide.
+func (s *server) meterWatchlist(ctx context.Context, add func(string, metering.Reading), inst string, tenants []string) {
+	const unavailable = "the BGP watchlist is not available on this build"
+	if s.bgpWatch == nil {
+		add(inst, metering.NotMeasured(metering.MeterWatchedPrefixes, inst, unavailable))
+		for _, t := range tenants {
+			add(t, metering.NotMeasured(metering.MeterWatchedPrefixes, t, unavailable))
+		}
+		return
+	}
+	const unreadable = "the BGP watchlist could not be read when this sample was taken"
+	if n, err := s.watchedPrefixCount(ctx, TenantGlobal, true); err == nil {
+		add(inst, metering.Measured(metering.MeterWatchedPrefixes, inst, float64(n)))
+	} else {
+		add(inst, metering.NotMeasured(metering.MeterWatchedPrefixes, inst, unreadable))
+	}
+	for _, t := range tenants {
+		if n, err := s.watchedPrefixCount(ctx, t, false); err == nil {
+			add(t, metering.Measured(metering.MeterWatchedPrefixes, t, float64(n)))
+		} else {
+			add(t, metering.NotMeasured(metering.MeterWatchedPrefixes, t, unreadable))
+		}
+	}
+}
+
+// meterRetention records the CONFIGURED retention windows — what the operator
+// asked for, not what happens to be on disk.
+//
+// The api applies the ClickHouse TTLs itself (clickhouse_policies.go), so those
+// three numbers are authoritative here. The log window is the one the
+// opensearch-init bootstrap applies from the same env value. The metric window
+// is a VictoriaMetrics process flag the api cannot see, and says so rather than
+// reporting a default it did not verify.
+func (s *server) meterRetention(add func(string, metering.Reading), inst string) {
+	ch := chschema.RetentionConfig()
+	add(inst, metering.Measured(metering.MeterRetentionFlows, inst, float64(ch.Flows)))
+	add(inst, metering.Measured(metering.MeterRetentionFindings, inst, float64(ch.Findings)))
+	add(inst, metering.Measured(metering.MeterRetentionCorrelation, inst, float64(chschema.CorrRetentionConfig().History)))
+
+	if raw := strings.TrimSpace(os.Getenv("OPENSEARCH_LOG_RETENTION_DAYS")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			add(inst, metering.Measured(metering.MeterRetentionLogs, inst, float64(n)))
+		} else {
+			add(inst, metering.NotMeasured(metering.MeterRetentionLogs, inst,
+				"OPENSEARCH_LOG_RETENTION_DAYS is set to something that is not a whole number of days, so the configured window could not be read"))
+		}
+	} else {
+		add(inst, metering.NotMeasured(metering.MeterRetentionLogs, inst,
+			"the log retention window is applied by the opensearch-init bootstrap from OPENSEARCH_LOG_RETENTION_DAYS, which is not set in this process"))
+	}
+	add(inst, metering.NotMeasured(metering.MeterRetentionMetrics, inst,
+		"the metric retention window is a VictoriaMetrics start-up flag (VICTORIA_RETENTION) that this process cannot read; the value on the compose file is the one in force"))
+}
+
+// meterAITokens records provider spend from the budget that already counts it.
+func (s *server) meterAITokens(add func(string, metering.Reading), inst string, tenants []string) {
+	// Input and output are NOT separable: the budget keeps one combined chars/4
+	// estimate, because its job is a spend ceiling rather than accounting. Two
+	// fabricated halves would be worse than one honest whole.
+	const split = "the provider budget meters one combined estimate for a spend ceiling, not separate input and output tokens"
+	for _, t := range tenants {
+		add(t, metering.NotMeasured(metering.MeterAITokensInput, t, split))
+		add(t, metering.NotMeasured(metering.MeterAITokensOutput, t, split))
+	}
+	if s.aiToolBudget == nil {
+		const why = "no hosted AI provider is configured on this installation, so no tokens are being charged"
+		add(inst, metering.NotMeasured(metering.MeterAITokens, inst, why))
+		for _, t := range tenants {
+			add(t, metering.NotMeasured(metering.MeterAITokens, t, why))
+		}
+		return
+	}
+	used := s.aiToolBudget.UsedByTenant()
+	total := 0
+	for _, n := range used {
+		total += n
+	}
+	add(inst, metering.Counted(metering.MeterAITokens, inst, float64(total)))
+	for _, t := range tenants {
+		add(t, metering.Counted(metering.MeterAITokens, t, float64(used[t])))
+	}
+}
+
+// meterTelemetry records the DIAGNOSTIC meters from counters the platform
+// already keeps in its metrics store.
+//
+// These exist because they are useful, NOT because anything is charged for
+// them: on-premises ingestion is deliberately not metered for money (the
+// commercial strategy is explicit — "Correlix is not paying for the customer's
+// disks, network or compute"). Every query below is a read of a counter that is
+// already being scraped; a query that returns nothing is recorded as
+// not_measured with the reason, never as a zero.
+func (s *server) meterTelemetry(ctx context.Context, add func(string, metering.Reading), inst string, tenants []string) {
+	// One hour of interval, matching the snapshot cadence, so the day's sum is
+	// the day's total.
+	//
+	// read returns the value and, when there is none, the REASON — and the two
+	// no-value cases are kept apart deliberately (§10). "the metrics store did
+	// not answer" is a broken dependency an operator can fix; "the counter has
+	// no series" is a pipeline that is not running or not scraped. Reporting one
+	// sentence for both would render an outage as a normal empty state, which is
+	// the exact confusion this package refuses to create with a zero.
+	const storeDown = "the metrics store did not answer when this sample was taken, so the counter could not be read"
+	read := func(query, absent string) (float64, string) {
+		samples, err := s.vmInstant(ctx, query)
+		if err != nil {
+			return 0, storeDown
+		}
+		if len(samples) == 0 {
+			return 0, absent
+		}
+		return samples[0].Value, ""
+	}
+	counter := func(meter, query, absent string) {
+		v, why := read(query, absent)
+		if why != "" {
+			add(inst, metering.NotMeasured(meter, inst, why))
+			return
+		}
+		add(inst, metering.Counted(meter, inst, math.Max(0, v)))
+	}
+
+	counter(metering.MeterMetricSamples, `sum(increase(vm_rows_inserted_total[1h]))`,
+		"the time-series store publishes no ingestion counter on this installation")
+	counter(metering.MeterMetricSeries, `sum(vm_cache_entries{type="storage/hour_metric_ids"})`,
+		"the time-series store publishes no active-series counter on this installation")
+	counter(metering.MeterLogRecords, `sum(increase(vector_component_sent_events_total{component_id=~"opensearch_syslog|opensearch_applogs"}[1h]))`,
+		"no log sink reported anything in the last hour, so there is no counter to read — not a count of zero")
+	counter(metering.MeterFlowRecords, `sum(increase(vector_component_sent_events_total{component_id=~"clickhouse_flows|opensearch_flows"}[1h]))`,
+		"no flow sink reported anything in the last hour, so there is no counter to read — not a count of zero")
+	add(inst, metering.NotMeasured(metering.MeterTraceSpans, inst,
+		"no distributed-tracing pipeline is configured on this installation, so no spans are accepted and none are counted"))
+
+	// Processor in/out is measured at the pipeline's edges — what entered and
+	// what was kept — because that is the ratio the number is FOR: a customer
+	// who filters noise should see the ratio fall.
+	const pipeAbsent = "the telemetry pipeline published no source/sink counter for the last hour"
+	pin, whyIn := read(`sum(increase(vector_component_received_events_total{component_kind="source"}[1h]))`, pipeAbsent)
+	pout, whyOut := read(`sum(increase(vector_component_sent_events_total{component_kind="sink"}[1h]))`, pipeAbsent)
+	if whyIn != "" {
+		add(inst, metering.NotMeasured(metering.MeterProcessorInput, inst, whyIn))
+	} else {
+		add(inst, metering.Counted(metering.MeterProcessorInput, inst, math.Max(0, pin)))
+	}
+	if whyOut != "" {
+		add(inst, metering.NotMeasured(metering.MeterProcessorOutput, inst, whyOut))
+	} else {
+		add(inst, metering.Counted(metering.MeterProcessorOutput, inst, math.Max(0, pout)))
+	}
+	switch {
+	case whyIn != "":
+		add(inst, metering.NotMeasured(metering.MeterProcessorRatio, inst, whyIn))
+	case whyOut != "":
+		add(inst, metering.NotMeasured(metering.MeterProcessorRatio, inst, whyOut))
+	case pin <= 0:
+		add(inst, metering.NotMeasured(metering.MeterProcessorRatio, inst,
+			"nothing entered the pipeline in the last hour, so there is no ratio to state — a ratio over zero input is undefined, not 0"))
+	default:
+		add(inst, metering.Counted(metering.MeterProcessorRatio, inst, math.Max(0, pout/pin)))
+	}
+
+	// Experience checks carry the tenant that owns the target, so this one is
+	// measurable per tenant as well as platform-wide.
+	byTenant := map[string]float64{}
+	total := 0.0
+	demWhy := ""
+	samples, err := s.vmInstant(ctx, `sum by (tenant) (count_over_time(dem_probe_success[1h]))`)
+	if err != nil {
+		demWhy = storeDown
+	} else {
+		for _, sm := range samples {
+			byTenant[strings.ToLower(strings.TrimSpace(sm.Labels["tenant"]))] += sm.Value
+			total += sm.Value
+		}
+	}
+	if demWhy != "" {
+		add(inst, metering.NotMeasured(metering.MeterDEMChecks, inst, demWhy))
+	} else {
+		add(inst, metering.Counted(metering.MeterDEMChecks, inst, math.Max(0, total)))
+	}
+	for _, t := range tenants {
+		if demWhy != "" {
+			add(t, metering.NotMeasured(metering.MeterDEMChecks, t, demWhy))
+			continue
+		}
+		add(t, metering.Counted(metering.MeterDEMChecks, t, math.Max(0, byTenant[t])))
+	}
+}
+
+// METERING-END
 
 // SECURITY-LANE-BEGIN — this function alone, inside the LICENCE block, carries
 // BOTH markers. It is licence policy (which dialects this deployment may

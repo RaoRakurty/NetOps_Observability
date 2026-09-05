@@ -16,6 +16,7 @@ import (
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/licence"
 	"netops/backend/internal/loginguard"
+	"netops/backend/internal/metering"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
 	"netops/backend/internal/users"
@@ -108,6 +109,16 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	backupCfg, err := dataprotect.NewFileConfigStore(envOr("SYSTEM_BACKUP_FILE", dir+"/system_backup.json"))
 	must(err)
 	s.dataProtect = dataprotect.New(s.dataProtectDeps(backupCfg))
+	// METERING: the Usage routes are registered off s.meteringAPI, so the
+	// harness must build it exactly like newServer does — a nil module would
+	// answer 503 everywhere and the isolation guard would pass vacuously. The
+	// store and the report key live INSIDE the test's temp dir, so no test can
+	// touch /data, and no snapshot worker is started: the tests that need rows
+	// record them explicitly.
+	s.meteringStore = metering.NewFileStore(dir + "/metering.json")
+	s.meteringKey = metering.NewReportKey(dir+"/licence-report-key.json", nil)
+	s.meteringRecorder = metering.NewRecorder(s.meteringStore, s.meteringSample, nil)
+	s.meteringAPI = metering.New(s.meteringDeps())
 	mux := http.NewServeMux()
 	s.routes(mux)
 	srv := httptest.NewServer(s.withAuth(s.withAudit(mux)))

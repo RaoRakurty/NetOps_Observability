@@ -570,6 +570,126 @@ Two guards worth knowing before editing the rules:
 
 ---
 
+## 8a. Usage metering and the signed usage report
+
+Design of record: `docs/design/METERING_2026-09-05.md`. Code:
+`src/backend/internal/metering`, migration `0046_metering_daily.sql`, the
+`METERING` marker blocks in `src/backend/main.go`.
+
+**Metering is a SEPARATE data contract from the licence, and it gates nothing.**
+The licence says what a customer may do; metering records what they used. No
+admission path reads a meter, so a metering failure can lose precision in a
+usage report and can never refuse a device, break a query or affect isolation.
+Treat every alert in this section as office-hours work.
+
+### What is recorded, and where
+
+One row per (UTC day, tenant), plus an **installation row** whose tenant key is
+the empty string and which only the platform scope can read. Samples are hourly
+(`METERING_INTERVAL`, default `1h`), folded into the day; 400 daily rows are
+kept and the recorder prunes on every snapshot.
+
+| Backend | Location |
+|---|---|
+| Postgres (when the platform PG backend is active) | table `metering_daily`, `tenant_iso` FORCE-RLS |
+| File (otherwise) | `/data/api/metering.json` (`METERING_FILE`), mode 0600 |
+
+The monitored-device count comes from **configuration** — a device with at least
+one collector enabled — never from recent telemetry, so an outage does not move
+the number. A meter this installation has no counter for is recorded as
+`not_measured` **with a reason**, never as a zero.
+
+### The report signing key
+
+`/data/api/licence-report-key.json`, mode **0600**, generated on this host the
+first time a report is produced. It is **not** the licence signing key: that one
+lives offline (§6) and must never exist on a customer machine. If a customer
+asks why the report key differs from the licence key, that is the answer.
+
+* Back it up with the rest of `/data/api`. If it is lost, a new one is generated
+  and future reports carry a new key id; reports already filed still verify
+  against the key embedded in them.
+* **Never hand-edit or replace it to "fix" a problem.** A key file that exists
+  but cannot be parsed is deliberately NOT replaced — the api refuses the
+  download and says so, because silently minting a new identity would orphan
+  every report a customer has already filed.
+
+### Verifying a report a customer sent us
+
+```bash
+correlix-licence usage-verify ./correlix-usage-2026-08-01_2026-08-31.json
+# and, when you hold their key out of band:
+correlix-licence usage-verify --pubkey <base64> ./correlix-usage-...json
+```
+
+Two independent checks, and read both: the **signature** says the file is what
+the installation produced, and the **re-derived totals** say the summary follows
+from the daily rows in the same file. A report that verifies but whose totals
+disagree is reported as such, naming the meter — that is a bug on our side or a
+hand-edited file, and either way it is not a number to invoice against.
+
+### Alerts
+
+Group `metering` in `src/config/rules.yaml`, unit-tested in
+`src/config/rules-tests/metering.test.yaml`. All warnings; none is a page and
+none carries a `layer` label, so they reach the product notifier and the warning
+digest rather than a phone.
+
+| Alert | Expression | For |
+|---|---|---|
+| `MeteringSnapshotStale` | `(time() - snapshot_timestamp) > 10800 and on() (snapshot_timestamp > 0)` | 15m |
+| `MeteringNeverRecorded` | `netops_metering_snapshot_timestamp_seconds == 0` | 1h |
+| `MeteringSnapshotsFailing` | `increase(netops_metering_snapshot_failures_total[3h]) >= 3` | 15m |
+
+The `> 0` guard on the staleness rule is load-bearing: `time() - 0` is ~57
+years, so without it every fresh install would fire in the seconds before its
+boot snapshot lands. The "never recorded" case has its own rule and its own
+sentence.
+
+### Usage metering is not recording
+
+First response for `MeteringSnapshotStale`, `MeteringNeverRecorded` and
+`MeteringSnapshotsFailing`.
+
+1. **Confirm what the api thinks.** All four series are emitted on every scrape,
+   including as zeros:
+
+   ```bash
+   curl -s localhost:8000/api/metrics | grep netops_metering_
+   ```
+
+   `netops_metering_snapshot_timestamp_seconds 0` means none has ever landed;
+   a stale non-zero means it landed once and stopped.
+
+2. **Read the reason.** The recorder never fails silently:
+
+   ```bash
+   docker compose logs api | grep '"component":"metering"'
+   ```
+
+   The three sentences it can log are "this hour's usage snapshot was not
+   recorded", "usage history older than 400 days could not be pruned" and "the
+   usage history could not be read".
+
+3. **Check the store it is writing to.**
+   * File backend: `/data/api/metering.json` must be writable by the api. A
+     corrupt file makes the store start EMPTY and say so at boot — the history
+     is not recovered, but recording resumes.
+   * Postgres backend: confirm migration 0046 applied
+     (`\dt metering_daily`). Without the table every snapshot fails.
+
+4. **Nothing else is degraded.** Say so explicitly to whoever escalated:
+   collection, correlation, alerting, isolation and sign-in do not consult
+   metering. The only cost is that a usage report for the affected hours will
+   understate what was in use — and the report says how many samples are behind
+   each number, so the gap is visible rather than silent.
+
+5. **Do not backfill by hand.** There is no path that writes a past hour, and
+   inventing one would put a fabricated number into a signed document. A day
+   with fewer samples is the honest record of what happened.
+
+---
+
 ## 9. Troubleshooting — every refusal the verifier can produce
 
 The install route returns the refusal **verbatim**, and the page shows it
