@@ -90,8 +90,10 @@ def step(msg: str, stage: str | None = None) -> None:
 # these ids; tests/test_installer_gui_contract.py pins the set.
 PROGRESS_STAGES = (
     "prereq", "scaffold", "env", "sizing", "tls-env", "data-dirs",
-    "bundle", "up-a", "mint", "up-b", "kafka-acls", "status",
-    "bootstrap-os", "bootstrap-kc", "bootstrap-grafana",
+    # bootstrap-appstate runs BEFORE the stack: on the postgres state backend
+    # the api cannot start until its non-superuser role exists (tracker 245).
+    "bundle", "bootstrap-appstate", "up-a", "mint", "up-b", "kafka-acls",
+    "status", "bootstrap-os", "bootstrap-kc", "bootstrap-grafana",
 )
 
 # Module state, not a hidden singleton: activation + the one currently-open
@@ -686,6 +688,16 @@ def write_env(env_path: Path, port: int, *, force: bool,
             additions.append(f"CORRELIX_GID={os.getgid()}")
         # Migration (#101): pre-retention .env gets the correlation retention
         # profile so upgraded installs get bounded correlation history too.
+        # Migration (tracker 245): a .env written before the app-state backend
+        # became explicit has no STORE_BACKEND line, and the compose fallback
+        # (`${STORE_BACKEND:-file}`) is the only thing keeping such an install on
+        # the backend its data actually lives on. Stamp the historical value
+        # EXPLICITLY so the choice survives any future default change — an
+        # upgrade must never silently repoint a registry at an empty database.
+        # A fresh install gets `postgres` from the template above; this path
+        # only ever writes what the install is already running on.
+        if "STORE_BACKEND" not in env:
+            additions.append("STORE_BACKEND=file")
         if "CORR_RETENTION_PROFILE" not in env:
             additions.append(f"CORR_RETENTION_PROFILE={retention_profile}")
         if "CORR_CHAOS_FIXTURES" not in env:
@@ -758,6 +770,12 @@ def write_env(env_path: Path, port: int, *, force: bool,
     # explicitly destructive way to force a re-seed).
 
     secrets_map = generate_secrets()
+    # The Postgres app-state role's password. Deliberately NOT part of
+    # generate_secrets(): it lives inside DATABASE_URL (the api reads a DSN, not
+    # a password), and install.py reconciles the live role against whatever that
+    # DSN says on every run — so rotating it is "edit DATABASE_URL, re-run
+    # install.py", not a --reset-env class. URL-safe: it rides URL userinfo.
+    app_db_password = generate_urlsafe_password(28)
     # Values the rotation gate ruled un-rotatable keep their current value; a
     # regenerated one would be a lie the stores never agreed to.
     for key, value in (preserve or {}).items():
@@ -998,15 +1016,36 @@ NETBOX_SUPERUSER_PASSWORD={secrets_map["NETBOX_SUPERUSER_PASSWORD"]}
 NETBOX_TOKEN={secrets_map["NETBOX_TOKEN"]}
 NETBOX_URL=
 
-# Identity/saved-object persistence backend. "file" (default) keeps the JSON
-# stores on the data volume; "postgres" moves them into a single key/value table
-# with NO API change. Postgres needs a driver compiled in — see pgkv.go /
-# docs/IDENTITY_ACCESS.md — so the default build stays stdlib-only.
-STORE_BACKEND=file
-# DATABASE_URL=postgres://netops:netops@postgres:5432/netops?sslmode=disable
-# On a --tls install postgres REQUIRES TLS (pg_hba `hostssl`, F-4): use
-# ?sslmode=verify-full&sslrootcert=/data/tls/ca.pem instead of sslmode=disable.
-# DATABASE_DRIVER=postgres
+# Registry / app-state persistence backend (tracker 245).
+#
+#   postgres  DEFAULT for a new installation. Normalized per-row tables with
+#             PostgreSQL Row-Level Security; the authoritative durable store for
+#             users, tenants, API keys, saved objects, the service catalog and
+#             the APPLICATION REGISTRY (which exists ONLY here — see below).
+#   file      Explicit compatibility / PostgreSQL-less mode: JSON on the data
+#             volume. Durable, but registries with no file implementation are
+#             UNAVAILABLE on it and say so rather than pretending.
+#   memory    Development and test ONLY. Ephemeral — nothing survives a restart.
+#             Never a default and never entered by accident.
+#
+# UPGRADING an install that already runs `file`? It STAYS on file: install.py
+# never rewrites this line on an existing .env, because switching backends does
+# not move your data (docs/DEPLOY_POSTGRES_APPSTATE.md documents the one-time
+# IMPORT_FILE_STATE_DIR importer and exactly which collections it covers).
+#
+# DATABASE_URL must authenticate as a NON-superuser role: superusers bypass
+# Row-Level Security, so the api refuses to start as one. install.py provisions
+# `netops_app` with the password below and keeps them in step on every re-run.
+STORE_BACKEND=postgres
+DATABASE_URL=postgres://netops_app:{app_db_password}@postgres:5432/netops?sslmode=disable
+# On a --tls install postgres REQUIRES TLS (pg_hba `hostssl`, F-4): install.py
+# rewrites the DSN to ?sslmode=verify-full&sslrootcert=/data/tls/ca.pem in TLS
+# phase B. Set it by hand only if you point at an external database.
+#
+# One-time file -> Postgres cutover: point this at the old JSON directory and
+# the api imports the durable collections ONCE (idempotent, marker-recorded, it
+# never clobbers live rows). Leave empty on a fresh install.
+IMPORT_FILE_STATE_DIR=
 
 # Token lifetimes
 ACCESS_TOKEN_TTL=1h
@@ -2507,6 +2546,142 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict) -> None:
     ok(f"keycloak database '{db}' created (owner {user})")
 
 
+# The non-superuser role the Postgres app-state backend authenticates as. It is
+# NOT the cluster superuser (DB_USER): a superuser — or any BYPASSRLS role —
+# ignores FORCE ROW LEVEL SECURITY, which would silently disable tenant
+# isolation, and the api refuses to start as one.
+APP_STATE_ROLE = "netops_app"
+
+
+def app_state_backend(env: dict) -> str:
+    """The configured registry/app-state backend, normalized."""
+    v = (env.get("STORE_BACKEND") or "").strip().lower()
+    return "postgres" if v in ("postgres", "postgresql", "pg") else (v or "file")
+
+
+def _split_app_dsn(dsn: str) -> tuple[str, str, str, str]:
+    """(user, password, host, dbname) from a DSN. Never logged, never echoed."""
+    from urllib.parse import unquote, urlsplit
+    parts = urlsplit(dsn)
+    return (unquote(parts.username or ""), unquote(parts.password or ""),
+            parts.hostname or "", (parts.path or "/").lstrip("/"))
+
+
+def bootstrap_app_state_role(compose_dir: Path, env: dict) -> None:
+    """Provision the Postgres role the api's registry storage connects as
+    (tracker 245).
+
+    Runs BEFORE the stack starts: with `postgres` as the default state backend,
+    an api whose DSN does not authenticate has no registry storage at all and
+    fails its boot by design (it must never fall back to files or RAM). So the
+    role has to exist first, and every re-run re-aligns it with whatever
+    DATABASE_URL now says — that is also the supported way to rotate it.
+
+    No-op for the file/memory backends and for an EXTERNAL database (a DSN that
+    does not point at this stack's own `postgres` service): there is no
+    container here to provision, and guessing would be worse than saying so.
+    """
+    if app_state_backend(env) != "postgres":
+        return
+    dsn = (env.get("DATABASE_URL") or "").strip()
+    if not dsn:
+        fail("STORE_BACKEND=postgres but DATABASE_URL is empty — the api cannot "
+             "start without it. Set DATABASE_URL in deployment/docker/.env "
+             "(docs/DEPLOY_POSTGRES_APPSTATE.md) and re-run.")
+        return
+    app_user, app_pw, host, dbname = _split_app_dsn(dsn)
+    if host not in ("postgres", "localhost", "127.0.0.1"):
+        info(f"DATABASE_URL points at an external database ({host}) — provision "
+             f"its non-superuser app role yourself (deployment/docker/postgres/"
+             f"netops-app-role.sql); nothing here to do")
+        return
+    db_user = env.get("DB_USER", "netops")
+    dbname = dbname or env.get("DB_NAME", "netops")
+    if not app_user or not app_pw:
+        fail("DATABASE_URL carries no user/password for the app-state role; "
+             "expected postgres://<role>:<password>@postgres:5432/<db>")
+        return
+    # Everything below is interpolated into SQL/shell inside the container —
+    # validate at the boundary instead of trusting an operator-edited .env (§3).
+    for name, value in (("DB_USER", db_user), ("the DATABASE_URL role", app_user),
+                        ("DB_NAME", dbname)):
+        if not _PG_IDENT.match(value):
+            fail(f"{name} must match [A-Za-z0-9_]+ to be provisioned safely; "
+                 f"fix it in .env and re-run")
+            return
+
+    # Start ONLY the database first. The api must not race a store that does not
+    # yet accept it, and a crash-looping api during a fresh install is exactly
+    # the experience this step exists to prevent.
+    step("provisioning the Postgres app-state role", stage="bootstrap-appstate")
+    up = subprocess.run(["docker", "compose", "up", "-d", "postgres"],
+                        cwd=str(compose_dir), capture_output=True, text=True,
+                        timeout=300, check=False)
+    if up.returncode != 0:
+        detail = (up.stderr or up.stdout or "").strip().splitlines()
+        fail("could not start the postgres service, so the app-state role cannot "
+             "be provisioned: " + (detail[-1] if detail else "see the output above"))
+        return
+    ready = subprocess.run(
+        ["docker", "compose", "exec", "-T", "postgres", "bash", "-lc",
+         f"for i in $(seq 1 45); do pg_isready -q -U {db_user} && exit 0; sleep 2; done; exit 1"],
+        cwd=str(compose_dir), capture_output=True, text=True, timeout=180, check=False)
+    if ready.returncode != 0:
+        fail("postgres did not become ready within 90s; the app-state role was "
+             "NOT provisioned and the api would fail to start. Check "
+             "`docker compose logs postgres` and re-run install.py.")
+        return
+
+    sr = _rotation_module()
+    done, msg = sr.provision_app_state_role(
+        ComposeRunner(compose_dir), db_user=db_user, db_name=dbname,
+        app_user=app_user, app_password=app_pw)
+    if not done:
+        fail(f"the app-state role could not be provisioned: {msg}. The api needs "
+             f"it to store registries (STORE_BACKEND=postgres) and will not "
+             f"start without it. Fix the database and re-run install.py, or set "
+             f"STORE_BACKEND=file to run without one.")
+        return
+    ok(f"app-state role '{app_user}' ready ({msg})")
+
+
+def enable_tls_database_url(env_path: Path) -> None:
+    """TLS phase B: point DATABASE_URL at the now-TLS-only postgres.
+
+    Phase A deliberately runs the DSN plaintext (the api is the thing that mints
+    the mesh CA, so the CA file does not exist yet). Once compose.tls.yml is
+    active, postgres' pg_hba is `hostssl` and refuses a non-TLS connection — a
+    plaintext DSN there is a crash-loop with the registry storage down. Idempotent
+    line surgery; a no-op unless the app-state backend is postgres.
+    """
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    lines = env_path.read_text().splitlines()
+    env = _parse_env(env_path)
+    if app_state_backend(env) != "postgres":
+        return
+    changed = False
+    for i, line in enumerate(lines):
+        if not line.startswith("DATABASE_URL="):
+            continue
+        val = line.split("=", 1)[1]
+        parts = urlsplit(val)
+        q = [(k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=True)
+             if k not in ("sslmode", "sslrootcert")]
+        q.append(("sslmode", "verify-full"))
+        q.append(("sslrootcert", "/data/tls/ca.pem"))
+        newval = urlunsplit((parts.scheme, parts.netloc, parts.path,
+                             urlencode(q), parts.fragment))
+        if newval != val:
+            lines[i] = f"DATABASE_URL={newval}"
+            changed = True
+        break
+    if changed:
+        _write_private(env_path, "\n".join(lines) + "\n")
+        ok("DATABASE_URL switched to sslmode=verify-full for the TLS mesh")
+    else:
+        info("DATABASE_URL already carries the TLS verify-full form")
+
+
 def bootstrap_grafana(root: Path, secrets_map: dict) -> None:
     """Enable Grafana's ClickHouse datasource: (1) create a read-only,
     tenant-scoped ClickHouse user the datasource binds to, and (2) install the
@@ -2836,6 +3011,11 @@ def main() -> None:
     if args.offline:
         write_offline_override(compose_dir, env_path)
 
+    # The api's registry storage must exist before the api does (tracker 245):
+    # on the default postgres backend a missing role is a failed boot, not a
+    # quiet downgrade to another store.
+    bootstrap_app_state_role(compose_dir, _parse_env(env_path))
+
     # Phase A (TLS): the baseline stack boots with the mint variables set; the
     # api's internal CA writes every SVID to data/tls while the stores are
     # still plaintext. On a rerun with certs already minted this converges in
@@ -2847,6 +3027,7 @@ def main() -> None:
     if tls_enabled:
         wait_for_minted_certs(root)
         activate_tls_compose_file(compose_dir, env_path)
+        enable_tls_database_url(env_path)
         step("starting stack (TLS phase B: fail-closed mesh)", stage="up-b")
         compose_up(compose_dir, offline=args.offline, root=root)
 

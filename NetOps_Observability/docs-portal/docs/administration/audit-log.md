@@ -110,7 +110,7 @@ The audit trail is the one surface where silence is itself a claim. A page readi
 - **Past the merge ceiling you are told to page differently.** Beyond an offset plus limit of 5000, an organization-scoped read is refused with `400` telling you to walk with `before=`. A short page there would be indistinguishable from the end of the trail.
 - **Past the end of the trail is an empty page**, never a clamped last page that re-serves rows you already walked.
 
-The default file backend holds a bounded ring of the newest 5000 events and older events fall off it. With `STORE_BACKEND=postgres` each event is its own row under row-level security, and the trail is bounded only by retention.
+On the default `STORE_BACKEND=postgres` backend each event is its own row under row-level security, and the trail is bounded only by retention. On the `file` compatibility backend the trail is a bounded ring of the newest 5000 events, and older events fall off it.
 
 ## Result
 

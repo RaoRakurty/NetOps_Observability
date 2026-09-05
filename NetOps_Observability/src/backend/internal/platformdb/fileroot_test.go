@@ -5,7 +5,8 @@ package platformdb
 // keys key is the BARE "secrets_wrapped_keys.json". On the FILE backend that
 // resolved against the process CWD — /home/nonroot in the distroless image,
 // unwritable — so sealing custody could not persist on ANY file-backend
-// deployment, and a fresh `install.py --tls` (STORE_BACKEND=file) could mint
+// deployment, and a fresh `install.py --tls` on the file backend (the
+// installer default until tracker 245 made it postgres) could mint
 // nothing. Nobody saw it earlier because every TLS deployment to date ran the
 // Postgres backend, where the bare key is a ROW KEY (and must STAY bare —
 // re-keying would orphan the existing custody row: the swtpm-incident class).

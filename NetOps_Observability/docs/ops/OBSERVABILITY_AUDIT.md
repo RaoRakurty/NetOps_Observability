@@ -296,7 +296,7 @@ Live example:
 | Signal | Healthy | Investigate |
 |---|---|---|
 | Total connections | < 20 on the bundle | > 80 of 100 = saturation (long-lived leak or Keycloak storm) |
-| `pg_policies` rows | **0 on a default install** — `STORE_BACKEND=file` keeps app state out of PG, so only Keycloak uses it. With `STORE_BACKEND=postgres`, every `tenant_iso` FORCE-RLS policy from `src/backend/internal/platformdb/migrations/` must be present | app-state tables existing **without** their `tenant_iso` policy = cross-tenant exposure — treat as an incident |
+| `pg_policies` rows | **Every `tenant_iso` FORCE-RLS policy from `src/backend/internal/platformdb/migrations/` must be present** on a new install (`STORE_BACKEND=postgres` is the default since tracker 245). **0 is correct only on an explicit `STORE_BACKEND=file` install**, which keeps app state out of PG so only Keycloak uses it | app-state tables existing **without** their `tenant_iso` policy = cross-tenant exposure — treat as an incident |
 | `state='idle in transaction'` | 0 | any, for minutes — blocks vacuum |
 
 ---

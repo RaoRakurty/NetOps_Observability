@@ -18,7 +18,7 @@
 // `attributed:false` a service shows in the flow view — so specAttributes() is
 // what lets the editor say that before the operator saves.
 
-import type { CatalogServiceSelector } from "../../services/api";
+import type { CatalogServiceSelector, RegistryStorageStatus } from "../../services/api";
 import { httpFailure } from "../../lib/errors";
 import { isIPv4CidrToken } from "./appIdCoverage";
 
@@ -167,7 +167,84 @@ export function validateBinding(kind: string, ref: string): string {
  * deployment fact, not an empty registry, and the two must not render alike.
  */
 export function isStoreUnavailable(e: unknown): boolean {
-  return httpFailure(e)?.status === 501;
+  const st = httpFailure(e)?.status;
+  // 501 — the configured backend has no implementation for this registry.
+  // 503 — it has one, but the store cannot be reached right now. Both are
+  // deployment facts rather than "the tenant has nothing", so both render as an
+  // explained unavailable state instead of an empty list (tracker 245).
+  return st === 501 || st === 503;
+}
+
+// ── which backend holds these records (tracker 245) ─────────────────────────
+//
+// The page must never assert durability it cannot see. Everything below is
+// derived from GET /api/registries/status; nothing is hardcoded per registry.
+
+/** Operator-facing name of a backend kind. Unknown kinds print as they arrive
+ *  rather than being coerced into a familiar-looking label. */
+export function backendLabel(kind: string): string {
+  switch (kind) {
+    case "postgres": return "PostgreSQL";
+    case "file": return "File";
+    case "memory": return "Memory";
+    default: return kind || "unknown";
+  }
+}
+
+function persistenceLabel(p: string): string {
+  switch (p) {
+    case "persistent": return "Persistent";
+    case "ephemeral": return "Ephemeral";
+    default: return "";
+  }
+}
+
+export type StorageBadge = { label: string; tone: string; title: string };
+
+/**
+ * How one registry's storage reads on screen. Four distinct states, none of
+ * which may be rendered as any of the others:
+ *
+ *   healthy persistent   "PostgreSQL · Persistent"
+ *   ephemeral            "Memory · Ephemeral"           (development mode)
+ *   configured but down  "PostgreSQL · Persistent · Unavailable"   — NEVER
+ *                        relabelled as file or memory: no failover happens.
+ *   unsupported          "Unavailable · configured storage: File"
+ *
+ * The copy names STORAGE, never a "backend" (src/copyVoice.test.ts): an
+ * operator reads what holds their records, not our configuration switch.
+ */
+export function storageBadge(st: RegistryStorageStatus | undefined): StorageBadge | null {
+  if (!st) return null;
+  const configured = backendLabel(st.configured_backend);
+  if (!st.active_backend) {
+    return {
+      label: `Unavailable · configured storage: ${configured}`,
+      tone: "var(--bad)",
+      title: `${configured} storage cannot hold this registry, so nothing here is saved. `
+        + "Switch this deployment to PostgreSQL to use it.",
+    };
+  }
+  const active = backendLabel(st.active_backend);
+  const persistence = persistenceLabel(st.persistence);
+  const base = persistence ? `${active} · ${persistence}` : active;
+  if (!st.available || !st.healthy) {
+    return {
+      label: `${base} · Unavailable`,
+      tone: "var(--bad)",
+      title: (st.reason ? `${st.reason}. ` : `${active} is unavailable. `)
+        + `Records stay in ${active}; nothing is written anywhere else, and they `
+        + "are readable again as soon as it recovers.",
+    };
+  }
+  if (st.persistence === "ephemeral") {
+    return {
+      label: base,
+      tone: "var(--warn)",
+      title: "Development mode — these records are held in memory and are lost when the API restarts.",
+    };
+  }
+  return { label: base, tone: "var(--good)", title: `Stored in ${active}; records survive an API restart.` };
 }
 
 // ── archive semantics ───────────────────────────────────────────────────────

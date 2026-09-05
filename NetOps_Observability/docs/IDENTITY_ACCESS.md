@@ -294,35 +294,32 @@ resolve them, and in practice only through the re-attribution workflow.
   what it audits concentrates every revealed secret in one admin-readable
   place.
 
-## Storage backend (file ↔ Postgres)
+## Storage backend (PostgreSQL ↔ file ↔ memory)
 
 All the JSON-blob stores (users, roles, tenants, API keys, refresh tokens, SNMP
-credentials, saved objects) persist through one seam — `kvBackend` in
-`kvstore.go` — so moving them off local files is a backend swap with **no change
-to any store's logic and no change to the HTTP API**:
+credentials, saved objects) persist through one seam — `Backend` in
+`internal/platformdb/kv.go` — so moving them between backends is a swap with **no
+change to any store's logic and no change to the HTTP API**:
 
-- **`file`** (default) — atomic JSON files on the data volume (the original
-  behavior, now centralized so every store shares one durable-write contract).
-- **`postgres`** (`STORE_BACKEND=postgres` + `DATABASE_URL`) — each store's blob
-  is one row in a `netops_kv(key, data, updated_at)` table (`pgkv.go`).
+| `STORE_BACKEND` | Durability | Role |
+|---|---|---|
+| `postgres` | Durable | **Default for a new installation.** Normalized per-row tables with FORCE Row-Level Security (`internal/platformdb/rows.go`, migrations `0001…`), reached through the vendored, allowlisted `pgx` driver. |
+| `file` | Durable | Explicit compatibility / PostgreSQL-less mode: atomic JSON files on the data volume. |
+| `memory` | **Ephemeral** | Development and test ONLY. Never a default, never entered implicitly. |
 
-`pgkv.go` uses **only `database/sql` from the standard library**, so the default
-build stays dependency-free per the stdlib-only invariant. A Postgres *driver*
-(`lib/pq`, `pgx`, …) is third-party and is **not** imported; to run the Postgres
-backend an operator compiles a driver in — a one-line, build-tagged blank import
-registered under `DATABASE_DRIVER` (default `postgres`):
+An unknown value is a configuration error that aborts the boot; it is never
+downgraded to one of the above. `STORE_BACKEND=postgres` with an unreachable
+database also fails the boot — there is no failover to files or RAM, because
+authoritative state written to a second backend would silently diverge from the
+first (tracker 245).
 
-```go
-//go:build pg
-package main
-import _ "github.com/lib/pq"
-```
-
-`go get github.com/lib/pq && go build -tags pg`. That single opt-in dependency is
-the only place the dependency-free rule is relaxed, and only when Postgres is
-chosen. Without a registered driver, startup fails fast (never a silent fallback
-to files). The pluggability is pinned by `kvstore_test.go` (an in-memory backend
-round-trips the saved + user stores with zero file I/O).
+Not every registry exists on every backend. One that has no implementation on the
+configured backend reports itself **unavailable** (`GET /api/registries/status`,
+and a `501` from its own routes) instead of quietly using an in-memory store: the
+Applications registry is PostgreSQL-only, as are the service catalog and cloud
+business services. Enabling and migrating the PostgreSQL backend, including
+exactly which collections the one-time file→PostgreSQL importer covers, is in
+[`DEPLOY_POSTGRES_APPSTATE.md`](DEPLOY_POSTGRES_APPSTATE.md).
 
 ## Build order
 

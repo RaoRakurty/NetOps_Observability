@@ -194,8 +194,33 @@ docker compose exec postgres psql -U netops -c \
   "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 5"
 ```
 
-On the file backend (`STORE_BACKEND` unset) there is nothing to apply — those
-stores fall back to their tenant-keyed files.
+On the file backend (`STORE_BACKEND=file`) there is nothing to apply — those
+stores use their tenant-keyed files.
+
+## Your state backend does not change on upgrade (tracker 245)
+
+New installations are now generated with **`STORE_BACKEND=postgres`** — the
+authoritative durable state backend. **An upgrade never changes an existing
+install's backend.** `install.py` does not rewrite `STORE_BACKEND` in an existing
+`.env`; if the key is missing entirely (a `.env` older than the explicit key) it
+*appends* `STORE_BACKEND=file`, pinning the backend your data actually lives on.
+
+That matters because switching backends does not move data: the JSON collections
+stay on the data volume, but the API stops reading them and starts reading
+PostgreSQL, which is empty. An upgrade must never make a registry look empty, so
+it does not switch.
+
+If you *want* to move to PostgreSQL, it is a deliberate migration with a
+documented, partial importer —
+[`DEPLOY_POSTGRES_APPSTATE.md`](DEPLOY_POSTGRES_APPSTATE.md) lists exactly which
+collections `IMPORT_FILE_STATE_DIR` carries over and which you must re-create
+(including the sealing vault's wrapped keys). Read it before you flip the value.
+
+One behaviour does change on upgrade regardless of backend: a registry that has
+no implementation on your configured backend now **says so** (`501` + an explicit
+"Unavailable" state on the Registries page) instead of silently serving an
+in-memory store. On the file backend the Applications registry is the one
+affected — it never persisted there; its records were lost on every API restart.
 
 ## Quick sanity checks after every upgrade
 

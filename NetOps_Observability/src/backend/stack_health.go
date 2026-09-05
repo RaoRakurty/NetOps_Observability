@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/platformdb"
+	"netops/backend/internal/registrystatus"
 )
 
 // Infra-stack monitoring is reserved for the PLATFORM OWNER (the cross-tenant
@@ -198,13 +201,28 @@ func (s *server) handleStackHealth(w http.ResponseWriter, r *http.Request) {
 		subsystems["alerts"] = s.alerts.Health()
 	}
 
+	// Which backend actually holds the platform's registry/app state, and can it
+	// serve. A green "App database (PostgreSQL)" TCP probe says a server accepts
+	// connections — NOT that the api stores anything in it (tracker 245): on the
+	// file backend nothing above the socket is true. Reported here so the
+	// platform view cannot imply durability the deployment does not have.
+	stateHealthy, stateReason := platformdb.Health(ctx)
+	state := map[string]any{
+		"backend":     platformdb.Kind(),
+		"persistence": registrystatus.PersistenceOf(platformdb.Kind()),
+		"healthy":     stateHealthy,
+	}
+	if stateReason != "" {
+		state["reason"] = stateReason
+	}
 	out := map[string]any{
-		"overall":    overall,
-		"up":         up,
-		"degraded":   degraded,
-		"down":       down,
-		"components": results,
-		"subsystems": subsystems,
+		"overall":       overall,
+		"up":            up,
+		"degraded":      degraded,
+		"down":          down,
+		"components":    results,
+		"subsystems":    subsystems,
+		"state_backend": state,
 	}
 	// Appliance self-health guard state (disk watermark + search-store read-only
 	// blocks + last heal action) — a heal is an event the operator must SEE.

@@ -203,7 +203,13 @@ func (p *PGStore) importKey(ctx context.Context, key string, data []byte) error 
 // resurrects the frozen snapshot on the next boot (M5). Transient state (refresh
 // tokens, the audit ring, ITSM ticket dedup) is intentionally NOT imported — it
 // rebuilds. The durable config (users/tenants/roles/SNMP creds/SSO/contact
-// points/policies) carries over so a cutover preserves logins and secrets.
+// points/policies) carries over so a cutover preserves logins and secrets, and
+// so does the CUSTODY material (sealing-vault wrapped keys + the internal mesh
+// CA) without which a TLS/sealed install cannot be cut over at all.
+//
+// What this list does NOT cover is documented collection by collection in
+// docs/DEPLOY_POSTGRES_APPSTATE.md — an operator must be able to SEE the gap
+// rather than discover it after the switch (tracker 245).
 func (p *PGStore) importFileState(ctx context.Context, dir string) error {
 	keys := []string{
 		"/data/tenants.json", "/data/roles.json", "/data/users.json",
@@ -213,6 +219,20 @@ func (p *PGStore) importFileState(ctx context.Context, dir string) error {
 		"/data/sso_idp_config.json",
 		"/data/tacacs_config.json", "/data/token_policy.json", "/data/copilot_config.json",
 		"/data/export_policy.json",
+		// CUSTODY, not configuration — and the reason a TLS/sealed install could
+		// not be cut over at all before (tracker 245). These three keys are BARE
+		// on both backends (relative on the file backend, anchored on DATA_DIR;
+		// a row key here), so they round-trip unchanged:
+		//   secrets_wrapped_keys.json — the vault's WRAPPED data-encryption keys.
+		//     Without them every value sealed on the file backend (SNMP
+		//     credentials, connector secrets) is undecryptable after a cutover.
+		//   tls_internal_ca_*         — the internal mesh CA. Without them the api
+		//     mints a NEW CA and every SVID issued by the old one stops being
+		//     trusted, which on a fail-closed mesh is a stack outage.
+		// Both are already encrypted/sealed at rest; this moves the same bytes
+		// between the platform's own stores, once, under the same marker gate.
+		"secrets_wrapped_keys.json",
+		"tls_internal_ca_cert.pem", "tls_internal_ca_key.enc",
 	}
 	imported := 0
 	for _, key := range keys {

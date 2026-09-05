@@ -8,8 +8,8 @@ import { describe, expect, it } from "vitest";
 import type { CatalogServiceSelector } from "../../services/api";
 import {
   BINDING_KIND_LABELS, EMPTY_SELECTOR_DRAFT, REGISTRY_NAME_MAX, archivePrompt,
-  describeSpec, ignoredSpecKeys, isArchived, isStoreUnavailable, latestSelector,
-  nextSelectorVersion, parseSelectorDraft, specAttributes, validateBinding,
+  backendLabel, describeSpec, ignoredSpecKeys, isArchived, isStoreUnavailable, latestSelector,
+  nextSelectorVersion, parseSelectorDraft, specAttributes, storageBadge, validateBinding,
   validateRegistryName,
 } from "./registries";
 
@@ -119,5 +119,68 @@ describe("store availability and archive semantics", () => {
   it("reads the archived marker off a row", () => {
     expect(isArchived({ archived_at: "2026-09-01T00:00:00Z" })).toBe(true);
     expect(isArchived({})).toBe(false);
+  });
+});
+
+// ── tracker 245: the storage badge ─────────────────────────────────────────
+//
+// Four states that must never collapse into each other. The label is what an
+// operator reads without knowing STORE_BACKEND exists.
+
+describe("storageBadge", () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    registry: "applications", label: "Application registry",
+    configured_backend: "postgres", active_backend: "postgres",
+    persistence: "persistent", available: true, healthy: true, ...over,
+  }) as Parameters<typeof storageBadge>[0];
+
+  it("healthy persistent storage names the backend and its durability", () => {
+    const b = storageBadge(row());
+    expect(b?.label).toBe("PostgreSQL · Persistent");
+    expect(b?.tone).toBe("var(--good)");
+    expect(b?.title).toMatch(/survive an API restart/);
+  });
+
+  it("an ephemeral backend is labelled ephemeral and warned about", () => {
+    const b = storageBadge(row({ configured_backend: "memory", active_backend: "memory", persistence: "ephemeral" }));
+    expect(b?.label).toBe("Memory · Ephemeral");
+    expect(b?.tone).toBe("var(--warn)");
+    expect(b?.title).toMatch(/lost when the API restarts/);
+  });
+
+  it("an unhealthy backend keeps its identity — it is never relabelled as another backend", () => {
+    const b = storageBadge(row({ available: false, healthy: false, reason: "database unavailable" }));
+    expect(b?.label).toBe("PostgreSQL · Persistent · Unavailable");
+    expect(b?.label).not.toMatch(/File|Memory/);
+    expect(b?.tone).toBe("var(--bad)");
+    expect(b?.title).toMatch(/nothing is written anywhere else/);
+  });
+
+  it("an unsupported backend names what is configured and claims no persistence", () => {
+    const b = storageBadge(row({
+      configured_backend: "file", active_backend: "", persistence: "",
+      available: false, healthy: false, reason: "backend not supported for this registry",
+    }));
+    expect(b?.label).toBe("Unavailable · configured storage: File");
+    expect(b?.label).not.toMatch(/Persistent/);
+    expect(b?.tone).toBe("var(--bad)");
+  });
+
+  it("renders nothing when the posture is unknown — unknown is not healthy", () => {
+    expect(storageBadge(undefined)).toBeNull();
+  });
+
+  it("prints an unrecognised backend kind verbatim rather than guessing", () => {
+    expect(backendLabel("cassandra")).toBe("cassandra");
+    expect(backendLabel("")).toBe("unknown");
+  });
+});
+
+describe("isStoreUnavailable", () => {
+  it("treats 501 (unsupported) and 503 (store down) as deployment facts, not empty registries", () => {
+    expect(isStoreUnavailable(new Error("501 Not Implemented: {}"))).toBe(true);
+    expect(isStoreUnavailable(new Error("503 Service Unavailable: {}"))).toBe(true);
+    expect(isStoreUnavailable(new Error("403 Forbidden: {}"))).toBe(false);
+    expect(isStoreUnavailable(new Error("500 Internal Server Error: {}"))).toBe(false);
   });
 });

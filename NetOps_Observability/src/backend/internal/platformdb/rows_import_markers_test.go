@@ -194,3 +194,62 @@ func TestPgStoreImportFailureFailsBoot(t *testing.T) {
 		t.Fatalf("expected the fixed import to land 1 user, got %s (err %v)", got, err)
 	}
 }
+
+// TestPgStoreImportsCustodyMaterial — tracker 245. A file-backend install with
+// TLS and sealing carries two things a cutover cannot re-create: the sealing
+// vault's wrapped keys and the internal mesh CA. Before they were importable, a
+// switch to Postgres silently minted a NEW CA (breaking every issued SVID on a
+// fail-closed mesh) and orphaned every sealed value. They round-trip under BARE
+// keys — identical on both backends — and, like every other collection, import
+// at most once and never over live custody.
+func TestPgStoreImportsCustodyMaterial(t *testing.T) {
+	adminDSN := os.Getenv("DATABASE_URL_TEST")
+	if adminDSN == "" {
+		t.Skip("set DATABASE_URL_TEST to run the custody-import test")
+	}
+	ctx := context.Background()
+	dsn := provisionAppRole(ctx, t, adminDSN)
+	ps, err := NewPGStore(ctx, dsn)
+	if err != nil {
+		t.Fatalf("newPgStore: %v", err)
+	}
+
+	dir := t.TempDir()
+	custody := map[string]string{
+		"secrets_wrapped_keys.json": `{"v1":"wrapped-dek-bytes"}`,
+		"tls_internal_ca_cert.pem":  "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
+		"tls_internal_ca_key.enc":   "sealed-ca-key-bytes",
+	}
+	for name, body := range custody {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := ps.importFileState(ctx, dir); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	for name, want := range custody {
+		got, err := ps.Load(name)
+		if err != nil {
+			t.Fatalf("load %s after import: %v", name, err)
+		}
+		if string(got) != want {
+			t.Fatalf("%s round-tripped as %q", name, got)
+		}
+	}
+
+	// A later boot must not overwrite custody that has since been rotated in
+	// Postgres — the marker, not the content, decides.
+	rotated := []byte("rotated-in-postgres")
+	if err := ps.Save("tls_internal_ca_key.enc", rotated); err != nil {
+		t.Fatalf("save rotated: %v", err)
+	}
+	if err := ps.importFileState(ctx, dir); err != nil {
+		t.Fatalf("second import: %v", err)
+	}
+	got, err := ps.Load("tls_internal_ca_key.enc")
+	if err != nil || string(got) != string(rotated) {
+		t.Fatalf("a re-run clobbered rotated custody: %q %v", got, err)
+	}
+	ps.db.Close()
+}

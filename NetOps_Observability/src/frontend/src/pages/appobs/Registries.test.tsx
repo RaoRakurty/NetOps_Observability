@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import type {
   ApplicationRow, CatalogServiceBinding, CatalogServiceRow, CatalogServiceSelector,
+  RegistryStorageReport,
 } from "../../services/api";
 
 const SVC_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -38,9 +39,23 @@ const h = vi.hoisted(() => {
     binding_id: BIND_ID, service_id: SVC_ID, kind: "probe", ref: "http-checkout",
     created_at: "2026-08-03T00:00:00Z", ...over,
   });
+  // GET /api/registries/status — the deployment's real storage posture. The
+  // default is the shipping one (postgres, healthy) so existing assertions are
+  // unaffected; the tracker-245 cases override it per test.
+  const storage = (over: Partial<RegistryStorageReport> = {}): RegistryStorageReport => ({
+    configured_backend: "postgres", persistence: "persistent", backend_healthy: true,
+    registries: [
+      { registry: "service_catalog", label: "Service catalog", configured_backend: "postgres",
+        active_backend: "postgres", persistence: "persistent", available: true, healthy: true },
+      { registry: "applications", label: "Application registry", configured_backend: "postgres",
+        active_backend: "postgres", persistence: "persistent", available: true, healthy: true },
+    ],
+    ...over,
+  });
   return {
-    svc, app, sel, bind,
+    svc, app, sel, bind, storage,
     mock: {
+      registriesStatus: vi.fn(async () => storage()),
       catalogServices: vi.fn(async () => [svc()]),
       createCatalogService: vi.fn(async () => svc({ service_id: "new" })),
       archiveCatalogService: vi.fn(async () => ({ archived: SVC_ID })),
@@ -297,5 +312,79 @@ describe("Registries — the application registry", () => {
     mock.applications.mockResolvedValueOnce([]);
     render(<Registries onOpenCloudCatalog={noop} />);
     expect(await screen.findByText("No applications registered yet")).toBeTruthy();
+  });
+});
+
+// ── tracker 245: the page must tell the truth about where records live ──────
+//
+// Every state below is rendered from GET /api/registries/status. None of it is
+// hardcoded per registry, and none of the four states may render as any other —
+// least of all "the database is down" as "you have no applications".
+
+describe("Registries — storage backend truthfulness", () => {
+  const statusRow = (over: Record<string, unknown>) => ({
+    registry: "applications", label: "Application registry",
+    configured_backend: "postgres", active_backend: "postgres",
+    persistence: "persistent", available: true, healthy: true, ...over,
+  });
+  const report = (appRow: Record<string, unknown>) => ({
+    ...h.storage(),
+    registries: [h.storage().registries[0], statusRow(appRow)],
+  });
+
+  it("a healthy Postgres deployment reads 'PostgreSQL · Persistent'", async () => {
+    render(<Registries onOpenCloudCatalog={noop} />);
+    expect(await screen.findByText("billing")).toBeTruthy();
+    expect(screen.getAllByText("PostgreSQL · Persistent").length).toBe(2); // both registries
+  });
+
+  it("an explicit memory backend reads 'Memory · Ephemeral' and warns it is lost on restart", async () => {
+    mock.registriesStatus.mockResolvedValueOnce(report({
+      configured_backend: "memory", active_backend: "memory", persistence: "ephemeral",
+      reason: "ephemeral development backend — records do not survive a restart",
+    }));
+    render(<Registries onOpenCloudCatalog={noop} />);
+    const chip = await screen.findByText("Memory · Ephemeral");
+    expect(chip.getAttribute("title")).toMatch(/lost when the API restarts/);
+  });
+
+  it("a Postgres outage reads 'PostgreSQL · Persistent · Unavailable' — never file or memory", async () => {
+    mock.registriesStatus.mockResolvedValueOnce(report({
+      available: false, healthy: false, reason: "database unavailable",
+    }));
+    mock.applications.mockRejectedValueOnce(
+      new Error('503 Service Unavailable: {"error":"registry storage is unavailable (database unavailable)",'
+        + '"code":"APPLICATIONS_STORAGE_UNAVAILABLE"}'));
+    render(<Registries onOpenCloudCatalog={noop} />);
+    const chip = await screen.findByText("PostgreSQL · Persistent · Unavailable");
+    expect(chip.getAttribute("title")).toMatch(/nothing is written anywhere else/);
+    // and the list says unavailable, not "none registered"
+    expect(await screen.findByText("Application registry storage is unavailable")).toBeTruthy();
+    expect(screen.queryByText("No applications registered yet")).toBeNull();
+    // no control offering a write that cannot land
+    expect(screen.queryByRole("button", { name: "New application" })).toBeNull();
+  });
+
+  it("a file deployment reads the registry as unavailable with the configured backend named", async () => {
+    mock.registriesStatus.mockResolvedValueOnce(report({
+      configured_backend: "file", active_backend: "", persistence: "",
+      available: false, healthy: false, reason: "backend not supported for this registry",
+    }));
+    mock.applications.mockRejectedValueOnce(
+      new Error('501 Not Implemented: {"error":"the application registry needs PostgreSQL storage on this '
+        + 'deployment (STORE_BACKEND=postgres); the configured storage cannot hold it",'
+        + '"code":"APPLICATION_REGISTRY_BACKEND_UNSUPPORTED"}'));
+    render(<Registries onOpenCloudCatalog={noop} />);
+    expect(await screen.findByText("Unavailable · configured storage: File")).toBeTruthy();
+    expect(await screen.findByText(/needs PostgreSQL storage on this deployment/)).toBeTruthy();
+    expect(screen.queryByText("No applications registered yet")).toBeNull();
+  });
+
+  it("shows no badge at all when the status endpoint cannot be read (unknown is not healthy)", async () => {
+    mock.registriesStatus.mockRejectedValueOnce(new Error("500 Internal Server Error: {}"));
+    render(<Registries onOpenCloudCatalog={noop} />);
+    expect(await screen.findByText("billing")).toBeTruthy();
+    expect(screen.queryByText(/Persistent/)).toBeNull();
+    expect(screen.queryByText(/Ephemeral/)).toBeNull();
   });
 });

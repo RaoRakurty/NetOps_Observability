@@ -85,6 +85,7 @@ import (
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
 	"netops/backend/internal/ratelimit"
+	"netops/backend/internal/registrystatus"
 	"netops/backend/internal/saved"
 	"netops/backend/internal/sealedfields"
 	"netops/backend/internal/seam"
@@ -1643,13 +1644,52 @@ func newBusinessServiceStore() *cloud.BizSvcStore {
 	return nil
 }
 
-// newApplicationStore picks the App Catalog backend: RLS-scoped pg under
-// STORE_BACKEND=postgres, else in-memory.
+// newApplicationStore picks the Applications registry backend EXPLICITLY
+// (tracker 245). There is no file implementation for this registry, and the old
+// "else in-memory" fallback made that invisible: on the file backend — the
+// packaged default at the time — an operator could create an application, see
+// it listed, and lose it on the next api restart, with nothing in the API or the
+// Registries page able to say why.
+//
+// The three cases are now closed:
+//   - postgres → the RLS-scoped durable store (the authoritative backend);
+//   - memory   → the ephemeral store, reachable ONLY by an explicit
+//     STORE_BACKEND=memory (a development/test mode that says so);
+//   - file     → nil. The registry is UNSUPPORTED on this backend and the
+//     handlers refuse with 501 + a machine-readable code instead of
+//     acknowledging writes nothing durable will keep.
+//
+// A nil store is never a Postgres-outage state: a configured-postgres process
+// fails its boot when the database is unreachable (initStoreBackend), so a
+// running api on the postgres backend always has the pg store — an outage
+// AFTER boot surfaces as 503 from the handlers, never as a silent switch to
+// another backend.
 func newApplicationStore() appid.AppStore {
-	if ps, ok := platformdb.ActivePG(); ok {
+	switch platformdb.Kind() {
+	case platformdb.KindPostgres:
+		ps, ok := platformdb.ActivePG()
+		if !ok {
+			// Unreachable in practice (Kind and active are set together); a
+			// wrong answer here would resurrect the silent-fallback bug, so it
+			// is loud and unsupported rather than quietly ephemeral.
+			logError("store", "applications registry unavailable: postgres backend selected but no pg store is active", nil)
+			return nil
+		}
+		logInfo("store", "applications registry storage", map[string]any{
+			"backend": platformdb.KindPostgres, "persistent": true,
+		})
 		return appid.NewPGAppStore(ps.DB())
+	case platformdb.KindMemory:
+		logWarn("store", "applications registry storage is EPHEMERAL — records are lost on restart", map[string]any{
+			"backend": platformdb.KindMemory, "persistent": false,
+		})
+		return appid.NewMemAppStore()
+	default:
+		logWarn("store", "applications registry unavailable", map[string]any{
+			"configured_backend": platformdb.Kind(), "reason": "backend_not_supported",
+		})
+		return nil
 	}
-	return appid.NewMemAppStore()
 }
 
 // newIncidentTimelineStore picks the incident-timeline backend: RLS-scoped pg
@@ -1726,8 +1766,21 @@ func newSelfHealer(notifier *notify.Dispatcher) *selfheal.Healer {
 	})
 }
 
-// initStoreBackend selects the store backend from STORE_BACKEND (default
-// "file"); env stays here, the machinery lives in internal/platformdb.
+// initStoreBackend selects the store backend from STORE_BACKEND; env stays
+// here, the machinery lives in internal/platformdb.
+//
+// DEFAULTS (tracker 245). New normal installations are generated with
+// STORE_BACKEND=postgres — that is the PRODUCT default, written explicitly by
+// scripts/install.py into deployment/docker/.env. The BINARY's unset default
+// stays "file" on purpose: an existing install whose configuration is lost or
+// not yet migrated must keep reading the registry data it already has on the
+// data volume, not silently start serving an empty Postgres. An unset variable
+// is therefore "the historical compatibility backend", never "guess postgres".
+//
+// There is NO failover between backends: the selection is made once, here, and
+// holds for the life of the process. A configured-postgres deployment whose
+// database is unreachable fails its boot loudly (below) rather than writing
+// authoritative state into files or RAM that nothing would ever reconcile.
 func initStoreBackend() error {
 	platformdb.SetLoggers(logInfo, logWarn, logError)
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("STORE_BACKEND"))) {
@@ -1738,13 +1791,33 @@ func initStoreBackend() error {
 		// and sealing custody could not persist on the file backend at all
 		// (CI tls-boot find, 2026-08-12).
 		platformdb.SetFileRoot(envOr("DATA_DIR", "/data"))
+		logInfo("store", "state backend selected", map[string]any{
+			"backend": platformdb.KindFile, "persistent": true,
+		})
 		return nil
 	case "postgres", "postgresql", "pg":
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		return platformdb.UsePostgres(ctx, os.Getenv("DATABASE_URL"))
+		if err := platformdb.UsePostgres(ctx, os.Getenv("DATABASE_URL")); err != nil {
+			return err
+		}
+		logInfo("store", "state backend selected", map[string]any{
+			"backend": platformdb.KindPostgres, "persistent": true,
+		})
+		return nil
+	case "memory", "mem":
+		// Explicit ephemeral mode: development and tests only. It is never a
+		// fallback and never a packaged default — reaching it takes deliberately
+		// setting STORE_BACKEND=memory, and it says so on every boot.
+		platformdb.UseMemory()
+		logWarn("store", "state backend is EPHEMERAL — nothing persists across a restart (STORE_BACKEND=memory)",
+			map[string]any{"backend": platformdb.KindMemory, "persistent": false})
+		return nil
 	default:
-		return fmt.Errorf("unknown STORE_BACKEND %q (want file|postgres)", os.Getenv("STORE_BACKEND"))
+		// A typo (STORE_BACKEND=postgress) must abort, never silently select
+		// file or memory: a misconfigured persistent deployment that comes up on
+		// the wrong backend is exactly the failure tracker 245 closes.
+		return fmt.Errorf("unknown STORE_BACKEND %q (want postgres|file|memory)", os.Getenv("STORE_BACKEND"))
 	}
 }
 
@@ -2650,6 +2723,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/services/", s.handleServiceByID)
 	mux.HandleFunc("/api/applications", s.handleApplications)
 	mux.HandleFunc("/api/applications/", s.handleApplicationByID)
+	// Which backend actually holds each registry's records, and can it serve
+	// (tracker 245). The Registries page renders from this instead of assuming.
+	mux.HandleFunc("/api/registries/status", s.handleRegistriesStatus)
 	mux.HandleFunc("/api/appid/resolve", s.handleAppIDResolve)
 	mux.HandleFunc("/api/appid/resolve/batch", s.handleAppIDResolveBatch) // #81 P3G client-side enrichment primitive
 	mux.HandleFunc("/api/appid/status", s.handleAppIDStatus)
@@ -3497,7 +3573,7 @@ func (s *server) handleDiscoveryRefresh(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "refresh scheduled"})
 }
 
-func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	fmt.Fprintf(w, "# HELP netops_devices_total Number of known devices.\n")
 	fmt.Fprintf(w, "# TYPE netops_devices_total gauge\n")
@@ -3505,6 +3581,23 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP netops_alerts_active Currently active alerts.\n")
 	fmt.Fprintf(w, "# TYPE netops_alerts_active gauge\n")
 	fmt.Fprintf(w, "netops_alerts_active %d\n", len(s.alerts.Active()))
+
+	// Registry storage posture (tracker 245). A registry whose storage cannot
+	// serve is invisible from the outside — the API answers honestly, but only
+	// to whoever asks. Emitted EVERY scrape, including as a zero, so "storage
+	// unavailable" is alertable and a vanished series still means a scrape
+	// failure rather than health. One cheap pool ping per scrape.
+	storageOK, _ := platformdb.Health(r.Context())
+	fmt.Fprintf(w, "# HELP netops_registry_storage_available Whether the configured storage for a registry can serve (1) or not (0).\n")
+	fmt.Fprintf(w, "# TYPE netops_registry_storage_available gauge\n")
+	for _, st := range registrystatus.Build(registrySpecs(), platformdb.Kind(), storageOK, "").Registries {
+		v := 0
+		if st.Available {
+			v = 1
+		}
+		fmt.Fprintf(w, "netops_registry_storage_available{registry=%q,configured_backend=%q,persistence=%q} %d\n",
+			st.Registry, st.ConfiguredBackend, st.Persistence, v)
+	}
 
 	// ClickHouse write outcomes (Phase 8): the per-outcome visibility F-38/F-56
 	// lacked. committed/rejected/unknown is the COMMIT-STATE axis a dashboard

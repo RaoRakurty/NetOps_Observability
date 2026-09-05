@@ -500,6 +500,60 @@ def reconcile_postgres(runner, *, service: str, user: str, db: str,
     return True, "ALTER USER applied and verified"
 
 
+def provision_app_state_role(runner, *, service: str = "postgres", db_user: str,
+                             db_name: str, app_user: str,
+                             app_password: str) -> tuple[bool, str]:
+    """Create (or re-align) the NON-SUPERUSER role the Postgres app-state backend
+    connects as, and prove the credential authenticates (tracker 245).
+
+    Why this is installer work and not a manual step: with `postgres` as the
+    default state backend for a new install, an api that cannot authenticate has
+    no registry storage at all — it fails its boot rather than quietly writing
+    the records somewhere ephemeral. The role must therefore exist before the
+    api's first start, and it must be NOSUPERUSER/NOBYPASSRLS or FORCE ROW LEVEL
+    SECURITY does not bite and tenant isolation is silently off (the api refuses
+    such a role on purpose).
+
+    Idempotent in every direction: it creates the role when absent, re-aligns an
+    existing one to NOSUPERUSER NOBYPASSRLS, sets the password to whatever the
+    DSN carries, and returns early when the credential already works. The
+    password is piped in on stdin (never argv), so it cannot appear in the
+    host's process table.
+    """
+    if _pg_verify(runner, service, app_user, db_name, app_password):
+        # Still assert the privilege posture: a role that works but bypasses RLS
+        # is the failure mode this function exists to prevent.
+        chk = runner.exec(service, ["psql", "-v", "ON_ERROR_STOP=1", "-U", db_user,
+                                    "-d", db_name, "-tAc",
+                                    "SELECT rolsuper OR rolbypassrls FROM pg_roles "
+                                    "WHERE rolname = " + _sql_lit(app_user)],
+                          stdin="", timeout=30)
+        if chk.returncode == 0 and chk.stdout.strip() == "t":
+            return False, (f"role {app_user} authenticates but can BYPASS Row-Level "
+                           "Security — tenant isolation would be off; fix it with "
+                           f"ALTER ROLE {app_user} NOSUPERUSER NOBYPASSRLS")
+        return True, "already provisioned (the app role accepts the configured credential)"
+
+    sql = (
+        "DO $do$ BEGIN\n"
+        f"  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {_sql_lit(app_user)}) THEN\n"
+        f"    EXECUTE format('CREATE ROLE %I LOGIN NOSUPERUSER NOBYPASSRLS', {_sql_lit(app_user)});\n"
+        "  END IF;\n"
+        "END $do$;\n"
+        f"ALTER ROLE {_ident(app_user)} WITH LOGIN NOSUPERUSER NOBYPASSRLS "
+        f"PASSWORD {_sql_lit(app_password)};\n"
+        f"GRANT ALL ON SCHEMA public TO {_ident(app_user)};\n"
+    )
+    r = runner.exec(service, ["psql", "-v", "ON_ERROR_STOP=1", "-U", db_user,
+                              "-d", db_name], stdin=sql, timeout=60)
+    if r.returncode != 0:
+        return False, f"provisioning failed: {redact(r.stderr or r.stdout, [app_password])}"
+    if not _pg_verify(runner, service, app_user, db_name, app_password):
+        return False, ("the role was provisioned but its credential does not "
+                       "authenticate over TCP")
+    return True, "app-state role provisioned and verified"
+
+
 # -- ClickHouse ----------------------------------------------------------------
 
 def _ch_client(runner, user: str, password: str, sql: str,
@@ -631,6 +685,7 @@ __all__ = [
     "classify",
     "install_started",
     "preflight",
+    "provision_app_state_role",
     "reconcile_clickhouse_admin",
     "reconcile_grafana_ch_user",
     "reconcile_postgres",

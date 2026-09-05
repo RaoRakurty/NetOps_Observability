@@ -36,16 +36,18 @@ import type { CSSProperties } from "react";
 import { api } from "../../services/api";
 import type {
   ApplicationRow, CatalogServiceBinding, CatalogServiceRow, CatalogServiceSelector,
+  RegistryStorageReport, RegistryStorageStatus,
 } from "../../services/api";
 import { operatorError } from "../../lib/errors";
 import { fmtDateTime } from "../../lib/time";
 import { EmptyState, EvidenceDrawer } from "./badges";
 import { CRITICALITY_ORDER, CRITICALITY_META } from "./catalog";
 import { CriticalityBadge } from "./ServiceCatalog";
+import { Chip } from "../../components/noc";
 import {
   BINDING_KINDS, BINDING_KIND_LABELS, EMPTY_SELECTOR_DRAFT, NO_SELECTOR_CONSEQUENCE,
   archivePrompt, describeSpec, ignoredSpecKeys, isStoreUnavailable, latestSelector,
-  nextSelectorVersion, parseSelectorDraft, specAttributes, validateBinding,
+  nextSelectorVersion, parseSelectorDraft, specAttributes, storageBadge, validateBinding,
   validateRegistryName,
 } from "./registries";
 import type { SelectorDraft } from "./registries";
@@ -53,6 +55,23 @@ import type { SelectorDraft } from "./registries";
 const TH: CSSProperties = { padding: "4px 8px" };
 const HEAD: CSSProperties = { textAlign: "left", color: "var(--fg-muted)" };
 const TABLE: CSSProperties = { width: "100%", fontSize: 12, borderCollapse: "collapse" };
+
+// ── which backend holds these records (tracker 245) ─────────────────────────
+//
+// Rendered from GET /api/registries/status, never assumed: a registry whose
+// backend cannot store it, or whose database is down, says so here instead of
+// looking like an empty list. The wording is deliberately readable without
+// knowing what STORE_BACKEND is.
+
+function StorageBadge({ status }: { status?: RegistryStorageStatus }) {
+  const badge = storageBadge(status);
+  if (!badge) return null;
+  return <Chip label={badge.label} tone={badge.tone} title={badge.title} />;
+}
+
+function statusFor(report: RegistryStorageReport | null, registry: string): RegistryStorageStatus | undefined {
+  return report?.registries?.find((r) => r.registry === registry);
+}
 
 // ── what drives what ────────────────────────────────────────────────────────
 
@@ -295,7 +314,8 @@ function BindingSection({ service }: { service: CatalogServiceRow }) {
 type ServiceDraft = { name: string; criticality: string; description: string };
 const EMPTY_SERVICE: ServiceDraft = { name: "", criticality: "normal", description: "" };
 
-function ServiceRegistryPanel({ onOpen }: { onOpen: (s: CatalogServiceRow) => void }) {
+function ServiceRegistryPanel({ onOpen, storage }:
+  { onOpen: (s: CatalogServiceRow) => void; storage?: RegistryStorageStatus }) {
   const [rows, setRows] = useState<CatalogServiceRow[] | null>(null);
   const [archived, setArchived] = useState(false);
   const [unavailable, setUnavailable] = useState("");
@@ -357,6 +377,7 @@ function ServiceRegistryPanel({ onOpen }: { onOpen: (s: CatalogServiceRow) => vo
       <div className="ao-panel-h">Service catalog{" "}
         <span className="ao-panel-meta">operator-authored · a selector here is what attributes traffic</span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          <StorageBadge status={storage} />
           <label style={{ fontSize: 12 }} className="ao-muted">
             <input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} />{" "}
             Include archived
@@ -442,9 +463,10 @@ function ServiceRegistryPanel({ onOpen }: { onOpen: (s: CatalogServiceRow) => vo
 type AppDraft = { name: string; owner_team: string; criticality: string; description: string };
 const EMPTY_APP: AppDraft = { name: "", owner_team: "", criticality: "normal", description: "" };
 
-function ApplicationRegistryPanel() {
+function ApplicationRegistryPanel({ storage }: { storage?: RegistryStorageStatus }) {
   const [rows, setRows] = useState<ApplicationRow[] | null>(null);
   const [archived, setArchived] = useState(false);
+  const [unavailable, setUnavailable] = useState("");
   const [err, setErr] = useState("");
   const [draft, setDraft] = useState<AppDraft>(EMPTY_APP);
   const [open, setOpen] = useState(false);
@@ -454,10 +476,18 @@ function ApplicationRegistryPanel() {
 
   useEffect(() => {
     let live = true;
-    setErr("");
+    setUnavailable(""); setErr("");
     api.applications(archived)
       .then((r) => { if (live) setRows(r ?? []); })
-      .catch((e) => { if (live) { setRows([]); setErr(operatorError(e, "The application registry could not be read.")); } });
+      .catch((e) => {
+        if (!live) return;
+        setRows([]);
+        // 501 (this backend cannot store applications) and 503 (its store is
+        // down) are DEPLOYMENT facts carrying the API's own sentence — they must
+        // never render as "no applications registered yet" (tracker 245).
+        const sentence = operatorError(e, "The application registry could not be read.");
+        if (isStoreUnavailable(e)) setUnavailable(sentence); else setErr(sentence);
+      });
     return () => { live = false; };
   }, [archived, nonce]);
 
@@ -499,13 +529,18 @@ function ApplicationRegistryPanel() {
       <div className="ao-panel-h">Application registry{" "}
         <span className="ao-panel-meta">operator-authored · names the application and who owns it</span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          <StorageBadge status={storage} />
           <label style={{ fontSize: 12 }} className="ao-muted">
             <input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} />{" "}
             Include archived
           </label>
-          <button className="ao-btn ao-btn--primary" onClick={() => { setFormErr(""); setOpen((o) => !o); }}>
-            {open ? "Cancel" : "New application"}
-          </button>
+          {/* Nothing can be registered while nothing is storing the registry —
+              offering the control would be offering a write that cannot land. */}
+          {!unavailable && (
+            <button className="ao-btn ao-btn--primary" onClick={() => { setFormErr(""); setOpen((o) => !o); }}>
+              {open ? "Cancel" : "New application"}
+            </button>
+          )}
         </span>
       </div>
       <p className="ao-set-d">
@@ -537,6 +572,8 @@ function ApplicationRegistryPanel() {
 
       {rows === null ? (
         <div className="ao-muted" style={{ fontSize: 12 }}>Loading…</div>
+      ) : unavailable ? (
+        <EmptyState title="Application registry storage is unavailable" hint={unavailable} />
       ) : list.length === 0 ? (
         <EmptyState title="No applications registered yet"
           hint="register the applications your teams own so ownership has a name here rather than living in a spreadsheet" />
@@ -580,11 +617,24 @@ function ApplicationRegistryPanel() {
 
 export default function Registries({ onOpenCloudCatalog }: { onOpenCloudCatalog: () => void }) {
   const [sel, setSel] = useState<CatalogServiceRow | null>(null);
+  const [storage, setStorage] = useState<RegistryStorageReport | null>(null);
+
+  // Which backend holds each registry. A failure here leaves the badges OFF
+  // (storageBadge returns null for an absent row) rather than printing a
+  // reassuring default — an unknown backend is not a healthy one.
+  useEffect(() => {
+    let live = true;
+    api.registriesStatus()
+      .then((r) => { if (live) setStorage(r); })
+      .catch(() => { if (live) setStorage(null); });
+    return () => { live = false; };
+  }, []);
+
   return (
     <div className="ao-stack">
       <RegistryGuide onOpenCloudCatalog={onOpenCloudCatalog} />
-      <ServiceRegistryPanel onOpen={setSel} />
-      <ApplicationRegistryPanel />
+      <ServiceRegistryPanel onOpen={setSel} storage={statusFor(storage, "service_catalog")} />
+      <ApplicationRegistryPanel storage={statusFor(storage, "applications")} />
       {sel && (
         <EvidenceDrawer title={`Service · ${sel.name}`}
           subtitle={<span className="ao-muted">grouping rule and attachments</span>}

@@ -3903,6 +3903,26 @@ export type ApplicationRow = {
   created_at: string;
   archived_at?: string;
 };
+/** Which storage backend is responsible for one registry's records, and can it
+ *  serve (GET /api/registries/status, tracker 245). `active_backend` is "" when
+ *  NOTHING stores the registry on the configured backend; it never names a
+ *  different backend than the configured one — there is no failover. */
+export type RegistryStorageStatus = {
+  registry: string;
+  label: string;
+  configured_backend: string;      // postgres | file | memory
+  active_backend: string;          // "" when unavailable
+  persistence: string;             // persistent | ephemeral | ""
+  available: boolean;
+  healthy: boolean;
+  reason?: string;
+};
+export type RegistryStorageReport = {
+  configured_backend: string;
+  persistence: string;
+  backend_healthy: boolean;
+  registries: RegistryStorageStatus[];
+};
 export type ApplicationInput = {
   name: string;
   owner_team?: string;
@@ -4611,6 +4631,7 @@ export const api = {
   // ---- application registry + service catalog (set B) -----------------------
   // Two independent registries: applications name WHAT the traffic is, catalog
   // services group it into an operable unit with a selector.
+  registriesStatus: () => request<RegistryStorageReport>(`/api/registries/status`),
   applications: (includeArchived = false) =>
     request<ApplicationRow[]>(`/api/applications${includeArchived ? "?archived=true" : ""}`),
   createApplication: (input: ApplicationInput) =>

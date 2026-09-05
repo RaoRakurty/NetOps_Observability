@@ -1,67 +1,175 @@
-# Enabling the Postgres app-state backend (normalized rows + RLS)
+# The PostgreSQL app-state backend (normalized rows + RLS)
 
-By default the API stores app-state (users, tenants, API keys, saved objects,
-SNMP credentials, audit) as JSON files on the data volume (`STORE_BACKEND=file`).
-That is fine for a single-node dev/lab deployment and needs no database.
+**PostgreSQL is the default persistent state backend for new normal Correlix
+installations.** `scripts/install.py` generates `STORE_BACKEND=postgres` and a
+`DATABASE_URL` for the non-superuser `netops_app` role, and provisions that role
+before the API first starts. **The file backend is retained for explicitly
+supported compatibility or PostgreSQL-less deployments.**
 
-For multi-tenant / SaaS-grade isolation, switch to the Postgres backend: each
-former blob becomes a normalized, per-row table with a `tenant_id` and
-**PostgreSQL Row-Level Security**, so the database itself refuses another
-tenant's rows even if an application filter is ever forgotten. The audit trail
-also becomes a real per-row append/query log instead of a rewrite-whole blob.
+Two rules follow from that, and they are the whole reason this document exists:
 
-This is **opt-in** — flipping it on does not change the default stack.
+* **Registries do not silently fall back to ephemeral memory** when a configured
+  persistent backend is unsupported or unavailable. They say so.
+* **A PostgreSQL outage does not trigger transparent failover to file or memory**
+  for authoritative registry state. The backend is chosen once, at boot, and
+  holds for the life of the process.
 
-## Prerequisites
+## The backend matrix
 
-The stack already runs a `postgres` service. The `POSTGRES_USER`/`DB_USER` in it
-is a **superuser**, which must NOT be used for app-state: superusers (and
-`BYPASSRLS` roles) bypass RLS even with `FORCE ROW LEVEL SECURITY`, silently
-disabling isolation. The API enforces this — it **refuses to start** when its
-`DATABASE_URL` role can bypass RLS (override only for a deliberate single-tenant
-deployment with `STORE_PG_ALLOW_RLS_BYPASS=true`).
+| `STORE_BACKEND` | Durability | When it is used |
+|---|---|---|
+| `postgres` | Durable | **Normal installation.** Normalized per-row tables, one `tenant_id` column per row, `FORCE ROW LEVEL SECURITY`. |
+| `file` | Durable | Explicit compatibility / PostgreSQL-less mode. JSON collections on the data volume. |
+| `memory` | **Ephemeral** | Development and test only. Explicit selection only; nothing survives a restart, and the API says so on every boot. |
 
-So step 1 is creating a dedicated least-privilege role.
+Anything else (`postgress`, `sqlite`, …) is a configuration error that **aborts
+the boot**. An unset variable resolves to `file`: an install whose configuration
+is lost must keep reading the data it already has, never start serving an empty
+database. New installs never rely on that — the installer writes the value.
 
-## Enable it
+### Not every registry exists on every backend
 
-1. **Create the non-superuser app role** (idempotent; works on a fresh or
-   existing volume):
+| Registry | `postgres` | `file` | `memory` |
+|---|---|---|---|
+| Applications (`/api/applications`) | supported | **unavailable** (no file implementation) | dev/test only |
+| Service catalog (`/api/services`) | supported | **unavailable** | **unavailable** |
+| Cloud business services | supported | **unavailable** | **unavailable** |
+| Users, tenants, roles, API keys, SNMP credentials, saved objects, audit | supported | supported | dev/test only |
 
-   ```bash
-   cd deployment/docker
-   docker compose cp postgres/netops-app-role.sql postgres:/tmp/netops-app-role.sql
-   docker compose exec -e PGPASSWORD="$DB_PASSWORD" postgres \
-     psql -U "$DB_USER" -d "${DB_NAME:-netops}" \
-          -v app_pw="'choose-a-strong-app-password'" \
-          -f /tmp/netops-app-role.sql
-   ```
+An unavailable registry answers `501` with a stable code
+(`APPLICATION_REGISTRY_BACKEND_UNSUPPORTED`) and is shown as
+*"Unavailable · configured storage: File"* on the Registries page. A registry
+whose backend is configured but **unreachable** answers `503`
+(`APPLICATIONS_STORAGE_UNAVAILABLE`) and is shown as *"PostgreSQL · Persistent ·
+Unavailable"* — never relabelled as file or memory, because no write goes there.
+`GET /api/registries/status` is the machine-readable form of the same truth:
 
-2. **Point the API at it** — add to `deployment/docker/.env`:
+```json
+{"registry":"applications","configured_backend":"postgres","active_backend":"postgres",
+ "persistence":"persistent","available":true,"healthy":true}
+```
 
-   ```dotenv
-   STORE_BACKEND=postgres
-   DATABASE_URL=postgres://netops_app:choose-a-strong-app-password@postgres:5432/netops?sslmode=disable
-   ```
+The same fact rides `/metrics` as
+`netops_registry_storage_available{registry="applications",configured_backend="postgres",persistence="persistent"}`,
+emitted on every scrape including as a zero, so unavailable storage is alertable
+and not merely honest to whoever asks. `/api/stack/health` carries a
+`state_backend` block for the platform owner: a green PostgreSQL TCP probe says a
+server accepts connections, not that the API stores anything in it.
 
-3. **Restart the API** — it runs its schema migrations on boot:
+Before tracker 245 the Applications registry answered `200` with an in-memory
+store on the file backend: applications could be created, listed, and were gone
+after the next API restart, with nothing in the API or the UI able to say why.
 
-   ```bash
-   docker compose up -d api
-   docker compose logs -f api    # expect "migration applied" then a clean start
-   ```
+## Fresh installs
 
-   If the role can bypass RLS, the API aborts with a clear error instead of
-   starting unprotected — fix the role and retry.
+Nothing to do. `python3 scripts/install.py` writes
 
-## Migrating existing file data
+```dotenv
+STORE_BACKEND=postgres
+DATABASE_URL=postgres://netops_app:<generated>@postgres:5432/netops?sslmode=disable
+```
 
-If you previously ran the legacy blob Postgres backend, its `netops_kv` table is
-imported into the normalized tables automatically on first boot (idempotent —
-only empty targets are filled). There is no automatic importer from the *file*
-backend; for a fresh switch, recreate the bootstrap admin via
-`ADMIN_USERNAME`/`ADMIN_INITIAL_PASSWORD` (seeded on an empty store) or
-re-create objects through the UI.
+and, before starting the stack, provisions `netops_app` as a **non-superuser,
+NOBYPASSRLS** role with that password (idempotent; a re-run re-aligns the live
+role with whatever the DSN now says, which is also how you rotate it). A
+superuser — or any `BYPASSRLS` role — ignores RLS even under `FORCE ROW LEVEL
+SECURITY`, so the API **refuses to start** as one; the override
+`STORE_PG_ALLOW_RLS_BYPASS=true` exists for a deliberate single-tenant
+deployment and is **never** set by the installer.
+
+On a `--tls` install the DSN is minted plaintext for phase A (the API is what
+mints the mesh CA) and rewritten to
+`?sslmode=verify-full&sslrootcert=/data/tls/ca.pem` in phase B, when postgres
+becomes `hostssl`-only.
+
+Pointing at an **external** database instead? Set `DATABASE_URL` yourself; the
+installer detects a non-local host and leaves role provisioning to you
+(`deployment/docker/postgres/netops-app-role.sql` is the same SQL it would run).
+
+## Upgrades — read this before changing `STORE_BACKEND`
+
+**An upgrade never changes an existing install's backend.** `install.py` does not
+rewrite `STORE_BACKEND` in an existing `.env`; if the key is absent (a `.env`
+older than the explicit key) it *appends* `STORE_BACKEND=file`, stamping the
+backend the install's data actually lives on. Upgrading is therefore never
+"the registry appeared empty".
+
+That is deliberate, because **switching the backend does not move your data.**
+The JSON files stay on the data volume, untouched, but the API stops reading
+them: every registry then reads whatever is (or is not) in PostgreSQL.
+
+### The one-time file → PostgreSQL importer
+
+Set `IMPORT_FILE_STATE_DIR=/data` (already wired in compose) and the API imports
+the durable configuration **once** on first boot of the PostgreSQL backend. It is
+idempotent: each collection's decision is recorded as a marker row, so a
+deliberately emptied collection is never re-filled from a stale snapshot, and a
+target that already has rows is marked *skipped-populated* rather than clobbered.
+An import failure **fails the boot** rather than letting a half-imported store
+seed a fresh bootstrap admin over the real one.
+
+**It covers exactly these collections:**
+
+`tenants` · `roles` · `users` · `snmp_credentials` · `snmp_profiles` · `apikeys` ·
+`saved` · `contact_points` · `notify_config` · `oidc_config` · `ldap_config` ·
+`sso_idp_config` · `tacacs_config` · `token_policy` · `copilot_config` ·
+`export_policy`
+
+— i.e. logins, roles, tenants, API keys, saved objects, SNMP credentials, SSO and
+notification configuration — plus the two pieces of **custody material** a
+cutover cannot re-create:
+
+`secrets_wrapped_keys.json` — the sealing vault's WRAPPED data-encryption keys.
+Without them every value sealed on the file backend (SNMP credentials, connector
+secrets) is undecryptable afterwards.
+
+`tls_internal_ca_cert.pem` + `tls_internal_ca_key.enc` — the internal mesh CA.
+Without them the API mints a NEW CA and every SVID issued by the old one stops
+being trusted, which on a fail-closed TLS mesh is a stack outage.
+
+Both are already sealed/encrypted at rest; the import moves the same bytes
+between the platform's own stores, once, under the same marker gate — a re-run
+never overwrites custody that has since been rotated in PostgreSQL
+(`TestPgStoreImportsCustodyMaterial`).
+
+Transient state (refresh tokens, the audit ring, ticket dedup) is intentionally
+not imported; it rebuilds.
+
+**It does NOT cover** the other file-backed collections. Everything below is
+still on the data volume after a switch, but the API will not see it:
+
+`devices.json` (+ `devices.json.d/`) · `orgs.json` · `role_bindings.json` ·
+`discovery_config.json` · `itsm_config.json` · `ai_tenant_config.json` ·
+`bgp_watchlist.json` · `dem_targets.json` · `iris_investigations.json` ·
+`config_backup_versions.json` · `config_drift_state.json` ·
+`security_settings.json` · `security_frameworks.json` ·
+`security_control_plane.json` · `rca_promotions.json` ·
+`rca_report_revisions.json` · `alert_episodes.json` · `alert_notify_state.json` ·
+`ssh_known_hosts.json`
+
+**Treat a backend switch on a populated install as a migration project, not a
+configuration change:** inventory the list above, decide per collection whether
+it is re-created or accepted as lost, and take a backup of `data/api/` first.
+
+There is no automatic importer for those collections, and this document will not
+pretend otherwise. The Applications registry needs none: it never had durable
+file data to import (its file-backend records only ever lived in RAM).
+
+### Switching a populated install deliberately
+
+1. Back up `data/api/` and the `postgres` volume.
+2. `STORE_BACKEND=postgres` + a `DATABASE_URL` in `deployment/docker/.env`.
+3. Re-run `python3 scripts/install.py` (it provisions/aligns `netops_app`).
+4. Optionally set `IMPORT_FILE_STATE_DIR=/data` for the covered collections.
+5. `docker compose up -d api`, then check the boot log: `state backend selected
+   backend=postgres`, `imported file-backend collection` lines, and
+   `GET /api/registries/status`.
+6. Re-create anything from the *not covered* list.
+
+### Reverting
+
+Set `STORE_BACKEND=file` and restart the API. The file collections are exactly
+as they were left — but anything written while on PostgreSQL stays there.
 
 ## Verifying isolation
 
@@ -77,11 +185,14 @@ DATABASE_URL_TEST="postgres://postgres:test@127.0.0.1:55432/netops?sslmode=disab
 docker rm -f pgtest
 ```
 
-## Reverting
-
-Set `STORE_BACKEND=file` (or unset it) and restart the API. File and Postgres
-backends are interchangeable from the API's perspective; only the persistence
-layer differs.
+Registry durability and the no-failover rule have their own tests on the same
+gate — `TestApplicationsSurviveAnAPIRestartPG` (create for two tenants, restart
+the store, both records and their isolation survive) and
+`TestApplicationsPostgresOutageDoesNotFailOverPG` (with the database down the
+registry answers 503, refuses the write, keeps naming PostgreSQL as its backend,
+and the pre-outage record is the only one there after recovery). The
+backend-selection invariants need no database:
+`go test . -run 'TestApplication|TestInitStoreBackend|TestRegistriesStatus'`.
 
 ---
 

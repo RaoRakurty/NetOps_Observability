@@ -739,6 +739,12 @@ var routeIsolationLedger = map[string]string{
 	"/api/health":       "infra",
 	"/api/paths/health": "infra",
 	"/api/probe/paths":  "infra",
+	// Registry STORAGE posture (tracker 245): which backend kind holds each
+	// registry, whether it persists, whether it can serve. Deployment-wide and
+	// identical for every tenant — no tenant rows, no counts, no DSN — but read
+	// by any principal with infrastructure:read, because the Registries page
+	// must tell THAT operator whether what they are looking at is durable.
+	"/api/registries/status": "infra",
 
 	// ── caller's OWN identity only ──
 	"/api/auth/me":              "selfScoped",

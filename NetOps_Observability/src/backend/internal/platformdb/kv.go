@@ -41,8 +41,13 @@ type Backend interface {
 // so tests and the default build need no wiring.
 var active Backend = FileKV{}
 
-// UseFile selects the file backend (the default).
-func UseFile() { active = FileKV{} }
+// UseFile selects the file backend (the compatibility / Postgres-less mode, and
+// the binary's unset default — see main.initStoreBackend for why the unset
+// default is deliberately NOT postgres).
+func UseFile() {
+	active = FileKV{}
+	kind = KindFile
+}
 
 // fileRoot anchors RELATIVE keys on the file backend. Store keys are
 // documented as absolute paths (":27 above"), but the vault's wrapped-keys key
@@ -71,9 +76,13 @@ func (FileKV) resolve(key string) string {
 func UsePostgres(ctx context.Context, dsn string) error {
 	pg, err := NewPGStore(ctx, dsn)
 	if err != nil {
+		// Fails CLOSED: the caller aborts the boot. Nothing here selects another
+		// backend — a Postgres outage must never redirect authoritative registry
+		// writes into files or RAM (tracker 245).
 		return err
 	}
 	active = pg
+	kind = KindPostgres
 	return nil
 }
 

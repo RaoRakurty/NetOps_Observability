@@ -141,7 +141,7 @@ func (s *server) handleServiceByID(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) serveServiceRoot(w http.ResponseWriter, r *http.Request, id string) {
 	// Shared GET/DELETE-by-id shape with applications (serveGetOrArchive, appid.go).
-	serveGetOrArchive(s, w, r, id, s.services.GetService, s.services.ArchiveService)
+	serveGetOrArchive(s, w, r, id, serviceRegistry, s.services.GetService, s.services.ArchiveService)
 }
 
 func (s *server) serveServiceSelectors(w http.ResponseWriter, r *http.Request, id string) {
