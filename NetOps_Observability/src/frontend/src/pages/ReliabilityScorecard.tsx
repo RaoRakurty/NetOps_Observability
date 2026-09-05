@@ -8,17 +8,36 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import ReactECharts from "../components/EChart";
 import {
   api, type ReliabilityRollupResp, type ChronicOffender, type OwnerDomainStat, type ReliabilityQuery,
+  type IncidentTimeMetricRow,
 } from "../services/api";
 import { Segmented, InfoTip } from "../components/ui";
 import RcaFeedbackTile from "../components/rca/RcaFeedbackTile";
+import { chartBase, axisStyle, paletteColor } from "../theme/charts";
+import { operatorError } from "../lib/errors";
 import {
   fmtDur, delayLabel, recommendedAction, offenderDisplay, DOMAIN_TONE,
   deriveCoverage, recoveryReadiness, COVERAGE_LABEL, COVERAGE_TONE, type CoverageState,
 } from "./reliabilityMeta";
+import { buildTimeMetricsSeries, METRIC_TTD, METRIC_TTR_RECOVERY } from "./timeMetricsSeries";
 
 const WINDOWS = [{ value: "604800", label: "7d" }, { value: "2592000", label: "30d" }, { value: "7776000", label: "90d" }];
 const OWNERS = ["", "isp", "cloud_provider", "saas", "app_team", "netops"];
 const OWNER_LABEL: Record<string, string> = { "": "all owners", isp: "ISP", cloud_provider: "Cloud", saas: "SaaS", app_team: "App", netops: "LAN / Network" };
+
+// Bucket width for the selected window — one definition, shared by the server-side
+// /reliability/trends read and the client-side phase-snapshot trend, so the two
+// charts on this page always carry the same x axis.
+function bucketFor(sinceSeconds: number): number {
+  return sinceSeconds <= 604800 ? 86400 : sinceSeconds <= 2592000 ? 604800 : 1209600;
+}
+
+// The persisted phase-metric snapshots are read newest-first; the endpoint's own
+// default is 500 and anything outside 1..cap is refused, so the ask is explicit.
+const TIME_METRIC_LIMIT = 500;
+// MTTD and MTTR, in the metric names timeintel persists.
+const TREND_PHASES = [METRIC_TTD, METRIC_TTR_RECOVERY] as const;
+
+const plural = (n: number, word: string): string => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 
 type CardTone = "hero" | "amber" | "good" | "muted" | "";
 // A card with an explicit unavailable state: the value reads a reason ("Not measured")
@@ -54,13 +73,17 @@ export default function ReliabilityScorecard() {
   const [trend, setTrend] = useState<{ x: string[]; tti50: (number | null)[]; tti90: (number | null)[] } | null>(null);
   const [offenders, setOffenders] = useState<ChronicOffender[]>([]);
   const [err, setErr] = useState("");
+  // Persisted phase-metric snapshots — their own state, their own fetch, their own
+  // failure. A dead snapshot read must leave the rest of the scorecard standing.
+  const [snapshots, setSnapshots] = useState<IncidentTimeMetricRow[] | null>(null);
+  const [snapErr, setSnapErr] = useState("");
 
   useEffect(() => {
     let alive = true;
     setErr(""); setData(null);
     const f: ReliabilityQuery = { ...(owner ? { owner } : {}), include_internal: includeInternal };
     const sinceN = Number(since);
-    const bucket = sinceN <= 604800 ? 86400 : sinceN <= 2592000 ? 604800 : 1209600;
+    const bucket = bucketFor(sinceN);
     Promise.all([
       api.reliabilityRollups(sinceN, f),
       api.reliabilityTrends(sinceN, bucket, f),
@@ -77,6 +100,18 @@ export default function ReliabilityScorecard() {
     }).catch(() => { if (alive) setErr("Reliability data unavailable."); });
     return () => { alive = false; };
   }, [since, owner, includeInternal]);
+
+  // The snapshot series is read once (the route carries no window/owner selector);
+  // the window, owner and internal filters are applied to the rows below, using the
+  // same controls and the same defaults as the rollup reads above.
+  useEffect(() => {
+    let alive = true;
+    setSnapErr(""); setSnapshots(null);
+    api.reliabilityTimeMetrics(TIME_METRIC_LIMIT)
+      .then((res) => { if (alive) setSnapshots(res.snapshots ?? []); })
+      .catch((e) => { if (alive) setSnapErr(operatorError(e, "Recorded phase timings could not be loaded.")); });
+    return () => { alive = false; };
+  }, []);
 
   const r = data?.rollup;
   const m = (name: string) => r?.metrics?.[name];
@@ -117,6 +152,39 @@ export default function ReliabilityScorecard() {
       ],
     };
   }, [data]);
+
+  // ── Detection & repair trend, from the PERSISTED phase-metric snapshots ──────
+  // Same window, same bucket width, same owner and internal-event filters as the
+  // rollups above. The central statistic is the MEDIAN (nearest-rank p50, the
+  // method the rollup percentiles use), so a point here agrees with the p50 cards.
+  const phaseTrend = useMemo(() => buildTimeMetricsSeries({
+    snapshots, metrics: TREND_PHASES, windowSeconds: Number(since),
+    bucketSeconds: bucketFor(Number(since)), now: Date.now(), includeInternal, owner,
+  }), [snapshots, since, includeInternal, owner]);
+
+  const phaseTrendMeasured = phaseTrend.series.some((s) => s.points.some((p) => p !== null));
+  const blockerPhrase = phaseTrend.blockers.slice(0, 2)
+    .map((b) => `${plural(b.count, "phase")} ${b.text}`).join(" and ");
+
+  const phaseTrendOption = useMemo(() => ({
+    ...chartBase,
+    grid: { left: 8, right: 12, top: 30, bottom: 20, containLabel: true },
+    tooltip: { ...chartBase.tooltip, trigger: "axis", valueFormatter: (v: number | null) => (v == null ? "not measured" : `${v}s`) },
+    legend: { ...chartBase.legend, top: 0 },
+    xAxis: { type: "category", data: phaseTrend.buckets.map((b) => b.label), ...axisStyle },
+    yAxis: { type: "value", name: "seconds (median)", ...axisStyle },
+    series: phaseTrend.series.map((s, i) => ({
+      name: s.label,
+      type: "line",
+      smooth: true,
+      // A bucket with nothing complete to measure is a GAP, never a joined line:
+      // connecting across it would draw a measurement that was never taken.
+      connectNulls: false,
+      data: s.points.map((p) => (p == null ? null : Math.round(p / 1000))),
+      lineStyle: { width: 2, color: paletteColor(i) },
+      itemStyle: { color: paletteColor(i) },
+    })),
+  }), [phaseTrend]);
 
   return (
     <div className="page rsc">
@@ -271,6 +339,36 @@ export default function ReliabilityScorecard() {
           </div>
         </>
       )}
+
+      {/* Detection & repair trend — the tenant's RECORDED phase-metric snapshots
+          (one per incident, freshest calculation kept). Deliberately outside the
+          rollup block: it owns its own read, so neither panel can blank the other.
+          An unmeasured bucket is a gap with a stated reason, never a zero. */}
+      <div className="rsc-panel rsc-chart">
+        <div className="rsc-panel-title">Detection and repair trend — MTTD and MTTR over time (median)</div>
+        {snapErr ? (
+          <div className="rsc-empty">{snapErr}</div>
+        ) : snapshots === null ? (
+          <div className="rsc-empty">Loading recorded phase timings…</div>
+        ) : phaseTrend.incidentCount === 0 ? (
+          <div className="rsc-empty">Nothing recorded in this window yet — phase timings appear once incidents are analyzed.</div>
+        ) : !phaseTrendMeasured ? (
+          <div className="rsc-empty">
+            Not measured in this window: none of the {plural(phaseTrend.incidentCount, "incident")} completed
+            a detection or recovery phase{blockerPhrase ? ` — ${blockerPhrase}` : ""}.
+          </div>
+        ) : (
+          <>
+            <ReactECharts option={phaseTrendOption} style={{ height: 220 }} notMerge lazyUpdate />
+            <div className="rsc-chart-note">
+              {phaseTrend.incompleteIncidents === 0
+                ? `All ${plural(phaseTrend.incidentCount, "incident")} in this window carry a complete detection and recovery lifecycle.`
+                : `${phaseTrend.incompleteIncidents.toLocaleString()} of ${plural(phaseTrend.incidentCount, "incident")} in this window have an incomplete lifecycle${blockerPhrase ? ` — ${blockerPhrase}` : ""}. A break in a line is a period with nothing complete to measure.`}
+              {snapshots.length >= TIME_METRIC_LIMIT && ` Based on the ${TIME_METRIC_LIMIT.toLocaleString()} most recent recorded snapshots.`}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Engine quality (Project 2 P7) — the operator verdict loop. Its own fixed
           30-day window (it measures the engine, not the selected incident

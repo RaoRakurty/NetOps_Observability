@@ -102,7 +102,10 @@ const LEGACY: [string, string, string][] = [
   // SAME page at its new address.
   ["#/admin/auth", "platform", "auth"],
   ["#/admin/data-protection", "platform", "data-protection"],
-  ["#/admin/licence", "platform", "licence"],
+  // Licence moved to Platform in the 2026-09-05 IA and came BACK the same day,
+  // when GET /api/system/licence became requireAdmin with a tenant projection.
+  ["#/admin/licence", "admin", "licence"],
+  ["#/platform/licence", "admin", "licence"],
   ["#/admin/regions", "platform", "regions"],
   ["#/admin/health", "platform", "health"],
   ["#/admin/grafana", "platform", "grafana"],
@@ -177,7 +180,7 @@ describe("canonicalHash — suffix + query preservation", () => {
 
   it("rewrites the Administration → Platform moves, suffix and query intact", () => {
     expect(canonicalHash("#/admin/health")).toBe("#/platform/health");
-    expect(canonicalHash("#/admin/licence")).toBe("#/platform/licence");
+    expect(canonicalHash("#/platform/licence")).toBe("#/admin/licence");
     expect(canonicalHash("#/admin/data-protection")).toBe("#/platform/data-protection");
     expect(canonicalHash("#/admin/auth?tab=oidc")).toBe("#/platform/auth?tab=oidc");
     expect(canonicalHash("#/stack/opensearch")).toBe("#/platform/opensearch");
@@ -189,7 +192,7 @@ describe("canonicalHash — suffix + query preservation", () => {
     expect(canonicalHash("#/investigate/rca?id=abc")).toBeNull();
     expect(canonicalHash("#/admin/api/token")).toBeNull();
     expect(canonicalHash("#/admin/access")).toBeNull();
-    expect(canonicalHash("#/platform/licence")).toBeNull();
+    expect(canonicalHash("#/admin/licence")).toBeNull();
     expect(canonicalHash("#/infrastructure/devices")).toBeNull();
     expect(canonicalHash("#/resource/device/edge-1")).toBeNull();
     expect(canonicalHash("#/")).toBeNull();
@@ -219,13 +222,16 @@ describe("new tree shape (owner tree, 2026-08)", () => {
     // The rest of the provider-level set left Administration entirely — the
     // Platform section carries the gate now, so a tenant admin sees no section.
     expect(tenantNav.find((s) => s.id === "platform")).toBeUndefined();
-    for (const moved of ["auth", "licence", "data-protection", "regions", "health", "grafana", "opensearch", "graphql"]) {
+    for (const moved of ["auth", "data-protection", "regions", "health", "grafana", "opensearch", "graphql"]) {
       expect(ids("admin")).not.toContain(moved);
     }
     // Sessions is NO LONGER platform-stamped (2026-09-05): handleSessions is
     // requireAdmin and filters by sameTenant(), so a tenant admin legitimately
     // sees its own tenant's live sessions.
     expect(ids("admin")).toContain("sessions");
+    // Licence is tenant-level too: the read is requireAdmin and answers the
+    // tenant its own entitlements, usage and ceilings.
+    expect(ids("admin")).toContain("licence");
     // ...and legacy deep links to gated leaves cannot resolve onto them.
     expect(resolveRoute("#/admin/collectors", tenantNav).leaf?.id).not.toBe("sensors");
     expect(resolveRoute("#/automation/sot", tenantNav).leaf?.id).not.toBe("sot");

@@ -64,6 +64,16 @@ The model refuses to conflate three things:
 
 A WLAN's mobility domain is populated only when the controller exposes one, and is never inferred from two WLANs sharing an SSID. A null mobility domain means roam analysis abstains, which is the honest answer.
 
+The **BSSIDs** table sits directly beneath the access points table and lists one row per broadcast identity: the BSSID, the access point carrying it, the WLAN it serves, the radio it sits on, and when it was first and last seen. A row the connector has not re-observed inside its freshness window is marked `(stale)` and greyed, so it reads as history rather than as a live claim.
+
+Three states are kept apart there, because a single blank table would collapse them:
+
+| What the page says | What it means |
+|---|---|
+| The BSSIDs were not read | The read failed. What each radio is broadcasting is unknown |
+| The controller reported no BSSID | The connector published none. Nothing is inferred from the gap |
+| A table of rows | The controller published these, at the times shown |
+
 ### Step 5 - Find the same devices in the fleet
 
 Open **Infrastructure → Devices**. Controllers appear with type `wlc` and access points with type `ap`, both with source `wireless`. The projection is read-time only: the wireless store stays the single source of truth, and a controller that SNMP discovery already found keeps its discovery row, because the projection de-duplicates by management address.
@@ -105,6 +115,8 @@ The read-only routes:
 
 Version 1 registers **no executor**. An approved action that reaches gate 4 therefore records the state `failed` with the reason `gate 4: no executor registered — the vendor write RPC has not earned live validation (Phase 9)`. The framework reports a refusal rather than pretending to have acted. Every transition is an audit event.
 
+The approval queue itself is on **Operations → Action Queue**, beneath the incident queue. See [review a proposed wireless remediation](/infrastructure/review-a-wireless-remediation) for the decision procedure.
+
 ### Client data and retention
 
 Per-client wireless events are stored in ClickHouse with a TTL set by `CH_WIRELESS_RETENTION_DAYS`, which defaults to 30 days because those events are personal data. The knob is clamped up to a 7-day floor and never down.
@@ -116,3 +128,4 @@ No per-client series reaches the metric store, and that is enforced by the schem
 - [Connect a vendor controller](/infrastructure/nms-integrations) for connecting the Catalyst 9800 that fills these tables.
 - [Work with the device inventory](/infrastructure/devices) for the fleet rows the controllers and access points project into.
 - [Feature flags](/reference/feature-flags) for `FEATURE_WIRELESS_ACTIONS`.
+- [Review a proposed wireless remediation](/infrastructure/review-a-wireless-remediation) for approving, rejecting and executing a proposed action.

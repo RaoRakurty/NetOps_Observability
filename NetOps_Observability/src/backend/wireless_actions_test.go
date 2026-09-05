@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"netops/backend/wireless"
@@ -85,7 +86,7 @@ func TestGate3And4ApprovalThenFailClosedExecution(t *testing.T) {
 	if _, err := st.Execute("t1", a.ID); !errors.Is(err, wireless.ErrActionNotApproved) {
 		t.Fatalf("unapproved execute must refuse, got %v", err)
 	}
-	if _, err := st.Approve("t1", a.ID, "admin"); err != nil {
+	if _, err := st.Approve("t1", a.ID, "admin", ""); err != nil {
 		t.Fatal(err)
 	}
 	// v1 has NO executor: execution fails CLOSED and records FAILED (gate 4).
@@ -99,10 +100,10 @@ func TestGate3And4ApprovalThenFailClosedExecution(t *testing.T) {
 	// A rejected proposal can never be approved or executed.
 	b, _ := st.Propose("t1", "op", wireless.WirelessActionRadioReset, "ap-def", "c1",
 		[]string{"wireless_radio_down"}, confirmedTier, wirelessActionAllowlist())
-	if _, err := st.Reject("t1", b.ID, "admin"); err != nil {
+	if _, err := st.Reject("t1", b.ID, "admin", "channel plan is already being re-run by hand"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Approve("t1", b.ID, "admin"); !errors.Is(err, wireless.ErrActionWrongState) {
+	if _, err := st.Approve("t1", b.ID, "admin", ""); !errors.Is(err, wireless.ErrActionWrongState) {
 		t.Fatalf("approving a rejected action must refuse, got %v", err)
 	}
 }
@@ -117,7 +118,7 @@ func TestActionsTenantScoped(t *testing.T) {
 	if got := st.List("tB", false); len(got) != 0 {
 		t.Fatalf("cross-tenant list leaked: %+v", got)
 	}
-	if _, err := st.Approve("tB", a.ID, "admin"); !errors.Is(err, wireless.ErrActionNotFound) {
+	if _, err := st.Approve("tB", a.ID, "admin", ""); !errors.Is(err, wireless.ErrActionNotFound) {
 		t.Fatalf("cross-tenant approve must be notFound, got %v", err)
 	}
 	if _, err := st.Execute("tB", a.ID); !errors.Is(err, wireless.ErrActionNotFound) {
@@ -211,4 +212,48 @@ func makeTenantOperator(t *testing.T, srv *httptest.Server, adminTok, name strin
 		t.Fatalf("user: %d %s", st, b)
 	}
 	return login(t, srv, user, "Passw0rd!2345").Token
+}
+
+// A rejection with no reason is refused: the audit trail's whole value is the
+// record of WHY an evidence-backed proposal was not carried out (gate 3).
+func TestRejectRequiresAReason(t *testing.T) {
+	t.Setenv("WIRELESS_ACTION_ALLOWLIST", wireless.WirelessActionRadioReset)
+	st := gateStore()
+	a, err := st.Propose("t1", "op", wireless.WirelessActionRadioReset, "ap-abc", "c1",
+		[]string{"wireless_radio_down"}, confirmedTier, wirelessActionAllowlist())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Reject("t1", a.ID, "admin", "   "); !errors.Is(err, wireless.ErrActionNoReason) {
+		t.Fatalf("blank reason must refuse, got %v", err)
+	}
+	// The proposal is untouched by the refused rejection.
+	if got := st.List("t1", false); len(got) != 1 || got[0].State != wireless.ActionStateProposed {
+		t.Fatalf("refused rejection must not move the action: %+v", got)
+	}
+	// An over-long reason is refused at the boundary rather than stored.
+	long := strings.Repeat("x", wireless.MaxActionReason+1)
+	if _, err := st.Reject("t1", a.ID, "admin", long); err == nil {
+		t.Fatal("over-long reason must be refused")
+	}
+	rejected, err := st.Reject("t1", a.ID, "admin", "  radio reset is scheduled in tonight's window  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejected.State != wireless.ActionStateRejected {
+		t.Fatalf("state = %q", rejected.State)
+	}
+	if rejected.Reason != "radio reset is scheduled in tonight's window" {
+		t.Fatalf("reason not trimmed/recorded: %q", rejected.Reason)
+	}
+	// An approval records its optional note the same way.
+	b, _ := st.Propose("t1", "op", wireless.WirelessActionRadioReset, "ap-def", "c1",
+		[]string{"wireless_radio_down"}, confirmedTier, wirelessActionAllowlist())
+	approved, err := st.Approve("t1", b.ID, "admin", "agreed with the seam owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.Reason != "agreed with the seam owner" {
+		t.Fatalf("approval note not recorded: %q", approved.Reason)
+	}
 }

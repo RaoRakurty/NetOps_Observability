@@ -16,6 +16,9 @@ type Props = {
   // Open the self-service change-password modal. Undefined for federated accounts
   // (they change it at the IdP), which hides the menu item.
   onChangePassword?: () => void;
+  // Opens the self-service two-factor modal. Gated the same way: a federated
+  // account's second factor lives at the IdP, so the item is hidden there.
+  onTwoFactor?: () => void;
   // Shell v2 relocates the account/user menu into the left rail's utility
   // cluster, so the top-right copy is suppressed to avoid duplication.
   hideUserMenu?: boolean;
@@ -34,7 +37,7 @@ const hitTag = (k: TopHit["kind"]): string => (k === "logs" ? "Logs" : OMNI_KIND
 // tenant-scoped unified search (lib/omniSearch), plus a raw log-search
 // handoff — a true global search, not just a log query. Each row navigates
 // to the entity's permanent URL.
-export default function TopBar({ health, user, onLogout, onChangePassword, hideUserMenu }: Props) {
+export default function TopBar({ health, user, onLogout, onChangePassword, onTwoFactor, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate, setHelpOpen } = useShell();
   // "*" is the match-all sentinel for the query; don't surface it literally in
   // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
@@ -278,6 +281,9 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
               <button onClick={() => { setMenuOpen(false); navigate("admin/settings"); }}>Settings</button>
               {onChangePassword && (
                 <button onClick={() => { setMenuOpen(false); onChangePassword(); }}>Change password</button>
+              )}
+              {onTwoFactor && (
+                <button onClick={() => { setMenuOpen(false); onTwoFactor(); }}>Two-factor authentication</button>
               )}
               {/* Third-party attribution must be REACHABLE from the running product,
                   not just present in the image (2026-09-03 licence audit §2). The page

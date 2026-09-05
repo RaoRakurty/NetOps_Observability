@@ -50,9 +50,13 @@ type Action struct {
 	State         ActionState `json:"state"`
 	ProposedBy    string      `json:"proposed_by"`
 	ApprovedBy    string      `json:"approved_by,omitempty"`
-	Error         string      `json:"error,omitempty"`
-	CreatedAt     time.Time   `json:"created_at"`
-	UpdatedAt     time.Time   `json:"updated_at"`
+	// Reason is the approver's own words for the decision, recorded on the
+	// action and in the audit event. REQUIRED on a rejection: a refusal nobody
+	// wrote a reason for is the audit gap this workflow exists to close.
+	Reason    string    `json:"reason,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	// Verification outcome (gate 5): set by the settle-window recheck.
 	VerifyNote string `json:"verify_note,omitempty"`
 }
@@ -87,6 +91,7 @@ var (
 	ErrActionNotApproved  = errors.New("gate 3: action is not approved")
 	ErrActionNoExecutor   = errors.New("gate 4: no executor registered — the vendor write RPC has not earned live validation (Phase 9)")
 	ErrActionWrongState   = errors.New("action is not in a state that permits this transition")
+	ErrActionNoReason     = errors.New("gate 3: a rejection must state its reason")
 )
 
 // propose runs gates 1 + 2 and records the request. participatingKinds and
@@ -141,10 +146,29 @@ func (st *ActionStore) Propose(tenant, actor string, kind, target, correlationID
 	return a, nil
 }
 
+// MaxActionReason bounds the approver's free text. Validated at the boundary
+// (§3): the note is stored, audited and rendered, so it is length-capped here
+// rather than trusted to be short.
+const MaxActionReason = 500
+
+// NormalizeReason trims the approver's note and rejects one that is too long.
+// Exported so the handler validates with the SAME rule the store applies.
+func NormalizeReason(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if len(s) > MaxActionReason {
+		return "", fmt.Errorf("reason is longer than %d characters", MaxActionReason)
+	}
+	return s, nil
+}
+
 // approve runs gate 3: a named human approver. (Auto-approve, when it lands,
 // calls this with actor "auto:<policy>" and its OWN audit event — never
-// silently.)
-func (st *ActionStore) Approve(tenant, id, approver string) (*Action, error) {
+// silently.) `reason` is the approver's optional note.
+func (st *ActionStore) Approve(tenant, id, approver, reason string) (*Action, error) {
+	reason, rerr := NormalizeReason(reason)
+	if rerr != nil {
+		return nil, rerr
+	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	a := st.rows[tenant][id]
@@ -156,12 +180,22 @@ func (st *ActionStore) Approve(tenant, id, approver string) (*Action, error) {
 	}
 	a.State = ActionStateApproved
 	a.ApprovedBy = approver
+	a.Reason = reason
 	a.UpdatedAt = time.Now().UTC()
 	return a, nil
 }
 
-// reject is the approver's other verb.
-func (st *ActionStore) Reject(tenant, id, approver string) (*Action, error) {
+// reject is the approver's other verb. Unlike an approval it REQUIRES a reason:
+// the proposal came from correlated evidence, so "we did not do this, and here
+// is why" is the record the next operator reads before proposing it again.
+func (st *ActionStore) Reject(tenant, id, approver, reason string) (*Action, error) {
+	reason, rerr := NormalizeReason(reason)
+	if rerr != nil {
+		return nil, rerr
+	}
+	if reason == "" {
+		return nil, ErrActionNoReason
+	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	a := st.rows[tenant][id]
@@ -173,6 +207,7 @@ func (st *ActionStore) Reject(tenant, id, approver string) (*Action, error) {
 	}
 	a.State = ActionStateRejected
 	a.ApprovedBy = approver
+	a.Reason = reason
 	a.UpdatedAt = time.Now().UTC()
 	return a, nil
 }

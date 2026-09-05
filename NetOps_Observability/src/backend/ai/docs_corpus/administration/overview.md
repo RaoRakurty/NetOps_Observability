@@ -84,15 +84,17 @@ calling the route directly still returns `403`.
 | **Administration → Access & Audit → Transport Security** | Per-tenant | All administrators; the export is platform-only |
 | **Administration → API Access** | Mixed | All administrators, token policy is platform-only |
 | **Administration → Settings** | Mixed | All administrators, DNS and NTP are platform-only |
-| **Platform → Licence** | Platform-global | Platform administrator only |
+| **Administration → Licence** | Mixed | All administrators read it, in their own scope; install and remove are platform-only |
 | **Platform → Security → Authentication** | Platform-global | Platform administrator only |
 | **Platform → Security → Data Protection** | Platform-global | Platform administrator only |
 | **Platform → Tools → Stack Health · Self-Monitoring · Search Dashboards · Pipeline Debugger · Regions · GraphQL Explorer** | Platform-global | Platform administrator only |
 
-There is one licence file per installation, which is why **Platform → Licence**
-sits with the platform and not with a tenant: the same file sets the ceilings
-every tenant on the installation runs under, and installing or replacing it is a
-platform administrator's action.
+There is one licence file per installation: the same file sets the ceilings every
+tenant on the installation runs under, and installing or replacing it is a
+platform administrator's action. The reading of it is not. **Administration →
+Licence** answers each administrator in its own scope, so a tenant sees its tier,
+its entitled features and its own usage against those ceilings, without the
+customer name, the licence id or the signing keys.
 
 ## Which administrator am I?
 

@@ -29,7 +29,6 @@ const groupIds = (s: { children?: { id: string; group?: string }[] }, g: string)
 // "tenant" = requirePerm/requireAdmin with a tenant filter.
 const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   // ── Platform ───────────────────────────────────────────────────────────────
-  licence: { scope: "platform", gate: "internal/licence/api.go Handle → licenceGate → requirePlatformAdmin, before the GET/PUT/DELETE switch" },
   auth: { scope: "platform", gate: "oidc_config.go / auth_config.go / token_policy.go → requirePlatformAdmin" },
   "data-protection": { scope: "platform", gate: "internal/dataprotect → dataProtectGate → requirePlatformAdmin" },
   health: { scope: "platform", gate: "stack_health.go handleStackHealth → requireCrossTenant" },
@@ -41,6 +40,7 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   // is the safe direction; unhiding it would be a new exposure.
   graphql: { scope: "platform", gate: "graphql.go handleGraphQL → requirePerm(infrastructure, read); UI kept provider-only (fail-closed)" },
   "pipeline-debugger": { scope: "platform", gate: "internal/pipedebug/http.go via debugAuthz → requirePlatformAdmin, on all five /api/debug/* routes" },
+  quarantine: { scope: "platform", gate: "pipeline_processors.go handleQuarantineList → requirePlatformAdmin (the index holds events attributable to NO tenant)" },
   // ── Administration ─────────────────────────────────────────────────────────
   access: { scope: "tenant", gate: "access_explain.go handleAccessExplain → requireAdmin" },
   sessions: { scope: "tenant", gate: "session_handlers.go handleSessions → requireAdmin + sameTenant() filter" },
@@ -52,8 +52,15 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   identity: { scope: "tenant", gate: "identity_handlers.go → requireAdmin (role/tenant/org writes alone escalate to requirePlatformAdmin)" },
   api: { scope: "tenant", gate: "identity_handlers.go apikeys → requireAdmin" },
   settings: { scope: "tenant", gate: "tenant_display.go → requireAdmin" },
+  // Licence moved BACK to Administration on 2026-09-05, when the read split
+  // shipped: GET is licenceReadGate → requireAdmin + principalTenant and
+  // answers a per-tenant projection. PUT/DELETE stay requirePlatformAdmin, and
+  // the page hides those controls by the PAYLOAD's scope rather than 403ing —
+  // a mixed-verb page whose READ decides its placement (design note §5.1a).
+  licence: { scope: "tenant", gate: "internal/licence/api.go GET → licenceReadGate → requireAdmin + principalTenant (tenant projection); PUT/DELETE alone → licenceGate → requirePlatformAdmin" },
   integrations: { scope: "tenant", gate: "integrations_http.go → requireAdmin, keyed by itsmKey(tenant)" },
   ticketing: { scope: "tenant", gate: "ticketing_http.go → requirePerm(administration, read|write)" },
+  "ticket-delivery": { scope: "tenant", gate: "ticketing_http.go handleTicketsOutbox/handleTicketsAudit → requirePerm(infrastructure, read) + principalTenant; integrations_http.go handleIntegrationReconcile → requireAdmin on the caller's own tenant" },
   datasources: { scope: "tenant", gate: "/api/devices → requirePerm(infrastructure, read)" },
   snmp: { scope: "tenant", gate: "snmp_profiles.go read → requirePerm(infrastructure, read); writes escalate to requirePlatformAdmin" },
   // Sensors is the ONE leaf that keeps a leaf-level platform stamp inside the
@@ -101,9 +108,11 @@ describe("Platform is ONE provider-only section", () => {
     expect(landingResolves("#/platform/tools/pipeline-debugger", providerNav)).toBe(true);
   });
 
-  it("opens on Licence — one licence file per installation, ungrouped and first", () => {
-    expect(platform.children?.[0]?.id).toBe("licence");
-    expect(platform.children?.[0]?.group).toBeUndefined();
+  it("no longer carries Licence — its read is tenant-level since 2026-09-05", () => {
+    expect(leafIds(platform)).not.toContain("licence");
+    expect(leafIds(admin)).toContain("licence");
+    // Every leaf left in Platform is grouped: the section opens on Security.
+    expect(platform.children?.[0]?.group).toBe("Security");
   });
 
   it("no leaf re-states the gate: the SECTION carries it", () => {
@@ -195,13 +204,25 @@ describe("redirects — no saved link is orphaned by the move", () => {
   const MOVED: [string, string][] = [
     ["#/admin/auth", "auth"],
     ["#/admin/data-protection", "data-protection"],
-    ["#/admin/licence", "licence"],
     ["#/admin/regions", "regions"],
     ["#/admin/health", "health"],
     ["#/admin/grafana", "grafana"],
     ["#/admin/opensearch", "opensearch"],
     ["#/admin/graphql", "graphql"],
   ];
+
+  it("#/platform/licence → admin/licence — the one leaf that moved BACK", () => {
+    expect(resolveRoute("#/platform/licence", providerNav)).toMatchObject({
+      section: { id: "admin" },
+      leaf: { id: "licence" },
+    });
+    // A tenant admin, who never saw the Platform section, reaches it too.
+    expect(resolveRoute("#/admin/licence", tenantNav)).toMatchObject({
+      section: { id: "admin" },
+      leaf: { id: "licence" },
+    });
+    expect(landingResolves("#/platform/licence", providerNav)).toBe(true);
+  });
 
   it.each(MOVED)("%s → platform/%s", (hash, leaf) => {
     expect(resolveRoute(hash, providerNav)).toMatchObject({

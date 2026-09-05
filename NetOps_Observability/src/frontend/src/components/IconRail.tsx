@@ -61,6 +61,9 @@ type Props = {
   // Opens the self-service change-password modal; undefined for federated
   // accounts (they change it at the IdP) so the item is hidden.
   onChangePassword?: () => void;
+  // Opens the self-service two-factor modal; undefined for federated accounts
+  // (their second factor lives at the IdP) so the item is hidden.
+  onTwoFactor?: () => void;
   // Where the brand/Home button goes (the configured landing, else first section).
   homeRoute?: string;
 };
@@ -87,7 +90,7 @@ function readRailExpanded(): boolean {
 // 44px icon pane with title tooltips; the foot toggle expands it to icon+label.
 // A utility cluster (Account · Support · Help) sits at the foot — replacing the
 // top-right user menu.
-export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword }: Props) {
+export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword, onTwoFactor }: Props) {
   const { navigate, setCopilotOpen, copilotOpen, setHelpOpen } = useShell();
   const [open, setOpen] = useState<OpenState>(null);
   const [expanded, setExpanded] = useState<boolean>(readRailExpanded);
@@ -293,6 +296,9 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
               <button onClick={() => { setAcctOpen(false); navigate("admin/settings"); }}>Settings</button>
               {onChangePassword && (
                 <button onClick={() => { setAcctOpen(false); onChangePassword(); }}>Change password</button>
+              )}
+              {onTwoFactor && (
+                <button onClick={() => { setAcctOpen(false); onTwoFactor(); }}>Two-factor authentication</button>
               )}
               {/* Third-party attribution must be REACHABLE from the running product,
                   not just present in the image (2026-09-03 licence audit §2). The page

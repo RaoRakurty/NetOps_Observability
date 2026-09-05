@@ -14,6 +14,7 @@ sidebar_position: 9
 
 - **Permission:** `administration:admin` opens the page. The landing page and the time display are per-tenant settings.
 - **Permission:** platform administrator for DNS and NTP. `GET` and `PUT` on `/api/system/network` and the probe at `/api/system/network/test` all call `requirePlatformAdmin`, and the two cards are hidden from a tenant administrator. This is platform-global configuration.
+- **Permission:** `administration:admin` for active verification, applied to your own tenant. `PUT /api/settings/verification` calls `requireAdmin` and stamps the tenant from the token, so an administrator configures its own tenant and never another's.
 - **Permission:** log-export limits render for any administrator and `GET /api/exports/policy` answers for them, but `PUT` is refused for anyone who is not the platform owner. A tenant must not be able to raise its own caps.
 - For DNS, have the resolver addresses reachable from the deployment host. For NTP, have the server names or addresses your organization uses.
 
@@ -25,6 +26,7 @@ sidebar_position: 9
 | **Time display** | Whether timestamps render in the local zone or UTC, for the whole tenant | All administrators |
 | **DNS** | The resolvers Correlix uses for outbound names | Platform administrator only |
 | **NTP** | The time sources Correlix measures its clock against | Platform administrator only |
+| **Active verification** | Whether the platform signs in to a device to check what a case claims, and the read-only sign-in it uses | All administrators, for their own tenant |
 | **Log export limits** | Anti-exfiltration guardrails on log exports | Platform administrator only |
 
 ## Steps
@@ -78,6 +80,25 @@ The probe speaks SNTP to each server on UDP 123 and reports the reachable server
 :::note Correlix reports the offset, the host keeps the clock
 In a containerised deployment Correlix measures and reports its offset so you can confirm sync. Disciplining the host operating system's clock to these servers is the deployment's job. Correlix surfaces the health rather than setting the time.
 :::
+
+### Turn on active verification
+
+Active verification signs in to a device to check what a correlation case claims, instead of inferring it from telemetry alone. It needs two things this tenant owns: the opt-in, and a read-only device sign-in.
+
+1. Find **Active verification** and select **Configure**.
+2. Select **Verify cases against this tenant's devices**.
+3. Enter the read-only **Device sign-in** user and, where the devices do not use the profile's port, the **SSH port**.
+4. Enter either a **Password** or a **Private key**, and a **Key passphrase** where the key needs one.
+5. Select **Save**.
+
+The stored secret is write-only. The card states whether a sign-in is stored, and for which user and port, and never shows the password or key again. Leaving a secret field empty keeps the stored one, so you can change the user without re-entering the credential. **Remove the stored sign-in** clears the user, the port and the secret together, which is why it saves on its own rather than alongside other edits.
+
+Each save is audited. The audit record carries whether a secret was set, never the secret itself.
+
+Two states are deliberately distinct on this card:
+
+- **The platform has not turned on active verification.** `FEATURE_ACTIVE_VERIFICATION` is unset, so nothing runs. What you set here is stored and takes effect when the capability is turned on.
+- **The stored settings could not be read.** The values shown are not the stored settings, so the controls are disabled rather than letting a save overwrite a configuration nobody has seen.
 
 ### Set the log-export limits
 

@@ -224,6 +224,34 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
          · scan 
         scan-7
       </p>
+      <div
+        class="panel"
+        style="min-width: 0;"
+      >
+        <div
+          class="panel-tools"
+        >
+          <h3
+            class="panel-zoomable"
+            title="Enlarge"
+          >
+            Security lane
+          </h3>
+          <button
+            aria-label="Enlarge Security lane"
+            class="panel-zoom-btn"
+            title="Enlarge"
+          >
+            ⤢
+          </button>
+        </div>
+        <div
+          class="empty"
+          role="status"
+        >
+          Reading the lane status…
+        </div>
+      </div>
     </div>
   </details>
   <details
@@ -783,6 +811,75 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
         </span>
         , never a zero.
       </p>
+      <div
+        class="panel"
+        style="min-width: 0;"
+      >
+        <div
+          class="panel-tools"
+        >
+          <h3
+            class="panel-zoomable"
+            title="Enlarge"
+          >
+            Seam groups
+          </h3>
+          <label>
+            <span
+              class="sr-only"
+            >
+              Filter seam groups by state
+            </span>
+            <select
+              aria-label="Filter seam groups by state"
+            >
+              <option
+                value=""
+              >
+                Every state
+              </option>
+              <option
+                value="suggested"
+              >
+                suggested
+              </option>
+              <option
+                value="confirmed"
+              >
+                confirmed
+              </option>
+              <option
+                value="active"
+              >
+                active
+              </option>
+              <option
+                value="rejected"
+              >
+                rejected
+              </option>
+              <option
+                value="retired"
+              >
+                retired
+              </option>
+            </select>
+          </label>
+          <button
+            aria-label="Enlarge Seam groups"
+            class="panel-zoom-btn"
+            title="Enlarge"
+          >
+            ⤢
+          </button>
+        </div>
+        <div
+          class="empty"
+          role="status"
+        >
+          Reading the seam groups…
+        </div>
+      </div>
     </div>
   </details>
   <details

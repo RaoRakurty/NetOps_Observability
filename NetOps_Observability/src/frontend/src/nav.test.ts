@@ -86,13 +86,19 @@ describe("Explain/Stack → Administration → Platform moves", () => {
     const admin = tenantNav.find((s) => s.id === "admin");
     expect(admin).toBeDefined();
     const ids = (admin?.children ?? []).map((l) => l.id);
-    for (const gated of ["health", "grafana", "opensearch", "graphql", "auth", "licence", "data-protection", "regions"]) {
+    for (const gated of ["health", "grafana", "opensearch", "graphql", "auth", "data-protection", "regions"]) {
       expect(ids).not.toContain(gated);
     }
     // And the legacy deep links to them cannot resolve onto the gated page —
     // resolveRoute falls back to the first VISIBLE section instead.
     expect(resolveRoute("#/stack/health", tenantNav).leaf?.id).not.toBe("health");
-    expect(resolveRoute("#/admin/licence", tenantNav).section.id).not.toBe("platform");
+    // Licence is the exception that proves the rule: its READ is requireAdmin
+    // with a per-tenant projection, so it lives in Administration and a tenant
+    // admin reaches it (docs/design/ADMIN_IA_2026-09-05.md §5.1a).
+    expect(resolveRoute("#/admin/licence", tenantNav)).toMatchObject({
+      section: { id: "admin" }, leaf: { id: "licence" },
+    });
+    expect(ids).toContain("licence");
     // Access Explorer, Sessions, Audit Log and Transport Security are
     // per-tenant (requireAdmin + tenant filter on the server) — still reachable.
     for (const kept of ["access", "sessions", "audit", "transport"]) {

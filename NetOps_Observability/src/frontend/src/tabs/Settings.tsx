@@ -5,6 +5,7 @@ import Icon from "../components/Icon";
 import { setTzMode, tzLabel } from "../lib/time";
 import { useAuth } from "../hooks/useAuth";
 import SystemNetworkCard from "../pages/SystemNetwork";
+import VerificationSettingsCard from "./VerificationSettingsCard";
 import { Modal } from "../components/ui";
 
 // Default landing page — the platform-wide page users land on after sign-in.
@@ -155,6 +156,12 @@ export default function Settings() {
 
       {/* DNS + NTP — two boxes (Configure → popup), platform-owner only. */}
       {platformAdmin && <SystemNetworkCard />}
+
+      {/* Active verification — the tenant opt-in plus the read-only device
+          sign-in it needs (GET/PUT /api/settings/verification, requireAdmin +
+          audited). Every sibling /api/settings/* had a panel and this one did
+          not, so the capability could only be turned on with a curl. */}
+      <VerificationSettingsCard />
 
       {/* Log export limits — tile + guided setup (C3). */}
       <div className="card" style={{ display: "flex", alignItems: "center", gap: 12 }}>

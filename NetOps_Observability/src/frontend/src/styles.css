@@ -2790,6 +2790,20 @@ body.dtv-resizing { cursor: col-resize !important; user-select: none !important;
 .chip:hover { border-color: var(--accent); color: var(--accent); }
 .chip-active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 
+/* Status chips — a NON-interactive state pill (delivery state, scan outcome,
+   action state, restore state). The state's word is always inside the chip, so
+   colour only reinforces it and never carries the meaning alone (WCAG 1.4.1).
+   `span.chip` drops the quick-pick chip's pointer cursor: these are labels, not
+   controls, and a pointer on one is a lie about what it does. */
+span.chip { cursor: default; }
+span.chip:hover { border-color: var(--panel-border); color: var(--fg); }
+.chip-ok { border-color: color-mix(in srgb, var(--good) 45%, var(--panel-border)); color: var(--good); }
+.chip-warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--panel-border)); color: var(--warn); }
+.chip-crit { border-color: color-mix(in srgb, var(--bad) 45%, var(--panel-border)); color: var(--bad); }
+span.chip-ok:hover { border-color: color-mix(in srgb, var(--good) 45%, var(--panel-border)); color: var(--good); }
+span.chip-warn:hover { border-color: color-mix(in srgb, var(--warn) 45%, var(--panel-border)); color: var(--warn); }
+span.chip-crit:hover { border-color: color-mix(in srgb, var(--bad) 45%, var(--panel-border)); color: var(--bad); }
+
 /* Elegant default <select> — custom caret, consistent with inputs, smooth focus. */
 select {
   padding: 7px 30px 7px 10px; font-size: var(--fs-sm);

@@ -86,6 +86,36 @@ and the class that pages someone at 03:00 can never disagree.
               "note":"The evaluator has not completed a pass for this tenant yet — an empty incident list here means 'not evaluated', not 'nothing wrong'."}}
    ```
 
+### Set the policy from the console
+
+The same policy is editable on **Analytics → BGP Operations**, in the **Alert
+policy — what counts as an incident** section. It sits directly beneath the
+**Incidents — watched prefixes** section, because every verdict there is this
+policy's output.
+
+1. Open **Analytics → BGP Operations**.
+2. In **Alert policy**, set **Expected origin AS** and **Upstream (transit) AS**
+   for the tenant default. Both accept `AS64500` or `64500`, separated by
+   commas.
+3. Set **Minimum visibility** as a share between 0 and 1, and **Minimum vantage
+   points** as a whole number.
+4. Select **Add a prefix policy** for a prefix that needs its own origin, its own
+   upstreams or its own thresholds. Enter the prefix, then its fields.
+5. Select **Save policy**.
+
+The section prints the consequence of each empty set next to the field that is
+empty: an empty origin set means the baseline is learned from the first
+observation, and an empty upstream set means the route-leak check does not run.
+Neither absence is a clean result.
+
+The platform stores what it normalizes, not what you typed. It removes duplicate
+AS numbers, refuses AS0, sorts each set, and rewrites every policy key to its
+canonical prefix, so `193.0.0.1/21` is stored as `193.0.0.0/21`. The section
+re-renders from the stored policy after each save.
+
+With `FEATURE_BGP_ALERTS` off, the section still saves. It states that the policy
+is stored and takes effect when the evaluator runs.
+
 ## Result
 
 Each watched prefix carries one class from a closed set. The headline class is

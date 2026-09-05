@@ -119,6 +119,7 @@ const sidebars = {
             'incident-response/integrations',
             'incident-response/rca-ticketing',
             'incident-response/rca-time-intelligence',
+            'incident-response/ticket-delivery',
           ],
         },
         {
@@ -133,6 +134,7 @@ const sidebars = {
             'infrastructure/paths-and-tunnels',
             'infrastructure/wan-interface-metrics',
             'infrastructure/wireless',
+            'infrastructure/review-a-wireless-remediation',
             'infrastructure/nms-integrations',
           ],
         },
@@ -144,6 +146,7 @@ const sidebars = {
             'explore/metrics',
             'explore/logs',
             'explore/flows',
+            'explore/application-attribution',
             'explore/events',
           ],
         },
@@ -253,6 +256,7 @@ const sidebars = {
         'administration/telemetry-coverage',
         'administration/licence',
     'administration/debug-the-pipeline-cli',
+        'administration/review-quarantined-telemetry',
       ],
     },
 

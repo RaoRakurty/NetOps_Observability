@@ -14,6 +14,11 @@ const securityExposureStories = vi.fn();
 const correlationTimeline = vi.fn();
 const seams = vi.fn();
 const securityViews = vi.fn();
+// The two panels the overview now embeds: the producer-lane strip and the seam
+// group roll-up, plus the permission read that gates the group state control.
+const securityLaneStatus = vi.fn();
+const seamGroups = vi.fn();
+const permissions = vi.fn();
 
 vi.mock("../../services/api", () => ({
   api: {
@@ -25,6 +30,9 @@ vi.mock("../../services/api", () => ({
     correlationTimeline: (...a: unknown[]) => correlationTimeline(...a),
     seams: (...a: unknown[]) => seams(...a),
     securityViews: (...a: unknown[]) => securityViews(...a),
+    securityLaneStatus: (...a: unknown[]) => securityLaneStatus(...a),
+    seamGroups: (...a: unknown[]) => seamGroups(...a),
+    permissions: (...a: unknown[]) => permissions(...a),
   },
 }));
 vi.mock("../../context/workspace", () => ({ useWorkspace: () => ({ enabled: false, openInspector: vi.fn() }) }));
@@ -44,6 +52,10 @@ beforeEach(() => {
   correlationTimeline.mockRejectedValue(new Error("none"));
   seams.mockResolvedValue(SEAMS);
   securityViews.mockResolvedValue([]);
+  // Dormant lane (the shipped default) and no recorded seam groups.
+  securityLaneStatus.mockRejectedValue(new Error("404 Not Found: "));
+  seamGroups.mockResolvedValue([]);
+  permissions.mockResolvedValue({ role: "viewer", permissions: { infrastructure: 1 } });
 });
 
 describe("Security Overview a11y", () => {

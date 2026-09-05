@@ -79,6 +79,11 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   // Pipeline debugger GUI (Platform → Tools) — the in-console view over the
   // same /api/debug/* routes correlix-debug drives from the CLI.
   PipelineDebugger: () => import("./pages/platform/PipelineDebugger"),
+  // ITSM delivery observability (Administration → Incident Response).
+  TicketDelivery: () => import("./pages/admin/TicketDelivery"),
+  // Sealed-quarantine viewer (Platform → Tools) — /api/quarantine is
+  // requirePlatformAdmin, so the page belongs to the provider section.
+  Quarantine: () => import("./pages/platform/Quarantine"),
 };
 
 const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -161,6 +166,10 @@ const TelemetryCoverage = lazy(ROUTE_CHUNKS["TelemetryCoverage"] as () => Promis
 const ConfigDrift = lazy(ROUTE_CHUNKS["ConfigDrift"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Pipeline debugger GUI — Platform → Tools.
 const PipelineDebugger = lazy(ROUTE_CHUNKS["PipelineDebugger"] as () => Promise<{ default: React.ComponentType<any> }>);
+// ITSM delivery outbox + audit trail — Administration → Incident Response.
+const TicketDelivery = lazy(ROUTE_CHUNKS["TicketDelivery"] as () => Promise<{ default: React.ComponentType<any> }>);
+// Sealed-quarantine viewer — Platform → Tools.
+const Quarantine = lazy(ROUTE_CHUNKS["Quarantine"] as () => Promise<{ default: React.ComponentType<any> }>);
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -409,6 +418,12 @@ export const NAV: NavSection[] = [
       { id: "integrations", label: "Integrations", group: "Incident Response", render: () => <IntegrationsAdmin /> },
       { id: "notifications", label: "Notifications", group: "Incident Response", render: () => <NotificationsAdmin /> },
       { id: "ticketing", label: "Ticketing & Automation", group: "Incident Response", render: () => <IncidentPoliciesAdmin /> },
+      // Ticket Delivery — the outbox and audit trail BEHIND the policies above.
+      // /api/tickets/{outbox,audit} are requirePerm(infrastructure, read) +
+      // principalTenant, and /api/integrations/reconcile is requireAdmin on the
+      // caller's own tenant: tenant-scoped throughout, so it belongs here and
+      // not in Platform.
+      { id: "ticket-delivery", label: "Ticket Delivery", group: "Incident Response", render: () => <TicketDelivery /> },
       // Data sources — the sources + the poller plumbing that feed telemetry
       // (owner IA, 2026-09-05: Sensors sits under Data sources; the shaping
       // pair moved to its own "Data handling" group below).
@@ -466,6 +481,17 @@ export const NAV: NavSection[] = [
         ],
       },
       { id: "settings", label: "Settings", render: () => <Settings /> },
+      // Licence — what this installation is licensed to run and where this
+      // tenant stands against every ceiling. TENANT-LEVEL since the 2026-09-05
+      // read split: GET /api/system/licence is licenceReadGate → requireAdmin
+      // and answers a per-tenant projection (tier, entitled features, the
+      // installation's ceilings against THIS tenant's own usage, expiry and
+      // grace, who manages it), while PUT/DELETE stay on licenceGate →
+      // requirePlatformAdmin. There is one licence file per installation, so
+      // installing or replacing it remains the provider's action — the page
+      // branches on the PAYLOAD's scope, not on who is looking, and hides the
+      // install controls for a tenant admin instead of 403ing them.
+      { id: "licence", label: "Licence", render: () => <Licence /> },
     ],
   },
   // ── Platform — the PROVIDER's own section (owner IA, 2026-09-05) ────────────
@@ -488,14 +514,6 @@ export const NAV: NavSection[] = [
     footer: true,
     platformOnly: true,
     children: [
-      // Licence — what this installation is licensed to run, where it stands
-      // against every ceiling, and where a licence is installed or removed.
-      // There is ONE licence file per installation, so it is not a per-tenant
-      // surface: /api/system/licence runs licenceGate → requirePlatformAdmin
-      // ONCE, before the GET/PUT/DELETE switch (internal/licence/api.go), so a
-      // tenant admin cannot even read it. Ungrouped and first: it is the
-      // question a provider opens this section to answer.
-      { id: "licence", label: "Licence", render: () => <Licence /> },
       // Security — the provider-level security plumbing.
       // auth            → oidc_config.go / auth_config.go / token_policy.go,
       //                   every route requirePlatformAdmin
@@ -524,6 +542,10 @@ export const NAV: NavSection[] = [
       { id: "pipeline-debugger", label: "Pipeline Debugger", group: "Tools", render: () => <PipelineDebugger /> },
       { id: "regions", label: "Regions", group: "Tools", render: () => <RegionsAdmin /> },
       { id: "graphql", label: "GraphQL Explorer", group: "Tools", render: () => <GraphQLExplorer /> },
+      // quarantine → pipeline_processors.go handleQuarantineList,
+      // requirePlatformAdmin: the index holds events that could not be
+      // attributed to ANY tenant, so it is provider-only by construction.
+      { id: "quarantine", label: "Quarantine", group: "Tools", render: () => <Quarantine /> },
     ],
   },
 ];
@@ -654,7 +676,6 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   // configured landing keeps resolving to the SAME page at its new address.
   "admin/auth": "platform/auth",
   "admin/data-protection": "platform/data-protection",
-  "admin/licence": "platform/licence",
   "admin/health": "platform/health",
   "admin/grafana": "platform/grafana",
   "admin/opensearch": "platform/opensearch",
@@ -665,6 +686,11 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   // rather than left to fall back to the section's first page.
   "platform/tools/pipeline-debugger": "platform/pipeline-debugger",
   "platform/tools": "platform/health",
+  // Licence came BACK (2026-09-05, after the read split): the GET is
+  // requireAdmin with a per-tenant projection, so the page is tenant-level and
+  // the alias points the other way — every link written while it lived under
+  // Platform still resolves.
+  "platform/licence": "admin/licence",
   // Explain + Stack rail sections dissolved into Administration (2026-07-10);
   // bare hashes land on their old first page. Stack's four leaves have since
   // moved on to the Platform section, so the bare hash follows them.

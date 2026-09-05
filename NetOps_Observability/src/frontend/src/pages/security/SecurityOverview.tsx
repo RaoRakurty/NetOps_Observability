@@ -10,6 +10,8 @@ import { operatorError } from "../../lib/errors";
 import {
   CoverageCard, CtemFunnel, EvidenceLane, FindingRow, SeamStrip,
 } from "./parts";
+import LaneHealth from "./LaneHealth";
+import SeamGroups from "./SeamGroups";
 import {
   coverageOf, evidenceClassLabel, facetTotal, funnelStages, isThreatLane,
   mapFacetRows, seamCards, storyConfidence, storyList, topExposures, trendPoints,
@@ -113,6 +115,9 @@ export default function SecurityOverview() {
   const [seams, setSeams] = useState<Seam[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // Confirming or rejecting a proposed seam grouping is infrastructure:write on
+  // the server. The control is hidden rather than offered and then 403'd.
+  const [canWriteSeams, setCanWriteSeams] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -140,6 +145,14 @@ export default function SecurityOverview() {
     }).finally(() => {
       if (alive) setLoaded(true);
     });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    api.permissions()
+      .then((p) => { if (alive) setCanWriteSeams((p.permissions?.infrastructure ?? 0) >= 2); })
+      .catch(() => { if (alive) setCanWriteSeams(false); });
     return () => { alive = false; };
   }, []);
 
@@ -194,6 +207,11 @@ export default function SecurityOverview() {
             ? <>Last assessment {fmtDateTime(posture.last_scan.time)} · scan {posture.last_scan.scan_id || "—"}</>
             : <>No assessment has run yet — every stage below counts zero because nothing was measured, not because the estate is clear.</>}
         </p>
+        {/* The producer behind every number above: is it running, when did it
+            last run, and did what it produced reach the engine. Rendered here
+            rather than in its own page because an operator judging coverage is
+            already asking the question this panel answers. */}
+        <LaneHealth />
       </Group>
 
       {stories.length > 0 && flagship ? (
@@ -253,6 +271,9 @@ export default function SecurityOverview() {
           Where the estate meets untrusted networks, and who owns each boundary. A seam with no
           assessment shows <span className="sec-unassessed">—</span>, never a zero.
         </p>
+        {/* The redundancy roll-up over the same seams: which of them carry the
+            same traffic as a pair, and which pairings are still only proposed. */}
+        <SeamGroups canWrite={canWriteSeams} />
       </Group>
 
       <Group title="Verdict trend" hue="#14b8a6">

@@ -24,6 +24,7 @@ import { WorkspaceProvider, useWorkspace } from "./context/workspace";
 import Login from "./pages/Login";
 import { Modal } from "./components/ui";
 import ChangePasswordCard from "./components/ChangePasswordCard";
+import TwoFactorCard from "./components/TwoFactorCard";
 import TenantGate from "./components/TenantGate";
 import ErrorBoundary from "./components/ErrorBoundary";
 
@@ -57,8 +58,13 @@ export default function App() {
   // signed in (TopBar in v1, IconRail foot in v2) — local accounts only; federated
   // users change it at their IdP. Works for global and tenant-scoped users alike.
   const [pwOpen, setPwOpen] = useState(false);
+  // Two-factor self-enrolment, same menus and the same gate: a federated
+  // account's second factor is the IdP's, so the entry is not offered at all
+  // rather than opening a card with nothing it can do.
+  const [tfaOpen, setTfaOpen] = useState(false);
   const localAccount = !user?.auth_source || user.auth_source === "local";
   const onChangePassword = localAccount ? () => setPwOpen(true) : undefined;
+  const onTwoFactor = localAccount ? () => setTfaOpen(true) : undefined;
 
   // The nav tree is gated to the principal: tenant-scoped users don't see the
   // platform's own infra-stack monitoring (Stack Health + raw backends). The
@@ -313,9 +319,9 @@ export default function App() {
           Skip to main content
         </a>
         <ShellGridSizing />
-        <TopBar health={health} user={user} onLogout={logout} onChangePassword={onChangePassword} hideUserMenu={shellV2} />
+        <TopBar health={health} user={user} onLogout={logout} onChangePassword={onChangePassword} onTwoFactor={onTwoFactor} hideUserMenu={shellV2} />
         {shellV2 ? (
-          <IconRail nav={nav} activeSection={resourceRoute ? "" : section.id} activeLeaf={resourceRoute ? undefined : leaf?.id} user={user} onLogout={logout} onChangePassword={onChangePassword} homeRoute={homeRoute} />
+          <IconRail nav={nav} activeSection={resourceRoute ? "" : section.id} activeLeaf={resourceRoute ? undefined : leaf?.id} user={user} onLogout={logout} onChangePassword={onChangePassword} onTwoFactor={onTwoFactor} homeRoute={homeRoute} />
         ) : (
           <Sidebar
             nav={nav}
@@ -389,6 +395,11 @@ export default function App() {
         {pwOpen && (
           <Modal title="Change password" subtitle={user.username} onClose={() => setPwOpen(false)}>
             <ChangePasswordCard fixedUsername={user.username} onDone={() => setPwOpen(false)} />
+          </Modal>
+        )}
+        {tfaOpen && (
+          <Modal title="Two-factor authentication" subtitle={user.username} onClose={() => setTfaOpen(false)}>
+            <TwoFactorCard onDone={() => setTfaOpen(false)} />
           </Modal>
         )}
       </div>

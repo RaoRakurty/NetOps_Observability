@@ -57,14 +57,20 @@ The counter is in memory and process-local. It resets when the API restarts, and
 
 ### Enrol multi-factor authentication
 
-A local account adds a time-based one-time code from an authenticator application.
+A local account adds a time-based one-time code from an authenticator application. You enrol your own account: no administrator is involved, and no permission beyond your own sign-in is required.
 
 1. Open the account menu, then **Two-factor authentication**.
-2. Select **Enable two-factor**.
-3. Scan the QR code. A **Can't scan?** link reveals the manual entry key.
-4. Enter the 6-digit code and select **Confirm & turn on**.
+2. Select **Set up**. The platform issues a pending secret and shows it as a QR code.
+3. Add the account to your authenticator application, by scanning the code or by entering the **Setup key** beneath it. **Copy setup key** puts the key on the clipboard for an application that takes typed entry.
+4. Enter the **Six-digit code** the application shows, then select **Turn on two-factor**.
 
-From then on, sign-in returns `{"mfa_required": true, "mfa_token": "…"}` instead of a session, and the code is completed at `POST /api/auth/mfa/login`. The challenge is valid for 5 minutes. An administrator can reset two-factor for a user from the Users page. A federated account enrols at its identity provider instead.
+The panel reads the state back after every change, so what it shows is the account's stored state rather than what you just did. Two-factor is not on until the code is confirmed: leaving at step 3 leaves the enrolment pending, and reopening the panel offers the pending enrolment or **Start over** for a fresh secret.
+
+To turn it off, open the same panel and select **Turn off**. It asks for a current code from the authenticator first, so a signed-in session left unattended cannot remove the second factor on its own.
+
+From then on, sign-in returns `{"mfa_required": true, "mfa_token": "…"}` instead of a session, and the code is completed at `POST /api/auth/mfa/login`. The challenge is valid for 5 minutes.
+
+This platform issues no recovery codes, and the panel says so. If the device holding the codes is lost, an administrator resets two-factor for the account from the Users page. A federated account enrols at its identity provider instead, and the panel states that rather than offering controls that do not apply.
 
 ### Connect an OIDC identity provider
 

@@ -13,6 +13,14 @@ const securityFindingTrend = vi.fn();
 const securityExposureStories = vi.fn();
 const correlationTimeline = vi.fn();
 const seams = vi.fn();
+// The producer-lane strip the page now embeds (LaneHealth) — mocked here so the
+// overview's own assertions are not measuring the lane panel.
+const securityLaneStatus = vi.fn();
+const securityScan = vi.fn();
+// The seam-group roll-up embedded under "Exposure by seam", and the permission
+// read that decides whether its state control is offered at all.
+const seamGroups = vi.fn();
+const permissions = vi.fn();
 
 vi.mock("../../services/api", () => ({
   api: {
@@ -23,6 +31,10 @@ vi.mock("../../services/api", () => ({
     securityExposureStories: (...a: unknown[]) => securityExposureStories(...a),
     correlationTimeline: (...a: unknown[]) => correlationTimeline(...a),
     seams: (...a: unknown[]) => seams(...a),
+    securityLaneStatus: (...a: unknown[]) => securityLaneStatus(...a),
+    securityScan: (...a: unknown[]) => securityScan(...a),
+    seamGroups: (...a: unknown[]) => seamGroups(...a),
+    permissions: (...a: unknown[]) => permissions(...a),
   },
 }));
 
@@ -33,7 +45,13 @@ afterEach(cleanup);
 
 beforeEach(() => {
   for (const m of [securityPosture, securityFindingFacets, securityFindings,
-    securityFindingTrend, securityExposureStories, correlationTimeline, seams]) m.mockReset();
+    securityFindingTrend, securityExposureStories, correlationTimeline, seams,
+    securityLaneStatus, securityScan, seamGroups, permissions]) m.mockReset();
+  seamGroups.mockResolvedValue([]);
+  permissions.mockResolvedValue({ role: "viewer", permissions: { infrastructure: 1 } });
+  // Dormant lane by default: 404 is what a deployment with FEATURE_SECURITY_LANE
+  // off actually answers, and it is the state most installs are in.
+  securityLaneStatus.mockRejectedValue(new Error("404 Not Found: "));
   securityPosture.mockResolvedValue(POSTURE);
   securityFindingFacets.mockResolvedValue(FACETS);
   securityFindings.mockResolvedValue({ items: FINDINGS, next_cursor: null, total: FINDINGS.length });

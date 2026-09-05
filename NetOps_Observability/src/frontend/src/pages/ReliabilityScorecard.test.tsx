@@ -3,10 +3,19 @@
 // "No valid sample" (not 0 ms), object-aware actions, and an honest summary that
 // never claims MTTR when recovery is missing.
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
+import type { IncidentTimeMetricRow, IncidentTimeMetric } from "../services/api";
 
-vi.mock("../components/EChart", () => ({ default: () => <div data-testid="chart" /> }));
+// The persisted phase-metric snapshot read is steered per test, so the trend
+// panel can be exercised with measured, all-incomplete, and dead responses.
+const hoisted = vi.hoisted(() => ({ timeMetrics: vi.fn() }));
+
+vi.mock("../components/EChart", () => ({
+  default: ({ option }: { option?: { series?: { name?: string; data?: unknown[] }[] } }) => (
+    <div data-testid="chart" data-series={(option?.series ?? []).map((s) => `${s.name}=${JSON.stringify(s.data)}`).join("|")} />
+  ),
+}));
 vi.mock("../services/api", () => ({
   api: {
     reliabilityRollups: vi.fn(() => Promise.resolve({
@@ -36,10 +45,43 @@ vi.mock("../services/api", () => ({
       days: 30, since: "2026-05-25T00:00:00Z", n: 0,
       counts: { correct: 0, wrong: 0, partial: 0 }, false_positive_rate: null, by_template: [],
     })),
+    // #84 persisted phase-metric snapshots — the detection/repair trend.
+    reliabilityTimeMetrics: hoisted.timeMetrics,
   },
 }));
 
 import ReliabilityScorecard from "./ReliabilityScorecard";
+
+// Inside the page's default 30-day window, whatever day the suite runs.
+const daysAgo = (n: number) => new Date(Date.now() - n * 86400_000).toISOString();
+
+function phase(name: string, ms: number): IncidentTimeMetric {
+  return {
+    metric_name: name, complete: true, duration_ms: ms,
+    start_event_type: "impact_started", end_event_type: name === "ttd" ? "detected" : "recovered",
+    confidence: 1, is_inferred: false, calculated_at: daysAgo(1), calculation_version: "v1",
+  };
+}
+function unmeasured(name: string, missing: string): IncidentTimeMetric {
+  return {
+    metric_name: name, complete: false, duration_ms: 0,
+    start_event_type: "impact_started", end_event_type: missing,
+    confidence: 0, is_inferred: false, blocked_by: `missing ${missing}`, missing_event: missing,
+    calculated_at: daysAgo(1), calculation_version: "v1",
+  };
+}
+function snapshot(id: string, days: number, metrics: IncidentTimeMetric[]): IncidentTimeMetricRow {
+  return {
+    correlation_id: id, calculation_version: "v1", occurred_at: daysAgo(days),
+    owner_domain: "LAN", current_bottleneck: "recovery", metrics,
+    calculated_at: daysAgo(days), internal: false, maintenance: false,
+  };
+}
+
+beforeEach(() => {
+  hoisted.timeMetrics.mockReset();
+  hoisted.timeMetrics.mockResolvedValue({ snapshots: [] });
+});
 
 afterEach(cleanup);
 
@@ -85,5 +127,84 @@ describe("NOC Recovery Scorecard", () => {
   it("summary explains recovery/ITSM not measured (no measured-MTTR claim)", async () => {
     render(<ReliabilityScorecard />);
     expect(await screen.findByText(/not yet measured because recovery\/ITSM evidence is not connected/)).toBeTruthy();
+  });
+});
+
+// ── Detection & repair trend (persisted phase-metric snapshots, #84) ─────────
+// The rules under test are the honesty rules: an unmeasured phase is a stated
+// gap and never a zero, and this panel's own read failing must not take the
+// rest of the scorecard down with it.
+describe("NOC Recovery Scorecard — detection and repair trend", () => {
+  it("reads the recorded snapshots with an explicit limit the route accepts", async () => {
+    render(<ReliabilityScorecard />);
+    await screen.findByText(/Detection and repair trend/);
+    expect(hoisted.timeMetrics).toHaveBeenCalledWith(500);
+  });
+
+  it("charts MTTD and MTTR from the recorded snapshots, gaps left as gaps", async () => {
+    hoisted.timeMetrics.mockResolvedValue({ snapshots: [
+      snapshot("a", 3, [phase("ttd", 30_000), phase("ttr_recovery", 600_000)]),
+      snapshot("b", 3, [phase("ttd", 10_000)]),
+      snapshot("c", 10, [phase("ttd", 90_000)]),
+    ] });
+    render(<ReliabilityScorecard />);
+    await screen.findByText(/Detection and repair trend/);
+    const chart = await screen.findByText(
+      /complete detection and recovery lifecycle/,
+    );
+    expect(chart).toBeTruthy();
+    const series = screen.getAllByTestId("chart").map((el) => el.getAttribute("data-series") ?? "");
+    const trend = series.find((s) => s.includes("MTTD"));
+    expect(trend).toBeTruthy();
+    expect(trend).toContain("MTTR — Recover");
+    // 30s and 10s in one bucket → the nearest-rank median, 10s; unmeasured
+    // buckets are null (a gap), never 0.
+    expect(trend).toMatch(/MTTD — Detect=\[[^\]]*10[,\]]/);
+    expect(trend).toContain("null");
+  });
+
+  it("an all-incomplete window reads Not measured and names the missing signal, never a zero", async () => {
+    hoisted.timeMetrics.mockResolvedValue({ snapshots: [
+      snapshot("a", 2, [unmeasured("ttd", "detected"), unmeasured("ttr_recovery", "recovered")]),
+      snapshot("b", 4, [unmeasured("ttr_recovery", "recovered")]),
+      snapshot("c", 6, [unmeasured("ttr_recovery", "recovered")]),
+    ] });
+    render(<ReliabilityScorecard />);
+    expect(await screen.findByText(/Not measured in this window/)).toBeTruthy();
+    expect(screen.getByText(/waiting on a service-recovery signal/)).toBeTruthy();
+    expect(screen.getByText(/none of the 3 incidents/)).toBeTruthy();
+    expect(screen.queryByText(/0s/)).toBeNull();
+    expect(screen.queryByText("0 ms")).toBeNull();
+  });
+
+  it("names the incomplete incidents alongside a chart that does have measurements", async () => {
+    hoisted.timeMetrics.mockResolvedValue({ snapshots: [
+      snapshot("a", 3, [phase("ttd", 30_000), unmeasured("ttr_recovery", "recovered")]),
+      snapshot("b", 5, [phase("ttd", 20_000), unmeasured("ttr_recovery", "recovered")]),
+    ] });
+    render(<ReliabilityScorecard />);
+    expect(await screen.findByText(/2 of 2 incidents in this window have an incomplete lifecycle/)).toBeTruthy();
+    expect(screen.getByText(/2 phases waiting on a service-recovery signal/)).toBeTruthy();
+  });
+
+  it("counts a recalculated incident once (a calculation-version bump is not a second incident)", async () => {
+    hoisted.timeMetrics.mockResolvedValue({ snapshots: [
+      { ...snapshot("a", 3, [phase("ttd", 30_000)]), calculation_version: "v2", calculated_at: daysAgo(1) },
+      { ...snapshot("a", 3, [phase("ttd", 30_000)]), calculation_version: "v1", calculated_at: daysAgo(3) },
+    ] });
+    render(<ReliabilityScorecard />);
+    expect(await screen.findByText(/All 1 incident in this window/)).toBeTruthy();
+  });
+
+  it("a dead snapshot read shows an operator sentence and leaves the rest of the scorecard alive", async () => {
+    hoisted.timeMetrics.mockRejectedValue(new Error('500 Internal Server Error: {"error":"pg: dial tcp 10.0.0.4:5432: connect: connection refused"}'));
+    render(<ReliabilityScorecard />);
+    expect(await screen.findByText("The service did not answer.")).toBeTruthy();
+    // no raw failure text reaches the screen
+    expect(screen.queryByText(/connection refused/)).toBeNull();
+    // …and the panels that do not depend on this read are still standing
+    expect(screen.getByText("Evidence coverage")).toBeTruthy();
+    expect(screen.getByText(/Recovery Readiness/)).toBeTruthy();
+    expect(screen.getByText("Median root-domain isolation time")).toBeTruthy();
   });
 });

@@ -43,6 +43,8 @@ import ResourceMetricsPanel from "./appobs/ResourceMetricsPanel";
 import MonitorsSettings from "./appobs/MonitorsSettings";
 import { RequiredTagsCard, RcaWindowCard, AttributionPrecedenceCard, GovernanceAuditCard, SeamOwnersCard } from "./appobs/GovernanceSettings";
 import ServiceCatalog, { CriticalityBadge } from "./appobs/ServiceCatalog";
+import Registries from "./appobs/Registries";
+import { AppIdCoverageCard, AppIdOverridesCard } from "./appobs/AppIdCoverage";
 import ServiceMap from "./appobs/ServiceMap";
 import { catalogByName, nameKey, criticalityRank } from "./appobs/catalog";
 import { buildDegradedRows, fmtDuration } from "./appobs/impact";
@@ -184,6 +186,9 @@ const TAB_LABEL: Record<Tab, string> = {
 const TAB_ALIAS: Record<string, { tab: Tab; sub?: string }> = {
   applications: { tab: "services", sub: "applications" },
   catalog: { tab: "services", sub: "catalog" },
+  // The operator-authored service catalog + application registry (distinct from
+  // the cloud business-service catalog the "catalog" alias above opens).
+  registries: { tab: "services", sub: "registries" },
   appmap: { tab: "services", sub: "map" },
   attribution: { tab: "resources", sub: "mapping" },
   unknowns: { tab: "resources", sub: "untagged" },
@@ -293,18 +298,24 @@ function SubTabs<T extends string>({ value, onChange, items }: {
 function Services({ initialSub, onOpen, ctl }: {
   initialSub: string; onOpen: (a: App) => void; ctl: CloudScopeControl;
 }) {
-  const [sub, setSub] = useState<"applications" | "catalog" | "map">(
-    initialSub === "map" ? "map" : initialSub === "catalog" ? "catalog" : "applications");
+  const [sub, setSub] = useState<"applications" | "catalog" | "registries" | "map">(
+    initialSub === "map" ? "map" : initialSub === "catalog" ? "catalog"
+      : initialSub === "registries" ? "registries" : "applications");
   return (
     <div className="ao-stack">
       <SubTabs value={sub} onChange={setSub}
         items={[
           { key: "applications", label: "Applications" },
           { key: "catalog", label: "Catalog" },
+          { key: "registries", label: "Registries" },
           { key: "map", label: "Service map" },
         ]} />
       {sub === "applications" && <Applications onOpen={onOpen} ctl={ctl} />}
       {sub === "catalog" && <ServiceCatalog />}
+      {/* The operator-authored service catalog + application registry. Its
+          cross-link to the cloud registry switches THIS sub-tab directly: a
+          hash change would not re-seat `sub` while Services stays mounted. */}
+      {sub === "registries" && <Registries onOpenCloudCatalog={() => setSub("catalog")} />}
       {sub === "map" && <MapView ctl={ctl} />}
     </div>
   );
@@ -1736,6 +1747,10 @@ function Settings() {
       ))}
       {/* Wave 4 #11: REAL per-tenant editors (persisted, audited, admin-gated). */}
       <AttributionPrecedenceCard />
+      {/* What the order above actually has to work with, and the tenant's own
+          highest-precedence overrides. Read-only coverage + a real editor. */}
+      <AppIdCoverageCard />
+      <AppIdOverridesCard />
       <RequiredTagsCard />
       <RcaWindowCard />
       <SeamOwnersCard />

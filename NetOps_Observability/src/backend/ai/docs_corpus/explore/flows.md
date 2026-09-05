@@ -23,7 +23,7 @@ Devices usually export sampled flows. Byte and packet counts are scaled by each 
 
 ### Step 1 - Choose a section
 
-The left-hand list holds ten sections: **Traffic Volume**, **Device Health**, **Flows**, **Conversations**, **Autonomous Systems**, **Geo IP**, **Source Ports**, **Destination Ports**, **Protocols** and **Flags**.
+The left-hand list holds twelve sections: **Traffic Volume**, **Device Health**, **Flows**, **Conversations**, **Applications**, **Services**, **Autonomous Systems**, **Geo IP**, **Source Ports**, **Destination Ports**, **Protocols** and **Flags**.
 
 Each Top-N panel has a bar-or-table toggle. The table view adds sortable **Bytes**, **Packets** and **Flows** columns.
 
@@ -48,8 +48,40 @@ Open the **Flows** section. **Source presence** shows one badge per flow type cu
 - **Conversations** ranks the heaviest pairs, and the initiator and responder endpoints individually.
 - **Autonomous Systems** groups by BGP AS number, where the exporter fills the AS fields.
 - **Geo IP** breaks traffic down by initiator and responder country and states the public-traffic share. Private address space has no geography, so an internal lab honestly reads zero per cent public rather than inventing countries. Where GeoIP enrichment has not been provisioned, the panel says so instead of showing an empty map.
+- **Applications** ranks the traffic by the application on each end, so a row reads as an initiator application talking to a destination application.
+- **Services** ranks the same window by the services in your service catalog.
 - **Source Ports**, **Destination Ports** and **Protocols** rank the port and protocol mix.
 - **Flags** reads TCP control bits. Where every TCP flow reports empty flags, the panel states that the exporter is not filling `tcpControlBits` and names how to turn it on, rather than rendering the flags as zero.
+
+### Step 5 - Read the traffic as applications and services
+
+The **Applications** and **Services** sections name the traffic instead of
+numbering it. Both read the window only. The filter bar above them does not
+narrow either one, and both sections say so while a filter is active.
+
+**Applications** resolves each end of the heaviest conversations against the
+attribution ladder. Read three columns carefully:
+
+| Column | What it means |
+|---|---|
+| **Source** | The initiator's application. **Source not resolved** means the flow row carried no source address to resolve, which is different from an address that resolved to nothing. |
+| **Destination application** | The responder's application. **Unknown / uncatalogued or internal** is a real answer, not a gap: the address matched nothing in the ladder, and the platform names no application rather than guessing one. |
+| **Attribution** | The strongest verdict behind the row: **Confirmed**, **Suspected · not confirmed**, or **Under review**. |
+
+Under the table the section states its coverage. The platform resolves the
+heaviest source-and-destination pairs in the window rather than every flow, and
+the sentence names how many pairs that is.
+
+**Services** measures the same window against your service catalog. A service
+with no usable selector shows **Not measured** in bytes, share and flows. That is
+the honest reading: the platform never scanned for it, so its traffic is unknown
+rather than zero. Give the service a selector to measure it. See
+[attribute traffic to applications and services](/explore/application-attribution).
+
+Each row in both sections offers **Conversations for this window**, which opens
+the **Conversations** section over the same window. The conversation list is
+address-level, so it is not narrowed to the row you came from, and the control
+says so.
 
 ## What you see
 

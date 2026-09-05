@@ -89,6 +89,29 @@ A missing ITSM workflow is a measurement gap, not a bottleneck. When no workflow
 is connected, the downstream phases read **Not measured**, never "workflow
 required", because Correlix finished the RCA and the gap is not a NOC failure.
 
+## Read the trend
+
+**Analytics → Recovery Scorecard** carries **Detection and repair trend — MTTD
+and MTTR over time (median)**. It charts the persisted phase-metric snapshots
+rather than a live scan, so a chart point and the stat card above it are the same
+number computed the same way.
+
+- The statistic is the median, taken by nearest rank, which is the method the
+  rollups use for their own p50. A point on this chart therefore agrees with the
+  p50 cards beside it.
+- Buckets align to the window and bucket size the page already carries. There is
+  no second time picker.
+- Only a phase marked complete becomes a measurement. A bucket where nothing
+  completed is drawn as a gap, never as a zero, and the legend names the event
+  the incomplete incidents are waiting for.
+- Below the chart the panel states how many incidents in the window have an
+  incomplete lifecycle, and what they are waiting on.
+- One snapshot counts per incident. Where a calculation-version bump produced a
+  second snapshot for the same case, the freshest one wins and the incident is
+  counted once.
+- Platform self-monitoring is excluded unless you include it, which matches the
+  rest of the page.
+
 ## Honest limits
 
 - **Detection latency is a per-incident figure only.** The reliability rollups
@@ -107,6 +130,9 @@ required", because Correlix finished the RCA and the gap is not a NOC failure.
   rollups, so one event is counted once.
 - **A stamp is never invented to fill a gap.** Where nothing was recorded, the
   phase stays incomplete and says which event it is waiting for.
+- **The trend reads the most recent snapshots.** The read is bounded, and where a
+  tenant's incident volume exceeds that bound the panel says the chart covers the
+  most recent snapshots rather than narrowing the window without saying so.
 
 ## Related
 

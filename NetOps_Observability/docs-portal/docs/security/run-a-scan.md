@@ -28,7 +28,30 @@ the advisory feed, so the Security pages reflect the change immediately.
 
 ## Steps
 
-### Step 1 — Queue the scan
+### Step 1 — Open the lane panel
+
+1. Go to **Security → Security Overview**.
+2. Open the **Exposure pipeline** group.
+3. Read the **Security lane** panel at the foot of the group. It states the scan
+   interval, the per-tenant finding cap, the bus topic the lane publishes to,
+   and your tenant's last run.
+
+If the panel says the lane is not enabled on this deployment, the two routes are
+not registered and no scan can be started here. Set `FEATURE_SECURITY_LANE` and
+restart the api.
+
+### Step 2 — Start the scan
+
+1. Select **Scan now**.
+2. Watch the note under the panel heading. It reads `Scan queued` until a
+   completed run is recorded, then reports the finding count and the number of
+   devices assessed.
+
+The button reports two refusals as themselves. A `429` says a scan is already
+queued or running for your tenant. A `400` says the caller is cross-tenant: a
+scan writes tenant-attributed evidence, so scope into a tenant first.
+
+The same trigger over the API:
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" \
@@ -43,11 +66,29 @@ A successful call answers `202 Accepted`:
 {"queued": true, "tenant_seg": "t_d3d501aa08e2395893b378a453b8af67"}
 ```
 
-If a scan is already queued or running for your tenant, the call answers `429`.
-The trigger queue is bounded at eight entries; a scan is not started twice for
-the same tenant concurrently.
+The trigger queue is bounded at eight entries, and a scan is never started twice
+for the same tenant concurrently.
 
-### Step 2 — Read the lane status
+### Step 3 — Read the lane status
+
+The panel's first table is one row per tenant: outcome, what started the run,
+when it ran, how long it took, devices assessed and findings published. A tenant
+administrator sees only its own row. The platform administrator sees one row per
+tenant.
+
+The second table is the lane's counters since the api started. The last five
+rows count evidence that never reached the engine, so any non-zero value there
+means a story that would have used that evidence was never built.
+
+| Counter | What a non-zero value means |
+|---|---|
+| Refused grounding | The bus seam would not attach the finding to an entity |
+| Dropped by the per-run cap | The run produced more findings than the cap allows |
+| Publish attempts exhausted | A batch used up its bounded retries |
+| Held in the dead-letter lane | Those batches were preserved off the main lane |
+| No durable copy anywhere | The dead-letter write also failed |
+
+The same read over the API:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
@@ -88,13 +129,10 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 }
 ```
 
-A tenant administrator sees only its own row. The platform administrator sees
-one row per tenant.
+### Step 4 — Confirm the funnel moved
 
-### Step 3 — Confirm the funnel moved
-
-Go to **Security → Security Overview**. The **Exposure pipeline** group shows
-assessment coverage and the CTEM funnel, with the scan id and time underneath.
+Scroll up to the top of the **Exposure pipeline** group. It shows assessment
+coverage and the CTEM funnel, with the scan id and time underneath.
 
 ## Result
 
@@ -107,6 +145,9 @@ triggered the scan. Four outcomes exist:
 | `partial` | Findings reached the bus, but a lane, a batch or the per-tenant cap degraded the run |
 | `error` | Nothing could be emitted |
 | `skipped` | A run was already in flight for this tenant |
+
+A `skipped` row keeps the previous real run's numbers rather than blanking them,
+and the panel labels it as carrying the last real result.
 
 Read `findings_emitted: 0` carefully. It means no producer had anything to
 report, not that the estate is clear. Check `devices_assessed` on the same row:
@@ -131,3 +172,4 @@ so it counts evidence with no durable copy anywhere.
 - [Review exposures](/security/exposures)
 - [Optional modules](/deploy/optional-modules)
 - [Feature flags reference](/reference/feature-flags)
+- [Review quarantined telemetry](/administration/review-quarantined-telemetry)

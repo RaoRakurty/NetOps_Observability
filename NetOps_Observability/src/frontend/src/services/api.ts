@@ -624,6 +624,76 @@ export type CorrelationTickets = {
 // plus the correlation it belongs to.
 export type TicketLinkRow = TicketStatus & { corr_object_id: string };
 
+// ── ITSM delivery observability (#78 P3) ────────────────────────────────────
+// Mirrors internal/ticketing model.go. An outbox row is one reliable, retryable
+// external action; `status` is pending | sent | failed | retrying | dead_letter
+// and `last_error` is the provider's own refusal, kept verbatim so an operator
+// can act on it.
+export type TicketOutboxItem = {
+  tenant_id: string;
+  id: string;
+  corr_object_id: string;
+  external_system: string;
+  action: string; // create | update | add_work_note | resolve | reopen
+  idempotency_key: string;
+  payload?: Record<string, unknown>;
+  status: string;
+  retry_count: number;
+  max_retries: number;
+  next_retry_at: string;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+};
+export type TicketOutboxPage = {
+  outbox: TicketOutboxItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+};
+export type TicketAuditRow = {
+  tenant_id: string;
+  id: string;
+  corr_object_id: string;
+  external_system: string;
+  action: string;
+  actor: string; // system | user:<id>
+  old_status: string;
+  new_status: string;
+  payload_hash: string;
+  result: string;
+  error: string;
+  at: string;
+};
+export type TicketAuditPage = {
+  audit: TicketAuditRow[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+};
+
+// ── sealed quarantine (F-11 D5) ─────────────────────────────────────────────
+// Metadata only. `cx_restored_at` without `cx_restored_produced` is a STRANDED
+// claim: an earlier restore took the envelope and may or may not have produced
+// it, which is a different state from "waiting" and is rendered as itself.
+export type QuarantineDoc = {
+  _index: string;
+  cx_event_id: string;
+  received_at: string;
+  lane: string;
+  identity_sha: string;
+  source_ip?: string;
+  reason: string;
+  cx_restored_at?: string;
+  cx_restored_produced?: string;
+};
+export type QuarantineListing = {
+  quarantine: QuarantineDoc[];
+  summary: { total: number; oldest_received_at: string | null };
+};
+
 // ---- RCA operator verdict feedback (Project 2 P7) --------------------------
 // The record an operator writes after reading a correlation case: "the engine
 // got this right / wrong / partly right", and when it was wrong, WHICH claim
@@ -1165,6 +1235,28 @@ export type Seam = {
   endpoints?: Record<string, string>;
   control_plane_owner: string;  // enterprise | isp | cloud | sdwan_controller
   visibility: string;           // full | partial | blind
+};
+
+// A seam GROUP models redundancy at the instance level (#68 §4): the same five
+// seam types, with fault semantics that vary by redundancy model and members.
+// `suggested_by` and `confidence` say where the grouping came from — the engine
+// proposes, a person confirms; a suggestion is never presented as settled.
+export type SeamMember = { member_id: string; role: string; seam_type?: string };
+export type SeamGroup = {
+  group_id: string;
+  tenant_id: string;
+  seam_type: string;
+  redundancy_model: string;
+  state: string;            // suggested | confirmed | active | rejected | retired
+  display_name: string;
+  members: SeamMember[] | null;
+  suggested_by: string;
+  evidence: Record<string, unknown> | null;
+  confidence: number;
+  suggestion_key?: string;
+  created_at: string;
+  updated_at: string;
+  updated_by: string;
 };
 
 export type Finding = {
@@ -3172,6 +3264,235 @@ export interface VrfInterfacesResponse {
   routing_instances: VrfRoutingInstance[];
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Feature→UI coverage set B (2026-09-05 audit). Types for backend capability
+// that shipped without a surface: the WAN endpoint/circuit/policy projection,
+// the persisted MTTD/MTTR snapshots, App-ID coverage + operator overrides, the
+// service catalog and application registry, the app/service views of the flow
+// plane, and the active-verification settings.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One WAN (or WAN-connected) transport interface as the projector derives it
+ *  (GET /api/wan/endpoints). `target_kind` is the PROVENANCE of the measurement
+ *  target: a directly-connected peer, an operator-declared ISP next-hop, or a
+ *  public reachability anchor. */
+export type WanEndpoint = {
+  device: string;
+  interface: string;
+  address: string;
+  measurable_addr: string;
+  site?: string;
+  connected_to_wan?: boolean;
+  target?: string;
+  target_kind?: WanTargetKind;
+  target_label?: string;
+};
+
+/** One interface → its measurement target (GET /api/wan/circuits). A 1:1 link,
+ *  not a mesh: `remote` is the target rendered as an endpoint. */
+export type WanCircuit = {
+  id: string;
+  local: WanEndpoint;
+  remote: WanEndpoint;
+  kind: WanTargetKind;
+  source: string;
+  enabled: boolean;
+};
+
+/** The tenant's WAN measurement policy (GET/PUT /api/wan/policy) — the only
+ *  persisted operator intent behind the projection above. `next_hops` is keyed
+ *  by device or `device/interface`; its value is the ISP next-hop to measure. */
+export type WanMeasurementPolicy = {
+  tenant_id?: string;
+  wan_pattern?: string;
+  anchors?: string[];
+  next_hops?: Record<string, string>;
+  include_connected?: boolean;
+  updated_by?: string;
+  updated_at?: string;
+};
+
+/** One lifecycle phase of one incident, as persisted by the time-intelligence
+ *  backfill. `complete:false` is the honest state: the phase has no measured
+ *  duration and `blocked_by` / `missing_event` say what is still absent. */
+export type IncidentTimeMetric = {
+  metric_name: string;
+  complete: boolean;
+  started_at?: string;
+  ended_at?: string;
+  duration_ms: number;
+  start_event_type: string;
+  end_event_type: string;
+  confidence: number;
+  is_inferred: boolean;
+  blocked_by?: string;
+  missing_event?: string;
+  calculated_at: string;
+  calculation_version: string;
+};
+
+/** One persisted phase-metric snapshot (GET /api/reliability/time-metrics). */
+export type IncidentTimeMetricRow = {
+  correlation_id: string;
+  calculation_version: string;
+  occurred_at: string;
+  owner_domain: string;
+  seam_type?: string;
+  current_bottleneck: string;
+  metrics: IncidentTimeMetric[];
+  calculated_at: string;
+  owner?: string;
+  state?: string;
+  internal: boolean;
+  group_keys?: Record<string, string>;
+  maintenance: boolean;
+};
+
+/** App-ID engine coverage (GET /api/appid/status). A count of -1 is the
+ *  UNKNOWN sentinel: the override store did not answer, which must never be
+ *  rendered as "this tenant declared none". */
+export type AppIdStatus = {
+  attribution_precedence: string[];
+  precedence_is_default: boolean;
+  feeds_configured: boolean;
+  catalog_prefixes: number;
+  catalog_domains: number;
+  ngfw_attributions: number;
+  cloud_attributions: number;
+  tenant_overrides: number;
+  tenant_override_pfx: number;
+  tenant_override_dom: number;
+  tenant_overrides_unavailable?: boolean;
+};
+
+/** One operator-curated attribution override (GET/POST /api/appid/catalog) —
+ *  the highest-precedence layer of the attribution ladder. */
+export type AppCatalogEntry = {
+  catalog_id: string;
+  tenant_id: string;
+  match_kind: string; // prefix | domain | asn | port
+  match_value: string;
+  app_label: string;
+  confidence: number;
+  source: string;
+  version: number;
+  created_at: string;
+};
+export type AppCatalogInput = {
+  match_kind: string;
+  match_value: string;
+  app_label: string;
+  confidence?: number;
+};
+
+/** One row of the application registry (GET/POST /api/applications). */
+export type ApplicationRow = {
+  application_id: string;
+  tenant_id: string;
+  name: string;
+  owner_team: string;
+  criticality: string;
+  description: string;
+  created_at: string;
+  archived_at?: string;
+};
+export type ApplicationInput = {
+  name: string;
+  owner_team?: string;
+  criticality?: string;
+  description?: string;
+};
+
+/** One row of the service catalog (GET/POST /api/services) — the registry the
+ *  flow-plane service view attributes traffic against. Distinct from the cloud
+ *  business-service catalog and from the application registry above. */
+export type CatalogServiceRow = {
+  service_id: string;
+  tenant_id: string;
+  name: string;
+  criticality: string;
+  description: string;
+  created_at: string;
+  archived_at?: string;
+};
+export type CatalogServiceInput = {
+  name: string;
+  criticality?: string;
+  description?: string;
+};
+/** A versioned, append-only grouping rule. A new POST creates a new version. */
+export type CatalogServiceSelector = {
+  service_id: string;
+  version: number;
+  effective_from: string;
+  spec: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+};
+/** An operational attachment: a probe, a path or a seam. */
+export type CatalogServiceBinding = {
+  binding_id: string;
+  service_id: string;
+  kind: string; // probe | path | seam
+  ref: string;
+  created_at: string;
+};
+
+/** One application's share of the flow plane (GET /api/flows/apps). `app` is
+ *  "unknown" when nothing in the ladder named the destination — a first-class
+ *  bucket, never a guess. */
+export type FlowAppRow = {
+  app: string;
+  src_app?: string;
+  tier: string; // confirmed | suspected | undetermined
+  bytes: number;
+  flows: number;
+  dests: number;
+};
+export type FlowAppsResp = {
+  apps: FlowAppRow[];
+  count: number;
+  coverage: { top_pairs: number; window_seconds: number; catalog_prefixes: number };
+};
+
+/** One catalog service's share of the flow plane (GET /api/flows/services).
+ *  `attributed:false` means the service has no usable selector yet, so its
+ *  zero bytes are UNMEASURED rather than idle. */
+export type FlowServiceRow = {
+  service_id: string;
+  name: string;
+  criticality: string;
+  attributed: boolean;
+  bytes: number;
+  flows: number;
+};
+
+/** Active-verification settings for the caller's tenant
+ *  (GET/PUT /api/settings/verification). No secret is ever returned:
+ *  `ssh_configured` is the only statement made about stored credentials. */
+export type VerificationSettings = {
+  tenant_id: string;
+  enabled: boolean;
+  feature: boolean;
+  ssh_configured: boolean;
+  ssh_user: string;
+  ssh_port: number;
+  config_unavailable?: boolean;
+  config_error?: string;
+};
+/** Write-only credential patch. Absent fields are left untouched; `clear_ssh`
+ *  removes the stored credential entirely. */
+export type VerificationSettingsPatch = {
+  enabled?: boolean;
+  ssh_user?: string;
+  ssh_password?: string;
+  ssh_private_key?: string;
+  ssh_passphrase?: string;
+  ssh_port?: number;
+  clear_ssh?: boolean;
+};
+
+
 export const api = {
   // ---- BGP Operations (item 10) ----
   bgpWatchlist: () => request<BgpWatchlistResp>("/api/bgp/watchlist"),
@@ -3757,6 +4078,75 @@ export const api = {
   },
   wanInterfaces: () => request<{ interfaces: WanInterfaceRow[] }>(`/api/wan/interfaces`),
 
+  // ---- WAN projection + measurement policy (set B) --------------------------
+  // Endpoints and circuits are DERIVED on read (interface-IP table × neighbours
+  // × policy); only the policy is persisted, so a PUT here changes what every
+  // WAN surface measures next.
+  wanEndpoints: () => request<{ endpoints: WanEndpoint[] }>(`/api/wan/endpoints`),
+  wanCircuits: () => request<{ circuits: WanCircuit[] }>(`/api/wan/circuits`),
+  wanPolicy: () => request<WanMeasurementPolicy>(`/api/wan/policy`),
+  setWanPolicy: (policy: WanMeasurementPolicy) =>
+    request<WanMeasurementPolicy>(`/api/wan/policy`, { method: "PUT", body: JSON.stringify(policy) }),
+
+  // ---- persisted MTTD/MTTR snapshots (set B) --------------------------------
+  // The trend series behind the Recovery Scorecard. Newest first, bounded.
+  reliabilityTimeMetrics: (limit = 500) =>
+    request<{ snapshots: IncidentTimeMetricRow[] }>(`/api/reliability/time-metrics?limit=${limit}`),
+
+  // ---- App-ID coverage + operator overrides (set B) -------------------------
+  appIdStatus: () => request<AppIdStatus>(`/api/appid/status`),
+  appIdOverrides: () => request<{ entries: AppCatalogEntry[]; count: number }>(`/api/appid/catalog`),
+  createAppIdOverride: (entry: AppCatalogInput) =>
+    request<AppCatalogEntry>(`/api/appid/catalog`, { method: "POST", body: JSON.stringify(entry) }),
+  deleteAppIdOverride: (id: string) =>
+    request<{ deleted: string }>(`/api/appid/catalog/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ---- application registry + service catalog (set B) -----------------------
+  // Two independent registries: applications name WHAT the traffic is, catalog
+  // services group it into an operable unit with a selector.
+  applications: (includeArchived = false) =>
+    request<ApplicationRow[]>(`/api/applications${includeArchived ? "?archived=true" : ""}`),
+  createApplication: (input: ApplicationInput) =>
+    request<ApplicationRow>(`/api/applications`, { method: "POST", body: JSON.stringify(input) }),
+  archiveApplication: (id: string) =>
+    request<{ archived: string }>(`/api/applications/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  catalogServices: (includeArchived = false) =>
+    request<CatalogServiceRow[]>(`/api/services${includeArchived ? "?archived=true" : ""}`),
+  createCatalogService: (input: CatalogServiceInput) =>
+    request<CatalogServiceRow>(`/api/services`, { method: "POST", body: JSON.stringify(input) }),
+  archiveCatalogService: (id: string) =>
+    request<{ archived: string }>(`/api/services/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  catalogServiceSelectors: (id: string) =>
+    request<CatalogServiceSelector[]>(`/api/services/${encodeURIComponent(id)}/selectors`),
+  addCatalogServiceSelector: (id: string, spec: Record<string, unknown>) =>
+    request<CatalogServiceSelector>(`/api/services/${encodeURIComponent(id)}/selectors`, {
+      method: "POST", body: JSON.stringify({ spec }),
+    }),
+  catalogServiceBindings: (id: string) =>
+    request<CatalogServiceBinding[]>(`/api/services/${encodeURIComponent(id)}/bindings`),
+  addCatalogServiceBinding: (id: string, kind: string, ref: string) =>
+    request<CatalogServiceBinding>(`/api/services/${encodeURIComponent(id)}/bindings`, {
+      method: "POST", body: JSON.stringify({ kind, ref }),
+    }),
+  deleteCatalogServiceBinding: (id: string, bindingID: string) =>
+    request<{ deleted: string }>(
+      `/api/services/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingID)}`,
+      { method: "DELETE" },
+    ),
+
+  // ---- app / service views of the flow plane (set B) ------------------------
+  flowsApps: (sinceSeconds = 3600) => request<FlowAppsResp>(`/api/flows/apps?since=${sinceSeconds}s`),
+  flowsServices: (sinceSeconds = 3600) =>
+    request<{ services: FlowServiceRow[]; count: number }>(`/api/flows/services?since=${sinceSeconds}s`),
+
+  // ---- active-verification settings (set B) ---------------------------------
+  // Secrets are write-only: the GET never returns credential material.
+  verificationSettings: () => request<VerificationSettings>(`/api/settings/verification`),
+  setVerificationSettings: (patch: VerificationSettingsPatch) =>
+    request<VerificationSettings>(`/api/settings/verification`, {
+      method: "PUT", body: JSON.stringify(patch),
+    }),
+
   // System network settings (platform admin) — DNS resolvers + NTP servers.
   systemNetwork: () => request<SystemNetworkConfig>(`/api/system/network`),
   setSystemNetwork: (cfg: SystemNetworkConfig) =>
@@ -3947,6 +4337,25 @@ export const api = {
   // All of the caller-tenant's ticket links (#103 UX-1) — the RCA candidate
   // list joins these by correlation id for the "Notified via" column.
   ticketLinks: () => request<{ links: TicketLinkRow[] }>(`/api/tickets/links`),
+  // ITSM delivery observability (#78 P3). The outbox is what is still on its
+  // way to the ticketing system — pending / retrying / failed / dead_letter —
+  // with the provider's own error text on the row. Both reads are paged and
+  // tenant-filtered server-side; `total` is the caller's real row count, so a
+  // short page is never mistaken for an empty outbox.
+  ticketsOutbox: (limit = 50, offset = 0) =>
+    request<TicketOutboxPage>(`/api/tickets/outbox?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`),
+  ticketsAudit: (opts: { limit?: number; offset?: number; corrObjectId?: string } = {}) => {
+    const p = new URLSearchParams();
+    p.set("limit", String(opts.limit ?? 50));
+    p.set("offset", String(opts.offset ?? 0));
+    if (opts.corrObjectId) p.set("corr_object_id", opts.corrObjectId);
+    return request<TicketAuditPage>(`/api/tickets/audit?${p.toString()}`);
+  },
+  // On-demand ITSM drift sweep for the caller's tenant ("Sync now"). Only the
+  // BIDIRECTIONAL providers are swept, so the count it answers with can be 0
+  // while integrations exist — the page says which.
+  integrationsReconcile: () =>
+    request<{ reconciled_providers: number }>("/api/integrations/reconcile", { method: "POST" }),
   correlationTicketCreate: (id: string) =>
     request<{ enqueued: string; corr_object_id: string; system: string }>(
       `/api/correlations/${encodeURIComponent(id)}/ticket`, { method: "POST", body: "{}" }),
@@ -3993,6 +4402,16 @@ export const api = {
   // the seam-aware graph. 501 on the file backend → caller degrades gracefully.
   seams: (state = "active") =>
     request<Seam[]>(`/api/seams?state=${encodeURIComponent(state)}`),
+  // Seam GROUPS — the redundancy roll-up over the flat seam list. The state
+  // filter is server-validated against the closed vocabulary; the PATCH is
+  // infrastructure:write and the server enforces the legal transitions, so the
+  // page offers the whole vocabulary and renders the refusal when one is not
+  // allowed rather than guessing the state machine here.
+  seamGroups: (state = "") =>
+    request<SeamGroup[]>(`/api/seams/groups${state ? `?state=${encodeURIComponent(state)}` : ""}`),
+  seamGroupSetState: (groupId: string, state: string) =>
+    request<SeamGroup>(`/api/seams/groups/${encodeURIComponent(groupId)}`,
+      { method: "PATCH", body: JSON.stringify({ state }) }),
   // Front page (#69)
   healthScore: (scope = "global", id?: string) => {
     const p = new URLSearchParams({ scope });
@@ -4362,6 +4781,15 @@ export const api = {
   securityFindingTrend: (query: SecFindingQuery = {}, bucket = "1d") =>
     request<SecTrend>(`/api/security/findings/trend?${secFindingParams({ ...query, cursor: undefined, limit: undefined })}&bucket=${encodeURIComponent(bucket)}`),
   securityPosture: () => request<SecPosture>("/api/security/posture"),
+  // The security PRODUCER lane's own health, and the manual trigger. Both
+  // routes are registered only while FEATURE_SECURITY_LANE is on — a dormant
+  // deployment answers 404, which the page reads as "the lane is not enabled
+  // here", never as "the lane is idle". Status is administration-gated and
+  // tenant-filtered server-side (a tenant admin sees only its own row); the
+  // scan refuses a cross-tenant caller with 400 and a queued/running one with
+  // 429, both of which the page renders as themselves.
+  securityLaneStatus: () => request<SecLaneStatus>("/api/security/lane/status"),
+  securityScan: () => request<SecScanQueued>("/api/security/scan", { method: "POST" }),
   // Exposure Stories are correlation objects filtered to the security evidence
   // class — the SAME RCA shape, so the workspace components are reused as-is.
   securityExposureStories: (limit = 20) =>
@@ -4444,6 +4872,26 @@ export const api = {
   wirelessControllers: () => request<WirelessController[]>("/api/wireless/controllers"),
   wirelessAPs: () => request<WirelessAP[]>("/api/wireless/aps"),
   wirelessWLANs: () => request<WirelessWLAN[]>("/api/wireless/wlans"),
+  wirelessBSSIDs: () => request<WirelessBSSID[]>("/api/wireless/bssids"),
+  // Guarded wireless remediation (#128 Phase 8). Every route 404s while
+  // FEATURE_WIRELESS_ACTIONS is off, which the queue renders as "not enabled
+  // here" rather than an empty queue. A rejection MUST carry a reason; the
+  // server refuses one that does not.
+  wirelessActions: () => request<WirelessActionRow[] | null>("/api/wireless/actions"),
+  wirelessActionApprove: (id: string, reason: string) =>
+    request<WirelessActionRow>(`/api/wireless/actions/${encodeURIComponent(id)}/approve`,
+      { method: "POST", body: JSON.stringify({ reason }) }),
+  wirelessActionReject: (id: string, reason: string) =>
+    request<WirelessActionRow>(`/api/wireless/actions/${encodeURIComponent(id)}/reject`,
+      { method: "POST", body: JSON.stringify({ reason }) }),
+  wirelessActionExecute: (id: string) =>
+    request<WirelessActionRow>(`/api/wireless/actions/${encodeURIComponent(id)}/execute`,
+      { method: "POST", body: JSON.stringify({}) }),
+  // Sealed quarantine (F-11 D5) — platform-admin metadata listing plus the
+  // depth/age summary. NEVER the payload: the server cannot serialize it.
+  // Re-attribution stays a deliberate break-glass operation, not a button.
+  quarantineList: (limit = 50, offset = 0) =>
+    request<QuarantineListing>(`/api/quarantine?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`),
   createNmsIntegration: (body: NmsIntegrationInput) =>
     request<NmsIntegration>("/api/nms/integrations", { method: "POST", body: JSON.stringify(body) }),
   updateNmsIntegration: (id: string, body: Partial<NmsIntegrationInput>) =>
@@ -5652,6 +6100,37 @@ export type WirelessController = {
   stale?: boolean;
 };
 
+// One radio's broadcast identity beneath an AP. `stale` means the connector has
+// not re-observed it inside its freshness window — the row is history, not a
+// live claim.
+export type WirelessBSSID = {
+  bssid: string;
+  radio_ref?: string;
+  wlan_ref?: string;
+  ap_ref?: string;
+  first_seen?: string;
+  last_seen?: string;
+  stale?: boolean;
+};
+
+// Guarded wireless remediation (#128 Phase 8) — mirrors wireless/actions.go.
+// `state` walks proposed → approved → executed → verified, or → rejected /
+// failed. `reason` is the approver's own words; a rejection always has one.
+export type WirelessActionRow = {
+  id: string;
+  kind: string;
+  target: string;
+  correlation_id: string;
+  state: string;
+  proposed_by: string;
+  approved_by?: string;
+  reason?: string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+  verify_note?: string;
+};
+
 export type WirelessWLAN = {
   wlan_id: string;
   profile_name: string;
@@ -6158,6 +6637,34 @@ export type SecTrend = { buckets: SecTrendBucket[] };
  * never "clear"); the funnel numbers are counts, never percentages of a total
  * the API did not state.
  */
+// ── security producer lane (P3-EMIT) ─────────────────────────────────────────
+// Mirrors internal/seclane: ScanStatus (one tenant's last run) and the status
+// envelope. `outcome` is one of ok | partial | error | skipped, and `skipped`
+// keeps the PREVIOUS real result's numbers — the lane refuses to blank a row
+// it did not re-measure.
+export type SecLaneScanStatus = {
+  tenant_id: string;
+  tenant_seg: string;
+  last_scan_id: string;
+  last_scan_at: string;
+  outcome: string;
+  trigger: string; // ticker | manual
+  duration_ms: number;
+  findings_emitted: number;
+  findings_truncated: number;
+  devices_assessed: number;
+  errors?: string[];
+};
+export type SecLaneStatus = {
+  enabled: boolean;
+  interval_seconds: number;
+  max_findings_per_tenant: number;
+  topic: string;
+  metrics: Record<string, number>;
+  tenants: SecLaneScanStatus[];
+};
+export type SecScanQueued = { queued: boolean; tenant_seg: string };
+
 export type SecPosture = {
   funnel: {
     scope: number;       // assets in scope

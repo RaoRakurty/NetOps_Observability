@@ -17,6 +17,7 @@ import {
   buildItem, isActionableCorr, bySeverityThenAge, filterItems,
 } from "./commandCenter.model";
 import { FilterBar, queueColumns, ExpandPanel } from "./CommandCenter";
+import WirelessRemediation from "./WirelessRemediation";
 
 export default function ActionQueue() {
   const [corr, setCorr] = useState<CorrObject[]>([]);
@@ -87,6 +88,11 @@ export default function ActionQueue() {
           </div>
         )}
       </div>
+      {/* The guarded wireless approval loop (#128 Phase 8): proposals raised
+          from a confirmed incident's own evidence, waiting on a person. It
+          renders nothing at all while FEATURE_WIRELESS_ACTIONS is off — a
+          dormant workflow must not look like an empty queue. */}
+      <WirelessRemediation />
     </div>
   );
 }

@@ -1,6 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "../components/EChart";
-import { api, FlowFilters } from "../services/api";
+import { api, FlowFilters, FlowAppRow, FlowAppsResp, FlowServiceRow } from "../services/api";
+import { operatorError, httpFailure } from "../lib/errors";
+import {
+  UNKNOWN_MEANING,
+  UNRESOLVED_SOURCE_MEANING,
+  UNMEASURED_LABEL,
+  UNMEASURED_MEANING,
+  DRILL_ACTION,
+  isUnknownApp,
+  appLabel,
+  appRowKey,
+  appShare,
+  appTotals,
+  sourceSide,
+  sortAppRows,
+  tierView,
+  groupServiceRows,
+  sortServiceRows,
+  serviceMeasuredBytes,
+  serviceShare,
+  coverageSentence,
+  drillNote,
+  windowScopeCaveat,
+  windowScopeNote,
+} from "./flowsAppViews";
 import { useAppNames, ResolvedApp } from "../services/appNames";
 import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric, hexToRgba } from "../theme/charts";
 import { cssVar } from "../theme/tokens";
@@ -94,6 +118,8 @@ const SECTIONS: { id: string; label: string; icon: string }[] = [
   { id: "health", label: "Device Health", icon: "infrastructure" },
   { id: "flows", label: "Flows", icon: "flows" },
   { id: "conversations", label: "Conversations", icon: "topology" },
+  { id: "apps", label: "Applications", icon: "dashboards" },
+  { id: "services", label: "Services", icon: "directory" },
   { id: "asn", label: "Autonomous Systems", icon: "stack" },
   { id: "geo", label: "Geo IP", icon: "explore" },
   { id: "sports", label: "Source Ports", icon: "arrow-up-right" },
@@ -432,6 +458,325 @@ export function ConversationsSection({ q }: { q: FlowQuery }) {
       <div className="flows-grid">
         <TopNPanel title="Top Initiator IPs" by="src_addr" q={q} keyHeader="Source IP" />
         <TopNPanel title="Top Responder IPs" by="dst_addr" q={q} keyHeader="Destination IP" />
+      </div>
+    </>
+  );
+}
+
+// ── Section: Applications — the app view of the flow plane (GET /api/flows/apps)
+//
+// The rows are the top SOURCE→DESTINATION app pairs by volume, so the table
+// reads "payroll → AWS S3". Three facts have to survive the rendering, and all
+// three live in flowsAppViews.ts with tests on them: "unknown" is a measured
+// bucket rather than a gap, a blank source is NOT RESOLVED rather than an
+// unnamed app, and the endpoint takes only `since` — the filter bar and the
+// direction toggle do not narrow it, which the screen says out loud.
+export function ApplicationsSection({
+  q,
+  filterKeys,
+  onDrill,
+}: {
+  q: FlowQuery;
+  filterKeys: string[];
+  onDrill: () => void;
+}) {
+  const [resp, setResp] = useState<FlowAppsResp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await api.flowsApps(q.since);
+        if (!alive) return;
+        setResp(res ?? null);
+        setErr(null);
+      } catch (e) {
+        if (alive) setErr(operatorError(e, "Application traffic could not be read for this window."));
+      }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [q.since]);
+
+  const rows = useMemo(() => sortAppRows(resp?.apps), [resp]);
+  const totals = useMemo(() => appTotals(rows), [rows]);
+  const named = rows.filter((r) => !isUnknownApp(r.app)).length;
+  const caveat = windowScopeCaveat(filterKeys, "Applications") ?? windowScopeNote("Applications");
+
+  const cols = useMemo<Column<FlowAppRow>[]>(
+    () => [
+      {
+        key: "src", header: "Source", width: "20%", sortable: true,
+        text: (r) => sourceSide(r.src_app).label,
+        render: (r) => {
+          const s = sourceSide(r.src_app);
+          return (
+            <span
+              style={s.kind === "named" ? undefined : { color: "var(--fg-subtle)" }}
+              title={s.kind === "unresolved" ? UNRESOLVED_SOURCE_MEANING : s.kind === "unknown" ? UNKNOWN_MEANING : undefined}
+            >
+              {s.label}
+            </span>
+          );
+        },
+      },
+      {
+        key: "app", header: "Destination application", width: "22%", sortable: true,
+        text: (r) => appLabel(r.app),
+        render: (r) => (
+          <span title={isUnknownApp(r.app) ? UNKNOWN_MEANING : undefined}>
+            {appLabel(r.app)}
+            {isUnknownApp(r.app) && (
+              <span style={{ display: "block", fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.2 }}>
+                uncatalogued or internal
+              </span>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: "tier", header: "Attribution", width: "16%", sortable: true,
+        text: (r) => tierView(r.tier).label,
+        render: (r) => {
+          const t = tierView(r.tier);
+          return <span style={{ color: t.tone }} title={t.meaning}>{t.label}</span>;
+        },
+      },
+      { key: "bytes", header: "Bytes", align: "right", sortable: true, sortValue: (r) => Number(r.bytes) || 0, render: (r) => fmtBytes(r.bytes) },
+      {
+        key: "share", header: "Share", align: "right", sortable: true,
+        sortValue: (r) => appShare(r, totals.bytes) ?? -1,
+        render: (r) => {
+          const p = appShare(r, totals.bytes);
+          return p === null ? "—" : `${p.toFixed(1)}%`;
+        },
+      },
+      { key: "flows", header: "Flows", align: "right", sortable: true, sortValue: (r) => Number(r.flows) || 0, render: (r) => fmtNum(r.flows) },
+      { key: "dests", header: "Far ends", align: "right", sortable: true, sortValue: (r) => Number(r.dests) || 0, render: (r) => fmtNum(r.dests) },
+      {
+        key: "drill", header: "Talkers", width: 190, align: "left",
+        render: (r) => (
+          <button className="btn-ghost" onClick={onDrill} title={drillNote(appLabel(r.app))}>
+            {DRILL_ACTION}
+          </button>
+        ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [totals.bytes, onDrill],
+  );
+
+  return (
+    <>
+      <StatStrip>
+        <Stat label="Volume named in this window" value={resp ? fmtBytes(totals.bytes) : "—"} />
+        <Stat label="Applications named" value={resp ? fmtNum(named) : "—"} />
+        <Stat
+          label="Share with no name"
+          value={resp && totals.bytes > 0 ? `${((100 * totals.unknownBytes) / totals.bytes).toFixed(1)}%` : "—"}
+          tone={totals.bytes > 0 && totals.unknownBytes / totals.bytes > 0.5 ? "warn" : ""}
+        />
+        <Stat label="Flow records" value={resp ? fmtNum(totals.flows) : "—"} />
+      </StatStrip>
+      <div className="panel" style={{ minWidth: 0 }}>
+        <div className="panel-tools"><h3>Applications by volume (source → destination)</h3></div>
+        <p className="mini-meta" style={{ margin: "0 2px 8px" }}>{caveat}</p>
+        {err ? (
+          <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
+        ) : rows.length === 0 ? (
+          <div className="empty board-empty">
+            <div className="board-empty-msg">
+              {resp ? "Nothing was named in this window." : "Reading the application view…"}
+            </div>
+            {resp && (
+              <div className="board-empty-hint">
+                Either no flows arrived in this window, or none of them reached an address any naming source claims.
+              </div>
+            )}
+          </div>
+        ) : (
+          <DataTable<FlowAppRow>
+            rows={rows}
+            columns={cols}
+            rowKey={appRowKey}
+            height={Math.min(460, 40 + rows.length * 28)}
+            ariaLabel="Applications by volume"
+            initialSort={{ key: "bytes", dir: "desc" }}
+          />
+        )}
+        <p className="mini-meta" style={{ margin: "8px 2px 0" }}>{coverageSentence(resp?.coverage)}</p>
+        {totals.unknownRows > 0 && (
+          <p className="mini-meta" style={{ margin: "4px 2px 0" }}>{UNKNOWN_MEANING}</p>
+        )}
+        {rows.some((r) => sourceSide(r.src_app).kind === "unresolved") && (
+          <p className="mini-meta" style={{ margin: "4px 2px 0" }}>{UNRESOLVED_SOURCE_MEANING}</p>
+        )}
+        <p className="mini-meta" style={{ margin: "4px 2px 0" }}>{drillNote("one application")}</p>
+      </div>
+    </>
+  );
+}
+
+// ── Section: Services — the catalog view of the flow plane (/api/flows/services)
+//
+// The distinction this view exists for: a service with no usable selector is
+// UNMEASURED, not idle. It is grouped and labelled, never sorted among real
+// zeroes, and it is excluded from the share denominator. When the catalog store
+// is absent the endpoint answers 501 with a reason — the reason is what the
+// operator sees, never an empty table.
+export function ServicesSection({
+  q,
+  filterKeys,
+  onDrill,
+}: {
+  q: FlowQuery;
+  filterKeys: string[];
+  onDrill: () => void;
+}) {
+  const [rows, setRows] = useState<FlowServiceRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await api.flowsServices(q.since);
+        if (!alive) return;
+        setRows(res?.services ?? []);
+        setErr(null);
+        setUnavailable(null);
+      } catch (e) {
+        if (!alive) return;
+        const f = httpFailure(e);
+        if (f?.status === 501) {
+          // A refusal with a stated reason — show the reason, not an empty list.
+          setUnavailable(operatorError(e, "The service catalog is not available on this deployment."));
+          setErr(null);
+        } else {
+          setErr(operatorError(e, "Service traffic could not be read for this window."));
+        }
+        setRows(null);
+      }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [q.since]);
+
+  const grouped = useMemo(() => groupServiceRows(rows), [rows]);
+  const ordered = useMemo(() => sortServiceRows(rows), [rows]);
+  const measuredBytes = useMemo(() => serviceMeasuredBytes(rows), [rows]);
+  const caveat = windowScopeCaveat(filterKeys, "Services") ?? windowScopeNote("Services");
+
+  const cols = useMemo<Column<FlowServiceRow>[]>(
+    () => [
+      {
+        key: "name", header: "Service", width: "28%", sortable: true, text: (r) => r.name,
+        render: (r) => (
+          <span title={r.attributed ? undefined : UNMEASURED_MEANING}>
+            {r.name}
+            {!r.attributed && (
+              <span style={{ display: "block", fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.2 }}>
+                no selector yet
+              </span>
+            )}
+          </span>
+        ),
+      },
+      { key: "criticality", header: "Criticality", width: "14%", sortable: true, text: (r) => r.criticality, render: (r) => r.criticality || "Not set" },
+      {
+        key: "bytes", header: "Bytes", align: "right", sortable: true,
+        sortValue: (r) => (r.attributed ? Number(r.bytes) || 0 : -1),
+        render: (r) => (r.attributed ? fmtBytes(r.bytes) : <span style={{ color: "var(--fg-subtle)" }} title={UNMEASURED_MEANING}>{UNMEASURED_LABEL}</span>),
+      },
+      {
+        key: "share", header: "Share", align: "right", sortable: true,
+        sortValue: (r) => serviceShare(r, measuredBytes) ?? -1,
+        render: (r) => {
+          const p = serviceShare(r, measuredBytes);
+          return p === null ? <span style={{ color: "var(--fg-subtle)" }}>{UNMEASURED_LABEL}</span> : `${p.toFixed(1)}%`;
+        },
+      },
+      {
+        key: "flows", header: "Flows", align: "right", sortable: true,
+        sortValue: (r) => (r.attributed ? Number(r.flows) || 0 : -1),
+        render: (r) => (r.attributed ? fmtNum(r.flows) : <span style={{ color: "var(--fg-subtle)" }}>{UNMEASURED_LABEL}</span>),
+      },
+      {
+        key: "drill", header: "Talkers", width: 190, align: "left",
+        render: (r) => (
+          <button className="btn-ghost" onClick={onDrill} title={drillNote(r.name)}>
+            {DRILL_ACTION}
+          </button>
+        ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [measuredBytes, onDrill],
+  );
+
+  if (unavailable) {
+    return (
+      <div className="panel">
+        <div className="panel-tools"><h3>Services</h3></div>
+        <div className="empty board-empty">
+          <div className="board-empty-msg">The service view is not available on this deployment.</div>
+          <div className="board-empty-hint">{unavailable}</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <StatStrip>
+        <Stat label="Services in the catalog" value={rows ? fmtNum(rows.length) : "—"} />
+        <Stat label="Services being measured" value={rows ? fmtNum(grouped.measured.length) : "—"} />
+        <Stat
+          label="Awaiting a selector"
+          value={rows ? fmtNum(grouped.unmeasured.length) : "—"}
+          tone={grouped.unmeasured.length > 0 ? "warn" : ""}
+        />
+        <Stat label="Measured volume" value={rows ? fmtBytes(measuredBytes) : "—"} />
+      </StatStrip>
+      <div className="panel" style={{ minWidth: 0 }}>
+        <div className="panel-tools"><h3>Services by measured volume</h3></div>
+        <p className="mini-meta" style={{ margin: "0 2px 8px" }}>{caveat}</p>
+        {err ? (
+          <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
+        ) : ordered.length === 0 ? (
+          <div className="empty board-empty">
+            <div className="board-empty-msg">
+              {rows ? "No services are defined for this tenant yet." : "Reading the service view…"}
+            </div>
+            {rows && (
+              <div className="board-empty-hint">
+                Define a service and give it a selector, and its share of the flow plane appears here.
+              </div>
+            )}
+          </div>
+        ) : (
+          <DataTable<FlowServiceRow>
+            rows={ordered}
+            columns={cols}
+            rowKey={(r) => r.service_id}
+            height={Math.min(460, 40 + ordered.length * 28)}
+            ariaLabel="Services by measured volume"
+          />
+        )}
+        {grouped.unmeasured.length > 0 && (
+          <p className="mini-meta" style={{ margin: "8px 2px 0" }}>{UNMEASURED_MEANING}</p>
+        )}
+        <p className="mini-meta" style={{ margin: "4px 2px 0" }}>{drillNote("one service")}</p>
       </div>
     </>
   );
@@ -831,6 +1176,12 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
         )}
         {section === "flows" && <FlowsSection q={q} />}
         {section === "conversations" && <ConversationsSection q={q} />}
+        {section === "apps" && (
+          <ApplicationsSection q={q} filterKeys={activeFilters.map(([k]) => k)} onDrill={() => setSection("conversations")} />
+        )}
+        {section === "services" && (
+          <ServicesSection q={q} filterKeys={activeFilters.map(([k]) => k)} onDrill={() => setSection("conversations")} />
+        )}
         {section === "asn" && (
           <div className="flows-grid">
             <TopNPanel title="Top Initiator AS" by="src_as" q={q} keyHeader="Source AS" />

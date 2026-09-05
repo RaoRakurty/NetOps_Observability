@@ -50,6 +50,7 @@ const AsPathGraphPanel = lazy(() => import("./bgp/AsPathGraphPanel"));
 const PrefixesPanel = lazy(() => import("./bgp/PrefixesPanel"));
 const PeersPanel = lazy(() => import("./bgp/PeersPanel"));
 const BogonsPanel = lazy(() => import("./bgp/BogonsPanel"));
+const AlertPolicyPanel = lazy(() => import("./bgp/AlertPolicyPanel"));
 
 /** Watchlist + alert-history refresh cadence. Matches the near-live feed's own
  *  bounded poll in spirit: slow enough to be free, fast enough that an operator
@@ -506,6 +507,13 @@ export default function BgpOps() {
               status={alertStatus} alerts={alerts} active={active} updatedAt={watchAt}
               onInvestigate={(r) => { setQuery(r); investigate(r); }}
             />
+          </Suspense>
+
+          {/* 5b. The policy those verdicts came from. It sits directly under the
+                 incidents it decides, so an operator who disagrees with a
+                 verdict can change the rule without leaving the screen. */}
+          <Suspense fallback={<PanelFallback label="the alert policy" />}>
+            <AlertPolicyPanel status={alertStatus} />
           </Suspense>
 
           {/* 6. Peers */}

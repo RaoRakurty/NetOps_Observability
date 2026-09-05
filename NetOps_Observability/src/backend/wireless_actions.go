@@ -35,6 +35,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -83,6 +84,9 @@ func (s *server) wirelessActionAudit(r *http.Request, claims jwtClaims, action s
 		detail["state"] = string(a.State)
 		detail["correlation_id"] = a.CorrelationID
 		detail["id"] = a.ID
+		if a.Reason != "" {
+			detail["reason"] = a.Reason
+		}
 	}
 	s.audit.Record(AuditEvent{
 		Time: time.Now().UTC(), Actor: claims.Sub, Tenant: tenant, Cross: cross,
@@ -135,6 +139,25 @@ func (s *server) handleWirelessActions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// wirelessActionReason reads the approver's note off the request. An EMPTY body
+// is legitimate (approve and execute need no note), a body that is not the
+// expected object is not: an unreadable payload must never be silently treated
+// as "no reason given" on a route where the absence of a reason is itself a
+// decision the store acts on.
+func wirelessActionReason(w http.ResponseWriter, r *http.Request) (string, error) {
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&in)
+	if errors.Is(err, io.EOF) {
+		return "", nil // no body at all
+	}
+	if err != nil {
+		return "", err
+	}
+	return wireless.NormalizeReason(in.Reason)
+}
+
 // handleWirelessActionItem — POST /api/wireless/actions/{id}/{approve|reject|execute}.
 func (s *server) handleWirelessActionItem(w http.ResponseWriter, r *http.Request) {
 	if !wirelessActionsEnabled() {
@@ -158,15 +181,20 @@ func (s *server) handleWirelessActionItem(w http.ResponseWriter, r *http.Request
 		return
 	}
 	id, verb := parts[0], parts[1]
-	var (
-		a   *wirelessAction
-		err error
-	)
+	// The approver's note. Bounded and OPTIONAL on the wire — a body-less POST
+	// stays valid (the shape the CLI used before the approval queue had a UI) —
+	// but the store still refuses a rejection that carries no reason.
+	reason, err := wirelessActionReason(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var a *wirelessAction
 	switch verb {
 	case "approve":
-		a, err = s.wirelessActions.Approve(tenant, id, claims.Sub)
+		a, err = s.wirelessActions.Approve(tenant, id, claims.Sub, reason)
 	case "reject":
-		a, err = s.wirelessActions.Reject(tenant, id, claims.Sub)
+		a, err = s.wirelessActions.Reject(tenant, id, claims.Sub, reason)
 	case "execute":
 		a, err = s.wirelessActions.Execute(tenant, id)
 	default:

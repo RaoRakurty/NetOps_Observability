@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, WirelessAP, WirelessController, WirelessWLAN } from "../services/api";
+import { api, WirelessAP, WirelessBSSID, WirelessController, WirelessWLAN } from "../services/api";
 import { Skeleton, Stat, StatStrip } from "../components/ui";
 
 // Wireless (#128 Phase 7) — the wireless canonical inventory: controllers
@@ -34,10 +34,72 @@ function RadioChips({ ap }: { ap: WirelessAP }) {
   );
 }
 
+/**
+ * The broadcast identities beneath the APs. One row per BSSID, grouped by the
+ * AP that carries it, with the WLAN it serves and the radio it sits on.
+ *
+ * Honesty: a BSSID read that FAILED is not an AP that broadcasts nothing, and
+ * an AP the connector reported no BSSID for is not an AP with no SSIDs on air —
+ * both say which they are. `stale` means the connector has not re-observed the
+ * BSSID inside its freshness window, so the row is history, not a live claim.
+ */
+function BssidTable({ aps, byAP, read, failed }: {
+  aps: WirelessAP[];
+  byAP: Map<string, WirelessBSSID[]>;
+  read: boolean;
+  failed: boolean;
+}) {
+  if (failed || !read) {
+    return (
+      <p className="muted" style={{ marginTop: 8 }}>
+        The BSSIDs beneath these access points were not read. What each radio is broadcasting is unknown
+        here — it is not a claim that they broadcast nothing.
+      </p>
+    );
+  }
+  const rows = aps.flatMap((ap) => (byAP.get(ap.ap_id) ?? []).map((b) => ({ ap, b })));
+  if (rows.length === 0) {
+    return (
+      <p className="muted" style={{ marginTop: 8 }}>
+        The controller connector reported no BSSID for these access points. A controller that does not
+        publish BSSIDs still serves clients; nothing is inferred from the gap.
+      </p>
+    );
+  }
+  return (
+    <>
+      <h4 style={{ margin: "12px 0 4px" }}>BSSIDs</h4>
+      <table className="data-table">
+        <thead>
+          <tr><th>BSSID</th><th>Access point</th><th>WLAN</th><th>Radio</th><th>First seen</th><th>Last seen</th></tr>
+        </thead>
+        <tbody>
+          {rows.map(({ ap, b }) => (
+            <tr key={`${ap.ap_id}-${b.bssid}`} className={b.stale ? "row-stale" : ""}>
+              <td className="mono">{b.bssid}</td>
+              <td>{ap.name || ap.ap_id}</td>
+              <td>{b.wlan_ref || "not reported"}</td>
+              <td>{b.radio_ref || "not reported"}</td>
+              <td>{fmtSeen(b.first_seen)}</td>
+              <td>{fmtSeen(b.last_seen)}{b.stale ? " (stale)" : ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
 export default function Wireless() {
   const [controllers, setControllers] = useState<WirelessController[] | null>(null);
   const [aps, setAPs] = useState<WirelessAP[] | null>(null);
   const [wlans, setWLANs] = useState<WirelessWLAN[] | null>(null);
+  // BSSIDs are read separately and are allowed to FAIL without taking the page
+  // with them: they are the detail beneath an AP, not the inventory itself.
+  // `null` here means "not read", which the sub-table states rather than
+  // rendering as "this AP broadcasts nothing".
+  const [bssids, setBSSIDs] = useState<WirelessBSSID[] | null>(null);
+  const [bssidErr, setBSSIDErr] = useState(false);
   const [err, setErr] = useState("");
 
   useEffect(() => {
@@ -50,8 +112,25 @@ export default function Wireless() {
         setWLANs(ws ?? []);
       })
       .catch((e) => { if (alive) setErr(String(e?.message || e)); });
+    api.wirelessBSSIDs()
+      .then((bs) => { if (alive) setBSSIDs(bs ?? []); })
+      .catch(() => { if (alive) { setBSSIDs(null); setBSSIDErr(true); } });
     return () => { alive = false; };
   }, []);
+
+  // BSSIDs grouped under the AP that broadcasts them.
+  const bssidsByAP = useMemo(() => {
+    const m = new Map<string, WirelessBSSID[]>();
+    for (const b of bssids ?? []) {
+      const key = b.ap_ref || "";
+      if (!key) continue;
+      const list = m.get(key);
+      if (list) list.push(b);
+      else m.set(key, [b]);
+    }
+    for (const list of m.values()) list.sort((a, b) => a.bssid.localeCompare(b.bssid));
+    return m;
+  }, [bssids]);
 
   const loading = controllers === null || aps === null || wlans === null;
   const stats = useMemo(() => {
@@ -142,6 +221,7 @@ export default function Wireless() {
               ))}
             </tbody>
           </table>
+          <BssidTable aps={aps!} byAP={bssidsByAP} read={bssids !== null} failed={bssidErr} />
         </section>
       )}
 

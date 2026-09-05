@@ -7,7 +7,7 @@ sidebar_position: 7
 
 # Measure WAN paths
 
-**Investigate → Paths → WAN Paths** puts one row on screen for every WAN interface, and for every interface directly connected to a WAN device. The page heading reads **WAN Interface Metrics**. Each row carries live utilization and status from the interface itself, and a latency, jitter, loss, QoE and availability SLA measured to a target the platform derived for that interface. An SLA cell with no measurement behind it reads as a dash, never as a number.
+**Investigate → Paths → WAN Paths** puts one row on screen for every WAN interface, and for every interface directly connected to a WAN device. The page heading reads **WAN Interface Metrics**. Each row carries live utilization and status from the interface itself, and a latency, jitter, loss, QoE and availability SLA measured to a target the platform derived for that interface. An SLA cell with no measurement behind it reads as a dash, never as a number. Below the table the page carries the derived paths and endpoints, and the measurement policy that produces both.
 
 ## Before you begin
 
@@ -53,6 +53,46 @@ The **Measured by** badge names the winning tier and method per row, so a latenc
 ### Step 4 - Narrow the table
 
 Use **Search devices, interfaces, targets…** to match on device, interface, remote device, target, target label or measurement method. The counter beside the box states how many of the total rows match. Sort by **Utilization** to bring the busiest circuit to the top, which is the default order.
+
+### Step 5 - Read the measured paths and the endpoint registry
+
+Below the table the page carries two derived sections. Neither is stored: the
+platform re-derives both from the interface addresses, the neighbours it learned
+and the measurement policy.
+
+**Measured paths** puts one row on each interface-to-target link, with the local
+device and interface, the far end, and how the target was derived. A row marked
+**held** is in the registry and is not being measured.
+
+**Endpoint registry** lists every interface the projection covers, its address,
+the address the far end measures to, its site, and its derived target. An
+interface marked **linked** is not on a WAN device. It is directly connected to
+one, so the platform measures it too.
+
+Both sections are empty until an interface has an address and either a neighbour
+on the wire, a declared ISP next-hop or a reachability anchor. The empty state
+says which of the three is missing.
+
+### Step 6 - Set the measurement policy
+
+**Measurement policy** is the only stored part of this page. Saving it re-derives
+the endpoint registry and the measured paths above.
+
+1. Set the **WAN device name pattern**. A device whose name matches is a WAN
+   device. Matching ignores case, and the default is `wan|edge|gw|dmz`.
+2. Leave **Also measure interfaces directly connected to a WAN device** selected
+   to keep both ends of a WAN hop measured.
+3. Set the **Reachability anchors** an interface measures to when it has neither
+   a neighbour on the wire nor a declared next-hop. Separate them with commas.
+   The defaults are `1.1.1.1` and `8.8.8.8`.
+4. Add an **ISP next-hop override** for each interface whose far end is an ISP.
+   A next-hop is where your ownership of the path hands off to the ISP. Key it by
+   device, or by `device/interface` for a single interface.
+5. Select **Save policy**.
+
+`infrastructure:write` is required to save. Without it the section renders the
+stored policy read-only and says so, rather than offering a control that is
+refused.
 
 ## What you see
 

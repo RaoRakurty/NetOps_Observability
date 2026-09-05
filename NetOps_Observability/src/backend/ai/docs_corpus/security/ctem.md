@@ -110,6 +110,37 @@ The same rule holds one level up. A device whose platform label matches no
 vendor profile yields exactly one finding, `platform-unresolved`, saying that
 no hardening control was evaluated for it.
 
+## Seam groups
+
+A seam is one ownership handoff. A **seam group** is the set of seams that carry
+the same traffic redundantly, such as two ISP circuits at one site or an
+active and standby pair. That group is the unit an operator reasons about
+during an outage, because a fault on one member is not the same event as a
+fault on the group.
+
+Correlix proposes a grouping from evidence and records how confident it is. It
+never presents a proposal as settled. The **Seam groups** panel on Security
+Overview lists each group with its type, redundancy model, member count, state,
+what proposed it, and its confidence. A group with no recorded confidence reads
+`not stated` rather than 0 %.
+
+The state machine belongs to the server. The panel offers the whole vocabulary
+and shows the server's own refusal when a step is not legal, rather than
+guessing the transitions:
+
+| State | What it means |
+|---|---|
+| `suggested` | Proposed from evidence. Not confirmed by a person |
+| `confirmed` | A person agreed the grouping is real |
+| `active` | In use for fault and impact reasoning |
+| `rejected` | A person said the grouping is wrong |
+| `retired` | It was real and no longer applies |
+
+Confirming a proposed grouping needs `infrastructure:write`. Without it the
+panel renders read-only and offers no state control at all. Confirming a
+grouping is what lets the engine report that a redundant pair is degraded,
+instead of filing two unrelated seam faults.
+
 ## Truncation is reported
 
 The current-state fold is bounded at 5000 distinct findings. Past that bound

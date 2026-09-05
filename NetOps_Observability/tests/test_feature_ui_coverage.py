@@ -231,7 +231,7 @@ def test_allowlist_has_no_stale_entries(surface):
 # The debt recorded on 2026-09-05. This number is a RATCHET: building a UI for
 # one of these removes its entry and lowers the pin. It must never be raised —
 # a new gap belongs in `headless` (with a reason) or in a page.
-MISSING_UI_BASELINE = 23
+MISSING_UI_BASELINE = 2
 
 
 def test_missing_ui_debt_only_shrinks():

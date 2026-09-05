@@ -169,6 +169,7 @@ vi.mock("./bgp/RpkiPanel", () => ({ default: stubPanel("rpki") }));
 vi.mock("./bgp/AspaCard", () => ({ default: stubPanel("aspa") }));
 vi.mock("./bgp/GeofeedPanel", () => ({ default: stubPanel("geofeed") }));
 vi.mock("./bgp/PrefixesPanel", () => ({ default: stubPanel("incidents") }));
+vi.mock("./bgp/AlertPolicyPanel", () => ({ default: stubPanel("alert-policy") }));
 vi.mock("./bgp/PeersPanel", () => ({ default: stubPanel("peers") }));
 vi.mock("./bgp/BogonsPanel", () => ({ default: stubPanel("bogons") }));
 // These two render INSIDE a page-owned section (`bare`), so they emit no
@@ -194,7 +195,9 @@ const watchEntry = (resource: string) => ({ resource, kind: "asn" as const, note
  *  the panels that landed on 2026-09-02 slotted into the right-hand column. */
 const SECTION_ORDER = [
   "verdict", "paths", "updates",
-  "rpki", "incidents", "peers", "bogons", "ownership", "geofeed", "aspa",
+  // 2026-09-05: the alert policy joins the right column directly beneath the
+  // incidents it decides — the verdicts above are this policy's output.
+  "rpki", "incidents", "alert-policy", "peers", "bogons", "ownership", "geofeed", "aspa",
 ];
 
 function sectionsInDom(container: HTMLElement): string[] {
