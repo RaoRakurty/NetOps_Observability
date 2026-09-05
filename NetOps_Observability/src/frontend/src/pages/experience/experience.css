@@ -1,0 +1,327 @@
+/* experience.css — Digital Experience (DEM) surface.
+ *
+ * Every colour, radius, space and size here resolves to a token from
+ * styles.css. There is no hex literal in this file on purpose: the page has to
+ * read correctly in both themes, and the NOC palette is the single source of
+ * truth for what "poor" looks like.
+ *
+ * Class prefix is `dx-` throughout so nothing collides with the `ao-`, `cc-`,
+ * `ds-` or `rw-` families already in the app.
+ */
+
+/* ── shell ────────────────────────────────────────────────────────────────── */
+
+.dx { display: flex; flex-direction: column; gap: var(--sp-3); }
+
+.dx-tabs {
+  display: flex; flex-wrap: wrap; gap: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+.dx-tab {
+  appearance: none; background: transparent; border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--fg-muted); cursor: pointer;
+  font-size: var(--fs-sm); font-weight: 600;
+  padding: var(--sp-2) var(--sp-3);
+}
+.dx-tab:hover { color: var(--fg); }
+.dx-tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.dx-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.dx-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3);
+  justify-content: space-between;
+}
+.dx-toolbar-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+
+.dx-window { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: var(--r-2); overflow: hidden; }
+.dx-window button {
+  appearance: none; background: var(--surface); border: 0; cursor: pointer;
+  color: var(--fg-muted); font-size: var(--fs-meta); font-weight: 600;
+  padding: var(--sp-1) var(--sp-3);
+}
+.dx-window button[aria-pressed="true"] { background: var(--surface-2); color: var(--fg); }
+.dx-window button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ── honest primitives ────────────────────────────────────────────────────── */
+
+.dx-nm {
+  display: inline-flex; flex-direction: column; gap: 2px;
+  color: var(--fg-subtle); font-size: var(--fs-meta); font-style: normal;
+}
+.dx-nm-tag {
+  align-self: flex-start;
+  border: 1px dashed var(--border-strong); border-radius: var(--r-1);
+  color: var(--fg-subtle); font-size: var(--fs-micro); font-weight: 600;
+  letter-spacing: 0.02em; padding: 1px var(--sp-2); text-transform: uppercase;
+}
+.dx-nm-why { color: var(--fg-muted); line-height: 1.45; max-width: 62ch; }
+.dx-nm-detail { color: var(--fg-subtle); line-height: 1.45; max-width: 62ch; }
+
+.dx-band {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  border: 1px solid currentColor; border-radius: 999px;
+  font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0.02em;
+  padding: 1px var(--sp-2); text-transform: uppercase; white-space: nowrap;
+}
+.dx-band--good { color: var(--ok); }
+.dx-band--fair { color: var(--warn); }
+.dx-band--poor { color: var(--crit); }
+.dx-band--not_measured { color: var(--fg-subtle); border-style: dashed; }
+
+.dx-sev {
+  display: inline-flex; align-items: center;
+  border-radius: var(--r-1); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: 0.02em; padding: 1px var(--sp-2); text-transform: uppercase;
+}
+.dx-sev--critical { color: var(--sev-critical); background: var(--sev-critical-bg); }
+.dx-sev--high     { color: var(--sev-error);    background: var(--sev-error-bg); }
+.dx-sev--medium   { color: var(--sev-warning);  background: var(--sev-warning-bg); }
+.dx-sev--low      { color: var(--sev-info);     background: var(--sev-info-bg); }
+.dx-sev--info     { color: var(--sev-debug);    background: var(--sev-debug-bg); }
+
+/* provenance: an inferred item must never look like an observed one. */
+.dx-prov {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  border-radius: var(--r-1); font-size: var(--fs-micro); font-weight: 600;
+  padding: 0 var(--sp-2); white-space: nowrap;
+}
+.dx-prov--observed { color: var(--ok); border: 1px solid var(--ok); }
+.dx-prov--inferred {
+  color: var(--warn); border: 1px dashed var(--warn);
+  font-style: italic;
+}
+.dx-prov--unknown { color: var(--fg-subtle); border: 1px dotted var(--fg-subtle); font-style: italic; }
+.dx-prov--simulated { color: var(--sev-notice); border: 1px dashed var(--sev-notice); font-style: italic; }
+
+.dx-conf { display: inline-flex; flex-direction: column; gap: 2px; }
+.dx-conf-head { display: inline-flex; align-items: baseline; gap: var(--sp-2); }
+.dx-conf-num { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 700; }
+.dx-conf-tier {
+  font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.dx-conf-tier--confirmed { color: var(--ok); }
+.dx-conf-tier--suspected { color: var(--warn); }
+.dx-conf-tier--undetermined { color: var(--fg-subtle); }
+.dx-conf-bar { background: var(--surface-2); border-radius: 999px; height: 4px; width: 100%; }
+.dx-conf-fill { background: var(--accent); border-radius: 999px; height: 100%; }
+.dx-conf-factors { display: grid; gap: 2px; margin: var(--sp-1) 0 0; padding: 0; list-style: none; }
+.dx-conf-factors li { color: var(--fg-muted); font-size: var(--fs-micro); line-height: 1.4; }
+.dx-conf-factors b { font-family: var(--font-mono); color: var(--fg); }
+.dx-gate { display: grid; gap: 2px; margin: var(--sp-1) 0 0; padding-left: var(--sp-4); }
+.dx-gate li { color: var(--warn); font-size: var(--fs-micro); line-height: 1.4; }
+
+/* ── cards ────────────────────────────────────────────────────────────────── */
+
+.dx-cards {
+  display: grid; gap: var(--sp-3);
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.dx-card {
+  appearance: none; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-3); cursor: pointer; display: flex; flex-direction: column;
+  gap: var(--sp-1); padding: var(--sp-3) var(--sp-4); text-align: left;
+}
+.dx-card:hover { border-color: var(--border-strong); }
+.dx-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dx-card-label {
+  color: var(--fg-muted); font-size: var(--fs-meta); font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.dx-card-value {
+  color: var(--fg); font-family: var(--font-mono); font-size: var(--fs-xl);
+  font-weight: 700; line-height: 1.1;
+}
+.dx-card-unit { color: var(--fg-subtle); font-size: var(--fs-meta); font-weight: 600; }
+.dx-card-foot { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.dx-delta { font-family: var(--font-mono); font-size: var(--fs-meta); font-weight: 700; }
+.dx-delta--up { color: var(--ok); }
+.dx-delta--down { color: var(--crit); }
+.dx-delta--flat { color: var(--fg-subtle); }
+.dx-card-prev { color: var(--fg-subtle); font-size: var(--fs-micro); }
+
+/* ── generic panel bits ───────────────────────────────────────────────────── */
+
+.dx-section { display: flex; flex-direction: column; gap: var(--sp-3); }
+.dx-section-head { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
+.dx-h2 { margin: 0; font-size: var(--fs-md); font-weight: 700; color: var(--fg); }
+.dx-h3 { margin: 0; font-size: var(--fs-sm); font-weight: 700; color: var(--fg); }
+.dx-note { color: var(--fg-muted); font-size: var(--fs-meta); line-height: 1.5; margin: 0; max-width: 80ch; }
+.dx-mono { font-family: var(--font-mono); }
+.dx-subtle { color: var(--fg-subtle); }
+.dx-muted { color: var(--fg-muted); }
+
+.dx-table { border-collapse: collapse; font-size: var(--fs-meta); width: 100%; }
+.dx-table th {
+  border-bottom: 1px solid var(--border); color: var(--fg-muted);
+  font-weight: 600; padding: var(--sp-2); text-align: left; white-space: nowrap;
+}
+.dx-table td { border-bottom: 1px solid var(--border); padding: var(--sp-2); vertical-align: top; }
+.dx-table tbody tr:hover { background: var(--surface-2); }
+.dx-row-btn {
+  appearance: none; background: transparent; border: 0; color: var(--fg);
+  cursor: pointer; font: inherit; font-weight: 600; padding: 0; text-align: left;
+}
+.dx-row-btn:hover { text-decoration: underline; }
+.dx-row-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dx-scroll { overflow-x: auto; }
+
+.dx-chip {
+  border: 1px solid var(--border); border-radius: var(--r-1);
+  color: var(--fg-muted); font-size: var(--fs-micro); padding: 0 var(--sp-2);
+  white-space: nowrap;
+}
+
+/* ── score breakdown ──────────────────────────────────────────────────────── */
+
+.dx-dims { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.dx-dim { display: grid; gap: 2px; }
+.dx-dim-head { display: flex; align-items: baseline; gap: var(--sp-2); justify-content: space-between; }
+.dx-dim-name { color: var(--fg); font-size: var(--fs-meta); font-weight: 600; }
+.dx-dim-w { color: var(--fg-subtle); font-family: var(--font-mono); font-size: var(--fs-micro); }
+.dx-dim-track { background: var(--surface-2); border-radius: 999px; height: 6px; }
+.dx-dim-fill { background: var(--viz-1); border-radius: 999px; height: 100%; }
+.dx-dim-fill--good { background: var(--ok); }
+.dx-dim-fill--fair { background: var(--warn); }
+.dx-dim-fill--poor { background: var(--crit); }
+
+/* ── heatmap (site × application) ─────────────────────────────────────────── */
+
+.dx-heat { display: grid; gap: var(--sp-2); }
+.dx-heat-grid { border-collapse: separate; border-spacing: 2px; font-size: var(--fs-micro); }
+.dx-heat-grid th {
+  color: var(--fg-muted); font-weight: 600; padding: 2px var(--sp-1);
+  text-align: left; white-space: nowrap;
+}
+.dx-heat-grid thead th { font-size: var(--fs-micro); }
+.dx-heat-cell {
+  border: 1px solid var(--border); border-radius: var(--r-1);
+  cursor: default; height: 26px; min-width: 26px; padding: 0;
+}
+.dx-heat-cell--good { background: var(--ok); }
+.dx-heat-cell--fair { background: var(--warn); }
+.dx-heat-cell--poor { background: var(--crit); }
+.dx-heat-cell--not_measured {
+  background: repeating-linear-gradient(
+    45deg, var(--surface-2), var(--surface-2) 3px, var(--surface) 3px, var(--surface) 6px);
+}
+.dx-heat-cell--empty { background: transparent; border-style: dotted; }
+.dx-heat-mark {
+  display: block; margin: auto; border-radius: 2px;
+  background: rgb(255 255 255 / 55%);
+}
+.dx-heat-legend { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+.dx-heat-key { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-micro); color: var(--fg-muted); }
+.dx-heat-swatch { border: 1px solid var(--border); border-radius: 2px; display: inline-block; height: 10px; width: 10px; }
+
+/* ── timeline scrubber ────────────────────────────────────────────────────── */
+
+.dx-scrub { display: grid; gap: var(--sp-2); }
+.dx-scrub-svg { display: block; width: 100%; height: 64px; }
+.dx-scrub-axis { stroke: var(--border-strong); stroke-width: 1; }
+.dx-scrub-tick { fill: var(--fg-subtle); font-size: var(--fs-micro); }
+.dx-scrub-mark--observed { fill: var(--info); }
+.dx-scrub-mark--inferred { fill: var(--warn); fill-opacity: 0.55; }
+.dx-scrub-mark--unknown { fill: var(--fg-subtle); fill-opacity: 0.5; }
+.dx-scrub-mark--simulated { fill: var(--sev-notice); fill-opacity: 0.55; }
+.dx-scrub-window { fill: var(--accent); fill-opacity: 0.10; }
+.dx-scrub-controls { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.dx-scrub-controls input[type="range"] { max-width: 320px; width: 100%; }
+
+.dx-events { display: grid; gap: var(--sp-2); list-style: none; margin: 0; padding: 0; }
+.dx-event {
+  border-left: 2px solid var(--border-strong); display: grid; gap: 2px;
+  padding: var(--sp-1) 0 var(--sp-1) var(--sp-3);
+}
+.dx-event--inferred { border-left-style: dashed; border-left-color: var(--warn); }
+.dx-event-at { color: var(--fg-subtle); font-family: var(--font-mono); font-size: var(--fs-micro); }
+.dx-event-summary { color: var(--fg); font-size: var(--fs-meta); line-height: 1.45; }
+
+/* ── evidence ─────────────────────────────────────────────────────────────── */
+
+.dx-ev { display: grid; gap: var(--sp-2); list-style: none; margin: 0; padding: 0; }
+.dx-ev-item {
+  border: 1px solid var(--border); border-radius: var(--r-2);
+  display: grid; gap: var(--sp-1); padding: var(--sp-3);
+}
+.dx-ev-item--supports { border-left: 3px solid var(--ok); }
+.dx-ev-item--contradicts { border-left: 3px solid var(--crit); }
+.dx-ev-item--neutral { border-left: 3px solid var(--border-strong); }
+/* Inferred evidence is visibly a different object from an observed one. */
+.dx-ev-item--inferred { background: var(--surface-2); border-style: dashed; }
+.dx-ev-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.dx-ev-summary { color: var(--fg); font-size: var(--fs-meta); font-weight: 600; line-height: 1.45; }
+.dx-ev-meta { color: var(--fg-subtle); font-size: var(--fs-micro); display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.dx-ev-filters { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+
+/* ── hypotheses ───────────────────────────────────────────────────────────── */
+
+.dx-hyp {
+  border: 1px solid var(--border); border-radius: var(--r-2);
+  display: grid; gap: var(--sp-2); padding: var(--sp-3);
+}
+.dx-hyp--leading { border-color: var(--accent); }
+.dx-hyp-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); justify-content: space-between; }
+.dx-hyp-state {
+  font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.dx-hyp-state--CONFIRMED { color: var(--ok); }
+.dx-hyp-state--SUPPORTED { color: var(--info); }
+.dx-hyp-state--SUSPECTED { color: var(--warn); }
+.dx-hyp-state--CANDIDATE { color: var(--fg-subtle); }
+.dx-hyp-state--REJECTED { color: var(--crit); text-decoration: line-through; }
+
+/* ── journeys ─────────────────────────────────────────────────────────────── */
+
+.dx-journey {
+  border: 1px solid var(--border); border-radius: var(--r-2);
+  display: grid; gap: var(--sp-2); padding: var(--sp-3);
+}
+.dx-steps { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.dx-step {
+  border: 1px solid var(--border); border-radius: var(--r-1);
+  display: grid; gap: 1px; font-size: var(--fs-micro); min-width: 108px;
+  padding: var(--sp-1) var(--sp-2);
+}
+.dx-step--failing { border-color: var(--crit); color: var(--crit); }
+.dx-step--unmeasured { border-style: dashed; color: var(--fg-subtle); }
+.dx-step-label { font-weight: 600; }
+
+.dx-form { display: grid; gap: var(--sp-3); }
+.dx-field { display: grid; gap: var(--sp-1); }
+.dx-field label { color: var(--fg-muted); font-size: var(--fs-meta); font-weight: 600; }
+.dx-field input, .dx-field select, .dx-field textarea {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-1);
+  color: var(--fg); font: inherit; font-size: var(--fs-meta); padding: var(--sp-1) var(--sp-2);
+}
+.dx-field-row { display: grid; gap: var(--sp-3); grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.dx-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+
+/* ── data health ──────────────────────────────────────────────────────────── */
+
+.dx-src {
+  border: 1px solid var(--border); border-radius: var(--r-2);
+  display: grid; gap: var(--sp-1); padding: var(--sp-3);
+}
+.dx-src--flowing { border-left: 3px solid var(--ok); }
+.dx-src--stale { border-left: 3px solid var(--warn); }
+.dx-src--off, .dx-src--not_supported { border-left: 3px solid var(--fg-subtle); }
+.dx-src--no_data, .dx-src--misconfigured, .dx-src--permission_denied { border-left: 3px solid var(--crit); }
+.dx-src-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); justify-content: space-between; }
+.dx-src-grid { display: grid; gap: var(--sp-3); grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.dx-meter { background: var(--surface-2); border-radius: 999px; height: 5px; }
+.dx-meter-fill { background: var(--viz-2); border-radius: 999px; height: 100%; }
+.dx-meter-fill--warn { background: var(--warn); }
+.dx-meter-fill--crit { background: var(--crit); }
+
+/* ── states ───────────────────────────────────────────────────────────────── */
+
+.dx-loading { color: var(--fg-subtle); font-size: var(--fs-meta); padding: var(--sp-4); }
+.dx-error {
+  border: 1px solid var(--crit); border-radius: var(--r-2); color: var(--crit);
+  font-size: var(--fs-meta); line-height: 1.5; padding: var(--sp-3);
+}
+.dx-cap { color: var(--fg-subtle); font-size: var(--fs-micro); }

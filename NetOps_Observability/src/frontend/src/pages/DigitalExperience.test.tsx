@@ -1,20 +1,52 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+// DigitalExperience.test.tsx — the route target.
+//
+// This file used to pin a deliberate stub in place. The design of record is now
+// ratified and the screen is live, so what it pins instead is that the route
+// mounts the REAL surface: the seven-tab Digital Experience page, with its tab
+// list and its measurement-window control. A route that silently fell back to a
+// placeholder again would pass every other test in the suite.
+
+import { render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+const mockApi = vi.hoisted(() => ({
+  demOverview: vi.fn(),
+  demExperience: vi.fn(),
+}));
+vi.mock("../services/api", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("../services/api");
+  return { ...actual, api: mockApi };
+});
 
 import DigitalExperience from "./DigitalExperience";
 
-// The point of these assertions is that the stub stays a stub. A half-built
-// screen showing a few real numbers is worse than no screen: it teaches an
-// operator to trust a view that is not finished.
 describe("DigitalExperience", () => {
-  it("renders the held state without claiming anything about health", () => {
-    render(<DigitalExperience />);
-    expect(screen.getByRole("region", { name: /digital experience status/i })).toBeInTheDocument();
-    expect(screen.getByText(/design of record is in progress/i)).toBeInTheDocument();
+  beforeEach(() => {
+    window.location.hash = "";
+    mockApi.demOverview.mockRejectedValue(new Error("503 Service Unavailable: not wired"));
+    mockApi.demExperience.mockRejectedValue(new Error("503 Service Unavailable: not wired"));
   });
 
-  it("says that collection is running, so an empty screen is not read as an outage", () => {
+  it("mounts the Digital Experience surface, not a placeholder", async () => {
     render(<DigitalExperience />);
-    expect(screen.getByText(/Collection is already running/i)).toBeInTheDocument();
+    expect(await screen.findByRole("tablist", { name: /digital experience/i })).toBeInTheDocument();
+    for (const tab of ["Experience", "Incidents", "Journeys", "Service Paths", "Synthetics", "Changes", "Data Health"]) {
+      expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
+    }
+  });
+
+  it("offers the measurement window and states the honesty rule the page follows", async () => {
+    render(<DigitalExperience />);
+    expect(await screen.findByRole("button", { name: /measure over the last 1h/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /measure over the last 24h/i })).toBeInTheDocument();
+    expect(
+      screen.getByText(/renders an absent measurement as a healthy one/i),
+    ).toBeInTheDocument();
+  });
+
+  it("says the read failed rather than showing an empty screen as healthy", async () => {
+    render(<DigitalExperience />);
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(screen.getByRole("alert").textContent).toMatch(/could not be read/i);
   });
 });

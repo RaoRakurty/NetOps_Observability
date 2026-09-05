@@ -5933,7 +5933,913 @@ export const api = {
       `/api/protocols/${encodeURIComponent(proto)}/health?${p.toString()}`,
     );
   },
+
+  // ---- Digital Experience Monitoring (DEM) ----
+  // The Experience surface: internal/dem (the synthetic target catalogue and
+  // the per-target score) plus internal/dem/experience (the published,
+  // decomposable experience score, journeys, incidents, changes, synthetic
+  // coverage and telemetry health).
+  //
+  // Every route here is PER-TENANT data. A cross-tenant principal must scope
+  // into one tenant with the switcher first — the server refuses a wildcard
+  // rather than answering across tenants — and another tenant's id answers 404
+  // so an id is never confirmed to exist. `window` is the closed 1h|24h label
+  // the server parses; anything else is refused, never clamped.
+  //
+  // Honesty note for every caller: these payloads carry `measured` flags and a
+  // `reason` beside them. A false `measured` is NOT a zero and must never be
+  // rendered as one — render the reason sentence.
+  /** Overview: score, journeys, incidents, changes, hotspots, telemetry
+   *  confidence, and whether the AI investigator is available. */
+  demOverview: (window?: DemWindow) =>
+    request<DemOverviewResponse>(`/api/dem/overview${demWindowQS(window)}`),
+  /** Experience incidents, worst first. Unset filters are DROPPED rather than
+   *  sent blank, so an empty control never narrows the server's answer. */
+  demIncidents: (opts: DemIncidentQuery = {}) =>
+    request<DemIncidentsResponse>(`/api/dem/incidents${demIncidentParams(opts)}`),
+  /** One incident's full packet (impact, hypotheses, evidence, verification). */
+  demIncident: (id: string, window?: DemWindow) =>
+    request<DemIncidentResponse>(
+      `/api/dem/incidents/${encodeURIComponent(id)}${demWindowQS(window)}`,
+    ),
+  /** The incident's evidence, missing evidence and ranked hypotheses. */
+  demIncidentEvidence: (id: string, window?: DemWindow) =>
+    request<DemIncidentEvidenceResponse>(
+      `/api/dem/incidents/${encodeURIComponent(id)}/evidence${demWindowQS(window)}`,
+    ),
+  /** Impact, evidence and changes on ONE axis, each entry stating whether it
+   *  was observed or inferred. */
+  demIncidentTimeline: (id: string, window?: DemWindow) =>
+    request<DemIncidentTimelineResponse>(
+      `/api/dem/incidents/${encodeURIComponent(id)}/timeline${demWindowQS(window)}`,
+    ),
+  /** The path-observation REFERENCE. `measured:false` carries the reason there
+   *  is no path — which is an absent measurement, not a clean path. */
+  demIncidentPath: (id: string, window?: DemWindow) =>
+    request<DemIncidentPathResponse>(
+      `/api/dem/incidents/${encodeURIComponent(id)}/path${demWindowQS(window)}`,
+    ),
+  /** Declared journeys with their measured health over the window. */
+  demJourneys: (window?: DemWindow) =>
+    request<DemJourneysResponse>(`/api/dem/journeys${demWindowQS(window)}`),
+  /** Declare a journey. The owning tenant is stamped from the token — the body
+   *  carries no tenant field at all, and unknown fields are refused (400). */
+  demCreateJourney: (body: DemJourneyWrite) =>
+    request<DemJourneyDefinition>("/api/dem/journeys", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /** One journey definition plus its health. Another tenant's id answers 404. */
+  demJourney: (id: string, window?: DemWindow) =>
+    request<DemJourneyItemResponse>(
+      `/api/dem/journeys/${encodeURIComponent(id)}${demWindowQS(window)}`,
+    ),
+  /** Replace a journey definition; the server increments its version. */
+  demUpdateJourney: (id: string, body: DemJourneyWrite) =>
+    request<DemJourneyDefinition>(`/api/dem/journeys/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  demDeleteJourney: (id: string) =>
+    request<{ deleted: string }>(`/api/dem/journeys/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  /** The synthetic COVERAGE model: what protects each declared user action. */
+  demSyntheticCoverage: (window?: DemWindow) =>
+    request<DemCoverageResponse>(`/api/dem/synthetics/coverage${demWindowQS(window)}`),
+  /** The normalized change feed over the window. */
+  demChanges: (opts: DemChangeQuery = {}) =>
+    request<DemChangesResponse>(`/api/dem/changes${demChangeParams(opts)}`),
+  /** Record a change event. The owning tenant is stamped from the token. */
+  demRecordChange: (body: DemChangeWrite) =>
+    request<DemChangeEvent>("/api/dem/changes", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /** Per-source experience telemetry health, coverage and how much each
+   *  source's current state is lowering diagnostic confidence. */
+  demDataHealth: (window?: DemWindow) =>
+    request<DemDataHealthResponse>(`/api/dem/data-health${demWindowQS(window)}`),
+  /** The per-tenant synthetic target catalogue (internal/dem). */
+  demTargets: () => request<DemTargetsResponse>("/api/dem/targets"),
+  /** The per-target experience score with its site and app roll-ups. */
+  demExperience: (window?: DemWindow) =>
+    request<DemExperienceResponse>(`/api/dem/experience${demWindowQS(window)}`),
 };
+
+// ---- Digital Experience Monitoring (DEM) — wire types ----------------------
+//
+// Mirrors src/backend/internal/dem/{model,score,http}.go and
+// src/backend/internal/dem/experience/*.go field for field: the Go `json:` tags
+// ARE this contract. Declared here, below `api`, the way CloudSignalPage and
+// the cloud signal rows below already are — interfaces are hoisted, so the
+// calls above resolve them.
+//
+// A pointer field in Go (`*float64`, `*int`, `*time.Time`) is `?` here and its
+// absence means NOT MEASURED — never zero. Every surface that renders one must
+// show the neighbouring `reason`/`detail` sentence instead of a number.
+
+/** The closed measurement window the server parses. Anything else is refused. */
+export type DemWindow = "1h" | "24h";
+
+/** Score bands. They never move: good ≥ 70, fair 31–69, poor ≤ 30. */
+export type DemBand = "good" | "fair" | "poor" | "not_measured";
+/** experience.BandGoodAt / BandPoorAt — the band edges, pinned to the server. */
+export const DEM_BAND_GOOD_AT = 70;
+export const DEM_BAND_POOR_AT = 30;
+
+/** Hypothesis lifecycle (experience/hypothesis.go). */
+export type DemHypothesisState =
+  | "CANDIDATE" | "SUSPECTED" | "SUPPORTED" | "CONFIRMED" | "REJECTED";
+/** The verdict a hypothesis has EARNED, distinct from its state. */
+export type DemVerdictTier = "undetermined" | "suspected" | "confirmed";
+/** Whether an item was seen or worked out. Inferred must never look observed. */
+export type DemObservation = "observed" | "inferred" | "unknown" | "simulated";
+export type DemStance = "supports" | "contradicts" | "neutral";
+export type DemSeverity = "info" | "low" | "medium" | "high" | "critical";
+/** datahealth.go source states. "flowing" is the only healthy one. */
+export type DemSourceState =
+  | "flowing" | "stale" | "off" | "permission_denied"
+  | "misconfigured" | "no_data" | "not_supported";
+/** synthetic.go coverage states. "untested" is a gap, never a pass. */
+export type DemCoverageState = "protected" | "thin" | "untested" | "broken" | "stale";
+/** synthetic.go reliability grades. "unknown" = nobody has graded it. */
+export type DemReliabilityGrade = "solid" | "noisy" | "flaky" | "broken" | "unknown";
+
+/** provenance.Provenance — where a fact came from and how it was obtained. */
+export interface DemProvenance {
+  source: string;
+  source_object?: string;
+  producer?: string;
+  event_at: string;
+  observed_at: string;
+  observation: DemObservation;
+  data_class: string;
+  schema_name: string;
+  schema_version: number;
+  external_schema?: string;
+  external_version?: string;
+}
+
+/** journey.Cohort — the population a measurement or a change applies to. */
+export interface DemCohort {
+  site?: string;
+  isp?: string;
+  region?: string;
+  device_type?: string;
+  browser?: string;
+  app_version?: string;
+  network_type?: string;
+  feature_flag?: string;
+}
+
+/** score.DimensionScore — one dimension of the published score, decomposed. */
+export interface DemDimensionScore {
+  name: string;
+  measured: boolean;
+  reason?: string;
+  points: number;
+  weight: number;
+  max: number;
+  score: number;
+  /** How many composite points this dimension moved since the previous score.
+   *  Absent when there is no previous score to compare with. */
+  delta_contribution?: number;
+  detail?: string;
+  samples: number;
+  evidence_ref?: string;
+}
+
+/** score.ExperienceScore — never published below the evidence minimum. */
+export interface DemExperienceScore {
+  subject: string;
+  subject_kind: string;
+  window: string;
+  app_class: string;
+  aggregation: string;
+  measured: boolean;
+  reason?: string;
+  detail?: string;
+  score?: number;
+  band: DemBand;
+  previous_score?: number;
+  delta?: number;
+  dimensions: DemDimensionScore[];
+  policy_version: number;
+  policy_name: string;
+  measured_dimensions: number;
+  declared_dimensions: number;
+}
+
+/** journey.JourneyStep — a step may branch, loop, or be optional. */
+export interface DemJourneyStep {
+  id: string;
+  label: string;
+  optional?: boolean;
+  next?: string[];
+  terminal_success?: boolean;
+  terminal_failure?: boolean;
+  /** Empty = the step is DECLARED but NOT MEASURED (a coverage gap). */
+  target_id?: string;
+  slo_success_pct?: number;
+  slo_latency_ms?: number;
+}
+
+/** journey.ExperienceSLO — the objective a journey or step is judged against. */
+export interface DemExperienceSLO {
+  success_pct: number;
+  latency_ms?: number;
+  window?: string;
+}
+
+/** journey.JourneyDefinition — the declared workflow. */
+export interface DemJourneyDefinition {
+  id: string;
+  tenant_id: string;
+  name: string;
+  app?: string;
+  description?: string;
+  business_importance: string;
+  business_value_per_success?: number;
+  currency?: string;
+  entry_step_id: string;
+  steps: DemJourneyStep[];
+  slo: DemExperienceSLO;
+  version: number;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** POST/PUT body. There is deliberately NO tenant field: ownership comes from
+ *  the token, and unknown fields are refused by the server (400). */
+export interface DemJourneyWrite {
+  name: string;
+  app: string;
+  description: string;
+  business_importance: string;
+  business_value_per_success: number;
+  currency: string;
+  entry_step_id: string;
+  steps: DemJourneyStep[];
+  slo: DemExperienceSLO;
+}
+
+/** journey.StepHealth — `measured:false` makes every number below meaningless. */
+export interface DemStepHealth {
+  step_id: string;
+  label: string;
+  optional?: boolean;
+  target_id?: string;
+  measured: boolean;
+  reason?: string;
+  detail?: string;
+  success_pct?: number;
+  samples?: number;
+  p95_ms?: number;
+  slo_success_pct?: number;
+  slo_latency_ms?: number;
+  meets_slo: boolean;
+  failing?: boolean;
+}
+
+/** journey.JourneyHealth — success is the PRODUCT of the required steps. */
+export interface DemJourneyHealth {
+  journey_id: string;
+  name: string;
+  app?: string;
+  business_importance: string;
+  window: string;
+  version: number;
+  measured: boolean;
+  reason?: string;
+  detail?: string;
+  success_pct?: number;
+  steps_measured: number;
+  steps_declared: number;
+  slo: DemExperienceSLO;
+  meets_slo: boolean;
+  failing_step_id?: string;
+  steps: DemStepHealth[];
+  /** Absent unless the operator declared a value per success. */
+  business_impact?: number;
+  business_impact_currency?: string;
+}
+
+/** evidence.EvidenceItem — one normalized observation and what it implicates. */
+export interface DemEvidenceItem {
+  id: string;
+  tenant_id: string;
+  incident_id?: string;
+  kind: string;
+  entity?: string;
+  entity_kind?: string;
+  summary: string;
+  detail?: string;
+  value?: number;
+  baseline?: number;
+  deviation?: number;
+  unit?: string;
+  stance: DemStance;
+  supports_hypothesis_ids?: string[];
+  contradicts_hypothesis_ids?: string[];
+  /** A contradiction that REFUTES rather than merely weakens. */
+  decisive?: boolean;
+  app?: string;
+  site?: string;
+  journey_id?: string;
+  step_id?: string;
+  cohort?: DemCohort;
+  cause_class?: string;
+  cause_entity?: string;
+  seam?: string;
+  owner?: string;
+  contradicts_causes?: string[];
+  /** The MODALITY class. Two items sharing it are one opinion. */
+  independence_group: string;
+  observer?: string;
+  reliability: number;
+  expected_interval_sec?: number;
+  provenance: DemProvenance;
+}
+
+/** evidence.MissingEvidence — a gap that lowers, or blocks, confirmation. */
+export interface DemMissingEvidence {
+  source: string;
+  independence_group?: string;
+  reason: string;
+  detail?: string;
+  required?: boolean;
+}
+
+/** evidence.Independence — why a verdict did, or did not, reach confirmed. */
+export interface DemIndependence {
+  anchor_modalities: string[];
+  modalities: string[];
+  observers: string[];
+  independent_pair?: string[];
+  reasons?: string[];
+}
+
+/** confidence.Factor — one multiplicand of a confidence score, with its why. */
+export interface DemFactor {
+  name: string;
+  value: number;
+  reason: string;
+}
+
+/** hypothesis.Hypothesis — a candidate cause and the evidence behind it. */
+export interface DemHypothesis {
+  id: string;
+  tenant_id: string;
+  incident_id?: string;
+  cause_class: string;
+  cause_entity?: string;
+  explanation: string;
+  seam?: string;
+  owner?: string;
+  blast_radius?: string;
+  first_impact_at?: string;
+  alternative_hypothesis_ids?: string[];
+  state: DemHypothesisState;
+  verdict_tier: DemVerdictTier;
+  confidence: number;
+  confidence_factors?: DemFactor[];
+  independence: DemIndependence;
+  supporting_evidence_ids?: string[];
+  contradicting_evidence_ids?: string[];
+  missing_evidence?: DemMissingEvidence[];
+  /** Why it is NOT confirmed. Empty on a confirmed one; shown verbatim. */
+  gate_reasons?: string[];
+}
+
+/** change.ChangeEvent — a normalized change from any producer. */
+export interface DemChangeEvent {
+  id: string;
+  tenant_id: string;
+  type: string;
+  actor?: string;
+  object: string;
+  object_kind?: string;
+  summary: string;
+  before?: string;
+  after?: string;
+  release_id?: string;
+  rollback_ref?: string;
+  site?: string;
+  app?: string;
+  seam?: string;
+  cohort: DemCohort;
+  provenance: DemProvenance;
+}
+
+/** POST /api/dem/changes body. No tenant field, by construction. */
+export interface DemChangeWrite {
+  type: string;
+  actor: string;
+  object: string;
+  object_kind: string;
+  summary: string;
+  before: string;
+  after: string;
+  release_id: string;
+  rollback_ref: string;
+  site: string;
+  app: string;
+  seam: string;
+  cohort: DemCohort;
+  event_at: string;
+  source: string;
+  source_object: string;
+}
+
+/** change.ChangeRelevance — how much a change bears on ONE incident. */
+export interface DemChangeRelevance {
+  change: DemChangeEvent;
+  score: number;
+  reasons: string[];
+  /** False when the change happened AFTER first impact: still shown, never a cause. */
+  precedes_impact: boolean;
+  touches_affected_cohort: boolean;
+}
+
+/** incident.Impact — a nil count means "we cannot count", never "nobody". */
+export interface DemImpact {
+  users?: number;
+  sessions?: number;
+  transactions?: number;
+  journey_success_pct?: number;
+  journey_success_before?: number;
+  error_pct?: number;
+  p95_ms?: number;
+  business_value_lost?: number;
+  currency?: string;
+  affected_cohorts?: DemCohort[];
+  unaffected_cohorts?: DemCohort[];
+  /** The impact dimensions nothing produced. Render these, not a zero. */
+  not_measured?: string[];
+}
+
+/** incident.RemediationAction — always states WHO proposed it. */
+export interface DemRemediationAction {
+  id: string;
+  type: string;
+  target?: string;
+  proposed_by: string;
+  summary: string;
+  expected_outcome: string;
+  risk: string;
+  reversible: boolean;
+  rollback_plan?: string;
+  evidence_ids?: string[];
+  approval_state: string;
+  execution_state: string;
+  verification_plan: string;
+}
+
+export interface DemVerificationCheck {
+  name: string;
+  source: string;
+  measured: boolean;
+  passed: boolean;
+  detail: string;
+}
+
+/** incident.Verification — recovered only when the EVIDENCE agrees. */
+export interface DemVerification {
+  attempted: boolean;
+  recovered: boolean;
+  detail: string;
+  checks?: DemVerificationCheck[];
+}
+
+export interface DemTimelineEntry {
+  at: string;
+  kind: string;
+  summary: string;
+  source?: string;
+  ref?: string;
+  observation: DemObservation;
+}
+
+/** hypothesis.Window — the incident's measurement window. */
+export interface DemIncidentWindow {
+  start: string;
+  end: string;
+}
+
+/** incident.ExperienceIncident — one incident's whole packet. */
+export interface DemExperienceIncident {
+  id: string;
+  tenant_id: string;
+  incident_id?: string;
+  promoted: boolean;
+  title: string;
+  severity: DemSeverity;
+  status: string;
+  detected_at: string;
+  first_impact_at: string;
+  recovered_at?: string;
+  window: DemIncidentWindow;
+  affected_apps?: string[];
+  affected_journeys?: string[];
+  affected_sites?: string[];
+  impact: DemImpact;
+  slo_impact_pct?: number;
+  hypotheses: DemHypothesis[];
+  leading_hypothesis_id?: string;
+  confidence: number;
+  verdict_tier: DemVerdictTier;
+  evidence: DemEvidenceItem[];
+  missing_evidence?: DemMissingEvidence[];
+  changes?: DemChangeRelevance[];
+  path_observation_id?: string;
+  owner?: string;
+  seam?: string;
+  recommended_actions?: DemRemediationAction[];
+  verification: DemVerification;
+  timeline?: DemTimelineEntry[];
+  score_ref?: string;
+}
+
+/** http.IncidentSummary — the row the overview and the list render. */
+export interface DemIncidentSummary {
+  id: string;
+  title: string;
+  severity: DemSeverity;
+  status: string;
+  app?: string;
+  journey?: string;
+  detected_at: string;
+  first_impact_at: string;
+  duration_sec: number;
+  leading_cause?: string;
+  leading_cause_class?: string;
+  likely_layer?: string;
+  confidence: number;
+  verdict_tier: DemVerdictTier;
+  /** The leading hypothesis's factor breakdown, carried on the LIST row so a
+   *  confidence can be decomposed without opening the incident. */
+  confidence_factors?: DemFactor[];
+  /** Why the verdict is not confirmed. Absent (not empty) when it is. */
+  gate_reasons?: string[];
+  owner?: string;
+  seam?: string;
+  journey_success_pct?: number;
+  business_impact?: number;
+  currency?: string;
+  impact_not_measured?: string[];
+  evidence_count: number;
+  contradiction_count: number;
+  missing_evidence_count: number;
+}
+
+/** http.Hotspot — a dimension with no producer says so; it is never a zero. */
+export interface DemHotspot {
+  dimension: string;
+  key: string;
+  band: DemBand;
+  measured: boolean;
+  reason?: string;
+  score?: number;
+  subjects: number;
+  failing: number;
+}
+
+/** http.AIAvailability — a disabled panel with a reason, never a hidden one. */
+export interface DemAIAvailability {
+  available: boolean;
+  reason?: string;
+}
+
+/** datahealth.SourceHealth — per-producer state, coverage and freshness. */
+export interface DemSourceHealth {
+  source: string;
+  label: string;
+  independence_group: string;
+  configured: boolean;
+  state: DemSourceState;
+  detail?: string;
+  last_seen?: string;
+  expected_interval_sec?: number;
+  freshness_seconds?: number;
+  events_in_window: number;
+  lag_seconds?: number;
+  errors?: number;
+  last_error?: string;
+  /** Absent = coverage is not knowable, which is stated, never shown as 100%. */
+  coverage?: number;
+  coverage_covered: number;
+  coverage_total: number;
+  confidence_influence: number;
+  anchor_capable: boolean;
+}
+
+/** datahealth.DataHealth — below two anchor sources nothing can be confirmed. */
+export interface DemDataHealth {
+  window: string;
+  sources: DemSourceHealth[];
+  anchor_sources_flowing: number;
+  can_confirm: boolean;
+  explanation: string;
+}
+
+/** synthetic.ActionCoverage — what protects one declared user action. */
+export interface DemActionCoverage {
+  journey_id: string;
+  step_id: string;
+  label: string;
+  app?: string;
+  business_importance: string;
+  /** Absent = nobody measures how often people do this; not "nobody does it". */
+  interaction_volume?: number;
+  synthetics: number;
+  vantages: number;
+  last_success?: string;
+  reliability_grade: DemReliabilityGrade;
+  state: DemCoverageState;
+  detail: string;
+}
+
+/** synthetic.CoverageReport — 100% coverage of zero actions is not a success. */
+export interface DemCoverageReport {
+  window: string;
+  actions: DemActionCoverage[];
+  critical_actions: number;
+  protected_actions: number;
+  untested_actions: number;
+  thin_actions: number;
+  broken_tests: number;
+  flaky_tests: number;
+  coverage_pct?: number;
+  detail: string;
+}
+
+/** dem.Target — one catalogue check (internal/dem). */
+export interface DemTarget {
+  id: string;
+  tenant_id: string;
+  name: string;
+  kind: string;
+  host: string;
+  port?: number;
+  resolver?: string;
+  interval_sec: number;
+  site?: string;
+  app?: string;
+  expect_status?: number;
+  latency_budget_ms?: number;
+  availability_budget_pct?: number;
+  paused: boolean;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** dem.Component — one scored dimension of a target's verdict. */
+export interface DemComponent {
+  measured: boolean;
+  reason?: string;
+  value?: number;
+  budget?: number;
+  /** Whether the OPERATOR set the budget, or a platform default was applied. */
+  budget_declared: boolean;
+  met: boolean;
+  points: number;
+  weight: number;
+  samples: number;
+}
+
+/** dem.Result — one target's score. `measured:false` is never a 0. */
+export interface DemResult {
+  tenant: string;
+  target: string;
+  kind: string;
+  site?: string;
+  app?: string;
+  source: string;
+  window: string;
+  measured: boolean;
+  reason?: string;
+  detail?: string;
+  score?: number;
+  grade: string;
+  availability: DemComponent;
+  latency: DemComponent;
+  path_stability: DemComponent;
+  samples: number;
+  last_probe?: string;
+}
+
+/** dem.Rollup — the site or app aggregate over its targets. */
+export interface DemRollup {
+  key: string;
+  scope: string;
+  window: string;
+  measured: boolean;
+  reason?: string;
+  score?: number;
+  grade: string;
+  targets: number;
+  scored: number;
+  not_measured: number;
+  worst_target_score?: number;
+}
+
+/** GET /api/dem/targets. */
+export interface DemTargetsResponse {
+  targets: DemTarget[];
+  count: number;
+  limit: number;
+  enabled: boolean;
+  note?: string;
+}
+
+/** GET /api/dem/experience. */
+export interface DemExperienceResponse {
+  window: string;
+  enabled: boolean;
+  measured: boolean;
+  reason?: string;
+  note?: string;
+  targets: DemResult[];
+  sites: DemRollup[];
+  apps: DemRollup[];
+  target_count: number;
+  scored_count: number;
+  generated_at: string;
+}
+
+/** GET /api/dem/overview. */
+export interface DemOverviewResponse {
+  window: string;
+  enabled: boolean;
+  measured: boolean;
+  reason?: string;
+  note?: string;
+  score: DemExperienceScore;
+  journeys: DemJourneyHealth[];
+  incidents: DemIncidentSummary[];
+  changes: DemChangeEvent[];
+  data_health: DemDataHealth;
+  hotspots: DemHotspot[];
+  /** Absent unless at least one incident carried a declared value. */
+  business_impact?: number;
+  business_impact_currency?: string;
+  /** Explains an ABSENT total — impact declared in more than one currency, so
+   *  no single figure is shown. Never set alongside a total. */
+  business_impact_note?: string;
+  ai_investigator: DemAIAvailability;
+  generated_at: string;
+  policy_version: number;
+}
+
+/** GET /api/dem/incidents. */
+export interface DemIncidentsResponse {
+  window: string;
+  measured: boolean;
+  reason?: string;
+  note?: string;
+  incidents: DemIncidentSummary[];
+  total: number;
+  returned: number;
+  limit: number;
+  offset: number;
+  complete: boolean;
+}
+
+/** GET /api/dem/incidents/{id}. */
+export interface DemIncidentResponse {
+  window: string;
+  incident: DemExperienceIncident;
+  ai_investigator: DemAIAvailability;
+  evidence_packet_available: boolean;
+}
+
+/** GET /api/dem/incidents/{id}/evidence. */
+export interface DemIncidentEvidenceResponse {
+  incident_id: string;
+  evidence: DemEvidenceItem[];
+  missing_evidence?: DemMissingEvidence[];
+  hypotheses: DemHypothesis[];
+}
+
+/** GET /api/dem/incidents/{id}/timeline. */
+export interface DemIncidentTimelineResponse {
+  incident_id: string;
+  timeline?: DemTimelineEntry[];
+  changes?: DemChangeRelevance[];
+}
+
+/** GET /api/dem/incidents/{id}/path — the observation REFERENCE only. The
+ *  ordered spine is fetched from the service path graph API, never copied. */
+export interface DemIncidentPathResponse {
+  incident_id: string;
+  path_observation_id?: string;
+  measured?: boolean;
+  reason?: string;
+  note?: string;
+}
+
+/** GET /api/dem/journeys. */
+export interface DemJourneysResponse {
+  window: string;
+  measured: boolean;
+  reason?: string;
+  note?: string;
+  journeys: DemJourneyDefinition[];
+  health: DemJourneyHealth[];
+  count: number;
+  limit: number;
+}
+
+/** GET /api/dem/journeys/{id}. */
+export interface DemJourneyItemResponse {
+  journey: DemJourneyDefinition;
+  window: string;
+  health: DemJourneyHealth;
+}
+
+/** GET /api/dem/synthetics/coverage. */
+export interface DemCoverageResponse {
+  window: string;
+  coverage: DemCoverageReport;
+  reliability_note: string;
+}
+
+/** GET /api/dem/changes. */
+export interface DemChangesResponse {
+  window: string;
+  changes: DemChangeEvent[];
+  total: number;
+  returned: number;
+  limit: number;
+  offset: number;
+  complete: boolean;
+  note?: string;
+}
+
+/** GET /api/dem/data-health. */
+export interface DemDataHealthResponse {
+  window: string;
+  enabled: boolean;
+  data_health: DemDataHealth;
+  policy_version: number;
+}
+
+/** Filters for GET /api/dem/incidents. Every field is optional. */
+export interface DemIncidentQuery {
+  window?: DemWindow;
+  severity?: DemSeverity;
+  app?: string;
+  journey?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Filters for GET /api/dem/changes. Every field is optional. */
+export interface DemChangeQuery {
+  window?: DemWindow;
+  type?: string;
+  app?: string;
+  site?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** `?window=` for the reads that take one. Omitted entirely when unset, so the
+ *  server applies its own default rather than parsing a blank label. */
+function demWindowQS(window?: DemWindow): string {
+  return window ? `?window=${encodeURIComponent(window)}` : "";
+}
+
+/** Serializes the incident filters. An unset filter is DROPPED, never sent
+ *  blank — a blank `severity` is refused by the server, and a blank `app`
+ *  would silently narrow the answer to incidents with no application. */
+function demIncidentParams(q: DemIncidentQuery): string {
+  const p = new URLSearchParams();
+  if (q.window) p.set("window", q.window);
+  if (q.severity) p.set("severity", q.severity);
+  if (q.app) p.set("app", q.app);
+  if (q.journey) p.set("journey", q.journey);
+  if (q.limit !== undefined) p.set("limit", String(q.limit));
+  if (q.offset !== undefined) p.set("offset", String(q.offset));
+  const qs = p.toString();
+  return qs ? `?${qs}` : "";
+}
+
+/** Serializes the change-feed filters, on the same drop-if-unset rule. */
+function demChangeParams(q: DemChangeQuery): string {
+  const p = new URLSearchParams();
+  if (q.window) p.set("window", q.window);
+  if (q.type) p.set("type", q.type);
+  if (q.app) p.set("app", q.app);
+  if (q.site) p.set("site", q.site);
+  if (q.limit !== undefined) p.set("limit", String(q.limit));
+  if (q.offset !== undefined) p.set("offset", String(q.offset));
+  const qs = p.toString();
+  return qs ? `?${qs}` : "";
+}
 
 
 // shared query string for the cloud signal surfaces (optional app + limit).

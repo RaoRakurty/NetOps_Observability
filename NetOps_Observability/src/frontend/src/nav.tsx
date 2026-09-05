@@ -71,6 +71,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   NewMonitor: () => import("./pages/NewMonitor"),
   CommandCenter: () => import("./pages/CommandCenter"),
   ActionQueue: () => import("./pages/ActionQueue"),
+  DigitalExperience: () => import("./pages/DigitalExperience"),
   Sites: () => import("./pages/Sites"),
   Discovery: () => import("./pages/Discovery"),
   LogsExplore: () => import("./pages/LogsExplore"),
@@ -159,6 +160,7 @@ const CommandCenter = lazy(ROUTE_CHUNKS["CommandCenter"] as () => Promise<{ defa
 // page, the Sites page (Device Geomap folded in as its Map tab), the
 // Discovery & NMS composite, and the Logs explorer (Log Search + Cloud Logs).
 const ActionQueue = lazy(ROUTE_CHUNKS["ActionQueue"] as () => Promise<{ default: React.ComponentType<any> }>);
+const DigitalExperience = lazy(ROUTE_CHUNKS["DigitalExperience"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Sites = lazy(ROUTE_CHUNKS["Sites"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Discovery = lazy(ROUTE_CHUNKS["Discovery"] as () => Promise<{ default: React.ComponentType<any> }>);
 const LogsExplore = lazy(ROUTE_CHUNKS["LogsExplore"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -245,6 +247,14 @@ export const NAV: NavSection[] = [
       // The Command Center's triage queue as a first-class routed page (it was a
       // panel with no route; the Command Center keeps its embedded copy).
       { id: "queue", label: "Action Queue", render: () => <ActionQueue /> },
+      // Digital Experience (DEM). Sub-items mirror the page's seven tabs, and
+      // each one is a real deep link: #/operations/digital-experience/<tab>.
+      { id: "digital-experience", label: "Digital Experience", render: () => <DigitalExperience />, subItems: [
+        { id: "experience", label: "Experience" }, { id: "incidents", label: "Incidents" },
+        { id: "journeys", label: "Journeys" }, { id: "paths", label: "Service Paths" },
+        { id: "synthetics", label: "Synthetics" }, { id: "changes", label: "Changes" },
+        { id: "data-health", label: "Data Health" },
+      ] },
       // Sub-items mirror the page's REAL 5-tab IA (2026-07 review).
       { id: "services", label: "Services", render: () => <AppObservability />, subItems: [
         { id: "overview", label: "Overview" }, { id: "services", label: "Services" },
