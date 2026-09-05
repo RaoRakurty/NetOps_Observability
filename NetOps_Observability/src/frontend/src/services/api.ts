@@ -1446,12 +1446,23 @@ export type EngineCoverage = {
   rpo_hours: number | null;
   rpo_detail: string;
   /**
-   * The OBJECTIVE this engine is held to. The platform does not publish one
-   * yet (see docs/design/DATA_PROTECTION_PAGE_2026-09-04.md §4), so the header
-   * reports the objective as unset rather than assuming a default and calling
-   * it met. Reading it here means wiring is one field when the server adds it.
+   * The recovery point the engine's own SCHEDULE implies — measured from a real
+   * cron, never typed in. Null wherever no schedule is in force, which is the
+   * shipped state of most rows on a platform whose bundle schedule is off.
    */
   rpo_target_hours?: number | null;
+  /**
+   * The platform's DECLARED objective for this engine — policy, not
+   * measurement, which is why it is a separate field from `rpo_target_hours`
+   * above. 24h for every data store; 0 for the sealed custody material, whose
+   * envelope is change-driven rather than time-driven. The page judges against
+   * the schedule-derived target when one exists and falls back to this,
+   * NAMING which of the two it used: conflating "the cron implies 24h" with
+   * "we decided 24h is acceptable" tells an operator their backups comply with
+   * a number the platform invented for itself.
+   */
+  rpo_objective_hours?: number | null;
+  rpo_objective_detail?: string;
   detail?: string;
 };
 
