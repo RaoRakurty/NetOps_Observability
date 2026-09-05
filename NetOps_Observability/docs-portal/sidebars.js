@@ -267,6 +267,7 @@ const sidebars = {
       collapsed: false,
       items: [
         'reference/licensing',
+        'reference/pricing',
         'reference/api',
         'reference/feature-flags',
         'reference/alert-rules',

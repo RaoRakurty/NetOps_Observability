@@ -25,6 +25,8 @@ A Correlix licence is one signed JSON file. Correlix verifies it offline, agains
 
 Contact Correlix with the deployment's device count and the capabilities you need. Correlix signs a file that names your organization, the tier, an expiry date, the ceilings and the commercial capabilities it grants, and returns the file to you. Nothing about the request happens inside the product, and the product never reports usage to Correlix on its own.
 
+A licence file carries exactly five things: the entitled features, the ceilings, the customer, the expiry with its grace period, and the support entitlement. It carries no price, no currency and no tier cost. What a tier costs is a commercial term that lives in the order form, and the product never reads it. See [Pricing](/reference/pricing) for the figures.
+
 A trial is the same mechanism: a Team or Enterprise file with a short expiry date — 30 days from issue, 7 days of grace, marked as an evaluation licence so the page can say so. No card, and it works offline like any other licence.
 
 ### Install the licence on the Licence page {#install-on-the-page}
@@ -250,6 +252,7 @@ This is structural rather than a policy choice. The isolation and authentication
 ## Related
 
 - [Licensing](/reference/licensing) for which parts of Correlix are Apache-2.0 and which are commercial add-ons.
+- [Pricing](/reference/pricing) for what each tier costs, and why no price appears in a licence file.
 - [Administration overview](/administration/overview) for the difference between per-tenant data and platform-global configuration.
 - [Read the audit log](/administration/audit-log) to see an installed or refused licence recorded.
 - [Honest states](/reference/honest-states) for how Correlix distinguishes not measured from measured as zero.

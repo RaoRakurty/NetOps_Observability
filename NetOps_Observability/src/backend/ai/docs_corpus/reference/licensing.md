@@ -70,7 +70,18 @@ whatever a draft tiering document proposes.
 | `ldap` | Enterprise | LDAP and Active Directory authentication. |
 
 `docs/design/TIERING_PLAN_2026-09-03.md` in the source tree records the ceilings
-each tier carries.
+each tier carries, and [Pricing](/reference/pricing) records what each tier
+costs.
+
+### A licence carries no price
+
+The commercial terms and the runtime entitlement are separate on purpose. A
+Correlix licence file carries the entitled features, the ceilings, the customer,
+the expiry with its grace period, and the support entitlement. It carries no
+price, no currency and no tier cost, and neither does the entitlement code that
+reads it. Price belongs to the order form. See [Pricing](/reference/pricing) for
+the figures and [Apply a licence](/administration/licence) for what the file
+does carry.
 
 ## How to tell which licence a file is under
 
@@ -128,5 +139,6 @@ source tree carries it in `NOTICE` and `docs/THIRD_PARTY_LICENSES.md`.
 
 ## Related
 
+- [Pricing](/reference/pricing) for what each tier costs and the unit it is charged on.
 - [Third-party components](../deploy/third-party-components.md)
 - [Feature flags](feature-flags.md)
