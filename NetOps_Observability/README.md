@@ -168,3 +168,4 @@ cross-tenant leak is a defect in every edition.
 | What each tier gets | [`docs/design/TIERING_PLAN_2026-09-03.md`](docs/design/TIERING_PLAN_2026-09-03.md) |
 | Third-party components | [`NOTICE`](NOTICE), [`docs/THIRD_PARTY_LICENSES.md`](docs/THIRD_PARTY_LICENSES.md) |
 | Contributing (CLA required) | [`CONTRIBUTING.md`](../CONTRIBUTING.md) |
+| Contributor License Agreement | [`CLA.md`](../CLA.md) — **text not yet drafted; a placeholder, not an agreement.** No contribution can be merged until it lands |

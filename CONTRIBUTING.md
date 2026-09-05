@@ -13,6 +13,13 @@ modules is source-available under the Correlix Enterprise License. See
 before it can be merged.** This applies to code, tests, configuration and
 documentation, from individuals and from companies.
 
+The agreement itself lives at [`CLA.md`](CLA.md). **It is a placeholder: the text
+is pending counsel approval and there are no terms in it.** Nothing on that page
+is an agreement, and nothing you do — opening a pull request, commenting on one,
+adding a trailer to a commit — constitutes signing it. Until the approved text
+lands there and a signing mechanism is recorded below, **no contribution can be
+merged.**
+
 ### Why
 
 Open core only works if one party can place the same code under both licences.
@@ -49,9 +56,26 @@ candidate mechanisms:
 Until one is chosen and recorded here, **external contributions cannot be
 merged**, because the rights the project depends on cannot be established.
 
+**This repository does not use a DCO.** There is no `Signed-off-by` requirement,
+no `Developer Certificate of Origin` in the tree and no DCO check in
+`.github/workflows/`; no commit in this repository's history carries the trailer.
+Do not add one and do not read one into the requirement above — a DCO certifies
+provenance, it does not grant the relicensing right open core depends on, and
+adopting one here would be inventing exactly the process this section says is
+undecided. The signing mechanism is pending counsel along with the text.
+
+The half of the mechanism that *can* be prepared without counsel is prepared:
+[`.github/workflows/cla-check.yml`](.github/workflows/cla-check.yml) carries a
+SHA-pinned CLA-assistant action with its job **disabled** (`if: false`), so if
+the owner picks the bot in step 3 below, enabling it is a reviewed one-line
+change rather than a new dependency introduced on ship day. It cannot run in its
+current state.
+
 `scripts/licensing-gate.py --release` fails while the `CLA-PROCESS-TBD` marker
 above is present, so this cannot be forgotten on the way to a release. Owner
-action: choose the mechanism, then replace this section with it.
+action: obtain the text from counsel and put it in [`CLA.md`](CLA.md), choose the
+mechanism, then replace this section with it. The full sequence, and who owns
+each step, is the table at the end of [`CLA.md`](CLA.md).
 
 ---
 

@@ -38,6 +38,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 RUNBOOK = Path(__file__).resolve().parents[1] / "docs" / "runbooks" / "ci-branch-protection.md"
 CHECKLIST = Path(__file__).resolve().parents[1] / "docs" / "RELEASE_CHECKLIST.md"
+# The rc1 release PROCEDURE reproduces the same payload a third time, because it
+# is the page an owner reads at the moment of authorizing the ruleset change. A
+# third hand-copied list with no guard is exactly the drift this file exists to
+# stop, so it is parsed too.
+RC1_PROCEDURE = (
+    Path(__file__).resolve().parents[1] / "docs" / "runbooks" / "rc1-release-procedure.md"
+)
 
 RELEASE_GATE = "release-gate.yml"
 # The workflows that publish something a customer can consume. Every job in them
@@ -150,6 +157,7 @@ def test_harness_is_aimed_at_something_real() -> None:
     assert WORKFLOWS.is_dir(), f"workflow dir not found at {WORKFLOWS}"
     assert RUNBOOK.is_file(), f"runbook not found at {RUNBOOK}"
     assert CHECKLIST.is_file(), f"release checklist not found at {CHECKLIST}"
+    assert RC1_PROCEDURE.is_file(), f"rc1 procedure not found at {RC1_PROCEDURE}"
     assert len(_workflow_files()) >= 10, "workflow discovery collapsed"
     assert len(_required()) >= 16, "runbook §1.1 shrank unexpectedly"
     assert _optional() and _excluded()
@@ -188,6 +196,11 @@ def test_gh_api_payload_matches_the_required_table() -> None:
     assert _gh_api_contexts(CHECKLIST) == expected, (
         "docs/RELEASE_CHECKLIST.md §6.2's `gh api` payload has drifted from the "
         "runbook's §1.1 table. §6.2 is the command the owner runs on ship day."
+    )
+    assert _gh_api_contexts(RC1_PROCEDURE) == expected, (
+        "docs/runbooks/rc1-release-procedure.md step 1's `gh api` payload has "
+        "drifted from the runbook's §1.1 table. That page is what the owner reads "
+        "when authorizing the ruleset change."
     )
 
 

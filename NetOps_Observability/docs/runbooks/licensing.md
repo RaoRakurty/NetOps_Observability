@@ -464,9 +464,19 @@ per design §3:
 **Also pending, and blocking commercial issue:** the **Correlix Enterprise
 licence TEXT and the CLA are awaiting legal approval, and no terms are written
 anywhere in this repository.** `LICENSES/Correlix-Enterprise.txt` is a slot, not
-a document. Do not draft, paraphrase, or generate licence or CLA text — the
+a document, and [`CLA.md`](../../../CLA.md) at the repository root is the other —
+an explicit placeholder that says so on its face and must not be treated as an
+agreement. Do not draft, paraphrase, or generate licence or CLA text — the
 design's build order (§7 step 1) records both as blockers precisely so that
 nobody does.
+
+Both are visible to the release gate rather than to memory alone:
+`python3 scripts/licensing-gate.py --release` fails on
+`enterprise-text-placeholder` (the `CORRELIX-ENTERPRISE-TEXT-PLACEHOLDER` marker)
+and on `cla-process-undefined` (the `CLA-PROCESS-TBD` marker in `CONTRIBUTING.md`).
+The CLA's enforcement plumbing is prepared and **disabled** at
+`.github/workflows/cla-check.yml` (`if: false`); who does what, in order, is the
+table at the end of `CLA.md`.
 
 ---
 
