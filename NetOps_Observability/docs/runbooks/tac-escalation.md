@@ -40,6 +40,13 @@ PROTOCOL_DIAG_SSH_PASSWORD=…      # or PROTOCOL_DIAG_SSH_KEY
 PROTOCOL_DIAG_SSH_PORT=22         # optional
 ```
 
+The identity, its precedence (`PROTOCOL_DIAG_SSH_*`, falling back to
+`CONFIG_BACKUP_SSH_*` only when none of the three is set) and how to prove it
+still authenticates — `scripts/check-device-ssh.sh` — are in
+**`docs/runbooks/device-ssh-credentials.md`**. Check it there first when a
+collect returns nothing: a rotated device password fails inside the collector,
+not at the HTTP boundary.
+
 With the flag off, `POST …/tac/collect` answers **503** with the sentence the UI
 shows verbatim — the plan, the bundle and the case text still work, and the
 operator pastes the outputs in. That is a supported path, not a degraded one.
