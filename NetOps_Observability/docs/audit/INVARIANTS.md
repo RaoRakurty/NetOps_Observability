@@ -406,15 +406,33 @@ would violate it.
 | The derivation is pure and does not mutate its evidence | ✅ | **BUILD** — `TestDetectDoesNotMutateItsInput`, `TestIncidentDerivationIsDeterministic` |
 | The end-to-end acceptance scenario holds | ✅ | **BUILD** — `TestPhaseTAcceptanceScenario`: one incident, transit confirmed across three independent modality classes, the deployment rejected by the unaffected cohort, ownership on the seam, an action with a verification plan, recovery not satisfied by the action completing |
 
-**Standing gap — the honest one.** Every row above is proven on FIXTURES. In a
-live deployment Correlix has exactly ONE anchor-capable evidence class in
-production (`active_probe`, the synthetic prober), so a live tenant reaches
-`suspected` and never `confirmed`. That is not a defect in the reasoning; it is
-a statement about the evidence, and `GET /api/dem/data-health` says so in one
-field (`can_confirm`) with a sentence. It closes when tracker 252 ships a second
-anchor-capable producer (flow-derived ART, first-party RUM, or an endpoint
-agent) — and the acceptance scenario should then be re-proven LIVE, not only on
-fixtures.
+| A second anchor-capable class exists, and CONFIRMED is reachable without RUM | ✅ **on fixtures**, ❌ **not live** | **BUILD** — `TestConfirmedIsReachableWithSyntheticAndFlow` (synthetic + flow reach `confirmed` on two anchor classes across two observers, with the SAME bundle minus the flow item failing to confirm as its control) and `TestFlowAloneCannotConfirm` (one class, however loud, stays short of the gate). `TestPassiveFlowIsAnchorCapableInBothGraders` reads `src/correlation/signals.py` and `verdicts.py` so the Go anchor set cannot become more confident than the engine |
+| Flow evidence is availability-shaped only, and says so | ✅ | **BUILD** — `TestFlowSourceHealthStatesAreFourDifferentSentences`: every Data Health state for the flow source states that responsiveness is not measured and names the columns `netops.flows` does not carry |
+| An exporter that reports no TCP flags is `not_supported`, never a healthy zero | ✅ | **BUILD** — `TestResetRatioBranches`: the reset ratio's denominator is flag-bearing flows only, and "0 of 1000 flows carried control bits" is reported as an exporter gap with the IPFIX field named |
+| The flow read is tenant-scoped three times over and default-closed | ✅ | **BUILD** — `dem_flow_isolation_test.go`: no principal → refused with no query; a scope that disagrees with the requested tenant → refused with no query; a tenant with no devices → nothing, with no query; a scoped read carries only its own device addresses and its own declared endpoints; aggregates only, never a raw conversation |
+
+**Standing gap — the honest one, updated 2026-09-05 (tracker 252).** Every row
+above is proven on FIXTURES. The second anchor-capable class shipped
+(`passive_flow`, `internal/dem/experience/flow.go`), so `can_confirm` **can** now
+be true and `confirmed` is reachable without RUM — but **it has not been proven
+live**, and two things stand between the fixture and the estate:
+
+1. **The lab has no flow evidence to produce.** Its exporters (172.40.40.51/.52)
+   emit OSPF hello flows only: over seven days, 53 002 rows, `tcp_flags = 0` on
+   every one, `proto = 0` on all but a single UDP record, `tenant_id = ''`
+   throughout, and **zero rows touching the DEM tenant's declared subjects**
+   (172.40.40.11/.12). The producer correctly reports `no_data` there, and
+   `can_confirm` correctly stays false. Live proof needs an exporter pointed at
+   real application traffic that populates `tcpControlBits`.
+2. **Flow cannot measure responsiveness at all.** `netops.flows` carries no
+   timing or retransmit column, so the class contributes availability-shaped
+   evidence only. That is stated on the Data Health row in every state rather
+   than left to be discovered.
+
+Until an exporter reporting control bits is pointed at the estate, a live tenant
+still reaches `suspected` and `GET /api/dem/data-health` still says so in
+`can_confirm` with its sentence. **The acceptance scenario must be re-proven
+LIVE before this row is marked ✅ without qualification.**
 
 ### 10b. Parser programme invariants (2026-09-02)
 

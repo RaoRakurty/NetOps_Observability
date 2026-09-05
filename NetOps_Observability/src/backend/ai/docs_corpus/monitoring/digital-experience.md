@@ -189,6 +189,34 @@ Correlix can suspect a cause but cannot confirm one, because confirmation
 requires two independent observations. That is a property of the evidence
 available, not a limit on the analysis.
 
+#### Flow records as a second kind of instrument
+
+Two kinds of instrument have producers today: the **synthetic prober**, which
+performs the check itself, and **flow records**, which are what the network
+already emits. The flow source reads the traffic your exporters report about the
+applications you declared, and it is the observation that lets a conclusion be
+confirmed rather than only suspected — the prober and the exporter are different
+instruments at different vantages, which is exactly what confirmation requires.
+
+Two limits are stated on the source's own row, because they change what the
+reading means:
+
+- **Flow measures whether conversations completed, not how fast they were.**
+  Flow records carry no timing field, so the flow source contributes an
+  availability-shaped observation — the share of TCP conversations the network
+  saw aborted — and never a response time. Responsiveness still comes from the
+  prober's own measurements.
+- **It needs an exporter that reports TCP flags.** Many exporters do not. When
+  none of the flows for an application carry TCP control bits, the row reads
+  `not_supported` and names the field the exporter would have to send. It never
+  reads as a healthy zero, because "no resets reported" and "resets are not
+  reported" are opposite facts.
+
+An application is measured from flow only when a declared target names it and
+points at an IP address; a target declared by hostname contributes no flow
+reading, and the coverage figure on the row says how many of your subjects are
+covered.
+
 ### The synthetic coverage view
 
 **Synthetics** reports protection rather than a list of tests. Each declared

@@ -148,9 +148,26 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 
 `can_confirm: false` with `anchor_sources_flowing: 1` is the expected answer on
 a synthetic-only deployment, and `explanation` is the sentence to quote. It
-becomes `true` when a second anchor-capable producer reports — flow-derived
-application response time, first-party real-user telemetry, or an endpoint
-agent (tracker 252).
+becomes `true` when a **second** anchor-capable producer reports.
+
+Two such producers are declared and one is built: the flow lane
+(`source: "flow"`, modality `passive_flow`) shipped with tracker 252; first-party
+RUM and an endpoint agent have not. So the first thing to check on a
+`can_confirm: false` deployment is the flow row, whose `detail` says exactly
+which of four things is true:
+
+| `state` on the `flow` row | What to do |
+|---|---|
+| `off` — "no flow store is wired" | ClickHouse is unreachable from the api, or the surface was built without it. Same investigation as any ClickHouse outage. |
+| `off` — "no declared target names an application AND an IP address" | A flow subject is `<app>@<site>` folded from the DEM catalogue. Give the targets an `app`, and point at least one at an **IP literal** — a target declared by hostname contributes no flow endpoint on purpose. |
+| `misconfigured` — "the flow store did not answer" | A real query failure. The api log carries "the wire could not be read for this tenant". |
+| `no_data` — "no flow record touched any declared subject" | The exporters are not seeing this application's traffic. Check `sampler_address` coverage and whether the exporter is on the path. |
+| `no_data` — "none could be graded" | Flows arrived, but the exporter reports no TCP control bits. The ratio needs `tcpControlBits` (IPFIX IE6 / NetFlow `TCP_FLAGS`); enable it on the exporter. This is why "0 resets" never reads as healthy. |
+
+Note what the flow source can and cannot say: it measures whether TCP
+conversations **completed**, never how fast they were. `netops.flows` carries no
+timing column, so `responsiveness` still comes from the prober alone, and every
+flow row states that.
 
 Open an incident and read `gate_reasons` on the leading hypothesis: it names the
 specific thing that is missing, in order. "only one independent modality class

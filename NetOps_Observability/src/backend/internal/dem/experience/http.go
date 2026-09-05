@@ -70,6 +70,12 @@ type Deps struct {
 	// surface then reports not-measured with ReasonQueryFailed rather than a
 	// fabricated score.
 	Metrics dem.Querier
+	// Flows answers the passive-flow lane (tracker 252) — the SECOND
+	// anchor-capable evidence class. nil is legal and HONEST in exactly the
+	// same way: the flow source then reports "off — no flow store is wired",
+	// which is a different sentence from "the wire saw nothing", and
+	// `can_confirm` stays false with that reason attached.
+	Flows FlowQuerier
 	// Policy is the versioned score policy. Required.
 	Policy ScorePolicy
 	// Enabled reports whether experience collection is on.
@@ -194,6 +200,27 @@ func (a *API) assemble(r *http.Request, tenant, window string) (Assembly, error)
 		return Assembly{}, jerr
 	}
 	in.Journeys = journeys
+
+	// The passive-flow lane. Subjects come from the SAME catalogue the
+	// synthetic lane scores, so a flow measurement lands on a declared (app,
+	// site) identity or on nothing at all.
+	in.FlowsConfigured = a.deps.Flows != nil
+	in.FlowSubjects = FlowSubjectsFor(targets)
+	if in.FlowsConfigured && len(in.FlowSubjects) > 0 {
+		stats, ferr := a.deps.Flows.FlowStats(r.Context(), tenant, in.FlowSubjects,
+			in.Now.Add(-dur), in.Now)
+		if ferr != nil {
+			// §10: reported, never swallowed. The flow source renders
+			// misconfigured with its reason instead of "no flows seen".
+			a.deps.Counters.QueryErrors.Add(1)
+			a.deps.LogWarn("the wire could not be read for this tenant — the flow store did not answer",
+				map[string]any{"err": ferr.Error(), "window": label, "subjects": len(in.FlowSubjects)})
+			in.FlowError = ferr
+		} else {
+			in.FlowsAvailable = true
+			in.Flows = stats
+		}
+	}
 
 	changes, cerr := a.deps.Store.ListChanges(r.Context(), tenant, ChangeQuery{
 		Since: in.Now.Add(-changeLookbackFor(dur)), Limit: DefaultChangePageLimit,

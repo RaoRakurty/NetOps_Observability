@@ -87,17 +87,38 @@ This is the highest-value work, because it is the only work that lifts
 `assemble.go` plus the five registration points in
 [`dem-architecture.md`](dem-architecture.md) §8.
 
+**Item 1 SHIPPED (tracker 252, 2026-09-05)** — with an important correction to
+what it was believed to contain, recorded below.
+
 | Order | Producer | Modality | Anchor? | What it unlocks | The hard part |
 |---|---|---|---|---|---|
-| 1 | **Flow-derived application response time** (client/server network latency, application latency, retransmits from flow records) | `passive_flow` | **Yes** | The second anchor class. `can_confirm` becomes true for any tenant with flow. `responsiveness` gains a source that needs no declared budget. | Mapping a flow record to an `app`/`site` scope that matches the journey's, and to an `Observer` distinct from the prober's. |
+| 1 ✅ | **Flow-derived evidence** — shipped as `internal/dem/experience/flow.go` | `passive_flow` | **Yes** | The second anchor class. `can_confirm` becomes true for a tenant whose exporter reports TCP control bits. | Done: the subject is `<app>@<site>` folded from the catalogue and the observer is the exporter. |
 | 2 | **SD-WAN IPFIX per-tunnel SLA** (BFD loss/latency/jitter per tunnel per site; Cisco cleanest, Versa/Fortinet/Prisma via their APIs) | `management_plane` | No | Real `network_quality` per site, and `wan_overlay` / `last_mile` cause attribution with a named tunnel. | It is a controller's own summary, so it corroborates and never confirms. Do not be tempted to promote it. |
 | 3 | **Wireless onboarding funnel + client metrics** (assoc → auth → DHCP → DNS, RSSI/SNR/retries/roams) | `management_plane` | No | `lan_access` and `client_endpoint` attribution, and the first real `user_friction` input. | The client id is PII the moment it becomes a label. It must be a per-tenant salted hash before it leaves the collector (`DEM_DATA_MODEL_2026-09-05.md` §5). |
 | 4 | **Microsoft Graph `callRecords`** (Teams call quality per user, agentless) | `management_plane` | No | Real-time-class experience with no endpoint install. | Per-user data at `pseudonymous_user` class, and a consent posture that does not exist yet (§5). |
 | 5 | **RIPEstat / CrUX** (Internet routing events; public-web field data as a global baseline) | `control_plane` (RIPEstat) / `public` baseline (CrUX) | RIPEstat yes | A third anchor class for transit hypotheses, and the only external baseline the product can honestly quote. | CrUX is a *baseline*, not an observation of this tenant. It must never be scored as evidence about the tenant's own users. |
 
-**Do the first one first.** Everything else in this roadmap is more valuable
-after a second anchor class exists, because until then every incident is capped
-at `SUPPORTED`.
+**The correction, recorded because the premise was wrong and the next producer
+must not inherit it.** This row promised "client/server network latency,
+application latency, retransmits from flow records". **`netops.flows` carries no
+timing column and no retransmit counter** — goflow2 exports none and the
+ClickHouse schema declares none, verified against both the DDL and the live
+table. What shipped therefore measures the one wire-observable experience
+outcome the lane genuinely carries: the share of TCP conversations aborted with
+a RST, from `tcp_flags` (IPFIX `tcpControlBits`). Responsiveness from flow is
+**not measured**, is reported as such in every Data Health state, and remains
+open work.
+
+Two follow-ups this leaves, neither of which is a code change alone:
+
+| Follow-up | What it needs |
+|---|---|
+| Responsiveness from flow | A schema + pipeline change: an exporter that emits per-flow timings (an ART-capable IPFIX template, or goflow2's `time_flow_start_ns`/`time_flow_end_ns` as a first approximation), the `netops.flows` columns to carry them, and the Vector flows lane to map them. Until then the class is availability-shaped only. |
+| Any flow evidence at all in the lab | The lab's exporters (172.40.40.51/.52) send OSPF hello flows with `tcp_flags = 0` and `proto = 0`, and nothing addressed to the declared DEM subjects. The producer correctly reports `no_data` there. See the lab note in `docs/audit/INVARIANTS.md` §11. |
+
+**Do the next one next.** Everything else in this roadmap is more valuable now
+that a second anchor class exists, but the class is thin until an exporter that
+reports control bits — and ideally timings — is pointed at the estate.
 
 ### 3.2 The `netops.experience` lane and the RUM snippet
 
@@ -210,7 +231,7 @@ infrastructure exists.
 | **Per-journey, per-app and per-site scores.** `ComputeScore` already accepts the subject kinds; only the tenant score is built. | The overview's hotspot breakdown is thin without them, and the incident's `score_ref` points at a journey score that is not computed. |
 | **Change-feed adapters.** `ChangeEvent` and `POST /api/dem/changes` exist; nothing pushes config drift, cloud changes, BGP route changes or deployments into them automatically. | "What changed" is only as good as its producers, and the API's own empty-state note says so. This is the cheapest large win on the list. |
 | **A `dem_experience_*` alert rule or two**, tied to the counters in `metrics.go`. | The nine counters are exposed and nothing watches them. `query_errors` rising against `views_served` is the signal that the surface is honest-but-blind. |
-| **A `required` missing source that can actually fire.** `MissingFrom` marks a source blocking only when it is anchor-capable, configured, and has reported at least once. No adapter reaches all three today, so the branch is correct and unreachable. | Not a defect: it becomes reachable the moment a Track T0 producer reports and later goes quiet, which is exactly the case it exists for. Worth a note in the runbook when the first producer ships. |
+| **A `required` missing source that can actually fire.** `MissingFrom` marks a source blocking only when it is anchor-capable, configured, and has reported at least once. Still unreachable after tracker 252, and the reason is worth stating exactly: `LastSeen` for a source is derived from the evidence it produced **in this window**, and for the flow source "produced evidence in this window" and "state is `flowing`" are the same condition — so a source is either healthy (and skipped by `MissingFrom`) or has no `LastSeen` (and is not `Required`). | Not a defect, but it means the branch is still dead code. Making it fire needs a per-source last-seen that OUTLIVES the window — a stored high-water mark per (tenant, source) — which is a small store, not a bigger adapter. Worth doing when the second real producer lands. |
 
 ---
 

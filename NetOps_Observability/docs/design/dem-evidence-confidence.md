@@ -216,6 +216,95 @@ verbatim. They are mechanical, never a generic label:
 | Fewer than two observers | "only one observer reported it" |
 | Two anchor classes and two observers, but no pair that is both | "the second modality came from the same observer, so the two observations are not independent" |
 
+### 4.5 `passive_flow` — the second anchor-capable class (tracker 252)
+
+Until this producer shipped Correlix had exactly **one** anchor-capable class in
+production, `active_probe`. Confirmation needs two, so a live tenant could
+honestly reach `suspected` and never `confirmed`, and `GET /api/dem/data-health`
+said so in `can_confirm`. `internal/dem/experience/flow.go` is the second one.
+
+**Why flow may anchor.** A flow record is observed on the wire by the **flow
+exporter**, not by our prober. It is a different instrument at a different
+vantage, and `passive_flow` is an ordinary `ModalityClass` in
+`src/correlation/signals.py` with no support-only rule against it in
+`verdicts.py` — `Witness.trusted` is `True` for every witness whose
+`probe_authority` is `None`, which is every class that is not `active_probe`, so
+the Python grader will pair a flow witness with a trusted probe witness of a
+different modality. The Go anchor set therefore claims nothing the engine does
+not already allow, and the one-directional relation of §4.1 holds.
+`TestPassiveFlowIsAnchorCapableInBothGraders` reads both Python files and fails
+if either rule changes underneath the Go set.
+
+**Reliability: `0.85`.** Below `active_probe`/`pathgraph` (`0.90`) and well below
+`rum` (`0.95`), and the ordering is the argument. A synthetic check *performs*
+the transaction it is measuring; a flow record is a **sampled**, second-hand
+summary of somebody else's transaction, produced by an exporter we do not
+control, subject to a sampling rate we did not choose. It is a real measurement
+on the path — which is why it outranks a controller's own summary (`0.75`) and a
+change record (`0.70`) — but it is not the experience itself.
+
+**What it actually measures, and what it does not.** The design of record calls
+this class "flow-derived application response time". **`netops.flows` carries no
+timing column** — its full schema is ts, time_received_ns, sampler_address,
+src/dst addr and port, proto, bytes, packets, in_if/out_if, src_as/dst_as,
+sampling_rate, vlan_id, tcp_flags, flow_type, tenant_id — so there is no
+server-response-time, no client/server network latency and no retransmit
+counter to derive one from. The producer therefore measures the one
+wire-observable experience outcome the lane genuinely carries:
+
+| Dimension | Measured from flow? | How |
+|---|---|---|
+| availability-ish | **yes** | share of TCP conversations carrying the RST control bit (IPFIX `tcpControlBits` IE6 / NetFlow `TCP_FLAGS`) |
+| responsiveness | **no** | no timing column exists; reported as such on Data Health, in every state |
+| loss / retransmits | **no** | no retransmit counter exists |
+
+Deriving a "response time" from bytes and packets would be exactly the confident
+guess this product exists to replace, so it is not done and the absence is
+stated on the surface where an operator reads how much to trust the source.
+
+**The exporter-silence trap, and the rule that defuses it.** `tcp_flags` defaults
+to `0` and many exporters never populate it. "0 resets out of 1000 flows"
+therefore means one of two **opposite** things: nothing was aborted, or this
+exporter does not report control bits. The ratio's denominator is consequently
+**flag-bearing TCP flows only** (`FlagBearingFlows`), never all flows, and:
+
+| Condition | Result |
+|---|---|
+| no TCP flow touched the subject | not measured — `no_samples` |
+| TCP flows exist, none carries control bits | not measured — `not_supported`, naming the IPFIX field the exporter would have to send |
+| fewer than `MinFlowSamples` (20) flag-bearing flows | not measured — `no_samples` |
+| ratio > `FlowResetRatioThresholdPct` (5%) | **SUPPORTS**, `passive_flow`, observer `flow@<exporter>`, **no cause class** |
+| ratio ≤ 5% | **NEUTRAL** context |
+
+The supporting item names **no cause class**, on the same reasoning as
+`causeForKind`: an aborted conversation says the service stopped completing
+conversations, not why. An item that names no cause bears on every hypothesis
+the other evidence raised, which is exactly what an anchor is for.
+
+The healthy item is **neutral, not a contradiction**, and that one choice is
+load-bearing. An unattached contradiction bears on *every* hypothesis
+(`selectEvidence`), so grading "few resets" as a refutation would let a weak
+absence veto strong measurements across the whole product — and it would be
+wrong on its own terms, because an application can be unusably slow without ever
+resetting a connection and a sampled exporter can miss the resets that did occur.
+
+**Subject identity.** `<app>@<site>`, exactly the identity
+`DEM_DATA_MODEL_2026-09-05.md` §2 reserved for `source: flow` / `kind:
+flow_app`, folded from the **existing** catalogue: a subject's endpoints are the
+IP literals its declared targets point at. A target with no app, a paused target
+and a target declared by hostname each contribute nothing, with their own
+reason — there is no subnet→site map in this repository and a producer that
+invented one would attribute a measurement to a place nobody declared.
+
+**Isolation.** The flows row policy is hybrid (untagged rows are shared into
+every tenant scope), so the read is scoped three times: the ClickHouse
+`tenant_scope` derived from the caller's own claims (a mismatch with the
+requested tenant is refused outright), `addrTenantClauseFor` narrowing to the
+tenant's own device addresses (no devices → no query at all), and the endpoint
+list itself, which comes from the tenant's own catalogue. Only aggregate
+counters are read; no raw conversation leaves ClickHouse.
+`dem_flow_isolation_test.go` pins all five branches.
+
 ---
 
 ## 5. Alignment and the change-before-effect rule

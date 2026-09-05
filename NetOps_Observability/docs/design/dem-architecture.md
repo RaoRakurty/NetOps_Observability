@@ -300,12 +300,18 @@ writing them now.
 
 Three limits follow from the pipeline above and are reported rather than hidden.
 
-**Only one anchor-capable modality class is live.** The synthetic prober and
-the path measurement both carry `active_probe`. RUM, flow ART, SD-WAN SLA and
-wireless client feeds have no producer. `DataHealth.CanConfirm` states this in
-one field with a sentence, and until a second anchor-capable source exists a
-live tenant will read `SUSPECTED` or `SUPPORTED`, not `CONFIRMED`. That is the
-correct answer, not a limitation to work around.
+**Two anchor-capable modality classes are live; the second is thin.** The
+synthetic prober and the path measurement both carry `active_probe`. Tracker 252
+added `passive_flow` (`flow.go`, §8.1), observed by the flow exporter rather than
+by our prober, so `CanConfirm` can now be true and a live tenant can reach
+`CONFIRMED`. It is thin for two reasons stated on the surface itself: the flow
+lane carries **no timing column**, so it contributes availability-shaped evidence
+only and never responsiveness; and it needs an exporter that populates
+`tcpControlBits`, without which the subject reports `not_supported` rather than a
+healthy-looking zero. RUM, SD-WAN SLA and wireless client feeds still have no
+producer. `DataHealth.CanConfirm` states the tenant's real position in one field
+with a sentence — including "only one kind of instrument is reporting" where that
+is still the truth, which is the correct answer, not a limitation to work around.
 
 **A source that went quiet blocks confirmation; one that never reported does
 not.** `DataHealth.MissingFrom()` marks a missing source `Required` only when it
@@ -395,10 +401,42 @@ contract it must satisfy:
    engine must learn the same class or the two graders will disagree about what
    "independent" means.
 
-The producers Track T0 will use these points for, in build order, are: flow
-ART, SD-WAN IPFIX per-tunnel SLA, the wireless onboarding funnel, Microsoft
-Graph `callRecords`, and RIPEstat/CrUX. The ordering and the reasoning are in
-[`dem-roadmap.md`](dem-roadmap.md) §3.
+The producers Track T0 will use these points for, in build order, are: **flow
+(shipped — §8.1)**, SD-WAN IPFIX per-tunnel SLA, the wireless onboarding funnel,
+Microsoft Graph `callRecords`, and RIPEstat/CrUX. The ordering and the reasoning
+are in [`dem-roadmap.md`](dem-roadmap.md) §3.
+
+### 8.1 The passive-flow producer (shipped, tracker 252)
+
+The first extension point actually used, and the worked example of the contract
+above. `internal/dem/experience/flow.go` is the whole producer; `assemble.go`
+gained one call and one `SourceHealth` case, and nothing else in the package
+changed shape.
+
+| Piece | Where |
+|---|---|
+| subject mapping `<app>@<site>` folded from the catalogue | `FlowSubjectsFor` (`flow.go`) |
+| the store seam | `FlowQuerier` (`flow.go`) — nil is legal and reports `off` |
+| the ClickHouse implementation | `demFlowQuerier` (`probe_handlers.go`) — aggregate counters only, triple-scoped |
+| the adapter | `flowEvidence` (`flow.go`), called from `Assemble` |
+| source state | `flowSourceHealth` (`flow.go`), the `SourceFlow` case in `assembleDataHealth` |
+| modality, label, reliability | already declared (`ModalityPassiveFlow`, "Flow records", `0.85`) |
+| the isolation pin | `dem_flow_isolation_test.go` |
+
+The reasoning — why flow may anchor, why `0.85`, why responsiveness is not
+measured, why the healthy item is neutral — is in
+[`dem-evidence-confidence.md`](dem-evidence-confidence.md) §4.5 and is not
+repeated here.
+
+Two things the producer deliberately does **not** do, both of which a later
+change may revisit with a schema change rather than a code change:
+
+- **It does not resolve hostnames.** A DEM target declared by name contributes
+  no flow endpoint. Resolving it in the API would measure whatever that name
+  resolves to on the API host, which is not what the user reached.
+- **It does not infer a site from an address.** There is no subnet→site map in
+  this repository; the site comes from the target declaration or the subject has
+  none.
 
 Two further seams are already declared and unimplemented: `EventSink`
 (`event.go`) for the RUM/agent ingest lane, and the AI orchestrator's use of

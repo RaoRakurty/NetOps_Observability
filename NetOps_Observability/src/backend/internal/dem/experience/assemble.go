@@ -12,6 +12,11 @@ package experience
 //   synthetic  — internal/dem's prober: availability against the error budget,
 //                p95 against the DECLARED latency budget, path stability.
 //   pathgraph  — path fingerprint changes under a reachable target.
+//   flow       — flow records observed on the wire by the exporter: aborted TCP
+//                conversations per declared (app, site) subject. THE SECOND
+//                ANCHOR-CAPABLE CLASS (tracker 252) — with it a tenant can
+//                reach `confirmed` rather than only `suspected`. See flow.go
+//                for what the lane does and does NOT carry.
 //   changes    — the normalized change feed (config, cloud, BGP, deploys).
 // Everything else in [SourceLadder] is declared and reports as NOT CONFIGURED,
 // which is what makes "we cannot confirm, because we have only one kind of
@@ -46,6 +51,21 @@ type AssembleInput struct {
 	Stats    map[string]dem.WindowStats
 	Journeys []JourneyDefinition
 	Changes  []ChangeEvent
+
+	// ── the passive-flow lane (tracker 252) ──
+	// FlowsConfigured reports whether a flow store is WIRED at all; it is a
+	// different fact from "the store answered with nothing", and the Data
+	// Health surface says which of the two happened.
+	FlowsConfigured bool
+	// FlowsAvailable reports that the flow store ANSWERED. False is never
+	// "there were no flows": with FlowError set it is a query failure, and the
+	// source reports misconfigured rather than healthy-and-quiet.
+	FlowsAvailable bool
+	FlowError      error
+	// FlowSubjects are the (app, site) subjects derived from the catalogue —
+	// the denominator of flow coverage, present even when nothing was seen.
+	FlowSubjects []FlowSubject
+	Flows        []FlowStats
 }
 
 // Assembly is everything the API's surfaces render.
@@ -83,6 +103,10 @@ func Assemble(in AssembleInput, policy ScorePolicy) Assembly {
 	}
 
 	evidence := syntheticEvidence(in, targetByID, resultByID)
+	// The passive-flow adapter — a second, independent instrument. It is
+	// appended BEFORE data health is assembled so the flow source's own
+	// "flowing" state is derived from evidence it actually produced.
+	evidence = append(evidence, flowEvidence(in)...)
 	health := assembleDataHealth(in, evidence)
 	a.DataHealth = health
 
@@ -399,6 +423,10 @@ func assembleDataHealth(in AssembleInput, evidence []EvidenceItem) DataHealth {
 			default:
 				h.State = StateFlowing
 			}
+		case SourceFlow:
+			fh := flowSourceHealth(in, seen[src], last[src])
+			fh.EventsInWindow = seen[src]
+			h = fh
 		case SourceConfigDrift, SourceCloud, SourceBGP:
 			h.Configured = seen[src] > 0
 			if seen[src] > 0 {

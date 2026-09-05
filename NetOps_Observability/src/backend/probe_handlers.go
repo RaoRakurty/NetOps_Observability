@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"netops/backend/collectors"
@@ -148,6 +152,207 @@ func (q demQuerier) Instant(ctx context.Context, expr string, filters []string) 
 	return out, nil
 }
 
+// demFlowQuerier adapts netops.flows to the experience surface's passive-flow
+// lane (tracker 252) — the SECOND anchor-capable evidence class.
+//
+// Isolation (§3a) is enforced THREE times over, because the flows row policy
+// shares UNTAGGED rows into every tenant scope (the hybrid model) and one
+// forgotten filter would be a cross-tenant leak:
+//
+//  1. the ClickHouse `tenant_scope` setting, derived from the CALLER's claims by
+//     the one canonical rule (chTenantScopeFor) — never from the tenant string
+//     the caller passed, and refused outright when the two disagree;
+//  2. addrTenantClauseFor, the same app-layer narrowing every other flows read
+//     uses, which bounds a scoped principal to flows touching ITS OWN devices'
+//     addresses and returns NOTHING when it has none (default-closed);
+//  3. the endpoint list itself, which comes from the tenant's own DEM catalogue.
+//
+// It reads only aggregate counters — never a raw flow row — so nothing that
+// could identify a conversation leaves ClickHouse.
+type demFlowQuerier struct{ s *server }
+
+// demFlowMaxRows bounds the grouped result. The grouping key is (server
+// endpoint, exporter), so this is far above anything a real catalogue produces
+// and exists to make the query provably finite rather than to trim an answer.
+const demFlowMaxRows = 2000
+
+func (q demFlowQuerier) FlowStats(ctx context.Context, tenant string, subjects []experience.FlowSubject,
+	start, end time.Time) ([]experience.FlowStats, error) {
+
+	if len(subjects) == 0 {
+		return nil, nil
+	}
+	claims, ok := userFrom(ctx)
+	if !ok {
+		// A read with no principal cannot be scoped, so it does not happen.
+		return nil, errors.New("dem flow: the request carries no principal, so the wire cannot be read for anyone")
+	}
+	scope := chTenantScopeFor(claims)
+	if scope != strings.ToLower(strings.TrimSpace(tenant)) {
+		// The experience surface resolves ONE concrete tenant before it calls
+		// here; a mismatch means a wiring mistake, and the safe answer to a
+		// wiring mistake about tenancy is no data at all.
+		return nil, fmt.Errorf("dem flow: the caller's tenant scope does not match the requested tenant, so the read is refused")
+	}
+	clause, empty := q.s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
+	if empty {
+		// Default-closed: this principal can see no device addresses, so it can
+		// see no flows. Reported as an empty answer, not as an error — the
+		// surface renders "no flow record touched any declared subject".
+		return nil, nil
+	}
+
+	addrs := make([]string, 0, len(subjects)*2)
+	seen := map[string]bool{}
+	for _, sub := range subjects {
+		for _, ep := range sub.Endpoints {
+			if ep.Addr == "" || seen[ep.Addr] {
+				continue
+			}
+			seen[ep.Addr] = true
+			addrs = append(addrs, ep.Addr)
+		}
+	}
+	if len(addrs) == 0 {
+		return nil, nil
+	}
+	sort.Strings(addrs)
+	in := sqlInList(addrs)
+
+	// The server-side endpoint of each flow: the declared address is whichever
+	// end of the conversation we recognise, and its port is that end's port. A
+	// flow between two declared endpoints is attributed to its destination.
+	epExpr := "multiIf(dst_addr IN (" + in + "), concat(dst_addr, ':', toString(dst_port)), concat(src_addr, ':', toString(src_port)))"
+	sql := "SELECT " + epExpr + " AS ep, sampler_address AS exporter, " +
+		"count() AS flows, " +
+		"countIf(proto = 6) AS tcp_flows, " +
+		"countIf(proto = 6 AND tcp_flags != 0) AS flag_flows, " +
+		"countIf(proto = 6 AND bitAnd(tcp_flags, 4) != 0) AS reset_flows, " +
+		"toInt64(sum(bytes * if(sampling_rate = 0, 1, sampling_rate))) AS bytes, " +
+		"toInt64(sum(packets * if(sampling_rate = 0, 1, sampling_rate))) AS packets, " +
+		"toUnixTimestamp(min(ts)) AS first_seen, toUnixTimestamp(max(ts)) AS last_seen " +
+		"FROM netops.flows WHERE ts >= toDateTime(" + strconv.FormatInt(start.Unix(), 10) + ") " +
+		"AND ts < toDateTime(" + strconv.FormatInt(end.Unix(), 10) + ") " +
+		"AND (src_addr IN (" + in + ") OR dst_addr IN (" + in + "))" + clause + " " +
+		"GROUP BY ep, exporter ORDER BY flows DESC LIMIT " + strconv.Itoa(demFlowMaxRows) + " FORMAT JSON"
+
+	rows, err := q.s.chRowsScope(ctx, scope, sql, "api:dem-flow")
+	if err != nil {
+		return nil, err
+	}
+	return foldDEMFlowRows(subjects, rows), nil
+}
+
+// foldDEMFlowRows attributes each (endpoint, exporter) aggregate to the DEM
+// subjects that declared that endpoint. Kept as a free function over plain
+// values so the attribution is unit-tested without ClickHouse.
+//
+// A row may land on more than one subject when two subjects declare the same
+// address; that is the operator's declaration, and splitting the counters
+// between them would invent a division nothing measured.
+func foldDEMFlowRows(subjects []experience.FlowSubject, rows []map[string]any) []experience.FlowStats {
+	type agg struct {
+		st        experience.FlowStats
+		exporters map[string]bool
+	}
+	acc := map[string]*agg{}
+	order := make([]string, 0, len(subjects))
+
+	for _, row := range rows {
+		ep, _ := row["ep"].(string)
+		addr, portStr, found := strings.Cut(ep, ":")
+		if !found {
+			continue
+		}
+		port, perr := strconv.Atoi(portStr)
+		if perr != nil {
+			continue
+		}
+		for _, sub := range subjects {
+			if !flowSubjectOwns(sub, addr, port) {
+				continue
+			}
+			a, ok := acc[sub.Subject]
+			if !ok {
+				a = &agg{st: experience.FlowStats{Subject: sub.Subject}, exporters: map[string]bool{}}
+				acc[sub.Subject] = a
+				order = append(order, sub.Subject)
+			}
+			a.st.Flows += chRowInt(row["flows"])
+			a.st.TCPFlows += chRowInt(row["tcp_flows"])
+			a.st.FlagBearingFlows += chRowInt(row["flag_flows"])
+			a.st.ResetFlows += chRowInt(row["reset_flows"])
+			a.st.Bytes += chRowInt(row["bytes"])
+			a.st.Packets += chRowInt(row["packets"])
+			if x, _ := row["exporter"].(string); x != "" {
+				a.exporters[x] = true
+			}
+			if ts := chRowInt(row["first_seen"]); ts > 0 {
+				t := time.Unix(ts, 0).UTC()
+				if a.st.FirstSeen.IsZero() || t.Before(a.st.FirstSeen) {
+					a.st.FirstSeen = t
+				}
+			}
+			if ts := chRowInt(row["last_seen"]); ts > 0 {
+				t := time.Unix(ts, 0).UTC()
+				if t.After(a.st.LastSeen) {
+					a.st.LastSeen = t
+				}
+			}
+		}
+	}
+
+	sort.Strings(order)
+	out := make([]experience.FlowStats, 0, len(order))
+	for _, id := range order {
+		a := acc[id]
+		exporters := make([]string, 0, len(a.exporters))
+		for e := range a.exporters {
+			exporters = append(exporters, e)
+		}
+		sort.Strings(exporters)
+		a.st.Exporters = exporters
+		out = append(out, a.st)
+	}
+	return out
+}
+
+// flowSubjectOwns reports whether a subject declared this server endpoint. A
+// declared port of 0 means "any port on that address", which is the honest
+// reading of an ICMP target: it names a host, not a service.
+func flowSubjectOwns(sub experience.FlowSubject, addr string, port int) bool {
+	for _, ep := range sub.Endpoints {
+		if ep.Addr != addr {
+			continue
+		}
+		if ep.Port == 0 || ep.Port == port {
+			return true
+		}
+	}
+	return false
+}
+
+// chRowInt reads a ClickHouse JSON numeric, which arrives as a float64 for a
+// plain number and as a string for the 64-bit types. A value it cannot read is
+// 0 — the counters it feeds are all sums, and a malformed one must not be
+// guessed at.
+func chRowInt(v any) int64 {
+	switch t := v.(type) {
+	case float64:
+		return int64(t)
+	case int64:
+		return t
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		if err != nil {
+			return 0
+		}
+		return n
+	default:
+		return 0
+	}
+}
+
 // buildDEMAPI builds the module's HTTP surface. It is built unconditionally: the
 // catalogue is manageable with the feature off (an operator must be able to
 // prepare targets before enabling collection), and every score then says the
@@ -274,7 +479,13 @@ func (s *server) buildExperienceAPI(store experience.Store, cat dem.Catalogue) (
 		Store:   store,
 		Targets: cat,
 		Metrics: q,
-		Policy:  experienceScorePolicy(),
+		// The passive-flow lane (tracker 252): the second anchor-capable
+		// evidence class, and the one that lets a live tenant reach a CONFIRMED
+		// verdict instead of stopping at suspected. Wired unconditionally —
+		// with ClickHouse unreachable the source reports misconfigured with its
+		// reason, which is what an operator needs to see.
+		Flows:  demFlowQuerier{s: s},
+		Policy: experienceScorePolicy(),
 		Enabled: envBool(dem.EnvFeatureFlag),
 		// The AI investigator needs BOTH the platform copilot and its own
 		// switch: a feature that can send evidence to a model gets its own.

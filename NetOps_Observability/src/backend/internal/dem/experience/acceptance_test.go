@@ -135,8 +135,12 @@ func acceptanceBundle() Bundle {
 		// confidence without blocking confirmation — which is exactly the
 		// distinction the design of record asks for.
 		Missing: []MissingEvidence{
-			{Source: SourceFlow, IndependenceGroup: ModalityPassiveFlow, Reason: MissingNotConfigured,
-				Detail: "flow-derived application response time has no producer deployed yet"},
+			// The flow producer EXISTS since tracker 252 (flow.go); in this
+			// scenario no flow record reached the affected subject, which is a
+			// different fact from "there is no producer" and is why the reason
+			// is no_data rather than not_configured.
+			{Source: SourceFlow, IndependenceGroup: ModalityPassiveFlow, Reason: MissingNoData,
+				Detail: "no flow record touched the checkout subject in this window"},
 			{Source: SourceAgent, IndependenceGroup: ModalityDeviceTelemetry, Reason: MissingNotConfigured,
 				Detail: "no endpoint agent is deployed"},
 		},
