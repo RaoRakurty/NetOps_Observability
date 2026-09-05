@@ -46,6 +46,9 @@ import (
 
 	"netops/backend/internal/bgpdepth"
 	"netops/backend/internal/bgpwatch"
+	// LICENCE-BEGIN
+	"netops/backend/internal/entitlement"
+	// LICENCE-END
 )
 
 // ── watchlist store (two backends, ONE contract) ────────────────────────────
@@ -509,6 +512,31 @@ func (s *server) handleBGPWatchlist(w http.ResponseWriter, r *http.Request) {
 		}
 		note := truncateUTF8(req.Note, bgpNoteMaxBytes)
 		e := bgpWatchEntry{Resource: resource, Kind: kind, Note: note, AddedBy: claims.Sub}
+		// LICENCE-BEGIN — the second ENFORCED ceiling (Community: 5 watched
+		// prefixes). This is the internet-intelligence tier line: the evaluator
+		// makes a bounded outbound measurement per watched PREFIX per pass, so the
+		// ceiling is on prefixes and an ASN entry does not consume it.
+		//
+		// Gated at the HTTP funnel rather than inside one store's Add, because
+		// there are two backends (Postgres RLS and the file store) and a gate in
+		// one of them is not a gate. The store's own MaxWatchEntriesPerTenant
+		// bound stays: it is a resource guard, this is a commercial one, and they
+		// are not the same thing.
+		//
+		// Re-adding an existing resource only updates its note and writes no new
+		// row, so it is never refused — the same rule as device re-onboarding.
+		if kind == "prefix" {
+			if current, err := s.watchedPrefixCount(r.Context()); err == nil && !s.watchlistHasResource(r.Context(), tenant, cross, resource) {
+				if err := entitlement.CheckCeiling(s.entitlements, entitlement.CeilingWatchedPrefixes, current); err != nil {
+					entitlement.WriteRefusal(w, err)
+					return
+				}
+			}
+			// A count we could not take is not a refusal: failing closed on a
+			// transient store error would turn a database blip into "your licence
+			// ran out", which is a worse lie than briefly allowing a sixth prefix.
+		}
+		// LICENCE-END
 		if err := s.bgpWatch.Add(r.Context(), tenant, e); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -1053,3 +1081,27 @@ func (s *server) handleBGPFeed(w http.ResponseWriter, r *http.Request) {
 		"metrics": s.bgpFeed.TenantMetrics(tenant),
 	})
 }
+
+// LICENCE-BEGIN
+// watchlistHasResource reports whether the tenant already watches `resource`.
+// Re-adding an existing entry updates only its note and writes no new row, so
+// the licence ceiling must not refuse it (the device re-onboarding rule).
+// A read error answers false, which only ever means the ceiling check runs —
+// never that it is skipped.
+func (s *server) watchlistHasResource(ctx context.Context, tenant string, cross bool, resource string) bool {
+	if s.bgpWatch == nil {
+		return false
+	}
+	rows, err := s.bgpWatch.List(ctx, tenant, cross)
+	if err != nil {
+		return false
+	}
+	for _, e := range rows {
+		if e.Resource == resource {
+			return true
+		}
+	}
+	return false
+}
+
+// LICENCE-END

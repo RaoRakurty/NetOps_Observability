@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/licence"
 	"netops/backend/internal/oidc"
 	"netops/backend/internal/session"
 	"netops/backend/internal/users"
@@ -46,6 +47,13 @@ func newAuthCfgServer(t *testing.T) *httptest.Server {
 		startedAt: time.Now().UTC(),
 		ldap:      newLDAPConfigStore(dir+"/ldap_config.json", nil),
 		tacacs:    newTACACSConfigStore(dir+"/tacacs_config.json", nil),
+		// LICENCE-BEGIN — licence-neutral, like the shared harness in
+		// auth_flow_test.go: LDAP CONFIGURATION is an Enterprise capability, and
+		// these tests are about the gate, the redaction and the validation, not
+		// about licensing. The licence gate on this route is proved in
+		// licence_routes_test.go against real signed documents.
+		entitlements: licence.NewUnlimitedService(),
+		// LICENCE-END
 	}
 	s.oidc.Store(oidc.NewProviderFromConfig(newOIDCConfigFromEnv(), jwksTTL())) // disabled (no env) -> ready()==false
 	s.oidcCfg = newOIDCConfigStore(dir+"/oidc_config.json", s)

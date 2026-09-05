@@ -17,6 +17,9 @@ import (
 	"sync"
 	"time"
 
+	// LICENCE-BEGIN
+	"netops/backend/internal/entitlement"
+	// LICENCE-END
 	"netops/backend/internal/keycloak"
 	"netops/backend/internal/oidc"
 	"netops/backend/internal/ssoidp"
@@ -385,6 +388,21 @@ func (s *server) handleSSOIdPPut(w http.ResponseWriter, r *http.Request, alias s
 		return
 	}
 	in.Alias = alias
+	// LICENCE-BEGIN — SAML is in the owner's LOCKED Enterprise set; OIDC is CORE
+	// and always available at every tier, which is why this gate is on the
+	// PROTOCOL and not on the route.
+	//
+	// It gates CONFIGURING a SAML connection, not signing in with one. Core
+	// authentication must stay reachable in every licence state: a lapsed
+	// licence that logged people out would be a licence problem touching
+	// authentication, which the owner spec forbids outright.
+	if strings.EqualFold(strings.TrimSpace(in.Protocol), "saml") {
+		if err := entitlement.Require(s.entitlements, entitlement.FeatureSAML); err != nil {
+			entitlement.WriteRefusal(w, err)
+			return
+		}
+	}
+	// LICENCE-END
 	out, err := s.ssoIdPCfg.Set(in)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)

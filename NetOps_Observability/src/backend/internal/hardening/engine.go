@@ -31,6 +31,13 @@ type Engine struct {
 	cfgSrc  ConfigSource
 	seams   SeamResolver
 	now     func() time.Time
+	// LICENCE-BEGIN
+	// dialectAllowed gates which vendor dialects this deployment may evaluate.
+	// nil = every dialect (the default, and what every test and every
+	// unlicensed build gets), so this package's behaviour is unchanged unless
+	// an integrator deliberately injects a gate.
+	dialectAllowed func(Vendor) bool
+	// LICENCE-END
 }
 
 // Option configures an Engine.
@@ -49,6 +56,26 @@ func WithClock(now func() time.Time) Option {
 // NewEngine builds an Engine. catalog, cfgSrc and seams must be non-nil; passing
 // nil is a programming error the caller must avoid (the engine does not paper
 // over a missing dependency with a silent no-op).
+// LICENCE-BEGIN
+// WithDialectGate injects the commercial dialect gate: allow(v) reports whether
+// this deployment may evaluate vendor dialect v.
+//
+// It is an INJECTED seam and not a package-level switch, because this package
+// must keep knowing nothing about licensing (the entitlement service lives in
+// internal/entitlement and the wiring binds the two — see the LICENCE block in
+// main.go). Passing nil, or not passing the option at all, allows every dialect,
+// which is what every unit test and every build without the wiring gets.
+//
+// The degradation is HONEST: a device whose dialect is not licensed is not
+// silently skipped and is never scored against some other platform's grammar —
+// it gets exactly one finding saying the dialect is not included, in the same
+// shape as the existing "platform unresolved" coverage finding.
+func WithDialectGate(allow func(Vendor) bool) Option {
+	return func(e *Engine) { e.dialectAllowed = allow }
+}
+
+// LICENCE-END
+
 func NewEngine(catalog *Catalog, cfgSrc ConfigSource, seams SeamResolver, opts ...Option) *Engine {
 	e := &Engine{catalog: catalog, cfgSrc: cfgSrc, seams: seams, now: time.Now}
 	for _, o := range opts {
@@ -94,6 +121,13 @@ func NewEngine(catalog *Catalog, cfgSrc ConfigSource, seams SeamResolver, opts .
 // evaluation touched a real config, a by-reference EvidenceRef.
 func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Finding, error) {
 	vendor := VendorFromPlatform(dev.Platform)
+	// LICENCE-BEGIN — a dialect this deployment is not licensed for is reported,
+	// not skipped. Placed AFTER resolution so the finding can name the dialect,
+	// and BEFORE any config is fetched so an unlicensed dialect costs nothing.
+	if vendor != VendorUnknown && e.dialectAllowed != nil && !e.dialectAllowed(vendor) {
+		return []secfindings.Finding{e.dialectNotLicensed(dev, vendor)}, nil
+	}
+	// LICENCE-END
 	if vendor == VendorUnknown {
 		// No dialect ⇒ no control set. Emitting the catalogue here would score
 		// the device against SOME OTHER platform's grammar; emitting nothing
@@ -210,6 +244,40 @@ func (e *Engine) platformUnresolved(dev Device) secfindings.Finding {
 	f.SetStatus(secfindings.StatusUnknown)
 	return f
 }
+
+// LICENCE-BEGIN
+
+// RuleDialectNotLicensed is the coverage finding emitted for a device whose
+// vendor dialect this deployment is not licensed to evaluate.
+const RuleDialectNotLicensed = "dialect-not-licensed"
+
+// dialectNotLicensed is the honest answer for an unlicensed dialect.
+//
+// It deliberately mirrors platformUnresolved rather than returning an empty
+// slice: an empty result reads as "this device is clean", which would be a lie
+// about a device nothing looked at. StatusUnknown plus a stated reason is the
+// same honesty rule the rest of this engine follows — "unassessed" is a
+// verdict, and "no findings" is not.
+func (e *Engine) dialectNotLicensed(dev Device, vendor Vendor) secfindings.Finding {
+	f := e.base(dev, secfindings.EvidencePosture)
+	f.ID = RuleDialectNotLicensed
+	f.RawRuleID = RuleDialectNotLicensed
+	f.ControlID = RuleDialectNotLicensed
+	f.ControlTitle = "Device dialect not included in this licence — no hardening control assessed"
+	f.Category = CategoryCoverage
+	f.Severity = secfindings.SeverityInfo
+	f.Intended = "Every device resolves to a vendor dialect whose hardening controls can be evaluated."
+	f.Observed = truncateLabel(dev.Platform)
+	f.Detail = "unassessed: the " + string(vendor) + " hardening dialect is not included in this licence, " +
+		"so NO hardening control was evaluated for this device. Nothing has been hidden or deleted — " +
+		"the device is still discovered, still monitored, and still appears everywhere else."
+	f.Remediation = "Add the multi-vendor hardening dialects to this deployment's licence, " +
+		"or exclude this device from the hardening scope."
+	f.SetStatus(secfindings.StatusUnknown)
+	return f
+}
+
+// LICENCE-END
 
 // describePlatform renders the platform clause of the narrative, naming an
 // ABSENT label explicitly rather than quoting an empty string at the operator.

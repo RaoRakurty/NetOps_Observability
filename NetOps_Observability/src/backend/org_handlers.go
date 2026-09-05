@@ -19,6 +19,10 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	// LICENCE-BEGIN
+	"netops/backend/internal/entitlement"
+	// LICENCE-END
 )
 
 type createOrgRequest struct {
@@ -63,6 +67,19 @@ func (s *server) handleOrgs(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		// LICENCE-BEGIN — an ORG is the MSP/fleet construct: orgs exist to group
+		// many tenants under one operator, so creating one beyond the seeded
+		// Global org IS multi-tenant fleet management (owner spec, 2026-09-04).
+		//
+		// The seeded Global org always exists and is never gated — a
+		// single-tenant deployment needs no entitlement to work normally, and
+		// isolation between whatever orgs already exist is a safety property that
+		// no licence state can touch.
+		if err := entitlement.Require(s.entitlements, entitlement.FeatureMSPManagement); err != nil {
+			entitlement.WriteRefusal(w, err)
+			return
+		}
+		// LICENCE-END
 		o, err := s.orgs.Create(req.Name, req.Slug, req.Note, req.HomeRegion, req.SSOConnection)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)

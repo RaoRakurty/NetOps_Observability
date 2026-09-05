@@ -18,6 +18,10 @@ package backend
 //	      internal/threatlane internal/advisory internal/configdrift
 //	rm secapi/rules.go secapi/rules_test.go
 //	rm security_lane_isolation_test.go security_lane_removability_test.go
+//	rm licence_dialect_gate_test.go  (the licence gate on the dialect registry;
+//	   its subject — main.go's licenceDialectAllowed — carries SECURITY-LANE
+//	   markers of its own and goes with the same deletion, after which
+//	   seclane.Deps.DialectAllowed stays unset and every dialect is allowed)
 //	delete every main.go line between a SECURITY-LANE-BEGIN marker and its
 //	matching SECURITY-LANE-END
 //	then, for internal/configdrift (which is NOT inside those markers because it
@@ -54,11 +58,15 @@ var securityProducerPkgs = []string{
 // import a producer package. Adding an entry here is a deliberate act that
 // EXTENDS the removal recipe above — do both in the same commit.
 var securityImportAllowlist = map[string]bool{
-	"main.go":                               true, // the wiring, inside SECURITY-LANE markers only
-	"secapi/rules.go":                       true, // the catalog the read API serves
-	"secapi/rules_test.go":                  true,
-	"security_lane_isolation_test.go":       true,
-	"security_lane_removability_test.go":    true,
+	"main.go":                            true, // the wiring, inside SECURITY-LANE markers only
+	"secapi/rules.go":                    true, // the catalog the read API serves
+	"secapi/rules_test.go":               true,
+	"security_lane_isolation_test.go":    true,
+	"security_lane_removability_test.go": true,
+	// The licence gate on the hardening DIALECT registry. Deliberately its own
+	// file so it is `rm`-able with the producer (recipe above); the code it
+	// tests, main.go's licenceDialectAllowed, carries SECURITY-LANE markers.
+	"licence_dialect_gate_test.go":          true,
 	"internal/protocoldiag/protocoldiag.go": false, // (documented non-importer; comments only)
 
 	// internal/configdrift is a security-lane PRODUCER: the drift verdict is

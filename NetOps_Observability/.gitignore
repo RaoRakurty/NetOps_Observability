@@ -31,6 +31,9 @@ scripts/ch-cold-export.log
 scripts/host-hygiene.log
 scripts/.host-hygiene.state
 scripts/.host-hygiene.heartbeat
+# OpenSearch probe reachability, so a broken probe pushes ONCE per transition
+# rather than every ten minutes (a 10-minute pager is a muted pager).
+scripts/.host-hygiene.osprobe.state
 
 # Editor / OS
 .idea/
@@ -72,3 +75,15 @@ scripts/rotate-tls.log
 scripts/rotate-tls.act.heartbeat
 scripts/.rotate-tls.loaded
 deployment/docker/compose.lab.yml
+# Build-time cache for vendor MIBs this repo does NOT redistribute (Arista's
+# enterprise modules carry no licence grant — licence audit 2026-09-03 D4).
+# gen_index.py fetches them here, pinned + sha256-verified; never commit them.
+src/backend/collectors/mibs/vendored/.fetched/
+
+# Licence SIGNING key material. `data/` above already covers this path; the
+# explicit rule is here so the ignore survives any future narrowing of that
+# line, and so a reader of this file can see that private signing keys are
+# never committed. Public keys ARE committed — they are embedded in the binary
+# (src/backend/internal/licence/keys.go) and published in the runbook.
+data/licence-signer/
+!data/licence-signer/*.pub

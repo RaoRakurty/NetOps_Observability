@@ -136,3 +136,36 @@ export function operatorError(e: unknown, fallback: string): string {
   // wording; only the shape is normalized.
   return ensureStop(capitalize(msg));
 }
+
+// ── the HTTP envelope, for callers that need the STATUS, not a sentence ──────
+//
+// Added for the licence upgrade card (components/licence/UpgradeCard.tsx). A
+// 402 is not a failure to explain away — it is a structured refusal with a
+// ceiling, a limit and the tier that lifts it, and the card renders all of
+// that. To find one, a caller has to see the status code that `operatorError`
+// deliberately swallows, so it is exposed here rather than re-implemented at
+// each call site with a slightly different regex.
+//
+// This is purely additive: `operatorError` above is unchanged, and anything
+// that does not care about the code keeps calling it.
+
+/** The two halves of the api.ts throw envelope: "<status> <statusText>: <body>". */
+export type HttpFailure = { status: number; body: string };
+
+/**
+ * The status and raw body of a thrown api.ts error, or null when the value is
+ * not one. The body is returned EXACTLY as the server sent it — no unwrapping,
+ * no prose test — because the caller is about to parse it as a contract, not
+ * show it to anyone.
+ */
+export function httpFailure(e: unknown): HttpFailure | null {
+  const msg = (e instanceof Error ? e.message : typeof e === "string" ? e : String(e ?? ""))
+    .replace(/^Error:\s*/, "")
+    .trim();
+  if (!msg) return null;
+  const envelope = msg.match(/^(\d{3})\s+([^:]*):\s*([\s\S]*)$/);
+  if (envelope) return { status: Number(envelope[1]), body: envelope[3].trim() };
+  const bare = msg.match(/^(\d{3})(?::\s*([\s\S]*))?$/);
+  if (bare) return { status: Number(bare[1]), body: (bare[2] ?? "").trim() };
+  return null;
+}

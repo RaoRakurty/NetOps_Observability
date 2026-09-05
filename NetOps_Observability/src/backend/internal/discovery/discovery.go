@@ -48,6 +48,20 @@ type DiscoveryAggregator struct {
 	// and a persisted shadow would resurrect what pollOnce legitimately prunes.
 	// See device_persist.go.
 	store DeviceStore
+	// LICENCE-BEGIN
+	// admit gates how many DISCOVERED devices this deployment may monitor.
+	// nil = no ceiling, which is what every test and every build without the
+	// licence wiring gets, so this package's behaviour is unchanged unless an
+	// integrator injects a gate (SetAdmissionGate).
+	admit func(current int) error
+	// withheld records the devices discovery FOUND but did not admit, so they
+	// can be LISTED rather than silently disappearing. That listing is the
+	// whole point: the design's rule is "over-ceiling devices are listed as
+	// 'not monitored: licence ceiling', nothing is deleted, nothing is hidden
+	// silently". A discovered device that just stopped appearing, with no
+	// explanation anywhere, is the failure mode this map exists to prevent.
+	withheld map[string]string
+	// LICENCE-END
 }
 
 type sourceStats struct {
@@ -225,6 +239,30 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 		if ok && existing.Source != src.Name() {
 			continue // higher-precedence source already won this id
 		}
+		// LICENCE-BEGIN — the discovery half of the device ceiling. Checked
+		// only for a device not already in the cache: a re-poll of an admitted
+		// device adds nothing and must never be withheld, or the fleet would
+		// shrink and regrow on every pass.
+		//
+		// `seen` is deliberately NOT marked for a withheld device: it never
+		// entered the cache, so the pruning loop below has nothing to reconcile
+		// and its bookkeeping stays exact.
+		if _, already := a.cache[d.ID]; !already && a.admit != nil {
+			if err := a.admit(len(a.cache)); err != nil {
+				if a.withheld == nil {
+					a.withheld = map[string]string{}
+				}
+				if _, told := a.withheld[d.ID]; !told {
+					// Once per device, not once per poll: this loop runs every
+					// interval and a per-poll line would bury the log.
+					log.Printf("discovery: %s not monitored: licence ceiling (%v) — the device was found and is NOT being deleted or hidden; it is listed on the Licence page", d.ID, err)
+				}
+				a.withheld[d.ID] = err.Error()
+				continue
+			}
+			delete(a.withheld, d.ID)
+		}
+		// LICENCE-END
 		seen[d.ID] = true
 		d.Source = src.Name()
 		d.LastSeen = time.Now().UTC()
@@ -241,6 +279,48 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 		}
 	}
 }
+
+// LICENCE-BEGIN
+
+// SetAdmissionGate injects the device-admission ceiling. `admit(current)` is
+// called before a NEW discovered device enters the cache, with the number of
+// devices already there; a non-nil error withholds it.
+//
+// A setter rather than a constructor argument, following the SetStore
+// precedent: the aggregator is built before the entitlement service exists.
+// Passing nil removes the ceiling.
+func (a *DiscoveryAggregator) SetAdmissionGate(admit func(current int) error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.admit = admit
+}
+
+// Withheld returns the devices discovery found but did not admit, keyed by
+// device id with the reason. Never nil.
+//
+// This is the honest half of the ceiling: these devices exist, they were seen,
+// and nothing about them has been deleted — they are simply not being
+// monitored, and the operator is told which ones and why.
+func (a *DiscoveryAggregator) Withheld() map[string]string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make(map[string]string, len(a.withheld))
+	for k, v := range a.withheld {
+		out[k] = v
+	}
+	return out
+}
+
+// WithheldCount is Withheld's size without the copy — the number the Licence
+// page adds to the admitted fleet so the usage bar shows the TRUE device count
+// and names the excess, instead of a reassuring number pinned at the ceiling.
+func (a *DiscoveryAggregator) WithheldCount() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.withheld)
+}
+
+// LICENCE-END
 
 // PollOnceForTest runs a single synchronous poll of src into the cache — test
 // support for seeding an aggregator without the poll loop.

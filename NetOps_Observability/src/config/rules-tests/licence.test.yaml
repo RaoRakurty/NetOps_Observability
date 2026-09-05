@@ -1,0 +1,144 @@
+# promtool unit tests for the `licence` alert group (Correlix licence mechanism).
+#
+# The thing that MUST be proven here is not "the rules fire" — it is that a
+# COMMUNITY deployment, which emits both gauges exactly like a licensed one,
+# fires nothing. That guard lives entirely in the expressions (the 36500
+# no-expiry sentinel falling outside the `< 14` range; `== 1` skipping the 0
+# valued state series), and an expression is the easiest thing in this repo to
+# edit without noticing what it was load-bearing for. These run in
+# preflight-configs.sh (promtool test rules), so a drift fails the build rather
+# than mailing a free-tier customer a renewal warning.
+#
+# Note on labels: netops_licence_state carries its own `tier` label (the LICENCE
+# tier) and the rules set the ROUTING label `tier: warning`. Rule labels win, so
+# every exp_labels below expects tier: warning, never community|team|enterprise.
+# That is the documented intent, not a test working around a bug.
+#
+# Paths are as mounted by the preflight docker run.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # (a) 10 days to expiry — inside the 14-day runway, fires after the 1h for.
+  - interval: 1m
+    input_series:
+      - series: "netops_licence_days_to_expiry"
+        values: "10x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+            exp_annotations:
+              summary: "the installed Correlix licence expires in 10 day(s) — renew it before then; on expiry the commercial ceilings fall back to Community, nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected"
+
+  # (b) THE COMMUNITY CASE. 36500 is licence.NoExpirySentinel: no licence is
+  #     installed, so there is nothing to expire and nothing to renew. It must
+  #     stay silent — the `< 14` upper bound is the only thing making that true,
+  #     so this case is the whole reason the bound is written as a range.
+  - interval: 1m
+    input_series:
+      - series: "netops_licence_days_to_expiry"
+        values: "36500x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceExpiringSoon
+        exp_alerts: []
+
+  # (c) 200 days — a healthy licence, comfortably outside the runway.
+  - interval: 1m
+    input_series:
+      - series: "netops_licence_days_to_expiry"
+        values: "200x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceExpiringSoon
+        exp_alerts: []
+
+  # (d) in_grace="true" at 1 fires LicenceInGrace; the in_grace="false" sibling
+  #     is present at 0 on the same scrape (the service emits every combination)
+  #     and must NOT produce a second alert. LicenceDegraded stays silent: grace
+  #     is the window BEFORE degradation.
+  - interval: 1m
+    input_series:
+      - series: 'netops_licence_state{tier="enterprise",degraded="false",in_grace="true"}'
+        values: "1x40"
+      - series: 'netops_licence_state{tier="enterprise",degraded="false",in_grace="false"}'
+        values: "0x40"
+      - series: 'netops_licence_state{tier="enterprise",degraded="true",in_grace="true"}'
+        values: "0x40"
+      - series: 'netops_licence_state{tier="enterprise",degraded="true",in_grace="false"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LicenceInGrace
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              degraded: "false"
+              in_grace: "true"
+            exp_annotations:
+              summary: "the Correlix licence has expired and the deployment is running on its grace period — the commercial ceilings are still honoured for now, but when grace ends they fall back to Community; nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected; install a renewed licence before grace runs out"
+      - eval_time: 30m
+        alertname: LicenceDegraded
+        exp_alerts: []
+
+  # (e) degraded="true" at 1 fires LicenceDegraded. Grace has ended, so
+  #     in_grace="false" here and LicenceInGrace must be silent — the two rules
+  #     describe consecutive states, never the same one.
+  - interval: 1m
+    input_series:
+      - series: 'netops_licence_state{tier="team",degraded="true",in_grace="false"}'
+        values: "1x40"
+      - series: 'netops_licence_state{tier="team",degraded="false",in_grace="false"}'
+        values: "0x40"
+      - series: 'netops_licence_state{tier="team",degraded="true",in_grace="true"}'
+        values: "0x40"
+      - series: 'netops_licence_state{tier="team",degraded="false",in_grace="true"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LicenceDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              degraded: "true"
+              in_grace: "false"
+            exp_annotations:
+              summary: "the Correlix licence has lapsed past its grace period and the deployment is DEGRADED — the commercial ceilings have fallen back to Community and writes above them will now be refused; nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected; install a renewed licence to lift the ceilings again"
+      - eval_time: 30m
+        alertname: LicenceInGrace
+        exp_alerts: []
+
+  # (f) ALL-CLEAR = a real Community deployment, scrape for scrape: the sentinel
+  #     on days-to-expiry and the full 2x2 state family with only
+  #     (community, not degraded, not in grace) at 1. Nothing in the group may
+  #     fire. This is the case a free-tier customer lives in permanently.
+  - interval: 1m
+    input_series:
+      - series: "netops_licence_days_to_expiry"
+        values: "36500x120"
+      - series: 'netops_licence_state{tier="community",degraded="false",in_grace="false"}'
+        values: "1x120"
+      - series: 'netops_licence_state{tier="community",degraded="true",in_grace="false"}'
+        values: "0x120"
+      - series: 'netops_licence_state{tier="community",degraded="false",in_grace="true"}'
+        values: "0x120"
+      - series: 'netops_licence_state{tier="community",degraded="true",in_grace="true"}'
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 1h30m
+        alertname: LicenceExpiringSoon
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceInGrace
+        exp_alerts: []
+      - eval_time: 1h30m
+        alertname: LicenceDegraded
+        exp_alerts: []

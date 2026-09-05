@@ -237,6 +237,15 @@ type Deps struct {
 	// ConfigSource yields device running-configs. Optional: nil means "config
 	// capture is not built", and every hardening rule reports UNASSESSED.
 	ConfigSource hardening.ConfigSource
+	// LICENCE-BEGIN
+	// DialectAllowed gates which hardening vendor dialects this deployment may
+	// evaluate. Optional: nil allows every dialect, which is what every test and
+	// every build without the licence wiring gets. The lane knows nothing about
+	// licensing — it just forwards this to the engine, which reports an
+	// unlicensed dialect honestly rather than skipping the device.
+	DialectAllowed func(hardening.Vendor) bool
+	// LICENCE-END
+
 	// Authz resolves the caller for the HTTP surface. Required.
 	Authz func(w http.ResponseWriter, r *http.Request, gate secapi.Gate) (secapi.Principal, bool)
 	// Audit records an accepted control-plane write. Optional.
@@ -649,7 +658,11 @@ func (l *Lane) hardeningFindings(ctx context.Context, tenant, scanID string,
 		return out
 	}
 	seams := l.seamResolver(ctx, tenant)
-	eng := hardening.NewEngine(hardening.DefaultCatalog(), cfgSrc, seams, hardening.WithClock(l.deps.Now))
+	// LICENCE-BEGIN — WithDialectGate is nil-safe: a nil DialectAllowed allows
+	// every dialect, so this call is a no-op unless the integrator wired one.
+	eng := hardening.NewEngine(hardening.DefaultCatalog(), cfgSrc, seams,
+		hardening.WithClock(l.deps.Now), hardening.WithDialectGate(l.deps.DialectAllowed))
+	// LICENCE-END
 	for _, d := range devices {
 		if ctx.Err() != nil {
 			return out

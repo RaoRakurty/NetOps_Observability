@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"net/http"
 	"netops/backend/internal/apikey"
+	// LICENCE-BEGIN
+	"netops/backend/internal/entitlement"
+	// LICENCE-END
 	"netops/backend/internal/rbac"
 	"strings"
 	"time"
@@ -367,6 +370,28 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			}
 			req.OrgID = o.ID // store the opaque org id, never the slug
 		}
+		// LICENCE-BEGIN — MSP / fleet management of MANY tenants is the commercial
+		// capability (owner spec, 2026-09-04). Read the scope carefully, because
+		// the line matters:
+		//
+		//   NOT gated — tenant ISOLATION itself, and normal SINGLE-tenant
+		//   operation. Isolation is a safety property of every tier and is never
+		//   an entitlement; the seeded Global tenant always exists and a
+		//   deployment always has one working tenant.
+		//
+		//   GATED — running a FLEET of them from one platform, which is the MSP
+		//   product. So the SECOND real tenant is the one that asks.
+		//
+		// The gate is semantic (Entitled(FeatureMSPManagement)), never a tier
+		// comparison: a licence may grant fleet management at any tier, and the
+		// file decides, not the label.
+		if !entitlement.Entitled(s.entitlements, entitlement.FeatureMSPManagement) {
+			if n := countRealTenants(s.tenants.List()); n >= 1 {
+				entitlement.WriteRefusal(w, entitlement.Require(s.entitlements, entitlement.FeatureMSPManagement))
+				return
+			}
+		}
+		// LICENCE-END
 		t, err := s.tenants.Create(req.Name, req.Slug, req.Note, req.IsolationMode, req.OrgID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -618,3 +643,21 @@ func (s *server) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// LICENCE-BEGIN
+// countRealTenants counts tenants excluding the seeded Global root.
+//
+// Global is platform scaffolding that always exists — counting it would make
+// the FIRST tenant an operator creates look like the second and refuse a
+// perfectly ordinary single-tenant install.
+func countRealTenants(all []Tenant) int {
+	n := 0
+	for _, t := range all {
+		if t.ID != TenantGlobal {
+			n++
+		}
+	}
+	return n
+}
+
+// LICENCE-END
