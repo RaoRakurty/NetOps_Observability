@@ -66,9 +66,29 @@ const (
 
 // anchorModalities are the classes that may anchor a CONFIRMED verdict.
 //
-// management_plane, active_verification and security corroborate but never
-// confirm — the Python engine's stance, kept verbatim. change_record and
-// business are DEM's own support-only classes (see above).
+// THIS SET IS DELIBERATELY STRICTER THAN THE CORRELATION ENGINE'S, and the
+// difference is worth stating plainly rather than glossing as "the same rule".
+// In src/correlation/verdicts.py only two things cannot anchor: a probe below
+// CONFIRM_AUTHORITIES, and a support-only active-verification witness —
+// `management_plane` and `security` are ordinary trusted modalities there, and
+// "a controller alone caps at suspected" follows from the two-modality rule
+// rather than from a per-class veto.
+//
+// DEM refuses those two, plus `active_verification`, as ANCHORS because an
+// experience verdict is a claim about what a user experienced: a controller's
+// own summary, a device's answer about itself and a rule engine's verdict are
+// all second-hand about that, however trustworthy they are about their own
+// subject. `change_record` and `business` are refused for the same reason one
+// step further out — a change is not a measurement of the experience, and a
+// business outcome measures the consequence rather than the mechanism.
+//
+// The consequence is one-directional and is the safe direction: a DEM verdict
+// can be LESS confident than the correlation engine's on the same evidence, and
+// never more. The two graders also answer different questions — this one grades
+// DEM's hypotheses over DEM's evidence, while `run_window` publishes the
+// winning SIGNATURE's gate after a topology-grounding cap — so a correlation
+// object's tier and an experience incident's tier are different claims about
+// different things and must never be shown as one number.
 var anchorModalities = map[string]bool{
 	ModalityActiveProbe:     true,
 	ModalityPassiveFlow:     true,

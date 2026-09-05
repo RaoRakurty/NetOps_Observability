@@ -37,7 +37,7 @@ import (
 // AttributionLine is shown with every AI-generated conclusion, verbatim.
 const AttributionLine = "AI-assisted analysis based on Correlix evidence"
 
-// EnvFeatureFlag gates the DEM AI investigator. It is IN ADDITION to the
+// EnvInvestigatorFlag gates the DEM AI investigator. It is IN ADDITION to the
 // platform copilot flag and the tenant's own AI configuration: a feature that
 // can send evidence to a model gets its own switch.
 const EnvInvestigatorFlag = "FEATURE_DEM_AI_INVESTIGATOR"

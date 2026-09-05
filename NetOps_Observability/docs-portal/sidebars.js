@@ -97,6 +97,7 @@ const sidebars = {
             'monitoring/manage-alerts',
             'monitoring/maintenance-windows',
             'monitoring/link-quality',
+            'monitoring/digital-experience',
             'monitoring/host-monitoring',
           ],
         },

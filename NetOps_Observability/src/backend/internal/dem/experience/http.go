@@ -234,6 +234,9 @@ type OverviewResponse struct {
 	Hotspots               []Hotspot         `json:"hotspots"`
 	BusinessImpact         *float64          `json:"business_impact,omitempty"`
 	BusinessImpactCurrency string            `json:"business_impact_currency,omitempty"`
+	// BusinessImpactNote explains an ABSENT total (business impact declared in
+	// more than one currency). It is never set alongside a total.
+	BusinessImpactNote string `json:"business_impact_note,omitempty"`
 
 	AIInvestigator AIAvailability `json:"ai_investigator"`
 	GeneratedAt    string         `json:"generated_at"`
@@ -279,8 +282,14 @@ type IncidentSummary struct {
 	LikelyLayer       string  `json:"likely_layer,omitempty"`
 	Confidence        float64 `json:"confidence"`
 	VerdictTier       string  `json:"verdict_tier"`
-	Owner             string  `json:"owner,omitempty"`
-	Seam              string  `json:"seam,omitempty"`
+	// ConfidenceFactors and GateReasons travel WITH the number, on the list row
+	// as well as on the incident, because a confidence an operator cannot
+	// decompose is a number they can only take on trust — and "not confirmed"
+	// with no reason teaches them to ignore the distinction.
+	ConfidenceFactors []Factor `json:"confidence_factors,omitempty"`
+	GateReasons       []string `json:"gate_reasons,omitempty"`
+	Owner             string   `json:"owner,omitempty"`
+	Seam              string   `json:"seam,omitempty"`
 
 	JourneySuccessPct *float64 `json:"journey_success_pct,omitempty"`
 	BusinessImpact    *float64 `json:"business_impact,omitempty"`
@@ -321,6 +330,7 @@ func Summarize(inc ExperienceIncident, now time.Time) IncidentSummary {
 		if h.ID == inc.LeadingHypothesisID {
 			s.LeadingCause, s.LeadingCauseClass = h.Explanation, h.CauseClass
 			s.LikelyLayer = LayerFor(h.CauseClass)
+			s.ConfidenceFactors, s.GateReasons = h.ConfidenceParts, h.GateReasons
 			break
 		}
 	}
@@ -401,20 +411,40 @@ func (a *API) HandleOverview(w http.ResponseWriter, r *http.Request) {
 	if resp.Changes == nil {
 		resp.Changes = []ChangeEvent{}
 	}
-	var impact float64
-	currency := ""
 	for _, inc := range asm.Incidents {
 		resp.Incidents = append(resp.Incidents, Summarize(inc, now))
-		if inc.Impact.BusinessValueLost != nil {
-			impact += *inc.Impact.BusinessValueLost
-			currency = inc.Impact.Currency
-		}
 	}
-	if currency != "" {
-		v := round2(impact)
-		resp.BusinessImpact, resp.BusinessImpactCurrency = &v, currency
-	}
+	resp.BusinessImpact, resp.BusinessImpactCurrency, resp.BusinessImpactNote = RollUpBusinessImpact(asm.Incidents)
 	a.deps.WriteJSON(w, http.StatusOK, resp)
+}
+
+// RollUpBusinessImpact totals the declared business impact across incidents.
+//
+// Adding dollars to euros is not a total. When more than one currency is
+// declared in the window the roll-up is WITHHELD with its reason: the
+// per-incident figures are still correct and are still shown, and a single
+// number nobody can act on would be worse than none. PURE.
+func RollUpBusinessImpact(incidents []ExperienceIncident) (total *float64, currency, note string) {
+	sum, seen, mixed := 0.0, "", false
+	for _, inc := range incidents {
+		if inc.Impact.BusinessValueLost == nil {
+			continue
+		}
+		if seen != "" && inc.Impact.Currency != seen {
+			mixed = true
+		}
+		sum += *inc.Impact.BusinessValueLost
+		seen = inc.Impact.Currency
+	}
+	switch {
+	case mixed:
+		return nil, "", "Business impact is declared in more than one currency in this window, so no single total is shown. The per-incident figures are correct."
+	case seen == "":
+		return nil, "", ""
+	default:
+		v := round2(sum)
+		return &v, seen, ""
+	}
 }
 
 func (a *API) aiAvailability() AIAvailability {

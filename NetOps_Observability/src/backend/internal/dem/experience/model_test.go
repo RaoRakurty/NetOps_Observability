@@ -319,9 +319,16 @@ func TestCoverageCallsAnUnmeasuredActionUntestedNotHealthy(t *testing.T) {
 // ── data health (UNKNOWN and NO DATA are never HEALTHY) ─────────────────────
 
 func TestDataHealthNeverCallsAbsenceHealthyAndGatesConfirmation(t *testing.T) {
+	seen := testNow.Add(-2 * time.Hour)
 	dh := BuildDataHealth("1h", []SourceHealth{
 		{Source: SourceSynthetic, Configured: true, State: StateFlowing, CoverageTotal: 4, CoverageCovered: 3},
-		{Source: SourcePathGraph, Configured: true, State: StateNoData},
+		// Configured, anchor-capable, HAS reported before, and has now gone
+		// quiet — the one shape that blocks confirmation.
+		{Source: SourcePathGraph, Configured: true, State: StateNoData, LastSeen: &seen},
+		// Configured and anchor-capable but has NEVER reported: a capability
+		// this deployment does not have. It lowers confidence; it must not make
+		// every incident permanently unconfirmable.
+		{Source: SourceFlow, Configured: true, State: StateNoData},
 		{Source: SourceRUM, State: StateOff},
 	}, testNow)
 	if dh.AnchorSourcesFlowing != 1 || dh.CanConfirm {
@@ -350,6 +357,9 @@ func TestDataHealthNeverCallsAbsenceHealthyAndGatesConfirmation(t *testing.T) {
 	}
 	if m, ok := byName[SourcePathGraph]; !ok || !m.Required {
 		t.Fatalf("a CONFIGURED anchor source that stopped reporting did not block confirmation: %+v", m)
+	}
+	if m, ok := byName[SourceFlow]; !ok || m.Required {
+		t.Fatalf("a source that has NEVER reported was treated as a blocking gap, which would make every incident in this deployment permanently unconfirmable: %+v", m)
 	}
 	// Coverage is stated, never assumed.
 	for _, s := range dh.Sources {
@@ -541,5 +551,28 @@ func TestPacketWithholdsWhatMayNotLeaveAndSaysSo(t *testing.T) {
 	}
 	if len(p.Redacted) == 0 {
 		t.Fatal("the redaction was silent; an operator must be able to see the briefing was trimmed")
+	}
+}
+
+// The published score's AGGREGATION LABEL must describe the arithmetic that was
+// actually performed. Labelling a mean "worst_of" would be exactly the confident
+// overstatement this package exists to prevent — and the fold itself gives the
+// worst subject the largest single share, so one dead target cannot vanish into
+// a green tile.
+func TestWorstWeightedMeanIsWhatTheLabelSays(t *testing.T) {
+	if _, ok := WorstWeightedMean(nil); ok {
+		t.Fatal("an empty set produced a value; nothing measured must never become a number")
+	}
+	v, ok := WorstWeightedMean([]float64{100, 100, 100, 100, 100, 100, 100, 100, 100, 0})
+	if !ok {
+		t.Fatal("a measured set produced nothing")
+	}
+	// Nine perfect subjects and one dead one: the plain mean is 90, which reads
+	// as "healthy". The worst-weighted fold is 54.
+	if v != 54 {
+		t.Fatalf("nine healthy and one dead folded to %v, want 54 (the plain mean, 90, is the number this rule exists to refuse)", v)
+	}
+	if single, _ := WorstWeightedMean([]float64{72}); single != 72 {
+		t.Fatalf("a single subject folded to %v", single)
 	}
 }

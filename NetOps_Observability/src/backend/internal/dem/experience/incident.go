@@ -359,7 +359,7 @@ func buildIncident(b Bundle, subj incidentSubject, items []EvidenceItem) Experie
 	}
 	inc.Changes = RankChanges(b.Changes, affected, subj.App, site, inc.Seam, inc.FirstImpactAt, b.Window, causes)
 
-	inc.Severity = severityFor(subj, inc, b.Reliability, items)
+	inc.Severity = severityFor(subj, b.Reliability, items)
 	inc.PathObservationID = pathObservationRef(items)
 	inc.Verification = planVerification(inc)
 	inc.Timeline = buildTimeline(inc)
@@ -502,6 +502,13 @@ func attachChangeEvidence(items []EvidenceItem, hyps []Hypothesis, changes []Cha
 		}
 		if it.Stance == StanceSupports && it.CauseClass != "" && len(it.SupportsHypotheses) == 0 {
 			it.SupportsHypotheses = dedupIDs(byCause[it.CauseClass])
+			if len(it.SupportsHypotheses) == 0 {
+				// It points at a cause nothing here proposed. Leaving it
+				// unnamed would make it bear on EVERY hypothesis, which is the
+				// opposite of what it says; it becomes context instead —
+				// rendered for the operator, scored against nothing.
+				it.Stance = StanceNeutral
+			}
 		}
 		out = append(out, it)
 	}
@@ -636,7 +643,7 @@ func buildTimeline(inc ExperienceIncident) []TimelineEntry {
 //     capped at `low`, whatever the miss looks like. That is Phase H's "a single
 //     flaky synthetic must not automatically create a high-severity incident",
 //     enforced here rather than left to a reviewer.
-func severityFor(subj incidentSubject, inc ExperienceIncident,
+func severityFor(subj incidentSubject,
 	reliability map[string]SyntheticReliability, items []EvidenceItem) string {
 
 	sev := SeverityMedium

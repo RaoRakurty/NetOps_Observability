@@ -293,3 +293,19 @@ exposing its evidence reference, observation method, confidence and timestamp.
 
 `contract_version = 1`. Stamped on every emitted path object. A breaking change bumps this and
 ships a migration + rollback.
+
+---
+
+## 12. Consumers — note (not a contract change)
+
+**Digital Experience references this contract; it never copies it.** An
+`ExperienceIncident` (`src/backend/internal/dem/experience`) carries a single
+`path_observation_id` — the id of an immutable `PathObservation` (§2.3) — and
+nothing else from this contract. It stores no hop, no address, no ordinal and no
+spine. `GET /api/dem/incidents/{id}/path` returns that reference plus an honest
+`measured:false` + reason when no forward path was observed, and directs the
+caller to fetch the ordered spine from this contract's own API (§7), which
+remains the single source of hop order and whose renderer contract is unchanged.
+
+Nothing above amends §§0–11. See `docs/design/dem-architecture.md` and
+`docs/design/dem-api.md`.

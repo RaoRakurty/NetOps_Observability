@@ -422,48 +422,43 @@ func assembleDataHealth(in AssembleInput, evidence []EvidenceItem) DataHealth {
 func tenantScore(in AssembleInput, policy ScorePolicy, health []JourneyHealth, results map[string]dem.Result) ExperienceScore {
 	dims := map[string]DimensionInput{}
 
-	measuredJourneys, journeySum := 0, 0.0
+	journeyPoints := make([]float64, 0, len(health))
 	for _, h := range health {
 		if h.Measured {
-			measuredJourneys++
-			journeySum += h.SuccessPct
+			journeyPoints = append(journeyPoints, h.SuccessPct)
 		}
 	}
-	if measuredJourneys > 0 {
+	if v, ok := WorstWeightedMean(journeyPoints); ok {
 		dims[DimJourneySuccess] = DimensionInput{
-			Measured: true, Points: journeySum / float64(measuredJourneys), Samples: measuredJourneys,
-			Detail: plural(measuredJourneys, "declared journey is", "declared journeys are") + " measured in this window",
+			Measured: true, Points: v, Samples: len(journeyPoints),
+			Detail: plural(len(journeyPoints), "declared journey is", "declared journeys are") +
+				" measured in this window; the worst one carries the largest single share, so one failing workflow cannot disappear into an average",
 		}
 	} else {
 		dims[DimJourneySuccess] = DimensionInput{Reason: ReasonJourneyNotMeasured,
 			Detail: "no declared journey has a measured required step, so journey success has no value"}
 	}
 
-	availSum, availN := 0.0, 0
-	latSum, latN := 0.0, 0
-	pathSum, pathN := 0.0, 0
+	var avail, lat, path []float64
 	for _, r := range results {
 		if !r.Measured {
 			continue
 		}
 		if r.Availability.Measured {
-			availSum += r.Availability.Points
-			availN++
+			avail = append(avail, r.Availability.Points)
 		}
 		if r.Latency.Measured {
-			latSum += r.Latency.Points
-			latN++
+			lat = append(lat, r.Latency.Points)
 		}
 		if r.PathStability.Measured {
-			pathSum += r.PathStability.Points
-			pathN++
+			path = append(path, r.PathStability.Points)
 		}
 	}
-	dims[DimAvailability] = dimFrom(availSum, availN, dem.ReasonNoSamples,
+	dims[DimAvailability] = dimFrom(avail, dem.ReasonNoSamples,
 		"no target produced a scorable availability measurement in this window")
-	dims[DimResponsiveness] = dimFrom(latSum, latN, dem.ReasonNoSamples,
+	dims[DimResponsiveness] = dimFrom(lat, dem.ReasonNoSamples,
 		"no target declared a latency budget, so responsiveness has no threshold to be scored against")
-	dims[DimNetworkQuality] = dimFrom(pathSum, pathN, dem.ReasonNoSamples,
+	dims[DimNetworkQuality] = dimFrom(path, dem.ReasonNoSamples,
 		"no forward path was observed, so network quality is not measured — it is not 'good'")
 
 	dims[DimErrorFreeInteraction] = DimensionInput{Reason: MissingNotConfigured,
@@ -471,12 +466,18 @@ func tenantScore(in AssembleInput, policy ScorePolicy, health []JourneyHealth, r
 	dims[DimUserFriction] = DimensionInput{Reason: MissingNotConfigured,
 		Detail: "user friction (retries, re-authentication, roaming, abandonment) needs real-user or endpoint telemetry, which is not collected yet"}
 
-	return ComputeScore(in.TenantID, "tenant", in.Window, AggWorstOf, policy, DefaultAppClass, dims, nil)
+	return ComputeScore(in.TenantID, "tenant", in.Window, AggWorstWeighted, policy, DefaultAppClass, dims, nil)
 }
 
-func dimFrom(sum float64, n int, reason, detail string) DimensionInput {
-	if n == 0 {
+// dimFrom folds one dimension's per-subject points, or reports the honest
+// absence. The fold is the worst-weighted mean, and the response says so in
+// ExperienceScore.Aggregation — a label that claimed `worst_of` over a plain
+// mean would be exactly the kind of confident overstatement this package
+// exists to prevent.
+func dimFrom(points []float64, reason, detail string) DimensionInput {
+	v, ok := WorstWeightedMean(points)
+	if !ok {
 		return DimensionInput{Reason: reason, Detail: detail}
 	}
-	return DimensionInput{Measured: true, Points: sum / float64(n), Samples: n}
+	return DimensionInput{Measured: true, Points: v, Samples: len(points)}
 }

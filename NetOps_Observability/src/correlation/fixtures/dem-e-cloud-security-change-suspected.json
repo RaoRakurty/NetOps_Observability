@@ -1,0 +1,34 @@
+{
+  "name": "DEM scenario E — a cloud security-policy change immediately precedes the synthetic failure: the policy hypothesis is raised, the verdict stays suspected",
+  "comment": "Owner Phase O scenario E. The change record satisfies sg-nacl-block's supporting clause (0.50 -> 0.55, into the visible top-K) but the signature still demands a passive_flow witness — a flow-log REJECT on the failing 5-tuple — which no source supplies. A change proves policy was edited, not that the edit is dropping traffic, so precedence in time can never confirm. The object's own verdict remains the single-modality app-experience suspicion.",
+  "signals": [
+    {
+      "kind": "cloud_audit",
+      "entity_type": "cloud_resource",
+      "entity_id": "sg-portal-egress",
+      "observer_id": "cloud:1234:us-east-1",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "ts_offset_s": 0,
+      "deviation": 0.0
+    },
+    {
+      "kind": "synthetic_http_fail",
+      "entity_type": "service",
+      "entity_id": "portal.acme.example",
+      "observer_id": "syn-frisco",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "probe_authority": "high",
+      "ts_offset_s": 60,
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.app.saas-experience-degraded",
+    "tier": "suspected",
+    "owner": "app_team"
+  }
+}

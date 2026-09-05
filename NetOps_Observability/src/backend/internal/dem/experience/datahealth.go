@@ -244,14 +244,18 @@ func (d DataHealth) MissingFrom() []MissingEvidence {
 		case StateNotSupported:
 			reason = MissingNotSupported
 		}
-		// Only a source that COULD have anchored a verdict is marked Required:
-		// its absence is what blocks confirmation. A corroborating source being
-		// off lowers confidence without blocking anything, and conflating the
-		// two would make every incident permanently unconfirmable.
+		// Required — the absence that BLOCKS confirmation — is deliberately
+		// narrow: a source that could have anchored a verdict, that is
+		// configured, AND that HAS reported at least once. A source that has
+		// never produced anything is a capability the deployment does not have,
+		// and treating that as a blocking gap would make every incident in
+		// every such deployment permanently unconfirmable — which is not
+		// caution, it is a broken product. It still lowers confidence.
 		out = append(out, MissingEvidence{
 			Source: s.Source, IndependenceGroup: s.IndependenceGroup,
-			Reason: reason, Required: s.AnchorCapable && s.Configured,
-			Detail: s.Label + " is not reporting (" + s.State + ")" + optDetail(s.Detail),
+			Reason:   reason,
+			Required: s.AnchorCapable && s.Configured && s.LastSeen != nil,
+			Detail:   s.Label + " is not reporting (" + s.State + ")" + optDetail(s.Detail),
 		})
 	}
 	return out

@@ -79,12 +79,48 @@ func Band(score float64) string {
 	}
 }
 
-// Aggregation modes. A subject legitimately has one score per observer; which
-// one is on screen must always be stated (§2 of the Correlix half).
+// Aggregation modes. A subject legitimately has one score per observer, and
+// which one is on screen must always be stated (§2 of the Correlix half) — so
+// the label has to describe the arithmetic that was actually performed, not the
+// arithmetic we would like to perform.
+//
+//	AggWorstWeighted is what the tenant score does TODAY: the mean of the
+//	    measured subjects with the WORST one weighted at [WorstShare]. A plain
+//	    mean is how one dead target disappears into a green tile; a pure
+//	    worst-of over subjects would make one paused check the whole story.
+//	AggWorstOf and AggP95Of are the PER-OBSERVER modes. They become meaningful
+//	    when a subject is measured from more than one vantage; with a single
+//	    prober there is no second observer to take a worst or a percentile of,
+//	    and labelling the current mean `worst_of` would be a claim the numbers
+//	    do not support.
 const (
-	AggWorstOf = "worst_of" // triage: the worst observer's view
-	AggP95Of   = "p95_of"   // reporting: the 95th percentile of observers
+	AggWorstWeighted = "worst_weighted"
+	AggWorstOf       = "worst_of"
+	AggP95Of         = "p95_of"
 )
+
+// WorstShare is the weight the single worst subject carries in a
+// worst-weighted mean. It is internal/dem.weightWorst, for the same reason:
+// a site with nine healthy targets and one dead one is not 90% well.
+const WorstShare = 0.4
+
+// WorstWeightedMean folds per-subject points into one number, giving the worst
+// subject WorstShare of the weight. Returns ok=false for an empty set, so a
+// caller cannot turn "nothing was measured" into a zero.
+func WorstWeightedMean(points []float64) (value float64, ok bool) {
+	if len(points) == 0 {
+		return 0, false
+	}
+	sum, worst := 0.0, points[0]
+	for _, p := range points {
+		sum += p
+		if p < worst {
+			worst = p
+		}
+	}
+	mean := sum / float64(len(points))
+	return round2(mean*(1-WorstShare) + worst*WorstShare), true
+}
 
 // MinMeasuredDimensions is the evidence minimum. Below it the score is not
 // rendered: one dimension is a metric, not an experience.

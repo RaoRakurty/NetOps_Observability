@@ -308,3 +308,64 @@ func (m *memCatalogue) ListAll(context.Context) ([]dem.Target, error) { return m
 // surface never writes the catalogue, and a test that started to would be
 // telling us something.
 var errNotUsedHere = errors.New("experience tests: the experience surface must not write the target catalogue")
+
+// Adding dollars to euros is not a total. The per-incident figures stay
+// correct; the tenant-level roll-up is withheld WITH ITS REASON rather than
+// rendered as a number nobody can act on.
+func TestMixedCurrencyBusinessImpactIsWithheldWithItsReason(t *testing.T) {
+	usd, eur := 100.0, 50.0
+	one := []ExperienceIncident{
+		{ID: "exp-a", Impact: Impact{BusinessValueLost: &usd, Currency: "USD"}},
+		{ID: "exp-b", Impact: Impact{BusinessValueLost: &eur, Currency: "USD"}},
+	}
+	total, cur, note := RollUpBusinessImpact(one)
+	if total == nil || *total != 150 || cur != "USD" || note != "" {
+		t.Fatalf("one currency did not total: %v %q %q", total, cur, note)
+	}
+
+	one[1].Impact.Currency = "EUR"
+	total, cur, note = RollUpBusinessImpact(one)
+	if total != nil || cur != "" {
+		t.Fatalf("a total was published across two currencies: %v %q", total, cur)
+	}
+	if note == "" {
+		t.Fatal("the withheld total gave no reason, so an operator would read it as 'no business impact'")
+	}
+
+	// No declared value at all: no total, and no note either — there is nothing
+	// to explain, and a note would imply something was withheld.
+	total, _, note = RollUpBusinessImpact([]ExperienceIncident{{ID: "exp-c"}})
+	if total != nil || note != "" {
+		t.Fatalf("an incident with no declared value produced %v / %q", total, note)
+	}
+}
+
+// A confidence an operator cannot decompose is a number they can only take on
+// trust, so the LIST row carries the factor breakdown and — when the verdict is
+// not confirmed — the reasons it is not.
+func TestIncidentSummaryCarriesTheConfidenceBreakdown(t *testing.T) {
+	inc := Detect(acceptanceBundle())[0]
+	s := Summarize(inc, testNow)
+	if s.Confidence <= 0 {
+		t.Fatalf("the summary carried no confidence: %+v", s)
+	}
+	if len(s.ConfidenceFactors) == 0 {
+		t.Fatal("the summary carried a confidence with no factor breakdown")
+	}
+	names := map[string]bool{}
+	for _, f := range s.ConfidenceFactors {
+		names[f.Name] = true
+		if f.Reason == "" {
+			t.Fatalf("factor %q carried no reason", f.Name)
+		}
+	}
+	for _, want := range []string{"support", "independence", "alignment", "specificity", "contradiction", "completeness"} {
+		if !names[want] {
+			t.Fatalf("the breakdown is missing the %q factor: %+v", want, s.ConfidenceFactors)
+		}
+	}
+	// This incident IS confirmed, so there is nothing to explain away.
+	if s.VerdictTier == TierConfirmed && len(s.GateReasons) != 0 {
+		t.Fatalf("a confirmed verdict carried gate reasons: %v", s.GateReasons)
+	}
+}
