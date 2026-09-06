@@ -630,6 +630,19 @@ services:
     build:
       context: ./vector-router
       dockerfile: Dockerfile
+      args:
+        # The image adds a static curl via apk. On egress that INTERCEPTS TLS
+        # (this lab: HTTPS re-signed by the SASE gateway) the apk fetch fails
+        # certificate verification, and the Dockerfile's documented workaround
+        # (--build-arg APK_REPO_SCHEME=http; apk still verifies SIGNED indexes)
+        # is unreachable through `docker compose build` — which is what
+        # scripts/make-installer.sh runs, so the customer bundle could not be
+        # cut on such a host at all. Passing it through here keeps the default
+        # EXACTLY as it was (https) and makes the escape hatch reachable:
+        #   APK_REPO_SCHEME=http docker compose build vector-router
+        # Same shape as Dockerfile.correlation's pip --trusted-host relaxation
+        # for the identical network condition.
+        APK_REPO_SCHEME: ${APK_REPO_SCHEME:-https}
     image: netops-vector-router:0.40.0-curl
     mem_limit: ${VECTOR_MEM_LIMIT:-512m}
     cpus: ${VECTOR_CPU_LIMIT:-2}
