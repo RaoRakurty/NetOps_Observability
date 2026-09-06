@@ -26,6 +26,7 @@ import type {
   TacPlanRequest,
   TacProgress,
   TacSection,
+  TacSource,
   TacState,
   TacStep,
   TacTarget,
@@ -164,6 +165,100 @@ export function verifiedLabel(v: TacVerified | "" | undefined): string {
   return "";
 }
 
+// ── the plan table (owner, 2026-09-06: "bunch of links … this page is unusable")
+//
+// The plan preview used to print, under every command, the whole citation list
+// the dialect inherited — 8,418 links on one Nokia SR Linux plan — plus the
+// intent id, a badge, a repeated note and the same caveat sentence on 23 rows.
+// It is now a table with four columns and ONE small chip, and everything that
+// was said twice is said once: the chip legend sits under the table, the intent
+// id and the collection stage live in the row's tooltip for support, and a step
+// links at most its first citation.
+
+/** The three things a plan row can honestly say about its command. */
+export type TacStepStatus = "verified" | "vendor-docs" | "unverified";
+
+/** The chip word for each. Three words, one per state, never a sentence. */
+export const STATUS_CHIP: Record<TacStepStatus, string> = {
+  verified: "Verified",
+  "vendor-docs": "From vendor docs",
+  unverified: "Not verified",
+};
+
+/** One legend line, printed ONCE under the table instead of on every row. */
+export const PLAN_LEGEND =
+  "Verified — Correlix has run this command on this platform. From vendor docs — the vendor publishes it and Correlix has not run it here. Not verified — neither.";
+
+/** What a step's `verified` flag maps to. An absent flag is "Not verified":
+ *  a blank would read as "fine", and it is not. */
+export function stepStatus(v: TacVerified | "" | undefined): TacStepStatus {
+  if (v === "capture") return "verified";
+  if (v === "doc_claimed") return "vendor-docs";
+  return "unverified";
+}
+
+/** The plain word for a collection stage, used only in the row tooltip. */
+export const SECTION_STAGE: Record<TacSection, string> = {
+  baseline: "always collected",
+  "deep-dive": "this issue",
+  optional: "optional",
+  topology: "topology",
+};
+
+/** The row's support tooltip: the machine ids a person never needs on screen
+ *  but a support engineer reading over their shoulder does. */
+export function stepTooltip(step: TacStep): string {
+  const stage = SECTION_STAGE[step.section] ?? step.section;
+  return `${step.intent} · ${stage}`;
+}
+
+/** The ONE reference a row may link. The rest of a citation list is the pack's
+ *  bibliography and belongs on the pack, not on 23 command rows. */
+export function stepReference(step: TacStep): TacSource | null {
+  const first = (step.sources ?? [])[0];
+  if (!first || !/^https:\/\//.test(first.url ?? "")) return null;
+  return first;
+}
+
+/** The one line that replaces a full list of unbound intents. */
+export function unavailableLine(count: number, platform: string): string {
+  const where = (platform || "").trim() || "this platform";
+  return count === 1
+    ? `1 check is not available on ${where}`
+    : `${count} checks are not available on ${where}`;
+}
+
+/** The one line that replaces the topology list. */
+export function topologyLine(count: number): string {
+  return count === 1 ? "1 topology fact goes into the bundle" : `${count} topology facts go into the bundle`;
+}
+
+/** The plan header, in one line: what, where, on which CLI, how long. */
+export function planHeadline(plan: TacPlan | undefined): string {
+  if (!plan) return "";
+  const where = plan.hostname || plan.device_id;
+  const dialect = plan.dialect_display || plan.dialect;
+  const parts = [where ? `${plan.class_title} on ${where}` : plan.class_title, dialect].filter(Boolean);
+  parts.push(`${humanBytes(plan.estimated_bytes)} · ${humanSeconds(plan.estimated_seconds)}`);
+  return parts.join(" · ");
+}
+
+/** The version strings, for the header's tooltip. They are provenance, not copy:
+ *  an operator never reads them and a support engineer always needs them. */
+export function planVersionTitle(plan: TacPlan | undefined): string {
+  if (!plan) return "";
+  return [
+    plan.plan_version ? `plan ${plan.plan_version}` : "",
+    plan.catalog_version ? `issues ${plan.catalog_version}` : "",
+    plan.engine_version ? `engine ${plan.engine_version}` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+/** The short sentence the Bundle step states once. The server's own full
+ *  promise stays on the page, one disclosure away — it is never replaced. */
+export const REDACTION_SHORT =
+  "Passwords, keys and community strings are masked in the bundle. Hostnames, interfaces and addresses are kept.";
+
 /** The reason an unbound step carries, never blank. */
 export function unboundReason(step: TacStep): string {
   return (step.note || "").trim() || UNBOUND_STEP_REASON;
@@ -172,23 +267,6 @@ export function unboundReason(step: TacStep): string {
 // ── plan sections ───────────────────────────────────────────────────────────
 
 export const SECTION_ORDER: TacSection[] = ["baseline", "deep-dive", "optional", "topology"];
-
-export const SECTION_TITLE: Record<TacSection, string> = {
-  baseline: "Baseline — collected for every class",
-  "deep-dive": "Deep dive — this issue class",
-  optional: "Optional — large or slow captures",
-  topology: "Topology — from Correlix's own model",
-};
-
-/** Steps grouped into the four sections, each in the plan's own order. */
-export function groupSteps(steps: TacStep[] | undefined): Record<TacSection, TacStep[]> {
-  const out: Record<TacSection, TacStep[]> = { baseline: [], "deep-dive": [], optional: [], topology: [] };
-  for (const s of steps ?? []) {
-    const sec = SECTION_ORDER.includes(s.section) ? s.section : "baseline";
-    out[sec].push(s);
-  }
-  return out;
-}
 
 /** The plan request body — empty target fields are omitted, never sent blank. */
 export function buildPlanRequest(

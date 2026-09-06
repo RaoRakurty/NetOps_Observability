@@ -5,9 +5,13 @@
 //  · classify — a matched class with the exact evidence rows that scored it and
 //    the alternatives; and `classified:false`, which shows the server's own note
 //    and never invents a class
-//  · plan     — bound steps with their commands, a `doc_claimed` command
-//    labelled "documented, not verified", unbound intents listed WITH their
-//    reason, and `has_plan:false` rendered as the honest no-plan state
+//  · plan     — one table: step number, what it collects, the command, one
+//    chip; a `doc_claimed` command chipped "From vendor docs"; the checks this
+//    platform cannot do folded behind ONE line; `has_plan:false` rendered as
+//    the honest no-plan state. The rework (owner, 2026-09-06: "bunch of links
+//    … this page is unusable") is guarded here: a step carrying hundreds of
+//    citations may still render at most ONE reference link, and no intent id
+//    may reach the visible row.
 //  · collect  — a 503 rendering the server's own collect_note with the Start
 //    button disabled; live per-command progress; cancel; the paste fallback
 //  · bundle   — the download called with the profile and a safe file name
@@ -41,15 +45,18 @@ vi.mock("../../services/api", () => ({ api: { ...mocks } }));
 import TacEscalationPanel from "./TacEscalationPanel";
 import {
   CONNECTOR_NOT_CONFIGURED,
-  DOC_CLAIMED_LABEL,
   NOTHING_SCORED_NOTE,
   NO_CAPTURE_YET,
   PASTE_INVITE,
   PLAN_NEEDS_DEVICE,
+  PLAN_LEGEND,
+  REDACTION_SHORT,
   REVIEW_POLICY_NOTE,
   REVIEW_REFUSED,
   STATE_READ_FAILED,
+  STATUS_CHIP,
   bundleFileName,
+  unavailableLine,
   unboundReason,
 } from "./tacModel";
 
@@ -322,37 +329,104 @@ describe("plan preview", () => {
     });
   });
 
-  it("shows bound commands, the size/time estimate and the redaction note verbatim", async () => {
+  it("renders the plan as one numbered table: what it collects, the command, one chip", async () => {
     await openClassified();
     mocks.tacPlan.mockResolvedValue(planResponse());
     mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
     await click("Build the command plan");
 
-    const preview = within(screen.getByTestId("tac-plan"));
-    expect(preview.getByText("show version")).toBeInTheDocument();
-    expect(preview.getByText("show ip ospf neighbor detail")).toBeInTheDocument();
-    expect(screen.getByText(/Estimated 2.0 KB · about 45 s/)).toBeInTheDocument();
-    expect(screen.getByTestId("tac-redaction"))
-      .toHaveTextContent("Secrets, community strings and keys are removed from the bundle; tenant ids are kept.");
+    const table = within(screen.getByTestId("tac-plan-table"));
+    expect(table.getByText("show version")).toBeInTheDocument();
+    expect(table.getByText("show ip ospf neighbor detail")).toBeInTheDocument();
+    expect(table.getByText("Software version")).toBeInTheDocument();
+    // The numbers are the collection order, and they start at 1.
+    expect(table.getByText("1")).toBeInTheDocument();
+    expect(table.getByText("2")).toBeInTheDocument();
+    // One chip per row, and the legend explains all three exactly once.
+    expect(table.getByText(STATUS_CHIP.verified)).toBeInTheDocument();
+    expect(table.getByText(STATUS_CHIP["vendor-docs"])).toBeInTheDocument();
+    expect(screen.getAllByText(PLAN_LEGEND)).toHaveLength(1);
   });
 
-  it("labels a documented command as unverified", async () => {
+  it("puts the class, the device, the CLI and the estimate on ONE header line", async () => {
     await openClassified();
     mocks.tacPlan.mockResolvedValue(planResponse());
     mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
     await click("Build the command plan");
-    expect(within(screen.getByTestId("tac-plan")).getByText(DOC_CLAIMED_LABEL)).toBeInTheDocument();
+
+    expect(
+      screen.getByText(
+        "OSPF adjacency will not form or is stuck on leaf1 · Cisco IOS-XE · 2.0 KB · about 45 s",
+      ),
+    ).toBeInTheDocument();
+    // The version strings are provenance, not copy: they live in the tooltip.
+    expect(screen.getByTitle(/correlix-tac-plan-cisco-iosxe-2026-09-05/)).toBeInTheDocument();
   });
 
-  it("lists an unbound intent with its own reason instead of dropping it", async () => {
+  it("states the redaction promise once, in the bundle step, with the server's own words behind it", async () => {
     await openClassified();
     mocks.tacPlan.mockResolvedValue(planResponse());
     mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
     await click("Build the command plan");
 
-    const unbound = screen.getByTestId("tac-unbound");
-    expect(unbound).toHaveTextContent("OSPF router LSA");
-    expect(unbound).toHaveTextContent("no binding on this dialect");
+    // NOT on the plan preview any more.
+    expect(within(screen.getByTestId("tac-plan")).queryByText(REDACTION_SHORT)).toBeNull();
+    const fold = screen.getByTestId("tac-redaction");
+    expect(fold).toHaveTextContent(REDACTION_SHORT);
+    expect(fold).toHaveTextContent(
+      "Secrets, community strings and keys are removed from the bundle; tenant ids are kept.",
+    );
+  });
+
+  it("renders at most ONE reference link on a step, whatever the pack cites", async () => {
+    await openClassified();
+    const many = Array.from({ length: 400 }, (_, i) => ({
+      title: `SR Linux documentation portal ${i}`,
+      url: `https://example.invalid/doc-${i}`,
+    }));
+    const heavy = plan({
+      steps: [
+        {
+          intent: "ospf.neighbors.detail", title: "OSPF neighbours, detailed", section: "deep-dive",
+          bound: true, command: "show ip ospf neighbor detail", verified: "doc_claimed",
+          sources: many,
+        },
+      ],
+    });
+    mocks.tacPlan.mockResolvedValue(planResponse(heavy));
+    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith({ plan: heavy }) }));
+    await click("Build the command plan");
+
+    const table = screen.getByTestId("tac-plan-table");
+    expect(within(table).getAllByRole("link")).toHaveLength(1);
+    expect(within(table).getByRole("link")).toHaveAttribute("href", "https://example.invalid/doc-0");
+    // and not one of the 400 titles as inline text.
+    expect(within(table).queryByText("SR Linux documentation portal 0")).toBeNull();
+  });
+
+  it("shows no intent id in a visible row — it stays in the tooltip for support", async () => {
+    await openClassified();
+    mocks.tacPlan.mockResolvedValue(planResponse());
+    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
+    await click("Build the command plan");
+
+    const table = screen.getByTestId("tac-plan-table");
+    expect(table.textContent).not.toContain("ospf.neighbors.detail");
+    expect(table.textContent).not.toContain("system.version");
+    expect(within(table).getByTitle("ospf.neighbors.detail · this issue")).toBeInTheDocument();
+  });
+
+  it("folds the checks this platform cannot do behind one line, collapsed by default", async () => {
+    await openClassified();
+    mocks.tacPlan.mockResolvedValue(planResponse());
+    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
+    await click("Build the command plan");
+
+    const unbound = screen.getByTestId("tac-unbound") as HTMLDetailsElement;
+    expect(unbound.open).toBe(false);
+    expect(unbound).toHaveTextContent(unavailableLine(1, "Cisco IOS-XE"));
+    // The name is inside; the reason rides on the tooltip, not on a per-row note.
+    expect(within(unbound).getByTitle(/no binding on this dialect/)).toHaveTextContent("OSPF router LSA");
     expect(unboundReason({ intent: "x", title: "x", section: "deep-dive", bound: false }))
       .toBeTruthy();
   });

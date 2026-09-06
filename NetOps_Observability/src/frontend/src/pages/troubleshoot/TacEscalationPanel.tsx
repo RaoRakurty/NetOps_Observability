@@ -19,8 +19,8 @@
 // HONESTY (the reason the feature exists). Nothing here is filled in to look
 // finished. `classified:false` shows the server's own note and never an invented
 // class. `has_plan:false` says this platform has no authored command set. An
-// unbound intent is listed WITH its reason. A `doc_claimed` command is labelled
-// "documented, not verified". A 503 on collect renders the server's own
+// unbound intent is counted and named, with its reason on its tooltip. A
+// `doc_claimed` command is chipped "From vendor docs". A 503 on collect renders the server's own
 // collect_note and leaves the paste path open. A connector with no credentials
 // is greyed with its own note and cannot be pressed into a case.
 //
@@ -66,15 +66,17 @@ import {
   NO_CAPTURE_YET,
   PASTE_INVITE,
   PLAN_FAILED,
+  PLAN_LEGEND,
   PLAN_NEEDS_DEVICE,
+  REDACTION_SHORT,
   REVIEW_EMPTY,
   REVIEW_INTRO,
   REVIEW_POLICY_NOTE,
   REVIEW_REFUSED,
   ROW_RENDER_CAP,
   SECTION_ORDER,
-  SECTION_TITLE,
   STATE_READ_FAILED,
+  STATUS_CHIP,
   TEMPLATES_FAILED,
   TEMPLATE_NEEDS_NAME,
   TEMPLATE_SAVE_FAILED,
@@ -91,10 +93,8 @@ import {
   connectorNote,
   editSummary,
   evidenceLine,
-  groupSteps,
   hasCapability,
   humanBytes,
-  humanSeconds,
   isCollecting,
   isMissingField,
   moveCommand,
@@ -102,10 +102,17 @@ import {
   pasteIntents,
   phaseLabel,
   planCommands,
+  planHeadline,
+  planVersionTitle,
   reasonLine,
   reviewChanged,
+  stepReference,
+  stepStatus,
+  stepTooltip,
   tacError,
   templateLabel,
+  topologyLine,
+  unavailableLine,
   unboundReason,
   verdictLine,
   verifiedLabel,
@@ -459,7 +466,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
 
   const started = Boolean(classification);
   const evidence = evidenceLine(classify?.evidence_sources ?? [], classify?.evidence_missing ?? []);
-  const sections = groupSteps(plan?.steps);
+  const planRows = orderedSteps(plan?.steps);
   const bundles = state?.bundles ?? [];
 
   return (
@@ -626,69 +633,61 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
             <p className="mini-meta tac-note" role="status">{PLAN_NEEDS_DEVICE}</p>
           ) : (
             <div className="tac-plan" data-testid="tac-plan">
-              <p className="mini-meta tac-note">
-                {plan.class_title} on <strong>{plan.hostname || plan.device_id}</strong> ·{" "}
-                {plan.dialect_display || plan.dialect}
-                {plan.plan_version ? ` · plan ${plan.plan_version}` : ""}
-              </p>
+              <p className="tac-plan-head" title={planVersionTitle(plan)}>{planHeadline(plan)}</p>
               {!plan.has_plan && (
                 <p className="tac-bad" role="status" data-testid="tac-no-plan">
                   {plan.note || NO_AUTHORED_PLAN_NOTE}
                 </p>
               )}
-              {plan.has_plan && plan.note && <p className="mini-meta tac-note">{plan.note}</p>}
-              <p className="mini-meta tac-note">
-                Estimated {humanBytes(plan.estimated_bytes)} · {humanSeconds(plan.estimated_seconds)}
-              </p>
-              <p className="mini-meta tac-note" data-testid="tac-redaction">{plan.redaction_note}</p>
 
-              {SECTION_ORDER.map((sec) => {
-                const steps = sections[sec];
-                if (steps.length === 0) return null;
-                const shown = steps.slice(0, ROW_RENDER_CAP);
-                return (
-                  <div className="tac-section" key={sec}>
-                    <h4 className="tac-section-h">{SECTION_TITLE[sec]}</h4>
-                    <ul className="tac-steps">
-                      {shown.map((s) => <PlanStep key={`${sec}-${s.intent}`} step={s} />)}
-                    </ul>
-                    {steps.length > shown.length && (
-                      <p className="mini-meta tac-note">{cappedNote(shown.length, steps.length, "steps")}</p>
-                    )}
+              {planRows.length > 0 && (
+                <>
+                  <div className="tac-plan-scroll">
+                    <table className="tac-plan-table" data-testid="tac-plan-table">
+                      <thead>
+                        <tr>
+                          <th scope="col" className="tac-col-n">#</th>
+                          <th scope="col">What it collects</th>
+                          <th scope="col">Command</th>
+                          <th scope="col">Status</th>
+                          <th scope="col" className="tac-col-ref"><span className="tac-sr">Reference</span></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {planRows.slice(0, ROW_RENDER_CAP).map((s, i) => (
+                          <PlanRow key={`${s.section}-${s.intent}`} step={s} n={i + 1} />
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                );
-              })}
-
-              {plan.topology.length > 0 && (
-                <div className="tac-section">
-                  <h4 className="tac-section-h">Topology carried into the bundle</h4>
-                  <ul className="tac-topo">
-                    {plan.topology.slice(0, ROW_RENDER_CAP).map((t, i) => (
-                      <li key={`${t.kind}-${t.ref}-${i}`}>
-                        <span className="tac-kind">{t.kind}</span> {t.ref}
-                        {t.detail ? <span className="mini-meta"> — {t.detail}</span> : null}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                  {planRows.length > ROW_RENDER_CAP && (
+                    <p className="tac-plan-legend">{cappedNote(ROW_RENDER_CAP, planRows.length, "steps")}</p>
+                  )}
+                  <p className="tac-plan-legend" data-testid="tac-plan-legend">{PLAN_LEGEND}</p>
+                </>
               )}
 
-              <div className="tac-section" data-testid="tac-unbound">
-                <h4 className="tac-section-h">Intents this platform binds no command for</h4>
-                {plan.unbound.length === 0 ? (
-                  <p className="mini-meta tac-note">Every intent in this plan is bound to a command.</p>
-                ) : (
-                  <ul className="tac-steps">
-                    {plan.unbound.slice(0, ROW_RENDER_CAP).map((s) => (
-                      <li className="tac-step-row unbound" key={`ub-${s.intent}`}>
-                        <span className="tac-step-t">{s.title}</span>
-                        <code className="tac-id">{s.intent}</code>
-                        <span className="mini-meta">{unboundReason(s)}</span>
-                      </li>
+              {plan.topology.length > 0 && (
+                <details className="tac-fold" data-testid="tac-topology">
+                  <summary>{topologyLine(plan.topology.length)}</summary>
+                  <ul className="tac-fold-list">
+                    {plan.topology.slice(0, ROW_RENDER_CAP).map((t, i) => (
+                      <li key={`${t.kind}-${t.ref}-${i}`} title={t.detail || t.kind}>{t.ref}</li>
                     ))}
                   </ul>
-                )}
-              </div>
+                </details>
+              )}
+
+              {plan.unbound.length > 0 && (
+                <details className="tac-fold" data-testid="tac-unbound">
+                  <summary>{unavailableLine(plan.unbound.length, plan.dialect_display || plan.dialect)}</summary>
+                  <ul className="tac-fold-list">
+                    {plan.unbound.slice(0, ROW_RENDER_CAP).map((s) => (
+                      <li key={`ub-${s.intent}`} title={`${stepTooltip(s)} · ${unboundReason(s)}`}>{s.title}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </div>
           )}
         </section>
@@ -970,6 +969,14 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
       {started && plan && (
         <section className="tac-step" aria-labelledby="tac-bundle-h">
           <h3 id="tac-bundle-h" className="tac-step-h">Bundle</h3>
+          {/* The redaction promise is made ONCE, here, where the file that
+              carries it is built — not repeated on the plan preview. The short
+              sentence is the summary; the server's own full promise is one
+              disclosure away and is never paraphrased out of existence. */}
+          <details className="tac-fold" data-testid="tac-redaction">
+            <summary>{REDACTION_SHORT}</summary>
+            <p className="tac-fold-text">{plan.redaction_note}</p>
+          </details>
           {!capture ? (
             <p className="mini-meta tac-note" role="status">{NO_CAPTURE_YET}</p>
           ) : (
@@ -1115,24 +1122,51 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   );
 }
 
-/** One planned step: what it is for, the command, and how sure we are of it. */
-function PlanStep({ step }: { step: TacStep }) {
-  const vlabel = verifiedLabel(step.verified);
+/** The plan's rows, in the order the collection runs them: the vendor baseline
+ *  first, then this issue's own checks, then anything optional. Topology is
+ *  model context, not a command, so it never becomes a row. */
+function orderedSteps(steps: TacStep[] | undefined): TacStep[] {
+  const rows = (steps ?? []).filter((s) => s.section !== "topology");
+  return rows
+    .map((s, i) => ({ s, i, rank: Math.max(0, SECTION_ORDER.indexOf(s.section)) }))
+    .sort((a, b) => (a.rank === b.rank ? a.i - b.i : a.rank - b.rank))
+    .map((x) => x.s);
+}
+
+/** One row of the command plan: the step number, what it collects in plain
+ *  words, the command, one chip, and at most one reference.
+ *
+ *  What is NOT here is the point (owner, 2026-09-06). The intent id, the
+ *  collection stage and the "documented, not verified" caveat used to be
+ *  printed on every row; they now live in the row's tooltip and in the single
+ *  legend line under the table. The citation list used to be printed in full —
+ *  366 links per row on a Nokia SR Linux plan — and is now one small link to
+ *  the first page, if the pack cites one at all. */
+function PlanRow({ step, n }: { step: TacStep; n: number }) {
+  const status = stepStatus(step.verified);
+  const ref = stepReference(step);
   return (
-    <li className={`tac-step-row${step.bound ? "" : " unbound"}`}>
-      <span className="tac-step-t">{step.title}</span>
-      <code className="tac-id">{step.intent}</code>
-      {step.bound && step.command ? <code className="tac-cmd">{step.command}</code> : null}
-      {!step.bound && <span className="mini-meta">{unboundReason(step)}</span>}
-      {vlabel && <span className={`badge tac-v-${step.verified}`}>{vlabel}</span>}
-      {step.note && step.bound && <span className="mini-meta">{step.note}</span>}
-      {(step.sources ?? []).length > 0 && (
-        <span className="mini-meta tac-src">
-          {(step.sources ?? []).map((s) => (
-            <a key={s.url} href={s.url} target="_blank" rel="noreferrer noopener">{s.title}</a>
-          ))}
-        </span>
-      )}
-    </li>
+    <tr className="tac-plan-row" title={stepTooltip(step)}>
+      <td className="tac-col-n">{n}</td>
+      <td className="tac-col-what">{step.title}</td>
+      <td className="tac-col-cmd"><code>{step.command || ""}</code></td>
+      <td className="tac-col-status">
+        <span className={`tac-chip tac-chip-${status}`}>{STATUS_CHIP[status]}</span>
+      </td>
+      <td className="tac-col-ref">
+        {ref ? (
+          <a
+            className="tac-ref"
+            href={ref.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            title={ref.title}
+            aria-label={`Vendor page for ${step.title}`}
+          >
+            &#8599;
+          </a>
+        ) : null}
+      </td>
+    </tr>
   );
 }

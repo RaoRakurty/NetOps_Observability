@@ -9,6 +9,9 @@
 //  · the download name comes from a closed character set, so a remote string
 //    cannot steer a file path
 //  · a size or a duration that was never estimated says so instead of "0"
+//  · a plan row carries ONE status word, ONE reference and no machine ids
+//    (owner, 2026-09-06: the preview printed the dialect's whole citation list
+//    on every row — 8,418 links — and was unusable)
 
 import { describe, it, expect } from "vitest";
 import type { TacPlan, TacState, TacStep, TacConnectorInfo } from "../../services/api";
@@ -19,7 +22,9 @@ import {
   DOC_CLAIMED_LABEL,
   MAX_PASTE_OUTPUTS,
   NOTHING_SCORED_NOTE,
+  PLAN_LEGEND,
   SECTION_ORDER,
+  STATUS_CHIP,
   UNBOUND_STEP_REASON,
   VERIFIED_LABEL,
   buildPasteOutputs,
@@ -31,7 +36,6 @@ import {
   connectorCapabilityLine,
   connectorNote,
   evidenceLine,
-  groupSteps,
   hasCapability,
   humanBytes,
   humanSeconds,
@@ -39,7 +43,14 @@ import {
   isMissingField,
   pasteIntents,
   phaseLabel,
+  planHeadline,
+  planVersionTitle,
   reasonLine,
+  stepReference,
+  stepStatus,
+  stepTooltip,
+  topologyLine,
+  unavailableLine,
   unboundReason,
   verifiedLabel,
 } from "./tacModel";
@@ -109,23 +120,67 @@ describe("unboundReason", () => {
 
 // ── plan shaping ─────────────────────────────────────────────────────────────
 
-describe("groupSteps", () => {
-  it("keeps each section in the plan's own order and covers all four", () => {
-    const g = groupSteps([
-      step({ intent: "a", section: "baseline" }),
-      step({ intent: "b", section: "deep-dive" }),
-      step({ intent: "c", section: "baseline" }),
-      step({ intent: "d", section: "optional" }),
-      step({ intent: "e", section: "topology" }),
-    ]);
+describe("the plan table", () => {
+  it("keeps the collection order the sections define", () => {
     expect(SECTION_ORDER).toEqual(["baseline", "deep-dive", "optional", "topology"]);
-    expect(g.baseline.map((s) => s.intent)).toEqual(["a", "c"]);
-    expect(g["deep-dive"].map((s) => s.intent)).toEqual(["b"]);
-    expect(g.optional.map((s) => s.intent)).toEqual(["d"]);
-    expect(g.topology.map((s) => s.intent)).toEqual(["e"]);
   });
-  it("survives an absent step list", () => {
-    expect(groupSteps(undefined).baseline).toEqual([]);
+
+  it("gives every step exactly one status word, and never a blank one", () => {
+    expect(stepStatus("capture")).toBe("verified");
+    expect(stepStatus("doc_claimed")).toBe("vendor-docs");
+    expect(stepStatus("")).toBe("unverified");
+    expect(stepStatus(undefined)).toBe("unverified");
+    expect(Object.values(STATUS_CHIP)).toEqual(["Verified", "From vendor docs", "Not verified"]);
+    // The legend explains all three, once, and never becomes a per-row note.
+    for (const word of Object.values(STATUS_CHIP)) {
+      expect(PLAN_LEGEND).toContain(word);
+    }
+  });
+
+  it("links at most ONE page, however many the pack cites", () => {
+    const many = Array.from({ length: 400 }, (_, i) => ({
+      title: `page ${i}`, url: `https://example.invalid/p-${i}`,
+    }));
+    const ref = stepReference(step({ sources: many }));
+    expect(ref?.url).toBe("https://example.invalid/p-0");
+    expect(stepReference(step({ sources: [] }))).toBeNull();
+    expect(stepReference(step())).toBeNull();
+  });
+
+  it("refuses a citation that is not an https page, rather than rendering it", () => {
+    expect(stepReference(step({ sources: [{ title: "x", url: "javascript:alert(1)" }] }))).toBeNull();
+    expect(stepReference(step({ sources: [{ title: "x", url: "http://example.invalid/p" }] }))).toBeNull();
+  });
+
+  it("keeps the machine ids in the tooltip, not on the row", () => {
+    expect(stepTooltip(step({ intent: "ospf.neighbors", section: "deep-dive" })))
+      .toBe("ospf.neighbors · this issue");
+    expect(stepTooltip(step({ intent: "system.version", section: "baseline" })))
+      .toBe("system.version · always collected");
+  });
+
+  it("says how many checks a platform cannot do, in one line, in plain words", () => {
+    expect(unavailableLine(72, "Nokia SR Linux")).toBe("72 checks are not available on Nokia SR Linux");
+    expect(unavailableLine(1, "Nokia SR Linux")).toBe("1 check is not available on Nokia SR Linux");
+    expect(unavailableLine(3, "  ")).toBe("3 checks are not available on this platform");
+    expect(topologyLine(1)).toBe("1 topology fact goes into the bundle");
+    expect(topologyLine(4)).toBe("4 topology facts go into the bundle");
+  });
+
+  it("puts the class, the device, the CLI and the estimate on one header line", () => {
+    const p = {
+      class_title: "OSPF adjacency will not form or is stuck",
+      hostname: "spine1", device_id: "dev-1",
+      dialect: "nokia-srlinux", dialect_display: "Nokia SR Linux",
+      estimated_bytes: 2048, estimated_seconds: 45,
+      plan_version: "plan-v1", catalog_version: "issues-v1", engine_version: "engine-v1",
+    } as unknown as TacPlan;
+    expect(planHeadline(p)).toBe(
+      "OSPF adjacency will not form or is stuck on spine1 · Nokia SR Linux · 2.0 KB · about 45 s",
+    );
+    expect(planVersionTitle(p)).toBe("plan plan-v1 · issues issues-v1 · engine engine-v1");
+    expect(planHeadline(undefined)).toBe("");
+    expect(planVersionTitle(undefined)).toBe("");
   });
 });
 
