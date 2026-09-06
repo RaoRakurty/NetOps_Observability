@@ -22,7 +22,7 @@ package backend
 // bind them turns the whole sweeper into a runtime error — retention would then
 // stop, silently, at the exact moment it was switched on.
 //
-// Gated on PG_TEST_DSN (the persistent non-superuser app role the pg corpus
+// Gated on DATABASE_URL_TEST (the superuser that provisions the throwaway app role the pg corpus
 // already uses) and connected with it directly rather than through
 // provisionAppRole: provisioning drops a CLUSTER role, which another package's
 // test may be holding, and this sweep runs under platform scope so it needs no
@@ -136,12 +136,17 @@ const auditRetentionTenant = "audit-retention-floor-test"
 // floor protected.
 func auditRetentionFixture(t *testing.T) (*platformdb.PGStore, audit.Repo) {
 	t.Helper()
-	dsn := os.Getenv("PG_TEST_DSN")
-	if dsn == "" {
-		t.Skip("PG_TEST_DSN not set — the Postgres audit retention tests need a non-superuser app role")
+	// Same prologue as every other pgintegration store test: DATABASE_URL_TEST
+	// is the superuser that migrates and provisions a throwaway NOBYPASSRLS app
+	// role; the store then runs as that role. Opening the store straight on the
+	// app role fails its own migration ("permission denied for table
+	// schema_migrations") — which is what CI reported on 5105ca31.
+	adminDSN := os.Getenv("DATABASE_URL_TEST")
+	if adminDSN == "" {
+		t.Skip("set DATABASE_URL_TEST to run the Postgres audit retention tests")
 	}
 	ctx := context.Background()
-	ps, err := platformdb.NewPGStore(ctx, dsn)
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}

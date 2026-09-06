@@ -206,15 +206,21 @@ def test_require_digest_gate_is_real():
 
 @needs_helm
 @pytest.mark.parametrize("bad,expect", [
-    ("store.backend=sqlite", "must be one of"),
-    ("api.image.digest=sha256:abc", "Does not match pattern"),
-    ("secrets.existingSecret=", "greater than or equal to 1"),
+    ("store.backend=sqlite", "store.backend"),
+    ("api.image.digest=sha256:abc", "image.digest"),
+    ("secrets.existingSecret=", "existingSecret"),
 ])
 def test_values_schema_rejects_bad_input(bad, expect):
-    """values.schema.json must actually constrain something."""
+    """values.schema.json must actually constrain something.
+
+    The assertion names the KEY the schema refused, not helm's wording: helm
+    3.16 prints `- api.image.digest: Does not match pattern`, helm 3.19 prints
+    `- at '/api/image/digest': ... does not match pattern`. Both carry the key.
+    """
     proc = _run([HELM, "template", "correlix", CHART, "--set", bad])
     assert proc.returncode != 0, f"schema accepted {bad!r}"
-    assert expect in (proc.stdout + proc.stderr)
+    out = (proc.stdout + proc.stderr).replace("/", ".")
+    assert expect in out, f"the refusal does not name {expect!r}: {out[:400]}"
 
 
 def test_staged_configs_match_canonical_sources():
