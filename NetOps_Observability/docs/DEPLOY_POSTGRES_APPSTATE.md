@@ -275,15 +275,15 @@ or, equivalently, by hand (the same SQL as
 `deployment/docker/postgres/netops-app-role.sql`):
 
 ```bash
-APP_PW='<generate one, 32+ chars>'
+app_pw='<generate one, 32+ chars>'
 # The container's own superuser name — never hardcode it.
 PGSU=$(docker exec netops-postgres-1 printenv POSTGRES_USER)
 docker exec -i netops-postgres-1 psql -v ON_ERROR_STOP=1 -U "$PGSU" -d netops <<SQL
 DO \$\$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='netops_app') THEN
-    CREATE ROLE netops_app LOGIN PASSWORD '$APP_PW' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+    CREATE ROLE netops_app LOGIN PASSWORD '$app_pw' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
   ELSE
-    ALTER ROLE netops_app WITH LOGIN PASSWORD '$APP_PW' NOSUPERUSER NOBYPASSRLS;
+    ALTER ROLE netops_app WITH LOGIN PASSWORD '$app_pw' NOSUPERUSER NOBYPASSRLS;
   END IF;
 END \$\$;
 GRANT CONNECT ON DATABASE netops TO netops_app;
