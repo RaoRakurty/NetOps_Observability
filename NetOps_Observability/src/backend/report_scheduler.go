@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/saved"
 	"os"
 	"path/filepath"
@@ -681,13 +682,8 @@ func (rs *reportScheduler) flushLocked() error {
 		log.Printf("report runs marshal: %v", err)
 		return err
 	}
-	tmp := rs.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	if err := platformdb.WriteFileAtomic(rs.path, b, 0o600); err != nil {
 		log.Printf("report runs write: %v", err)
-		return err
-	}
-	if err := os.Rename(tmp, rs.path); err != nil {
-		log.Printf("report runs rename: %v", err)
 		return err
 	}
 	return nil

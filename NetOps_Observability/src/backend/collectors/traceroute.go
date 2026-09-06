@@ -17,6 +17,8 @@ import (
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+
+	"netops/backend/internal/platformdb"
 )
 
 // traceroute.go — modern, Paris-consistent path discovery (the "which path"
@@ -214,11 +216,17 @@ func pushProbePaths(data []byte) {
 	}
 }
 
-// writeAtomic writes data to path via a temp file + rename.
+// writeAtomic writes data to path through the house durable-write primitive (a
+// unique temp file + rename; see platformdb.WriteFileAtomic for why the name
+// must be unique). The fallback file is a stale-tolerant read for a consumer
+// that cannot reach the API, so a failed write is not fatal — but it is never
+// SILENT (§10): a vantage whose file stopped updating would otherwise look
+// exactly like a vantage that had nothing new to say.
 func writeAtomic(path string, data []byte) {
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, data, 0o644) == nil { // #nosec G306 -- non-secret topology
-		_ = os.Rename(tmp, path) // best-effort: readers tolerate a stale fallback file
+	// #nosec G306 -- 0644 on purpose: non-secret topology, read by an operator
+	// and by out-of-process consumers of the fallback file.
+	if err := platformdb.WriteFileAtomic(path, data, 0o644); err != nil {
+		log.Printf("traceroute: path fallback write failed (%s): %v", path, err)
 	}
 }
 

@@ -719,3 +719,34 @@ func TestGraphQLDoesNotDispatchOnSubstrings(t *testing.T) {
 		t.Error("handleGraphQL is authenticating without authorizing again (F-72).")
 	}
 }
+
+// TestNoFixedNameTempFileWrites guards the tracker-229 class: an "atomic" write
+// that stages its data in a temp file named after the TARGET —
+// `tmp := path + ".tmp"` — and then renames it into place.
+//
+// The rename is atomic; the temp NAME is the defect. Two writers of the same
+// target share one temp path, so the loser either loses its write outright (its
+// rename hits ENOENT because the winner already renamed the shared file away)
+// or has its half-written bytes committed by the winner's rename. The audit
+// trail lost writes this way on every restart until 7ec92152 gave
+// platformdb.FileKV.Save a unique name — and eleven sibling call sites kept the
+// fixed name for another year because the fix was applied to the instance and
+// not to the class. This guard is the class.
+//
+// The house primitive is platformdb.WriteFileAtomic (os.CreateTemp in the
+// target's own directory, chmod, write, rename, unlink on every failure path).
+// If a store genuinely needs its own copy — a different directory mode, a
+// streamed body — it must still take the temp name from os.CreateTemp.
+func TestNoFixedNameTempFileWrites(t *testing.T) {
+	// `<anything> + ".tmp"` / ".part" / ".new" — the target-derived temp name.
+	fixedTemp := regexp.MustCompile(`\+\s*"\.(tmp|part|new)"`)
+	for name, src := range goSources(t) {
+		for _, m := range fixedTemp.FindAllString(src, -1) {
+			t.Errorf("%s: %q derives a temp file name from its target.\n"+
+				"Two concurrent writers then share one temp path: one write is LOST "+
+				"(rename → ENOENT) or the two interleave into a file that is neither. "+
+				"Use platformdb.WriteFileAtomic(path, data, perm), or os.CreateTemp in "+
+				"the target's directory if this site needs its own copy.", name, strings.TrimSpace(m))
+		}
+	}
+}

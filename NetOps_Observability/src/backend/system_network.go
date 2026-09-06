@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/platformdb"
 )
 
 // system_network.go — Correlix SYSTEM network settings: the DNS resolvers the
@@ -74,11 +76,7 @@ func (s *systemNetStore) Put(c SystemNetworkConfig) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return platformdb.WriteFileAtomic(s.path, b, 0o600)
 }
 
 // ---- validation ----

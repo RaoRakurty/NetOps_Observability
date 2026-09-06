@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"netops/backend/internal/platformdb"
 )
 
 // ops.go — snapshot INVENTORY, snapshot MANAGEMENT and the restorability PROBE,
@@ -231,11 +233,7 @@ func (r *opsRing) persistLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := r.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, r.path)
+	return platformdb.WriteFileAtomic(r.path, b, 0o600)
 }
 
 // logPersistFailure is the single place the ring reports a lost history, so the
@@ -545,11 +543,7 @@ func (v *verdictStore) record(name string, rec snapshotVerdict) error {
 	if err != nil {
 		return err
 	}
-	tmp := v.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, v.path)
+	return platformdb.WriteFileAtomic(v.path, b, 0o600)
 }
 
 // ── the restorability probe ─────────────────────────────────────────────────

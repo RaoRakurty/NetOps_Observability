@@ -17,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"netops/backend/internal/platformdb"
 )
 
 // ticketCore is embedded by both connectors; T is the connector's ticket type.
@@ -129,12 +131,8 @@ func (c *ticketCore[T]) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(c.statePath), 0o755); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
-	tmp := c.statePath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	if err := platformdb.WriteFileAtomic(c.statePath, b, 0o600); err != nil {
 		return fmt.Errorf("write open-ticket state: %w", err)
-	}
-	if err := os.Rename(tmp, c.statePath); err != nil {
-		return fmt.Errorf("commit open-ticket state: %w", err)
 	}
 	return nil
 }

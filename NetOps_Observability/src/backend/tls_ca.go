@@ -378,9 +378,5 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 			return err
 		}
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return platformdb.WriteFileAtomic(path, data, perm)
 }

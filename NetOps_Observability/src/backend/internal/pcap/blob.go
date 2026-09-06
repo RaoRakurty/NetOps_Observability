@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"netops/backend/internal/platformdb"
 )
 
 // blob.go — the sealed capture store.
@@ -102,12 +104,7 @@ func (f *FileBlobStore) Put(tenant, deviceID, captureID, sealed string) (string,
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return "", err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, []byte(sealed), 0o600); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tmp, p); err != nil {
-		_ = os.Remove(tmp) // best-effort: the rename already failed; leave no partial
+	if err := platformdb.WriteFileAtomic(p, []byte(sealed), 0o600); err != nil {
 		return "", err
 	}
 	rel, err := filepath.Rel(f.root, p)

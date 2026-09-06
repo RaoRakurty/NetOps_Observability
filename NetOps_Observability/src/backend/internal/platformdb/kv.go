@@ -106,61 +106,15 @@ type FileKV struct{}
 
 func (f FileKV) Load(key string) ([]byte, error) { return os.ReadFile(f.resolve(key)) }
 
-// Save writes `data` durably at the resolved key: a temp file in the SAME
-// directory, then an atomic rename over the target.
-//
-// The temp name is UNIQUE per call (os.CreateTemp). It used to be the fixed
-// "<key>.tmp", which made two concurrent Saves of the SAME key corrupt each
-// other:
-//
-//	A: write tmp → B: write tmp → A: rename(tmp,key) ok → B: rename(tmp,key) ENOENT
-//
-// — i.e. B's write was LOST and surfaced as
-// "rename /data/audit.json.tmp /data/audit.json: no such file or directory".
-// The audit trail (Record runs on essentially every authenticated request) was
-// the heaviest concurrent writer of a single key and lost writes constantly, so
-// the trail did not survive an api restart on the file backend.
-//
-// The pattern keeps the ".tmp" SUFFIX ("<base>.<random>.tmp") because
-// LoadPrefix skips in-flight temporaries by that suffix — see prefix.go.
+// Save writes `data` durably at the resolved key through WriteFileAtomic (a
+// unique temp file in the same directory, then an atomic rename). The unique
+// temp name — and the reason it must be unique — is documented there; this was
+// the call site the fixed-name race was found on.
 func (f FileKV) Save(key string, data []byte) error {
 	key = f.resolve(key)
-	dir := filepath.Dir(key)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(key), 0o755); err != nil {
 		return err
 	}
-	// Same directory ⇒ same filesystem ⇒ the rename below is atomic.
-	tmp, err := os.CreateTemp(dir, filepath.Base(key)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	committed := false
-	defer func() {
-		if committed {
-			return
-		}
-		// Litter cleanup on every failure path. The temp file is a
-		// never-committed record nothing can read, and there is no useful
-		// recovery from failing to abandon a file we are already abandoning —
-		// the returned error is the one the caller must act on.
-		_ = tmp.Close()     // best-effort: closing an abandoned temp file; the Save error is what matters
-		_ = os.Remove(name) // best-effort: unlink of an uncommitted temp; nothing can read it either way
-	}()
-	// CreateTemp opens 0600 already; set it explicitly so the data file's mode
-	// does not depend on the process umask.
-	if err := tmp.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, key); err != nil {
-		return err
-	}
-	committed = true
-	return nil
+	// 0600 explicitly, so the data file's mode does not depend on the umask.
+	return WriteFileAtomic(key, data, 0o600)
 }

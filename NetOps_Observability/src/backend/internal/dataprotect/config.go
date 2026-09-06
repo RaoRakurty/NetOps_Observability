@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/platformdb"
 )
 
 // config.go — Correlix DATA PROTECTION settings + status: the platform's backup
@@ -120,11 +122,7 @@ func (s *FileConfigStore) Put(c Config) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return platformdb.WriteFileAtomic(s.path, b, 0o600)
 }
 
 // config reads the stored intent through the injected store, nil-safe.
