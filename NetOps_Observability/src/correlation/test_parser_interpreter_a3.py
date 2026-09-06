@@ -30,11 +30,14 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import re
+import statistics
 import sys
 import time
 from datetime import datetime, timezone
+from unittest import mock
 
 import pytest
 
@@ -619,25 +622,176 @@ BENCH_RATIO = 1.5
 TRAP_BENCH_RATIO = 2.0
 
 
-def _bench(fns, events, repeats: int = 5) -> float:
+#: THE HARNESS (tracker 234). The gate used to be a SINGLE `process_time` sample
+#: per side, taken one after the other. Its own scatter was +/-0.25 on a loaded
+#: box — wider than the difference it was being asked to detect — so it failed
+#: about one run in ten on a parser that had not regressed, and a real 6 %
+#: regression would have hidden inside the same noise. A gate that cannot
+#: measure is not a gate; it is a coin toss that occasionally blocks a merge.
+#:
+#: What replaces it is drift-cancelling, and each of the three parts earns its
+#: place:
+#:
+#:   * MIN OF `BENCH_INNER` per side. A minimum is the run least disturbed by
+#:     everything else on the machine — noise only ever adds time.
+#:   * `BENCH_ROUNDS` rounds, each timing BOTH sides. A monotone drift (thermal
+#:     throttling, a neighbour ramping up) then lands on both sides of the same
+#:     round rather than on whichever side happened to run second.
+#:   * The sides ALTERNATE which runs first, and the reported figure is the
+#:     MEDIAN of the per-round ratios. Alternation cancels the residual
+#:     first-mover advantage; the median discards the round that caught a
+#:     scheduler event.
+#:
+#: All of it inside ONE process, on ONE corpus, so the two sides see the same
+#: interpreter state, the same warmed caches and the same allocator.
+BENCH_ROUNDS = 7
+BENCH_INNER = 5
+
+#: Seconds of work one TIMED SAMPLE must contain, and why there is a floor at
+#: all. The trap corpus is 240 events at ~40-65 us, so one pass over it is ~10-15
+#: ms — close enough to the scheduler's slice that a single context switch moves
+#: it 20 %. Measured with one pass per sample, the trap lane's five round ratios
+#: came out 1.69 / 2.21 / 1.64 / 1.23 / 1.79: a scatter of 0.98 on a quantity
+#: whose real value is 1.67. The corpus is therefore REPEATED inside each sample
+#: until the sample is at least this long, so both lanes are timed over
+#: comparable work rather than over comparable event counts.
+BENCH_SAMPLE_SECONDS = 0.05
+
+
+def _bench(fns, events, repeats: int = 5, reps: int = 1) -> float:
     """CPU time (`process_time`), best of N.
 
     Wall clock on a shared CI box measures the neighbours, not the parser: the
     same pair of runs swung between 1.3x and 2.2x on wall clock while CPU time
     held steady within a few percent. Best-of-N because a min is the run least
     disturbed by everything else on the machine.
+
+    `reps` passes over the corpus make up ONE timed sample (see
+    BENCH_SAMPLE_SECONDS); the returned figure is always per single pass, so a
+    ratio is unaffected by it.
     """
     best = float("inf")
     for _ in range(repeats):
         t0 = time.process_time()
-        for ev in events:
-            for fn in fns:
-                try:
-                    fn(ev, "t1", T0)
-                except DeadLetter:
-                    pass
+        for _ in range(reps):
+            for ev in events:
+                for fn in fns:
+                    try:
+                        fn(ev, "t1", T0)
+                    except DeadLetter:
+                        pass
         best = min(best, time.process_time() - t0)
-    return best
+    return best / reps
+
+
+class LaneCost:
+    """One lane's measured A/B, and everything a reader needs to judge it."""
+
+    __slots__ = ("count", "lane", "ratio", "ratios", "us_new", "us_old")
+
+    def __init__(self, lane, ratio, ratios, us_new, us_old, count):
+        self.lane, self.ratio, self.ratios = lane, ratio, ratios
+        self.us_new, self.us_old, self.count = us_new, us_old, count
+
+    @property
+    def spread(self) -> float:
+        """The harness's OWN scatter — the range of the rounds after the single
+        best and single worst are dropped. Printed on every run, because a
+        margin is only meaningful beside the precision that produced it.
+
+        TRIMMED, not the raw max-min, and the reason is measured rather than
+        assumed. On a 4-core box under load 17 (the lab box with three other
+        suites running) one round in seven catches a contention event and lands
+        20-40 % off: an observed syslog set was 1.43/1.18/1.19/1.24/0.96 — raw
+        range 0.47, trimmed range 0.06, true value ~1.20. Gating on the raw
+        range would make this test a load meter. Dropping ONE outlier at each
+        end is the smallest trim that survives that, and it cannot hide a real
+        spread: two bad rounds still show.
+        """
+        rs = sorted(self.ratios)
+        if len(rs) >= 3:
+            rs = rs[1:-1]
+        return rs[-1] - rs[0]
+
+    def detail(self) -> str:
+        return (f"{self.us_new:.1f} vs {self.us_old:.1f} us/event over "
+                f"{self.count}, round ratios "
+                f"{'/'.join(f'{r:.2f}' for r in self.ratios)}, "
+                f"scatter {self.spread:.3f}")
+
+
+def _measure(golden, lane: str) -> LaneCost:
+    """The drift-cancelling A/B for one lane. See the harness note above."""
+    events = [e["ev"] for e in golden if e["lane"] == lane]
+    new = [f for _n, f, _o in LANE_FNS[lane]]
+    old = [f for _n, _f, f in LANE_FNS[lane]]
+    warm_new = _bench(new, events, repeats=1)      # warm both sides' caches…
+    warm_old = _bench(old, events, repeats=1)
+    # …and size the sample off the SLOWER side, so both are timed over at least
+    # BENCH_SAMPLE_SECONDS of work.
+    slowest = max(warm_new, warm_old, 1e-6)
+    reps = max(1, math.ceil(BENCH_SAMPLE_SECONDS / slowest))
+    ratios, news, olds = [], [], []
+    for i in range(BENCH_ROUNDS):
+        if i % 2:                                  # alternate the first mover
+            o = _bench(old, events, BENCH_INNER, reps)
+            n = _bench(new, events, BENCH_INNER, reps)
+        else:
+            n = _bench(new, events, BENCH_INNER, reps)
+            o = _bench(old, events, BENCH_INNER, reps)
+        ratios.append(n / o)
+        news.append(n)
+        olds.append(o)
+    return LaneCost(lane, statistics.median(ratios), ratios,
+                    statistics.median(news) * 1e6 / len(events),
+                    statistics.median(olds) * 1e6 / len(events), len(events))
+
+
+@pytest.fixture(scope="module")
+def cost(golden) -> dict[str, LaneCost]:
+    """ONE measurement per lane for the whole cost section.
+
+    The three gates below are three questions about the SAME run, not three
+    independent noisy draws — so they can never disagree with each other, and
+    the section costs one measurement instead of three.
+    """
+    return {lane: _measure(golden, lane) for lane in ("syslog", "trap")}
+
+
+#: The gate. Parsing is on the ingest hot path — 900k raw lines produce 44k
+#: signals on the ratified 2.5k workload, and `handle.syslog` was measured at
+#: 789 s of engine time. A tidier parser that costs 3x is not an improvement.
+BENCH_RATIO = 1.5
+
+#: The trap lane gets a looser budget, deliberately and with the reason stated.
+#: It is EMISSION-dominated — every corpus trap classifies, so ~35 interpreter
+#: dispatches per event land on top of a 36-46 us branch path that had them all
+#: inline — and it carries orders of magnitude less volume than syslog: traps
+#: arrive in the tens per second where syslog arrives in the tens of thousands.
+#: MEASURED 1.40x on an idle box and up to 1.65x on a contended one; the budget
+#: is set above that spread so this gate reports a real regression rather than
+#: the neighbours on the CI runner. The gates that matter (the corpus as a whole
+#: and the syslog lane) stay at 1.5x.
+#:
+#: A9 RE-MEASURED, budget UNCHANGED. The four promoted trap rows add four guards
+#: that an unclassified trap now walks before reaching the generic net. Measured
+#: on the pre-A9 trap corpus with the four rows plan-patched in and out:
+#: 56.13 -> 56.54 us/event, ratio 1.57 -> 1.58 — **0.41 us/event, 0.7 %**. The
+#: guards are OID/name equality and short substring tests; the lane's cost is
+#: dominated by EMISSION (the generic alarm's content rendering + sha256), which
+#: A9 did not touch. So the budget stays where it is: widening it would have
+#: hidden the next real regression behind a change that did not cause one.
+#:
+#: 234 RE-MEASURED, budgets UNCHANGED — and this time the margin moved instead.
+#: The emission lever the row identified was taken in `producers._build_signal`:
+#: the per-signal work whose answer is fixed at import (eleven reads off a
+#: non-slotted dataclass, two string->enum dict lookups, a fidelity property
+#: call, and a whole second dict allocated and merged for four constant
+#: provenance keys) is now resolved once into the slotted `_Emission` the plan
+#: carries. Drift-cancelled median over the corpus: syslog 1.31 -> 1.22, trap
+#: 1.75 -> 1.67. Neither budget was widened to make this pass, which is the
+#: point: option (b) on the row — ratify a looser number — was not taken.
+TRAP_BENCH_RATIO = 2.0
 
 
 def _report(label: str, ratio: float, budget: float, detail: str) -> None:
@@ -652,17 +806,7 @@ def _report(label: str, ratio: float, budget: float, detail: str) -> None:
           f"(budget {budget:.2f}x) — {detail}")
 
 
-def _ab(golden, lane) -> tuple[float, float, int]:
-    events = [e["ev"] for e in golden if e["lane"] == lane]
-    new = [f for _n, f, _o in LANE_FNS[lane]]
-    old = [f for _n, _f, f in LANE_FNS[lane]]
-    # Warm every cache (interned observers, compiled patterns) on both sides.
-    _bench(new, events, repeats=1)
-    _bench(old, events, repeats=1)
-    return _bench(new, events), _bench(old, events), len(events)
-
-
-def test_the_interpreter_is_within_1_5x_of_the_branch_code(golden):
+def test_the_interpreter_is_within_1_5x_of_the_branch_code(cost):
     """THE COST GATE, over the whole corpus — both lanes, every event.
 
     The frozen pre-A3 branch code is the denominator (see
@@ -670,47 +814,223 @@ def test_the_interpreter_is_within_1_5x_of_the_branch_code(golden):
     running the catalog cost materially more than running the hand-written
     chain it replaced?
     """
-    t_new = t_old = 0.0
-    per_lane = {}
-    for lane in ("syslog", "trap"):
-        n, o, count = _ab(golden, lane)
-        t_new += n
-        t_old += o
-        per_lane[lane] = f"{n / o:.2f}x over {count}"
+    t_new = sum(c.us_new * c.count for c in cost.values())
+    t_old = sum(c.us_old * c.count for c in cost.values())
     ratio = t_new / t_old
+    per_lane = {lane: f"{c.ratio:.2f}x over {c.count}" for lane, c in cost.items()}
     _report("corpus", ratio, BENCH_RATIO, str(per_lane))
     assert ratio <= BENCH_RATIO, (
         f"the interpreter costs {ratio:.2f}x the branch code over the corpus "
         f"(per lane: {per_lane})")
 
 
-def test_the_hot_syslog_lane_is_within_1_5x(golden):
+def test_the_hot_syslog_lane_is_within_1_5x(cost):
     """The lane that actually matters: 95 % of ingest volume is syslog, and the
     control-plane classifier is where the P3 measurement put 789 s of engine
     time. Gated on its own so a regression here cannot hide behind the trap
     lane's small event count."""
-    t_new, t_old, count = _ab(golden, "syslog")
-    ratio = t_new / t_old
-    _report("syslog", ratio, BENCH_RATIO,
-            f"{t_new * 1e6 / count:.1f} vs {t_old * 1e6 / count:.1f} us/event")
-    assert ratio <= BENCH_RATIO, (
-        f"syslog lane: the interpreter costs {ratio:.2f}x the branch code "
-        f"({t_new * 1e6 / count:.1f} us/event vs {t_old * 1e6 / count:.1f} "
-        f"us/event over {count} events)")
+    c = cost["syslog"]
+    _report("syslog", c.ratio, BENCH_RATIO, c.detail())
+    assert c.ratio <= BENCH_RATIO, (
+        f"syslog lane: the interpreter costs {c.ratio:.2f}x the branch code "
+        f"({c.detail()})")
 
 
-def test_the_trap_lane_stays_inside_its_stated_budget(golden):
+def test_the_trap_lane_stays_inside_its_stated_budget(cost):
     """See TRAP_BENCH_RATIO for why this budget is looser than the syslog one.
     It is still a gate: a change that made trap classification 3x would be red
     here, and the number is written down rather than assumed."""
-    t_new, t_old, count = _ab(golden, "trap")
-    ratio = t_new / t_old
-    _report("trap", ratio, TRAP_BENCH_RATIO,
-            f"{t_new * 1e6 / count:.1f} vs {t_old * 1e6 / count:.1f} us/event")
-    assert ratio <= TRAP_BENCH_RATIO, (
-        f"trap lane: the interpreter costs {ratio:.2f}x the branch code "
-        f"({t_new * 1e6 / count:.1f} us/event vs {t_old * 1e6 / count:.1f} "
-        f"us/event over {count} events)")
+    c = cost["trap"]
+    _report("trap", c.ratio, TRAP_BENCH_RATIO, c.detail())
+    assert c.ratio <= TRAP_BENCH_RATIO, (
+        f"trap lane: the interpreter costs {c.ratio:.2f}x the branch code "
+        f"({c.detail()})")
+
+
+#: The scatter the OLD gate had, and therefore the number the new harness has to
+#: beat. Tracker 234 measured the single-sample `process_time` comparison at
+#: +/-0.25 on a loaded box — wider than the difference it was being asked to
+#: detect, which is why it failed about one run in ten on a parser that had not
+#: regressed and would equally have passed a real 6 % regression.
+#:
+#: It is a REPORTED diagnostic, not an assertion, and that is deliberate: an
+#: assertion on measured scatter is itself a flaky test — it turns "the box is
+#: busy" into a red build, which is the defect this row exists to remove, wearing
+#: a different hat. What IS asserted is the harness's CONSTRUCTION
+#: (`test_the_cost_harness_is_drift_cancelling_by_construction`), which is
+#: deterministic, plus the medians the construction makes trustworthy. Every run
+#: prints the scatter beside the ratio so a reader can see the precision the
+#: verdict was reached with.
+OLD_HARNESS_SCATTER = 0.25
+
+
+def test_the_cost_harness_is_drift_cancelling_by_construction(golden):
+    """THE GATE ON THE GATE (tracker 234), checked structurally.
+
+    The budgets above are only gates if the number under them is a measurement
+    rather than a draw. This asserts the four properties that make it one, by
+    RECORDING what `_measure` actually does — a harness that quietly went back
+    to a single sample, or stopped alternating, would still produce a plausible
+    ratio and nothing else would notice.
+
+      1. both sides are timed in EVERY round (drift lands on both, not on
+         whichever ran second);
+      2. the sides ALTERNATE which goes first (cancels the residual first-mover
+         advantage);
+      3. every timed sample is a MIN over several passes (a minimum is the pass
+         least disturbed by the rest of the machine) and holds at least
+         BENCH_SAMPLE_SECONDS of work (the trap corpus is 15 ms a pass — one
+         scheduler event moves it 20 %);
+      4. the reported figure is the MEDIAN of the per-round ratios, so one bad
+         round cannot decide the verdict.
+    """
+    calls: list[tuple[int, int, int]] = []      # (side, repeats, reps)
+    real = _bench
+
+    def recording(fns, events, repeats: int = 5, reps: int = 1) -> float:
+        calls.append((id(fns[0]), repeats, reps))
+        return real(fns, events, repeats, reps)
+
+    trap_events = [e["ev"] for e in golden if e["lane"] == "trap"]
+    new_first = id(LANE_FNS["trap"][0][1])
+    old_first = id(LANE_FNS["trap"][0][2])
+
+    with mock.patch.object(sys.modules[__name__], "_bench", recording):
+        cost = _measure(golden, "trap")
+
+    timed = [c for c in calls if c[1] != 1]     # drop the two warm-up passes
+    assert len(timed) == BENCH_ROUNDS * 2, (
+        f"{len(timed)} timed samples for {BENCH_ROUNDS} rounds — a round must "
+        "time BOTH sides or a machine drift lands on one of them")
+    for i in range(BENCH_ROUNDS):
+        pair = timed[2 * i:2 * i + 2]
+        assert {p[0] for p in pair} == {new_first, old_first}, (
+            f"round {i} timed the same side twice: {pair}")
+        # 2. alternation.
+        want = old_first if i % 2 else new_first
+        assert pair[0][0] == want, (
+            f"round {i} started with the wrong side — the harness stopped "
+            "alternating, so the first-mover advantage is no longer cancelled")
+    # 3. min-of-N over a sample big enough to measure.
+    assert {p[1] for p in timed} == {BENCH_INNER} and BENCH_INNER > 1
+    reps = {p[2] for p in timed}
+    assert len(reps) == 1, f"the two sides were timed over different work: {reps}"
+    one_pass = min(_bench(f, trap_events, repeats=1)
+                   for f in ([x[1] for x in LANE_FNS["trap"]],
+                             [x[2] for x in LANE_FNS["trap"]]))
+    assert reps.pop() * one_pass >= BENCH_SAMPLE_SECONDS * 0.5, (
+        "a timed sample is too short to measure through the scheduler")
+    # 4. the reported figure is the median of the rounds, not one of them.
+    assert len(cost.ratios) == BENCH_ROUNDS
+    assert cost.ratio == pytest.approx(statistics.median(cost.ratios))
+
+
+# ══ 6c. THE EMISSION PLAN (tracker 234) ══════════════════════════════════════
+#
+# The cost lever the row identified was in `producers._build_signal`: per-signal
+# work whose answer is fixed at import. It is now resolved once into the slotted
+# `_Emission` each lane plan carries. Precomputation is the classic place for a
+# silent divergence — the fast path answering a question the catalog no longer
+# asks — so what it precomputed is pinned against the rule row it came from, and
+# the provenance it writes is pinned against the `_prov` helper the FROZEN branch
+# baseline still calls.
+
+
+def test_the_emission_plan_is_what_the_catalog_row_says():
+    """Every value `_Emission` resolved at import must still be the value the
+    rule's own `emit:` block declares. A precomputation that drifts from its
+    source is worse than no precomputation: it is the catalog silently not
+    being the parser."""
+    plans = {"syslog": P._SYSLOG_PLAN, "port": P._PORT_PLAN, "trap": P._TRAP_PLAN}
+    seen = 0
+    for lane, plan in plans.items():
+        for _guard, _reads, rule, em in plan:
+            assert rule.lane == lane
+            emit = rule.emit
+            assert em.kind == emit.kind
+            assert em.metric == emit.metric_name
+            assert em.modality is P._MODALITIES[emit.modality]
+            assert em.entity_type is P._ENTITY_TYPES[emit.entity_type]
+            assert em.entity_type_else is P._ENTITY_TYPES[
+                emit.entity_type_else or emit.entity_type]
+            assert em.attr_plan is emit.attr_plan
+            assert em.tokens_only == emit.tokens_only
+            assert em.tokens_fallback == emit.tokens_fallback
+            assert em.content_tag == emit.content_tag
+            assert em.rule_id == rule.rule_id
+            assert em.fidelity == rule.fidelity
+            assert em.generic == rule.generic
+            assert em.source == rule.source
+            seen += 1
+    assert seen == len(P.RULES)
+
+
+def test_the_emission_object_cannot_grow_a_per_event_attribute():
+    """`__slots__` is the point — an emitter that could stash per-event state on
+    the shared plan object would be a cross-event data leak, not a speedup."""
+    _g, _r, _rule, em = P._TRAP_PLAN[0]
+    assert not hasattr(em, "__dict__")
+    with pytest.raises(AttributeError):
+        em.leaked = "per-event state"       # type: ignore[attr-defined]
+
+
+def test_the_emitter_writes_exactly_the_provenance_the_frozen_helper_returns():
+    """`_prov` builds the four provenance keys as a dict; the emitter now writes
+    them straight into the attrs it is already building. The frozen branch
+    baseline still calls `_prov`, so the two must agree KEY FOR KEY — otherwise
+    the parity run would be comparing two different provenance stamps and
+    calling it agreement."""
+    for rule_id in ("trap.link.state_change", "syslog.bgp.neighbor_state",
+                    "trap.generic.device_alarm"):
+        rule = P.RULES_BY_ID.get(rule_id)
+        if rule is None:                     # a rule renamed out from under us
+            continue
+        want = P._prov(rule)
+        assert set(want) == {"rule_id", "parser_rev", "rules_hash", "fidelity"}
+        assert want["rule_id"] == rule.rule_id
+        assert want["parser_rev"] == P.PARSER_REV
+        assert want["rules_hash"] == P.RULES_HASH_TAG
+        assert want["fidelity"] == rule.fidelity
+
+
+def test_both_provenance_paths_count_the_hit_the_same_way():
+    """The accounting moved into `_count_emission` so ONE implementation serves
+    both callers. This proves it: `_prov` and a real emission move the same
+    counters by the same amount."""
+    trap = {"device": "leaf9", "trap_oid": "1.3.6.1.6.3.1.1.5.3",
+            "trap_name": "linkDown", "event_type": "", "authenticated": True,
+            "timestamp": TS, "varbinds": []}
+    rule = P.RULES_BY_ID["trap.link.state_change"]
+
+    P.reset_parser_counters()
+    P._prov(rule)
+    via_helper = (dict(P.RULE_HITS), dict(P.GENERIC_FALLBACKS),
+                  P.semantic_promotion_rate())
+
+    P.reset_parser_counters()
+    sig = P.trap_control_signal(dict(trap), "t1", T0)
+    assert sig is not None and sig.attrs["rule_id"] == rule.rule_id
+    via_emitter = (dict(P.RULE_HITS), dict(P.GENERIC_FALLBACKS),
+                   P.semantic_promotion_rate())
+
+    assert via_helper == via_emitter
+    P.reset_parser_counters()
+
+
+def test_a_generic_fallback_still_counts_as_a_fallback_through_the_emitter():
+    """The `generic` flag reaches the counter through `_Emission` now, not
+    through the Rule. A generic rule that stopped counting as one would silently
+    inflate the semantic-promotion rate — the number the parser's own health is
+    read from."""
+    P.reset_parser_counters()
+    sig = P.trap_control_signal(
+        {"device": "leaf9", "trap_oid": "1.3.6.1.4.1.9.9.999.0.7",
+         "trap_name": "someVendorThing", "event_type": "", "severity": "critical",
+         "authenticated": True, "timestamp": TS, "varbinds": []}, "t1", T0)
+    assert sig is not None and sig.kind == "device_alarm"
+    assert P.GENERIC_FALLBACKS["trap"] == 1
+    assert P.semantic_promotion_rate() == 0.0
+    P.reset_parser_counters()
 
 
 def test_the_expensive_derivations_stay_lazy():

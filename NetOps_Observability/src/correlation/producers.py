@@ -521,17 +521,33 @@ def reset_parser_counters() -> None:
     _PROMO_TYPED = 0
 
 
+def _count_emission(rule_id: str, generic: bool, source: str) -> None:
+    """The per-rule hit accounting one emitted Signal owes.
+
+    Split out of `_prov` (tracker 234) so the interpreter's emitter can write the
+    four provenance keys straight into the attrs dict it is already building,
+    instead of allocating a second dict and merging it, while the FROZEN branch
+    baseline — which calls `_prov` from its own `attrs` literal and must keep
+    doing so — still counts exactly the same way. One accounting path, two
+    callers.
+    """
+    RULE_HITS[rule_id] += 1
+    if generic:
+        GENERIC_FALLBACKS[source] = GENERIC_FALLBACKS.get(source, 0) + 1
+    _record_promotion(not generic)
+
+
 def _prov(rule: Rule) -> dict:
     """Count the hit and return the provenance `attrs` for this rule.
 
     Called exactly once per emitted Signal, from the branch's own `attrs`
     literal. The returned keys are provenance ONLY — none of them reaches
     `native_id`, so `signal_id` is unchanged (tracker 198: identity is content).
+
+    Kept for `fixtures/parser_branch_baseline.py`, which is FROZEN and calls it;
+    the interpreter takes the allocation-free path in `_build_signal`.
     """
-    RULE_HITS[rule.rule_id] += 1
-    if rule.generic:
-        GENERIC_FALLBACKS[rule.source] = GENERIC_FALLBACKS.get(rule.source, 0) + 1
-    _record_promotion(not rule.generic)
+    _count_emission(rule.rule_id, rule.generic, rule.source)
     return {
         "rule_id": rule.rule_id,
         "parser_rev": PARSER_REV,
@@ -1116,7 +1132,7 @@ _TRAP_LANE_FNS: dict[str, Callable[[Ctx], object]] = {
 }
 
 
-def _tokens_of(emit: Emit, ctx: Ctx, owner: str) -> tuple[str, ...]:
+def _tokens_of(emit: _Emission, ctx: Ctx, owner: str) -> tuple[str, ...]:
     """Grounding tokens from the emission spec (tracker 168 semantics).
 
     A token whose template references an EMPTY var is DROPPED rather than
@@ -1167,61 +1183,128 @@ def _tokens_of(emit: Emit, ctx: Ctx, owner: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+class _Emission:
+    """One rule's emission block with every per-event lookup already done.
+
+    THE LEVER (tracker 234). Phase-split profiling put 54 us of the syslog
+    lane's 79 us in EMISSION rather than in the guards, and the emitter was
+    paying, on EVERY signal, for work whose answer is fixed at import: eleven
+    attribute reads off a non-slotted frozen dataclass, two dict lookups to turn
+    the row's `modality:`/`entity.type:` STRINGS into enum members, a property
+    call for the rule's fidelity, and a second dict allocated and merged just to
+    carry four constant provenance keys.
+
+    None of that is per-event information. It is resolved once, here, at import,
+    into a `__slots__` object the emitter reads by slot. What is left per event
+    is exactly the work that depends on the event: the guards, the templates,
+    the extractions and the Signal.
+
+    Deliberately NOT a dataclass: `__slots__` is the whole point, and a frozen
+    dataclass would put an attribute lookup back on the path this exists to take
+    it off.
+    """
+
+    __slots__ = (
+        "attr_plan", "content_tag", "entity_id", "entity_id_else",
+        "entity_type", "entity_type_else", "entity_when", "fidelity", "generic",
+        "kind", "metric", "modality", "native_id", "rule_id", "severity",
+        "source", "tokens", "tokens_fallback", "tokens_only",
+    )
+
+    def __init__(self, rule: Rule, emit: Emit) -> None:
+        self.entity_when = emit.entity_when
+        self.entity_type = _ENTITY_TYPES[emit.entity_type]
+        self.entity_id = emit.entity_id
+        # `entity_type_else` is "" on a rule with no conditional entity; it is
+        # never read in that case, so it resolves to the primary type rather
+        # than needing a KeyError-shaped guard on the hot path.
+        self.entity_type_else = _ENTITY_TYPES[emit.entity_type_else or emit.entity_type]
+        self.entity_id_else = emit.entity_id_else
+        self.native_id = emit.native_id
+        self.content_tag = emit.content_tag
+        self.severity = emit.severity
+        self.attr_plan = emit.attr_plan
+        self.kind = emit.kind
+        self.metric = emit.metric_name
+        self.modality = _MODALITIES[emit.modality]
+        self.tokens = emit.tokens
+        self.tokens_only = emit.tokens_only
+        self.tokens_fallback = emit.tokens_fallback
+        # Provenance that is constant for the life of the process. PARSER_REV
+        # and RULES_HASH_TAG are deliberately NOT cached: they are module
+        # globals a test may patch to prove the stamp is real, and reading two
+        # globals is cheaper than the dict this used to allocate anyway.
+        self.rule_id = rule.rule_id
+        self.fidelity = rule.fidelity
+        self.generic = rule.generic
+        self.source = rule.source
+
+
 def _build_signal(
-    rule: Rule, emit: Emit, ctx: Ctx, tenant: str, ts: datetime,
+    em: _Emission, ctx: Ctx, tenant: str, ts: datetime,
     observer: Observer, owner: str, source: Source,
 ) -> Signal:
     """A matched rule + its context → the Signal its `emit:` block describes."""
-    if emit.entity_when is not None and not emit.entity_when(ctx):
-        etype = emit.entity_type_else
-        eid = emit.entity_id_else(ctx) if emit.entity_id_else else owner
+    when = em.entity_when
+    if when is not None and not when(ctx):
+        etype = em.entity_type_else
+        eid = em.entity_id_else(ctx) if em.entity_id_else else owner
     else:
-        etype = emit.entity_type
-        eid = emit.entity_id(ctx)
-    native = emit.native_id(ctx)
-    if emit.content_tag is not None:
+        etype = em.entity_type
+        eid = em.entity_id(ctx)
+    native = em.native_id(ctx)
+    tag = em.content_tag
+    if tag is not None:
         # tracker 198: the event's OWN content discriminates the id, so two
         # distinct unrecognized lines from one device in the same millisecond
         # are two signals — while a byte-identical redelivery still dedups.
-        native = _tagged_native_id(native, str(ctx.var(emit.content_tag)))
+        native = _tagged_native_id(native, str(ctx.var(tag)))
     cached = ctx.vars
     attrs: dict[str, object] = {}
-    for key, name, fn in emit.attr_plan:
+    for key, name, fn in em.attr_plan:
         if name is None:
             attrs[key] = fn(ctx)
             continue
         v = cached.get(name, MISS)
         attrs[key] = ctx.var(name) if v is MISS else v
-    attrs.update(_prov(rule))
+    # The four provenance keys, written straight in. They used to be a dict
+    # built by `_prov` and merged; the merge and the allocation were pure tax
+    # (tracker 234). `_count_emission` keeps the accounting identical.
+    attrs["rule_id"] = em.rule_id
+    attrs["parser_rev"] = PARSER_REV
+    attrs["rules_hash"] = RULES_HASH_TAG
+    attrs["fidelity"] = em.fidelity
+    _count_emission(em.rule_id, em.generic, em.source)
     return Signal(
         tenant_id=tenant,
         ts=ts,
         source=source,
-        kind=emit.kind,
+        kind=em.kind,
         observer=observer,
-        modality_class=_MODALITIES[emit.modality],
-        entity_type=_ENTITY_TYPES[etype],
+        modality_class=em.modality,
+        entity_type=etype,
         entity_id=eid,
-        severity=emit.severity(ctx),
+        severity=em.severity(ctx),
         native_id=native,
-        entity_tokens=_tokens_of(emit, ctx, owner),
-        metric_name=emit.metric_name,
+        entity_tokens=_tokens_of(em, ctx, owner),
+        metric_name=em.metric,
         attrs=attrs,
     )
 
 
-def _plan(rules: tuple[Rule, ...]) -> tuple[tuple[Guard, bool, Rule, Emit], ...]:
-    """A lane's rules flattened for the walk: (guard, reads_vars, rule, emit).
+def _plan(rules: tuple[Rule, ...]) -> tuple[tuple[Guard, bool, Rule, _Emission], ...]:
+    """A lane's rules flattened for the walk: (guard, reads_vars, rule, emission).
 
     Two attribute lookups per rule per line is not free when a lane has fifteen
     rules and the workload is 900k lines; the tuple unpack is. It is also where
     "every runtime rule has a guard and an emit" is checked ONCE, at import,
-    instead of per event."""
-    out: list[tuple[Guard, bool, Rule, Emit]] = []
+    instead of per event — and where the emission block is resolved to the
+    slotted `_Emission` the emitter reads (tracker 234)."""
+    out: list[tuple[Guard, bool, Rule, _Emission]] = []
     for r in rules:
         if r.guard is None or r.emit is None:     # pragma: no cover - guard
             raise RuntimeError(f"rule {r.rule_id!r} has no guard/emit")
-        out.append((r.guard, r.guard_reads_vars, r, r.emit))
+        out.append((r.guard, r.guard_reads_vars, r, _Emission(r, r.emit)))
     return tuple(out)
 
 
@@ -1232,7 +1315,7 @@ _TRAP_PLAN = _plan(_TRAP_RULES)
 
 
 def _run(
-    rules: tuple[tuple[Guard, bool, Rule, Emit], ...], ctx: Ctx, tenant: str,
+    rules: tuple[tuple[Guard, bool, Rule, _Emission], ...], ctx: Ctx, tenant: str,
     ts: datetime, observer: Observer, owner: str, source: Source,
 ) -> Signal | None:
     """Walk a lane's rules in order; first non-shadow match emits.
@@ -1243,7 +1326,7 @@ def _run(
     on the ingest hot path. A rule that ever does read one gets the table bound
     before its guard runs, and re-bound on the match — correct either way.
     """
-    for guard, reads_vars, rule, emit in rules:
+    for guard, reads_vars, rule, em in rules:
         if reads_vars:                            # pragma: no cover - none today
             ctx.enter(rule.extract)
         if not guard(ctx):
@@ -1255,7 +1338,7 @@ def _run(
             SHADOW_HITS[rule.rule_id] = SHADOW_HITS.get(rule.rule_id, 0) + 1
             continue
         ctx.enter(rule.extract)
-        return _build_signal(rule, emit, ctx, tenant, ts, observer, owner, source)
+        return _build_signal(em, ctx, tenant, ts, observer, owner, source)
     return None
 
 
