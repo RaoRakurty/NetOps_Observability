@@ -22,11 +22,11 @@ package backend
 // bind them turns the whole sweeper into a runtime error — retention would then
 // stop, silently, at the exact moment it was switched on.
 //
-// Gated on DATABASE_URL_TEST (the superuser that provisions the throwaway app role the pg corpus
-// already uses) and connected with it directly rather than through
-// provisionAppRole: provisioning drops a CLUSTER role, which another package's
-// test may be holding, and this sweep runs under platform scope so it needs no
-// fresh role of its own — audit_pg_test.go proves the RLS half separately.
+// Gated on DATABASE_URL_TEST and opened through provisionAppRole like every
+// other store test in this package (the superuser migrates, the throwaway
+// NOBYPASSRLS role runs). The earlier PG_TEST_DSN variant opened the store on
+// the app role directly and failed its own migration in CI — a sweep that
+// runs under platform scope still needs a migrated schema to sweep.
 //
 // Every row it writes carries one dedicated tenant, and it reads and cleans up
 // through that scope, so it neither asserts about nor leaves behind another
