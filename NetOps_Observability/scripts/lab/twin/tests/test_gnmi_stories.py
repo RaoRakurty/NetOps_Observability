@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The gNMI lane end of the twin: story DSL wiring, scenario validation,
 GnmiLane transport and Injector accounting.
 

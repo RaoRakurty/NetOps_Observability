@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Cloud discovery — REAL inventory + in-cloud topology from the provider APIs.
 
 Two outputs, both derived from live API reads (never hand-written, never invented):

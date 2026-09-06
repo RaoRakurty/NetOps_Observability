@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """
 telemetry.py — audit the data plane: are logs, metrics, flows and correlation
 findings actually reachable and flowing? Endpoint errors (5xx / 401) FAIL; an

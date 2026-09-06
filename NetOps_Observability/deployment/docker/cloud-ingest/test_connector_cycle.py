@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Per-tenant ingestion tests (Wave 1 #2): the poller's connector cycle.
 
 Pins the contracts that make multi-tenant polling safe:

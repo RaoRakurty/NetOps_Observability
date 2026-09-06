@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Unit tests for `scripts/release-qualify.py` — the V1 release qualification.
 
 The script decides whether a candidate build still meets

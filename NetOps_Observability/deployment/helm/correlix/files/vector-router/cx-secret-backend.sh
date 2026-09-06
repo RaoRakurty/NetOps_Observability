@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # cx-secret-backend.sh — Vector `exec` secret backend for Sealed Fields.
 #
 # Vector runs this at CONFIG LOAD, writes a JSON request on stdin, and expects a

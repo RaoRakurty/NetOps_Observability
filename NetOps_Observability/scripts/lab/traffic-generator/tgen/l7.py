@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Real L7 session generator — genuine application bytes.
 
 Opens real client sessions so true L7 traffic crosses the wire:

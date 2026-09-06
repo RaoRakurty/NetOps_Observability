@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """A4 Phase 1 — the syslog admission split (aggregator-side screen).
 
 WHAT IS BEING PINNED. `src/correlation/producers.syslog_promotable` decides

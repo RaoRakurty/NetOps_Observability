@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """
 integrations.py — audit the ITSM / integration plane: provider config and
 connector status are readable and well-shaped. Config-only — no tickets are

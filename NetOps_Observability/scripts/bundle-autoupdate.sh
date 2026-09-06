@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # bundle-autoupdate.sh — ON-DEMAND customer-bundle build (#97).
 #
 # NO LONGER A DAILY CRON (removed 2026-07-23, CLAUDE.md §16.4). Building a

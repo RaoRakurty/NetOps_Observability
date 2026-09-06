@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Orchestration for the tracker-155 ownership-movement scenarios.
 
 Pairs with ownership.py, which holds the PASS/FAIL/INVALID judge. This module

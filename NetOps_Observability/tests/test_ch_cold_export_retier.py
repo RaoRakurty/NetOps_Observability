@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """ch-cold-export.sh late-arrival re-tiering (ultra #22, 2026-09-01).
 
 The defect this pins: the export skipped any partition whose Parquet file

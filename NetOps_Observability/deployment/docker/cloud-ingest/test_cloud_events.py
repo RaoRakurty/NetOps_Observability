@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Contract tests for the shared cloud MetricEvent shape (cloud_events.py).
 
 The Vector metrics lane silently DROPS an event missing any contract field, and

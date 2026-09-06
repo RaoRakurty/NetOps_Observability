@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # backup-retention.sh — proves scripts/backup.sh's retention sweep (audit item 6).
 #

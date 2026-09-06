@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Per-exchange self-metrics for the cloud-ingest poller (Wave 4 #13).
 
 The poller's provider exchanges all flow through the platform Identity Broker

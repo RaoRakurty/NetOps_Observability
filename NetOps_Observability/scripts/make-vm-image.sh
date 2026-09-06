@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # make-vm-image.sh — build the Correlix APPLIANCE VM images from the newest
 # customer bundle (#97 VM leg, owner directive 2026-07-18: demo-ready install
 # artifacts in every virtualization format, always in sync with the build).

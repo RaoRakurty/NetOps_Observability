@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Permission-test harness tests (capabilities.py) — the read-only, least-privilege
 guarantee, exercised against CANNED provider responses (no live cloud, no creds).
 

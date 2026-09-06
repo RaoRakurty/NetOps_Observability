@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Ownership-movement correctness harness (tracker 155, GA gate defect class 4).
 
 WHAT THIS EXISTS TO MEASURE

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # ch-cold-export.sh (#101) — TTL-to-cold for the correlation history tables.
 #
 # Exports CLOSED partitions (strictly older than the current one) of the

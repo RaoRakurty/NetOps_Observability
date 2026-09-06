@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Prepare an IP→country dataset for the platform's Geo IP flow analytics.
 
 Converts a publicly obtainable GeoIP database into the canonical CSV the

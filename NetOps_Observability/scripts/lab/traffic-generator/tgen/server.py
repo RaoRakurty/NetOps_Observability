@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tgen control server — stats + control HTTP API + static dashboard.
 
 `python -m tgen serve` (the container default) starts:

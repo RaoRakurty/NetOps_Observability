@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Unit tests for `scripts/sbom.py` — the committed CycloneDX bill of materials.
 
 The SBOM is a RELEASE ARTIFACT: it is what a customer or an auditor is handed

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # High-level feature smoke test — logs in once, then exercises every major API
 # surface and asserts each responds successfully. Confirms "are all the features
 # working" end-to-end against a running stack. NOT a deep correctness test (see

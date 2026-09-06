@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # tls-entrypoint.sh — Kafka broker TLS bootstrap (SEC-006.1).
 #
 # Same wrapper family as postgres/clickhouse tls-entrypoint.sh, with a

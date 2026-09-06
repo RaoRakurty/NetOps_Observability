@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """HPACK codec (gnmi_hpack) — the header layer of the twin gNMI target.
 
 Two jobs: prove the RFC 7541 codec is correct against the RFC's own examples,

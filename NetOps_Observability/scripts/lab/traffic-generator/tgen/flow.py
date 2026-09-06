@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Flow realization — turn a catalog App into concrete bidirectional flows.
 
 A `Flow` is the OTG-style unit: endpoints + L4 + a byte/packet/timing profile.

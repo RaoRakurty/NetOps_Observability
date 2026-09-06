@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """bmp-synthetic-session.py — a synthetic RFC 7854 BMP router, on the wire.
 
 WHAT THIS IS

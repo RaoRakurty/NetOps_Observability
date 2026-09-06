@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Installer data-dir ownership (2026-08 scale-test defects).
 
 `ensure_data_dirs` used to mkdir and, when a non-root installer could not

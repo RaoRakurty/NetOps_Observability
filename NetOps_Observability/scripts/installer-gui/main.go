@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // correlix-setup — the graphical installer for the Correlix appliance bundle.
 //
 // A single static binary (Go stdlib only, per the repo dependency rules) that

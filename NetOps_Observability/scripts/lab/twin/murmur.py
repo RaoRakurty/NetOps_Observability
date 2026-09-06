@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Java-compatible murmur2 + tenant→partition mapping (tracker 152, design §6).
 
 This mirrors the bus keying contract every producer in the deployment honors

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The correlation family's STORAGE SHAPE stays pinned to the measured fix.
 
 Source of truth: docs/scale/P2_STEP5_2P5K_VERDICT_2026-08-29.md §3 and

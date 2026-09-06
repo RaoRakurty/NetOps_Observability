@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # preflight-configs.sh — FRESH-LOAD validation for every config-driven service.
 #

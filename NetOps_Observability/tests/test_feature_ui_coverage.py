@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Feature-to-UI coverage guard — every public API route family must have a UI,
 or be declared headless-by-design in a checked-in allowlist.
 

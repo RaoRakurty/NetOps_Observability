@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # apply-acls.sh — SEC-007: the per-identity Kafka ACL matrix.
 #
 # Runs INSIDE the kafka container (the only place kafka-acls.sh lives),

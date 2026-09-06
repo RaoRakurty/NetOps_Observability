@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure network-component inventory (cloud-network-overview P0, design §5+§4a).
 
 The Azure twin of aws_components.py. Pure mapping functions (ARM list JSON →

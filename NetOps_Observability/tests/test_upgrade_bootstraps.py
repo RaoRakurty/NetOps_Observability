@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Upgrade-path bootstraps — the two defects found on the lab, 2026-09-03.
 
 An UPGRADE that adds an ingest lane touches four files that are applied by four

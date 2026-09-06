@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # Correlix watchdog installer (runs as root; the setup GUI invokes it via sudo
 # with a fixed argv). Installs the external stack watchdog as a system cron:

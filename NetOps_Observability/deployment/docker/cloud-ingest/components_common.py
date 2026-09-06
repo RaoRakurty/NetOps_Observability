@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Shared vocabulary + helpers for the network-component inventory lanes
 (cloud-network-overview P0 — design doc §5).
 

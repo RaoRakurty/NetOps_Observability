@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Consumer-group membership parsing in the G2 mini-ladder preflight.
 
 REGRESSION (CI run 31991056443, 2026-08-17 03:19 UTC — the workflow's first

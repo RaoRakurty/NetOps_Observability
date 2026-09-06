@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Scorer logic on fixture data: hit / miss / wrong-verdict / false-positive
 on a negative control — plus the aggregate SLO math and the evidence trail on
 a miss (design §5/§8.4 scoring contract).

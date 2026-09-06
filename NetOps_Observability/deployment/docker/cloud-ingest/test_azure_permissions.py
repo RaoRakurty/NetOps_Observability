@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure permission-adapter tests (azure_permissions.py) — the harness invokes the
 ACTUAL ARM paths (mocked here) and grades them, never inferring from a role name.
 

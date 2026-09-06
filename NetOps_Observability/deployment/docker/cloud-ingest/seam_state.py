@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Seam-state core — pure, provider-neutral state/transition/freshness logic
 shared by every hybrid-seam lane (#105 P0).
 

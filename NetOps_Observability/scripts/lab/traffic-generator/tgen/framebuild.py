@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """L2–L4 frame builder — Ethernet + IPv4 + TCP/UDP/ICMP.
 
 Shared by the sFlow encoder (which embeds a sampled packet header) and the raw

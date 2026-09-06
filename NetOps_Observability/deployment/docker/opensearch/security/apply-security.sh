@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # apply-security.sh — SEC-008.1 security-config bootstrap.
 #
 # Runs INSIDE the opensearch container (the only place securityadmin.sh and

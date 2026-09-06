@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Live end-to-end regression smoke — the metric/trap correlation path.
 
 Proves, against the RUNNING stack (Layer 5 + the 5 critical tests), that the

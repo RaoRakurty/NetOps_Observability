@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Command mock-nms is a tiny, stdlib-only stand-in for a Cisco Catalyst SD-WAN
 // Manager (vManage) REST API, used to exercise Correlix's NMS vendor-controller
 // integration cycle (#95) end-to-end on the live stack WITHOUT a real

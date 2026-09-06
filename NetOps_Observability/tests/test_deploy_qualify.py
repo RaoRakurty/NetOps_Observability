@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Static guards for scripts/deploy-qualify.sh — the post-deploy gate.
 
 WHY THIS EXISTS. On 2026-09-03 the gate appeared to HANG a real deploy at

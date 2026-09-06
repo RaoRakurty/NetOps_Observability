@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Capture the appliance-soak baseline — including WHO was measured.
 
 Until tracker 158 this file had no writer at all: `data/miniladder/

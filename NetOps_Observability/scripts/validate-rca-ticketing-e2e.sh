@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # validate-rca-ticketing-e2e.sh — exercise the RCA auto-ticketing CREATE leg (#78)
 # AND the INBOUND state-sync leg (#84) end-to-end against the running stack and
 # the bundled mock ServiceNow.

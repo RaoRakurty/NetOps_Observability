@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Demo-fill generator — make every dashboard panel light up for a walkthrough.
 
 Extends seed_demo_data.py (flows / base metrics / tunnels / findings) with the

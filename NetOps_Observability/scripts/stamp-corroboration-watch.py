@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """stamp-corroboration-watch.py — live validation harness for the trusted
 customer-path STAMP probe corroboration feature (commit fc76f72).
 

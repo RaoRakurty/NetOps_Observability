@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Real L2–L4 packet generator (raw sockets).
 
 Crafts and transmits genuine IPv4 TCP/UDP/ICMP frames so a real exporter on the

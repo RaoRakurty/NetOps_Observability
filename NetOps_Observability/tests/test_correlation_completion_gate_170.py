@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 170 — the qualification harness must not call the engine healthy
 because the transport and ingest layers finished.
 

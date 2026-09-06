@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Seam-lane tests (#105 P0/P1) — run with: python3 -m pytest test_seams.py
 
 Covers the prompt's regression demands that live in this layer:

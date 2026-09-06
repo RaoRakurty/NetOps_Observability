@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tracker 205 STEP 2 — the tail classifier's pure functions.
 
 `scripts/scale-rca-tail.py` answers one question — *does a small identity class

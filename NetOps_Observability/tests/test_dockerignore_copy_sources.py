@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The root `.dockerignore` must never hide a path a Dockerfile COPYs.
 
 Eight compose services build with `context: ../..`, which resolves to the

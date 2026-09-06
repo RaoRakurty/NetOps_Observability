@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """GCP → the platform's canonical lanes (provider-parity program, tracker #105).
 
 Mirrors azure.py's architecture 1:1 so every downstream consumer stays

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Guard: an alert-rule unit test must actually resolve the rules it names.
 
 WHY THIS EXISTS. `rules-scale-slo.yaml` shipped unvalidated: `preflight-configs.sh`

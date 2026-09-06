@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """AWS workload-inventory tests (Wave 5 #15) — fixture-driven, no live calls.
 
 Pins the parse contract for the K8s + serverless/PaaS classes: STATUS HONESTY

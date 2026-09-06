@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """test_tac_forbidden_policy.py — the guard on the OUTPUT-ONLY command policy.
 
 Owner decision, 2026-09-05: a command that changes configuration, that restarts

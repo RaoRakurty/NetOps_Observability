@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The burst injects the PROFILE's fleet, or it fails (2026-08-29).
 
 THE DEFECT THIS PINS. Two 2.5K T-nominal runs that were meant to be the same

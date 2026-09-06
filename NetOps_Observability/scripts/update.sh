@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # update.sh — safe in-place upgrade for an existing NetOps Observability
 # deployment.

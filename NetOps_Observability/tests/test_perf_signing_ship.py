@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Pipeline-ladder ship contracts (owner-approved rungs, 2026-08-14).
 
 Two rungs pinned here:

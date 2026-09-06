@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tenant→partition keying pinned against the repo's Java-murmur2 reference.
 
 The literal vectors below were produced by the INDEPENDENT reimplementation in

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tests for scripts/resource_planner.py — the 26 design-spec scenarios (#102).
 
 Run: python3 -m unittest scripts.tests.test_resource_planner  (from repo root)

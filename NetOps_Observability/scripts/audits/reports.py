@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """
 reports.py — audit the reporting plane: delivery channels, schedules/runs and
 execution history are readable. Read-only by design — it never calls /run or

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Steady-state + fault-story schedule engine (tracker 152, design §5).
 
 `build_run_plan(scenario, duration_s)` expands a validated scenario into a

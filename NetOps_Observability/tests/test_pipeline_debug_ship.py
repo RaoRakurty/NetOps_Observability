@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Pipeline-debugger ship contract (W2 (f), design PIPELINE_DEBUGGER_2026-09-04 §1).
 
 `correlix-debug` is a HOST-SIDE operator CLI, and W1 shipped it only into the

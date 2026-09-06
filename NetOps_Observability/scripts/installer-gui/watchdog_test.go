@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // POST /api/watchdog tests (design §8, privileged op #3): session gate,
 // server-side validation mirroring install-watchdog.sh, install-result gating,
 // fixed argv assembly (I1), password stdin + zeroing (H3), secret-token

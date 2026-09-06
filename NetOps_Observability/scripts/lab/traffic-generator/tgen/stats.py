@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Shared live statistics for the dashboard.
 
 Workers publish a small per-worker snapshot into a multiprocessing Manager dict

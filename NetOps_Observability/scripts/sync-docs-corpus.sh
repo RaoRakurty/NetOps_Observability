@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # sync-docs-corpus.sh — mirror the docs-portal markdown into the backend's
 # embedded AI corpus (src/backend/ai/docs_corpus). go:embed can only reach files
 # inside the package tree, so the corpus is a checked-in mirror; this script is

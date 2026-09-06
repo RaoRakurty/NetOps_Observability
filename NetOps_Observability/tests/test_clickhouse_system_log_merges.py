@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """system.* log tables must merge cheaply BY CONSTRUCTION.
 
 Source of truth: docs/scale/P2_CLICKHOUSE_PEAK_S06_2026-08-29.md (run

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # Example workload declaration for the Correlix resource planner (#102).
 # Copy to correlix-sizing.yaml next to install-correlix.sh (bundle installs)
 # or pass via: python3 scripts/install.py --replan --sizing-file <path>.

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Minimal protobuf + gNMI message codec (tracker 152, design §4.6).
 
 The twin serves gNMI to OUR collector (`gnmic` 0.46.0, pinned in

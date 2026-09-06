@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Unit tests for the multi-source S3 log config (poller.extra_s3_sources).
 
 Prod-grade log ingestion must support real AWS layouts: WAF logs in a

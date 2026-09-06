@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # fetch-appid-feeds.sh — download the free, vendor-published IP-range feeds the
 # Application Identification resolver (#81 P1) loads. Deliberately OUT-OF-BAND and

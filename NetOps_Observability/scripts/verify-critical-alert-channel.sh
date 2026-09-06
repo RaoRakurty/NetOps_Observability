@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # verify-critical-alert-channel.sh (#101) — the first-customer alert-delivery
 # gate. FAILS (exit 1) unless critical alerts demonstrably LEAVE the app.
 #

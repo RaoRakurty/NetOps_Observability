@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # rca-canary.sh (#99 R1) — live end-to-end RCA pipeline canary.
 #
 # Injects two KNOWN raw failure events onto the bus for a dedicated canary

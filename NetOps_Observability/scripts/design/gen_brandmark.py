@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Generate the Correlix eye brand mark.
 
 Geometry (viewBox 0 0 512 512):

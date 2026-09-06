@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """sFlow v5 encoder — flow samples carrying a sampled packet header.
 
 XDR-encoded (big-endian, 4-byte aligned). Each flow sample embeds a raw

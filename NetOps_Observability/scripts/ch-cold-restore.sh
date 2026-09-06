@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # ch-cold-restore.sh (#101) — restore cold Parquet history into an ISOLATED
 # side database, without disturbing hot production.
 #

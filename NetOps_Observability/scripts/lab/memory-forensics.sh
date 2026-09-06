@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # External memory/pressure sampler for a correlation diagnostic run.
 #
 # WHY IT IS EXTERNAL. The in-process diagnostics cannot report during the very

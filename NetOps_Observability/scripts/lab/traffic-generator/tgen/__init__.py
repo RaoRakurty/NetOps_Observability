@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tgen — OTG-modeled lab traffic generator.
 
 Crafts enterprise / SaaS / AI application traffic as flow telemetry

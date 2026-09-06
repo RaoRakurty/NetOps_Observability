@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Seed the NetOps stack with synthetic traffic so every module populates.
 
 Drives the *real* ingest paths so you can watch data appear in the UI:

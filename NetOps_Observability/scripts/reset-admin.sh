@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # reset-admin.sh — wipe the local user store and let the api container
 # re-seed the admin user from the current ADMIN_INITIAL_PASSWORD in

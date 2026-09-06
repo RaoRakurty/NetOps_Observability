@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Secret-rotation policy tests (audit FUNC-HIGH-1).
 
 `install.py --reset-env` is documented as "rotate all secrets". It used to

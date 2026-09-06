@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """ClickHouse merge/memory budget stays pinned to the MEASURED numbers.
 
 Source of truth: docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md (run

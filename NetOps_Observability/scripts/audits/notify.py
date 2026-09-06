@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """
 notify.py — audit the notification plane: per-channel config is readable and the
 contact-point store does a clean CRUD lifecycle.

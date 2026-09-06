@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The ENTERPRISE OUTAGE causal chain — one definition, two harnesses.
 
 WHY THIS MODULE EXISTS. Two harnesses need the same fault story:

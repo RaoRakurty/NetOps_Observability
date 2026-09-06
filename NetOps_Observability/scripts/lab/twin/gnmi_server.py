@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Twin gNMI target — a minimal OpenConfig fake (tracker 152, design §4.6).
 
 DESIGN DECISION (§4.6 left it open: "gnmic target mode vs a small OpenConfig

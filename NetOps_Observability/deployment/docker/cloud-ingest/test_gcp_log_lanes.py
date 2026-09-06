@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """GCP log-fidelity lane tests (#105 parity) — python3 -m pytest test_gcp_log_lanes.py
 
 Fixture-driven, no live GCP calls. Covers the program's hard rules in this layer:

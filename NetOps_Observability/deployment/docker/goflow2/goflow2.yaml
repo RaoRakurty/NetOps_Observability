@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # goflow2 configuration.
 #
 # ⚠️ THIS FILE IS NOT MOUNTED INTO THE CONTAINER. docker-compose.yml passes

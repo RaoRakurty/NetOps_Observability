@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tac-merge-research.py — merge vendor TAC research into the escalation taxonomy.
 
     Research  ai/tac/research/<vendor>.yaml   (INPUT, written by the research pass)

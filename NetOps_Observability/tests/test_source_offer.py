@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """GPL/LGPL corresponding-source mirror — the bundle must carry the source it owes.
 
 Licence audit D2 (docs/security/LICENSE_AUDIT_2026-09-03.md §4 D2), owner

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """CIS-Docker policy gate (gap-report #7) — a deterministic, dependency-free check
 that the container posture we CONTROL cannot silently regress.
 

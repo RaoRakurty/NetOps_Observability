@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The stability gate must observe the WHOLE lifecycle, not just the drain.
 
 THE FALSE GREEN THIS REPLACES (2026-08-20). Stability was diagnosed only inside

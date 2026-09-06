@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """UNKNOWN is never PASS — the settle and hollow-completion gates (ultra #23/#24).
 
 Two 2026-08-31 fixes, each with the false green it kills:

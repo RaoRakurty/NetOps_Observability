@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Watchdog ship contract (owner decision 2026-08-13).
 
 The external stack watchdog is promoted into customer bundles with phone

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # Vector — AGGREGATION tier.
 #
 # Receives from edge collectors (syslog-ng, goflow2) plus container

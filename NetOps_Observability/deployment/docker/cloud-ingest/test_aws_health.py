@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """AWS Health provider-incident lane tests (Wave 5 #16) — fake API responses,
 no live calls. Pins: normalization (arn identity, category→severity), the
 checkpoint discipline (advance over anything seen; never regress), and the

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """twin.py — CORRELIX Network Digital Twin, phase T1 CORE (tracker 152).
 
 Runs a labeled multi-tenant fault scenario against the LIVE stack and measures

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Deployment plumbing for the flag-gated api/correlation modules.
 
 A module can be perfectly implemented and still be UNDEPLOYABLE: the flag the

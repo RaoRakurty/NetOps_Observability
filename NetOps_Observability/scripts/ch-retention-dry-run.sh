@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # ch-retention-dry-run.sh (#101) — preview EXACTLY what the correlation
 # retention contract would drop, before (or after) enabling it. Read-only.
 #

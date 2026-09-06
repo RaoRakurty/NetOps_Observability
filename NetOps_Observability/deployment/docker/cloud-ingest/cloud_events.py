@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Shared cloud MetricEvent builder (AWS / Azure / GCP) — one source of the shape.
 
 The Vector `cloud_metrics_only` transform filters on ``signal_family == "cloud_resource"``

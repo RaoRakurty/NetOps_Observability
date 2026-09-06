@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # ch-query-budget-check.sh (#100 hardening) — enforce per-endpoint ClickHouse
 # read budgets against the LIVE stack.
 #

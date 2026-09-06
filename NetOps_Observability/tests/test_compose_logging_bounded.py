@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Every compose service caps its container log — no exceptions.
 
 WHY THIS EXISTS (2026-09-03). The lab host hit **94% disk**; OpenSearch's

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """test_tac_merge_research.py — the guard on scripts/tac-merge-research.py.
 
 The merge script is the ONLY sanctioned path from vendor research into the

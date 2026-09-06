@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The customer download folder — what a first-time customer actually receives.
 
 Tracker 265. `scripts/make-installer.sh` builds `dist/correlix-<version>/`, and

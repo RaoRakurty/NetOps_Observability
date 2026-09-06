@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """AWS workload-breadth inventory (cloud platform backlog Wave 5 #15).
 
 Extends discovery beyond network components to the WORKLOAD classes the

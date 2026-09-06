@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Cloud control-plane / flow-log poller (lab-site service, not a product default).
 
 Two lanes into the existing pipelines, no new product code paths:

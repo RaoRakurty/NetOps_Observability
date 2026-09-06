@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Regression guards for audit F-41 (cloud-ingest lane starvation).
 
 Two independent defects lived here, and both had the same signature — a real

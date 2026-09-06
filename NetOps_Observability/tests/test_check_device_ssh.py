@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Guards for scripts/check-device-ssh.sh (tracker 247).
 
 The script exists to answer one question honestly — "is the device SSH identity

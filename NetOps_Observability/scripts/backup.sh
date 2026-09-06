@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # backup.sh — snapshot the full NetOps Observability data directory
 # plus per-engine logical dumps into one compressed tarball.

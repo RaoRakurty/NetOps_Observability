@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # Build + run tgen as a container ON the lab host (10.70.245.120), pointed at the
 # NMS collector. Run this FROM the traffic-generator/ dir (it ships itself over
 # ssh, builds the image on the lab host, and starts it).

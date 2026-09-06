@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """demo_lab.py — build (and tear down) a multi-tenant demo estate.
 
 Creates orgs, tenants, sites and devices from a PROFILE, then optionally drives

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """GCP workload-breadth inventory (cloud platform backlog Wave 5 #15).
 
 The GCP third of the workload triad (aws_workloads / azure_workloads). Pure

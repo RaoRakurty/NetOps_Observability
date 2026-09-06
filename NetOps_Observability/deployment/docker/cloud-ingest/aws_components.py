@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """AWS network-component inventory (cloud-network-overview P0, design §5+§4a).
 
 Extends discovery beyond ec2:instance to every network component, one row per

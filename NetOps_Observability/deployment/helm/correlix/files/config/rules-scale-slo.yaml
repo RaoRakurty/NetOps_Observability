@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # Platform SLO + engine-liveness alert rules — evaluated by vmalert ONLY.
 #
 # Companion to rules.yaml. Loaded via an additional -rule= flag on the vmalert

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Ratified workload profiles in the G2 mini-ladder (gate spec §5/§6).
 
 Pins, against the REAL correlation classifier where promotion is claimed:

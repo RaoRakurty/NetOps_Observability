@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Partition-spread measurement (tracker 152, design §6 — closing G-1).
 
 During the run the twin samples the correlation group's per-partition consumed

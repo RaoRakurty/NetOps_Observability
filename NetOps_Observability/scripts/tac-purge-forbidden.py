@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tac-purge-forbidden.py — enforce the OUTPUT-ONLY command policy over the corpus.
 
 Owner decision, 2026-09-05, verbatim:

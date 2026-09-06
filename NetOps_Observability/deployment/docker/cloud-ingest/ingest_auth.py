@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Ingest credential for the cloud-ingest producers (F-08, SEC-013.1).
 
 WHY THIS EXISTS. F-08 put Basic auth on all four vector-aggregator ingest

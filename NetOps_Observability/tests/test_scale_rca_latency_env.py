@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """`scale-rca-latency.py` must not resolve its ClickHouse container from a
 compose .env it could not read.
 

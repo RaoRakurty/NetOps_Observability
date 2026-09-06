@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Unit tests for `scripts/scale-ab-driver.py` — the P3 aggregation-plane A/B driver.
 
 The driver is unattended: it redeploys correlation, launches 2.5k-device storm

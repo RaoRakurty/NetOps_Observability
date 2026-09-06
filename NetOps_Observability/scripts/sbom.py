@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Generate the CycloneDX software bill of materials for Correlix.
 
 SC-006 asks for an SBOM. `supply-chain.yml` already produces one with Trivy, but

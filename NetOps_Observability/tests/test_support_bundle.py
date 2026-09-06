@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """scripts/support-bundle.sh — the pilot diagnostic bundle (Project 2, G6).
 
 What a support bundle must guarantee, and what this suite pins:

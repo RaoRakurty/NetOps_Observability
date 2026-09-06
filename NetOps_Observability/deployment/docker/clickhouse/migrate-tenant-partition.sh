@@ -1,4 +1,7 @@
 #!/usr/bin/env sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # migrate-tenant-partition.sh — #20 Phase 3 (ClickHouse at-rest separation).
 #
 # Rebuilds the live netops.{flows,findings,tunnels} tables so tenant_id leads the

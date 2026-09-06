@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Mini-ladder composition plumbing (design §8.3): the `--load-generator twin`
 flag exists, requires a scenario, and — crucially — the DEFAULT path is
 untouched: default argv parses to the internal generator with the exact

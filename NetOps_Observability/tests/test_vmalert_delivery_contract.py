@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The vmalert -> api alert-DELIVERY contract, across both compose variants.
 
 WHY THIS EXISTS. Before 2026-09-02 vmalert ran with `-notifier.blackhole`:

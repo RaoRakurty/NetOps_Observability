@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The base-image digest lock — a re-pin without a re-scan is a CI failure.
 
 WHY THIS EXISTS. `docs/compliance/oci-inventory.json` is not a description of

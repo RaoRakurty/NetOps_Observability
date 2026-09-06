@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """HPACK (RFC 7541) codec — the header layer of the twin's gNMI target
 (tracker 152, design §4.6).
 

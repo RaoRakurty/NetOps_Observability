@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """HTTP/2 + gRPC frame layer (gnmi_h2), driven over a REAL loopback socket.
 
 A framing bug here is invisible in unit tests of the layers above it, so these

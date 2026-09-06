@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """source-IP fidelity orchestration (tracker 152 fidelity wave, design §3.4
 `source_ip` mode / risk R-4).
 

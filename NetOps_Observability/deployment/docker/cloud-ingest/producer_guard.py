@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Delivery-checked Kafka producer wrapper for the cloud-ingest poller.
 
 kafka-python's `send()` is asynchronous: it returns a future and NEVER raises

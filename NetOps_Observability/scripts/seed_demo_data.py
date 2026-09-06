@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Seed the running stack with demo telemetry so every dashboard/metric is
 exercised — useful for a functional walkthrough without live devices.
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Unit tests for cloud_tag — the ingest-side family/provider/resource tagging
 that makes raw cloud logs searchable as `cloud_family:… cloud_provider:…`.
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The panel↔metric audit's gNMI ownership gate — an EMPTY gate is now legal.
 
 `scripts/audit_metric_contract.py` used to fail outright when the gnmic

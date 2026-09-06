@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # SUPPORTED TLS VARIANT (tracked) — the full internal-TLS/mTLS mesh (#151).
 # Activated by `install.py --tls`, which puts this file on the COMPOSE_FILE
 # chain (COMPOSE_FILE=docker-compose.yml:compose.tls.yml in .env) so every

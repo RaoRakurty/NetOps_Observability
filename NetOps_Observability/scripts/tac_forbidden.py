@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tac_forbidden.py — the OUTPUT-ONLY command policy, Python side.
 
 Owner decision, 2026-09-05: a command that changes configuration, that restarts

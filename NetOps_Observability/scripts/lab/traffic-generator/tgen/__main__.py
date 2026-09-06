@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tgen CLI — craft enterprise/SaaS/AI traffic as flow telemetry and/or packets.
 
   python -m tgen --collector 10.70.245.122 --mode ipfix --fps 2000 --duration 0

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """memflat judges ClickHouse on ClickHouse's numbers (2026-08-29).
 
 THE FIRST DEFECT THIS PINS. `docker stats` MemUsage is cgroup

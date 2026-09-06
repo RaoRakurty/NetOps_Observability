@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Snapshot restorability + repository-custody ship contract (2026-09-03).
 
 WHY THIS SUITE EXISTS. The netops-fs OpenSearch snapshot repository was

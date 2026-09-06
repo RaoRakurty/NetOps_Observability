@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Single-contract ownership: the gnmic gate and the SNMP profiles must mirror.
 
 A canonical `device_*` family is served by exactly ONE transport per device.

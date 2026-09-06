@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """snmpsim data-file generation: golden-file pin (deterministic .snmprec from
 the example topology) + manifest shape the supervisor consumes."""
 import json

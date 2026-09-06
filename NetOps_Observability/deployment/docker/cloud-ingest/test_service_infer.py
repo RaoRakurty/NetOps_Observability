@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Unit tests for built-in service inference (service_infer.py).
 
 The inference must be GENERIC and HONEST: a resource-group name gives a

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """release-qualify.py — rerun the CORRELIX REFERENCE CAPACITY V1 qualification
 on the currently deployed build and grade every V1 clause (tracker 203).
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """license-audit.py — third-party licence inventory + CI gate for Correlix.
 
 WHY THIS EXISTS

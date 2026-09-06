@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Guard: a container whose healthcheck forks must reap what it orphans.
 
 INCIDENT 2026-08-19. The 2026-08-09 TLS-enforce wave removed ClickHouse's

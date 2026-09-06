@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Correlix resource planner — the canonical sizing calculator (#102).
 
 Design: docs/design/resource-sizing-design.md (approved v2, 2026-07-11).

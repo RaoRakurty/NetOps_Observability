@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """preflight-install.py — FRESH-INSTALL integrity gate.
 
 Catches the drift class the team cares about most: *you built a new feature that a

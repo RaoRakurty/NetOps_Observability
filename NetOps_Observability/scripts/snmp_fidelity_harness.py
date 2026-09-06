@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """SNMP / telemetry fidelity harness — runtime, hop-by-hop, entrance→exit.
 
 This is the RUNTIME counterpart to `audit_metric_contract.py` (which is the

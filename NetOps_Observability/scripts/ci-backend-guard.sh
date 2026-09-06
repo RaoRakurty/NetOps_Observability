@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # ci-backend-guard.sh — local mirror of the blocking backend-ci gate. Run before
 # every push that touches Go: go build + vet + the EXACT golangci-lint version CI
 # uses (via docker, since it isn't installed locally). Exit non-zero on any

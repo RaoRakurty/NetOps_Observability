@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Command mock-servicenow is a tiny, stdlib-only stand-in for the ServiceNow
 // Table API (incident table ONLY) used to exercise Correlix's RCA auto-ticketing
 // create leg (#78) end-to-end on the live stack WITHOUT a real ServiceNow

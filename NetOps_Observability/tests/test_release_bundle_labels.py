@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The release bundle must not lie about which profile it is.
 
 WHY (2026-09-03). `scripts/make-installer.sh` takes `[--core]`:

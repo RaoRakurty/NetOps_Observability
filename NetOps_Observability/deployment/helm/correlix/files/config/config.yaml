@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # NetOps Observability — main configuration.
 # Values surrounded by ${...} are interpolated from environment variables
 # (typically supplied via deployment/docker/.env that install.py generates).

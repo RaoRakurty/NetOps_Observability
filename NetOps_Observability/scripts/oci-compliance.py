@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """oci-compliance.py — the FINAL OCI IMAGE is the compliance boundary.
 
 WHY THIS EXISTS

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Fidelity-wave wire encoders: every encoder round-trips through its own
 decoder (the trap decoder mirrors the Go receiver's TLV walk, so the trap
 test proves the receiver-side shape), and the payload builders emit exactly

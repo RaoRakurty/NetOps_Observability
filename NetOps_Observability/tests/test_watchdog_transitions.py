@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Watchdog per-problem-class state machine + packaged-layout contract
 (H16/H17/M25/M27, 2026-08-15).
 

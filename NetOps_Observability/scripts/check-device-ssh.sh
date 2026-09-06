@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # check-device-ssh.sh (tracker 247) — is the platform's read-only device SSH
 # identity CONFIGURED, and does it still AUTHENTICATE?
 #

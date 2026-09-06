@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """ONE Go toolchain version, pinned in every place that builds Go.
 
 WHY (2026-09-03). The 2026-09-02 raise 1.25.13 -> 1.26.8 (x/crypto v0.56.0 for

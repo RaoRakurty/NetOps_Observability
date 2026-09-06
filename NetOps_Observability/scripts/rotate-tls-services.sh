@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # rotate-tls-services.sh — SEC-019.1 part 2: propagate re-minted SVIDs to
 # every service that loads its certificate material once at start.
 #

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """AWS hybrid-seam lane (#105 P1) — the gateway plane, finally measured.
 
 Two cost tiers, per the owner's policy:

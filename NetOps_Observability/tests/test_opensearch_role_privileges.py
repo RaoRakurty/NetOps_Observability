@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """OpenSearch role privileges are a CONTRACT, not a convenience.
 
 WHY THIS EXISTS. `deployment/docker/opensearch/security/roles.yml` is the only

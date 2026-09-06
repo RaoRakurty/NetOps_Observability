@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tracker 205 STEP 2 — classify the RCA latency TAIL, before any optimization.
 
 Step 1 (`scripts/scale-rca-latency.py --ground-truth`,

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """GCP network-component inventory (cloud-network-overview P0, design §5+§4a).
 
 The GCP third of the component-inventory triad (aws_components /

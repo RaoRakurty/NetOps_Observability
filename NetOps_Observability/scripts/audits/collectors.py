@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """
 collectors.py — audit the collection plane: collector status + SNMP credential
 and profile config (CRUD lifecycle, secret hygiene). No device polling is

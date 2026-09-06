@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # Authentication & identity test suite — exercises the full auth surface end to
 # end against a running stack: login (good/bad), bearer enforcement, token
 # refresh ROTATION + REUSE-DETECTION, logout revocation, API-key mint/use/revoke,

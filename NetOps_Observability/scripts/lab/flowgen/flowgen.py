@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """flowgen — multi-protocol flow telemetry generator for the NetOps stack.
 
 Emits realistic **NetFlow v5**, **IPFIX**, and **sFlow v5** datagrams to goflow2's

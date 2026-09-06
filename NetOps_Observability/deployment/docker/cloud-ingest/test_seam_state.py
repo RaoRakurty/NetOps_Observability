@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Unit tests for the pure seam-state core (#105 P1, §11).
 
 The tracker is the shared truth engine for every provider seam lane, so its

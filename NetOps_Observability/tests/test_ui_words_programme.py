@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Guard: the "fewer words, Iris explains" debt list stays empty (tracker 270).
 
 WHY THIS EXISTS. The programme

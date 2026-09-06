@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """gNMI → correlation lane contract (ENABLE_GNMI_CORRELATION).
 
 The Go SNMP collector and gnmic are now two producers of the SAME canonical

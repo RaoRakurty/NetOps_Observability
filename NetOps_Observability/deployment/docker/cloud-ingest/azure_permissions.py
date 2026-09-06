@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure adapter for the capability permission-test harness (capabilities.py).
 
 Maps each shared Capability to the ACTUAL Azure ARM read it needs and invokes it,

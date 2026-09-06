@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 ####
 # NetBox extra configuration (mounted at /etc/netbox/config/extra.py).
 #

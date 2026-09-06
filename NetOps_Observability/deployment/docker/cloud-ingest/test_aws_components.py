@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """AWS component-inventory tests (cloud-network-overview P0).
 
 Fixture-driven, no live cloud calls — pins the parse contract for every new

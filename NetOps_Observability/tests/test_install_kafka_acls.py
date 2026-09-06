@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Installer-owned Kafka ACL application (SEC-007 P0, 2026-08-16).
 
 The TLS variant boots the broker with StandardAuthorizer and

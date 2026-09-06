@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // P1 hardening + P2 API tests: TLS mint/fingerprint, bind selection,
 // single-session, idle timeout, idempotency, facts, profile validation,
 // @CX@ marker parsing, sg-docker decision, support-bundle redaction,

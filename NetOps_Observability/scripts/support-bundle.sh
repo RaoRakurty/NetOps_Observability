@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # shellcheck disable=SC2317  # collectors, dcompose and cleanup are invoked indirectly (collector table, timeout wrappers, the EXIT trap); shellcheck on the CI runner reports each as unreachable, one per run
 #
 # support-bundle.sh — one redacted diagnostic bundle a pilot can send back.

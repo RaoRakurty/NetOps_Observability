@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # tls-entrypoint.sh — ClickHouse server TLS bootstrap (SEC-009.1).
 #
 # Same cross-uid problem and solution as postgres/tls-entrypoint.sh: the

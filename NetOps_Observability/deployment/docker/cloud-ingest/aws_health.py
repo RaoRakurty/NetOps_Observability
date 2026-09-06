@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """AWS Health provider incident/maintenance lane (Wave 5 #16).
 
 The provider's OWN declaration that something is wrong (or scheduled) on its

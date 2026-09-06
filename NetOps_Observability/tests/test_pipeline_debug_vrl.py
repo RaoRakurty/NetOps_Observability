@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """W2 pipeline-debugger — the VRL parser/router DECISION HOOK.
 
 WHAT IS BEING PINNED. `correlix-debug trace` collects the parser and router

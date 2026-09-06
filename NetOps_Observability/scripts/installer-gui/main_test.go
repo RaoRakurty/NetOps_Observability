@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // correlix-setup contract tests: token/session gate, state machine, check
 // parsing, single-flight phase execution, credential extraction. A fake
 // runner stands in for the shell scripts (§11: mock the boundary, test the

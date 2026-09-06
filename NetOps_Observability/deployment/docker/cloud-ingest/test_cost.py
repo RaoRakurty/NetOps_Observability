@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Cost-lane tests (Wave 5 #18 slice 1) — fake provider responses, no live calls.
 
 Pins the contracts that make cost ingestion safe and honest:

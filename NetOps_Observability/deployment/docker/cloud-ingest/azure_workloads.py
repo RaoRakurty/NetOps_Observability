@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure workload-breadth inventory (cloud platform backlog Wave 5 #15).
 
 The Azure twin of aws_workloads.py — K8s + serverless/PaaS classes, ARM

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Run lifecycle: preflight → tenancy → devices → gates → seams → teardown
 (tracker 152, design §7).
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Prepare the device-OS vulnerability feed for Vulnerability Management.
 
 Converts NVD CVE data (and optionally the CISA KEV catalog) into the compact

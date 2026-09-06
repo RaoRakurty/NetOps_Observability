@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # cx-enrichment-reload.sh — Vector entrypoint wrapper: reload on enrichment
 # change (F-10, tracker #151 step 3).
 #

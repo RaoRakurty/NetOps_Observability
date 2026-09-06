@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """RCA accuracy scorer (tracker 152, design §5/§8.4 — closing G-2).
 
 Joins the run's `ground_truth.jsonl` labels against the engine's output in

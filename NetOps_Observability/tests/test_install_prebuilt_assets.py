@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """`install.py` refuses to build without the pre-built web assets, ACTIONABLY.
 
 WHY (2026-09-03). `deployment/docker/Dockerfile.frontend` COPYs two directories

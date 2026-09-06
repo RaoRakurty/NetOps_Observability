@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """correlix-debug against the RUNNING lab stack (W1 integration test).
 
 docs/design/PIPELINE_DEBUGGER_2026-09-04.md §6 W1: "an integration test against

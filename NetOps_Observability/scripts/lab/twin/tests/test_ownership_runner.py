@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tests for the tracker-155 orchestration runner.
 
 Same stance as test_ownership.py: the valuable tests are the ones proving this

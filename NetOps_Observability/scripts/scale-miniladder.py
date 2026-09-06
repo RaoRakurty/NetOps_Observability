@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """scale-miniladder.py — G2 self-judging nightly scale-regression harness.
 
 Proves, on EVERY run and on ANY hardware, that the stack still holds the

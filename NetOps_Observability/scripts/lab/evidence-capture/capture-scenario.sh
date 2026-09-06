@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # capture-scenario.sh — the ONE-LINER the operator runs per scenario during the
 # live capture window. Wraps capture.mjs to write the standard evidence-book
 # shots for a <provider>/<scenario> in light mode at 2x DPI.

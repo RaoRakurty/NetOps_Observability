@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure storage-delivered log lanes (#105 build order #2 + log-fidelity families).
 
 Azure's high-volume log families (VNet flow logs, App Gateway / Front Door

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The onboard gate must never fail a run for STARTING FASTER (tracker 202).
 
 THE FALSE FAILURE THIS FILE KILLS. The clause was

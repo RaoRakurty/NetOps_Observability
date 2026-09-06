@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """
 tracker_staleness.py — flag TRACKER.md items whose status has gone STALE.
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Ground-truth determinism: (scenario, seed) fully determines every event's
 content and relative timing (design §3.3). Two plan builds must be
 byte-identical; a different seed must produce a different plan; wall-clock

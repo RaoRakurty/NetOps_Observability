@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """NetFlow v9 (RFC 3954) encoder.
 
 Header(20) + (periodic template FlowSet 0) + a data FlowSet. Field types are the

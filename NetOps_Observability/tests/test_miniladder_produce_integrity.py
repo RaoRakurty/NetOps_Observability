@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The injector delivers every record, or it says so (2026-08-29).
 
 THE DEFECT THIS PINS. Run `p2-s04b-08290858` failed accounting with

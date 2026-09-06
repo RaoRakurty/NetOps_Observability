@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """End-to-end smoke test for the NetOps Observability stack.
 
 Probes every tier and the API surface and prints a PASS/WARN/FAIL line for

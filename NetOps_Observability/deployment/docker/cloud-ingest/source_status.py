@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Structured per-source error reporting (cloud platform backlog Wave 2 #4).
 
 The poller has always LOGGED provider failures ("connector poll error",

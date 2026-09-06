@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # Per-connection handler for the sealing sidecar (#17). socat pipes one client
 # connection to stdin/stdout; we read ONE request line and emit ONE response:
 #

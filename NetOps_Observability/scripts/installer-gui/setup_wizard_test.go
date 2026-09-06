@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Tests for the management-address / transport-choice surface added for the
 // customer install package (tracker 266): the address list the shell offers,
 // the certificate SANs that must cover whatever address was picked, the HTTPS

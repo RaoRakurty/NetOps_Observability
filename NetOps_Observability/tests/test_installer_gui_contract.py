@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """GUI-installer P0 engine contract tests (docs/design/gui-installer-2026-08.md §6).
 
 Pins the correlix-setup v1 API + event contract the graphical installer parses:

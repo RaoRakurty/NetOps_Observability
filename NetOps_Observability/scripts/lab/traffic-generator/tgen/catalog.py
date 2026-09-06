@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Application catalog — enterprise / SaaS / AI app signatures.
 
 Each entry models a real application the way the platform's flow analytics see

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # validate-nms-e2e.sh — exercise the NMS vendor-controller integration cycle
 # (#95) end-to-end against the running stack and the bundled mock controller.
 #

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useEffect, useRef, useState } from "react";
 
 // tgen dashboard — IXIA/Ostinato-style live view of the traffic the generator

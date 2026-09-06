@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # fix-permissions.sh — chown each data/ subdirectory to the UID/GID
 # the corresponding container runs as. Run once after the first

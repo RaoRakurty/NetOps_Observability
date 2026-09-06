@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Time-to-Useful-RCA (TTUR) lifecycle measurement — READ-ONLY.
 
 Measures the RCA lifecycle latencies and verdict churn that the correlation

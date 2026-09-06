@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Live-stack access layer for the twin (tracker 152).
 
 Adapted from the PROVEN mechanics of `scripts/scale-miniladder.py` (§16 bar:

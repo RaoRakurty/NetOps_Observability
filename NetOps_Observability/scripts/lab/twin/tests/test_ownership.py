@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tests for the tracker-155 ownership-movement harness.
 
 The point of this file is NOT to show the harness can say PASS. It is to prove

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure → the platform's canonical lanes (Service View counters + RCA evidence).
 
 Deliberately stdlib-only (`urllib`). The Azure ARM/Monitor APIs are plain REST

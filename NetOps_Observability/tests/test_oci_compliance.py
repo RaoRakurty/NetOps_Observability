@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The final OCI image is the compliance boundary (tracker 238).
 
 WHY THIS EXISTS. Correlix's licence inventory used to be derived entirely from

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tenant-keyed injection in the G2 mini-ladder (2026-08-22).
 
 THE DEFECT THIS PINS. The production pipeline keys every Kafka topic by TENANT

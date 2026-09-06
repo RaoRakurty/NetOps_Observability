@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # clean-slate.sh — factory-reset the CORRELIX stack's application data.
 #
 # Scripts the clean-slate procedure the scale-test programme executed manually

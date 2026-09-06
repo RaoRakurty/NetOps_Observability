@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure in-cloud NETWORK topology → the platform's canonical topology schema.
 
 The Azure twin of discover.py's AWS route-table discovery. It reads the VNet /

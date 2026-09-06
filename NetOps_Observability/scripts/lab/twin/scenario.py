@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Scenario DSL loader + validation (tracker 152, design §3.3 / §8.2).
 
 Plain-Python structural validation of the `correlix.twin.scenario.v1` shape —

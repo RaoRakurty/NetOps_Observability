@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """`twin.py`'s gNMI wiring, exercised for real: rendering the run's target
 manifest + gnmic targets file, launching the target server as a child process,
 proving the lane is live, applying a fault op through it, and stopping it at

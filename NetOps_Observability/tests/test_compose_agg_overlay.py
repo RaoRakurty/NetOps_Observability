@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The P3 A/B overlays stay ONE-VARIABLE overlays (docs/scale/RUN_PLAN_P3_AB_2026-08-29.md).
 
 THE CONTRACT (amended 2026-08-31, ultra #35). Three defaults exist and they are

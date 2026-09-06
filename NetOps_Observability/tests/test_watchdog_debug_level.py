@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Watchdog DEBUG_LEVEL_STUCK problem class (pipeline debugger W2(d), 2026-09-04).
 
 `correlix-debug logs` raises a module's runtime log level to debug for a bounded

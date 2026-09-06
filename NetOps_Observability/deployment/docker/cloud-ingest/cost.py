@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Cloud cost ingestion (cloud platform backlog Wave 5 #18, slice 1).
 
 Daily provider-billed cost per (tenant, provider, account, service, day) →

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # docker-compose.snapshot-repo2.yml — OPTIONAL overlay: a SECOND OpenSearch
 # snapshot repository on a separately-mounted path (S4, 2026-09-04; tracker 225a).
 #

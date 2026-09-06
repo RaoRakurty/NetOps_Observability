@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Connector-registry / token-broker client (cloud platform backlog Wave 1 #2).
 
 Per-tenant ingestion: the poller never holds long-lived per-tenant cloud

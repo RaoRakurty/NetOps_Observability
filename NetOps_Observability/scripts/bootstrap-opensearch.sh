@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # bootstrap-opensearch.sh — THE single owner of OpenSearch index-template
 # application. It applies every template declared in

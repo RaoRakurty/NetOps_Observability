@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Panel↔metric contract audit (foundation guard, Tier 1).
 
 The failure class this catches: a dashboard panel queries a metric that NO

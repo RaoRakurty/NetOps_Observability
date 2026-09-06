@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # restore-drill.sh — prove a backup can actually be RESTORED, with content
 # validation, into disposable empty stores that never touch live data.

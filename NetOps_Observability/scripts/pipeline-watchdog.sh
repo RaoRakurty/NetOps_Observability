@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # =============================================================================
 # pipeline-watchdog.sh — telemetry-FLOW watchdog + auto-heal for the ingest
 # pipeline (companion to stack-watchdog.sh, which only checks container health).

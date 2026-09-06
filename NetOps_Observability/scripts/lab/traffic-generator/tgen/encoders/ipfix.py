@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """IPFIX (RFC 7011) encoder.
 
 Emits an IPFIX message: 16-byte header + (periodic template set) + a data set

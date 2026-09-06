@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Scenario DSL validation: the shipped example must load; a curated set of
 broken scenarios must each fail with an ACTIONABLE error naming the problem."""
 import copy

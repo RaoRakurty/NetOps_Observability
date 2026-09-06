@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # deploy.sh — install the end-to-end HTTP traffic generator onto a LAB CLIENT
 # that sits BEHIND a clos leaf, and run it as a systemd service. Ships the
 # stdlib script + your filled endpoints.conf over ssh, installs to

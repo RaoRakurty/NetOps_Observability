@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """scale-ab-driver.py — unattended, resumable driver for the P3 aggregation-plane A/B.
 
 Executes the six-leg wave of `docs/scale/RUN_PLAN_P3_AB_2026-08-29.md` end to

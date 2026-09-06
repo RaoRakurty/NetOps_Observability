@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 ---
 # SEC-008.1 — MINIMAL role model (owner steer §0a: "one user per client
 # identity scoped to the index patterns it actually touches, and nothing

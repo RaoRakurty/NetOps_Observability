@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The `t-storm-2.5k` scenario profile (tracker 183, 2026-08-29).
 
 THE GAP THIS CLOSES. The ratified `t-nominal-2.5k` workload pins every device's

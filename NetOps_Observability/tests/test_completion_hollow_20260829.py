@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """2026-08-29 — a drained engine that produced NOTHING is not a completed run.
 
 THE FALSE GREEN THIS KILLS (run p2-s012-08290116, /var/tmp/scale-runs). With the

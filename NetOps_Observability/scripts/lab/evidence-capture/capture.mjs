@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // capture.mjs — light-mode, high-DPI screenshot harness for the Cloud Demo
 // evidence book (docs/design/cloud-demo-traffic-program.md §4).
 //

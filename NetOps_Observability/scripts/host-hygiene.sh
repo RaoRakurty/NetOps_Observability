@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 #
 # Host hygiene — threshold-driven self-cleanup for the NetOps stack host.
 #

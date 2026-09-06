@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 159 — the accounting gate judges DLQ reasons, not a raw count.
 
 The mini-ladder failed `accounting` every night on a non-empty DLQ. But the DLQ

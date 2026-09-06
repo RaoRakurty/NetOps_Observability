@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """F-18 — idempotent OpenSearch indexing via Kafka-coordinate document ids.
 
 THE DEFECT (run 08221846o1fo, 2026-08-22): a slow OpenSearch made a bulk

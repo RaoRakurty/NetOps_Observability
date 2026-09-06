@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """cloud_edge_traffic.py — end-to-end demo HTTP traffic generator.
 
 This is the END-USER hop for the Cloud Demo Traffic Program (docs/design/

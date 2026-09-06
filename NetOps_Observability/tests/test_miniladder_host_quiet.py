@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The preflight disk-headroom + host-quiet gate (tracker 210).
 
 WHY THIS GATE EXISTS. `storm-s10` (run `09012025x578`) started with **10.8 GiB**

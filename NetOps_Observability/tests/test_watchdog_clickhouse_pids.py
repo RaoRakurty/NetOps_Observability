@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Watchdog fault-domain separation (2026-08-15 ClickHouse/cgroup incident).
 
 The incident: the ClickHouse container's cgroup task charge reached its ceiling

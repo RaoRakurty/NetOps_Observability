@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """CloudTrail checkpoint tests — run with: python3 -m pytest test_trail_state.py
 
 Pins the regression: the checkpoint must advance over EXCLUDED chatter too

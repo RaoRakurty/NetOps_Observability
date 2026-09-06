@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Licence-compliance gate — fail CI when a dependency's licence is unreviewed.
 
 CLAUDE.md §6 puts zero trust on dependencies. That rule has always covered the

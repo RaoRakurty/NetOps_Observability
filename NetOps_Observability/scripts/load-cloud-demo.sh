@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # load-cloud-demo.sh — load (or clear) the Cloud App Observability demo inventory
 # (#81 P3F+1). Use this to populate App Observability with synthetic AWS/Azure
 # resources UNTIL real cloud connectors provide data; clear it the moment real

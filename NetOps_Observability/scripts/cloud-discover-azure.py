@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure discovery — REAL inventory + in-cloud egress topology, from the Azure APIs.
 
 Mirror of cloud-ingest/discover.py (AWS). Two outputs into CLOUD_FIXTURES_DIR:

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Scale P0 — the bus side of tenant-keyed co-partitioning.
 
 The correlation tier scales horizontally by giving instance k partition k of

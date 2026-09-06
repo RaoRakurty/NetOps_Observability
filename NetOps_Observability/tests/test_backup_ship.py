@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Backup / DR / secret-custody ship contract (wave-2 fixes, 2026-08-14).
 
 Executed-function tests (fake tpm2-tools / rsync / zstd / docker / crontab on

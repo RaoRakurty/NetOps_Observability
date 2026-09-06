@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """gNMI fidelity-status conformance (Layer 6 D/E — critical test #5).
 
 Enforces the honesty contract for gNMI telemetry claims (catalog:

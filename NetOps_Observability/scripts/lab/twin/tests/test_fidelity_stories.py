@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Fidelity-wave plan building: trap/flow lanes in stories + baseline,
 traffic_drop suppression, and BACK-COMPAT — a T1-core scenario (no new
 constructs) builds the exact same plan as before the wave."""

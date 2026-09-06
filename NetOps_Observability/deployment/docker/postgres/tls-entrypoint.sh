@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # tls-entrypoint.sh — Postgres server TLS bootstrap (SEC-011.1).
 #
 # The internal CA (api, SEC-003.3 registry) mints the postgres server SVID as

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The `enterprise_outage` story template (§5.12) — one causally ordered chain.
 
 WHAT THIS TEMPLATE IS FOR. The owner asked for traffic that simulates a real

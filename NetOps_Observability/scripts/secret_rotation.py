@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """secret_rotation.py — the policy behind `install.py --reset-env`.
 
 WHY THIS MODULE EXISTS (audit FUNC-HIGH-1)

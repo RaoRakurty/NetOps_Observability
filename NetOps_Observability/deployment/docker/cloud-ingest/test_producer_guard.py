@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """F-36: no Kafka produce failure may be silent.
 
 kafka-python's send() is fire-and-forget — the poller's 17 call sites discarded

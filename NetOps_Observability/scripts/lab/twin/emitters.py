@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Wire-payload builders + bus injector (tracker 152, design §4).
 
 Bus lanes (T1 core): syslog, probes, cloud, metrics — injected bus-direct via

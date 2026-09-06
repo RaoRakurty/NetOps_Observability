@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P3-L1 — the security FINDINGS lane (netops.security → netops-secfindings-*).
 
 The durable findings store decided in

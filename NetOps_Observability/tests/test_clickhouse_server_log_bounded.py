@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """ClickHouse's own server log is bounded — the copy that lives in the CONTAINER.
 
 WHY (2026-09-03, host at 94% disk against OpenSearch's 95% flood stage):

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Two mini-ladder runs on one stack must never inherit each other's devices.
 
 THE DEFECT THIS FILE KILLS (2026-08-29). A cron ladder (`mlx-08290317j7hy`,

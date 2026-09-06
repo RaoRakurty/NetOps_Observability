@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """refresh_provider_ranges — refresh the bundled cloud-provider CIDR snapshot.
 
 The segment classifier (path-causality RCA P0, src/correlation/segment_classifier.py +

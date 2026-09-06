@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # Secret-custody sealing sidecar entrypoint (#17).
 #
 # Boots a software TPM (swtpm, TCP TCTI on localhost, state persisted under

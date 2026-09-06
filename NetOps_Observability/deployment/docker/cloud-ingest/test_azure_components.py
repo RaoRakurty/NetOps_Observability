@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure component-inventory tests (cloud-network-overview P0).
 
 Fixture-driven ARM JSON, no live calls — pins VNet/subnet tagging, status

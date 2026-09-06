@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """snmpsim data-file generation from the scenario topology (tracker 152
 fidelity wave, design §4.3).
 

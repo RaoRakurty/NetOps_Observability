@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """rotate-tls-services.sh qualification-guard liveness check (ultra #21,
 2026-09-01).
 

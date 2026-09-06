@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Teardown ordering: the telemetry purge must run only AFTER the consumer
 drain gate (the late-insert residue race the mini-ladder fixed on 2026-08-16),
 and every step reports its failure instead of raising past the rest."""

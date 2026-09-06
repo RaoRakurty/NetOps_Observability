@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # apply-ism.sh — install an OpenSearch ISM (Index State Management) retention
 # policy that deletes the netops time-series indices once they age past the
 # retention window. Without this, daily log/flow indices grow until they fill

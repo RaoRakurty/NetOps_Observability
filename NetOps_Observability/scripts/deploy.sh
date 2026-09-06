@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # deploy.sh — self-healing deploy for the NetOps_Observability stack.
 #
 # WHY THIS EXISTS: the frontend image (Dockerfile.frontend) ships a PRE-BUILT

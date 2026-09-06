@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Partition-spread math: expected shares from computed placement + journaled
 counts vs consumed deltas, the ±20% gate, starvation, and the organic-rate
 correction (design §6)."""

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Per-exchange self-metrics for the poller (Wave 4 #13 slice 4).
 
 Pins: outcome classification from BrokerError statuses, bounded-label counter

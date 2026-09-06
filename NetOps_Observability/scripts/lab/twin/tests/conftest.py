@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Test wiring for the twin package: the flat modules live one directory up
 (the same sys.path the `twin.py` entrypoint uses)."""
 import os

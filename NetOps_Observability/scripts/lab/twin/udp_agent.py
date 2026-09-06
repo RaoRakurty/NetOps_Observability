@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """udp_agent — dumb UDP send/alias helper that runs INSIDE the twin container
 (tracker 152 fidelity wave, design §3.4 `source_ip` mode).
 

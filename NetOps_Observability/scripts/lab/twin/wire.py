@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Wire encoders/decoders for the twin's UDP lanes (tracker 152, fidelity
 wave — design §4.4/§4.5).
 

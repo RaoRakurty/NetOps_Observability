@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """GCP component-inventory tests (cloud-network-overview P0).
 
 Fixture-driven compute/DNS JSON, no live calls — pins VPC/subnet tagging,

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Step-2 assurance contracts stay pinned to the as-built truth (tracker #151).
 
 mtls-edges.yaml and telemetry-lanes.yaml are THIN OVERLAYS: they must never

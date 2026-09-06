@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """CloudTrail checkpoint core — pure, no boto3/kafka (same pattern as seam_state.py).
 
 The bug this fixes (#105 side-find, seen live 2026-07-14): the poller advanced

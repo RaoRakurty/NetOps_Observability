@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Minimal HTTP/2 (h2c) + gRPC server frame layer (tracker 152, design §4.6).
 
 The SERVER half of exactly one conversation: a gRPC client dials plaintext

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """A transient socket timeout must never cost the mini-ladder its teardown.
 
 THE DEFECT THIS FILE KILLS (live 2026-08-29, /var/tmp/scale-runs/

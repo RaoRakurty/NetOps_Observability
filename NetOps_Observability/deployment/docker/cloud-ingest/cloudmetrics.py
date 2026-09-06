@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """AWS CloudWatch → the platform's CANONICAL metric lane (Service View counters).
 
 Design decision (deliberate): continuous cloud metric VALUES do NOT go to the

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure topology-mapping tests — run with: python3 -m pytest test_azure_topology.py
 
 Exercises the pure map_topology() core against representative ARM API JSON, asserting

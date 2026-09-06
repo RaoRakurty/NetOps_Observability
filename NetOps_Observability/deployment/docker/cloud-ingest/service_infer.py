@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Built-in service mapping — infer a BusinessService for a cloud resource that
 carries NO app tag, from the RELATIONSHIPS the read-only inventory already sees.
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """GCP workload-inventory tests (Wave 5 #15) — fixture-driven, no live calls."""
 from __future__ import annotations
 

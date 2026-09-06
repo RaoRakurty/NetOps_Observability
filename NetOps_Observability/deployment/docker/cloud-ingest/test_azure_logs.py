@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Azure storage-log lane tests (#105 build order #2) — python3 -m pytest test_azure_logs.py
 
 Fixture-driven, NO live Azure calls anywhere. Covers the prompt's hard rules:

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Cloud-log family/provider tagging — the ingest half of the unified Cloud Logs
 experience.
 

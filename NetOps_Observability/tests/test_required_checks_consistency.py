@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Guard: the required-check list is ONE list.
 
 WHY THIS EXISTS. Three places have to agree about which CI jobs block a ship, and

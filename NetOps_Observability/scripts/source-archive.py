@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """source-archive.py — the Correlix-controlled corresponding-source archive.
 
 WHY THIS EXISTS

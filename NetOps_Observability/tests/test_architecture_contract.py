@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Architecture contract tests — fail CI if the finalized wiring is broken.
 
 These are STATIC checks against the real config/source files (no running stack),

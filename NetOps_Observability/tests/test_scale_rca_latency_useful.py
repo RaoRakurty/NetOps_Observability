@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tracker 205 STEP 1 — the "Useful RCA" clause evaluator and its four timings.
 
 `scripts/scale-rca-latency.py --ground-truth <run-dir>` turns a run's OWN

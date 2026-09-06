@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """ch-cold-restore.sh archive-grouping date filters (ultra #26, 2026-09-01).
 
 The defect this pins: an old-vintage `--month` restore of corr_objects

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The Correlix-controlled corresponding-source archive (tracker 262).
 
 WHAT IS ACTUALLY BEING PROVEN

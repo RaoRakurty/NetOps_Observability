@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """UDP sender with batched syscalls (sendmmsg) + token-bucket rate control.
 
 The flow-telemetry encoders produce one datagram per batch of flows; this sends

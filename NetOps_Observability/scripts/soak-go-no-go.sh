@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # soak-go-no-go.sh — the SEC-007.2 enforce-flip gate (tracker #151).
 #
 # Reviews the Kafka authorizer soak window and answers GO or NO-GO for the

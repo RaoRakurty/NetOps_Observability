@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Minimal protobuf + gNMI message codec (gnmi_proto).
 
 The wire numbers are asserted against BYTES, not against our own encoder alone,

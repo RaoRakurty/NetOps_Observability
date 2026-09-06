@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """gen-syslog-admission.py — compile the correlation engine's syslog admission
 screen into VRL the aggregator can run, so the bus can carry a PRE-SCREENED
 copy of the syslog lane (topic `netops.syslog.control`).

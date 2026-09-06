@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """GCP log-based parity lanes (#105) — pure rollups over Cloud Logging entries.
 
 Five lanes, one discipline: gcp.list_log_entries (bounded, checkpointed,

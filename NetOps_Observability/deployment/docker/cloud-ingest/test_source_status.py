@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Wave 2 #4 — structured permission_denied/misconfigured emission.
 
 Pins the contracts that turn a poller log line into a renderable product state:
