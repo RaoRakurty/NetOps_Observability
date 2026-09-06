@@ -121,7 +121,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mode := topologyModeOrDefault(strings.TrimSpace(r.URL.Query().Get("mode")))
-	tenant, _ := principalTenant(claims) // "" for a platform-owner all-tenants view
+	tenant, cross := principalTenant(claims) // "" for a platform-owner all-tenants view
 
 	// ── inventory + deduped, evidence-bearing links (same normalizer as /links) ──
 	devs := visibleDevices(s.discovery.Devices(), claims)
@@ -178,6 +178,15 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		// Item 121: devices inside an active window render the calm
 		// maintenance state (alerts still win inside the projection).
 		MaintenanceDevices: s.maintenanceCoveredDevices(devs),
+	}
+
+	// Path Trace crosses the SEAM (#130a). The cloud slice's nodes become
+	// vertices in the SPF graph, joined by their route edges, the lateral seam
+	// links and the DISCOVERED on-prem↔cloud adjacency — behind the cloud
+	// slice's own default-closed gate, which is not the fabric's. Only this mode
+	// carries them, so no other view's payload changes.
+	if mode == topology.ModePathTrace {
+		in.CloudNodes, in.CloudEdges, in.CloudGroups = s.cloudPathGraph(r, tenant, cross, devs)
 	}
 
 	view := topology.Project(in)

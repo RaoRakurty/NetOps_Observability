@@ -8,11 +8,13 @@ package backend
 // as_tenant override nor a narrowed owner view can leak another tenant's network.
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"netops/backend/cloud"
 	"netops/backend/topology"
 )
 
@@ -20,13 +22,31 @@ func writeTopologyFixture(t *testing.T, dir string) {
 	t.Helper()
 	fixture := map[string]any{
 		"provider": "aws", "account_id": "123456789012", "region": "us-west-2",
-		"vpcs":    []map[string]any{{"id": "vpc-1", "cidr": "10.60.0.0/16", "name": "prod"}},
-		"subnets": []map[string]any{{"id": "subnet-app", "cidr": "10.60.10.0/24", "name": "app-a"}},
-		"nodes":   []map[string]any{{"id": "igw-1", "kind": "internet_gateway", "name": "prod-igw"}},
-		"edges": []map[string]any{{
-			"from_subnet": "subnet-app", "to": "igw-1", "to_kind": "internet_gateway",
-			"destination": "0.0.0.0/0", "state": "active", "route_table_name": "rt-app",
-		}},
+		"vpcs": []map[string]any{
+			{"id": "vpc-1", "cidr": "10.60.0.0/16", "name": "prod"},
+			{"id": "vpc-2", "cidr": "10.61.0.0/16", "name": "shared"},
+		},
+		"subnets": []map[string]any{
+			{"id": "subnet-app", "cidr": "10.60.10.0/24", "name": "app-a"},
+			{"id": "subnet-shared", "cidr": "10.61.10.0/24", "name": "shared-a"},
+		},
+		"nodes": []map[string]any{{"id": "igw-1", "kind": "internet_gateway", "name": "prod-igw"}},
+		"edges": []map[string]any{
+			{
+				"from_subnet": "subnet-app", "to": "igw-1", "to_kind": "internet_gateway",
+				"destination": "0.0.0.0/0", "state": "active", "route_table_name": "rt-app",
+			},
+			// The two TGW attachments are route targets, so both are NODES on the
+			// projected view — the precondition for a lateral seam edge (#131c).
+			{
+				"from_subnet": "subnet-app", "to": "tgw-attach-1", "to_kind": "transit_gateway",
+				"destination": "10.61.0.0/16", "state": "active", "route_table_name": "rt-app",
+			},
+			{
+				"from_subnet": "subnet-shared", "to": "tgw-attach-2", "to_kind": "transit_gateway",
+				"destination": "10.60.0.0/16", "state": "active", "route_table_name": "rt-shared",
+			},
+		},
 	}
 	b, err := json.Marshal(fixture)
 	if err != nil {
@@ -38,7 +58,8 @@ func writeTopologyFixture(t *testing.T, dir string) {
 }
 
 func TestCloudTopologyIsolation(t *testing.T) {
-	srv, _ := newTestServerState(t)
+	srv, s := newTestServerState(t)
+	s.cloud = newCloudStore() // the shared harness does not wire the cloud store
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	onboard := func(org, tenant, slug string) onboardResponse {
@@ -124,5 +145,57 @@ func TestCloudTopologyIsolation(t *testing.T) {
 	//    only ever narrows — it must not reveal the owner tenant's fixtures).
 	if got := get(admin, "/api/topology/cloud?as_tenant="+other.Tenant.ID); len(got.Nodes) != 0 {
 		t.Fatalf("narrowed owner leak: admin?as_tenant=other saw %d nodes", len(got.Nodes))
+	}
+
+	// ── 6) LATERAL SEAM LINKS (#131c) are tenant-scoped too ──────────────────
+	//
+	// Both tenants' inventories declare a TGW attachment joining THE SAME VPC ids
+	// — which is exactly the shape a tenant-blind grouping would merge — and the
+	// projection must still never draw a line between them.
+	attach := func(id string) cloud.CloudResource {
+		return cloud.CloudResource{
+			Provider: cloud.AWS, Region: "us-west-2",
+			ResourceID: id, ResourceType: "ec2:tgw-attachment", ResourceName: id,
+			Status:         cloud.StatusHealthy,
+			AttachedVpcIDs: []string{"vpc-1", "vpc-2"},
+		}
+	}
+	ctx := context.Background()
+	if err := s.cloud.ReplaceInventory(ctx, owner.Tenant.ID, []cloud.CloudResource{attach("tgw-attach-1")}, nil); err != nil {
+		t.Fatalf("seed owner inventory: %v", err)
+	}
+	if err := s.cloud.ReplaceInventory(ctx, other.Tenant.ID, []cloud.CloudResource{attach("tgw-attach-2")}, nil); err != nil {
+		t.Fatalf("seed other inventory: %v", err)
+	}
+	seamEdgeIDs := func(v topology.View) []string {
+		out := []string{}
+		for _, e := range v.Edges {
+			if e.Tags["seam_group_id"] != "" {
+				out = append(out, e.ID)
+			}
+		}
+		return out
+	}
+	// The owner holds only ONE of the two attachments, so there is no pair and
+	// no seam edge — a link is never drawn from one end alone.
+	if got := seamEdgeIDs(get(alice, "/api/topology/cloud")); len(got) != 0 {
+		t.Fatalf("drew a seam from a single endpoint: %v", got)
+	}
+	// The CROSS-TENANT platform owner reads both inventories at once. The two
+	// attachments share an attachment set; joining them would wire Acme's VPC to
+	// Globex's through a line that looks entirely plausible.
+	if got := seamEdgeIDs(get(admin, "/api/topology/cloud")); len(got) != 0 {
+		t.Fatalf("CROSS-TENANT SEAM LEAK: platform view joined two tenants' attachments: %v", got)
+	}
+	// Both attachments in ONE tenant: exactly one seam edge, and only for that tenant.
+	if err := s.cloud.ReplaceInventory(ctx, owner.Tenant.ID,
+		[]cloud.CloudResource{attach("tgw-attach-1"), attach("tgw-attach-2")}, nil); err != nil {
+		t.Fatalf("reseed owner inventory: %v", err)
+	}
+	if got := seamEdgeIDs(get(alice, "/api/topology/cloud")); len(got) != 1 {
+		t.Fatalf("owner tenant should see exactly one seam edge, got %v", got)
+	}
+	if got := len(get(bob, "/api/topology/cloud").Edges); got != 0 {
+		t.Fatalf("cross-tenant leak: bob saw %d edges", got)
 	}
 }

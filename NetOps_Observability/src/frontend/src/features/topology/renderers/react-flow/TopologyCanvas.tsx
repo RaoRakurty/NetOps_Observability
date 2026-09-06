@@ -27,7 +27,7 @@ import {
 import type { Padding, PaddingWithUnit } from "@xyflow/system";
 import "@xyflow/react/dist/style.css";
 
-import type { OverlayKind, TopologySelection, WorkflowMode, TopologyView } from "../../api/topologyTypes";
+import type { OverlayKind, PathState, TopologySelection, WorkflowMode, TopologyView } from "../../api/topologyTypes";
 import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, fetchCloudTopology, type TopologyCoverage, type TopologyGraphStatus, type TopologyViewStatus, type CloudTopologyStatus } from "../../api/topologyApi";
 import { api, type CorrObject } from "../../../../services/api";
 import { layoutView, viewSignature } from "../../layout/elkLayout";
@@ -91,7 +91,7 @@ import {
 import { renderedNodeCount, allGroupIds, canAggregateUnderCeiling, expansionWouldExceed } from "../../utils/topologyScale";
 import { focusSummary, focusView } from "../../utils/topologyFocus";
 import { excludeInternalNodes } from "../../utils/topologyFilters";
-import { filterViewByDomain, isCloudNode, DOMAINS, type NetworkDomain } from "../../utils/topologyDomains";
+import { filterViewByDomain, DOMAINS, type NetworkDomain } from "../../utils/topologyDomains";
 import { mergeCloudView } from "../../utils/cloudMerge";
 import { withCarrierOverlay } from "../../utils/carrierOverlay";
 import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
@@ -617,17 +617,16 @@ function CanvasInner({
   // Endpoint options for the Path Trace picker: the nodes the path engine can
   // actually RESOLVE, by label, sorted.
   //
-  // Cloud entities are on this canvas now (#131) but are deliberately NOT offered
-  // here yet (#130): `/api/topology/view?mode=path_trace` resolves a path by
-  // Dijkstra over the discovered DEVICE fabric, and a cloud subnet's id is not a
-  // vertex in that graph — so every cloud endpoint would resolve to "no path" and
-  // the picker would be advertising a trace the backend cannot run. Offering a
-  // control that always fails is the same defect as an empty tab promising a
-  // network. They become selectable when the projection can cross the seam.
+  // Cloud entities are offered here (#130a). They used to be filtered out because
+  // the backend resolved a path by Dijkstra over the DEVICE fabric alone, where a
+  // cloud subnet's id was not a vertex — offering one would have advertised a
+  // trace the backend could not run. The projection now takes the cloud slice as
+  // vertices and crosses the DISCOVERED seam, and where no seam has been
+  // discovered it says exactly that (`path_state`), which is an honest answer
+  // rather than a hidden control.
   const endpointOptions = useMemo(
     () =>
       (view?.nodes ?? [])
-        .filter((n) => !isCloudNode(n))
         .map((n) => ({ id: n.id, label: n.label || n.id }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     [view],
@@ -1103,6 +1102,7 @@ function CanvasInner({
           <PathTraceNoPath
             srcLabel={labelFor(pathSrc)}
             dstLabel={labelFor(pathDst)}
+            pathState={view.path_state}
             options={endpointOptions}
             src={pathSrc}
             dst={pathDst}
@@ -1423,9 +1423,17 @@ function PathTraceResolving({ srcLabel, dstLabel }: { srcLabel: string; dstLabel
 // Honest "no path" state: the trace resolved but no route exists between the endpoints
 // over the discovered LLDP/IGP adjacency. We say so explicitly (and let the operator
 // re-aim) instead of silently dropping back to the full graph, which read as Explore.
+//
+// TWO REASONS, TOLD APART (#130b). "No route over the discovered topology" and "no
+// seam link has been discovered between on-prem and this cloud" are different
+// findings with different next actions, and the backend distinguishes them
+// (`path_state`). The alternative — drawing the hop between the WAN edge and the
+// cloud gateway that obviously must exist in real life — is the invented adjacency
+// the frozen path contract forbids.
 function PathTraceNoPath({
   srcLabel,
   dstLabel,
+  pathState,
   options,
   src,
   dst,
@@ -1434,12 +1442,16 @@ function PathTraceNoPath({
 }: {
   srcLabel: string;
   dstLabel: string;
+  pathState?: PathState;
   options: { id: string; label: string }[];
   src: string;
   dst: string;
   onSrc: (v: string) => void;
   onDst: (v: string) => void;
 }) {
+  const noSeam = pathState === "no_seam_edge";
+  const title = noSeam ? "No seam link discovered" : "No path found";
+  const topic = noSeam ? "path.no-seam" : "path.no-path";
   return (
     <div className="topo-placeholder">
       <div className="topo-pathprompt-card">
@@ -1451,10 +1463,18 @@ function PathTraceNoPath({
             <path d="m9.6 9.6 4.8 4.8M14.4 9.6l-4.8 4.8" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" />
           </svg>
         </div>
-        <div className="topo-pathprompt-title">No path found</div>
+        <div className="topo-pathprompt-title">{title}</div>
         <p className="topo-pathprompt-body">
-          No route between <strong>{srcLabel}</strong> and <strong>{dstLabel}</strong> over the discovered topology.
-          <AskIris topic="path.no-path" label="No path found" />
+          {noSeam ? (
+            <>
+              Nothing discovered joins <strong>{srcLabel}</strong> to <strong>{dstLabel}</strong>.
+            </>
+          ) : (
+            <>
+              No route between <strong>{srcLabel}</strong> and <strong>{dstLabel}</strong> over the discovered topology.
+            </>
+          )}
+          <AskIris topic={topic} label={title} />
         </p>
         <div className="topo-pathprompt-row">
           <select value={src} onChange={(e) => onSrc(e.target.value)} aria-label="Path source device">

@@ -74,6 +74,13 @@ const (
 	PathComputed = "computed"
 )
 
+// Path states (View.PathState) — the HONEST reasons a path_trace resolved no
+// path. Distinct from "no route found": a missing seam is a gap in what has been
+// DISCOVERED, and saying so is what stops the projection inventing the hop.
+const (
+	PathStateNoSeam = "no_seam_edge"
+)
+
 // Edge link status (contract EdgeStatus). "" → "unknown" at the boundary.
 const (
 	StatusUp          = "up"
@@ -183,6 +190,11 @@ type Edge struct {
 	LastSeen       string        `json:"last_seen,omitempty"`
 	ChangeState    string        `json:"change_state,omitempty"`
 	Evidence       []EvidenceRef `json:"evidence"`
+	// Tags are DERIVED enrichment on an edge, mirroring Node.Tags on the TS side
+	// (TopologyEdge.tags). Today it carries `seam_group_id` on a lateral cloud
+	// seam link (#131c), so the canvas and the cloud rollup name the same seam.
+	// Omitted (nil) for every other producer, so no existing view's JSON changes.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // ── output: group ────────────────────────────────────────────────────────────
@@ -231,6 +243,13 @@ type View struct {
 	// (IGP-weighted SPF inference). HONESTY: the UI must not call a computed path
 	// "traced". Empty when there is no path.
 	PathSource string `json:"path_source,omitempty"`
+	// PathState — WHY there is no path, when the reason is more specific than
+	// "no route over the discovered topology". Today the only value is
+	// PathStateNoSeam (#130b): the two endpoints sit on opposite sides of the
+	// on-prem↔cloud seam and NO seam adjacency has been discovered to cross.
+	// Empty whenever a path resolved, or when the plain no-route case applies —
+	// the UI must never turn a missing fact into an invented hop.
+	PathState string `json:"path_state,omitempty"`
 }
 
 // ── input: the DI'd telemetry bundle ─────────────────────────────────────────
@@ -321,4 +340,20 @@ type Input struct {
 	// ok/unknown; an active critical/warning alert still wins (planned work is
 	// calm, never a blindfold).
 	MaintenanceDevices map[string]bool
+	// Cloud* — the ALREADY-PROJECTED cloud half of the graph (#130a), handed in
+	// by the caller after it has passed the cloud slice's own tenancy gate.
+	//
+	// They arrive as contract objects rather than as raw facts because the cloud
+	// projection (cloud.BuildTopologyViewWithInventory) is the one place that
+	// knows how a VPC, a subnet and a gateway are drawn; re-deriving that here
+	// would be a second, divergent answer to the same question. This package
+	// stays pure — it does no IO and imports nothing new — and the on-prem half
+	// WINS every id collision, exactly as the canvas merge does client-side.
+	//
+	// Supplied for path_trace, where the cloud nodes must be VERTICES for
+	// Dijkstra to cross the seam. Empty for every other mode, so no other view's
+	// payload changes.
+	CloudNodes  []Node
+	CloudEdges  []Edge
+	CloudGroups []Group
 }

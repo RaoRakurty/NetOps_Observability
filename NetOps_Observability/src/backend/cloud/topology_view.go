@@ -464,3 +464,43 @@ func healthFromCloudStatus(s string) string {
 		return ""
 	}
 }
+
+// StatusLookupFor builds the live-state lookup for a resource inventory.
+//
+// PURE, and in this package on purpose: the projection, the seam links and the
+// path graph all need the same join, and three copies of "index by resource id
+// AND by any interface id" would eventually disagree. A nil/empty inventory
+// yields a nil lookup, which renders every node as NOT MEASURED — the honest
+// rendering of "we could not ask", never a green map from no data at all.
+func StatusLookupFor(res []CloudResource) StatusLookup {
+	if len(res) == 0 {
+		return nil
+	}
+	byID := make(map[string]NodeStatus, len(res))
+	for _, c := range res {
+		st := NodeStatus{Status: c.Status, Reason: c.StatusReason}
+		if c.KeyMetricValue != nil && c.KeyMetricName != "" {
+			st.Metric = fmt.Sprintf("%s %g%s", c.KeyMetricName, *c.KeyMetricValue, c.KeyMetricUnit)
+		}
+		// Index by resource id AND by any interface id, because the egress
+		// topology names NVAs by their instance id while the inventory may only
+		// carry the ENI that address belongs to.
+		if c.ResourceID != "" {
+			byID[c.ResourceID] = st
+		}
+		for _, nic := range c.NetworkInterfaceIDs {
+			if nic != "" {
+				if _, taken := byID[nic]; !taken {
+					byID[nic] = st
+				}
+			}
+		}
+	}
+	if len(byID) == 0 {
+		return nil
+	}
+	return func(id string) (NodeStatus, bool) {
+		st, ok := byID[id]
+		return st, ok
+	}
+}

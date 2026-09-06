@@ -322,7 +322,7 @@ describe("TopologyCanvas — cloud on the one canvas", () => {
     expect(screen.getAllByText("Subnet · app-a").length).toBeGreaterThan(0);
   });
 
-  it("does NOT offer cloud endpoints to the path tracer — the engine cannot resolve them yet (#130)", async () => {
+  it("OFFERS cloud endpoints to the path tracer — the projection crosses the seam now (#130)", async () => {
     const api = await topologyApi();
     (api.fetchTopologyView as ReturnType<typeof vi.fn>).mockResolvedValue({ view: twoDeviceView(), status: "live" });
     (api.fetchCloudTopology as ReturnType<typeof vi.fn>).mockResolvedValue({ view: cloudNetworkView(), live: true, status: "live" });
@@ -332,12 +332,36 @@ describe("TopologyCanvas — cloud on the one canvas", () => {
     const src = (await screen.findByLabelText("Path source device")) as HTMLSelectElement;
     const options = [...src.options].map((o) => o.value);
 
-    // A control that always fails is the same defect as an empty tab promising a
-    // network: cloud ids are not vertices in the device-fabric graph the trace
-    // walks, so they stay out of the picker until the projection crosses the seam.
+    // Cloud ids ARE vertices in the graph the trace walks, so hiding them would
+    // now be withholding a control that works. Where no seam has been discovered
+    // the trace still refuses honestly (`path_state`) rather than inventing a hop
+    // — an honest refusal is a better answer than a missing option.
     expect(options).toContain("core-1");
-    expect(options).not.toContain("subnet-app");
-    expect(options).not.toContain("igw-1");
+    expect(options).toContain("subnet-app");
+    expect(options).toContain("igw-1");
+  });
+
+  it("says NO SEAM LINK when the two ends have no discovered adjacency (#130b)", async () => {
+    const api = await topologyApi();
+    (api.fetchTopologyView as ReturnType<typeof vi.fn>).mockResolvedValue({
+      view: { ...twoDeviceView(), mode: "path_trace", path: [], path_state: "no_seam_edge" },
+      status: "live",
+    });
+    (api.fetchCloudTopology as ReturnType<typeof vi.fn>).mockResolvedValue({ view: cloudNetworkView(), live: true, status: "live" });
+    atRoute("?mode=path_trace");
+
+    render(<TopologyCanvas />);
+    // Pick an on-prem source and a CLOUD destination — the pair the picker now
+    // allows and the backend answers for.
+    fireEvent.change(await screen.findByLabelText("Path source device"), { target: { value: "core-1" } });
+    // The picker re-renders through a load between the two choices.
+    fireEvent.change(await screen.findByLabelText("Path destination device"), { target: { value: "subnet-app" } });
+
+    // A DISTINCT state, not the generic "no route": the operator's next action is
+    // to fix discovery, not to re-aim the trace.
+    expect(await screen.findByText("No seam link discovered")).toBeInTheDocument();
+    expect(screen.queryByText("No path found")).toBeNull();
+    expect(screen.getByRole("button", { name: "Ask Iris about No seam link discovered" })).toBeInTheDocument();
   });
 
   it("an empty cloud read says nothing is discovered — never a blank Cloud canvas", async () => {

@@ -13,8 +13,19 @@ const ev = [{ source: "lldp" as const, confidence: 0.9 }];
 function node(id: string, over: Partial<TopologyNode> = {}): TopologyNode {
   return { id, label: id, kind: "switch", health: "ok", confidence: 1, evidence: ev, ...over } as TopologyNode;
 }
-function edge(id: string, source: string, target: string): TopologyEdge {
-  return { id, source, target, relationship: "connected_to", confidence: 1, evidence: ev } as TopologyEdge;
+function edge(id: string, source: string, target: string, over: Partial<TopologyEdge> = {}): TopologyEdge {
+  return { id, source, target, relationship: "connected_to", confidence: 1, evidence: ev, ...over } as TopologyEdge;
+}
+/** A lateral seam link as cloud/seam_links.go emits it (#131c). */
+function seamEdge(id: string, source: string, target: string, over: Partial<TopologyEdge> = {}): TopologyEdge {
+  return edge(id, source, target, {
+    relationship: "connected_to",
+    protocol: "cloud_api",
+    status: "up",
+    confidence: 0.9,
+    tags: { seam_group_id: "aws|vpc=vpc-1,vpc=vpc-2" },
+    ...over,
+  });
 }
 function group(id: string, children: string[], over: Partial<TopologyGroup> = {}): TopologyGroup {
   return { id, label: id, group_type: "site", children, health: "unknown", collapsed: false, ...over } as TopologyGroup;
@@ -100,6 +111,65 @@ describe("mergeCloudView", () => {
     const vpc = out.groups.find((g) => g.id === "vpc-1");
     expect(vpc).toBeTruthy();
     expect(vpc!.parent_id).toBeUndefined();
+  });
+
+  // ── lateral seam links (#131c) ────────────────────────────────────────────
+  //
+  // The seam link is the answer to "is the problem on my side or theirs", so
+  // what matters is that it arrives on the SAME canvas as everything else and
+  // still reads as an OBSERVED claim once it is there.
+
+  it("carries a lateral seam link between two cloud gateways onto the canvas", () => {
+    const withSeam = view({
+      ...cloud,
+      nodes: [...cloud.nodes, node("tgw-a", { kind: "cloud" }), node("tgw-b", { kind: "cloud" })],
+      edges: [...cloud.edges, seamEdge("seam-tgw_a-tgw_b", "tgw-a", "tgw-b")],
+    });
+    const out = mergeCloudView(fabric, withSeam);
+    const seam = out.edges.find((e) => e.id === "seam-tgw_a-tgw_b");
+    expect(seam).toBeTruthy();
+    expect(seam!.tags?.seam_group_id).toBe("aws|vpc=vpc-1,vpc=vpc-2");
+  });
+
+  it("keeps an ON-PREM↔cloud seam link — both ends are on this canvas now (#130b)", () => {
+    const withSeam = view({
+      ...cloud,
+      nodes: [...cloud.nodes, node("vpn-1", { kind: "cloud" })],
+      // The target is an on-prem DEVICE from the fabric half; before the merge it
+      // is not in the cloud view at all, which is the whole reason cloud used to
+      // be a separate page.
+      edges: [...cloud.edges, seamEdge("seam-vpn_1-edge_9", "vpn-1", "edge-9")],
+    });
+    const out = mergeCloudView(fabric, withSeam);
+    expect(out.edges.map((e) => e.id)).toContain("seam-vpn_1-edge_9");
+  });
+
+  it("a seam link is OBSERVED, never the inferred class a route edge carries", () => {
+    const withSeam = view({
+      ...cloud,
+      nodes: [...cloud.nodes, node("tgw-a", { kind: "cloud" }), node("tgw-b", { kind: "cloud" })],
+      edges: [
+        edge("route-2", "subnet-app", "tgw-a", { relationship: "routed_adjacency", confidence: 0.7 }),
+        seamEdge("seam-tgw_a-tgw_b", "tgw-a", "tgw-b"),
+      ],
+    });
+    const out = mergeCloudView(fabric, withSeam);
+    const seam = out.edges.find((e) => e.id === "seam-tgw_a-tgw_b")!;
+    const route = out.edges.find((e) => e.id === "route-2")!;
+    // Different relationship classes: `bundleParallelEdges` keys its bundle on
+    // the class, so an observed seam can never be collapsed into a route bundle.
+    expect(seam.relationship).toBe("connected_to");
+    expect(route.relationship).toBe("routed_adjacency");
+    expect(seam.confidence).toBeGreaterThan(route.confidence);
+  });
+
+  it("drops a seam link whose far end was never discovered — no link to nowhere", () => {
+    const dangling = view({
+      ...cloud,
+      edges: [...cloud.edges, seamEdge("seam-tgw_a-tgw_ghost", "subnet-app", "tgw-ghost")],
+    });
+    const out = mergeCloudView(fabric, dangling);
+    expect(out.edges.map((e) => e.id)).not.toContain("seam-tgw_a-tgw_ghost");
   });
 
   it("does not mutate either input", () => {

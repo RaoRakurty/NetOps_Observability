@@ -79,6 +79,16 @@ export type RcaOverlayState =
 /** Edge link status (skill example uses "up"). Mapped to Health for colour. */
 export type EdgeStatus = "up" | "down" | "degraded" | "warning" | "maintenance" | "unknown";
 
+/**
+ * Why a path_trace resolved nothing, when the reason is more specific than "no
+ * route" (#130b). `no_seam_edge` = the two endpoints are on opposite sides of
+ * the on-prem↔cloud seam and none has been discovered to cross. Distinct on
+ * purpose: it is a gap in what we have DISCOVERED, and the alternative — drawing
+ * the hop everyone knows must exist — is the invented adjacency the frozen path
+ * contract forbids.
+ */
+export type PathState = "no_seam_edge";
+
 /** Edge relationship (skill example: "connected_to"). */
 export type EdgeRelationship =
   | "connected_to" // L2/physical adjacency (LLDP/CDP)
@@ -186,6 +196,10 @@ export type TopologyEdge = {
   /** RCA Layer-3 overlay state (only on RCA path views) — drives the distinct
    *  suspected/confirmed/insufficient edge treatment, overriding the health colour. */
   rca_status?: RcaOverlayState;
+  /** DERIVED enrichment, mirroring TopologyNode.tags. A lateral cloud seam link
+   *  carries `seam_group_id` (#131c) so the canvas and the cloud rollup name the
+   *  same seam. Absent for every other producer. */
+  tags?: Record<string, string>;
 };
 
 // ── group ──────────────────────────────────────────────────────────────────────
@@ -240,6 +254,14 @@ export type TopologyView = {
    * an observed forwarding path). The UI MUST NOT call a "computed" path "traced".
    */
   path_source?: "measured" | "computed";
+  /**
+   * WHY there is no path, when the reason is more specific than "no route over
+   * the discovered topology". "no_seam_edge" (#130b): the endpoints sit on
+   * opposite sides of the on-prem↔cloud seam and no seam adjacency has been
+   * discovered to cross — a gap in DISCOVERY, not a claim that traffic cannot
+   * flow. Absent whenever a path resolved.
+   */
+  path_state?: PathState;
   renderer_hints?: { preferred: "react_flow" | "sigma" | "deck_geo"; max_detail_level: number };
 };
 

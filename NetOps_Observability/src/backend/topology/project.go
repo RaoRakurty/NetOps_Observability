@@ -182,11 +182,23 @@ func Project(in Input) View {
 	// ── groups by site (only when sites are present) ──
 	groups := buildGroups(nodes)
 
+	// ── the CLOUD half of the graph (#130a) ──
+	// Already-projected objects from the cloud slice, merged under the same rule
+	// the canvas uses: the on-prem inventory wins every id collision, and an edge
+	// whose endpoints did not survive is dropped rather than drawn to nowhere.
+	// The nodes are added to `graph` as VERTICES so Dijkstra can cross the seam,
+	// and to `managed` so a measured hop through one is not sanitized away.
+	cloudIDs := mergeCloud(in, &nodes, &edges, &groups, graph, managed)
+
 	// ── path (path_trace): prefer a measured path; else compute IGP-weighted SPF ──
 	var path []string
 	var pathSource string
+	var pathState string
 	if mode == ModePathTrace {
 		path, pathSource = resolvePath(in, graph, managed, unresolvedSeen)
+		if len(path) == 0 {
+			pathState = noPathState(in, edges, cloudIDs)
+		}
 	}
 
 	return View{
@@ -201,6 +213,7 @@ func Project(in Input) View {
 		Overlays:    overlays(mode, edges),
 		Path:        path,
 		PathSource:  pathSource,
+		PathState:   pathState,
 	}
 }
 

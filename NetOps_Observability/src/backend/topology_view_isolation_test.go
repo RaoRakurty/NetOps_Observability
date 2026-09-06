@@ -144,4 +144,45 @@ func TestTopologyViewHTTPIsolation(t *testing.T) {
 	if got["acme-core"] || got["acme-edge"] {
 		t.Fatalf("narrowed owner leak: admin?as_tenant=globex saw acme devices (%v)", got)
 	}
+
+	// ── 6) A CROSS-TENANT CLOUD NODE IS NOT AN ENDPOINT (#130) ───────────────
+	//
+	// Path Trace now reaches into the cloud slice, which carries its OWN
+	// default-closed gate (CLOUD_FIXTURE_TENANT) — a different tenancy rule from
+	// the device fabric's. Naming a cloud node the caller may not read must
+	// neither resolve a path nor return the node: the id stays a non-oracle.
+	dir := t.TempDir()
+	writeTopologyFixture(t, dir)
+	t.Setenv("CLOUD_FIXTURES_DIR", dir)
+	t.Setenv("CLOUD_FIXTURE_TENANT", acme.Tenant.ID)
+
+	// Acme owns the fixtures: the cloud subnet IS on its canvas and IS offerable
+	// as an endpoint — and because no seam adjacency has been discovered, the
+	// answer is the honest NO-SEAM state, never a fabricated hop.
+	acmeTrace := get(alice, "/api/topology/view?mode=path_trace&src=acme-core&dst=subnet-app")
+	if !nodeIDs(acmeTrace)["subnet-app"] {
+		t.Fatalf("the owner tenant must see its own cloud endpoint: %v", nodeIDs(acmeTrace))
+	}
+	if len(acmeTrace.Path) != 0 {
+		t.Fatalf("no seam is discovered — no path may be invented, got %v", acmeTrace.Path)
+	}
+	if acmeTrace.PathState != topology.PathStateNoSeam {
+		t.Fatalf("path_state = %q, want %q", acmeTrace.PathState, topology.PathStateNoSeam)
+	}
+
+	// Globex may not read the fixtures at all: no node, no path, and no state —
+	// even the failure reason must not confirm that the id exists.
+	globexTrace := get(bob, "/api/topology/view?mode=path_trace&src=globex-core&dst=subnet-app")
+	if nodeIDs(globexTrace)["subnet-app"] {
+		t.Fatalf("CROSS-TENANT LEAK: globex saw acme's cloud node")
+	}
+	if len(globexTrace.Path) != 0 || globexTrace.PathState != "" {
+		t.Fatalf("cross-tenant cloud endpoint leaked a verdict: path=%v state=%q",
+			globexTrace.Path, globexTrace.PathState)
+	}
+	// ...and `as_tenant` into the owner org does not widen the cloud gate either.
+	widen := get(bob, "/api/topology/view?mode=path_trace&src=globex-core&dst=subnet-app&as_tenant="+acme.Tenant.ID)
+	if nodeIDs(widen)["subnet-app"] || len(widen.Path) != 0 {
+		t.Fatalf("as_tenant leak: bob?as_tenant=acme reached the cloud slice")
+	}
 }
