@@ -24,8 +24,8 @@ real announcement.
 ## Steps
 
 1. Go to **Analytics → Metric Dashboards → BGP Operations**.
-2. Read the **RPKI origin validation** section in the right-hand column. With a
-   prefix selected it validates that prefix. With none selected it validates the
+2. Read the **Prefix origin problems** section in the right-hand column — the
+   RPKI verdict. With a prefix selected it validates that prefix. With none selected it validates the
    prefixes on this tenant's watchlist and shows the chip **from your
    watchlist**.
 3. Read the summary chips first. They count the verdicts, worst first.

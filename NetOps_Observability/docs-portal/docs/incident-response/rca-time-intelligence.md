@@ -91,8 +91,8 @@ required", because Correlix finished the RCA and the gap is not a NOC failure.
 
 ## Read the trend
 
-**Analytics → Recovery Scorecard** carries **Detection and repair trend — MTTD
-and MTTR over time (median)**. It charts the persisted phase-metric snapshots
+**Analytics → Recovery Scorecard** carries **Detection and repair trend**, which
+plots MTTD and MTTR over time. It charts the persisted phase-metric snapshots
 rather than a live scan, so a chart point and the stat card above it are the same
 number computed the same way.
 

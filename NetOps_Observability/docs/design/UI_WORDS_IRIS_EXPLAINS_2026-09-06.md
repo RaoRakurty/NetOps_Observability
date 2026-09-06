@@ -265,3 +265,42 @@ fabricated MTTR.
 `wordBudget.allow.json`. It was being rewritten in a concurrent change while
 sweep 5 ran, so sweeping it here would have clobbered that work. Everything
 else on the debt list is gone.
+
+## Sweep 6 — what is left: nothing
+
+`pages/iris/Knowledge.tsx` was swept on 2026-09-06, after the TAC learning work
+that had been rewriting it landed. The coverage catalogue, the unplanned
+platforms, the command templates, the learning backlog and the whole candidate
+review/export surface keep every count, every control and every honest absence;
+what left was the teaching around them. The header no longer opens by defining a
+vendor dialect, an issue class and a command intent — it states the version pins
+and the counts and offers `tac.coverage-catalogue`. "Platforms with no authored
+plan" is "Platforms with no plan" with `tac.unplanned-platforms` behind the
+`(i)`; the paragraph contrasting read-only Correlix defaults with a tenant's own
+saved sets is `tac.command-templates`. The intent table's per-row cells ("this
+dialect binds no command for it", "not bound") are `.fact-line` — they were
+never notes — and its header stopped SHOUTING; `.tac-learn-meta` and the device
+output excerpt went 11.5 px → 12.5 px. Operator-readable prose: 282 → 196 words
+(-30%). `wordBudget.allow.json` is `{}`.
+
+## Done (2026-09-06)
+
+The programme is finished. Six sweeps took **118 files** across the whole
+console — Command Center and the dashboards, Operations, Alerts, Security and
+Data Protection, Administration, Licence, Registries, Cloud ingest, the
+Platform tools, the topology canvas, WAN, Wireless, device detail, BGP, the RCA
+workspace, Reports, the reliability scorecard, troubleshooting, TAC, the tabs,
+telemetry coverage, the app-observability pages and Iris Knowledge — from
+**34,812 to 29,601 words** of operator-readable prose (**-15 %**): 4177 → 3444
+(sweep 1), 5369 → 4124 (2), 8196 → 6808 (3), 2119 → 1621 (4), 14,669 → 13,408
+(5) and 282 → 196 (6). The debt list went from **92 files / 401 breaches to
+zero**, and `wordBudget.allow.json` is `{}` — guarded from outside the frontend
+by `tests/test_ui_words_programme.py`, so the debt cannot be re-admitted, and
+from inside by the "stays swept" pins in `wordBudget.test.ts`. What left the
+screens did not evaporate: the explain corpus under
+`src/backend/ai/skills/explain/` now holds **337 authored files**, each ≤ 120
+words, loader-validated at start-up and cited by name when Iris answers from
+one. No honesty state, licence condition, refusal text or destructive-action
+consequence was shortened anywhere in the six sweeps — those are the action, not
+an explanation — and no test assertion was deleted: each one that read a removed
+sentence now reads the short line plus its `Ask Iris about …` affordance.

@@ -169,6 +169,19 @@ describe("the coverage page", () => {
     expect(screen.getByText(/2 issue classes · 3 command intents/)).toBeInTheDocument();
   });
 
+  // Sweep 6 (tracker 270): the header used to open with a sentence explaining
+  // what a dialect, an issue class and a command intent are. The pins stayed,
+  // the lesson moved into ai/skills/explain/tac.coverage-catalogue.md, and this
+  // is the affordance that reaches it — an explanation the page no longer
+  // carries must still be one click away, or it was simply deleted.
+  it("offers the catalogue explanation instead of printing it", async () => {
+    await show();
+    expect(screen.getByLabelText("Ask Iris about Knowledge")).toHaveAttribute(
+      "data-topic", "tac.coverage-catalogue",
+    );
+    expect(document.body.textContent).not.toContain("What Correlix can plan and collect");
+  });
+
   it("says what did not happen when the catalogue cannot be read", async () => {
     mocks.tacKnowledge.mockRejectedValue(new Error("TypeError: fetch failed"));
     render(<IrisKnowledge />);
@@ -224,6 +237,15 @@ describe("platforms with no authored plan", () => {
     expect(un).toHaveTextContent("Nokia SR Linux");
     expect(un).toHaveTextContent("0 of 3 intents bound");
     expect(un).toHaveTextContent("1 classes unplannable");
+  });
+
+  it("offers the unplanned-platform explanation instead of printing it", async () => {
+    await show();
+    expect(screen.getByRole("heading", { name: "Platforms with no plan", level: 2 })).toBeInTheDocument();
+    expect(screen.getByLabelText("Ask Iris about Platforms with no plan")).toHaveAttribute(
+      "data-topic", "tac.unplanned-platforms",
+    );
+    expect(document.body.textContent).not.toContain("offers the paste path");
   });
 
   it("says so plainly when every recognised platform is planned", async () => {
@@ -348,7 +370,7 @@ describe("the output-only command policy", () => {
 
   it("names the three families and pins the policy version", async () => {
     await show();
-    expect(screen.getByRole("heading", { name: "What Correlix will not learn", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "What Correlix never learns", level: 2 })).toBeInTheDocument();
     expect(screen.getByText("changes configuration or persistent state")).toBeInTheDocument();
     expect(screen.getByText("restarts, reboots, halts or powers off the device")).toBeInTheDocument();
     expect(screen.getByText("addresses a named daemon or process")).toBeInTheDocument();
@@ -406,10 +428,21 @@ describe("the command templates tab", () => {
     expect(screen.getByTestId("tac-tpl-policy").textContent).toContain("Output only");
   });
 
+  // Sweep 6: the paragraph that explained read-only defaults versus a tenant's
+  // own sets is ai/skills/explain/tac.command-templates.md now. The distinction
+  // is still on the screen as one line; the teaching is behind the `(i)`.
+  it("offers the template explanation instead of printing it", async () => {
+    await show();
+    expect(screen.getByLabelText("Ask Iris about Command templates")).toHaveAttribute(
+      "data-topic", "tac.command-templates",
+    );
+    expect(document.body.textContent).not.toContain("generated from the authored");
+  });
+
   it("says plainly when the tenant has saved none — never an empty table read as coverage", async () => {
     await show();
     expect((await screen.findByTestId("tac-tpl-none")).textContent)
-      .toContain("saved no command set yet");
+      .toContain("No set saved yet");
   });
 
   it("shows a tenant set's difference from the default it was forked from", async () => {

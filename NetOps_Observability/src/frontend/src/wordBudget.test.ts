@@ -194,12 +194,15 @@ export function scanWordBudget(source: string): Breach[] {
 // workspace, the account and tenant gates, Reports, the reliability scorecard,
 // the legacy troubleshooting board, TAC, the tabs (flows, log search,
 // correlations, collectors, credentials, the Iris drawer), device inventory,
-// telemetry coverage and the app-observability pages — so ONE file is left:
-// pages/iris/Knowledge.tsx, which was being rewritten in another change while
-// sweep 5 ran and is the next (and last) sweep. The number is that file's breach
-// count, so the whole backlog is visible in one diff and each sweep is a
-// deletion from this list. Sweep order and the "done" definition are in the
-// design doc; a swept file loses its line here.
+// telemetry coverage and the app-observability pages — leaving ONE file, which
+// was being rewritten in another change while sweep 5 ran. Sweep 6 swept it
+// (pages/iris/Knowledge.tsx), so the list is EMPTY: 92 files and 401 breaches
+// paid off, and `{}` is the finished state, not a starting one.
+//
+// THE LIST MAY NEVER GROW AGAIN. tests/test_ui_words_programme.py fails if this
+// file is non-empty — a new breach is fixed in the copy, or the explanation moves
+// into src/backend/ai/skills/explain/<topic>.md behind an <AskIris topic=…/>.
+// It is not re-admitted as debt.
 export const ALLOW: Readonly<Record<string, number>> = Object.freeze(
   JSON.parse(readFileSync(join(SRC, "wordBudget.allow.json"), "utf-8")) as Record<string, number>,
 );
@@ -252,6 +255,17 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     ).toEqual([]);
   });
 
+  // The programme is finished (tracker 270, 2026-09-06): the debt list is empty
+  // and stays empty. tests/test_ui_words_programme.py guards the JSON from the
+  // outside as well, so the claim survives someone editing this file.
+  it("the debt list is empty — the programme is paid off", () => {
+    expect(
+      Object.keys(ALLOW),
+      "wordBudget.allow.json must stay empty: shorten the copy, or move the " +
+      "explanation into src/backend/ai/skills/explain/<topic>.md behind an <AskIris/>",
+    ).toEqual([]);
+  });
+
   // The ratchet. Without this the allowlist would record yesterday's debt
   // forever and a swept page would still read as unfinished.
   it("no allowlist entry is stale (the debt list only ever shrinks)", () => {
@@ -270,10 +284,10 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
 
   // Sweeps 1 (Dashboard/Command Center · Operations · Alerts), 2 (Security ·
   // Data Protection), 3 (Administration · Licence · Registries · Cloud ingest ·
-  // Platform tools), 4 (Topology · WAN · Wireless) and 5 (BGP · RCA workspace ·
+  // Platform tools), 4 (Topology · WAN · Wireless), 5 (BGP · RCA workspace ·
   // Reports · reliability scorecard · troubleshooting · TAC · the tabs · device
-  // inventory · telemetry) are DONE, so these files must never reappear in the
-  // debt list — the allowlist may not grow a new entry for one, and its breach
+  // inventory · telemetry) and 6 (Iris Knowledge) are DONE — the whole programme
+  // — so these files must never reappear in the debt list — the allowlist may not grow a new entry for one, and its breach
   // count must stay zero.
   it.each([
     "components/noc.tsx",
@@ -406,6 +420,13 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     "pages/panels.tsx",
     "pages/telemetry/TelemetryCoverage.tsx",
     "pages/telemetry/coverageModel.ts",
+    // sweep 6 — Iris Knowledge, the last file on the debt list. The coverage
+    // catalogue, the unplanned platforms, the command templates and the
+    // learning backlog keep every count and every honest absence; the four
+    // paragraphs that TAUGHT what a dialect, an unplanned platform and a
+    // command template are became tac.coverage-catalogue, tac.unplanned-platforms
+    // and tac.command-templates behind the `(i)`.
+    "pages/iris/Knowledge.tsx",
   ])("%s stays swept", (label) => {
     expect(ALLOW[label], `${label} is in a completed sweep and may not carry budget debt`).toBeUndefined();
     expect(counted.get(label)?.map((b) => fmtBreach(label, b)) ?? [], `${label} regressed`).toEqual([]);

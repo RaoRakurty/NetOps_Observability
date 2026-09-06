@@ -45,14 +45,13 @@ critical reads Watch, and nothing outstanding reads Nominal.
 The queue holds correlated incidents, not raw alerts, sorted by severity and
 then by age.
 
-1. Take the top row and read it across: **Sev**, **Problem ID** (a stable handle
-   such as `P-5564D1`), **Incident / correlation group**, **RCA state**,
-   **Impact**, **Fault domain**, **Evidence**, **Owner**, **Started**, **Age**,
-   **Ticket** and **Next action**.
+1. Take the top row and read it across: **Sev**, **Problem** (a stable handle
+   such as `P-5564D1`), **Incident**, **RCA**, **Impact**, **Domain**,
+   **Evidence**, **Owner**, **Started**, **Age**, **Ticket** and **Next**.
 2. Select the row to expand it. Three panes open: **Impacted entities**, where
    each device links to its live status; **Evidence**, which states how many
    observations correlated across how many nodes and links to the full ledger; and
-   **Recommended next action**.
+   **Next action**.
 3. Act from the buttons on the expanded row: **Open RCA**, **View topology**,
    **Assign owner** when the owner is missing, and **Open ticket** when one is
    needed.

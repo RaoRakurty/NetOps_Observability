@@ -50,6 +50,7 @@ import {
   type TacTemplate,
   type TacTemplateItemResponse,
 } from "../../services/api";
+import AskIris from "../../components/AskIris";
 import WindowedList from "../../components/WindowedList";
 import {
   BACKLOG_CLEAN,
@@ -153,10 +154,10 @@ export default function IrisKnowledge() {
     <div className="dm-board tac-know">
       <header className="tac-know-head">
         <h1 className="tac-h">Knowledge</h1>
-        <p className="mini-meta">
-          What Correlix can plan and collect for each vendor dialect when an incident is escalated.
+        <p className="fact-line">
           Issue catalogue {data.catalog_version} · engine {data.engine_version} ·{" "}
-          {data.classes.length} issue classes · {data.intents.length} command intents.
+          {data.classes.length} issue classes · {data.intents.length} command intents.{" "}
+          <AskIris topic="tac.coverage-catalogue" label="Knowledge" />
         </p>
       </header>
 
@@ -196,10 +197,10 @@ export default function IrisKnowledge() {
       </section>
 
       <section className="tac-step" aria-labelledby="tac-know-unplanned-h">
-        <h2 id="tac-know-unplanned-h" className="tac-step-h">Platforms with no authored plan</h2>
+        <h2 id="tac-know-unplanned-h" className="tac-step-h">Platforms with no plan</h2>
         <p className="mini-meta tac-note">
-          Correlix recognises these platforms and has authored no command set for them. An escalation on
-          one of them says so and offers the paste path instead of guessing a command.
+          Recognised; no command set is authored for them.
+          <AskIris topic="tac.unplanned-platforms" label="Platforms with no plan" />
         </p>
         {unplanned.length === 0 ? (
           <p className="mini-meta tac-note">{NO_UNPLANNED_DIALECTS}</p>
@@ -219,7 +220,7 @@ export default function IrisKnowledge() {
       </section>
 
       <section className="tac-step" aria-labelledby="tac-know-policy-h">
-        <h2 id="tac-know-policy-h" className="tac-step-h">What Correlix will not learn</h2>
+        <h2 id="tac-know-policy-h" className="tac-step-h">What Correlix never learns</h2>
         <p className="mini-meta tac-note">{COMMAND_POLICY_NOTE}</p>
         <p className="mini-meta tac-note">
           Policy <code className="tac-id">{data.command_policy?.version || "not loaded"}</code>
@@ -249,9 +250,8 @@ export default function IrisKnowledge() {
       <section className="tac-step" aria-labelledby="tac-know-tpl-h">
         <h2 id="tac-know-tpl-h" className="tac-step-h">Command templates</h2>
         <p className="mini-meta tac-note">
-          The command sets an escalation can be run from. Correlix&apos;s own are generated from the authored
-          plans above and are read-only; your team&apos;s are saved from the review step on the Investigate page
-          and are visible only to your tenant.
+          Correlix defaults are read-only. Your saved sets stay in your tenant.
+          <AskIris topic="tac.command-templates" label="Command templates" />
         </p>
         <p className="mini-meta tac-note" data-testid="tac-tpl-policy">{REVIEW_POLICY_NOTE}</p>
         {tplErr && <p className="tac-bad" role="alert">{tplErr}</p>}
@@ -272,12 +272,10 @@ export default function IrisKnowledge() {
           </ul>
         )}
 
-        <h3 className="tac-section-h">Your team&apos;s sets</h3>
+        <h3 className="tac-section-h">Your saved sets</h3>
         {templates.length === 0 ? (
           <p className="mini-meta tac-note" data-testid="tac-tpl-none">
-            Your tenant has saved no command set yet. Build one in the review step of an escalation —
-            Correlix&apos;s default is the starting point, and a saved copy is offered on the next
-            escalation for that vendor.
+            No set saved yet. Build one in an escalation review.
           </p>
         ) : (
           <ul className="tac-tpl-list" data-testid="tac-tpl-mine">
@@ -403,14 +401,12 @@ function DialectDetail({ d }: { d: TacDialectCoverage }) {
                 <span className="tac-intent-t">{it.title}</span>
                 {it.bound && it.command
                   ? <code className="tac-cmd">{it.command}</code>
-                  : <span className="mini-meta">this dialect binds no command for it</span>}
-                <span className="mini-meta">{verifiedLabel(it.verified) || "not bound"}</span>
+                  : <span className="fact-line">this dialect binds no command for it</span>}
+                <span className="fact-line">{verifiedLabel(it.verified) || "not bound"}</span>
               </div>
             )}
           />
-          <p className="mini-meta tac-note">
-            {intents.length} intents · scroll the table; only the rows in view are drawn.
-          </p>
+          <p className="fact-line">{intents.length} intents</p>
         </>
       )}
     </div>
