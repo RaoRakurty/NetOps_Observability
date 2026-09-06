@@ -50,6 +50,20 @@
 #         APK_REPO_SCHEME=http docker compose build correlation # TLS-intercepted egress
 # Runtime TLS to external APIs is unaffected by either.
 #
+# ONE MEASURED BEHAVIOURAL DIFFERENCE, and it is a test-only one. Running the
+# full correlation suite inside the old and the new image with the SAME source
+# mounted gave 3366 passed / 16 failed / 87 skipped on Debian against
+# 3365 / 16 / 88 on Alpine, out of 3469 collected in both — identical failures,
+# one extra SKIP. It is `test_kafka_security.py:32`, which mints a throwaway
+# certificate with the `openssl` COMMAND and skips itself when that binary is
+# absent: python:3.12-slim ships the openssl CLI, python:3.12-alpine ships only
+# libssl/libcrypto. Nothing under src/correlation shells out to openssl at run
+# time (the service's TLS is Python's `ssl` module against libssl, which IS
+# here), and the blocking gate — .github/workflows/correlation-ci.yml on
+# ubuntu-latest — has the binary, so that test still runs where it gates. Do NOT
+# `apk add openssl` to make a skip go away: it would put a CLI in the shipped
+# image to satisfy a test that already runs in CI.
+#
 # HASHES STILL RULE. requirements.txt is hash-locked (pip-compile
 # --generate-hashes), so pip enforces --require-hashes automatically; the musl
 # wheels and the aiokafka sdist are covered by the same recorded hashes as the
