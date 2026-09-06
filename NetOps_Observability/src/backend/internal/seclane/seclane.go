@@ -172,13 +172,17 @@ const DeadLetterTopic = "netops.deadletter"
 // depends on the core inventory model — §4 plugin isolation, and the reason
 // deleting this package touches nothing else.
 type Device struct {
-	ID       string
-	Name     string
-	Address  string
-	Vendor   string
-	OS       string
-	Model    string
-	TenantID string // the owning tenant, from the inventory row (§3a)
+	ID      string
+	Name    string
+	Address string
+	Vendor  string
+	OS      string
+	// OSVersion is the inventory row's explicit software-version leaf — the
+	// second source ParseSoftware consults when OS carries no version
+	// (tracker 231). Empty on a device that never reported one.
+	OSVersion string
+	Model     string
+	TenantID  string // the owning tenant, from the inventory row (§3a)
 }
 
 // Platform renders the free-form platform token the hardening and advisory
@@ -241,10 +245,15 @@ type Deps struct {
 	// nil and this is not, the lane wraps it in the OFFLINE provider — the
 	// credential-free, air-gap-canonical path (§5g).
 	AdvisoryFeed *vuln.Feed
-	// ParseSoftware splits a device's (vendor, OS string) into the (product,
-	// version) pair the advisory query needs. Optional: nil uses a conservative
-	// two-token split. Production binds the platform's SNMP sysDescr parser.
-	ParseSoftware func(vendor, osStr string) (product, version string)
+	// ParseSoftware splits a device's software identity into the (product,
+	// version) pair the advisory query needs. It takes BOTH strings the device
+	// row can carry — the OS/sysDescr text and the row's explicit os_version
+	// leaf (tracker 231) — because a device whose row was authored by hand or
+	// by an importer carries a product label with no version in OS, and the
+	// version arrives separately from whatever transport could reach it.
+	// Optional: nil uses a conservative two-token split. Production binds the
+	// platform's vendor-profile resolver, collectors.ResolveDeviceOS.
+	ParseSoftware func(vendor, osStr, osVersion string) (product, version string)
 	// ConfigSource yields device running-configs. Optional: nil means "config
 	// capture is not built", and every hardening rule reports UNASSESSED.
 	ConfigSource hardening.ConfigSource
@@ -730,7 +739,7 @@ func (l *Lane) advisoryFindings(ctx context.Context, scanID string,
 			DeviceID: d.ID, DeviceName: d.Name, Hostname: d.Name, Address: d.Address,
 			Kind: secfindings.KindNetworkDevice, Platform: d.Platform(),
 		}.ResolvePlatform() // T9: one canonical platform identity on every finding
-		product, version := parse(d.Vendor, d.OS)
+		product, version := parse(d.Vendor, d.OS, d.OSVersion)
 		switch {
 		case strings.TrimSpace(d.Vendor) == "":
 			out = append(out, unassessedAdvisory(d.TenantID, scanID, res, l.deps.Now(),
@@ -738,7 +747,7 @@ func (l *Lane) advisoryFindings(ctx context.Context, scanID string,
 			continue
 		case product == "" || version == "":
 			out = append(out, unassessedAdvisory(d.TenantID, scanID, res, l.deps.Now(),
-				"OS product/version not present in sysDescr — advisory exposure not assessed"))
+				"OS product/version not present in sysDescr or os_version — advisory exposure not assessed"))
 			continue
 		}
 		fs, err := advisory.FindingsFor(ctx, l.deps.Advisory,
@@ -758,12 +767,20 @@ func (l *Lane) advisoryFindings(ctx context.Context, scanID string,
 // when the integrator injects no richer parser. It is deliberately conservative
 // and NEVER invents a version — an unparseable OS string yields ("", ""), which
 // the advisory lane reports as UNASSESSED rather than as "no CVEs apply".
-func defaultParseSoftware(_, osStr string) (product, version string) {
+func defaultParseSoftware(_, osStr, osVersion string) (product, version string) {
 	fields := strings.Fields(strings.TrimSpace(osStr))
-	if len(fields) < 2 {
-		return "", ""
+	if len(fields) >= 2 {
+		return fields[0], fields[len(fields)-1]
 	}
-	return fields[0], fields[len(fields)-1]
+	// One token in OS (the "SR Linux"-shaped row) — take the product from it and
+	// the version from the row's explicit leaf, if it has one. Still never
+	// invents: no leaf, no version, and the caller reports UNASSESSED.
+	if len(fields) == 1 {
+		if v := strings.Fields(strings.TrimSpace(osVersion)); len(v) > 0 {
+			return fields[0], v[len(v)-1]
+		}
+	}
+	return "", ""
 }
 
 // unassessedAdvisory builds the honest non-verdict for one device.

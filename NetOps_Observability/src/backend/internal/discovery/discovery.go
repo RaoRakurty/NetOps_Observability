@@ -163,12 +163,33 @@ func (a *DiscoveryAggregator) enrichVendors(ctx context.Context, community strin
 		}
 		a.mu.Lock()
 		a.detected[p.id] = vendor
-		if d, ok := a.cache[p.id]; ok && d.Vendor == "" {
-			d.Vendor = vendor
+		if d, ok := a.cache[p.id]; ok {
+			changed := false
+			if d.Vendor == "" {
+				d.Vendor = vendor
+				changed = true
+			}
 			if d.OS == "" && descr != "" {
 				d.OS = TruncateDescr(descr)
+				changed = true
 			}
-			a.cache[p.id] = d
+			// Tracker 231: the sysDescr also lands on the explicit version leaf,
+			// and it does so even when the row ALREADY names a vendor and an OS.
+			// The whole enrichment used to be skipped on `d.Vendor != ""`, so a
+			// hand-authored row carrying `vendor: Nokia` + `os: "SR Linux"` — a
+			// product label with no version — could never be upgraded by a
+			// sysDescr the device was answering with, and stayed permanently
+			// unassessed for advisories. The device's own description always
+			// wins over an authored label; it is never overwritten by a later,
+			// EMPTY read (the `descr != ""` guard), so a probe that answered
+			// with nothing cannot erase what an earlier one learned.
+			if descr != "" && d.OSVersion != TruncateDescr(descr) {
+				d.OSVersion = TruncateDescr(descr)
+				changed = true
+			}
+			if changed {
+				a.cache[p.id] = d
+			}
 		}
 		a.mu.Unlock()
 	}
@@ -550,6 +571,9 @@ func mergeDevices(x, y models.Device) models.Device {
 	}
 	if base.OS == "" {
 		base.OS = other.OS
+	}
+	if base.OSVersion == "" {
+		base.OSVersion = other.OSVersion
 	}
 	if base.Address == "" {
 		base.Address = other.Address
@@ -1007,6 +1031,8 @@ func (s *StaticSource) Poll(_ context.Context) ([]models.Device, error) {
 //	    address: 10.0.0.1
 //	    preferred_protocol: snmp
 //	    credential_ref: corp-snmp
+//	    os: "SR Linux"
+//	    os_version: "SRLinux-v26.3.2-426-g2b38957bbca"
 //	    labels:
 //	      site: hq
 //
@@ -1093,6 +1119,12 @@ func parseStaticDevicesYAML(s string) ([]models.Device, error) {
 			cur.Vendor = unquoteValue(strings.TrimSpace(strings.TrimPrefix(body, "vendor:")))
 		case strings.HasPrefix(body, "model:"):
 			cur.Model = unquoteValue(strings.TrimSpace(strings.TrimPrefix(body, "model:")))
+		case strings.HasPrefix(body, "os_version:"):
+			// Tracker 231: the explicit software-version leaf. An operator (or
+			// an importer) writing `os: "SR Linux"` names a product and no
+			// version, which leaves advisory assessment permanently UNASSESSED;
+			// this carries the string the DEVICE reports beside it.
+			cur.OSVersion = unquoteValue(strings.TrimSpace(strings.TrimPrefix(body, "os_version:")))
 		case strings.HasPrefix(body, "os:"):
 			cur.OS = unquoteValue(strings.TrimSpace(strings.TrimPrefix(body, "os:")))
 		case body == "labels:":

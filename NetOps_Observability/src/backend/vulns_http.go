@@ -79,9 +79,14 @@ func (s *server) handleVulns(w http.ResponseWriter, r *http.Request) {
 			unassessed = append(unassessed, vulnUnassessed{DeviceID: d.ID, DeviceName: d.Name, Reason: "vendor unknown (SNMP unreachable or unrecognized sysObjectID)"})
 			continue
 		}
-		osi := collectors.ParseOS(d.Vendor, d.OS)
+		// Tracker 231: the version may come from the sysDescr OR from the row's
+		// own os_version leaf, for a device whose version was learned over a
+		// transport SNMP could not reach. One resolver, so this read and the
+		// security lane's advisory findings can never disagree about a version.
+		osi := collectors.ResolveDeviceOS(d.Vendor, d.OS, d.OSVersion)
 		if osi.Product == "" || osi.Version == "" {
-			unassessed = append(unassessed, vulnUnassessed{DeviceID: d.ID, DeviceName: d.Name, Vendor: d.Vendor, Reason: "OS version not present in sysDescr"})
+			unassessed = append(unassessed, vulnUnassessed{DeviceID: d.ID, DeviceName: d.Name, Vendor: d.Vendor,
+				Reason: "OS version not present in sysDescr or os_version"})
 			continue
 		}
 		assessed++

@@ -13,6 +13,26 @@ type Device struct {
 	Vendor  string `json:"vendor,omitempty"`
 	Model   string `json:"model,omitempty"`
 	OS      string `json:"os,omitempty"`
+	// OSVersion is the device's software identity as the DEVICE reports it —
+	// the description line the device serves ("SRLinux-v26.3.2-426-g2b38957bbca
+	// 7220 IXR-D3L …") or the version string it prints. It exists because OS
+	// alone is not enough on a
+	// device whose row was authored by hand or by an importer: an operator
+	// writes `os: "SR Linux"`, which names the PRODUCT and carries no version,
+	// and advisory assessment needs a version or it must report the device
+	// UNASSESSED (tracker 231).
+	//
+	// It is a SECOND source, never a replacement: collectors.ResolveDeviceOS
+	// reads OS first and consults this only when OS yields no version, so a
+	// live sysDescr always wins over a hand-written string. It is parsed by the
+	// SAME vendor pattern, never trusted as a number: a value the vendor profile
+	// cannot match leaves the device UNASSESSED rather than inventing a version
+	// nobody read off a device. Any source may
+	// write it — the inventory file's `os_version:` key, the devices API, an
+	// importer, or a collector that reached the device over a transport SNMP
+	// could not (gNMI, SSH) — which is the point: the row carries the version
+	// however it was learned.
+	OSVersion string `json:"os_version,omitempty"`
 	// Type — router|switch|firewall|load-balancer|ap|wlc|cloud-gw|generic.
 	// SNMP-inferred from vendor/model/sysDescr (InferDeviceType), operator-overridable
 	// via labels["device_type"]. Populated on-read by the devices API.

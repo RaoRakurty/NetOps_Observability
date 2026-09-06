@@ -350,7 +350,7 @@ func TestAdvisoryMockProviderYieldsFindingForKnownVulnerableVersion(t *testing.T
 	})
 	fx := newFixture(t, func(d *Deps) {
 		d.Advisory = mock
-		d.ParseSoftware = func(_, _ string) (string, string) { return "IOS-XE", "17.9.1" }
+		d.ParseSoftware = func(_, _, _ string) (string, string) { return "IOS-XE", "17.9.1" }
 	})
 	fx.devices["acme"] = []Device{dev("acme-core", "acme")}
 
@@ -381,7 +381,7 @@ func TestAdvisoryUnassessableDeviceIsUnassessedNotClear(t *testing.T) {
 	mock := advisory.NewMockProvider("mock")
 	fx := newFixture(t, func(d *Deps) {
 		d.Advisory = mock
-		d.ParseSoftware = func(_, _ string) (string, string) { return "", "" } // no version parsed
+		d.ParseSoftware = func(_, _, _ string) (string, string) { return "", "" } // no version parsed
 	})
 	fx.devices["acme"] = []Device{dev("acme-core", "acme")}
 
@@ -409,7 +409,7 @@ func TestAdvisoryProviderCanBeDisabledPerTenant(t *testing.T) {
 	})
 	fx := newFixture(t, func(d *Deps) {
 		d.Advisory = mock
-		d.ParseSoftware = func(_, _ string) (string, string) { return "IOS-XE", "17.9.1" }
+		d.ParseSoftware = func(_, _, _ string) (string, string) { return "IOS-XE", "17.9.1" }
 	})
 	fx.devices["acme"] = []Device{dev("acme-core", "acme")}
 	fx.states["acme"] = map[string]bool{advisory.SourceOfflineFeed: false}
@@ -1097,5 +1097,52 @@ func TestUnassessedFindingsCarryTheirReasonOnTheBus(t *testing.T) {
 	if n := len(reasons["mystery"]); n != 1 {
 		t.Errorf("an unresolvable platform produced %d posture findings (%v), want exactly 1",
 			n, reasons["mystery"])
+	}
+}
+
+// TestAdvisoryUsesTheRowsVersionLeafWhenTheOSLabelHasNone is tracker 231 in the
+// PRODUCER lane (the twin of the /api/vulns read).
+//
+// The reference lab's SR Linux spines carry `os: "SR Linux"` — a product label
+// and no version — because the platform's ACL refuses the SNMP collector and
+// there is no sysDescr to parse. The lane reported them unassessed forever. It
+// now hands ParseSoftware BOTH strings the row can carry, so a version learned
+// over any transport reaches the advisory query; the default splitter proves
+// the seam works even with no platform parser injected.
+func TestAdvisoryUsesTheRowsVersionLeafWhenTheOSLabelHasNone(t *testing.T) {
+	mock := advisory.NewMockProvider("mock").Add("nokia", "SR", advisory.Advisory{
+		CVE: "CVE-2026-9001", Severity: secfindings.SeverityHigh, CVSS: 8.1,
+		Summary:         "SR Linux advisory",
+		AffectedVersion: advisory.VersionConstraint{Exact: "26.3.2"},
+	})
+	fx := newFixture(t, func(d *Deps) {
+		d.Advisory = mock
+		// No ParseSoftware: defaultParseSoftware is the one under test.
+	})
+	withLeaf := dev("spine1", "acme")
+	withLeaf.Vendor, withLeaf.OS, withLeaf.OSVersion = "nokia", "SR", "26.3.2"
+	noLeaf := dev("spine2", "acme")
+	noLeaf.Vendor, noLeaf.OS, noLeaf.OSVersion = "nokia", "SR", ""
+	fx.devices["acme"] = []Device{withLeaf, noLeaf}
+
+	fx.lane.ScanTenant(context.Background(), "acme", "manual")
+
+	matched, unassessed := 0, 0
+	for _, r := range fx.pub.on(secbus.TopicSecurityEvidence) {
+		ev := r.Value.(secbus.EvidenceEvent)
+		switch ev.Attrs["control_id"] {
+		case "CVE-2026-9001":
+			matched++
+		case "advisory-unassessed":
+			unassessed++
+		}
+	}
+	if matched != 1 {
+		t.Fatalf("advisory matches = %d, want 1 — the row's version leaf never reached the query", matched)
+	}
+	// The device WITHOUT a leaf is still honestly unassessed: the leaf makes a
+	// device assessable, it never makes an unassessable one look clear.
+	if unassessed != 1 {
+		t.Fatalf("unassessed findings = %d, want 1 (spine2 has no version anywhere)", unassessed)
 	}
 }

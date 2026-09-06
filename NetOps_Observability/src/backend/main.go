@@ -5017,8 +5017,8 @@ func (s *server) securityLaneDeps() seclane.Deps {
 		// lane then reports every rule UNASSESSED rather than falsely clear.
 		AdvisoryFeed: s.vulns,
 		ConfigSource: s.configHardeningSource(), // P3-CFG: sealed config store (nil while FEATURE_CONFIG_BACKUP is off)
-		ParseSoftware: func(vendor, osStr string) (string, string) {
-			osi := collectors.ParseOS(vendor, osStr)
+		ParseSoftware: func(vendor, osStr, osVersion string) (string, string) {
+			osi := collectors.ResolveDeviceOS(vendor, osStr, osVersion)
 			return osi.Product, osi.Version
 		},
 
@@ -5079,7 +5079,7 @@ func (s *server) securityLaneDevices(tenant string) []seclane.Device {
 		// MONITORING-END
 		out = append(out, seclane.Device{
 			ID: d.ID, Name: d.Name, Address: d.Address,
-			Vendor: d.Vendor, OS: d.OS, Model: d.Model,
+			Vendor: d.Vendor, OS: d.OS, OSVersion: d.OSVersion, Model: d.Model,
 			TenantID: deviceTenant(d),
 		})
 	}
