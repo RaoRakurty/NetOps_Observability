@@ -2,7 +2,7 @@
   "schema_version": 1,
   "vendor": "paloalto",
   "display_name": "Palo Alto Networks",
-  "notes": "A PAN-OS sysDescr often omits the version entirely; the profile still names the product so the device reports as UNASSESSED for advisories rather than clear.",
+  "notes": "A PAN-OS sysDescr often omits the version entirely; the profile still names the product so the device reports as UNASSESSED for advisories rather than clear. Platform-text detection for the `pan-os` profile (tracker 271) is DOC_CLAIMED, not device-confirmed: the markers are the PAN-OS tokens this document's vendor-level sysdescr_contains and device_type hints already carry, plus the \"Palo Alto Networks PA-<model> series firewall\" shape a PA firewall reports. The hyphen in \"palo alto networks pa-\" is load-bearing: bare \"palo alto\" would also capture \"Palo Alto Networks Panorama\", a management platform with a different command grammar and no profile of its own, and mis-routing it onto the firewall plan would be worse than not resolving it. `show system info` is the command PAN-OS documents for the version banner. Promote to live_capture when a real PA firewall reports.",
   "detection": {
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.25461"
@@ -55,7 +55,13 @@
           "product": "pan-os",
           "rank": 10,
           "sysdescr_contains_any": []
-        }
+        },
+        "platform_contains": [
+          "pan-os",
+          "panos",
+          "palo alto networks pa-"
+        ],
+        "platform_rank": 70
       },
       "capture": {
         "running_config_cmd": "show config running",

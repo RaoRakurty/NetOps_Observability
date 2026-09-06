@@ -2,7 +2,8 @@
   "schema_version": 1,
   "vendor": "cisco",
   "display_name": "Cisco",
-  "notes": "os_parse ranks reproduce collectors.ciscoProduct exactly: IOS-XR and IOS-XE sysDescrs also contain the bare 'ios', so the family markers must be evaluated before it. No unconditional default: a Cisco sysDescr naming no family yields product \"\" (version still parsed) — honest, not a guess.",
+  "notes": "os_parse ranks reproduce collectors.ciscoProduct exactly: IOS-XR and IOS-XE sysDescrs also contain the bare 'ios', so the family markers must be evaluated before it. No unconditional default: a Cisco sysDescr naming no family yields product \"\" (version still parsed) \u2014 honest, not a guess. Platform-text detection for the `asa` profile (tracker 271) is DOC_CLAIMED, not device-confirmed: the markers are the ASA `show version` first line \"Cisco Adaptive Security Appliance Software Version \u2026\" (ASA Series Command Reference, \"show u - show z\") and the same phrase as it appears in sysDescr, which this profile's os_parse already keys on. It ranks 9 \u2014 BEFORE cisco/ios at 13, which owns the bare \"cisco\" \u2014 because an ASA label contains \"cisco\" too and would otherwise resolve onto IOS. Bare \"asa\" is deliberately NOT a marker: three characters that also match Casa, NASA and any hostname. Promote to live_capture when a real ASA reports.",
+  "notes": "os_parse ranks reproduce collectors.ciscoProduct exactly: IOS-XR and IOS-XE sysDescrs also contain the bare 'ios', so the family markers must be evaluated before it. No unconditional default: a Cisco sysDescr naming no family yields product \"\" (version still parsed) — honest, not a guess. Platform-text detection for the `asa` profile (tracker 271) is DOC_CLAIMED, not device-confirmed: the markers are the ASA `show version` first line \"Cisco Adaptive Security Appliance Software Version …\" (ASA Series Command Reference, \"show u - show z\") and the same phrase as it appears in sysDescr, which this profile's os_parse already keys on. It ranks 9 — BEFORE cisco/ios at 13, which owns the bare \"cisco\" — because an ASA label contains \"cisco\" too and would otherwise resolve onto IOS. Bare \"asa\" is deliberately NOT a marker: three characters that also match Casa, NASA and any hostname. Promote to live_capture when a real ASA reports.",
   "detection": {
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.9"
@@ -441,6 +442,12 @@
             "adaptive security appliance"
           ]
         },
+        "platform_contains": [
+          "adaptive security appliance",
+          "cisco asa",
+          "asav"
+        ],
+        "platform_rank": 9,
         "syslog_facilities": [
           "SYS",
           "SEC",

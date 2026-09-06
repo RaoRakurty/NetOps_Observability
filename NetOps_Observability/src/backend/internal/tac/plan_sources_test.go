@@ -26,12 +26,13 @@ import (
 // dialect. Most dialects answer to their own display name; the ones that do not
 // carry the string a real device reports instead.
 //
-// Three dialects (cisco-asa, fortinet-fortios, paloalto-panos) are NOT reachable
-// from any platform string at all: their vendorprofile entries declare no
-// `platform_contains` detection, so DialectForPlatform can never land on them and
-// no plan can be built for them today. That is a real coverage gap and it is
-// named here rather than hidden by a skip — the citation invariant is still
-// proved for them, on their bindings, by TestNoBindingCarriesTheDialectPool.
+// Until tracker 271 the three firewall dialects (cisco-asa, fortinet-fortios,
+// paloalto-panos) were reachable from NO platform string at all — their
+// vendorprofile entries declared no `platform_contains`, so DialectForPlatform
+// could never land on them and the strings below resolved onto cisco/ios or onto
+// nothing. Those profiles now carry detection strings, so every entry here
+// resolves to its own dialect; plan_reach_test.go is the guard that keeps it
+// that way for every authored dialect, not just these three.
 var planPlatformText = map[string]string{
 	"cisco-asa":        "Cisco Adaptive Security Appliance ASA 5525-X",
 	"fortinet-fortios": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
@@ -101,7 +102,7 @@ func checkCitations(t *testing.T, where string, lists map[string][]Source) {
 }
 
 // TestNoBindingCarriesTheDialectPool proves the invariant at the SOURCE — every
-// authored dialect, including the three no platform string can reach.
+// authored dialect, reachable or not — the source of truth is the plan file.
 func TestNoBindingCarriesTheDialectPool(t *testing.T) {
 	c := mustCatalog(t)
 	for _, dialect := range c.Dialects() {
