@@ -63,6 +63,33 @@ type FrameworkCoverage struct {
 // as "nothing here speaks to PCI yet", never as 0 %.
 const unassessedNote = "No assessed control maps to this framework yet — this is an absence of assessment, not a passing or failing result."
 
+// notInstalledNote is what an enabled framework whose CROSSWALK is not part of
+// this deployment says. It deliberately mirrors unassessedNote rather than
+// returning nothing: a framework that silently disappears from the page reads
+// as "we looked and found nothing to say", which is a lie about a framework
+// nothing looked at. Nothing is hidden or deleted — the selection is still the
+// tenant's, and the sentence says what would make it scorable.
+const notInstalledNote = "This framework's crosswalk is not included in this deployment — no control has been projected onto it. " +
+	"The selection is kept and nothing has been hidden; adding the compliance frameworks beyond the default two to this deployment's licence starts scoring it."
+
+// NotLicensedCoverage is the honest non-scorecard for a framework the tenant
+// enabled but whose crosswalk this deployment does not carry (see pack.go).
+//
+// Every number is the "nothing was assessed" value the rest of this file uses
+// for that state — a NULL score, an Unknown verdict, an empty control list —
+// so no client can read it as a pass, a failure, or a 0 %.
+func NotLicensedCoverage(info FrameworkInfo) FrameworkCoverage {
+	return FrameworkCoverage{
+		Framework:   info.Name,
+		Version:     info.Version,
+		Verdict:     secfindings.StatusUnknown,
+		VerdictName: secfindings.StatusUnknown.String(),
+		Controls:    []ControlResult{},
+		Caption:     standardCaption,
+		Note:        notInstalledNote,
+	}
+}
+
 // worstRank orders verdicts so a rollup keeps the most severe. Fail dominates,
 // then Error, Warning, Pass, NotApplicable; Unknown (no verdict) is lowest so it
 // never overrides a real verdict.
@@ -238,6 +265,24 @@ func ProjectFrameworks(findings []secfindings.Finding, cat *Catalog, fps []Frame
 	out := make([]FrameworkCoverage, 0, len(fps))
 	for _, fp := range fps {
 		out = append(out, ProjectFramework(findings, cat, fp))
+	}
+	return out
+}
+
+// ProjectSelection is the whole per-tenant compliance answer in one call: it
+// resolves an enabled SELECTION of framework ids through the core catalogue
+// plus the installed crosswalk packs, projects the shared findings onto each
+// resolved framework, and appends an honest not-installed row for every enabled
+// framework whose crosswalk this deployment does not carry.
+//
+// Callers use this rather than ProvidersFor + ProjectFrameworks so the missing
+// case cannot be forgotten at one call site and remembered at another. With
+// every crosswalk installed it is exactly ProjectFrameworks over ProvidersFor —
+// same rows, same order.
+func ProjectSelection(findings []secfindings.Finding, cat *Catalog, ids []string, packs ...FrameworkPack) []FrameworkCoverage {
+	out := ProjectFrameworks(findings, cat, ProvidersFor(ids, packs...))
+	for _, info := range MissingCrosswalks(ids, packs...) {
+		out = append(out, NotLicensedCoverage(info))
 	}
 	return out
 }

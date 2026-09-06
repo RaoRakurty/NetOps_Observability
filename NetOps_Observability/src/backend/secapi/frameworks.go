@@ -12,6 +12,13 @@ package secapi
 //     the 800-53 base catalogue plus CIS Controls; NIST CSF, HIPAA and PCI DSS
 //     are off until somebody asks for them, because a regulatory scorecard
 //     nobody requested is an implied compliance claim.
+//
+//     The VOCABULARY is Apache-2.0 core and carries all five, so a stored
+//     selection is always valid to read and validate. The CROSSWALKS for the
+//     three beyond the default two are a commercial add-on and arrive as
+//     injected FrameworkPack data (Deps.FrameworkCrosswalks); this package
+//     never learns about licensing. An enabled framework whose crosswalk is not
+//     installed is REPORTED — a null score and a sentence — never dropped.
 //  2. A framework is COMPUTED, never tagged. The Compliance page used to build
 //     its framework list from the distinct `standards` tags on findings, so
 //     every invented `CIS-NET-x.y` benchmark section rendered as its own
@@ -152,6 +159,17 @@ func (a *API) inputs() ComplianceInputs {
 		return ComplianceInputs{}
 	}
 	return a.d.ComplianceInputs()
+}
+
+// crosswalks are the installed framework crosswalk packs beyond core's own two
+// (Deps.FrameworkCrosswalks). Nil-safe: no wiring, or nothing installed, means
+// the Apache-2.0 catalogue's own crosswalks and an honest not-installed row for
+// anything else the tenant enabled.
+func (a *API) crosswalks() []compliancemodel.FrameworkPack {
+	if a.d.FrameworkCrosswalks == nil {
+		return nil
+	}
+	return a.d.FrameworkCrosswalks()
 }
 
 // ---- GET|PUT /api/security/frameworks ---------------------------------------
@@ -460,7 +478,6 @@ func (a *API) HandleCompliance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	enabled := enabledIDs(frameworkViews(states, configured))
-	providers := compliancemodel.ProvidersFor(enabled)
 
 	// The scorecards describe CURRENT state regardless of what the caller asked
 	// for: scoring every historical verdict would count one control that failed
@@ -474,7 +491,11 @@ func (a *API) HandleCompliance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cat := ComplianceCatalog(a.inputs().Mappings)
-	covs := compliancemodel.ProjectFrameworks(rows, cat, providers)
+	// ProjectSelection — not ProjectFrameworks over a resolved provider list —
+	// because it is also what reports an enabled framework whose crosswalk this
+	// deployment does not carry. A framework that simply vanished from the page
+	// would tell the tenant that enabled it nothing at all.
+	covs := compliancemodel.ProjectSelection(rows, cat, enabled, a.crosswalks()...)
 	if covs == nil {
 		covs = []compliancemodel.FrameworkCoverage{}
 	}
@@ -506,7 +527,10 @@ func (a *API) HandleCompliance(w http.ResponseWriter, r *http.Request) {
 		"coverage": "coverage_percent is how much of the framework's own scope this platform can evidence " +
 			"at all. It is a capability, not a verdict, and it is deliberately below 100%.",
 	}
-	if len(providers) == 0 {
+	// The tenant's SELECTION, not the resolved provider list: a framework whose
+	// crosswalk is not installed is still enabled, and reporting "nothing is
+	// enabled" over its not-installed card would contradict the card.
+	if len(enabled) == 0 {
 		notes["empty"] = "No framework is enabled for this tenant, so nothing is scored."
 	}
 	if !configured {

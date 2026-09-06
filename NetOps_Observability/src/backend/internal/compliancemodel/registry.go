@@ -20,6 +20,16 @@ package compliancemodel
 // The ID is VERSIONED because the version is part of a framework's identity
 // (§5d). When CIS Controls v9 lands it is a NEW id and a NEW provider, not a
 // silent renumbering of the rows a tenant already enabled.
+//
+// WHAT IS CORE HERE. The VOCABULARY — the ids, the descriptors, the default
+// set and the closed list an API write is validated against — is Apache-2.0 and
+// carries all five frameworks, because a deployment must be able to name,
+// validate and keep serving a selection it has already persisted. The CROSSWALK
+// EDGES for the frameworks beyond the default two are the `security_dialects`
+// entitlement and arrive as FrameworkPack data from outside this package (see
+// pack.go); `new: nil` below is where each of those is bound at assembly time,
+// and an enabled framework with no installed crosswalk is REPORTED as such
+// (MissingCrosswalks + NotLicensedCoverage), never silently dropped.
 
 import "sort"
 
@@ -87,7 +97,9 @@ func frameworkCatalogue() []struct {
 				Source: SourceProjection, DefaultOn: false,
 				Scope: "The CSF 2.0 outcome subcategories (ID/PR/DE). Enable it when the organisation reports its programme in CSF terms.",
 			},
-			new: NewNISTCSFProvider,
+			// Crosswalk beyond the default two: a FrameworkPack supplies it
+			// (pack.go). Core carries the IDENTITY, not the edges.
+			new: nil,
 		},
 		{
 			info: FrameworkInfo{
@@ -95,7 +107,9 @@ func frameworkCatalogue() []struct {
 				Source: SourceProjection, DefaultOn: false,
 				Scope: "The §164.312 technical safeguards only — the slice of the Security Rule a device configuration can evidence. Enable it for an organisation handling protected health information.",
 			},
-			new: NewHIPAAProvider,
+			// Crosswalk beyond the default two: a FrameworkPack supplies it
+			// (pack.go). Core carries the IDENTITY, not the edges.
+			new: nil,
 		},
 		{
 			info: FrameworkInfo{
@@ -103,7 +117,9 @@ func frameworkCatalogue() []struct {
 				Source: SourceProjection, DefaultOn: false,
 				Scope: "The PCI DSS technical requirements a network device is in scope for (1, 2, 4, 6, 7, 8, 10, 11). Enable it for a cardholder-data environment.",
 			},
-			new: NewPCIProvider,
+			// Crosswalk beyond the default two: a FrameworkPack supplies it
+			// (pack.go). Core carries the IDENTITY, not the edges.
+			new: nil,
 		},
 	}
 }
@@ -153,12 +169,38 @@ func DefaultEnabled() []string {
 	return out
 }
 
-// ProviderFor returns the crosswalk provider for a framework id.
-func ProviderFor(id string) (FrameworkProvider, bool) {
+// InfoFor returns the catalogue descriptor for a framework id. It answers for
+// every id in the vocabulary, whether or not its crosswalk is installed — the
+// descriptor is what lets a deployment name a framework it cannot yet score.
+func InfoFor(id string) (FrameworkInfo, bool) {
 	for _, e := range frameworkCatalogue() {
 		if e.info.ID == id {
+			return e.info, true
+		}
+	}
+	return FrameworkInfo{}, false
+}
+
+// ProviderFor returns the crosswalk provider for a framework id, resolving it
+// from core first and then from the supplied packs (pack.go).
+//
+// CORE WINS: a pack can never override a framework core ships a crosswalk for,
+// so the two default frameworks are exactly what the Apache-2.0 tree says they
+// are. An id whose crosswalk is neither in core nor in the packs does not
+// resolve — the caller reports that honestly (MissingCrosswalks) instead of
+// scoring an empty scope.
+func ProviderFor(id string, packs ...FrameworkPack) (FrameworkProvider, bool) {
+	for _, e := range frameworkCatalogue() {
+		if e.info.ID != id {
+			continue
+		}
+		if e.new != nil {
 			return e.new(), true
 		}
+		if p, ok := packFor(id, packs); ok {
+			return p.New(), true
+		}
+		return nil, false
 	}
 	return nil, false
 }
@@ -167,7 +209,7 @@ func ProviderFor(id string) (FrameworkProvider, bool) {
 // catalogue's display order (not the caller's, so two tenants with the same
 // selection get the same scorecard order). An unknown id is SKIPPED — a
 // selection persisted before a framework was retired must not fail the read.
-func ProvidersFor(ids []string) []FrameworkProvider {
+func ProvidersFor(ids []string, packs ...FrameworkPack) []FrameworkProvider {
 	want := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		want[id] = true
@@ -177,8 +219,32 @@ func ProvidersFor(ids []string) []FrameworkProvider {
 		if !want[info.ID] {
 			continue
 		}
-		if p, ok := ProviderFor(info.ID); ok {
+		if p, ok := ProviderFor(info.ID, packs...); ok {
 			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// MissingCrosswalks returns the descriptors of the SELECTED frameworks whose
+// crosswalk is not installed in this deployment, in catalogue order.
+//
+// It exists so the absence is REPORTED rather than silently skipped: a tenant
+// that enabled PCI DSS and then finds no PCI card on the page has been told
+// nothing, which is exactly the silent-failure shape §10 forbids. An id outside
+// the vocabulary is not "missing" — it is unknown, and stays skipped.
+func MissingCrosswalks(ids []string, packs ...FrameworkPack) []FrameworkInfo {
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	out := []FrameworkInfo{}
+	for _, info := range Frameworks() {
+		if !want[info.ID] {
+			continue
+		}
+		if _, ok := ProviderFor(info.ID, packs...); !ok {
+			out = append(out, info)
 		}
 	}
 	return out

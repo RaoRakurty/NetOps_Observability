@@ -1,18 +1,18 @@
 package compliancemodel
 
 import (
+	"strings"
 	"testing"
 
 	"netops/backend/internal/compliance"
 	"netops/backend/internal/secfindings"
 )
 
-// sharedFindings builds the SAME finding set both frameworks are scored against,
-// so the test proves the per-framework projection — not a difference in inputs —
-// is what produces different scopes. One SNMP-crypto violation (→ SC-8, in BOTH
-// HIPAA and PCI scope) and one golden-baseline violation (→ CM-2, in PCI scope
-// only, NOT a HIPAA §164.312 technical safeguard). Convert routes each finding to
-// its owned control purely by its Check id (the T1 converter fixes verdict=Fail,
+// sharedFindings builds the SAME finding set every framework here is scored
+// against, so the tests prove the per-framework projection — not a difference in
+// inputs — is what produces different scopes. One SNMP-crypto violation (→ SC-8)
+// and one golden-baseline violation (→ CM-2). Convert routes each finding to its
+// owned control purely by its Check id (the T1 converter fixes verdict=Fail,
 // class=posture).
 func sharedFindings(cat *Catalog) []secfindings.Finding {
 	fSC8 := cat.Convert(compliance.Finding{Check: "snmp-v3-strength"}, EmitOptions{TenantID: "acme"}) // → SC-8
@@ -20,120 +20,119 @@ func sharedFindings(cat *Catalog) []secfindings.Finding {
 	return []secfindings.Finding{fSC8, fCM2}
 }
 
-func TestHIPAAvsPCIIndependence(t *testing.T) {
+// narrowFramework is a deliberately NARROW in-test framework: it scopes
+// transmission security and access enforcement and nothing else. It exists so
+// the per-framework independence contract is proved by the ENGINE and the
+// interface alone, with no dependence on which crosswalks a particular build
+// happens to carry — the property has to hold in an Apache-2.0-only tree.
+const narrowFramework = "Narrow Test Framework"
+
+func newNarrowProvider() *StaticFrameworkProvider {
+	return NewStaticFrameworkProvider(narrowFramework, "1.0", map[string][]FrameworkRequirement{
+		ControlSC8: {Requirement(narrowFramework, "N-1", "Protect data in transit")},
+		ControlAC3: {Requirement(narrowFramework, "N-2", "Enforce access")},
+	})
+}
+
+// TestProjectionIsIndependentPerFramework is the crux of the model: one shared
+// finding set, two frameworks, two INDEPENDENT scopes and verdicts.
+func TestProjectionIsIndependentPerFramework(t *testing.T) {
 	cat := DefaultCatalog()
 	findings := sharedFindings(cat)
 
-	hipaa := ProjectFramework(findings, cat, NewHIPAAProvider())
-	pci := ProjectFramework(findings, cat, NewPCIProvider())
+	cis := ProjectFramework(findings, cat, NewCISProvider())
+	narrow := ProjectFramework(findings, cat, newNarrowProvider())
 
 	// ── independent SCOPES from the SAME findings ────────────────────────────
-	// HIPAA §164.312 technical safeguards: SC-8, IA-5 (+ AC-3/AU-2/SI-7 unverified).
-	// CM-2 (golden baseline) is NOT a HIPAA technical safeguard → out of scope.
-	if inScope(hipaa, ControlCM2) {
-		t.Error("CM-2 must NOT be in HIPAA scope (not a §164.312 technical safeguard)")
+	if !inScope(cis, ControlCM2) {
+		t.Error("CM-2 must be in CIS scope (CIS-4 secure configuration)")
 	}
-	if !inScope(hipaa, ControlSC8) {
-		t.Error("SC-8 (transmission security) must be in HIPAA scope")
+	if inScope(narrow, ControlCM2) {
+		t.Error("CM-2 must NOT be in the narrow framework's scope")
 	}
-	// PCI includes CM-2 (Req 2 secure configuration) → in scope.
-	if !inScope(pci, ControlCM2) {
-		t.Error("CM-2 must be in PCI scope (Req 2)")
+	if !inScope(narrow, ControlSC8) {
+		t.Error("SC-8 must be in the narrow framework's scope")
 	}
 
-	// ── same shared CM-2 finding scored DIFFERENTLY per framework ────────────
-	// It fails a control in PCI; it is invisible to HIPAA. This is the crux of
-	// per-framework independence: one finding, two independent verdicts.
-	if statusOf(pci, ControlCM2) != secfindings.StatusFail {
-		t.Errorf("CM-2 should FAIL under PCI, got %v", statusOf(pci, ControlCM2))
+	// ── the same shared CM-2 finding is scored DIFFERENTLY per framework ─────
+	if statusOf(cis, ControlCM2) != secfindings.StatusFail {
+		t.Errorf("CM-2 should FAIL under CIS, got %v", statusOf(cis, ControlCM2))
 	}
-	if hasControl(hipaa, ControlCM2) {
-		t.Error("HIPAA projection must not carry CM-2 at all")
+	if hasControl(narrow, ControlCM2) {
+		t.Error("the narrow projection must not carry CM-2 at all")
 	}
-
 	// SC-8 is shared: it fails in BOTH — same finding, both frameworks see it.
-	if statusOf(hipaa, ControlSC8) != secfindings.StatusFail {
-		t.Errorf("SC-8 should FAIL under HIPAA, got %v", statusOf(hipaa, ControlSC8))
+	if statusOf(cis, ControlSC8) != secfindings.StatusFail {
+		t.Errorf("SC-8 should FAIL under CIS, got %v", statusOf(cis, ControlSC8))
 	}
-	if statusOf(pci, ControlSC8) != secfindings.StatusFail {
-		t.Errorf("SC-8 should FAIL under PCI, got %v", statusOf(pci, ControlSC8))
-	}
-
-	// ── independent COVERAGE % (honest, < 100% via uncovered controls) ───────
-	// The denominator is the framework's OWN scope, the numerator is the
-	// controls the LEGACY 9 checks evidence (this catalog carries no hardening
-	// mappings — a caller composes those in with Catalog.With, which is what
-	// raises the numerator without touching the scope).
-	//
-	// HIPAA §164.312 technical safeguards: 10 in scope, 2 check-covered → 20%.
-	if hipaa.ControlsInScope != 10 || hipaa.ControlsWithCheck != 2 {
-		t.Errorf("HIPAA coverage counts = %d/%d, want 2/10", hipaa.ControlsWithCheck, hipaa.ControlsInScope)
-	}
-	if hipaa.CoveragePercent != 20 {
-		t.Errorf("HIPAA coverage = %.1f%%, want 20%%", hipaa.CoveragePercent)
-	}
-	// PCI technical requirements: 18 in scope, 5 check-covered → ~27.8%. PCI's
-	// scope is BROADER than HIPAA's from the same owned catalog, which is the
-	// point — the two frameworks are not two labels on one number.
-	if pci.ControlsInScope != 18 || pci.ControlsWithCheck != 5 {
-		t.Errorf("PCI coverage counts = %d/%d, want 5/18", pci.ControlsWithCheck, pci.ControlsInScope)
-	}
-	if pci.ControlsInScope <= hipaa.ControlsInScope {
-		t.Errorf("PCI scope (%d) must be broader than HIPAA's (%d)", pci.ControlsInScope, hipaa.ControlsInScope)
-	}
-	if pci.CoveragePercent < 27.5 || pci.CoveragePercent > 28.0 {
-		t.Errorf("PCI coverage = %.2f%%, want ~27.78%%", pci.CoveragePercent)
+	if statusOf(narrow, ControlSC8) != secfindings.StatusFail {
+		t.Errorf("SC-8 should FAIL under the narrow framework, got %v", statusOf(narrow, ControlSC8))
 	}
 
-	// Both frameworks reach a Fail verdict (each from ITS OWN in-scope findings)
-	// but on different scopes — HIPAA off SC-8 only, PCI off SC-8 + CM-2.
-	if hipaa.Verdict != secfindings.StatusFail || pci.Verdict != secfindings.StatusFail {
-		t.Errorf("verdicts hipaa=%v pci=%v, want both Fail", hipaa.Verdict, pci.Verdict)
+	// ── coverage is computed against each framework's OWN scope ──────────────
+	if narrow.ControlsInScope != 2 {
+		t.Errorf("narrow scope = %d controls, want 2 (the provider owns the scope)", narrow.ControlsInScope)
 	}
-	if hipaa.Failed != 1 {
-		t.Errorf("HIPAA failed controls = %d, want 1 (SC-8)", hipaa.Failed)
+	if cis.ControlsInScope != len(NewCISProvider().ControlsInScope()) {
+		t.Errorf("CIS scope = %d, want the provider's own %d",
+			cis.ControlsInScope, len(NewCISProvider().ControlsInScope()))
 	}
-	if pci.Failed != 2 {
-		t.Errorf("PCI failed controls = %d, want 2 (SC-8, CM-2)", pci.Failed)
+	if cis.ControlsInScope <= narrow.ControlsInScope {
+		t.Errorf("CIS scope (%d) must be broader than the narrow one (%d)",
+			cis.ControlsInScope, narrow.ControlsInScope)
+	}
+	if cis.CoveragePercent <= 0 || cis.CoveragePercent >= 100 {
+		t.Errorf("CIS coverage = %.2f%%, want an honest fraction between 0 and 100", cis.CoveragePercent)
+	}
+
+	// Each reaches a Fail verdict from ITS OWN in-scope findings.
+	if cis.Verdict != secfindings.StatusFail || narrow.Verdict != secfindings.StatusFail {
+		t.Errorf("verdicts cis=%v narrow=%v, want both Fail", cis.Verdict, narrow.Verdict)
+	}
+	if narrow.Failed != 1 {
+		t.Errorf("narrow failed controls = %d, want 1 (SC-8)", narrow.Failed)
+	}
+	if cis.Failed != 2 {
+		t.Errorf("CIS failed controls = %d, want 2 (SC-8, CM-2)", cis.Failed)
 	}
 
 	// Honesty caption present on every framework view (§5d).
-	if hipaa.Caption == "" || pci.Caption == "" {
+	if cis.Caption == "" || narrow.Caption == "" {
 		t.Error("standard honesty caption must be attached to every framework view")
 	}
 }
 
+// TestPerTenantSelectionIsInputSet proves the selection — not the catalogue — is
+// what a tenant is scored against, and that enabling a second framework does not
+// disturb the first one's independent score.
 func TestPerTenantSelectionIsInputSet(t *testing.T) {
 	cat := DefaultCatalog()
 	findings := sharedFindings(cat)
 
-	// A HIPAA-only tenant passes ONLY the HIPAA provider and sees ONLY HIPAA.
-	only := ProjectFrameworks(findings, cat, []FrameworkProvider{NewHIPAAProvider()})
-	if len(only) != 1 || only[0].Framework != FrameworkHIPAA {
-		t.Fatalf("HIPAA-only selection = %+v, want single HIPAA scorecard", only)
+	only := ProjectFrameworks(findings, cat, []FrameworkProvider{NewCISProvider()})
+	if len(only) != 1 || only[0].Framework != FrameworkCIS {
+		t.Fatalf("CIS-only selection = %+v, want a single CIS scorecard", only)
 	}
-	// A both-enabled tenant gets two independent, separately-scored scorecards
-	// from the SAME findings (run once, project onto each).
-	both := ProjectFrameworks(findings, cat, []FrameworkProvider{NewHIPAAProvider(), NewPCIProvider()})
+	both := ProjectFrameworks(findings, cat, []FrameworkProvider{NewCISProvider(), newNarrowProvider()})
 	if len(both) != 2 {
 		t.Fatalf("both selection returned %d scorecards, want 2", len(both))
 	}
-	if both[0].Framework != FrameworkHIPAA || both[1].Framework != FrameworkPCIDSS {
+	if both[0].Framework != FrameworkCIS || both[1].Framework != narrowFramework {
 		t.Errorf("order not preserved: %q, %q", both[0].Framework, both[1].Framework)
 	}
-	// Enabling PCI alongside HIPAA does NOT change HIPAA's independent score.
 	if both[0].Failed != only[0].Failed || both[0].CoveragePercent != only[0].CoveragePercent {
-		t.Error("HIPAA score changed when PCI was also enabled — not independent")
+		t.Error("the CIS score changed when a second framework was enabled — not independent")
 	}
 	if ProjectFrameworks(findings, cat, nil) != nil {
 		t.Error("no selected frameworks should yield nil")
 	}
 }
 
+// TestUnassessedNeverFalseClear: a run with no findings leaves covered controls
+// UNASSESSED, never Pass.
 func TestUnassessedNeverFalseClear(t *testing.T) {
 	cat := DefaultCatalog()
-	// A run with NO findings at all: covered controls are UNASSESSED, never Pass.
-	cov := ProjectFramework(nil, cat, NewPCIProvider())
+	cov := ProjectFramework(nil, cat, NewCISProvider())
 	if cov.Verdict != secfindings.StatusUnknown {
 		t.Errorf("empty run verdict = %v, want Unknown (never a false clear)", cov.Verdict)
 	}
@@ -144,9 +143,85 @@ func TestUnassessedNeverFalseClear(t *testing.T) {
 		t.Errorf("all check-covered controls should be Unassessed with no findings: %d vs %d",
 			cov.Unassessed, cov.ControlsWithCheck)
 	}
-	// Coverage % is a static capability and stays honest regardless of findings.
-	if cov.ControlsWithCheck != 5 {
-		t.Errorf("PCI check-covered = %d, want 5", cov.ControlsWithCheck)
+	if cov.ControlsWithCheck == 0 {
+		t.Error("CIS must be check-covered by the legacy checks, or the coverage numerator means nothing")
+	}
+}
+
+// TestSelectionReportsAMissingCrosswalkInsteadOfDroppingIt is the honesty half
+// of the pack seam (pack.go): an enabled framework whose crosswalk is not
+// installed is REPORTED — a null score and a sentence — never silently absent
+// from the page, and never a 0 % that reads as total failure.
+func TestSelectionReportsAMissingCrosswalkInsteadOfDroppingIt(t *testing.T) {
+	cat := DefaultCatalog()
+	findings := sharedFindings(cat)
+
+	licensed := LicensedFrameworkIDs()
+	if len(licensed) == 0 {
+		t.Skip("no framework awaits a crosswalk pack in this build")
+	}
+	var awaiting string
+	for _, info := range Frameworks() { // catalogue order, so the pick is stable
+		if licensed[info.ID] {
+			awaiting = info.ID
+			break
+		}
+	}
+
+	covs := ProjectSelection(findings, cat, []string{IDCISv8, awaiting})
+	if len(covs) != 2 {
+		t.Fatalf("selection produced %d scorecards, want 2 (the missing one is reported, not dropped)", len(covs))
+	}
+	missing := covs[1]
+	info, _ := InfoFor(awaiting)
+	if missing.Framework != info.Name {
+		t.Errorf("the reported row is %q, want the framework the tenant enabled (%q)", missing.Framework, info.Name)
+	}
+	if missing.ScorePercent != nil {
+		t.Errorf("a framework with no installed crosswalk must report a NULL score, got %v", *missing.ScorePercent)
+	}
+	if missing.Verdict != secfindings.StatusUnknown || missing.Passed != 0 || missing.Failed != 0 {
+		t.Errorf("a not-installed framework must be unassessed, got %+v", missing)
+	}
+	if !strings.Contains(missing.Note, "not included in this deployment") {
+		t.Errorf("the row must SAY why it has no score, got %q", missing.Note)
+	}
+	if missing.Caption == "" {
+		t.Error("the honesty caption belongs on every framework view, including this one")
+	}
+
+	// With a crosswalk installed for that id, the not-installed row is gone and
+	// the framework is scored like any other.
+	pack := FrameworkPack{ID: awaiting, New: newNarrowProvider}
+	withPack := ProjectSelection(findings, cat, []string{IDCISv8, awaiting}, pack)
+	if len(withPack) != 2 {
+		t.Fatalf("with the pack installed the selection produced %d scorecards, want 2", len(withPack))
+	}
+	if withPack[1].Note == missing.Note {
+		t.Error("an installed crosswalk must be projected, not reported as missing")
+	}
+	if withPack[1].ControlsInScope != 2 {
+		t.Errorf("the installed crosswalk's own scope should drive the scorecard, got %d",
+			withPack[1].ControlsInScope)
+	}
+}
+
+// TestAPackCannotAddOrRenameAFramework is the DATA-not-code-injection rule from
+// the core side: a pack for an id the catalogue does not carry contributes
+// nothing at all, so no module can extend the vocabulary a tenant selects from.
+func TestAPackCannotAddOrRenameAFramework(t *testing.T) {
+	rogue := FrameworkPack{ID: "not-a-framework", New: newNarrowProvider}
+	if _, ok := ProviderFor("not-a-framework", rogue); ok {
+		t.Error("a pack must not be able to add an id to the closed vocabulary")
+	}
+	if len(Frameworks()) != len(frameworkCatalogue()) {
+		t.Error("the catalogue is the catalogue: a pack cannot lengthen it")
+	}
+	if KnownFrameworkIDs()["not-a-framework"] {
+		t.Error("a pack must not widen what an API write may name")
+	}
+	if got := ProjectSelection(nil, DefaultCatalog(), []string{"not-a-framework"}, rogue); len(got) != 0 {
+		t.Errorf("an unknown id is skipped, not reported as missing: %+v", got)
 	}
 }
 

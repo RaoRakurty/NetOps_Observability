@@ -15,6 +15,7 @@ import (
 // v8.0 crosswalk.
 func TestFrameworkCatalogueIsClosedAndVersioned(t *testing.T) {
 	seen := map[string]bool{}
+	licensed := LicensedFrameworkIDs()
 	for _, info := range Frameworks() {
 		if info.ID == "" || info.Name == "" || info.Version == "" || info.Scope == "" {
 			t.Errorf("framework descriptor is incomplete: %+v", info)
@@ -27,17 +28,36 @@ func TestFrameworkCatalogueIsClosedAndVersioned(t *testing.T) {
 			t.Errorf("%s: unknown source %q", info.ID, info.Source)
 		}
 		p, ok := ProviderFor(info.ID)
-		if !ok {
-			t.Fatalf("%s: no provider", info.ID)
+		switch {
+		case ok:
+			if p.Framework() != info.Name {
+				t.Errorf("%s: descriptor name %q != provider %q", info.ID, info.Name, p.Framework())
+			}
+			if p.Version() != info.Version {
+				t.Errorf("%s: descriptor version %q != provider %q", info.ID, info.Version, p.Version())
+			}
+			if len(p.ControlsInScope()) == 0 {
+				t.Errorf("%s: provider has an empty scope", info.ID)
+			}
+		case !licensed[info.ID]:
+			// Core carries the descriptor AND the crosswalk for the default
+			// two. Anything else that fails to resolve is a catalogue entry
+			// nothing can ever score.
+			t.Fatalf("%s: no provider and no pack awaited", info.ID)
 		}
-		if p.Framework() != info.Name {
-			t.Errorf("%s: descriptor name %q != provider %q", info.ID, info.Name, p.Framework())
+	}
+	// The frameworks whose crosswalk is the `security_dialects` entitlement
+	// stay in the VOCABULARY — an Apache-2.0 build must still be able to name
+	// them and validate a selection already stored against them — but their
+	// crosswalk resolves only when a pack supplies it (pack.go).
+	for _, id := range []string{IDNIST80053, IDCISv8} {
+		if licensed[id] {
+			t.Errorf("%s is a DEFAULT framework: its crosswalk must be Apache-2.0 core", id)
 		}
-		if p.Version() != info.Version {
-			t.Errorf("%s: descriptor version %q != provider %q", info.ID, info.Version, p.Version())
-		}
-		if len(p.ControlsInScope()) == 0 {
-			t.Errorf("%s: provider has an empty scope", info.ID)
+	}
+	for id := range licensed {
+		if _, ok := ProviderFor(id); ok {
+			t.Errorf("%s: core must not carry a crosswalk it declares licensed", id)
 		}
 	}
 	if !seen[IDNIST80053] || !seen[IDCISv8] || !seen[IDNISTCSF] || !seen[IDHIPAA] || !seen[IDPCIDSS] {
@@ -78,11 +98,11 @@ func TestDefaultSetIsNotEveryFramework(t *testing.T) {
 // order regardless of the caller's, and an unknown id is skipped rather than
 // failing the read.
 func TestProvidersForIsSelectionOnlyAndOrdered(t *testing.T) {
-	got := ProvidersFor([]string{IDPCIDSS, "retired-framework", IDNIST80053})
+	got := ProvidersFor([]string{IDCISv8, "retired-framework", IDNIST80053})
 	if len(got) != 2 {
 		t.Fatalf("got %d providers, want 2 (the unknown id is skipped)", len(got))
 	}
-	if got[0].Framework() != FrameworkNIST80053 || got[1].Framework() != FrameworkPCIDSS {
+	if got[0].Framework() != FrameworkNIST80053 || got[1].Framework() != FrameworkCIS {
 		t.Errorf("catalogue order not applied: %q, %q", got[0].Framework(), got[1].Framework())
 	}
 	if len(ProvidersFor(nil)) != 0 {
@@ -90,44 +110,11 @@ func TestProvidersForIsSelectionOnlyAndOrdered(t *testing.T) {
 	}
 }
 
-// TestHIPAAReportsThroughTheProjection is the bug the owner reported: HIPAA is a
-// projection and never a standards TAG, so before this it could never appear.
-// A finding tagged only with an 800-53 control must reach HIPAA's requirement.
-func TestHIPAAReportsThroughTheProjection(t *testing.T) {
-	cat := DefaultCatalog()
-	// A hardening finding: no legacy check id, only the producer-stamped control.
-	f := secfindings.Finding{RawRuleID: "telnet-vty-enabled", ControlID: ControlAC17}
-	f.SetStatus(secfindings.StatusFail)
-
-	cov := ProjectFramework([]secfindings.Finding{f}, cat, NewHIPAAProvider())
-	if cov.Framework != FrameworkHIPAA {
-		t.Fatalf("framework = %q", cov.Framework)
-	}
-	if statusOf(cov, ControlAC17) != secfindings.StatusFail {
-		t.Fatalf("AC-17 should FAIL under HIPAA via the projection, got %v", statusOf(cov, ControlAC17))
-	}
-	var reqs []string
-	for _, c := range cov.Controls {
-		if c.ControlID == ControlAC17 {
-			for _, r := range c.Requirements {
-				reqs = append(reqs, r.RequirementID)
-			}
-		}
-	}
-	if len(reqs) == 0 || reqs[0] != "164.312(a)(1)" {
-		t.Errorf("AC-17 must carry the HIPAA requirement it satisfies, got %v", reqs)
-	}
-	// …and the same finding is invisible to a framework that does not scope AC-17.
-	if cov.ScorePercent == nil || *cov.ScorePercent != 0 {
-		t.Errorf("one failing assessed control = 0%% score, got %v", cov.ScorePercent)
-	}
-}
-
 // TestNothingAssessedIsANoteNeverAPercentage is the honesty rule the compliance
 // page depends on: a framework with no assessed control says so in words. A 0
 // there would read as "everything failed"; a 100 would read as a clean bill.
 func TestNothingAssessedIsANoteNeverAPercentage(t *testing.T) {
-	cov := ProjectFramework(nil, DefaultCatalog(), NewPCIProvider())
+	cov := ProjectFramework(nil, DefaultCatalog(), NewCISProvider())
 	if cov.ScorePercent != nil {
 		t.Errorf("an unassessed framework must report a null score, got %v", *cov.ScorePercent)
 	}
@@ -140,7 +127,7 @@ func TestNothingAssessedIsANoteNeverAPercentage(t *testing.T) {
 	// A NotApplicable verdict is likewise NOT a pass.
 	na := secfindings.Finding{RawRuleID: "x", ControlID: ControlSC8}
 	na.SetStatus(secfindings.StatusNotApplicable)
-	cov = ProjectFramework([]secfindings.Finding{na}, DefaultCatalog(), NewPCIProvider())
+	cov = ProjectFramework([]secfindings.Finding{na}, DefaultCatalog(), NewCISProvider())
 	if cov.Passed != 0 {
 		t.Errorf("NotApplicable counted as a pass (%d) — it is not assessed evidence", cov.Passed)
 	}
@@ -167,13 +154,13 @@ func TestWithComposesForeignMappings(t *testing.T) {
 	if base.HasCheckForControl(ControlAC17) {
 		t.Error("With must not mutate the receiver")
 	}
-	beforeScope := ProjectFramework(nil, base, NewHIPAAProvider()).ControlsInScope
-	after := ProjectFramework(nil, composed, NewHIPAAProvider())
+	beforeScope := ProjectFramework(nil, base, NewCISProvider()).ControlsInScope
+	after := ProjectFramework(nil, composed, NewCISProvider())
 	if after.ControlsInScope != beforeScope {
 		t.Errorf("composition changed the framework SCOPE (%d → %d) — scope belongs to the provider",
 			beforeScope, after.ControlsInScope)
 	}
-	if after.ControlsWithCheck <= ProjectFramework(nil, base, NewHIPAAProvider()).ControlsWithCheck {
+	if after.ControlsWithCheck <= ProjectFramework(nil, base, NewCISProvider()).ControlsWithCheck {
 		t.Error("composition should raise the check-covered numerator")
 	}
 }

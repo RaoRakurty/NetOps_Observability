@@ -12,10 +12,8 @@ import (
 // compile time (§5h — frameworks are interchangeable providers behind the interface).
 var (
 	_ FrameworkProvider = (*StaticFrameworkProvider)(nil)
-	_ FrameworkProvider = NewNISTCSFProvider()
+	_ FrameworkProvider = NewNIST80053Provider()
 	_ FrameworkProvider = NewCISProvider()
-	_ FrameworkProvider = NewHIPAAProvider()
-	_ FrameworkProvider = NewPCIProvider()
 )
 
 func TestDefaultCatalogSeed(t *testing.T) {

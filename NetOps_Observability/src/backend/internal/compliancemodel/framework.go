@@ -143,38 +143,6 @@ func NewNIST80053Provider() *StaticFrameworkProvider {
 	return NewStaticFrameworkProvider(f, "Rev 5 (Release 5.2.0)", crosswalk)
 }
 
-// NewNISTCSFProvider seeds the NIST CSF 2.0 crosswalk.
-//
-// CSF 2.0 (February 2024) RENUMBERED the subcategories CSF 1.1 used: PR.AC-*
-// became PR.AA-* (Identity Management, Authentication and Access Control),
-// PR.IP-* was replaced by PR.PS-* (Platform Security), and network protection
-// moved to PR.IR-* (Technology Infrastructure Resilience). The ids below are the
-// 2.0 ones — the previous seed carried 1.1 ids under a "2.0" label, which is the
-// kind of quiet version drift a scorecard must never have.
-func NewNISTCSFProvider() *StaticFrameworkProvider {
-	f := FrameworkNISTCSF
-	return NewStaticFrameworkProvider(f, "2.0", map[string][]FrameworkRequirement{
-		ControlCM8:  {req(f, "ID.AM-01", "Inventories of hardware managed by the organization are maintained")},
-		ControlSI2:  {req(f, "ID.RA-01", "Vulnerabilities in assets are identified, validated and recorded")},
-		ControlAC2:  {req(f, "PR.AA-01", "Identities and credentials for authorized users and devices are managed")},
-		ControlIA5:  {req(f, "PR.AA-01", "Identities and credentials for authorized users and devices are managed")},
-		ControlIA2:  {req(f, "PR.AA-03", "Users, services and hardware are authenticated")},
-		ControlIA3:  {req(f, "PR.AA-03", "Users, services and hardware are authenticated")},
-		ControlAC3:  {req(f, "PR.AA-05", "Access permissions and authorizations are defined and enforced")},
-		ControlAC17: {req(f, "PR.AA-05", "Access permissions and authorizations are defined and enforced")},
-		ControlSC8:  {req(f, "PR.DS-02", "The confidentiality, integrity and availability of data in transit are protected")},
-		ControlSI7:  {req(f, "PR.DS-01", "The confidentiality, integrity and availability of data at rest are protected")},
-		ControlCM2:  {req(f, "PR.PS-01", "Configuration management practices are established and applied")},
-		ControlCM7:  {req(f, "PR.PS-01", "Configuration management practices are established and applied")},
-		ControlAU2:  {req(f, "PR.PS-04", "Log records are generated and made available for continuous monitoring")},
-		ControlAU8:  {req(f, "PR.PS-04", "Log records are generated and made available for continuous monitoring")},
-		ControlAC4:  {req(f, "PR.IR-01", "Networks and environments are protected from unauthorized logical access")},
-		ControlSC7:  {req(f, "PR.IR-01", "Networks and environments are protected from unauthorized logical access")},
-		ControlSC5:  {req(f, "PR.IR-04", "Adequate resource capacity to ensure availability is maintained")},
-		ControlAU6:  {req(f, "DE.CM-01", "Networks and network services are monitored to find potentially adverse events")},
-	})
-}
-
 // NewCISProvider seeds the CIS Critical Security Controls v8.1 crosswalk — the
 // ENTERPRISE controls (CIS-1 … CIS-18), which are a different artefact from the
 // per-platform CIS Benchmarks. Benchmark sections are NOT frameworks and are
@@ -204,64 +172,12 @@ func NewCISProvider() *StaticFrameworkProvider {
 	})
 }
 
-// NewHIPAAProvider seeds the HIPAA Security Rule crosswalk (45 CFR Part 164
-// Subpart C as it stands in 2026 — the January 2025 NPRM was moved to HHS'
-// long-term agenda with anticipated final action in 2027 and is NOT law, so
-// nothing here codes against its proposed requirements). HIPAA is a
-// LEGAL/regulatory framework: only the §164.312 Technical Safeguards map to a
-// device config audit at all (§5d), so its scope is DELIBERATELY narrow and
-// INCLUDES technical-safeguard controls Correlix has no check for yet — that is
-// what makes the coverage % honest, and what makes a HIPAA-only tenant's view
-// genuinely different from a PCI tenant's.
-//
-// CM-2/CM-8 (baseline configuration, asset inventory) are deliberately ABSENT:
-// they are §164.308 administrative safeguards, not §164.312 technical ones, and
-// a config audit cannot evidence them.
-//
-// NOTE: this is control EVIDENCE for the technical slice, NEVER "certified HIPAA
-// compliance" (§5d defensible-claim rule); the broad §164.308/.310 realization
-// is out of a config audit's reach.
-func NewHIPAAProvider() *StaticFrameworkProvider {
-	f := FrameworkHIPAA
-	return NewStaticFrameworkProvider(f, "45 CFR 164.312", map[string][]FrameworkRequirement{
-		ControlAC3:  {req(f, "164.312(a)(1)", "Access Control")},
-		ControlAC17: {req(f, "164.312(a)(1)", "Access Control")},
-		ControlAC2:  {req(f, "164.312(a)(2)(i)", "Unique User Identification")},
-		ControlAU2:  {req(f, "164.312(b)", "Audit Controls")},
-		ControlAU6:  {req(f, "164.312(b)", "Audit Controls")},
-		ControlAU8:  {req(f, "164.312(b)", "Audit Controls")},
-		ControlSI7:  {req(f, "164.312(c)(1)", "Integrity")},
-		ControlIA2:  {req(f, "164.312(d)", "Person or Entity Authentication")},
-		ControlIA5:  {req(f, "164.312(d)", "Person or Entity Authentication")},
-		ControlSC8:  {req(f, "164.312(e)(1)", "Transmission Security")},
-	})
-}
-
-// NewPCIProvider seeds the PCI DSS v4.0.1 crosswalk. PCI is also regulatory but its
-// TECHNICAL requirements (1/2/4/6/7/8/10/11) cover more of the owned controls
-// than HIPAA's technical safeguards do, so a PCI tenant's scope is broader —
-// proving the two frameworks are scored on DIFFERENT, INDEPENDENT scopes from
-// the same shared findings.
-func NewPCIProvider() *StaticFrameworkProvider {
-	f := FrameworkPCIDSS
-	return NewStaticFrameworkProvider(f, "4.0.1", map[string][]FrameworkRequirement{
-		ControlAC4:  {req(f, "Req 1", "Install and maintain network security controls")},
-		ControlSC7:  {req(f, "Req 1", "Install and maintain network security controls")},
-		ControlSC5:  {req(f, "Req 1", "Install and maintain network security controls")},
-		ControlCM2:  {req(f, "Req 2", "Apply secure configurations to all system components")},
-		ControlCM7:  {req(f, "Req 2", "Apply secure configurations to all system components")},
-		ControlAC17: {req(f, "Req 2", "Apply secure configurations to all system components")},
-		ControlSC8:  {req(f, "Req 4", "Protect cardholder data with strong cryptography during transmission")},
-		ControlSI2:  {req(f, "Req 6", "Develop and maintain secure systems and software")},
-		ControlAC3:  {req(f, "Req 7", "Restrict access to system components by business need to know")},
-		ControlAC2:  {req(f, "Req 8", "Identify users and authenticate access to system components")},
-		ControlIA2:  {req(f, "Req 8", "Identify users and authenticate access to system components")},
-		ControlIA5:  {req(f, "Req 8", "Identify users and authenticate access to system components")},
-		ControlIA3:  {req(f, "Req 8", "Identify users and authenticate access to system components")},
-		ControlAU2:  {req(f, "Req 10", "Log and monitor all access to system components and cardholder data")},
-		ControlAU6:  {req(f, "Req 10", "Log and monitor all access to system components and cardholder data")},
-		ControlAU8:  {req(f, "Req 10", "Log and monitor all access to system components and cardholder data")},
-		ControlSI7:  {req(f, "Req 11", "Test security of systems and networks regularly")},
-		ControlCM8:  {req(f, "Req 12.5.1", "An inventory of system components in scope for PCI DSS is maintained")},
-	})
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// The crosswalks BEYOND the default two — NIST CSF 2.0, HIPAA §164.312 and
+// PCI DSS v4.0.1 — are not in this file. They are the `security_dialects`
+// entitlement ("compliance frameworks beyond the default two") and live in
+// src/backend/enterprise/frameworks, reaching the registry as FrameworkPack
+// data (pack.go). Their IDENTITY stays here and in registry.go: an Apache-2.0
+// build still names them, still validates a stored selection against them, and
+// still reports — in words — that their crosswalk is not installed.
+// ─────────────────────────────────────────────────────────────────────────────

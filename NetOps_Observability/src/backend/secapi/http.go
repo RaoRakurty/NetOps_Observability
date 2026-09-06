@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/compliancemodel"
 	"netops/backend/internal/httppage"
 	"netops/backend/internal/oslog"
 )
@@ -101,6 +102,16 @@ type Deps struct {
 	// this read API keeps answering with the producer deleted
 	// (security_lane_removability_test.go).
 	ComplianceInputs func() ComplianceInputs
+	// FrameworkCrosswalks supplies the compliance-framework CROSSWALKS that are
+	// not part of Apache-2.0 core — the frameworks beyond the shipped default
+	// two (internal/compliancemodel's pack.go). It is INJECTED and nil-safe for
+	// the same two reasons ComplianceInputs is: this package must keep
+	// answering when the module is deleted, and it must never learn about
+	// licensing. The wiring decides what a deployment is entitled to and hands
+	// over the packs; a nil func (or a nil result) means core's own two
+	// frameworks, and an enabled framework whose crosswalk is absent is
+	// REPORTED as such rather than dropped.
+	FrameworkCrosswalks func() []compliancemodel.FrameworkPack
 	// FrameworkStore is the PG/file register for WHICH compliance frameworks a
 	// tenant has opted into (frameworks.go). Optional: a nil store means the
 	// deployment cannot persist a selection, so every tenant reads the shipped

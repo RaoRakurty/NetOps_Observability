@@ -316,6 +316,15 @@ vocabulary in `internal/compliancemodel/registry.go`:
 | `hipaa-security-rule` | HIPAA Security Rule | 45 CFR 164.312 | projection-of-800-53 | off |
 | `pci-dss-v4` | PCI DSS v4.0.1 | 4.0.1 | projection-of-800-53 | off |
 
+The VOCABULARY above is Apache-2.0 core in full — a deployment must be able to
+name a framework and validate a selection it has already stored. The CROSSWALK
+DATA for the three non-default frameworks is the `security_dialects` entitlement
+and lives in `src/backend/enterprise/frameworks`, reaching the registry as
+`compliancemodel.FrameworkPack` data through the assembly seam (tracker 240,
+2026-09-06). With that module absent the framework stays selectable and reports
+a null score with a sentence saying the crosswalk is not included — never an
+empty scorecard.
+
 The default set is deliberately small: the 800-53 base is the catalogue the
 platform already models (no crosswalk hop), CIS Controls is the vendor-neutral
 baseline a network team is expected to speak to, and the three regulatory
