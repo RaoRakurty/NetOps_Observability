@@ -1587,8 +1587,8 @@ code, kbd, pre, .mono, td.mono {
 /* ---- Modal forms: Create User + Grant access (elegant dialog layout) ------ */
 .uf-logo { background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; }
 /* Section divider inside a modal body */
-.uf2-sec { display: flex; align-items: baseline; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: .06em;
-  text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+.uf2-sec { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; font-weight: 700; letter-spacing: .02em;
+  text-transform: none; color: var(--muted); margin: 0 0 10px; }
 .uf2-sec:not(:first-child) { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--panel-border); }
 .uf2-sec .mini-meta { text-transform: none; letter-spacing: 0; font-weight: 500; }
 
@@ -1672,8 +1672,8 @@ code, kbd, pre, .mono, td.mono {
   padding: 10px 18px; background: color-mix(in srgb, var(--accent) 8%, transparent); min-width: 280px;
 }
 .region-topo-tag { font-weight: 700; font-size: 13px; }
-.region-topo-sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
-.region-topo-arrow { color: var(--muted); font-size: 11px; }
+.region-topo-line { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.region-topo-arrow { color: var(--muted); font-size: 12.5px; }
 .region-topo-planes { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
 .region-plane {
   border: 1px dashed var(--panel-border); border-radius: 10px; padding: 9px 12px;
@@ -1681,8 +1681,8 @@ code, kbd, pre, .mono, td.mono {
 }
 .region-plane.used { opacity: 1; border-style: solid; }
 .region-plane-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
-.region-plane-meta { color: var(--muted); font-size: 11px; margin-top: 3px; }
-.region-plane-stack { color: var(--muted); font-size: 10px; margin-top: 4px; letter-spacing: 0.02em; }
+.region-plane-meta { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+.region-plane-stack { color: var(--muted); font-size: 12.5px; margin-top: 4px; letter-spacing: 0.02em; }
 
 /* Scope selector — the Org | Region | Tenant context control in the top bar. */
 .scope-sel { position: relative; }
@@ -2825,6 +2825,33 @@ body.dtv-resizing { cursor: col-resize !important; user-select: none !important;
   gap: var(--sp-3); margin-bottom: var(--sp-3);
 }
 .admin-card-head h2 { margin: 0; }
+.admin-head h2 { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ----- swept Administration surfaces (tracker 270, sweep 3) -----
+   `.adm` is a SCOPE, not a layout. It exists so the sentence-case and
+   minimum-size rules below reach only the swept Administration / Platform
+   views: an unswept page may still hand a chip a raw lowercase enum, and
+   restyling that globally would be a change nobody reviewed.
+
+   `.adm-line` is a STATED FACT — a count, a state, a locator, a legend. It is
+   NOT an explanatory note, which is why the word budget does not count it and
+   why nothing that TEACHES may be written into one. That goes to
+   src/backend/ai/skills/explain/<topic>.md, behind the (i). */
+.adm-line { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin: 0; }
+.adm-mt { margin-top: var(--sp-2); }
+.adm-check { display: inline-flex; align-items: center; gap: 8px; }
+.adm-grouphead {
+  margin: 0 0 2px; font-size: 12.5px; font-weight: 700; letter-spacing: .02em;
+  color: var(--muted); text-transform: none;
+}
+.adm .badge, .adm .conn-status, .adm .perm-pill, .adm .conn-meta {
+  font-size: 12.5px; text-transform: none; letter-spacing: 0;
+}
+.adm .badge::first-letter, .adm .conn-status::first-letter, .adm .perm-pill::first-letter {
+  text-transform: uppercase;
+}
+.adm .mini-meta { font-size: 12.5px; line-height: 1.5; }
+.adm .sync-block > summary::before { font-size: 12.5px; }
 
 /* A subtle accent-tinted banner marking a not-yet-wired feature. */
 .planned-banner {
@@ -6664,7 +6691,11 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
   background: color-mix(in srgb, var(--lic-tone, var(--fg-subtle)) 12%, transparent);
   white-space: nowrap;
 }
-.lic-sub { font-size: 11px; color: var(--muted); }
+.lic-sub { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+/* `.lic-line` is a STATED FACT — a date, a key id, a limit, a locator. It is
+   not an explanatory note (tracker 270, sweep 3), so the word budget does not
+   count it and nothing that teaches may be written into one. */
+.lic-line { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 .lic-block { display: block; }
 /* absence, not failure */
 .lic-absent { font-size: 11px; color: var(--fg-subtle); font-style: italic; }

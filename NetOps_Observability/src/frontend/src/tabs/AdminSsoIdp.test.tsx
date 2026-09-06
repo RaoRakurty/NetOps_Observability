@@ -75,7 +75,11 @@ describe("RoleMappingTable", () => {
     const row = screen.getByTestId("default-role-row");
     expect(row).toHaveClass("default-row");
     expect(row).toHaveTextContent("read-only");
-    expect(screen.getByText(/federated\s+logins land read-only when mappings are missing/i)).toBeInTheDocument();
+    // The CLAIM stays: no match means the default role, which is why a federated
+    // login lands read-only when the mappings are wrong. The reasoning moved to
+    // ai/skills/explain/sso.default-role.md and the (i) is asserted with it.
+    expect(screen.getByText(/No match means the default role/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ask Iris about the default role/ })).toBeInTheDocument();
   });
 });
 

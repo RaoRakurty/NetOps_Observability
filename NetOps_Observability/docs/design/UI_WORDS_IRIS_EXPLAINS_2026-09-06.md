@@ -118,3 +118,42 @@ same reading.
   Security or Data Protection surface renders below 12.5 px.
 - **All four** — none explains a protocol, a framework or a backup verdict on
   the page. 54 more authored files carry it instead.
+
+## Vendor observation — what sweep 3 matched (2026-09-06)
+
+Sweep 3 = Administration (Users, Roles, Tenants, Organizations, Regions,
+Security Settings, Assign access, Sessions, API Access with the scope picker,
+Authentication + the SSO identity-provider panel, Token policy, Log export
+limits, Integrations, Notifications and contact points, RCA Auto-Ticketing,
+Ticket Delivery), Licence and its 402 card, Registries, Cloud ingest, and the
+Platform tools (Pipeline Debugger, Quarantine). Same four consoles.
+
+- **Datadog** — an admin screen is a table and a form; what a setting *means*
+  sits behind an `(i)`, never above the field. Matched: every `AdminHead`
+  paragraph is now one short line plus a topic — "People who can sign in.",
+  "Isolation units inside an organization.", "How people sign in." — and the
+  RFC citations (4511, 8907, 9700, NIST 800-63B) left the screen entirely.
+- **Kentik** — a caveat is stated once per view. Matched: "inbound webhooks are
+  recorded but not yet driving incident state" appeared three times on the
+  Integrations/Notifications surfaces and is now one file cited from one line;
+  the four ITSM/PagerDuty/Slack/Jira "one ticket per root cause, never per raw
+  alert" restatements are four authored files behind four `(i)`.
+- **ThousandEyes** — protocol vocabulary lives in the tooltip. Matched: PBKDF2,
+  Authorization Code flow, HMAC, `acr`/`amr`, Events API v2, `client_credentials`
+  and STORE_BACKEND all left the page; `title=` and the `(i)` carry them.
+- **Meraki** — plain outcomes, sentence case, small print that is still
+  readable. Matched: `.adm` scopes badges, connector chips and permission pills
+  to sentence case at 12.5 px (they were 11–12 px uppercase), the modal section
+  divider stopped SHOUTING, and nothing on a swept Administration, Licence,
+  Registries, Cloud-ingest or Platform surface renders below 12.5 px.
+- **All four** — a destructive confirmation still reads in full. Deleting a
+  tenant, force-deleting one with users, suspending it, hiding it from the
+  global view, revoking a session, break-glass and "this credential administers
+  the whole platform" keep every word: a consequence you must read before
+  confirming is part of the action, not an explanation. Licence conditions,
+  the platform's verbatim refusal text and the signing-key notices are
+  untouched for the same reason.
+
+`.adm-line` (Administration) and `.lic-line` (Licence) are new names for ink
+that already existed — a STATED FACT is not an explanatory note, and the word
+budget counts notes. 84 authored files carry what left.

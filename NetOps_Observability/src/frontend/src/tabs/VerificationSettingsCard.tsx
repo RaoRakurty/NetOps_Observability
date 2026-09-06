@@ -36,6 +36,7 @@ import { api, type VerificationSettings } from "../services/api";
 import Icon from "../components/Icon";
 import { Modal } from "../components/ui";
 import { operatorError } from "../lib/errors";
+import AskIris from "../components/AskIris";
 import {
   EMPTY_FORM,
   canEdit,
@@ -61,10 +62,10 @@ function Field({ label, hint, error, children }: {
 }) {
   return (
     <label style={{ display: "block", marginBottom: 12 }}>
-      <span style={{ display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{label}</span>
+      <span style={{ display: "block", fontSize: "var(--fs-meta)", fontWeight: 600, marginBottom: 4 }}>{label}</span>
       {children}
-      {hint && <span style={{ display: "block", fontSize: 11, color: "var(--muted)", marginTop: 3 }}>{hint}</span>}
-      {error && <span role="alert" style={{ display: "block", fontSize: 11, color: "var(--crit)", marginTop: 3 }}>{error}</span>}
+      {hint && <span style={{ display: "block", fontSize: "var(--fs-meta)", color: "var(--muted)", marginTop: 3 }}>{hint}</span>}
+      {error && <span role="alert" style={{ display: "block", fontSize: "var(--fs-meta)", color: "var(--crit)", marginTop: 3 }}>{error}</span>}
     </label>
   );
 }
@@ -132,25 +133,23 @@ export function VerificationSettingsForm({ onSaved }: { onSaved?: (v: Verificati
 
   return (
     <div>
-      <p style={{ marginTop: 0, fontSize: 12, color: "var(--muted)" }}>
-        Active verification signs in to a device to check what a case claims, instead of
-        inferring it from telemetry alone. It uses a read-only sign-in you store here, and
-        it runs only against this tenant&apos;s own devices.
+      <p className="adm-line">
+        Signs in to a device to check what a case claims.
+        <AskIris topic="verify.active-verification" label="active verification" />
       </p>
 
-      <p style={{ fontSize: 12, color: TONE[state.tone] ?? "var(--muted)" }} role="status">
+      <p style={{ fontSize: "var(--fs-meta)", color: TONE[state.tone] ?? "var(--muted)" }} role="status">
         {state.text}
       </p>
 
       {stored?.config_unavailable && (
-        <p role="alert" style={{ fontSize: 12, color: "var(--crit)" }}>
-          {stored.config_error || "The stored verification settings could not be read."} The values
-          below are not the stored settings, so they cannot be changed from here.
+        <p role="alert" style={{ fontSize: "var(--fs-meta)", color: "var(--crit)" }}>
+          {stored.config_error || "The stored verification settings could not be read."} These are not the stored settings.
         </p>
       )}
 
-      {err && <p role="alert" style={{ fontSize: 12, color: "var(--crit)" }}>{err}</p>}
-      {saved && <p role="status" style={{ fontSize: 12, color: "var(--ok)" }}>Saved.</p>}
+      {err && <p role="alert" style={{ fontSize: "var(--fs-meta)", color: "var(--crit)" }}>{err}</p>}
+      {saved && <p role="status" style={{ fontSize: "var(--fs-meta)", color: "var(--ok)" }}>Saved.</p>}
 
       {loadFailed ? (
         <button className="btn" onClick={() => void load()}>Read the settings again</button>
@@ -182,7 +181,7 @@ export function VerificationSettingsForm({ onSaved }: { onSaved?: (v: Verificati
             />
           </Field>
 
-          <Field label="SSH port" error={errs.ssh_port} hint="Left empty, the platform uses the device profile's port.">
+          <Field label="SSH port" error={errs.ssh_port} hint="Empty uses the device profile's port.">
             <input
               className="ccw-input"
               type="text"
@@ -199,7 +198,7 @@ export function VerificationSettingsForm({ onSaved }: { onSaved?: (v: Verificati
           <Field
             label="Password"
             error={errs.ssh_secret}
-            hint="Stored sealed and never shown again. Leave empty to keep the sign-in you already stored."
+            hint="Sealed, never shown again. Empty keeps the stored one."
           >
             <input
               className="ccw-input"
@@ -212,7 +211,7 @@ export function VerificationSettingsForm({ onSaved }: { onSaved?: (v: Verificati
             />
           </Field>
 
-          <Field label="Private key" hint="An alternative to the password. Paste the key, not a path to it.">
+          <Field label="Private key" hint="Paste the key, not a path to it.">
             <textarea
               className="ccw-input"
               rows={3}
@@ -235,7 +234,7 @@ export function VerificationSettingsForm({ onSaved }: { onSaved?: (v: Verificati
             />
           </Field>
 
-          {errs.clear_ssh && <p role="alert" style={{ fontSize: 11, color: "var(--crit)" }}>{errs.clear_ssh}</p>}
+          {errs.clear_ssh && <p role="alert" style={{ fontSize: "var(--fs-meta)", color: "var(--crit)" }}>{errs.clear_ssh}</p>}
 
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
             <button
@@ -281,8 +280,9 @@ export default function VerificationSettingsCard() {
       </div>
       <div style={{ flex: 1 }}>
         <h3 style={{ fontWeight: 700, fontSize: "inherit", margin: 0 }}>Active verification</h3>
-        <div style={{ fontSize: 12, color: "var(--muted)" }}>
-          Sign in to a device to check what a case claims. {summary.text}
+        <div className="adm-line">
+          {summary.text}
+          <AskIris topic="verify.active-verification" label="active verification" />
         </div>
       </div>
       <button className="btn" onClick={() => setOpen(true)}>Configure</button>

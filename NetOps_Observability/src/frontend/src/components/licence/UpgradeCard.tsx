@@ -27,6 +27,7 @@ import type { ReactNode } from "react";
 import { httpFailure } from "../../lib/errors";
 import type { LicenceRefusalBody } from "../../services/api";
 import { tierLabel } from "../../pages/licence.model";
+import AskIris from "../AskIris";
 
 /** The machine tokens the server uses. Switched on, never rendered. */
 const KIND_CEILING = "licence_ceiling";
@@ -189,14 +190,15 @@ export default function UpgradeCard({ refusal, title, actions }: {
             {lifted ? (
               <span className="lic-pill lic-good">Included in {lifted}</span>
             ) : (
-              <span className="lic-absent">no higher tier lifts this — talk to us about it</span>
+              <span className="lic-absent">no higher tier lifts this</span>
             )}
           </dd>
         </div>
       </dl>
 
       <p className="lic-upgrade-safe">
-        Nothing has been removed and nothing has stopped. This is a limit on what the licence covers, not a fault.
+        Nothing has been removed and nothing has stopped.
+        <AskIris topic="licence.limit-not-a-fault" label="a licence limit" />
       </p>
 
       {actions && <div className="lic-actions">{actions}</div>}

@@ -154,7 +154,7 @@ describe("an older api", () => {
     mockDebug.parseMarker.mockRejectedValue(new Error("404 Not Found: 404 page not found"));
     setup();
     expect(await screen.findByText(/does not carry the pipeline debugger/i)).toBeTruthy();
-    expect(screen.queryByLabelText(/Hops this record crossed/i)).toBeNull();
+    expect(screen.queryByLabelText(/Hops crossed/i)).toBeNull();
   });
 
   it("keeps the rest of the screen when only the saved runs are missing", async () => {
@@ -187,7 +187,7 @@ describe("following one record", () => {
       persist: true,
     });
 
-    const table = await screen.findByLabelText("Hops this record crossed");
+    const table = await screen.findByLabelText("Hops crossed");
     // Every hop of the pipeline is a row — including the ones this screen
     // cannot see, which must not simply be missing.
     expect(within(table).getAllByRole("row").length).toBe(11); // 10 hops + the header
@@ -216,7 +216,7 @@ describe("following one record", () => {
     setup();
     await pickDevice("spine1");
     fireEvent.click(screen.getByRole("button", { name: /send one record and follow it/i }));
-    const table = await screen.findByLabelText("Hops this record crossed");
+    const table = await screen.findByLabelText("Hops crossed");
     const row = table.querySelector('tr[data-stage="kafka"]') as HTMLElement;
     fireEvent.click(within(row).getByRole("button", { name: /read this hop/i }));
 
@@ -277,7 +277,7 @@ describe("saved runs", () => {
     });
     setup();
     fireEvent.click(await screen.findByRole("button", { name: /^Open$/ }));
-    const table = await screen.findByLabelText("Hops in this saved run");
+    const table = await screen.findByLabelText("Saved-run hops");
     const row = table.querySelector('tr[data-stage="kafka"]') as HTMLElement;
     fireEvent.click(within(row).getByRole("button", { name: /read this hop/i }));
     await waitFor(() => expect(mockDebug.sessionModule).toHaveBeenCalledWith(summary.id, "kafka"));

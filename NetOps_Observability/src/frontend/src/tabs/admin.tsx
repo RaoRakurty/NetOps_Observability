@@ -12,7 +12,6 @@
 import { fmtDate, fmtDateTime } from "../lib/time";
 import { useCallback, useEffect, useState } from "react";
 import { api, AdminUser, AdminSession, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, TeamsConfig, SNSConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus, IncidentPolicy, IncidentPolicyTestFacts, TicketPolicyDecision } from "../services/api";
-import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
 import { SsoIdpPanel } from "./AdminSsoIdp";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
@@ -22,14 +21,21 @@ import ConnectorGlyph from "../components/ConnectorGlyph";
 import { teamsErrors, snsErrors, hasErrors, FieldErrors } from "../lib/notifyValidation";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
+import AskIris from "../components/AskIris";
 
 // ---- shared chrome ---------------------------------------------------------
 
-function AdminHead({ title, sub }: { title: string; sub: string }) {
+// AdminHead. The `sub` is one SHORT line at most — the sentence that used to
+// teach what the screen is for now lives in ai/skills/explain/<topic>.md and is
+// reached from the (i) beside the title (tracker 270, sweep 3).
+function AdminHead({ title, sub, topic }: { title: string; sub?: string; topic?: string }) {
   return (
     <div className="admin-head">
-      <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>{title}</h2>
-      <p className="admin-sub">{sub}</p>
+      <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>
+        {title}
+        {topic ? <AskIris topic={topic} label={title} /> : null}
+      </h2>
+      {sub ? <p className="admin-sub">{sub}</p> : null}
     </div>
   );
 }
@@ -218,8 +224,8 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
   const canUnlock = selCount > 0 && selUsers.some((u) => u.status === "disabled");
 
   return (
-    <>
-      <AdminHead title="Users" sub={`People with access to ${BRAND}. Local accounts today; federated users (SSO/LDAP) arrive once an identity provider is configured.`} />
+    <div className="adm">
+      <AdminHead title="Users" sub="People who can sign in." topic="admin.users" />
       <StatStrip>
         <Stat label="Users" value={users ? stats.total : <Skeleton w={26} h={22} />} />
         <Stat label="Admins" value={users ? stats.admins : "—"} tone="accent" />
@@ -238,7 +244,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
                 {tenantList.filter((t) => t.id !== "global").map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             )}
-            {selCount > 0 && <span className="mini-meta">{selCount} selected</span>}
+            {selCount > 0 && <span className="adm-line">{selCount} selected</span>}
             <button className="dash-btn" disabled={!canReset || busy} onClick={resetPw}
               title={selCount !== 1 ? "Select one user" : canReset ? "Set a new password" : "Federated accounts reset at the identity provider"}>
               Reset password
@@ -255,8 +261,8 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
           <Modal
             title={isProvider ? "New Provider user" : `New user · ${scopeTenantName}`}
             subtitle={isProvider
-              ? "A platform-level account — not tied to any organization or tenant. Grant it access under Access."
-              : `An account scoped to ${scopeTenantName}.`}
+              ? "A platform account. Grant it access under Access."
+              : `Scoped to ${scopeTenantName}.`}
             logo={<span className="conn-logo uf-logo"><Icon name="user" size={24} /></span>}
             onClose={closeAdd}
           >
@@ -311,7 +317,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
                 <>
                   <div className="uf2-sec">
                     Security settings
-                    <span className="mini-meta">applies to all {isProvider ? "Provider" : scopeTenantName} users</span>
+                    <span className="adm-line">applies to all {isProvider ? "Provider" : scopeTenantName} users</span>
                   </div>
                   <div className="uf-secgrid">
                     <label className="uf-field"><span>Minimum password length</span>{num("min_password_length")}</label>
@@ -358,7 +364,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
         )}
         <div className="ds-toolbar">
           <input className="ds-search" placeholder="Search users…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search users" />
-          <span className="mini-meta">{shown.length} of {list.length}</span>
+          <span className="adm-line">{shown.length} of {list.length}</span>
         </div>
         <table className="ds-table">
           <thead>
@@ -385,7 +391,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
                 </td>
                 <td>{u.tenant_id || "—"}</td>
                 <td><span className="badge">{u.auth_source || "local"}</span></td>
-                <td>{u.mfa_enabled ? <span className="badge good" title="Two-factor enabled">On</span> : <span className="mini-meta">—</span>}</td>
+                <td>{u.mfa_enabled ? <span className="badge good" title="Two-factor enabled">On</span> : <span className="adm-line">—</span>}</td>
                 <td><span className={`badge ${u.status === "disabled" ? "warn" : "good"}`}>{u.status || "active"}</span></td>
                 <td>{u.last_login_at ? fmtDateTime(u.last_login_at) : "—"}</td>
               </tr>
@@ -394,7 +400,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
         </table>
         {users && shown.length === 0 && <div className="empty">{list.length === 0 ? "No users yet." : "No users match your search."}</div>}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -436,27 +442,26 @@ export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: str
   };
 
   const title = variant === "builtin" ? "User Roles" : variant === "custom" ? "Custom User Roles" : "Roles & Permissions";
-  const sub = variant === "builtin"
-    ? "The standard roles and what each can see and change. These are fixed."
-    : variant === "custom"
-    ? "Roles you define. Each cell sets a role’s access level."
-    : "Control what each role can see and change. Built-in roles are fixed; each cell on a custom role sets its access.";
+  const sub = variant === "builtin" ? "The standard roles. Fixed."
+    : variant === "custom" ? "Roles you define."
+    : "What each role may change.";
+
   return (
-    <>
+    <div className="adm">
       <div className="admin-head-row">
-        <AdminHead title={title} sub={sub} />
+        <AdminHead title={title} sub={sub} topic={variant === "builtin" ? "roles.builtin" : variant === "custom" ? "roles.custom" : "roles.matrix"} />
         {canCreate && <button className="dash-btn accent" onClick={addRole}>＋ New custom role</button>}
       </div>
       {tenantScoped && (
-        <div className="card" style={{ fontSize: 12, color: "var(--muted)", borderLeft: "3px solid var(--accent)" }}>
-          These roles are shared across the platform and shown here for reference. Assign them to this tenant's
-          people in <b>Users</b>. Tenant-specific roles are not available yet.
+        <div className="card adm-line" style={{ borderLeft: "3px solid var(--accent)" }}>
+          Platform-wide roles. Assign them under <b>Users</b>.
+          <AskIris topic="roles.platform-wide" label="platform-wide roles" />
         </div>
       )}
       <div className="card">
         <ErrLine msg={err} />
         {roles.length === 0 ? (
-          <div className="empty">{variant === "custom" ? "No custom roles yet — create one to tailor access." : "No roles."}</div>
+          <div className="empty">{variant === "custom" ? "No custom roles yet." : "No roles."}</div>
         ) : (
         <table className="ds-table">
           <thead>
@@ -467,7 +472,7 @@ export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: str
               <tr key={r.id}>
                 <td>
                   <div style={{ fontWeight: 700 }}>{r.name} {!r.builtin && <span className="badge accent-badge">custom</span>}</div>
-                  <div className="mini-meta">{r.description || (r.builtin ? "built-in" : "custom role")}</div>
+                  <div className="adm-line">{r.description || (r.builtin ? "built-in" : "custom role")}</div>
                 </td>
                 {modules.map((m) => {
                   const lvl = LEVELS[r.permissions[m] ?? 0];
@@ -490,7 +495,7 @@ export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: str
         </table>
         )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -576,11 +581,9 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
 
   const list = (tenants ?? []).filter((t) => !orgId || (t.org_id || "global") === orgId);
   return (
-    <>
+    <div className="adm">
       <div className="admin-head-row">
-        <AdminHead title="Tenants" sub={orgId
-          ? "Optional isolation units inside this organization — create one only when you need to split (prod/dev/region). Each tenant is its own namespace."
-          : "Isolation boundaries within an organization. Each tenant is its own namespace — devices, dashboards, alerts and users are scoped to it."} />
+        <AdminHead title="Tenants" sub="Isolation units inside an organization." topic="admin.tenants" />
         {!adding && <button className="dash-btn accent" onClick={() => { setAdding(true); setErr(null); }}>＋ Create tenant</button>}
       </div>
       {adding && (
@@ -617,9 +620,10 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
             <button className="dash-btn" onClick={() => { setAdding(false); setName(""); setOrg(orgId ?? "global"); setRegion(""); setNote(""); setHideGlobal(false); setErr(null); }}>Cancel</button>
             <button className="dash-btn accent" disabled={!name.trim()} onClick={create}>Create tenant</button>
           </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+          <label className="adm-line adm-check adm-mt" title="Global/platform users stop seeing this tenant's logs, flows, findings and metrics.">
             <input type="checkbox" checked={hideGlobal} onChange={(e) => setHideGlobal(e.target.checked)} />
-            Hide this tenant's data from the global view (data privacy — global/platform users won't see its logs, flows, findings or metrics)
+            Hide this tenant from the global view
+            <AskIris topic="tenant.global-visibility" label="global visibility" />
           </label>
           <RequiredLegend />
         </div>
@@ -651,7 +655,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                   <tr key={t.id}>
                     <td style={{ fontWeight: 600 }}>
                       {t.name}
-                      <div className="mini-meta" style={{ fontFamily: "var(--mono, monospace)" }} title={t.id}>{t.slug}</div>
+                      <div className="adm-line mono" title={t.id}>{t.slug}</div>
                     </td>
                     <td>
                       <span className={`badge ${isParent ? "accent" : ""}`}>
@@ -663,10 +667,10 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                         ? <span className="badge bad">Suspended</span>
                         : <span className="badge good">Active</span>}
                     </td>
-                    <td style={{ color: "var(--muted)", fontSize: 12 }}>{orgName(t.org_id)}</td>
+                    <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{orgName(t.org_id)}</td>
                     <td>
                       {isParent ? (
-                        <span style={{ color: "var(--muted)", fontSize: 12 }}>{regionLabel(t.region || orgRegion(t.org_id))}</span>
+                        <span style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{regionLabel(t.region || orgRegion(t.org_id))}</span>
                       ) : (
                         <select
                           className="ds-mini-select"
@@ -694,7 +698,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                     </td>
                     <td>
                       {isParent ? (
-                        <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                        <span style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>—</span>
                       ) : (
                         <button
                           type="button"
@@ -710,7 +714,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                       )}
                     </td>
                     <td style={{ color: "var(--muted)" }}>{t.note || "—"}</td>
-                    <td className="mono" style={{ color: "var(--muted)", fontSize: 12 }}>{t.id}</td>
+                    <td className="mono" style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{t.id}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       {!isParent && t.operator_restricted && (
                         <button className="dash-btn" style={{ marginRight: 6 }} title="Request time-boxed, audited access to this restricted tenant" onClick={() => { setBgTarget(t); setBgReason(""); setBgErr(null); }}>Break-glass</button>
@@ -815,7 +819,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
           })()}
         </Modal>
       )}
-    </>
+    </div>
   );
 }
 
@@ -851,9 +855,9 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
 
   const list = orgs ?? [];
   return (
-    <>
+    <div className="adm">
       <div className="admin-head-row">
-        <AdminHead title="Organizations" sub="Open one to manage its users, tenants, roles and security — ＋ Add is the guided way to create anything new." />
+        <AdminHead title="Organizations" sub="Open one to manage it." topic="admin.organizations" />
       </div>
       <StatStrip>
         <Stat label="Organizations" value={orgs ? list.length : <Skeleton w={26} h={22} />} />
@@ -885,12 +889,12 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
                         ? <button className="ia-linkname" onClick={() => onManageOrg(o.id, o.name)}>{o.name}</button>
                         : o.name}
                       {isRoot && <span className="badge accent" style={{ marginLeft: 6 }}>Provider</span>}
-                      <div className="mini-meta" style={{ fontFamily: "var(--mono, monospace)" }} title={o.id}>{o.slug}</div>
+                      <div className="adm-line mono" title={o.id}>{o.slug}</div>
                     </td>
                     <td><span className="badge">{regionLabel(o.home_region)}</span></td>
                     <td style={{ color: "var(--muted)" }}>{memberCount(o.id)}</td>
                     <td style={{ color: "var(--muted)" }}>{tenantCount(o.id)}</td>
-                    <td style={{ color: "var(--muted)", fontSize: 12 }}>{o.sso_connection || "Platform default"}</td>
+                    <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{o.sso_connection || "Platform default"}</td>
                     <td style={{ color: "var(--muted)" }}>{o.note || "—"}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       {onManageOrg && <button className="dash-btn accent" style={{ marginRight: 6 }} onClick={() => onManageOrg(o.id, o.name)}>Manage</button>}
@@ -913,7 +917,7 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
           onSaved={() => { setEdit(null); reload(); }}
         />
       )}
-    </>
+    </div>
   );
 }
 
@@ -972,8 +976,8 @@ export function RegionsAdmin() {
   const rows = topo?.regions ?? [];
   const active = rows.filter((r) => r.tenants > 0 || r.orgs > 0);
   return (
-    <>
-      <AdminHead title="Regions" sub="Where each tenant's data lives. Every tenant is routed to its assigned data region automatically." />
+    <div className="adm">
+      <AdminHead title="Regions" sub="Where each tenant's data lives." topic="admin.regions" />
       <ErrLine msg={err} />
       <StatStrip>
         <Stat label="Management" value="Global" />
@@ -986,7 +990,7 @@ export function RegionsAdmin() {
         <div className="region-topo">
           <div className="region-topo-cp">
             <div className="region-topo-tag">Global management</div>
-            <div className="region-topo-sub">Organizations · Identity · Access · Tenants · Billing</div>
+            <div className="region-topo-line">Organizations · Identity · Access · Tenants · Billing</div>
           </div>
           <div className="region-topo-arrow">routes by tenant → region ↓</div>
           <div className="region-topo-planes">
@@ -1025,18 +1029,19 @@ export function RegionsAdmin() {
                 <td><span className={`badge ${r.data_plane.local ? "" : "accent"}`}>{r.data_plane.local ? "Local" : "Dedicated"}</span></td>
                 <td style={{ color: "var(--muted)" }}>{r.tenants}</td>
                 <td style={{ color: "var(--muted)" }}>{r.orgs}</td>
-                <td className="mono" style={{ color: "var(--muted)", fontSize: 11 }}>
+                <td className="mono" style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>
                   {r.data_plane.local ? "in-cluster" : "dedicated deployment"}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <p className="mini-meta" style={{ marginTop: 8 }}>
-          Single-region today: every region routes to the local stack. To stand up a real region, point its data plane at a regional deployment — no code change.
+        <p className="adm-line adm-mt">
+          Single region today.
+          <AskIris topic="regions.single-region" label="single region today" />
         </p>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1095,9 +1100,9 @@ function SecuritySettings({ scopeTenant }: { scopeTenant: string }) {
     </label>
   );
   return (
-    <>
+    <div className="adm">
       <div className="admin-head-row">
-        <AdminHead title="Security Settings" sub="Password, lockout and session rules that apply to everyone in this scope. Per-person settings (2FA, temporary account) are on the user." />
+        <AdminHead title="Security Settings" sub="Rules for everyone in this scope." topic="admin.security-settings" />
         <button className="dash-btn accent" disabled={busy} onClick={save}>{busy ? "Saving…" : savedTick ? "✓ Saved" : "Save settings"}</button>
       </div>
       <ErrLine msg={err} />
@@ -1128,15 +1133,13 @@ function SecuritySettings({ scopeTenant }: { scopeTenant: string }) {
           <label>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
               Sign out after inactivity (min)
-              <InfoTip label="Idle timeout: users inactive longer than this are signed out at their next request. Configurable per Provider, Organization and Tenant. Sessions also have a fixed maximum lifetime enforced behind the scenes.">
-                Idle timeout — a session with no activity for this many minutes is ended (checked at the token-refresh boundary). Set per scope. A fixed maximum session lifetime applies on top, as a standard default.
-              </InfoTip>
+              <AskIris topic="session.idle-timeout" label="idle timeout" />
             </span>
             {num("idle_timeout_minutes")}
           </label>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1195,9 +1198,9 @@ export function BindingsAdmin() {
     return id;
   }
   return (
-    <>
+    <div className="adm">
       <div className="admin-head-row">
-        <AdminHead title="Assign access" sub="Who can do what, where. Give a person a role on an organization; access can be revoked any time. You can also assign from an org's Access tab." />
+        <AdminHead title="Assign access" sub="Who has a role, where." topic="access.bindings" />
         <button className="dash-btn accent" onClick={openGrant}>＋ Assign access</button>
       </div>
       <StatStrip>
@@ -1209,7 +1212,7 @@ export function BindingsAdmin() {
       {granting && (
         <Modal
           title="Grant access"
-          subtitle="Give a person a role on an organization."
+          subtitle="A role on an organization."
           logo={<span className="conn-logo uf-logo"><Icon name="key" size={22} /></span>}
           onClose={() => setGranting(false)}
         >
@@ -1224,14 +1227,14 @@ export function BindingsAdmin() {
                   </option>
                 ))}
               </select>
-              {userList.length === 0 && <span className="mini-meta">No users yet — create one under Provider → Users first.</span>}
+              {userList.length === 0 && <span className="adm-line">No users yet — create one under Provider → Users.</span>}
             </label>
             <label className="req-field"><span>Organization <Req /></span>
               <select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
                 <option value="">Select an organization…</option>
                 {scopeOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
               </select>
-              {scopeOptions.length === 0 && <span className="mini-meta">No organizations yet — create one under Organizations first.</span>}
+              {scopeOptions.length === 0 && <span className="adm-line">No organizations yet — create one under Organizations.</span>}
             </label>
             <label><span>Role</span>
               <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
@@ -1277,9 +1280,9 @@ export function BindingsAdmin() {
                 <tr key={b.id}>
                   <td style={{ fontWeight: 600 }}>{b.principal_id}</td>
                   <td><span className="badge">{b.role_id}</span></td>
-                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{labelScope(b.scope_id)}</td>
+                  <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{labelScope(b.scope_id)}</td>
                   <td>{b.effect === "deny" ? <span className="badge" style={{ color: "var(--bad)" }}>Deny</span> : <span className="badge accent">Allow</span>}</td>
-                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{b.granted_by || "—"}</td>
+                  <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{b.granted_by || "—"}</td>
                   <td style={{ textAlign: "right" }}>
                     <button className="dash-btn" onClick={() => revoke(b)}>Revoke</button>
                   </td>
@@ -1289,7 +1292,7 @@ export function BindingsAdmin() {
           </table>
         )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1344,7 +1347,7 @@ function OrgTenants({ orgId, orgName }: { orgId: string; orgName: string }) {
         <div className="ia-crumb">
           <button className="dash-btn" onClick={() => setSel(null)}>← {orgName} tenants</button>
           <span className="ia-crumb-name">{sel.name}</span>
-          <span className="mini-meta">tenant — configured independently</span>
+          <span className="adm-line">tenant — configured independently</span>
         </div>
         <IAItems kind="tenant" id={sel.id} name={sel.name} />
       </>
@@ -1383,15 +1386,15 @@ function OrgAccessPanel({ orgId, orgName }: { orgId: string; orgName?: string })
   };
 
   return (
-    <>
+    <div className="adm">
       <div className="admin-head-row">
-        <AdminHead title="Access" sub={`Who has a role in ${orgName || "this organization"}. Assign an existing user a role — scope is this org.`} />
+        <AdminHead title="Access" sub="Who has a role here." topic="access.org" />
         <button className="dash-btn accent" onClick={() => { setPrincipal(""); setRoleId("operator"); setErr(null); setAssigning(true); }}>＋ Assign access</button>
       </div>
       <ErrLine msg={err} />
       <div className="card" style={{ paddingTop: 8 }}>
         {bindings && list.length === 0 ? (
-          <div className="empty">No one is assigned to {orgName || "this organization"} yet. Use <b>Assign access</b> to grant an existing user a role here.</div>
+          <div className="empty">No one has access yet.</div>
         ) : (
           <table className="ds-table" style={{ width: "100%" }}>
             <thead><tr><th>User</th><th>Role</th><th style={{ width: 1 }}></th></tr></thead>
@@ -1409,7 +1412,7 @@ function OrgAccessPanel({ orgId, orgName }: { orgId: string; orgName?: string })
       </div>
 
       {assigning && (
-        <Modal title="Assign access" subtitle={`Give a person a role in ${orgName || "this organization"}.`} logo={<span className="conn-logo uf-logo"><Icon name="key" size={22} /></span>} onClose={() => setAssigning(false)}>
+        <Modal title="Assign access" subtitle={`A role in ${orgName || "this organization"}.`} logo={<span className="conn-logo uf-logo"><Icon name="key" size={22} /></span>} onClose={() => setAssigning(false)}>
           <ErrLine msg={err} />
           <div className="admin-form">
             <label className="req-field"><span>User <Req /></span>
@@ -1429,7 +1432,7 @@ function OrgAccessPanel({ orgId, orgName }: { orgId: string; orgName?: string })
           </div>
         </Modal>
       )}
-    </>
+    </div>
   );
 }
 
@@ -1437,10 +1440,9 @@ function OrgAccessPanel({ orgId, orgName }: { orgId: string; orgName?: string })
 // today; this surfaces the link until they're moved inline.
 function SsoRolesPanel() {
   return (
-    <div className="card" style={{ color: "var(--muted)" }}>
-      External SSO role mappings (IdP group → role) are configured under
-      <b> Administration → Authentication</b> for each connected identity provider.
-      They'll move inline here next.
+    <div className="card adm-line">
+      Configured under <b>Administration → Authentication</b>.
+      <AskIris topic="sso.role-mappings" label="external SSO role mappings" />
     </div>
   );
 }
@@ -1522,7 +1524,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
 
   const sRow = (n: string, label: string, val: string, muted?: boolean) => (
     <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
-      <span style={{ width: 18, height: 18, borderRadius: 9, background: "var(--surface-2)", color: "var(--muted)", fontSize: 11, display: "inline-grid", placeItems: "center", flexShrink: 0 }}>{n}</span>
+      <span style={{ width: 18, height: 18, borderRadius: 9, background: "var(--surface-2)", color: "var(--muted)", fontSize: "var(--fs-meta)", display: "inline-grid", placeItems: "center", flexShrink: 0 }}>{n}</span>
       <span style={{ color: "var(--muted)", minWidth: 96 }}>{label}</span>
       <span style={{ color: muted ? "var(--muted)" : "var(--fg)", fontWeight: muted ? 400 : 600 }}>{val}</span>
     </div>
@@ -1530,13 +1532,13 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
 
   // Step 1 — what to add. The four cards are the four things this wizard creates.
   const MODES: { id: AddMode; name: string; desc: string }[] = [
-    { id: "org", name: "Customer organization", desc: "A customer or business-unit grouping — optionally with its first tenant and user." },
-    { id: "tenant", name: "Tenant", desc: "A workspace that holds devices & data — under the Provider or an organization." },
-    { id: "user", name: "User", desc: "A person — under the Provider, an organization or a tenant, with a role." },
-    { id: "access", name: "Access grant", desc: "Give an existing person a role on an organization." },
+    { id: "org", name: "Customer organization", desc: "A customer or business-unit grouping." },
+    { id: "tenant", name: "Tenant", desc: "A workspace holding devices and data." },
+    { id: "user", name: "User", desc: "A person, with a role." },
+    { id: "access", name: "Access grant", desc: "A role for someone who exists." },
   ];
   const modeStep: WizardStep = {
-    id: "what", title: "What to add", hint: "One guided path for everything — pick what you want to set up.",
+    id: "what", title: "What to add", hint: "Pick what to set up.",
     isValid: () => true,
     render: () => (
       <div style={{ display: "grid", gap: 8 }}>
@@ -1549,7 +1551,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
             <input type="radio" name="add-mode" checked={mode === m.id} onChange={() => setMode(m.id)} style={{ marginTop: 3 }} />
             <span style={{ display: "grid", gap: 2 }}>
               <span style={{ fontWeight: 650 }}>{m.name}</span>
-              <span className="mini-meta">{m.desc}</span>
+              <span className="adm-line">{m.desc}</span>
             </span>
           </label>
         ))}
@@ -1558,7 +1560,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
   };
 
   const orgStep: WizardStep = {
-    id: "org", title: "Organization", hint: "The customer/BU account. Its tenants inherit region and sign-in.",
+    id: "org", title: "Organization", hint: "Tenants inherit its region and sign-in.",
     isValid: () => !!oName.trim(),
     render: () => (
       <div className="admin-form">
@@ -1572,7 +1574,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
   const tenantStep = (required: boolean): WizardStep => ({
     id: "tenant",
     title: required ? "Tenant" : "First tenant",
-    hint: required ? "The workspace that holds devices & data." : "Optional — add the organization's first tenant now.",
+    hint: required ? "The workspace holding devices and data." : "Optional — add the first tenant now.",
     isValid: () => (required || makeTenant ? !!tName.trim() : true),
     render: () => (
       <div style={{ display: "grid", gap: 12 }}>
@@ -1634,7 +1636,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
   );
 
   const userOptStep: WizardStep = {
-    id: "user", title: "First user", hint: "Optional — create a person here, with their role (access included).",
+    id: "user", title: "First user", hint: "Optional — create a person and their role.",
     isValid: () => !makeUser || !!uName.trim(),
     render: () => (
       <div style={{ display: "grid", gap: 12 }}>
@@ -1648,13 +1650,13 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
   };
 
   const userStep: WizardStep = {
-    id: "user", title: "User & access", hint: "Create the person and their role in one step — where they belong decides what they see.",
+    id: "user", title: "User & access", hint: "The person and their role, in one step.",
     isValid: () => !!uName.trim(),
     render: () => userFields(true, true),
   };
 
   const accessStep: WizardStep = {
-    id: "access", title: "Access grant", hint: "Give an existing person a role on an organization. Revocable any time.",
+    id: "access", title: "Access grant", hint: "A role on an organization. Revocable any time.",
     isValid: () => !!aPrincipal && !!aScope,
     render: () => (
       <div className="admin-form">
@@ -1678,7 +1680,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
   };
 
   const reviewStep: WizardStep = {
-    id: "review", title: "Review & create", hint: "Here's what will be set up, in order.",
+    id: "review", title: "Review & create", hint: "What will be set up, in order.",
     isValid: () => true,
     render: () => (
       <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
@@ -1693,7 +1695,10 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
         </>)}
         {mode === "user" && sRow("1", "User", `${uName.trim() || "—"} · role ${uRole} · under ${scopeName(uScope)}`)}
         {mode === "access" && sRow("1", "Access", `${aPrincipal || "—"} → ${aRole} (${aEffect}) on ${aScope ? scopeName(aScope.replace(/^org:/, "")) : "—"}`)}
-        <div className="mini-meta" style={{ marginTop: 6 }}>Click Create to set this up. Everything here can be managed later from the Organizations tree.</div>
+        <div className="adm-line adm-mt">
+          Nothing exists until Create.
+          <AskIris topic="setup.guided-add" label="guided setup" />
+        </div>
       </div>
     ),
   };
@@ -1705,7 +1710,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
     [modeStep, accessStep, reviewStep];
 
   return (
-    <Modal title="Add" subtitle="One guided path — organization, tenant, user or access grant." onClose={onClose}>
+    <Modal title="Add" subtitle="Organization, tenant, user or access." onClose={onClose}>
       <Wizard steps={steps} onFinish={finish} onCancel={onClose} finishLabel="Create" />
     </Modal>
   );
@@ -1744,10 +1749,10 @@ export function IdentityAccess() {
   // A tenant admin governs only its own tenant — no Provider, no picker.
   if (!platform) {
     return (
-      <>
-        <AdminHead title="Identity & Access" sub="Users, roles and security settings for your tenant." />
+      <div className="adm">
+        <AdminHead title="Identity & Access" sub="Users, roles and security here." topic="admin.identity" />
         <IAItems kind="tenant" id={user?.tenant_id || ""} deepTab={deepTab} />
-      </>
+      </div>
     );
   }
 
@@ -1756,9 +1761,9 @@ export function IdentityAccess() {
   // to; ＋ Add is the single guided way to create anything here.
   const isProvider = sel?.id === "global";
   return (
-    <>
+    <div className="adm">
       <div className="admin-head-row">
-        <AdminHead title="Identity & Access" sub="Organizations, their tenants, and the people inside them — one tree. Open the Provider row to manage the platform's own users." />
+        <AdminHead title="Identity & Access" sub="Organizations and the people inside." topic="admin.identity-tree" />
         <button className="dash-btn accent" onClick={() => setShowAdd(true)}>＋ Add</button>
       </div>
       {showAdd && <GuidedSetupWizard onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); setSel(null); setRefresh((r) => r + 1); }} />}
@@ -1768,7 +1773,7 @@ export function IdentityAccess() {
           <div className="ia-crumb">
             <button className="dash-btn" onClick={() => setSel(null)}>← Organizations</button>
             <span className="ia-crumb-name">{sel.name}</span>
-            <span className="mini-meta">{isProvider ? "the platform's own realm — users · security" : "users · access · roles · security · tenants"}</span>
+            <span className="adm-line">{isProvider ? "the platform's own realm — users · security" : "users · access · roles · security · tenants"}</span>
           </div>
           {isProvider
             ? <IAItems kind="provider" tabs={IA_TABS_PROVIDER} deepTab={deepTab} />
@@ -1777,7 +1782,7 @@ export function IdentityAccess() {
       ) : (
         <OrgsAdmin key={refresh} onManageOrg={(id, name) => setSel({ id, name })} />
       )}
-    </>
+    </div>
   );
 }
 
@@ -1804,9 +1809,9 @@ export function SessionsAdmin() {
     return <span className={`badge ${tone}`}>{label}</span>;
   };
   return (
-    <>
+    <div className="adm">
       <div className="admin-head-row">
-        <AdminHead title="Sessions" sub="Live sign-in sessions. Revoke one to sign that person out immediately. Idle and maximum-lifetime limits apply automatically per the scope's Security Settings." />
+        <AdminHead title="Sessions" sub="Live sign-in sessions." topic="admin.sessions" />
         <button className="dash-btn" onClick={reload}>↻ Refresh</button>
       </div>
       <StatStrip>
@@ -1818,7 +1823,7 @@ export function SessionsAdmin() {
       <div className="card" style={{ paddingTop: 8 }}>
         <div className="ds-toolbar">
           <input className="ds-search" placeholder="Search sessions…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search sessions" />
-          <span className="mini-meta">{shown.length} of {list.length}</span>
+          <span className="adm-line">{shown.length} of {list.length}</span>
         </div>
         {sessions && shown.length === 0 ? (
           <div className="empty">No sessions.</div>
@@ -1834,12 +1839,12 @@ export function SessionsAdmin() {
               {shown.map((s) => (
                 <tr key={s.id}>
                   <td style={{ fontWeight: 600 }}>{s.display_name || s.user_id}</td>
-                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{s.tenant_id || "—"}</td>
+                  <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{s.tenant_id || "—"}</td>
                   <td className="mono">{s.issued_ip || "—"}</td>
                   <td>{statusBadge(s.status)}</td>
-                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{fmt(s.created_at)}</td>
-                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{fmt(s.last_activity_at)}</td>
-                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{s.idle_timeout_sec ? `${Math.round(s.idle_timeout_sec / 60)}m` : "off"}</td>
+                  <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{fmt(s.created_at)}</td>
+                  <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{fmt(s.last_activity_at)}</td>
+                  <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{s.idle_timeout_sec ? `${Math.round(s.idle_timeout_sec / 60)}m` : "off"}</td>
                   <td style={{ textAlign: "right" }}>{s.status === "active" && <button className="dash-btn" onClick={() => revoke(s)}>Revoke</button>}</td>
                 </tr>
               ))}
@@ -1847,7 +1852,7 @@ export function SessionsAdmin() {
           </table>
         )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1936,10 +1941,10 @@ export function isAdministrativeScope(scope: string): boolean {
 }
 
 const SCOPE_GROUPS: { kind: ScopeKind; title: string; blurb: string }[] = [
-  { kind: "read", title: "Read", blurb: "The key can look, never change." },
-  { kind: "write", title: "Write", blurb: "Operator authority — the key can change operational state." },
-  { kind: "service", title: "Service", blurb: "Dedicated machine credential for one platform service." },
-  { kind: "admin", title: "Administrative", blurb: "Full administration through the API. Mint one only for automation you own." },
+  { kind: "read", title: "Read", blurb: "Looks, never changes." },
+  { kind: "write", title: "Write", blurb: "Changes operational state." },
+  { kind: "service", title: "Service", blurb: "One platform service, machine to machine." },
+  { kind: "admin", title: "Administrative", blurb: "Full administration through the API." },
 ];
 
 /**
@@ -1958,7 +1963,7 @@ export function ScopePicker({
   onConfirm: (v: boolean) => void;
 }) {
   if (options.length === 0) {
-    return <p className="mini-meta" style={{ margin: 0 }}>Checking which scopes your role may issue…</p>;
+    return <p className="adm-line">Checking which scopes your role may issue…</p>;
   }
   const adminSelected = selected.some(isAdministrativeScope);
   return (
@@ -1968,10 +1973,8 @@ export function ScopePicker({
         if (inGroup.length === 0) return null;
         return (
           <div key={g.kind} style={{ marginBottom: 12 }}>
-            <h3 style={{ margin: "0 0 2px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>
-              {g.title}
-            </h3>
-            <p className="mini-meta" style={{ margin: "0 0 6px" }}>{g.blurb}</p>
+            <h3 className="adm-grouphead">{g.title}</h3>
+            <p className="adm-line adm-mt">{g.blurb}</p>
             <div className="scope-row">
               {inGroup.map((o) => (
                 <label key={o.id} className={`scope-chip ${selected.includes(o.id) ? "on" : ""}`} title={o.what}>
@@ -2088,13 +2091,13 @@ export function ApiAccessAdmin() {
   const list = keys ?? [];
   const active = list.filter((k) => !k.revoked_at).length;
   const TILES: { id: ApiTile; name: string; tagline: string; icon: string; meta: string }[] = [
-    { id: "keys", name: "Generate API key", icon: "key", tagline: "Mint a scoped client credential for machine clients.", meta: keys ? `${active} active · ${list.length - active} revoked` : "…" },
-    { id: "token", name: "Token Policy", icon: "shield", tagline: "Access & refresh token lifetimes for sessions.", meta: "Clamped to safe bounds" },
-    { id: "rest", name: "REST API Reference", icon: "docs", tagline: "Browse every endpoint; export the OpenAPI spec.", meta: "Live, generated from the API" },
+    { id: "keys", name: "Generate API key", icon: "key", tagline: "A scoped credential for machine clients.", meta: keys ? `${active} active · ${list.length - active} revoked` : "…" },
+    { id: "token", name: "Token Policy", icon: "shield", tagline: "Session token lifetimes.", meta: "Clamped to safe bounds" },
+    { id: "rest", name: "REST API Reference", icon: "docs", tagline: "Every endpoint, generated live.", meta: "Live, generated from the API" },
   ];
 
   return (
-    <div className="dm-board">
+    <div className="dm-board adm">
       <Group title="API access" hue="#3B82F6">
       <StatStrip>
         <Stat label="Keys" value={keys ? list.length : <Skeleton w={26} h={22} />} />
@@ -2102,9 +2105,9 @@ export function ApiAccessAdmin() {
         <Stat label="Revoked" value={keys ? list.length - active : "—"} tone={list.some((k) => k.revoked_at) ? "warn" : ""} />
         <Stat label="Rate-limited" value={keys ? list.filter((k) => (k.rate_limit_per_min || 0) > 0).length : "—"} />
       </StatStrip>
-      <p className="mini-meta" style={{ margin: 0 }}>
-        {BRAND} is API-first — mint <strong>scoped credentials</strong> for machine clients, tune <strong>session-token</strong> lifetimes,
-        and browse the live <strong>REST reference</strong>. A key never exceeds its scopes.
+      <p className="adm-line">
+        A key never exceeds its scopes.
+        <AskIris topic="api.scoped-credentials" label="API access" />
       </p>
 
       <div className="conn-grid">
@@ -2145,7 +2148,7 @@ export function ApiAccessAdmin() {
                 </td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.grant_types || []).join(", ") || "—"}</td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.source_cidrs || []).join(", ") || "any"}</td>
-                <td className="mono">{cap > 0 ? <span className={near ? "badge warn" : ""}>{k.window_used}/{cap}</span> : <span className="mini-meta">unlimited</span>}</td>
+                <td className="mono">{cap > 0 ? <span className={near ? "badge warn" : ""}>{k.window_used}/{cap}</span> : <span className="adm-line">unlimited</span>}</td>
                 <td className="mono">{(k.use_count ?? 0).toLocaleString()}</td>
                 <td>{k.created_at ? fmtDate(k.created_at) : "—"}</td>
                 <td>{k.client_expires_at || k.secret_expires_at ? fmtDate(k.client_expires_at || k.secret_expires_at || "") : "never"}</td>
@@ -2160,13 +2163,13 @@ export function ApiAccessAdmin() {
       </div>
 
       {open === "keys" && (
-        <Modal title="Generate API key" subtitle="A scoped client credential for machine clients." logo={<span className="conn-logo api-keys"><Icon name="key" size={26} /></span>} onClose={closeTile}>
+        <Modal title="Generate API key" subtitle="A scoped credential for machine clients." logo={<span className="conn-logo api-keys"><Icon name="key" size={26} /></span>} onClose={closeTile}>
           <ErrLine msg={err} />
           {secret && (
             <div className="planned-banner" style={{ background: "var(--sev-ok-bg)", borderColor: "var(--good)" }}>
               <span className="badge good">Client secret</span>
               <span>Copy it now — it won't be shown again:&nbsp;<code style={{ userSelect: "all" }}>{secret}</code>
-                <InfoTip label="Present it as Authorization: Bearer <secret> or the X-API-Key header. The key resolves to the same tenant + RBAC context as its scopes — never more.">Present it as <code>Authorization: Bearer …</code> or <code>X-API-Key</code>. The key never exceeds its scopes.</InfoTip>
+                <AskIris topic="api.client-secret" label="client secret" />
               </span>
               <button className="dash-btn" style={{ marginLeft: "auto" }} onClick={() => setSecret(null)}>Dismiss</button>
             </div>
@@ -2177,7 +2180,7 @@ export function ApiAccessAdmin() {
             steps={[
               {
                 id: "identity", title: "Identity",
-                hint: "Name the credential and (optionally) cap its request rate.",
+                hint: "Name it, and cap its request rate.",
                 isValid: () => !!label.trim(),
                 render: () => (
                   <>
@@ -2191,7 +2194,7 @@ export function ApiAccessAdmin() {
               },
               {
                 id: "scopes", title: "Scopes & grant",
-                hint: "What the credential may do; its RBAC role is derived from the scopes.",
+                hint: "What the credential may do.",
                 // An administrative key needs the operator to say so explicitly.
                 isValid: () => !scopes.some(isAdministrativeScope) || adminConfirmed,
                 render: () => (
@@ -2204,9 +2207,11 @@ export function ApiAccessAdmin() {
                       confirmed={adminConfirmed}
                       onConfirm={setAdminConfirmed}
                     />
-                    <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)", display: "flex", alignItems: "center", gap: 5 }}>
-                      Grant types<InfoTip label="The OAuth 2.0 grant types this credential supports. client_credentials is the usual machine-to-machine flow.">OAuth 2.0 flows this credential supports. <code>client_credentials</code> is the usual machine-to-machine flow.</InfoTip>
-                    </h3>
+                    <h3 className="adm-grouphead adm-mt">Grant types</h3>
+                    <p className="adm-line adm-mt">
+                      OAuth flows this credential supports.
+                      <AskIris topic="api.grant-types" label="grant types" />
+                    </p>
                     <div className="scope-row">
                       {GRANT_TYPE_OPTIONS.map((g) => (
                         <label key={g} className={`scope-chip ${grantTypes.includes(g) ? "on" : ""}`}>
@@ -2219,7 +2224,7 @@ export function ApiAccessAdmin() {
               },
               {
                 id: "client", title: "Client & network",
-                hint: "Optional client metadata and a source-IP allowlist.",
+                hint: "Client metadata and a source-IP allowlist.",
                 isValid: () => true,
                 render: () => (
                   <div className="form-grid">
@@ -2231,7 +2236,7 @@ export function ApiAccessAdmin() {
               },
               {
                 id: "expiry", title: "Expiry & contacts",
-                hint: "Optional lifetime and owner contacts. Review, then generate.",
+                hint: "Lifetime and owner contacts.",
                 isValid: () => true,
                 render: () => (
                   <>
@@ -2250,13 +2255,13 @@ export function ApiAccessAdmin() {
       )}
 
       {open === "token" && (
-        <Modal title="Token Policy" subtitle="Session access & refresh token lifetimes." logo={<span className="conn-logo api-token"><Icon name="shield" size={26} /></span>} onClose={closeTile}>
+        <Modal title="Token Policy" subtitle="Session token lifetimes." logo={<span className="conn-logo api-token"><Icon name="shield" size={26} /></span>} onClose={closeTile}>
           <TokenPolicyForm embedded />
         </Modal>
       )}
 
       {open === "rest" && (
-        <Modal title="REST API Reference" subtitle="Every endpoint, generated live from the API." logo={<span className="conn-logo api-rest"><Icon name="docs" size={26} /></span>} onClose={closeTile}>
+        <Modal title="REST API Reference" subtitle="Every endpoint, generated live." logo={<span className="conn-logo api-rest"><Icon name="docs" size={26} /></span>} onClose={closeTile}>
           <OpenAPIReference embedded />
         </Modal>
       )}
@@ -2298,14 +2303,14 @@ export function GraphQLExplorer() {
   };
 
   return (
-    <div className="card">
+    <div className="card adm">
       <div className="admin-card-head">
         <h2>GraphQL explorer</h2>
         <a className="dash-btn" href="/api/graphql" target="_blank" rel="noreferrer">/api/graphql <Icon name="external" size={12} /></a>
       </div>
-      <p className="mini-meta" style={{ marginTop: 0 }}>
-        Single typed endpoint over <code>devices</code> · <code>alerts</code> · <code>rules</code> ·{" "}
-        <code>health</code> (+ <code>__schema</code> introspection). Results are tenant-scoped, just like REST.
+      <p className="adm-line">
+        One typed endpoint. Results are tenant-scoped.
+        <AskIris topic="api.graphql" label="GraphQL explorer" />
       </p>
       <div className="scope-row" style={{ marginBottom: 10 }}>
         {GQL_EXAMPLES.map((ex) => (
@@ -2360,8 +2365,9 @@ function OpenAPIReference({ embedded = false }: { embedded?: boolean }) {
           <a className="dash-btn" href="/api/openapi.json" target="_blank" rel="noreferrer">openapi.json <Icon name="external" size={12} /></a>
         </div>
       )}
-      <p className="mini-meta" style={{ marginTop: 0, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <span>{spec?.info?.title} · v{spec?.info?.version} · OpenAPI {spec?.openapi}. Generated from the Go handlers; import it into Postman or any OpenAPI client.</span>
+      <p className="adm-line" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span>{spec?.info?.title} · v{spec?.info?.version} · OpenAPI {spec?.openapi}</span>
+        <AskIris topic="api.openapi-spec" label="the OpenAPI spec" />
         {embedded && <a className="dash-btn" href="/api/openapi.json" target="_blank" rel="noreferrer" style={{ marginLeft: "auto" }}>openapi.json <Icon name="external" size={12} /></a>}
       </p>
       <div className="ov-grid">
@@ -2402,9 +2408,9 @@ function TestResult({ r }: { r: AuthTestResult | null }) {
     // the OK/FAIL badge text (not only the color) carries the verdict.
     <div role="status" style={{ marginTop: 8, padding: "8px 10px", borderRadius: 6, border: `1px solid ${color}`, background: "var(--panel)", fontSize: 13 }}>
       <span className={`badge ${r.ok ? "good" : "bad"}`}>{r.ok ? "OK" : "FAIL"}</span>{" "}
-      <span className="mini-meta">[{r.stage}]</span> {r.message}
-      {r.resolved_dn && <div className="mono mini-meta" style={{ marginTop: 4 }}>DN: {r.resolved_dn}</div>}
-      {r.groups && r.groups.length > 0 && <div className="mini-meta">groups: {r.groups.join(", ")}</div>}
+      <span className="adm-line">[{r.stage}]</span> {r.message}
+      {r.resolved_dn && <div className="mono adm-line adm-mt">DN: {r.resolved_dn}</div>}
+      {r.groups && r.groups.length > 0 && <div className="adm-line">groups: {r.groups.join(", ")}</div>}
       {r.assigned_role && <div style={{ marginTop: 4 }}>→ would be assigned role <b>{r.assigned_role}</b></div>}
     </div>
   );
@@ -2430,11 +2436,11 @@ function LabeledInput({ label, value, onChange, type = "text", placeholder = "",
   label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; hint?: string; info?: string; required?: boolean;
 }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
       <FieldLabel label={label} required={required} info={info} />
       <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
         style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }} />
-      {hint && <span className="mini-meta">{hint}</span>}
+      {hint && <span className="adm-line">{hint}</span>}
     </label>
   );
 }
@@ -2443,7 +2449,7 @@ function LabeledSelect({ label, value, onChange, options, info }: {
   label: string; value: string; onChange: (v: string) => void; options: string[]; info?: string;
 }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
       <FieldLabel label={label} info={info} />
       <select value={value} onChange={(e) => onChange(e.target.value)}
         style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
@@ -2455,7 +2461,7 @@ function LabeledSelect({ label, value, onChange, options, info }: {
 
 // Legend explaining the asterisk on config forms.
 function RequiredLegend() {
-  return <p className="mini-meta" style={{ marginTop: 4 }}><Req /> required when the provider is enabled</p>;
+  return <p className="adm-line adm-mt"><Req /> required when the provider is enabled</p>;
 }
 
 // ---- LDAP / Active Directory form ----
@@ -2473,7 +2479,7 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
       .then((r) => setCfg({ ...r.config, role_mappings: r.config.role_mappings ?? [] }))
       .catch((e) => setMsg((e as Error).message));
   }, []);
-  if (!cfg) return embedded ? <p className="mini-meta">Loading…</p> : <div className="card"><h2>LDAP / Active Directory</h2><p className="mini-meta">Loading…</p></div>;
+  if (!cfg) return embedded ? <p className="adm-line">Loading…</p> : <div className="card adm"><h2>LDAP / Active Directory</h2><p className="adm-line">Loading…</p></div>;
 
   const set = (patch: Partial<LdapConfig>) => setCfg({ ...cfg, ...patch });
   const enc = cfg.use_tls ? "ldaps" : cfg.start_tls ? "starttls" : "none";
@@ -2513,7 +2519,10 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
           </label>
         </div>
       )}
-      <p className="admin-sub">Native stdlib LDAP bind (RFC 4511). Directory groups map onto NetOps roles (first match by privilege wins). The bind password is write-only — leave blank to keep the stored one.</p>
+      <p className="admin-sub">
+        Directory groups map onto roles.
+        <AskIris topic="auth.ldap" label="LDAP sign-in" />
+      </p>
       <Wizard
         finishLabel="Save"
         onFinish={save}
@@ -2521,14 +2530,14 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
           {
             id: "connect",
             title: "Connection",
-            hint: "Reach the directory. Host and Base DN are required; the bind password is write-only.",
+            hint: "Host and Base DN are required.",
             isValid: () => !!cfg.host.trim() && !!cfg.base_dn.trim(),
             render: () => (
               <>
                 <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
                   <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="ldap.example.com" required />
                   <LabeledInput label="Port (0 = auto)" type="number" value={String(cfg.port)} onChange={(v) => set({ port: Number(v) || 0 })} />
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
                     Encryption
                     <select value={enc} onChange={(e) => setEnc(e.target.value)}>
                       <option value="none">None (389)</option>
@@ -2539,7 +2548,7 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
                   <LabeledInput label="Bind DN (service acct)" value={cfg.bind_dn} onChange={(v) => set({ bind_dn: v })} placeholder="cn=svc,dc=example,dc=com" info="Distinguished Name of the service account used to search the directory. Leave blank for anonymous bind." />
                   <LabeledInput label="Bind password" type="password" value={pw} onChange={setPw} placeholder={cfg.bind_password_set ? "•••••• (unchanged)" : "(none)"} info="Password for the bind DN service account. Write-only — blank keeps stored." />
                   <LabeledInput label="Base DN" value={cfg.base_dn} onChange={(v) => set({ base_dn: v })} placeholder="dc=example,dc=com" required info="The directory subtree under which user searches start, e.g. dc=example,dc=com." />
-                  <label style={{ fontSize: 12, color: "var(--muted)", alignSelf: "end" }}>
+                  <label style={{ fontSize: "var(--fs-meta)", color: "var(--muted)", alignSelf: "end" }}>
                     <input type="checkbox" checked={cfg.insecure_skip_verify} onChange={(e) => set({ insecure_skip_verify: e.target.checked })} /> Skip TLS verify (lab only)
                   </label>
                 </div>
@@ -2550,14 +2559,14 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
           {
             id: "users",
             title: "Users & groups",
-            hint: "How users are found and how directory groups resolve. User filter is required.",
+            hint: "How users are found. User filter is required.",
             isValid: () => !!cfg.user_filter.trim(),
             render: () => (
               <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
                 <LabeledInput label="User filter" value={cfg.user_filter} onChange={(v) => set({ user_filter: v })} hint="%s = username, e.g. (uid=%s) or (sAMAccountName=%s)" required />
                 <LabeledInput label="Group base DN" value={cfg.group_base_dn} onChange={(v) => set({ group_base_dn: v })} placeholder="(defaults to Base DN)" />
                 <LabeledInput label="Group filter" value={cfg.group_filter} onChange={(v) => set({ group_filter: v })} hint="%s = user DN, e.g. (member=%s)" />
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
                   Default role
                   <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
                     {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -2570,7 +2579,7 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
           {
             id: "roles",
             title: "Roles & test",
-            hint: "Map directory groups to roles (highest-privilege match wins), then test and save.",
+            hint: "Map directory groups to roles, then test.",
             isValid: () => true,
             render: () => (
               <>
@@ -2595,7 +2604,7 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
           },
         ]}
       />
-      {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
+      {msg && <p className="adm-line adm-mt">{msg}</p>}
     </div>
   );
 }
@@ -2611,7 +2620,7 @@ function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; emb
   const [result, setResult] = useState<AuthTestResult | null>(null);
 
   useEffect(() => { api.tacacsConfig().then((r) => setCfg(r.config)).catch((e) => setMsg((e as Error).message)); }, []);
-  if (!cfg) return embedded ? <p className="mini-meta">Loading…</p> : <div className="card"><h2>TACACS+</h2><p className="mini-meta">Loading…</p></div>;
+  if (!cfg) return embedded ? <p className="adm-line">Loading…</p> : <div className="card adm"><h2>TACACS+</h2><p className="adm-line">Loading…</p></div>;
   const set = (patch: Partial<TacacsConfig>) => setCfg({ ...cfg, ...patch });
 
   const save = async () => {
@@ -2645,7 +2654,10 @@ function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; emb
           </label>
         </div>
       )}
-      <p className="admin-sub">Native stdlib TACACS+ PAP (RFC 8907) — authenticate operators against the same AAA server that fronts your routers/switches. The shared secret is write-only.</p>
+      <p className="admin-sub">
+        Authenticates against your AAA server.
+        <AskIris topic="auth.tacacs" label="TACACS+ sign-in" />
+      </p>
       <Wizard
         finishLabel="Save"
         onFinish={save}
@@ -2653,7 +2665,7 @@ function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; emb
           {
             id: "connect",
             title: "Connection",
-            hint: "Reach your TACACS+ AAA server. Host is required; the shared secret is write-only.",
+            hint: "Host is required. The secret is write-only.",
             isValid: () => !!cfg.host.trim(),
             render: () => (
               <>
@@ -2670,12 +2682,12 @@ function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; emb
           {
             id: "defaults",
             title: "Defaults & test",
-            hint: "Role/tenant for authenticated users, then test and save.",
+            hint: "Role and tenant for authenticated users.",
             isValid: () => true,
             render: () => (
               <>
                 <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
                     Default role
                     <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
                       {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -2694,17 +2706,17 @@ function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; emb
           },
         ]}
       />
-      {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
+      {msg && <p className="adm-line adm-mt">{msg}</p>}
     </div>
   );
 }
 
 type AuthProviderId = "local" | "sso" | "ldap" | "tacacs";
 const AUTH_PROVIDERS: { id: AuthProviderId; name: string; tagline: string; icon: string }[] = [
-  { id: "local", name: "Local accounts", tagline: "Username + password (PBKDF2) with JWT + rotating refresh tokens — the always-on fallback.", icon: "lock" },
-  { id: "sso", name: "Single Sign-On", tagline: "Federate sign-in to your OIDC identity provider (Okta, Azure AD, Google…).", icon: "key" },
-  { id: "ldap", name: "LDAP / Active Directory", tagline: "Bind directly to your directory (RFC 4511); directory groups map onto roles.", icon: "directory" },
-  { id: "tacacs", name: "TACACS+", tagline: "Authenticate operators against the AAA server fronting your routers and switches.", icon: "server" },
+  { id: "local", name: "Local accounts", tagline: "Username and password. The always-on fallback.", icon: "lock" },
+  { id: "sso", name: "Single Sign-On", tagline: "Sign in through your OIDC provider.", icon: "key" },
+  { id: "ldap", name: "LDAP / Active Directory", tagline: "Bind to your directory; groups map onto roles.", icon: "directory" },
+  { id: "tacacs", name: "TACACS+", tagline: "Authenticate against your AAA server.", icon: "server" },
 ];
 
 export function AuthenticationAdmin() {
@@ -2741,8 +2753,8 @@ export function AuthenticationAdmin() {
   };
 
   return (
-    <>
-      <AdminHead title="Authentication" sub="How people sign in. Local accounts always work; pick a provider tile to federate sign-in via SSO (OIDC), or authenticate directly against LDAP/AD or TACACS+." />
+    <div className="adm">
+      <AdminHead title="Authentication" sub="How people sign in." topic="admin.authentication" />
       <StatStrip>
         <Stat label="Providers" value={AUTH_PROVIDERS.length} />
         <Stat label="Active" value={loaded ? enabledCount : <Skeleton w={26} h={22} />} tone="good" />
@@ -2772,8 +2784,11 @@ export function AuthenticationAdmin() {
           <Modal title={p.name} subtitle={p.tagline} logo={<span className={`conn-logo auth-${p.id}`}><Icon name={p.icon} size={26} /></span>} onClose={() => { setOpen(null); reloadStatus(); }}>
             {open === "local" && (
               <>
-                <p className="admin-sub">Local accounts are always available — even when an external IdP is down. They authenticate with username + password (PBKDF2) and issue JWT access tokens with rotating, single-use refresh tokens.</p>
-                <p className="mini-meta">Manage individual accounts under <strong>Identity &amp; Access → Users</strong>. Password complexity, lockout and session lifetimes are governed by the per-scope <strong>Security Settings</strong>.</p>
+                <p className="adm-line">
+                  Always available, even when an IdP is down.
+                  <AskIris topic="auth.local" label="local accounts" />
+                </p>
+                <p className="adm-line adm-mt">Accounts live under Identity &amp; Access → Users.</p>
               </>
             )}
             {open === "sso" && <SsoAdminForm roleIds={fallbackRoles} embedded />}
@@ -2782,7 +2797,7 @@ export function AuthenticationAdmin() {
           </Modal>
         );
       })()}
-    </>
+    </div>
   );
 }
 
@@ -2805,7 +2820,7 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
       .then((r) => { setCfg(r.config); setReady(r.ready); })
       .catch((e) => setMsg((e as Error).message));
   }, []);
-  if (!cfg) return embedded ? <p className="mini-meta">{msg ?? "Loading…"}</p> : <div className="card"><h2>Single Sign-On (OIDC)</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
+  if (!cfg) return embedded ? <p className="adm-line">{msg ?? "Loading…"}</p> : <div className="card adm"><h2>Single Sign-On (OIDC)</h2><p className="adm-line">{msg ?? "Loading…"}</p></div>;
 
   const set = (patch: Partial<OidcConfig>) => setCfg({ ...cfg, ...patch });
 
@@ -2839,7 +2854,10 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
           </label>
         </div>
       )}
-      <p className="admin-sub">Federate sign-in to your OIDC identity provider (Authorization Code flow). The platform brokers the login and re-issues its own session. Upstream IdPs such as Okta, Azure AD, Google or any standards-compliant provider are supported. The client secret is write-only — leave blank to keep the stored one.</p>
+      <p className="admin-sub">
+        Sign-in is brokered to your OIDC provider.
+        <AskIris topic="auth.sso" label="single sign-on" />
+      </p>
       <div style={{ marginBottom: 10 }}>
         <Segmented
           ariaLabel="SSO configuration section"
@@ -2859,7 +2877,7 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
           {
             id: "connect",
             title: "Connection",
-            hint: "Point at your OIDC provider. Issuer and Client ID are required; the secret is write-only.",
+            hint: "Issuer and Client ID are required.",
             isValid: () => !!cfg.issuer.trim() && !!cfg.client_id.trim(),
             render: () => (
               <>
@@ -2869,8 +2887,8 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
                   <LabeledInput label="Client secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.client_secret_set ? "•••••• (unchanged)" : "(none / public client)"} />
                   <LabeledInput label="Scopes" value={cfg.scopes} onChange={(v) => set({ scopes: v })} placeholder="openid email profile" />
                 </div>
-                <p className="mini-meta" style={{ marginTop: 8 }}>
-                  Register this Redirect URI with your identity provider:{" "}
+                <p className="adm-line adm-mt">
+                  Redirect URI to register:{" "}
                   <code className="mono" style={{ userSelect: "all" }}>{redirectHint}</code>
                 </p>
                 <RequiredLegend />
@@ -2880,11 +2898,11 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
           {
             id: "mapping",
             title: "Role mapping",
-            hint: "How IdP identities map to platform roles and tenant.",
+            hint: "How IdP identities map to roles.",
             isValid: () => true,
             render: () => (
               <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
                   Default role
                   <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
                     {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -2893,9 +2911,11 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
                 <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
                 <LabeledInput label="Admin roles" value={cfg.admin_roles} onChange={(v) => set({ admin_roles: v })} placeholder="super-admin,admin,netops-admin" hint="Comma-separated IdP roles/groups mapped to super-admin." />
                 <LabeledInput label="Operator roles" value={cfg.operator_roles} onChange={(v) => set({ operator_roles: v })} placeholder="operator,netops-operator" hint="Comma-separated IdP roles/groups mapped to operator." />
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginTop: 6 }}>
+                <label className="adm-check adm-mt" style={{ fontSize: "var(--fs-meta)" }}
+                  title="Sign-ins your identity provider did not verify with a second factor are rejected.">
                   <input type="checkbox" checked={!!cfg.require_mfa} onChange={(e) => set({ require_mfa: e.target.checked })} />
-                  Require multi-factor authentication (reject sign-ins your identity provider didn't verify with a second factor)
+                  Require multi-factor authentication
+                  <AskIris topic="auth.require-mfa" label="require multi-factor authentication" />
                 </label>
                 {cfg.require_mfa && (
                   <LabeledInput label="MFA assurance values (optional)" value={cfg.mfa_acr ?? ""} onChange={(v) => set({ mfa_acr: v })} placeholder="urn:okta:loa:2fa,gold" hint="Comma-separated acr values your IdP sends for MFA. Leave blank to detect MFA from the sign-in methods (amr)." />
@@ -2906,7 +2926,7 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
           {
             id: "signin",
             title: "Sign-in & redirect",
-            hint: "Optional sign-in buttons and post-login behavior. Review, then save.",
+            hint: "Sign-in buttons and where login lands.",
             isValid: () => true,
             render: () => (
               <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
@@ -2918,7 +2938,7 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
           },
         ]}
       />}
-      {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
+      {msg && <p className="adm-line adm-mt">{msg}</p>}
     </div>
   );
 }
@@ -2938,7 +2958,7 @@ function TokenPolicyForm({ embedded = false }: { embedded?: boolean }) {
     setRefreshDays(String(Math.round(p.refresh_ttl_seconds / 86400)));
   };
   useEffect(() => { api.tokenPolicy().then(load).catch((e) => setMsg((e as Error).message)); }, []);
-  if (!tp) return embedded ? <p className="mini-meta">{msg ?? "Loading…"}</p> : <div className="card"><h2>Token policy</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
+  if (!tp) return embedded ? <p className="adm-line">{msg ?? "Loading…"}</p> : <div className="card adm"><h2>Token policy</h2><p className="adm-line">{msg ?? "Loading…"}</p></div>;
 
   const b = tp.bounds;
   const save = async () => {
@@ -2954,7 +2974,10 @@ function TokenPolicyForm({ embedded = false }: { embedded?: boolean }) {
 
   const inner = (
     <>
-      <p className="admin-sub">Session token lifetimes, clamped to safe bounds (RFC 9700 / NIST 800-63B); out-of-range entries are adjusted on save.</p>
+      <p className="admin-sub">
+        Clamped to safe bounds on save.
+        <AskIris topic="token.policy-bounds" label="safe token bounds" />
+      </p>
       <div className="form-grid">
         <LabeledInput label="Access token TTL (minutes)" type="number" value={accessMin} onChange={setAccessMin} required
           info={`How long an access token stays valid. Allowed ${Math.round(b.access_min_seconds / 60)}–${Math.round(b.access_max_seconds / 60)} min · recommended ≤ ${Math.round(b.access_recommended_seconds / 60)} min.`} />
@@ -2969,11 +2992,11 @@ function TokenPolicyForm({ embedded = false }: { embedded?: boolean }) {
       <RequiredLegend />
       <div className="admin-actions">
         <button className="dash-btn accent" disabled={busy} onClick={save}>Save policy</button>
-        {msg && <span className="mini-meta">{msg}</span>}
+        {msg && <span className="adm-line">{msg}</span>}
       </div>
     </>
   );
-  return embedded ? inner : <div className="card"><h2>Token policy</h2>{inner}</div>;
+  return embedded ? inner : <div className="card adm"><h2>Token policy</h2>{inner}</div>;
 }
 
 // ExportPolicyForm — runtime-tunable log-export limits (anti-exfiltration
@@ -2998,7 +3021,7 @@ export function ExportPolicyForm() {
     });
   };
   useEffect(() => { api.exportPolicy().then(load).catch((e) => setMsg((e as Error).message)); }, []);
-  if (!p) return <div className="card"><h2>Log export limits</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
+  if (!p) return <div className="card adm"><h2>Log export limits</h2><p className="adm-line">{msg ?? "Loading…"}</p></div>;
 
   const set = (k: string) => (v: string) => setF((s) => ({ ...s, [k]: v }));
   const num = (v: string, min = 1) => Math.max(min, Math.round(Number(v) || 0));
@@ -3019,9 +3042,12 @@ export function ExportPolicyForm() {
   };
 
   return (
-    <div className="card">
+    <div className="card adm">
       <h2>Log export limits</h2>
-      <p className="admin-sub">Guardrails for log exports (anti-exfiltration / abuse). Applied live — no restart. Only the platform owner can change them. Download links are clamped to 5–15 minutes.</p>
+      <p className="admin-sub">
+        Applied live. Platform owner only.
+        <AskIris topic="export.limits" label="log export limits" />
+      </p>
       <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
         <LabeledInput label="Rate limit (exports / min / tenant)" type="number" value={f.rate} onChange={set("rate")} required />
         <LabeledInput label="Max rows per export" type="number" value={f.rows} onChange={set("rows")} required />
@@ -3035,7 +3061,7 @@ export function ExportPolicyForm() {
       <div style={{ marginTop: 12 }}>
         <button className="dash-btn" disabled={busy} onClick={save}>Save limits</button>
       </div>
-      {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
+      {msg && <p className="adm-line adm-mt">{msg}</p>}
     </div>
   );
 }
@@ -3059,8 +3085,8 @@ export function ExportPolicyForm() {
 type ConnectorId = "servicenow" | "jira";
 
 const CONNECTORS: { id: ConnectorId; name: string; tagline: string; noun: string }[] = [
-  { id: "servicenow", name: "ServiceNow", noun: "incidents", tagline: "Promote critical incidents to ServiceNow via the Table API; auto-resolve when the alert clears." },
-  { id: "jira", name: "Jira", noun: "issues", tagline: "One deduped Jira issue per RCA root cause (policy-driven); transitioned to Done on resolve." },
+  { id: "servicenow", name: "ServiceNow", noun: "incidents", tagline: "One incident per root cause, auto-resolved." },
+  { id: "jira", name: "Jira", noun: "issues", tagline: "One issue per root cause, closed on resolve." },
 ];
 
 const SEV = ["info", "low", "medium", "high", "critical"];
@@ -3095,8 +3121,8 @@ export function IntegrationsAdmin() {
   const openTickets = (sn?.open_count ?? 0) + (jira?.open_count ?? 0);
 
   return (
-    <>
-      <AdminHead title="Integrations" sub="Connect NetOps to your system of record. Pick a connector to set up its connection, ticket routing and two-way sync — all in one guided flow." />
+    <div className="adm">
+      <AdminHead title="Integrations" sub="Your system of record." topic="admin.integrations" />
       <StatStrip>
         <Stat label="Connectors" value={loaded ? CONNECTORS.length : <Skeleton w={26} h={22} />} />
         <Stat label="Configured" value={loaded ? configuredCount : "—"} tone={configuredCount ? "accent" : ""} />
@@ -3187,7 +3213,7 @@ export function IntegrationsAdmin() {
           onSaved={async () => { setOpen(null); load(); }}
         />
       )}
-    </>
+    </div>
   );
 }
 
@@ -3250,7 +3276,7 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
   const steps: WizardStep[] = [
     {
       id: "connect", title: "Connect",
-      hint: isSN ? "Where your ServiceNow instance lives and how to authenticate." : "Where your Jira site lives and how to authenticate.",
+      hint: isSN ? "Where ServiceNow lives, and how to authenticate." : "Where Jira lives, and how to authenticate.",
       isValid: () => connectValid,
       render: () => (
         <>
@@ -3296,26 +3322,26 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
     },
     {
       id: "sync", title: "Sync",
-      hint: "Outbound promotes your incidents to tickets. Bidirectional also applies inbound state changes (close, reassign) back onto the incident via a registered webhook.",
+      hint: "Which way state travels.",
       isValid: () => syncValid,
       render: () => (
         <>
           <div className="form-grid">
             <LabeledSelect label="Sync mode" value={syncMode} onChange={(v) => setSyncMode(v as IntegrationConfig["sync_mode"])} options={["outbound", "bidirectional"]} info="Outbound promotes incidents to tickets. Bidirectional also applies inbound state changes (close, reassign) back onto the incident." />
-            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Inbound webhook<InfoTip label="Let the provider push state changes back via a registered, HMAC-signed webhook. Requires bidirectional mode + a signing secret.">Let the provider push state changes back via a registered, HMAC-signed webhook. Requires bidirectional mode + a signing secret.</InfoTip></span>
-              <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center", padding: "8px 0" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Inbound webhook<AskIris topic="itsm.inbound-webhook" label="inbound webhook" /></span>
+              <label className="adm-line adm-check" style={{ padding: "8px 0" }}>
                 <input type="checkbox" checked={webhookEnabled} disabled={syncMode !== "bidirectional"} onChange={(e) => setWebhookEnabled(e.target.checked)} /> Accept inbound state changes
               </label>
             </label>
-            <LabeledInput label={`Webhook signing secret${integration.webhook_secret_set ? " (stored)" : ""}`} type="password" value={secret} onChange={setSecret} placeholder={integration.webhook_secret_set ? "•••••• (unchanged)" : "shared secret for HMAC verification"} info="Shared secret used to HMAC-verify inbound webhooks from the provider. Write-only — blank keeps stored." />
+            <LabeledInput label={`Webhook signing secret${integration.webhook_secret_set ? " (stored)" : ""}`} type="password" value={secret} onChange={setSecret} placeholder={integration.webhook_secret_set ? "•••••• (unchanged)" : "shared secret for HMAC verification"} info="Shared secret used to HMAC-verify inbound webhooks. Write-only — blank keeps stored." />
           </div>
           {syncMode === "bidirectional" && webhookEnabled && !integration.webhook_secret_set && !secret.trim() && (
             <p className="pol-row-err" role="alert">A signing secret is required to accept inbound webhooks.</p>
           )}
           {fullUrl && (
             <div style={{ marginTop: 12 }}>
-              <span className="mini-meta">Inbound webhook URL — register this with {meta.name}</span>
+              <span className="adm-line">Inbound webhook URL — register it with {meta.name}</span>
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
                 <input readOnly value={fullUrl} onFocus={(e) => e.currentTarget.select()} className="mono" style={{ flex: 1, padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }} />
                 <button className="dash-btn" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
@@ -3323,7 +3349,10 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
             </div>
           )}
           {!inboundEnabled && (
-            <p className="mini-meta" style={{ marginTop: 8 }}>Inbound webhooks are recorded but not yet driving incident state — pending platform enablement.</p>
+            <p className="adm-line adm-mt">
+              Recorded, not yet applied.
+              <AskIris topic="itsm.inbound-pending" label="inbound webhooks recorded" />
+            </p>
           )}
         </>
       ),
@@ -3333,7 +3362,7 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
       isValid: () => true,
       render: () => (
         <div style={{ display: "grid", gap: 8 }}>
-          <p className="mini-meta">Saving hot-swaps the connector live — no restart.</p>
+          <p className="adm-line">Saving takes effect at once.</p>
           <dl className="kv-form">
             <dt>Status</dt><dd>{enabled ? "Enabled" : "Disabled"}</dd>
             <dt>{isSN ? "Instance" : "Site"}</dt><dd className="mono">{isSN ? (sn.instance_url || "—") : (jr.base_url || "—")}</dd>
@@ -3365,12 +3394,12 @@ const SEVERITIES = ["info", "notice", "warning", "error", "critical"];
 // vendor artwork and no brand colour is rendered here.
 type ChannelId = "email" | "mobile" | "slack" | "pagerduty" | "teams" | "sns";
 const CHANNELS: { id: ChannelId; name: string; tagline: string; logo: JSX.Element }[] = [
-  { id: "email", name: "Email", tagline: "SMTP relay — route alert emails to your NOC distribution list.", logo: <Icon name="mail" size={26} /> },
-  { id: "mobile", name: "SMS & Push", tagline: "Phone alerts — SMS via Twilio and free push via ntfy.", logo: <Icon name="smartphone" size={26} /> },
-  { id: "slack", name: "Slack", tagline: "Post alerts to a Slack channel via an Incoming Webhook.", logo: <ConnectorGlyph connector="slack" size={26} /> },
-  { id: "pagerduty", name: "PagerDuty", tagline: "On-call escalation via the PagerDuty Events API v2.", logo: <ConnectorGlyph connector="pagerduty" size={26} /> },
-  { id: "teams", name: "Microsoft Teams", tagline: "Post alerts to a Teams channel via an Incoming Webhook.", logo: <ConnectorGlyph connector="teams" size={26} /> },
-  { id: "sns", name: "Amazon SNS", tagline: "Publish to an SNS topic or SMS phone numbers — AWS credentials come from the deployment environment.", logo: <AwsLogo size={30} /> },
+  { id: "email", name: "Email", tagline: "Alert email through your SMTP relay.", logo: <Icon name="mail" size={26} /> },
+  { id: "mobile", name: "SMS & Push", tagline: "Phone alerts: SMS and push.", logo: <Icon name="smartphone" size={26} /> },
+  { id: "slack", name: "Slack", tagline: "Post alerts to a Slack channel.", logo: <ConnectorGlyph connector="slack" size={26} /> },
+  { id: "pagerduty", name: "PagerDuty", tagline: "Escalate to the on-call.", logo: <ConnectorGlyph connector="pagerduty" size={26} /> },
+  { id: "teams", name: "Microsoft Teams", tagline: "Post alerts to a Teams channel.", logo: <ConnectorGlyph connector="teams" size={26} /> },
+  { id: "sns", name: "Amazon SNS", tagline: "Publish to an SNS topic or phone numbers.", logo: <AwsLogo size={30} /> },
 ];
 
 // FieldError — the inline, field-level validation message shown under an input
@@ -3383,8 +3412,8 @@ function FieldError({ msg }: { msg?: string }) {
 
 function SeveritySelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Send on severity ≥<InfoTip label="Only alerts at or above this severity are delivered to this channel.">Only alerts at or above this severity are delivered to this channel.</InfoTip></span>
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }} title="Only alerts at or above this severity reach this channel.">Send on severity ≥</span>
       <select value={value} onChange={(e) => onChange(e.target.value)}
         style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
         {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -3433,15 +3462,18 @@ function SyncSettings({ integration, inboundEnabled, webhookHint, onSaved }: {
   return (
     <details className="sync-block">
       <summary>Bidirectional sync <span className={`conn-status ${enabled ? "good" : ""}`}>{summary}</span></summary>
-      <p className="mini-meta">Outbound promotes incidents to this system. Bidirectional also applies inbound state changes (ack, resolve, reassign) back onto the incident via a registered webhook.</p>
+      <p className="adm-line">
+        Which way state travels.
+        <AskIris topic="itsm.two-way-sync" label="bidirectional sync" />
+      </p>
       <label className="scope-chip" style={{ marginBottom: 8 }}>
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enable two-way sync
       </label>
       <div className="form-grid">
         <LabeledSelect label="Sync mode" value={syncMode} onChange={(v) => setSyncMode(v as IntegrationConfig["sync_mode"])} options={["outbound", "bidirectional"]} />
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
           <span>Inbound webhook</span>
-          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center", padding: "8px 0" }}>
+          <label className="adm-line adm-check" style={{ padding: "8px 0" }}>
             <input type="checkbox" checked={webhookEnabled} disabled={syncMode !== "bidirectional"} onChange={(e) => setWebhookEnabled(e.target.checked)} /> Accept inbound state changes
           </label>
         </label>
@@ -3450,18 +3482,18 @@ function SyncSettings({ integration, inboundEnabled, webhookHint, onSaved }: {
       {needsSecret && <p className="pol-row-err" role="alert">A signing secret is required to accept inbound webhooks.</p>}
       {fullUrl && (
         <div style={{ marginTop: 12 }}>
-          <span className="mini-meta">Inbound webhook URL — register this with the provider</span>
+          <span className="adm-line">Inbound webhook URL — register it with the provider</span>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
             <input readOnly value={fullUrl} onFocus={(e) => e.currentTarget.select()} className="mono" style={{ flex: 1, padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }} />
             <button className="dash-btn" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
           </div>
-          <p className="mini-meta" style={{ marginTop: 4 }}>{webhookHint}</p>
+          <p className="adm-line adm-mt">{webhookHint}</p>
         </div>
       )}
-      {!inboundEnabled && <p className="mini-meta" style={{ marginTop: 8 }}>Inbound webhooks are recorded but not yet driving incident state — pending platform enablement.</p>}
+      {!inboundEnabled && <p className="adm-line adm-mt">Recorded, not yet applied.</p>}
       <div className="admin-actions">
         <button onClick={save} disabled={busy}>{busy ? "Saving…" : "Save sync"}</button>
-        {msg && <span className="mini-meta">{msg}</span>}
+        {msg && <span className="adm-line">{msg}</span>}
       </div>
     </details>
   );
@@ -3632,12 +3664,11 @@ export function NotificationsAdmin() {
   };
 
   return (
-    <>
+    <div className="adm">
       <AdminHead
         title="Notifications"
-        sub={platform
-          ? "Email, SMS and push channels. Critical alerts route here; secrets are write-only."
-          : "Reusable contact points that scheduled reports deliver to. Delivery channels are operated at the platform level."}
+        sub={platform ? "Where alerts are delivered." : "Who scheduled reports go to."}
+        topic={platform ? "notify.channels" : "notify.contact-points"}
       />
       {platform ? (() => {
         const loaded = smtp !== null;
@@ -3716,7 +3747,7 @@ export function NotificationsAdmin() {
                   <LabeledInput label="Recipients (comma-separated)" value={smtp.to} onChange={(v) => setSmtp({ ...smtp, to: v })} required info="One or more addresses that receive alert emails, comma-separated." />
                   <LabeledInput label="Username" value={smtp.user} onChange={(v) => setSmtp({ ...smtp, user: v })} info="SMTP auth username. Leave blank for an unauthenticated relay." />
                   <LabeledInput label={`Password${smtp.pass_set ? " (stored)" : ""}`} type="password" value={secret.smtp} onChange={(v) => setSecret((s) => ({ ...s, smtp: v }))} placeholder={smtp.pass_set ? "•••••• (unchanged)" : ""} info="SMTP auth password. Write-only — blank keeps the stored value." />
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Security<InfoTip label="Transport encryption: STARTTLS (587), implicit TLS on connect (465), or none (plain, insecure).">Transport encryption: STARTTLS (587), implicit TLS on connect (465), or none (plain, insecure).</InfoTip></span>
                     <select value={smtp.security} onChange={(e) => setSmtp({ ...smtp, security: e.target.value })} style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
                       <option value="starttls">STARTTLS (587, secure)</option>
@@ -3730,7 +3761,7 @@ export function NotificationsAdmin() {
                 <div className="admin-actions">
                   <button onClick={saveSmtp}>Save</button>
                   <button className="ghost" onClick={() => test("smtp", api.testSmtp)}>Send test</button>
-                  {msg.smtp && <span className="mini-meta">{msg.smtp}</span>}
+                  {msg.smtp && <span className="adm-line">{msg.smtp}</span>}
                 </div>
               </>
             )}
@@ -3738,7 +3769,10 @@ export function NotificationsAdmin() {
             {openCh === "mobile" && (
               <>
                 <h3 className="ds-modal-section"><ConnectorGlyph connector="twilio" size={18} /> SMS · Twilio</h3>
-                <p className="mini-meta">Phone SMS for critical alerts. Twilio is metered — use ntfy below for free testing.</p>
+                <p className="adm-line">
+                  Twilio is metered.
+                  <AskIris topic="notify.twilio" label="SMS via Twilio" />
+                </p>
                 {twilio && (
                   <>
                     <label className="scope-chip" style={{ margin: "10px 0" }}>
@@ -3754,12 +3788,15 @@ export function NotificationsAdmin() {
                     <div className="admin-actions">
                       <button onClick={saveTwilio}>Save SMS</button>
                       <button className="ghost" onClick={() => test("twilio", api.testTwilio)}>Send test</button>
-                      {msg.twilio && <span className="mini-meta">{msg.twilio}</span>}
+                      {msg.twilio && <span className="adm-line">{msg.twilio}</span>}
                     </div>
                   </>
                 )}
                 <h3 className="ds-modal-section" style={{ marginTop: 18 }}><Icon name="bell" size={16} /> Push · ntfy</h3>
-                <p className="mini-meta">Free push to phone/desktop — subscribe to the topic in the ntfy app. Great for testing critical-alert pushes without Twilio.</p>
+                <p className="adm-line">
+                  Free push to phone or desktop.
+                  <AskIris topic="notify.ntfy" label="push via ntfy" />
+                </p>
                 {ntfy && (
                   <>
                     <label className="scope-chip" style={{ margin: "10px 0" }}>
@@ -3774,7 +3811,7 @@ export function NotificationsAdmin() {
                     <div className="admin-actions">
                       <button onClick={saveNtfy}>Save push</button>
                       <button className="ghost" onClick={() => test("ntfy", api.testNtfy)}>Send test</button>
-                      {msg.ntfy && <span className="mini-meta">{msg.ntfy}</span>}
+                      {msg.ntfy && <span className="adm-line">{msg.ntfy}</span>}
                     </div>
                   </>
                 )}
@@ -3795,7 +3832,7 @@ export function NotificationsAdmin() {
                 <div className="admin-actions">
                   <button onClick={saveSlack}>Save</button>
                   <button className="ghost" onClick={() => test("slack", api.testSlack)}>Send test</button>
-                  {msg.slack && <span className="mini-meta">{msg.slack}</span>}
+                  {msg.slack && <span className="adm-line">{msg.slack}</span>}
                 </div>
                 <SyncSettings integration={integrationFor("slack")} inboundEnabled={inboundEnabled} webhookHint="Paste into your Slack app's Interactivity & Shortcuts request URL." onSaved={onIntegrationSaved} />
               </>
@@ -3814,7 +3851,7 @@ export function NotificationsAdmin() {
                 <div className="admin-actions">
                   <button onClick={savePager}>Save</button>
                   <button className="ghost" onClick={() => test("pager", api.testPagerDuty)}>Send test</button>
-                  {msg.pager && <span className="mini-meta">{msg.pager}</span>}
+                  {msg.pager && <span className="adm-line">{msg.pager}</span>}
                 </div>
                 <SyncSettings integration={integrationFor("pagerduty")} inboundEnabled={inboundEnabled} webhookHint="Paste into a PagerDuty v3 webhook subscription." onSaved={onIntegrationSaved} />
               </>
@@ -3829,7 +3866,7 @@ export function NotificationsAdmin() {
                   <div>
                     <LabeledInput label={`Webhook URL${teams.webhook_set ? " (stored)" : ""}`} type="password" value={secret.teams} onChange={(v) => setSecret((s) => ({ ...s, teams: v }))} placeholder={teams.webhook_set ? "\u2022\u2022\u2022\u2022\u2022\u2022 (unchanged)" : "https://\u2026.webhook.office.com/webhookb2/\u2026"} required={!teams.webhook_set} info="Teams Incoming Webhook URL (channel \u2192 Connectors \u2192 Incoming Webhook). It embeds a bearer token, so it is write-only \u2014 blank keeps the stored value." />
                     <FieldError msg={teamsErrs.webhook_url} />
-                    {teams.webhook_set && <p className="mini-meta" style={{ marginTop: 2 }}>A webhook is stored. Type a new one to replace it; leave blank to keep it.</p>}
+                    {teams.webhook_set && <p className="adm-line">A webhook is stored. Type a new one to replace it.</p>}
                   </div>
                   <SeveritySelect value={teams.min_severity} onChange={(v) => setTeams({ ...teams, min_severity: v })} />
                 </div>
@@ -3837,7 +3874,7 @@ export function NotificationsAdmin() {
                 <div className="admin-actions">
                   <button onClick={saveTeams}>Save</button>
                   <button className="ghost" onClick={() => test("teams", api.notifyTeamsTest)}>Send test</button>
-                  {msg.teams && <span className="mini-meta">{msg.teams}</span>}
+                  {msg.teams && <span className="adm-line">{msg.teams}</span>}
                 </div>
               </>
             )}
@@ -3870,8 +3907,9 @@ export function NotificationsAdmin() {
                     the deployment environment and are never stored or returned by
                     the API, so the surface can only report their presence. */}
                 <div className="ds-readonly-note">
-                  <span className="mini-meta">
-                    AWS credentials come from the environment (<code>AWS_ACCESS_KEY_ID</code> / <code>AWS_SECRET_ACCESS_KEY</code>) and are never stored or shown here.
+                  <span className="adm-line">
+                    AWS credentials come from the environment.
+                    <AskIris topic="notify.sns-credentials" label="AWS credentials" />
                   </span>
                   <span className={`conn-status ${sns.credentials_set ? "good" : "warn"}`}>
                     {sns.credentials_set ? "Credentials detected" : "Credentials not set"}
@@ -3881,7 +3919,7 @@ export function NotificationsAdmin() {
                 <div className="admin-actions">
                   <button onClick={saveSns}>Save</button>
                   <button className="ghost" onClick={() => test("sns", api.notifySNSTest)}>Send test</button>
-                  {msg.sns && <span className="mini-meta">{msg.sns}</span>}
+                  {msg.sns && <span className="adm-line">{msg.sns}</span>}
                 </div>
               </>
             )}
@@ -3896,9 +3934,9 @@ export function NotificationsAdmin() {
         <div className="admin-card-head">
           <h2>Contact points</h2>
         </div>
-        <p className="mini-meta">
-          Reusable delivery audiences (email groups, Slack, webhooks) that Reports
-          deliver to. Scoped to the current tenant.
+        <p className="adm-line">
+          Delivery audiences that Reports use.
+          <AskIris topic="notify.contact-points" label="contact points" />
         </p>
 
         {cps.length > 0 && (
@@ -3911,7 +3949,7 @@ export function NotificationsAdmin() {
                 <tr key={cp.id}>
                   <td>{cp.name}</td>
                   <td>{cp.type}</td>
-                  <td className="mini-meta">{cp.type === "email" ? (cp.email ?? []).join(", ") : cp.target}</td>
+                  <td className="adm-line">{cp.type === "email" ? (cp.email ?? []).join(", ") : cp.target}</td>
                   <td>{cp.enabled ? "Yes" : "No"}</td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                     <button className="ghost" onClick={() => editCp(cp)}>Edit</button>
@@ -3925,7 +3963,7 @@ export function NotificationsAdmin() {
 
         <div className="form-grid">
           <LabeledInput label="Name" value={cpDraft.name ?? ""} onChange={(v) => setCpDraft({ ...cpDraft, name: v })} required placeholder="NOC on-call" />
-          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" }}>
             <span>Type</span>
             <select value={cpDraft.type ?? "email"} onChange={(e) => setCpDraft({ ...cpDraft, type: e.target.value as ContactPointType })}
               style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
@@ -3937,7 +3975,7 @@ export function NotificationsAdmin() {
           ) : (
             <LabeledInput label="Target (webhook URL / Slack channel)" value={cpDraft.target ?? ""} onChange={(v) => setCpDraft({ ...cpDraft, target: v })} required />
           )}
-          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <label className="adm-line adm-check">
             <input type="checkbox" checked={cpDraft.enabled ?? true} onChange={(e) => setCpDraft({ ...cpDraft, enabled: e.target.checked })} /> Enabled
           </label>
         </div>
@@ -3945,10 +3983,10 @@ export function NotificationsAdmin() {
         <div className="admin-actions">
           <button onClick={saveCp}>{cpDraft.id ? "Update" : "Add"}</button>
           {cpDraft.id && <button className="ghost" onClick={resetCp}>Cancel</button>}
-          {msg.cp && <span className="mini-meta">{msg.cp}</span>}
+          {msg.cp && <span className="adm-line">{msg.cp}</span>}
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -4036,7 +4074,7 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
           placeholder="e.g. Customer-impacting outages" info="A label for this policy; shown in the list and audit." />
         <LabeledSelect label="External system" value={p.external_system} onChange={(v) => set("external_system", v)}
           options={["servicenow", "pagerduty", "slack", "jira"]}
-          info="Where this policy delivers: ServiceNow opens ITSM incidents; PagerDuty pages the on-call; Slack posts to the tenant's channel; Jira opens issues in the tenant's project. One enabled policy per system — a tenant can run any combination." />
+          info="Where this policy delivers. One enabled policy per system." />
         <LabeledSelect label="Minimum verdict" value={p.min_verdict} onChange={(v) => set("min_verdict", v)}
           options={["suspected", "confirmed"]} info="The lowest RCA verdict that may open a ticket." />
         {p.external_system === "servicenow" && (
@@ -4052,31 +4090,29 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
       </div>
 
       {p.external_system === "pagerduty" && (
-        <p className="mini-meta" style={{ margin: "var(--sp-2) 0 0" }}>
-          Pages are deduplicated per root cause: one PagerDuty incident per correlated incident, updated in place and
-          auto-resolved on recovery. Urgency above maps to page severity (1 = critical). Connect the routing key under
-          PagerDuty paging connection on this page. Raw alerts never page directly.
+        <p className="adm-line adm-mt">
+          One page per root cause, auto-resolved.
+          <AskIris topic="policy.pagerduty" label="PagerDuty paging" />
         </p>
       )}
       {p.external_system === "slack" && (
-        <p className="mini-meta" style={{ margin: "var(--sp-2) 0 0" }}>
-          One rich message per root-cause lifecycle transition (opened / materially updated / resolved) in this tenant's
-          own channel — never per raw alert. Connect the webhook under Slack channel connection on this page.
+        <p className="adm-line adm-mt">
+          One message per root cause.
+          <AskIris topic="policy.slack" label="Slack delivery" />
         </p>
       )}
       {p.external_system === "jira" && (
-        <p className="mini-meta" style={{ margin: "var(--sp-2) 0 0" }}>
-          One deduplicated Jira issue per root cause, updated in place and transitioned to Done on resolve — never per
-          raw alert. Connect the Jira site (base URL, project, token) in <b>Incident Response → Integrations</b>. Jira
-          policies are strictly opt-in: no Jira policy, no issues.
+        <p className="adm-line adm-mt">
+          One issue per root cause. Opt-in only.
+          <AskIris topic="policy.jira" label="Jira delivery" />
         </p>
       )}
       {p.external_system === "servicenow" && (<>
       {/* Per-verdict ticket priority mapping — the ITSM derives Priority from Impact x Urgency. */}
-      <h4 style={{ margin: "var(--sp-3) 0 var(--sp-1)" }}>Ticket priority mapping</h4>
-      <p className="mini-meta" style={{ margin: "0 0 var(--sp-2)" }}>
-        The ticketing system derives Priority from Impact x Urgency. 0 = automatic: a confirmed critical fault files at
-        1 / 1 (highest priority), a confirmed fault raises Urgency to High, and a suspected fault uses the defaults above.
+      <h4 style={{ margin: "var(--sp-3) 0 var(--sp-1)" }}>Ticket priority</h4>
+      <p className="adm-line">
+        0 = automatic.
+        <AskIris topic="policy.priority-mapping" label="ticket priority" />
       </p>
       <div className="form-grid">
         <LabeledInput label="Impact — confirmed critical" type="number" value={String(p.impact_confirmed_critical ?? 0)}
@@ -4109,7 +4145,7 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
       {/* Simulator — a pure dry-run: would a hypothetical object ticket under this policy? */}
       <div className="card" style={{ padding: "var(--sp-3)", marginTop: "var(--sp-4)", background: "var(--bg)" }}>
         <h4 style={{ margin: "0 0 var(--sp-2)" }}>Simulate a decision</h4>
-        <p className="mini-meta" style={{ marginTop: 0 }}>Dry-run this policy against a hypothetical RCA object — no ticket is created.</p>
+        <p className="adm-line">No ticket is created.</p>
         <div className="form-grid">
           <LabeledSelect label="Verdict" value={facts.verdict} onChange={(v) => setFacts((f) => ({ ...f, verdict: v }))} options={["undetermined", "suspected", "confirmed"]} />
           <LabeledSelect label="Peak severity" value={facts.peak_severity ?? "crit"} onChange={(v) => setFacts((f) => ({ ...f, peak_severity: v }))} options={["info", "warn", "high", "crit"]} />
@@ -4128,28 +4164,27 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
           <div style={{ marginTop: "var(--sp-2)" }}>
             <p style={{ margin: 0 }}>
               <span className={`badge ${decision.create ? "good" : "warn"}`}>{decision.create ? "Would open a ticket" : "Held"}</span>{" "}
-              <span className="mini-meta">{decision.reason}</span>
+              <span className="adm-line">{decision.reason}</span>
             </p>
             {decision.policy_name && (
-              <p className="mini-meta" style={{ margin: "var(--sp-1) 0 0" }}>
+              <p className="adm-line adm-mt">
                 Evaluated policy: <b>{decision.policy_name}</b>
                 {decision.policy_updated_at ? ` · saved ${fmtDateTime(decision.policy_updated_at)}` : ""}
               </p>
             )}
             {decision.runtime_state === "shadowed" && (
-              <p className="mini-meta" style={{ margin: "var(--sp-1) 0 0", color: "var(--warn, #b45309)" }}>
-                Not the live policy — “{decision.runtime_policy_name || "another policy"}” currently governs auto-ticketing
-                for this tenant, so this dry-run does not reflect live behavior.
+              <p className="adm-line adm-mt" style={{ color: "var(--warn, #b45309)" }}>
+                Not the live policy — “{decision.runtime_policy_name || "another policy"}” governs this tenant.
               </p>
             )}
             {decision.runtime_state === "held" && (
-              <p className="mini-meta" style={{ margin: "var(--sp-1) 0 0", color: "var(--bad, #b91c1c)" }}>
-                Auto-ticketing is HELD for this tenant — more than one policy is enabled. Disable all but one to resume.
+              <p className="adm-line adm-mt" style={{ color: "var(--bad, #b91c1c)" }}>
+                Auto-ticketing is held — more than one policy is enabled. Disable all but one.
               </p>
             )}
             {decision.runtime_state === "opted_out" && (
-              <p className="mini-meta" style={{ margin: "var(--sp-1) 0 0" }}>
-                Auto-ticketing is switched off for this tenant — no policy is enabled, so no ticket would open automatically.
+              <p className="adm-line adm-mt">
+                Auto-ticketing is off — no policy is enabled.
               </p>
             )}
           </div>
@@ -4179,9 +4214,9 @@ function PagerDutyPagingConnection() {
   return (
     <div className="cc-panel" style={{ padding: "var(--sp-3)", marginBottom: "var(--sp-3)" }}>
       <h4 style={{ margin: 0 }}>PagerDuty paging connection</h4>
-      <p className="mini-meta" style={{ margin: "var(--sp-1) 0 var(--sp-2)" }}>
-        This tenant's own Events API v2 routing key — used ONLY by PagerDuty incident policies below
-        (one page per correlated root cause, auto-resolved on recovery). Raw alerts never page directly.
+      <p className="adm-line adm-mt">
+        This tenant's own routing key.
+        <AskIris topic="policy.pagerduty-key" label="PagerDuty routing key" />
       </p>
       <div style={{ display: "flex", gap: "var(--sp-2)", alignItems: "center", flexWrap: "wrap" }}>
         <label className="scope-chip"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled</label>
@@ -4189,8 +4224,8 @@ function PagerDutyPagingConnection() {
           placeholder={hasKey ? "routing key set — leave blank to keep" : "Events API v2 integration key"}
           onChange={(e) => setKey(e.target.value)} autoComplete="new-password" />
         <button className="btn btn-primary" onClick={() => { void save(); }}>Save</button>
-        {hasKey && <span className="mini-meta">key stored (write-only)</span>}
-        {msg && <span className="mini-meta">{msg}</span>}
+        {hasKey && <span className="adm-line">key stored (write-only)</span>}
+        {msg && <span className="adm-line">{msg}</span>}
       </div>
       <ErrLine msg={err} />
     </div>
@@ -4217,9 +4252,9 @@ function SlackChannelConnection() {
   return (
     <div className="cc-panel" style={{ padding: "var(--sp-3)", marginBottom: "var(--sp-3)" }}>
       <h4 style={{ margin: 0 }}>Slack channel connection</h4>
-      <p className="mini-meta" style={{ margin: "var(--sp-1) 0 var(--sp-2)" }}>
-        This tenant's own incoming-webhook URL — used ONLY by Slack incident policies below (one message per
-        correlated root cause lifecycle, never per raw alert).
+      <p className="adm-line adm-mt">
+        This tenant's own webhook URL.
+        <AskIris topic="policy.slack-webhook" label="Slack webhook" />
       </p>
       <div style={{ display: "flex", gap: "var(--sp-2)", alignItems: "center", flexWrap: "wrap" }}>
         <label className="scope-chip"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled</label>
@@ -4227,8 +4262,8 @@ function SlackChannelConnection() {
           placeholder={hasHook ? "Webhook is set — leave blank to keep it" : "https://hooks.slack.com/services/…"}
           onChange={(e) => setUrl(e.target.value)} autoComplete="new-password" />
         <button className="btn btn-primary" onClick={() => { void save(); }}>Save</button>
-        {hasHook && <span className="mini-meta">webhook stored (write-only)</span>}
-        {msg && <span className="mini-meta">{msg}</span>}
+        {hasHook && <span className="adm-line">webhook stored (write-only)</span>}
+        {msg && <span className="adm-line">{msg}</span>}
       </div>
       <ErrLine msg={err} />
     </div>
@@ -4267,22 +4302,21 @@ export function IncidentPoliciesAdmin() {
   }, [load]);
 
   return (
-    <>
+    <div className="adm">
       {sel && (
         <Modal
           title={sel.id ? "Edit incident policy" : "New incident policy"}
-          subtitle="Decide when an RCA correlation object reaches this destination — one ticket/page per root cause."
+          subtitle="One ticket or page per root cause."
           wide
           onClose={() => setSel(null)}
         >
           <PolicyEditor policy={sel} canWrite={canWrite} inModal onCancel={() => setSel(null)} onSaved={() => { setSel(null); load(); }} />
         </Modal>
       )}
-      <AdminHead title="RCA Auto-Ticketing" sub="Incident policies that decide when an RCA correlation object opens a ServiceNow ticket or Jira issue, pages PagerDuty, or posts to Slack — one ticket/page per root cause, never per raw alert." />
-      <p className="mini-meta" style={{ marginTop: "calc(-1 * var(--sp-2))" }}>
-        Configure the ServiceNow and Jira connections in <b>Incident Response → Integrations</b>; the PagerDuty routing key and
-        Slack webhook below. A tenant with no policy uses a safe ServiceNow default (customer-facing confirmed faults open an
-        incident; internal / probe-only / undetermined are held). Every other destination is strictly opt-in: no policy, no delivery.
+      <AdminHead title="RCA Auto-Ticketing" sub="When a root cause opens a ticket." topic="admin.rca-ticketing" />
+      <p className="adm-line">
+        No policy means the safe ServiceNow default.
+        <AskIris topic="policy.defaults" label="the default policy" />
       </p>
       <PagerDutyPagingConnection />
       <SlackChannelConnection />
@@ -4302,9 +4336,7 @@ export function IncidentPoliciesAdmin() {
       {policies === null ? (
         <Skeleton h={120} style={{ marginTop: "var(--sp-3)" }} />
       ) : policies.length === 0 ? (
-        <p className="mini-meta" style={{ marginTop: "var(--sp-3)" }}>
-          No policies yet — the safe default applies. {canWrite ? "Create one to tune ticketing for this tenant." : ""}
-        </p>
+        <p className="adm-line adm-mt">No policies yet — the safe default applies.</p>
       ) : (
         <table className="ds-table" style={{ marginTop: "var(--sp-3)" }}>
           <thead>
@@ -4329,8 +4361,8 @@ export function IncidentPoliciesAdmin() {
                     ? <span className="badge bad">Conflict — ticketing held</span>
                     : <span className={`badge ${p.enabled ? "good" : ""}`}>{p.enabled ? "Active" : "Disabled"}</span>}
                 </td>
-                <td className="mini-meta">{policyGates(p).join(" · ")}</td>
-                <td className="mini-meta">{p.assignment_group || "—"}</td>
+                <td className="adm-line">{policyGates(p).join(" · ")}</td>
+                <td className="adm-line">{p.assignment_group || "—"}</td>
                 <td style={{ textAlign: "right" }}><button className="btn" onClick={(e) => { e.stopPropagation(); setSel(p); }}>{canWrite ? "Edit" : "View"}</button></td>
               </tr>
             ))}
@@ -4338,9 +4370,9 @@ export function IncidentPoliciesAdmin() {
         </table>
       )}
       {!canWrite && policies && policies.length >= 0 && (
-        <p className="mini-meta" style={{ marginTop: "var(--sp-2)" }}>Read-only — administration write access is required to change policies.</p>
+        <p className="adm-line adm-mt">Read-only — you need administration write access.</p>
       )}
       {user && null}
-    </>
+    </div>
   );
 }

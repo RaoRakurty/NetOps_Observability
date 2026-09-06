@@ -186,8 +186,10 @@ export function scanWordBudget(source: string): Breach[] {
 //
 // Seeded 2026-09-06 with every file that was over budget on the day the guard
 // landed (92 files, 401 breaches); sweep 1 removed 14 of them (78 files, 353
-// breaches) and sweep 2 (Security + Data Protection) removed 16 more, leaving
-// 62 files and 312 breaches. The number is that file's breach count, so the whole
+// breaches), sweep 2 (Security + Data Protection) removed 16 more (62 files,
+// 312 breaches), and sweep 3 (Administration · Licence · Registries · Cloud
+// ingest · Platform tools) removed 6 more, leaving 56 files and 240 breaches.
+// The number is that file's breach count, so the whole
 // backlog is visible in one diff and each sweep is a deletion from this list.
 // Sweep order and the "done" definition are in the design doc; a swept file
 // loses its line here.
@@ -259,10 +261,11 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     expect(stale, `wordBudget.allow.json is out of date:\n${stale.join("\n")}`).toEqual([]);
   });
 
-  // Sweeps 1 (Dashboard/Command Center · Operations · Alerts) and 2 (Security ·
-  // Data Protection) are DONE, so these files must never reappear in the debt
-  // list — the allowlist may not grow a new entry for one, and its breach count
-  // must stay zero.
+  // Sweeps 1 (Dashboard/Command Center · Operations · Alerts), 2 (Security ·
+  // Data Protection) and 3 (Administration · Licence · Registries · Cloud
+  // ingest · Platform tools) are DONE, so these files must never reappear in the
+  // debt list — the allowlist may not grow a new entry for one, and its breach
+  // count must stay zero.
   it.each([
     "components/noc.tsx",
     "pages/CommandCenter.tsx",
@@ -303,8 +306,22 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     "pages/VulnerabilityManagement.tsx",
     "pages/ComplianceMonitoring.tsx",
     "pages/DataProtection.tsx",
+    // sweep 3 — Administration (users, roles, tenants, orgs, regions, access,
+    // sessions, API keys + the scope picker, auth providers, token policy,
+    // notifications and contact points, integrations, RCA auto-ticketing),
+    // Licence, Registries, Cloud ingest and the Platform tools.
+    "tabs/admin.tsx",
+    "tabs/AdminSsoIdp.tsx",
+    "tabs/VerificationSettingsCard.tsx",
+    "pages/Licence.tsx",
+    "components/licence/UpgradeCard.tsx",
+    "pages/admin/TicketDelivery.tsx",
+    "pages/platform/PipelineDebugger.tsx",
+    "pages/platform/Quarantine.tsx",
+    "pages/appobs/Registries.tsx",
+    "pages/appobs/Ingestion.tsx",
   ])("%s stays swept", (label) => {
-    expect(ALLOW[label], `${label} is in sweep 1 and may not carry budget debt`).toBeUndefined();
+    expect(ALLOW[label], `${label} is in a completed sweep and may not carry budget debt`).toBeUndefined();
     expect(counted.get(label)?.map((b) => fmtBreach(label, b)) ?? [], `${label} regressed`).toEqual([]);
   });
 

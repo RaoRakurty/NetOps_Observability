@@ -35,6 +35,7 @@ import { api, QuarantineDoc } from "../../services/api";
 import { fmtDateTime } from "../../lib/time";
 import { httpFailure, operatorError } from "../../lib/errors";
 import { Stat, StatStrip } from "../../components/ui";
+import AskIris from "../../components/AskIris";
 
 const PAGE = 50;
 
@@ -97,14 +98,12 @@ export default function Quarantine() {
   }, [load]);
 
   const head = (
-    <div className="admin-head">
-      <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>Quarantine</h2>
-      <p className="admin-sub">
-        Telemetry whose sender is not in the device inventory cannot be attributed to a tenant, so the
-        router seals the whole event and holds it here instead of guessing an owner. Only the syslog,
-        trap and flow lanes have this stage — those are the lanes whose tenant comes from a registry
-        lookup. Metadata only: the sealed event itself is never served to this page.
-      </p>
+    <div className="adm admin-head">
+      <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>
+        Quarantine
+        <AskIris topic="quarantine.why-held" label="Quarantine" />
+      </h2>
+      <p className="admin-sub">Events no tenant owns. Metadata only.</p>
     </div>
   );
 
@@ -115,21 +114,20 @@ export default function Quarantine() {
     return (
       <>{head}
         <div className="empty">
-          Sealing custody is not enabled on this deployment, so there is no quarantine stage: unattributable
-          events are not sealed and held, and this index does not exist. That is different from a quarantine
-          that is empty.
+          No quarantine stage on this deployment.
+          <AskIris topic="quarantine.not-enabled" label="no quarantine stage" />
         </div>
       </>
     );
   }
   if (load.kind === "denied") {
-    return <>{head}<div className="empty">Reading the quarantine needs platform-owner access. It holds events that could not be attributed to any tenant, so no tenant principal may see it.</div></>;
+    return <>{head}<div className="empty">Reading the quarantine needs platform-owner access.<AskIris topic="quarantine.platform-only" label="platform-owner access" /></div></>;
   }
   if (load.kind === "unreadable") {
     return (
       <>{head}
         <div className="empty" role="alert" style={{ color: "var(--bad)" }}>
-          {load.message} The quarantine depth is unknown — this is NOT an empty quarantine. Read it again.
+          {load.message} The depth is unknown — this is not an empty quarantine.
         </div>
       </>
     );
@@ -140,7 +138,7 @@ export default function Quarantine() {
   const hasMore = offset + shown < total;
 
   return (
-    <>
+    <div className="adm">
       {head}
       <div className="admin-head-row" style={{ marginTop: "var(--sp-2)" }}>
         <StatStrip>
@@ -149,24 +147,19 @@ export default function Quarantine() {
           <Stat label="Oldest age" value={oldest ? ageDays(oldest) : "—"} />
         </StatStrip>
       </div>
-      <p className="mini-meta">
-        Envelopes are deleted by the index retention policy after a bounded window —
-        <code> QUARANTINE_RETENTION_DAYS</code>, 30 days on the shipped configuration. This page reports the
-        oldest envelope it can see, not the window installed on this cluster. Re-attribution is deliberate
-        break-glass and is not a control here; the procedure, including how to confirm a device assignment
-        first, is in the quarantine operations runbook
-        (<code>docs/runbooks/security/quarantine-operations.md</code>).
+      <p className="adm-line">
+        Held for a bounded window, then deleted.
+        <AskIris topic="quarantine.retention" label="how long an envelope is held" />
       </p>
 
       {total === 0 ? (
         <div className="empty">
-          Nothing is held. Every event on the syslog, trap and flow lanes resolved to a device in the
-          inventory. A steady trickle here is normal while a new device converges; a growing depth means
-          something is sending that nothing owns.
+          Nothing is held.
+          <AskIris topic="quarantine.nothing-held" label="nothing is held" />
         </div>
       ) : (
         <>
-          <p className="mini-meta">
+          <p className="adm-line">
             Lanes on this page ({shown.toLocaleString()} of {total.toLocaleString()} envelopes):{" "}
             {byLane.map(([lane, n], i) => (
               <span key={lane}>{i > 0 ? " · " : ""}<b>{lane}</b> {n.toLocaleString()}</span>
@@ -204,7 +197,7 @@ export default function Quarantine() {
             </tbody>
           </table>
           <div className="admin-head-row">
-            <p className="mini-meta" style={{ margin: 0 }}>
+            <p className="adm-line">
               Showing {offset + 1}–{offset + shown} of {total.toLocaleString()}.
             </p>
             <button type="button" className="btn" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>
@@ -214,13 +207,12 @@ export default function Quarantine() {
               Next
             </button>
           </div>
-          <p className="mini-meta">
-            The hashed identity is what the sender claimed, hashed on the way in — the raw hostname or
-            exporter address is never stored outside the sealed envelope. Match it by assigning the device
-            in the inventory; the runbook names the exact identity strings that are hashed.
+          <p className="adm-line">
+            The hashed identity is what the sender claimed.
+            <AskIris topic="quarantine.hashed-identity" label="the hashed identity" />
           </p>
         </>
       )}
-    </>
+    </div>
   );
 }

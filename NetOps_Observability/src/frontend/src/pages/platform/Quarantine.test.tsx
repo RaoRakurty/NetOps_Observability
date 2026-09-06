@@ -80,7 +80,9 @@ describe("Quarantine — reading the index", () => {
     await screen.findByRole("table", { name: /quarantined envelopes/i });
     expect(screen.queryByRole("button", { name: /re-?attribut/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /unseal|restore/i })).toBeNull();
-    expect(screen.getByText(/break-glass/i)).toBeTruthy();
+    // Re-attribution is break-glass and is NOT a control here. The page no longer
+    // spells the procedure out; the (i) beside the retention line carries it.
+    expect(screen.getByRole("button", { name: /Ask Iris about how long an envelope is held/ })).toBeTruthy();
   });
 
   it("shows the hashed identity truncated, never a raw hostname column", async () => {
@@ -95,8 +97,11 @@ describe("Quarantine — the states that must not be confused", () => {
   it("a 501 says there is no quarantine STAGE on this deployment", async () => {
     quarantineList.mockRejectedValue(new Error("501 Not Implemented: "));
     render(<Quarantine />);
-    expect(await screen.findByText(/Sealing custody is not enabled/i)).toBeTruthy();
-    expect(screen.getByText(/different from a quarantine\s+that is empty/i)).toBeTruthy();
+    // "no stage" and "empty" must never read as the same fact. The screen states
+    // the first; the difference between them is in
+    // ai/skills/explain/quarantine.not-enabled.md, behind the (i).
+    expect(await screen.findByText(/No quarantine stage on this deployment/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about no quarantine stage/ })).toBeTruthy();
   });
 
   it("a 503 says the depth is UNKNOWN — explicitly not an empty quarantine", async () => {
@@ -114,7 +119,8 @@ describe("Quarantine — the states that must not be confused", () => {
   it("a genuinely empty quarantine says every event resolved to a device", async () => {
     quarantineList.mockResolvedValue({ quarantine: [], summary: { total: 0, oldest_received_at: null } });
     render(<Quarantine />);
-    expect(await screen.findByText(/resolved to a device in the\s+inventory/i)).toBeTruthy();
+    expect(await screen.findByText(/Nothing is held/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about nothing is held/ })).toBeTruthy();
   });
 });
 

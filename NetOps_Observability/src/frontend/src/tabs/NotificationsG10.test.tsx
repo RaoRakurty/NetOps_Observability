@@ -130,7 +130,11 @@ describe("SNS channel card", () => {
   it("reports environment credentials read-only — no credential field exists", async () => {
     const dlg = await openCard(SNS_TILE);
     expect(await screen.findByText("Credentials detected")).toBeTruthy();
-    expect(screen.getByText(/never stored or shown here/)).toBeTruthy();
+    // The CLAIM is unchanged — the credentials are not ours to hold. The
+    // sentence that explained where they do come from moved to
+    // ai/skills/explain/notify.sns-credentials.md, so the (i) is asserted with it.
+    expect(screen.getByText(/AWS credentials come from the environment/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about AWS credentials/ })).toBeTruthy();
     expect(dlg.querySelectorAll('input[type="password"]').length).toBe(0);
     expect((screen.getByPlaceholderText(/arn:aws:sns/) as HTMLInputElement).value).toBe(ARN);
   });

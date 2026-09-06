@@ -32,6 +32,7 @@ import { api, TicketAuditRow, TicketOutboxItem } from "../../services/api";
 import { fmtDateTime } from "../../lib/time";
 import { httpFailure, operatorError } from "../../lib/errors";
 import { Stat, StatStrip } from "../../components/ui";
+import AskIris from "../../components/AskIris";
 
 const PAGE = 50;
 
@@ -163,7 +164,7 @@ export default function TicketDelivery() {
     setRowNote(null);
     try {
       await api.correlationTicketSync(corrObjectId);
-      setRowNote(`A fresh sync was queued for case ${shortId(corrObjectId)}. This adds a new outbox row; it does not replay the stuck one.`);
+      setRowNote(`A fresh sync was queued for case ${shortId(corrObjectId)} — a new row, not a replay.`);
       await loadOutbox();
     } catch (e) {
       setRowNote(operatorError(e, "That case could not be queued for a sync."));
@@ -185,14 +186,13 @@ export default function TicketDelivery() {
   const partial = outbox !== null && outbox.length < outboxTotal;
 
   return (
-    <>
+    <div className="adm">
       <div className="admin-head">
-        <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>Ticket delivery</h2>
-        <p className="admin-sub">
-          What auto-ticketing has queued, failed or delivered to the ticketing system, with the
-          provider&apos;s own refusal on the row, and every recorded transition beside it. Policies and
-          destinations are configured in <b>Incident Response → Ticketing &amp; Automation</b>.
-        </p>
+        <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>
+          Ticket delivery
+          <AskIris topic="ticketing.outbox" label="Ticket delivery" />
+        </h2>
+        <p className="admin-sub">What auto-ticketing queued, failed or delivered.</p>
       </div>
 
       <div className="admin-head-row" style={{ marginTop: "var(--sp-2)" }}>
@@ -205,11 +205,11 @@ export default function TicketDelivery() {
           {syncing ? "Sweeping…" : "Sync now"}
         </button>
       </div>
-      <p className="mini-meta">
-        <b>Sync now</b> reads the current state of every two-way integration for this tenant and records
-        what changed on the provider&apos;s side. It does not open or close a ticket.
+      <p className="adm-line">
+        <b>Sync now</b> opens and closes nothing.
+        <AskIris topic="ticketing.sync-now" label="the sync sweep" />
       </p>
-      {syncNote && <p className="mini-meta" role="status">{syncNote}</p>}
+      {syncNote && <p className="adm-line" role="status">{syncNote}</p>}
 
       <h3 style={{ marginBottom: "var(--sp-1)" }}>Outbox</h3>
       <div className="admin-head-row">
@@ -230,14 +230,14 @@ export default function TicketDelivery() {
       </div>
 
       {outboxErr && <p role="alert" style={{ color: "var(--bad)", fontSize: "var(--fs-meta)" }}>{outboxErr} The outbox contents are unknown, not empty.</p>}
-      {rowNote && <p className="mini-meta" role="status">{rowNote}</p>}
+      {rowNote && <p className="adm-line" role="status">{rowNote}</p>}
 
       {outbox === null && !outboxErr ? (
         <div className="empty" role="status">Reading the delivery outbox…</div>
       ) : outbox !== null && outbox.length === 0 ? (
         <div className="empty">
-          Nothing is in flight to the ticketing system. The outbox holds work on its way out, so an empty
-          outbox is not evidence that a ticket was filed — the audit trail below is.
+          Nothing is in flight.
+          <AskIris topic="ticketing.empty-outbox" label="nothing in flight" />
         </div>
       ) : outbox !== null && rows.length === 0 ? (
         <div className="empty">No row on this page is {LANES.find((l) => l.key === lane)?.label.toLowerCase()}.</div>
@@ -286,7 +286,7 @@ export default function TicketDelivery() {
       ) : null}
 
       {outbox !== null && (
-        <p className="mini-meta">
+        <p className="adm-line">
           {partial
             ? `Showing the first ${outbox.length} of ${outboxTotal.toLocaleString()} rows — this page is not the whole outbox.`
             : `${outboxTotal.toLocaleString()} row${outboxTotal === 1 ? "" : "s"} — this is the whole outbox.`}
@@ -296,7 +296,7 @@ export default function TicketDelivery() {
       <h3 style={{ marginBottom: "var(--sp-1)" }}>Audit trail</h3>
       <div className="admin-head-row">
         <label>
-          <span className="mini-meta">RCA case id</span>{" "}
+          <span className="adm-line">RCA case id</span>{" "}
           <input
             type="text"
             value={caseFilter}
@@ -321,7 +321,7 @@ export default function TicketDelivery() {
       ) : audit !== null && audit.length === 0 ? (
         <div className="empty">
           {appliedFilter
-            ? "No ticket action has been recorded for that case. Nothing was sent for it, in either direction."
+            ? "No ticket action recorded for that case."
             : "No ticket action has been recorded for this tenant yet."}
         </div>
       ) : audit !== null ? (
@@ -354,12 +354,12 @@ export default function TicketDelivery() {
       ) : null}
 
       {audit !== null && audit.length > 0 && (
-        <p className="mini-meta">
+        <p className="adm-line">
           {audit.length < auditTotal
             ? `Showing the ${audit.length} most recent of ${auditTotal.toLocaleString()} recorded actions.`
             : `${auditTotal.toLocaleString()} recorded action${auditTotal === 1 ? "" : "s"} — this is the whole trail.`}
         </p>
       )}
-    </>
+    </div>
   );
 }

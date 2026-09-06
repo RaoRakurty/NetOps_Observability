@@ -190,6 +190,10 @@ describe("the card", () => {
   it("states that nothing was lost — a limit is not a fault", () => {
     render(<UpgradeCard refusal={refusal()} />);
     expect(screen.getByText(/Nothing has been removed and nothing has stopped/)).toBeTruthy();
+    // The reasoning ("a limit on what the licence covers, not a fault") moved to
+    // ai/skills/explain/licence.limit-not-a-fault.md; the (i) is what carries it,
+    // so it has to be here for the claim to still be reachable.
+    expect(screen.getByRole("button", { name: /Ask Iris about a licence limit/ })).toBeTruthy();
   });
 
   it("takes the calling surface's own headline when it has one", () => {

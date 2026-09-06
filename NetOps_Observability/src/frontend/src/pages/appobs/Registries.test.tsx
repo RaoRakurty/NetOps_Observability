@@ -83,9 +83,14 @@ afterEach(cleanup);
 describe("Registries — what each registry drives", () => {
   it("names all three registries and says the two here are separate lists", async () => {
     render(<Registries onOpenCloudCatalog={noop} />);
-    expect(await screen.findByText("Which registry drives what")).toBeTruthy();
-    expect(screen.getByText(/a service cannot be attached to an application in the product/)).toBeTruthy();
-    expect(screen.getByText(/Its selector is what/)).toBeTruthy();
+    expect(await screen.findByText("Three registries")).toBeTruthy();
+    // The CLAIM is unchanged — three lists, and the two here are not joined. The
+    // paragraphs that explained each one moved to
+    // ai/skills/explain/registry.which-drives-what.md and registry.not-joined.md,
+    // so the (i) that reaches them is pinned beside the claim.
+    expect(screen.getByText(/Separate lists. Nothing joins them\./)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about which registry drives what/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about separate lists/ })).toBeTruthy();
   });
 
   it("cross-links to the cloud business-service registry through the page's own sub-tab", async () => {
@@ -150,7 +155,7 @@ describe("Registries — the service catalog", () => {
     mock.catalogServices.mockRejectedValueOnce(
       new Error('501 Not Implemented: {"error":"service catalog requires the PostgreSQL backend"}'));
     render(<Registries onOpenCloudCatalog={noop} />);
-    expect(await screen.findByText("The service catalog is not available on this deployment")).toBeTruthy();
+    expect(await screen.findByText("Service catalog unavailable")).toBeTruthy();
     expect(screen.getByText(/Service catalog requires the PostgreSQL/)).toBeTruthy();
     expect(screen.queryByText("No services defined yet")).toBeNull();
   });
@@ -191,7 +196,7 @@ describe("Registries — a service's grouping rule (selectors)", () => {
     await openDrawer();
     expect((await screen.findAllByText(/Nothing is attributed to this service until a selector matches/)).length)
       .toBeGreaterThan(0);
-    expect(screen.getByText(/also carries domains, which the/)).toBeTruthy();
+    expect(screen.getByText(/also carries domains — not acted on/)).toBeTruthy();
     expect(screen.getByText("nothing")).toBeTruthy();
   });
 
@@ -359,7 +364,7 @@ describe("Registries — storage backend truthfulness", () => {
     const chip = await screen.findByText("PostgreSQL · Persistent · Unavailable");
     expect(chip.getAttribute("title")).toMatch(/nothing is written anywhere else/);
     // and the list says unavailable, not "none registered"
-    expect(await screen.findByText("Application registry storage is unavailable")).toBeTruthy();
+    expect(await screen.findByText("Application registry unavailable")).toBeTruthy();
     expect(screen.queryByText("No applications registered yet")).toBeNull();
     // no control offering a write that cannot land
     expect(screen.queryByRole("button", { name: "New application" })).toBeNull();

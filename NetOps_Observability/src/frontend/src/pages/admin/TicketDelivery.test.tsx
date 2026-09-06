@@ -101,7 +101,11 @@ describe("TicketDelivery — the outbox", () => {
   it("an empty outbox is not read as proof a ticket was filed", async () => {
     ticketsOutbox.mockResolvedValue({ outbox: [], total: 0, limit: 50, offset: 0, has_more: false });
     render(<TicketDelivery />);
-    expect(await screen.findByText(/not evidence that a ticket was filed/i)).toBeTruthy();
+    // The CLAIM stays: an empty outbox proves nothing about a filed ticket. The
+    // sentence that said why moved to ai/skills/explain/ticketing.empty-outbox.md,
+    // so the (i) that carries it is pinned beside the state.
+    expect(await screen.findByText(/Nothing is in flight/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about nothing in flight/ })).toBeTruthy();
   });
 
   it("a bounded page says it is not the whole outbox", async () => {
@@ -143,7 +147,7 @@ describe("TicketDelivery — per-case sync and the audit trail", () => {
     const row = within(table).getByTitle(CASE_A).closest("tr")!;
     fireEvent.click(within(row).getByRole("button", { name: /sync this case/i }));
     await waitFor(() => expect(correlationTicketSync).toHaveBeenCalledWith(CASE_A));
-    expect(await screen.findByText(/does not replay the stuck one/i)).toBeTruthy();
+    expect(await screen.findByText(/a new row, not a replay/i)).toBeTruthy();
   });
 
   it("filters the audit trail by a case id, and refuses a malformed one client-side", async () => {
@@ -166,7 +170,7 @@ describe("TicketDelivery — per-case sync and the audit trail", () => {
     render(<TicketDelivery />);
     fireEvent.change(await screen.findByPlaceholderText(/filter by case id/i), { target: { value: CASE_B } });
     fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-    expect(await screen.findByText(/Nothing was sent for it, in either direction/i)).toBeTruthy();
+    expect(await screen.findByText(/No ticket action recorded for that case/i)).toBeTruthy();
   });
 
   it("renders the recorded transition and its error", async () => {

@@ -24,6 +24,7 @@ import {
 } from "./ingestion";
 import ConnectorWizard from "./ConnectorWizard";
 import Connections from "./Connections";
+import AskIris from "../../components/AskIris";
 
 type Sub = "accounts" | "sources" | "status";
 const PROVIDER = (p: string) => (p ? p.toUpperCase() : "—");
@@ -87,7 +88,7 @@ export default function Ingestion({ initialSub = "", scope, onClearScope }: {
     return <div className="ao-stack"><div className="ao-panel"><Skeleton w={220} h={14} /><div style={{ marginTop: 12 }}><Skeleton h={260} /></div></div></div>;
   }
   if (state === "error") {
-    return <div className="ao-panel"><EmptyState title="Unable to load ingestion status" hint="retry, or open Admin → Integrations to check the cloud connectors" action={<button className="ao-btn" onClick={goIntegrations}>Open Integrations</button>} /></div>;
+    return <div className="ao-panel"><EmptyState title="Ingestion status unavailable" hint="check the cloud connectors" action={<button className="ao-btn" onClick={goIntegrations}>Open Integrations</button>} /></div>;
   }
 
   // Global scope narrows the merged view rows CLIENT-side (small, already-built
@@ -161,7 +162,7 @@ function Accounts({ accounts, onNew, onResume, connections, scopedOut, onClearSc
   return (
     <div className="ao-stack">
       <div className="ao-cta">
-        <span className="ao-cta-h">Connect and scope AWS, Azure, and GCP accounts for observability.</span>
+        <span className="ao-cta-h">Connect AWS, Azure and GCP accounts.</span>
         {/* The guided onboarding wizard (Wave 1 #3) over the done connector API —
             provider → draft → auth → trust → scope → validate → activate. */}
         <div className="ao-cta-btns">
@@ -176,7 +177,7 @@ function Accounts({ accounts, onNew, onResume, connections, scopedOut, onClearSc
              a filter problem, never "connect an account" advice. */
           <div className="ao-panel"><EmptyState
             title="No accounts in this scope"
-            hint="connected accounts exist outside the current provider / account / region filters"
+            hint="accounts exist outside these filters"
             action={onClearScope
               ? <button className="ao-btn ao-btn--primary" onClick={onClearScope}>Clear filters</button>
               : undefined} /></div>
@@ -186,11 +187,13 @@ function Accounts({ accounts, onNew, onResume, connections, scopedOut, onClearSc
            buttons read as a double implementation — user report 2026-07-16). */
         <div className="ao-panel"><EmptyState
           title="No cloud accounts yet"
-          hint="Accounts appear here as soon as a connection is configured — including before any data arrives — use “Connect a cloud account” above to link one." /></div>
+          hint="a configured connection shows here before any data arrives" /></div>
         )
       ) : (
         <div className="ao-panel">
-          <div className="ao-panel-h">Accounts <span className="ao-panel-meta">connection health and data delivery are judged separately · a configured account never disappears for lack of data</span></div>
+          <div className="ao-panel-h">Accounts <span className="ao-panel-meta">connection and delivery judged separately</span>
+            <AskIris topic="cloud.account-health" label="connection and delivery" />
+          </div>
           <DataTable<MergedAccountRow> rows={accounts} rowKey={(a) => a.key}
             height={Math.min(360, 44 + accounts.length * 30)} ariaLabel="Cloud accounts"
             onRowClick={goIntegrations}
@@ -241,7 +244,9 @@ function Sources({ matrix, scopedOut, onClearScope }: {
   return (
     <div className="ao-stack">
       <div className="ao-panel">
-        <div className="ao-panel-h">Sources by account &amp; region <span className="ao-panel-meta">what Correlix ingests · each chip is measured per provider</span></div>
+        <div className="ao-panel-h">Sources by region <span className="ao-panel-meta">each chip is measured per provider</span>
+          <AskIris topic="cloud.source-matrix" label="the source matrix" />
+        </div>
         <SourceMatrix rows={matrix} detailed={false} />
       </div>
     </div>
@@ -265,16 +270,17 @@ function Status({ matrix, scopedOut, onClearScope }: {
     <div className="ao-stack">
       <ReadinessStrip summary={summary} />
       <div className="ao-panel">
-        <div className="ao-panel-h">Verify whether cloud observability data is actually arriving
-          <span className="ao-panel-meta">per account × region × source · last sync + volume</span></div>
+        <div className="ao-panel-h">Is data arriving?
+          <span className="ao-panel-meta">per account × region × source</span>
+          <AskIris topic="cloud.ingestion-status" label="is data arriving" />
+        </div>
         <SourceMatrix rows={matrix} detailed />
       </div>
       <div className="ao-panel ao-remediation">
         <div className="ao-panel-h">Remediation</div>
         <p className="ao-set-d">
-          When a source is off, stale or permission-denied, fix it at the connector —
-          IAM/permissions, source enablement and log-bucket settings all live there.
-          Correlix never fabricates the missing signal.
+          Fix it at the connector.
+          <AskIris topic="cloud.remediation" label="remediation" />
         </p>
         <div className="ao-cta-btns">
           <button className="ao-btn ao-btn--primary" onClick={goIntegrations}>Open Integrations</button>
@@ -335,7 +341,7 @@ function SourceMatrix({ rows, detailed }: { rows: RegionReadiness[]; detailed: b
 function CloudEmpty() {
   return <div className="ao-panel"><EmptyState
     title="No cloud inventory yet"
-    hint="connect an AWS / Azure / GCP account in Integrations — sources appear here as data starts arriving"
+    hint="connect an account in Integrations"
     action={<button className="ao-btn ao-btn--primary" onClick={goIntegrations}>Open Integrations</button>} /></div>;
 }
 
@@ -343,7 +349,7 @@ function CloudEmpty() {
 function ScopeEmptyPanel({ onClearScope }: { onClearScope?: () => void }) {
   return <div className="ao-panel"><EmptyState
     title="No sources in this scope"
-    hint="configured accounts and regions exist outside the current scope filters"
+    hint="accounts exist outside these filters"
     action={onClearScope
       ? <button className="ao-btn ao-btn--primary" onClick={onClearScope}>Clear filters</button>
       : undefined} /></div>;

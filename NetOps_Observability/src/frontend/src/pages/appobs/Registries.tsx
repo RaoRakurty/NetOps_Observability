@@ -51,10 +51,11 @@ import {
   validateRegistryName,
 } from "./registries";
 import type { SelectorDraft } from "./registries";
+import AskIris from "../../components/AskIris";
 
 const TH: CSSProperties = { padding: "4px 8px" };
 const HEAD: CSSProperties = { textAlign: "left", color: "var(--fg-muted)" };
-const TABLE: CSSProperties = { width: "100%", fontSize: 12, borderCollapse: "collapse" };
+const TABLE: CSSProperties = { width: "100%", fontSize: 12.5, borderCollapse: "collapse" };
 
 // ── which backend holds these records (tracker 245) ─────────────────────────
 //
@@ -78,30 +79,20 @@ function statusFor(report: RegistryStorageReport | null, registry: string): Regi
 function RegistryGuide({ onOpenCloudCatalog }: { onOpenCloudCatalog: () => void }) {
   return (
     <div className="ao-panel">
-      <div className="ao-panel-h">Which registry drives what{" "}
-        <span className="ao-panel-meta">three separate lists · none of them the same thing</span>
+      <div className="ao-panel-h">Three registries
+        <AskIris topic="registry.which-drives-what" label="which registry drives what" />
       </div>
       <ul style={{ margin: "0 0 8px", paddingLeft: 18, fontSize: 12.5, display: "grid", gap: 6 }}>
+        <li><strong>Service catalog</strong> — groups traffic.</li>
+        <li><strong>Application registry</strong> — names ownership.</li>
         <li>
-          <strong>Service catalog</strong> (below) — an operable unit of traffic. Its selector is what
-          makes per-service flow totals add up: without a usable one the service is carried with
-          nothing attributed to it. Explore &rarr; Flows &rarr; <strong>Services</strong> reads those
-          totals, and shows a service with no usable selector as not measured rather than as idle.
-        </li>
-        <li>
-          <strong>Application registry</strong> (below) — the business application and the team
-          accountable for it. It names ownership; it does not group traffic.
-        </li>
-        <li>
-          <strong>Cloud business services</strong> — the cloud-side registry behind resource
-          assignment and the criticality-aware impact view.{" "}
+          <strong>Cloud business services</strong> — the cloud-side registry.{" "}
           <button className="ao-rowaction" onClick={onOpenCloudCatalog}>Open the Catalog view</button>
         </li>
       </ul>
       <p className="ao-muted" style={{ fontSize: 12.5, margin: 0 }}>
-        The service catalog and the application registry are separate lists today: a service cannot
-        be attached to an application in the product, so treat the shared names as a convention you
-        keep, not a link the platform enforces.
+        Separate lists. Nothing joins them.
+        <AskIris topic="registry.not-joined" label="separate lists" />
       </p>
     </div>
   );
@@ -149,24 +140,20 @@ function SelectorSection({ service }: { service: CatalogServiceRow }) {
   return (
     <section>
       <div className="ao-panel-h" style={{ padding: 0 }}>Grouping rule{" "}
-        <span className="ao-panel-meta">versioned · a save adds version {nextSelectorVersion(rows)}, it never edits one</span>
+        <span className="ao-panel-meta">a save adds version {nextSelectorVersion(rows)}</span>
+        <AskIris topic="registry.grouping-rule" label="the grouping rule" />
       </div>
-      <p className="ao-set-d">
-        Which traffic belongs to this service. The engine acts on destination ports, destination
-        prefixes and protocol numbers; the newest version is the one in force, and earlier versions
-        stay on the record so past attribution keeps its meaning.
-      </p>
+      <p className="ao-set-d">Which traffic belongs to this service.</p>
       {latest && !specAttributes(latest.spec) && (
         <p style={{ color: "var(--warn)", fontSize: 12.5, margin: "0 0 8px" }}>{NO_SELECTOR_CONSEQUENCE}</p>
       )}
       {latest && ignoredSpecKeys(latest.spec).length > 0 && (
         <p className="ao-muted" style={{ fontSize: 12.5, margin: "0 0 8px" }}>
-          Version {latest.version} also carries {ignoredSpecKeys(latest.spec).join(", ")}, which the
-          engine does not act on.
+          Version {latest.version} also carries {ignoredSpecKeys(latest.spec).join(", ")} — not acted on.
         </p>
       )}
       {sels === null ? (
-        <div className="ao-muted" style={{ fontSize: 12 }}>Loading…</div>
+        <div className="ao-muted" style={{ fontSize: 12.5 }}>Loading…</div>
       ) : rows.length === 0 ? (
         <div className="ao-muted" style={{ fontSize: 12.5, marginBottom: 8 }}>{NO_SELECTOR_CONSEQUENCE}</div>
       ) : (
@@ -262,14 +249,12 @@ function BindingSection({ service }: { service: CatalogServiceRow }) {
   return (
     <section style={{ marginTop: 16 }}>
       <div className="ao-panel-h" style={{ padding: 0 }}>Attachments{" "}
-        <span className="ao-panel-meta">probes, paths and seams this service is measured through</span>
+        <span className="ao-panel-meta">probes, paths and seams</span>
+        <AskIris topic="registry.attachments" label="attachments" />
       </div>
-      <p className="ao-set-d">
-        What this service is watched by. An attachment is a reference, not a measurement: removing one
-        stops the association, it never deletes the probe or the path it names.
-      </p>
+      <p className="ao-set-d">What this service is watched by.</p>
       {rows === null ? (
-        <div className="ao-muted" style={{ fontSize: 12 }}>Loading…</div>
+        <div className="ao-muted" style={{ fontSize: 12.5 }}>Loading…</div>
       ) : rows.length === 0 ? (
         <div className="ao-muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
           Nothing is attached to this service yet.
@@ -375,10 +360,11 @@ function ServiceRegistryPanel({ onOpen, storage }:
   return (
     <div className="ao-panel">
       <div className="ao-panel-h">Service catalog{" "}
-        <span className="ao-panel-meta">operator-authored · a selector here is what attributes traffic</span>
+        <span className="ao-panel-meta">operator-authored</span>
+        <AskIris topic="registry.service-catalog" label="the service catalog" />
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <StorageBadge status={storage} />
-          <label style={{ fontSize: 12 }} className="ao-muted">
+          <label style={{ fontSize: 12.5 }} className="ao-muted">
             <input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} />{" "}
             Include archived
           </label>
@@ -390,7 +376,7 @@ function ServiceRegistryPanel({ onOpen, storage }:
       </div>
 
       {unavailable ? (
-        <EmptyState title="The service catalog is not available on this deployment" hint={unavailable} />
+        <EmptyState title="Service catalog unavailable" hint={unavailable} />
       ) : (
         <>
           {err && <div style={{ color: "var(--crit)", fontSize: 12.5, marginBottom: 8 }}>{err}</div>}
@@ -413,10 +399,9 @@ function ServiceRegistryPanel({ onOpen, storage }:
             </div>
           )}
           {rows === null ? (
-            <div className="ao-muted" style={{ fontSize: 12 }}>Loading…</div>
+            <div className="ao-muted" style={{ fontSize: 12.5 }}>Loading…</div>
           ) : list.length === 0 ? (
-            <EmptyState title="No services defined yet"
-              hint="a service groups the traffic your team operates as one unit; its grouping rule is what makes per-service flow totals add up" />
+            <EmptyState title="No services defined yet" hint="a service groups the traffic you operate as one unit" />
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table className="ao-kv" style={TABLE}>
@@ -527,10 +512,11 @@ function ApplicationRegistryPanel({ storage }: { storage?: RegistryStorageStatus
   return (
     <div className="ao-panel">
       <div className="ao-panel-h">Application registry{" "}
-        <span className="ao-panel-meta">operator-authored · names the application and who owns it</span>
+        <span className="ao-panel-meta">operator-authored</span>
+        <AskIris topic="registry.application-registry" label="the application registry" />
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <StorageBadge status={storage} />
-          <label style={{ fontSize: 12 }} className="ao-muted">
+          <label style={{ fontSize: 12.5 }} className="ao-muted">
             <input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} />{" "}
             Include archived
           </label>
@@ -544,8 +530,7 @@ function ApplicationRegistryPanel({ storage }: { storage?: RegistryStorageStatus
         </span>
       </div>
       <p className="ao-set-d">
-        The applications this tenant runs, and the team answerable for each. This list does not group
-        traffic and it is not joined to the service catalog above — the two are kept separately today.
+        The applications you run, and who answers for each.
         {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
       </p>
 
@@ -571,12 +556,11 @@ function ApplicationRegistryPanel({ storage }: { storage?: RegistryStorageStatus
       )}
 
       {rows === null ? (
-        <div className="ao-muted" style={{ fontSize: 12 }}>Loading…</div>
+        <div className="ao-muted" style={{ fontSize: 12.5 }}>Loading…</div>
       ) : unavailable ? (
-        <EmptyState title="Application registry storage is unavailable" hint={unavailable} />
+        <EmptyState title="Application registry unavailable" hint={unavailable} />
       ) : list.length === 0 ? (
-        <EmptyState title="No applications registered yet"
-          hint="register the applications your teams own so ownership has a name here rather than living in a spreadsheet" />
+        <EmptyState title="No applications registered yet" hint="register one so ownership has a name here" />
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table className="ao-kv" style={TABLE}>
@@ -637,7 +621,7 @@ export default function Registries({ onOpenCloudCatalog }: { onOpenCloudCatalog:
       <ApplicationRegistryPanel storage={statusFor(storage, "applications")} />
       {sel && (
         <EvidenceDrawer title={`Service · ${sel.name}`}
-          subtitle={<span className="ao-muted">grouping rule and attachments</span>}
+          subtitle={<span className="ao-muted">grouping rule · attachments</span>}
           onClose={() => setSel(null)}>
           <SelectorSection service={sel} />
           <BindingSection service={sel} />

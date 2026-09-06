@@ -72,6 +72,7 @@ import {
 } from "../services/api";
 import { useAuth } from "../hooks/useAuth";
 import Icon from "../components/Icon";
+import AskIris from "../components/AskIris";
 import { operatorError } from "../lib/errors";
 import {
   NOT_ENFORCED_NOTE,
@@ -149,13 +150,13 @@ function Pill({ tone, children, title }: { tone: Tone; children: ReactNode; titl
 }
 
 /** A section of the page: a landmark, a stable id, and its own header. */
-function Section({ id, title, note, actions, children }: {
-  id: string; title: string; note?: ReactNode; actions?: ReactNode; children: ReactNode;
+function Section({ id, title, note, topic, actions, children }: {
+  id: string; title: string; note?: ReactNode; topic?: string; actions?: ReactNode; children: ReactNode;
 }) {
   return (
     <section className="lic-sec" data-section={id} role="region" aria-label={title}>
       <div className="lic-sec-hd">
-        <h2>{title}</h2>
+        <h2>{title}{topic ? <AskIris topic={topic} label={title} /> : null}</h2>
         {note && <span className="lic-sec-note">{note}</span>}
         <span className="lic-sp" />
         {actions}
@@ -252,7 +253,7 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
           <Fact label="Tier in force">
             <Pill tone={h.tone === "bad" ? "bad" : h.tone === "warn" ? "warn" : "good"}>{tierLabel(st.tier)}</Pill>
             {st.licensed_tier && st.licensed_tier !== st.tier && (
-              <span className="lic-sub lic-block">the licence names {tierLabel(st.licensed_tier)}</span>
+              <span className="lic-line lic-block">the licence names {tierLabel(st.licensed_tier)}</span>
             )}
           </Fact>
           {provider && (
@@ -261,16 +262,16 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
                 m={measured(st.licence_id || null, "no licence is installed")}
                 render={(v) => <span className="mono">{v}</span>}
               />
-              {st.issued_at && <span className="lic-sub lic-block">issued {st.issued_at}</span>}
+              {st.issued_at && <span className="lic-line lic-block">issued {st.issued_at}</span>}
             </Fact>
           )}
           <Fact label="Expiry">
             {expiry.state === "none" ? (
-              <span className="lic-sub">{expiry.text}</span>
+              <span className="lic-line">{expiry.text}</span>
             ) : (
               <>
                 <Pill tone={expiry.tone}>{expiry.text}</Pill>
-                <span className="lic-sub lic-block mono">{st.expires_at}</span>
+                <span className="lic-line lic-block mono">{st.expires_at}</span>
               </>
             )}
           </Fact>
@@ -281,7 +282,7 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
                 <>
                   <span>{v} days, set by the issuer</span>
                   {st.grace_ends_at && (
-                    <span className="lic-sub lic-block">
+                    <span className="lic-line lic-block">
                       {view.grace_days_left === null || view.grace_days_left === undefined
                         ? `covered until ${st.grace_ends_at}`
                         : `${view.grace_days_left} ${view.grace_days_left === 1 ? "day" : "days"} left — until ${st.grace_ends_at}`}
@@ -298,7 +299,7 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
                 render={(v) => (
                   <>
                     <span>{v}</span>
-                    {support?.contact && <span className="lic-sub lic-block">{support.contact}</span>}
+                    {support?.contact && <span className="lic-line lic-block">{support.contact}</span>}
                   </>
                 )}
               />
@@ -318,7 +319,7 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
         <HonestState
           tone="bad"
           headline="A licence is installed, and the platform will not use it."
-          remedy={`${st.load_error} Until that is fixed the Community ceilings are the ones in force — install a licence the platform accepts, or remove this one so the page stops reporting a licence nobody is getting the benefit of.`}
+          remedy={`${st.load_error} Until it is fixed the Community ceilings are in force.`}
         />
       )}
 
@@ -338,7 +339,7 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
                   {/* The START of the episode, and nothing else. How long an
                       overage may run is an order-form term; a countdown here
                       would be the product inventing commercial policy. */}
-                  {since && <span className="lic-sub lic-block">{since}</span>}
+                  {since && <span className="lic-line lic-block">{since}</span>}
                 </li>
               );
             })}
@@ -353,13 +354,13 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
       {view.over_ceiling_devices && view.over_ceiling_devices.length > 0 && (
         <div className="lic-over" role="note">
           <strong>{view.over_ceiling_devices.length} monitored device(s) beyond the allowance</strong>
-          {view.over_ceiling_note && <span className="lic-sub lic-block">{view.over_ceiling_note}</span>}
+          {view.over_ceiling_note && <span className="lic-line lic-block">{view.over_ceiling_note}</span>}
           <ul className="lic-over-list">
             {view.over_ceiling_devices.map((d) => (
               <li key={d.device_id}>
                 <Pill tone="warn">still monitored</Pill>
                 <span className="mono">{d.name || d.device_id}</span>
-                <span className="lic-sub lic-block">{d.reason}</span>
+                <span className="lic-line lic-block">{d.reason}</span>
               </li>
             ))}
           </ul>
@@ -413,7 +414,7 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
       </div>
 
       <div className="lic-usage-ft">
-        <span className="lic-sub">
+        <span className="lic-line">
           {bar.kind === "unlimited"
             ? "This licence sets no limit here."
             : `Licensed limit ${fmtLimit(row.limit)}.`}
@@ -430,7 +431,7 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
           holding back. Distinct from the not-measured text above, which appears
           only when there is no number at all. A bar reading "25 of 25" beside a
           network of forty is true and useless without this line. */}
-      {row.note && <p className="lic-sub lic-usage-note">{row.note}</p>}
+      {row.note && <p className="lic-line lic-usage-note">{row.note}</p>}
     </li>
   );
 }
@@ -442,7 +443,7 @@ function Usage({ rows, note }: { rows: readonly LicenceCeiling[]; note?: string 
       <HonestState
         tone="warn"
         headline="The platform listed no ceilings."
-        remedy="Until it does, nothing here is a statement about what this licence covers. Read the page again."
+        remedy="Nothing here states what this licence covers. Read the page again."
       />
     );
   }
@@ -480,7 +481,7 @@ function MeterAmount({ row }: { row: UsageMeterRow }) {
   return (
     <span className="mono">
       {row.text}
-      {unit ? <span className="lic-sub"> {unit}</span> : null}
+      {unit ? <span className="lic-line"> {unit}</span> : null}
     </span>
   );
 }
@@ -515,7 +516,7 @@ function MeterSparkline({ points, label }: { points: Array<{ day: string; value:
 
 function MeterTable({ rows, view, tenant }: { rows: UsageMeterRow[]; view: LicenceUsageView; tenant?: string }) {
   if (rows.length === 0) {
-    return <p className="lic-sub">Nothing was recorded for this period.</p>;
+    return <p className="lic-line">Nothing was recorded for this period.</p>;
   }
   return (
     <div className="lic-tblwrap">
@@ -528,8 +529,8 @@ function MeterTable({ rows, view, tenant }: { rows: UsageMeterRow[]; view: Licen
             <tr key={r.name}>
               <th scope="row">
                 <span className="lic-meter-name">{r.label}</span>
-                <span className="lic-sub lic-meter-doc">{r.doc}</span>
-                {r.note && <span className="lic-sub lic-meter-doc">{r.note}</span>}
+                <span className="lic-line lic-meter-doc">{r.doc}</span>
+                {r.note && <span className="lic-line lic-meter-doc">{r.note}</span>}
               </th>
               <td><MeterAmount row={r} /></td>
               <td><MeterSparkline points={meterSeries(view, r.name, tenant)} label={r.label} /></td>
@@ -563,8 +564,9 @@ function TenantBreakdown({ view }: { view: LicenceUsageView }) {
                 <th scope="row">
                   {t.label}
                   {t.tenant_id === INSTALLATION_TENANT && (
-                    <span className="lic-sub lic-meter-doc">
-                      Every monitored device on this installation, including any that belong to no tenant — so the tenant lines below can add up to less.
+                    <span className="lic-line lic-meter-doc">
+                      Includes devices that belong to no tenant.
+                      <AskIris topic="licence.installation-total" label="the installation total" />
                     </span>
                   )}
                 </th>
@@ -622,7 +624,7 @@ function RecordedUsage({
         <HonestState tone="muted" headline="Nothing recorded yet." remedy={NO_SNAPSHOT_TEXT} />
       )}
 
-      <p className="lic-sub">{view.snapshot_note}</p>
+      <p className="lic-line">{view.snapshot_note}</p>
 
       <h3 className="lic-subhead">Entitlement meters</h3>
       <MeterTable rows={entitlement} view={view} tenant={tenant} />
@@ -632,7 +634,8 @@ function RecordedUsage({
           know at a glance which of them anything is charged for. */}
       <h3 className="lic-subhead">Diagnostic meters</h3>
       <p className="lic-sub">
-        Recorded because they are useful, not because anything is charged for them. Telemetry you run yourself is not metered for money.
+        Nothing here is charged for.
+        <AskIris topic="licence.diagnostic-meters" label="diagnostic meters" />
       </p>
       <MeterTable rows={diagnostic} view={view} tenant={tenant} />
 
@@ -644,16 +647,16 @@ function RecordedUsage({
       )}
 
       <h3 className="lic-subhead">Signed usage report</h3>
-      <p className="lic-sub">{view.report_hint}</p>
+      <p className="lic-line">{view.report_hint}</p>
       {view.key ? (
-        <p className="lic-sub">
+        <p className="lic-line">
           Signed by this installation&rsquo;s own key <span className="mono">{view.key.id}</span>. {view.key.note}
         </p>
       ) : (
-        <p className="lic-sub">{view.key_note}</p>
+        <p className="lic-line">{view.key_note}</p>
       )}
       <div className="lic-actions lic-usage-actions">
-        <label className="lic-sub" htmlFor="lic-usage-period">Period</label>
+        <label className="lic-line" htmlFor="lic-usage-period">Period</label>
         <select
           id="lic-usage-period"
           className="lic-input"
@@ -685,7 +688,7 @@ function Features({ view }: { view: LicenceView }) {
       <HonestState
         tone="warn"
         headline="The platform listed no commercial capabilities."
-        remedy="Read the page again. An empty list is not the same as a licence that grants nothing."
+        remedy="Read the page again. An empty list is not a licence that grants nothing."
       />
     );
   }
@@ -803,9 +806,9 @@ function InstallPanel({ view, canEdit, onInstalled }: {
 
   return (
     <div className="lic-install">
-      <p className="lic-sub">
-        The document is verified before anything is written, so a licence the platform will not accept never
-        displaces the one already in force.
+      <p className="lic-line">
+        A refused licence never displaces the one in force.
+        <AskIris topic="licence.install-verified" label="verified before it is written" />
       </p>
 
       <label className="lic-field">
@@ -837,8 +840,8 @@ function InstallPanel({ view, canEdit, onInstalled }: {
         <div className="lic-honest lic-bad" role="alert">
           <strong>The platform refused that licence.</strong>
           <span className="lic-verbatim mono">{refused}</span>
-          <span className="lic-sub">
-            That is the platform's own words, unchanged. The licence already in force, if any, was not touched.
+          <span className="lic-line">
+            The platform&rsquo;s own words. Nothing in force was touched.
           </span>
         </div>
       )}
@@ -886,8 +889,8 @@ function InstallPanel({ view, canEdit, onInstalled }: {
         </div>
       )}
 
-      <p className="lic-sub">
-        A licence may also be placed on the host by hand at <span className="mono">{view.path}</span>.
+      <p className="lic-line">
+        A licence may also be placed on the host at <span className="mono">{view.path}</span>.
       </p>
     </div>
   );
@@ -952,8 +955,8 @@ function Verification({ view }: { view: LicenceView }) {
   return (
     <>
       <p className="lic-sub">
-        A licence is a signed document. Anyone can check ours without this page, and without us: the public keys
-        this build trusts are below, and the recipe beside them uses nothing but the file and the key.
+        Anyone can check ours without this page, and without us.
+        <AskIris topic="licence.independent-verification" label="independent verification" />
       </p>
 
       {/* Verbatim, because it is a command someone is going to run. */}
@@ -968,7 +971,7 @@ function Verification({ view }: { view: LicenceView }) {
         <HonestState
           tone="bad"
           headline="This build trusts no signing key."
-          remedy="No licence can be verified, so none can be installed. That is a build fault, not a configuration one — report it with the platform version."
+          remedy="No licence can be verified, so none can be installed. Report it with the platform version."
         />
       ) : (
         <ul className="lic-keys">
@@ -983,7 +986,7 @@ function Verification({ view }: { view: LicenceView }) {
                 </button>
               </div>
               <code className="lic-key-b64">{k.base64}</code>
-              {k.note && <span className="lic-sub lic-block">{k.note}</span>}
+              {k.note && <span className="lic-line lic-block">{k.note}</span>}
             </li>
           ))}
         </ul>
@@ -1059,8 +1062,8 @@ export default function Licence() {
         title="Licence"
         note={
           tenantScope
-            ? "What this platform's licence puts in force for your tenant"
-            : "Platform-global — one licence for every tenant on this platform"
+            ? "In force for your tenant"
+            : "One licence, every tenant"
         }
         actions={
           <button type="button" className="btn sm" onClick={reload}>
@@ -1085,11 +1088,8 @@ export default function Licence() {
       <Section
         id="usage"
         title="Current usage"
-        note={
-          tenantScope
-            ? "Where your tenant stands against every ceiling the licence carries"
-            : "Where this platform stands against every ceiling the licence carries"
-        }
+        topic="licence.ceilings"
+        note={tenantScope ? "Your tenant against every ceiling" : "This platform against every ceiling"}
       >
         {body("the ceilings", (v) => <Usage rows={v.ceilings} note={v.scope_note} />)}
       </Section>
@@ -1127,7 +1127,8 @@ export default function Licence() {
       <Section
         id="features"
         title="Features"
-        note="The commercial capabilities, and the tier each one belongs to"
+        topic="licence.features"
+        note="Capabilities, and the tier each needs"
       >
         {body("the capabilities", (v) => <Features view={v} />)}
       </Section>
@@ -1135,7 +1136,7 @@ export default function Licence() {
       <Section
         id="install"
         title={provider ? "Install a licence" : "Changing this licence"}
-        note="One licence file per installation — verified before it is written"
+        note="One licence file per installation"
       >
         {body("the licence", (v) => (
           <InstallPanel view={v} canEdit={v.scope === "platform"} onInstalled={put} />
@@ -1152,7 +1153,7 @@ export default function Licence() {
           {body("the expiry policy", (v) => <ExpiryNote text={v.expiry_semantics} />)}
         </Section>
       ) : (
-        <Section id="verification" title="Verification" note="Check what we sent you without trusting this page">
+        <Section id="verification" title="Verification" note="Check it without trusting this page">
           {body("the trusted keys", (v) => <Verification view={v} />)}
         </Section>
       )}

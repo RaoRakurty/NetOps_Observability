@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, SsoIdP, SsoIdpAttrMapping, SsoIdpRoleMapping, SsoIdpTestResult } from "../services/api";
 import { certExpiry, parseCertNotAfter } from "../lib/x509";
+import AskIris from "../components/AskIris";
 
 // ---- pure helpers (exported for tests) -------------------------------------
 
@@ -75,7 +76,7 @@ export function idpIsValid(idp: SsoIdP): boolean {
 // ---- tiny local field primitives (match admin.tsx LabeledInput styling) ----
 
 const inputStyle: React.CSSProperties = { padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" };
-const labelStyle: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" };
+const labelStyle: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--fs-meta)", color: "var(--muted)" };
 
 function Field({ label, value, onChange, type = "text", placeholder = "", hint, disabled = false }: {
   label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; hint?: string; disabled?: boolean;
@@ -84,7 +85,7 @@ function Field({ label, value, onChange, type = "text", placeholder = "", hint, 
     <label style={labelStyle}>
       {label}
       <input type={type} value={value} placeholder={placeholder} disabled={disabled} onChange={(e) => onChange(e.target.value)} style={inputStyle} />
-      {hint && <span className="mini-meta">{hint}</span>}
+      {hint && <span className="adm-line">{hint}</span>}
     </label>
   );
 }
@@ -117,8 +118,8 @@ function CopyValue({ label, value }: { label: string; value: string }) {
   };
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-      <span className="mini-meta" style={{ minWidth: 180 }}>{label}</span>
-      <code className="mono" style={{ userSelect: "all", fontSize: 12 }}>{value}</code>
+      <span className="adm-line" style={{ minWidth: 180 }}>{label}</span>
+      <code className="mono" style={{ userSelect: "all", fontSize: "var(--fs-meta)" }}>{value}</code>
       <button type="button" onClick={copy} aria-label={`Copy ${label}`}>{copied ? "Copied" : "Copy"}</button>
     </div>
   );
@@ -131,7 +132,7 @@ export function CertExpiryBanner({ notAfter, now }: { notAfter: Date | null; now
   const e = certExpiry(notAfter, now);
   const date = notAfter.toISOString().slice(0, 10);
   if (e.level === "ok") {
-    return <p className="mini-meta">Signing certificate valid until {date}.</p>;
+    return <p className="adm-line">Signing certificate valid until {date}.</p>;
   }
   if (e.level === "warn") {
     return (
@@ -194,7 +195,7 @@ export function RoleMappingTable({ rows, roleIds, defaultRole, onChange }: {
     onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
     <>
-      <p className="mini-meta">Rules are evaluated top to bottom — the <strong>first match wins</strong>.</p>
+      <p className="adm-line">Top to bottom — the <strong>first match wins</strong>.</p>
       <table className="map-table">
         <thead>
           <tr><th style={{ width: 64 }}>Order</th><th>Group / claim value</th><th style={{ width: 64 }}>Match</th><th>Correlix role</th><th aria-label="actions" /></tr>
@@ -207,7 +208,7 @@ export function RoleMappingTable({ rows, roleIds, defaultRole, onChange }: {
                 <button type="button" aria-label={`Move mapping ${i + 1} down`} disabled={i === rows.length - 1} onClick={() => onChange(moveRow(rows, i, 1))}>↓</button>
               </td>
               <td><input aria-label={`Group or claim value ${i + 1}`} value={r.value} placeholder="cn=netops-admins,ou=groups,dc=corp" onChange={(e) => setRow(i, { value: e.target.value })} /></td>
-              <td className="mini-meta">exact</td>
+              <td className="adm-line">exact</td>
               <td>
                 <select aria-label={`Mapped role ${i + 1}`} value={r.role} onChange={(e) => setRow(i, { role: e.target.value })}>
                   {roleIds.map((id) => <option key={id} value={id}>{id}</option>)}
@@ -221,7 +222,7 @@ export function RoleMappingTable({ rows, roleIds, defaultRole, onChange }: {
           <tr className="default-row" data-testid="default-role-row">
             <td aria-hidden="true">—</td>
             <td>* (anything else)</td>
-            <td className="mini-meta">default</td>
+            <td className="adm-line">default</td>
             <td><strong>{defaultRole || "(none)"}</strong></td>
             <td />
           </tr>
@@ -234,9 +235,9 @@ export function RoleMappingTable({ rows, roleIds, defaultRole, onChange }: {
           </tr>
         </tfoot>
       </table>
-      <p className="mini-meta">
-        Users matching no row get the default role <strong>{defaultRole || "(none)"}</strong> — this is why federated
-        logins land read-only when mappings are missing. Change it under Connection → Role mapping.
+      <p className="adm-line">
+        No match means the default role <strong>{defaultRole || "(none)"}</strong>.
+        <AskIris topic="sso.default-role" label="the default role" />
       </p>
     </>
   );
@@ -319,7 +320,7 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
 
   const valid = idpIsValid(idp);
   return (
-    <div className="auth-form">
+    <div className="auth-form adm">
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
         <button type="button" onClick={onBack}>← Providers</button>
         <strong>{isNew ? "New identity provider" : idp.alias}</strong>
@@ -338,7 +339,7 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
 
       <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
         <Field label="Alias (URL-safe id)" value={idp.alias} onChange={(v) => set({ alias: v })} placeholder="okta" disabled={!isNew}
-          hint={isNew ? "Lowercase letters, digits, - and _. Becomes part of the broker URLs below." : "Fixed after creation (part of the broker URLs)."} />
+          hint={isNew ? "Lowercase letters, digits, - and _." : "Fixed after creation."} />
         <Field label="Display name" value={idp.display_name} onChange={(v) => set({ display_name: v })} placeholder="Okta" hint="Shown on the sign-in button." />
         <label style={labelStyle}>
           Protocol
@@ -348,7 +349,7 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
           </select>
         </label>
         <Field label="Groups attribute / claim" value={idp.groups_attr} onChange={(v) => set({ groups_attr: v })} placeholder="groups"
-          hint="The IdP attribute or token claim carrying group membership (drives role mapping)." />
+          hint="The attribute or claim carrying group membership." />
       </div>
 
       {idp.protocol === "saml" ? (
@@ -356,17 +357,17 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
           <h4 style={{ margin: "0 0 6px" }}>SAML settings</h4>
           <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
             <Field label="IdP metadata URL" value={idp.metadata_url ?? ""} onChange={(v) => set({ metadata_url: v })}
-              placeholder="https://idp.example.com/app/metadata.xml" hint="Easiest path — the metadata is fetched and kept fresh." />
+              placeholder="https://idp.example.com/app/metadata.xml" hint="Fetched and kept fresh." />
             <label style={labelStyle}>
               …or IdP metadata XML (paste or upload)
               <textarea aria-label="IdP metadata XML" rows={4} value={idp.metadata_xml ?? ""} onChange={(e) => set({ metadata_xml: e.target.value })}
-                placeholder="<EntityDescriptor …>" style={{ ...inputStyle, fontFamily: "var(--mono, monospace)", fontSize: 11 }} />
+                placeholder="<EntityDescriptor …>" style={{ ...inputStyle, fontFamily: "var(--mono, monospace)", fontSize: "var(--fs-meta)" }} />
               <FilePick label="Upload metadata file" onText={(t) => set({ metadata_xml: t })} />
             </label>
             <label style={labelStyle}>
               IdP signing certificate (PEM, optional)
               <textarea aria-label="IdP signing certificate PEM" rows={4} value={idp.signing_cert_pem ?? ""} onChange={(e) => set({ signing_cert_pem: e.target.value })}
-                placeholder="-----BEGIN CERTIFICATE-----" style={{ ...inputStyle, fontFamily: "var(--mono, monospace)", fontSize: 11 }} />
+                placeholder="-----BEGIN CERTIFICATE-----" style={{ ...inputStyle, fontFamily: "var(--mono, monospace)", fontSize: "var(--fs-meta)" }} />
               <FilePick label="Upload certificate file" onText={(t) => set({ signing_cert_pem: t })} />
               {idp.signing_cert_pem?.trim() && !notAfter && <span className="result err">✗ Could not parse a certificate from this PEM.</span>}
             </label>
@@ -387,7 +388,8 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
       )}
 
       <div style={{ marginTop: 12, padding: "8px 10px", border: "1px solid var(--panel-border)", borderRadius: 6 }}>
-        <h4 style={{ margin: "0 0 6px" }}>Service-provider values (register these with your IdP)</h4>
+        <h4 style={{ margin: "0 0 6px" }}>Service-provider values</h4>
+        <p className="adm-line">Register these with your IdP.</p>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {spValues(window.location.origin, realm, idp.alias, idp.protocol).map((v) => <CopyValue key={v.label} label={v.label} value={v.value} />)}
         </div>
@@ -395,7 +397,10 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
 
       <div style={{ marginTop: 12 }}>
         <h4 style={{ margin: "0 0 6px" }}>User attributes</h4>
-        <p className="mini-meta">How IdP attributes / claims populate the Correlix user profile on first login.</p>
+        <p className="adm-line">
+          What fills the profile on first login.
+          <AskIris topic="sso.attribute-mapping" label="user attributes" />
+        </p>
         <AttrMappingTable rows={idp.attr_mappings} onChange={(rows) => set({ attr_mappings: rows })} />
       </div>
 
@@ -408,7 +413,7 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
         <button type="button" disabled={busy || isNew} title={isNew ? "Save the provider first, then test it" : ""} onClick={runTest}>Test connection</button>
         <button type="button" className="dash-btn accent" disabled={busy || !valid} title={valid ? "" : "Alias, display name and the protocol's connection fields are required"} onClick={save}>Save</button>
         {!isNew && <button type="button" disabled={busy} onClick={remove}>Delete</button>}
-        {msg && <span className="mini-meta" role="status">{msg}</span>}
+        {msg && <span className="adm-line" role="status">{msg}</span>}
       </div>
       {test && <IdpTestChecks result={test} />}
     </div>
@@ -430,8 +435,8 @@ export function SsoIdpPanel({ roleIds, defaultRole }: { roleIds: string[]; defau
   }, []);
   useEffect(load, [load]);
 
-  if (err && idps === null) return <p className="mini-meta" role="alert">{err}</p>;
-  if (idps === null) return <p className="mini-meta">Loading…</p>;
+  if (err && idps === null) return <p className="adm-line" role="alert">{err}</p>;
+  if (idps === null) return <p className="adm-line">Loading…</p>;
 
   if (editing) {
     return (
@@ -448,16 +453,19 @@ export function SsoIdpPanel({ roleIds, defaultRole }: { roleIds: string[]; defau
   }
 
   return (
-    <div className="auth-form">
+    <div className="auth-form adm">
       {kc && !kc.reachable && (
         <div className="banner warn" role="alert">
           Keycloak is unreachable{kc.detail ? ` — ${kc.detail}` : ""}. Changes are saved but will only be applied once it is back.
         </div>
       )}
-      {kc?.reachable && <p className="mini-meta">Brokered by Keycloak realm <code className="mono">{kc.realm}</code>.</p>}
+      {kc?.reachable && <p className="adm-line">Brokered by Keycloak realm <code className="mono">{kc.realm}</code>.</p>}
 
       {idps.length === 0 ? (
-        <p className="mini-meta">No upstream identity providers registered yet. Add one to put an “Okta” / “Azure AD” button on the sign-in page.</p>
+        <p className="adm-line">
+          No identity providers yet.
+          <AskIris topic="sso.no-idps" label="no identity providers" />
+        </p>
       ) : (
         <table className="map-table">
           <thead>

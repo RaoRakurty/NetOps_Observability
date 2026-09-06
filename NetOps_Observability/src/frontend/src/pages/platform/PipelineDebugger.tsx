@@ -43,6 +43,7 @@ import {
 } from "../../services/api.debug";
 import { useAuth } from "../../hooks/useAuth";
 import Icon from "../../components/Icon";
+import AskIris from "../../components/AskIris";
 import { operatorError } from "../../lib/errors";
 import {
   bundleCommand,
@@ -94,18 +95,20 @@ function Section({
   title,
   note,
   actions,
+  topic,
   children,
 }: {
   id: string;
   title: string;
   note?: ReactNode;
   actions?: ReactNode;
+  topic?: string;
   children: ReactNode;
 }) {
   return (
     <section className="pdbg-sec" data-section={id} role="region" aria-label={title}>
       <div className="pdbg-sec-hd">
-        <h2>{title}</h2>
+        <h2>{title}{topic ? <AskIris topic={topic} label={title} /> : null}</h2>
         {note && <span className="pdbg-sec-note">{note}</span>}
         <span className="pdbg-sp" />
         {actions}
@@ -455,7 +458,7 @@ export default function PipelineDebugger() {
         <Honest
           tone="muted"
           headline="This is a platform operator tool."
-          detail="A run reads one tenant's telemetry back out of the shared stores and a raised log level changes every tenant's service, so it is open to the platform operator only."
+          detail="A run reads shared stores and a raise changes every tenant's service."
         />
       </div>
     );
@@ -467,7 +470,7 @@ export default function PipelineDebugger() {
         <Honest
           tone="warn"
           headline="The running api does not carry the pipeline debugger."
-          detail="Update the stack to a build that has it, or run correlix-debug on the host — the command-line tool works against this api as it is."
+          detail="Update the stack, or run correlix-debug on the host."
         />
       </div>
     );
@@ -484,7 +487,8 @@ export default function PipelineDebugger() {
       <Section
         id="trace"
         title="Follow one record"
-        note="One marked record through the stack's own ingress — never to a device."
+        topic="pipedebug.follow-one-record"
+        note="Into our own ingress, never to a device."
       >
         <div className="pdbg-form">
           <label className="pdbg-field">
@@ -572,7 +576,7 @@ export default function PipelineDebugger() {
           <Honest
             tone="muted"
             headline="A gNMI update starts on the device, so nothing is sent."
-            detail="This follows real traffic for the device and window above. No device is ever written to."
+            detail="Real traffic for the device and window above. Nothing is written."
           />
         )}
 
@@ -594,7 +598,7 @@ export default function PipelineDebugger() {
           })}
         </Cli>
 
-        {traceError && <Honest tone="bad" headline={traceError} detail="Nothing on this table is a statement about the pipeline until a run answers." />}
+        {traceError && <Honest tone="bad" headline={traceError} detail="This table states nothing until a run answers." />}
 
         {receipt && (
           <Honest
@@ -616,7 +620,7 @@ export default function PipelineDebugger() {
 
         {receipt && (
           <StageTable
-            caption="Hops this record crossed"
+            caption="Hops crossed"
             rows={rows}
             expanded={expandedStage}
             onToggle={toggleStage}
@@ -648,7 +652,8 @@ export default function PipelineDebugger() {
       <Section
         id="sessions"
         title="Saved runs"
-        note="Each run keeps one file per module, on the api, readable and downloadable."
+        topic="pipedebug.saved-runs"
+        note="One file per module, kept on the api."
         actions={
           <button type="button" className="btn sm" onClick={reloadSessions}>
             <Icon name="refresh" size={13} /> Read again
@@ -660,7 +665,7 @@ export default function PipelineDebugger() {
           <Honest
             tone="warn"
             headline="The running api does not keep saved runs yet."
-            detail="A newer api build stores each run on disk. Until then, run correlix-debug on the host — it writes the same files under data/debug/."
+            detail="Run correlix-debug on the host — it writes the same files."
           />
         ) : sessions.error ? (
           <Honest tone="bad" headline={sessions.error} />
@@ -699,7 +704,7 @@ export default function PipelineDebugger() {
         {openSession && (
           <>
             <StageTable
-              caption="Hops in this saved run"
+              caption="Saved-run hops"
               rows={sessionRows}
               expanded={sessionStage}
               onToggle={readModule}
@@ -732,7 +737,8 @@ export default function PipelineDebugger() {
       <Section
         id="levels"
         title="Log detail"
-        note={`Raised for a bounded window — ${MAX_WINDOW_MINUTES} minutes at the very most, and every raise returns on its own.`}
+        topic="pipedebug.log-detail"
+        note={`Raised for ${MAX_WINDOW_MINUTES} minutes at most.`}
         actions={
           <button type="button" className="btn sm" onClick={reloadLevels}>
             <Icon name="refresh" size={13} /> Read again
@@ -743,7 +749,7 @@ export default function PipelineDebugger() {
           <Honest
             tone="warn"
             headline="The running api cannot report which modules are raised."
-            detail="Raising and lowering still work here, and every raise still returns on its own inside the module that was raised."
+            detail="Raising and lowering still work, and every raise still returns."
           />
         )}
         {levels.error && <Honest tone="bad" headline={levels.error} />}
@@ -772,7 +778,7 @@ export default function PipelineDebugger() {
                 </div>
                 {raised && secs > 0 && <span className="pdbg-session-meta">Returns to normal in {secs}s</span>}
                 {"source" in m && m.source === "last-request" && (
-                  <span className="pdbg-session-meta">Last change asked for from here, not a reading of that module.</span>
+                  <span className="pdbg-session-meta">Asked for from here, not read back.</span>
                 )}
                 {!m.switchable && <span className="pdbg-session-meta">{"reason" in m ? m.reason : ""}</span>}
               </div>
@@ -808,7 +814,8 @@ export default function PipelineDebugger() {
       <Section
         id="parsemarker"
         title="Parser decision trail"
-        note="For a real, unmarked record: the parser records how it decided, for a bounded window."
+        topic="pipedebug.parser-trail"
+        note="How the parser decided, for a bounded window."
       >
         {marker.error && <Honest tone="bad" headline={marker.error} />}
         {marker.loading && !marker.data ? (
@@ -858,7 +865,8 @@ export default function PipelineDebugger() {
         <Cli>{parseMarkerCommand(Math.min(needleMinutes, MAX_WINDOW_MINUTES) * 60)}</Cli>
         {needleError && <Honest tone="bad" headline={needleError} />}
         <span className="pdbg-session-meta">
-          What you arm is never shown back in full — only its first characters and its length.
+          What you arm is never shown back in full.
+          <AskIris topic="pipedebug.masked-marker" label="what you arm" />
         </span>
       </Section>
     </div>

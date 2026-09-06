@@ -559,7 +559,7 @@ describe("installing a licence", () => {
     fireEvent.click(screen.getByRole("button", { name: "Install licence" }));
     expect(await screen.findByText("licence expired on 2026-01-01 and its 30-day grace period has passed")).toBeTruthy();
     expect(screen.getByText("The platform refused that licence.")).toBeTruthy();
-    expect(screen.getByText(/The licence already in force, if any, was not touched/)).toBeTruthy();
+    expect(screen.getByText(/Nothing in force was touched/)).toBeTruthy();
     // Not softened into the generic sentence the rest of the product uses.
     expect(screen.queryByText("That request was not accepted.")).toBeNull();
   });
@@ -663,7 +663,7 @@ describe("verification", () => {
     setup({ view: view({ keys: [] }) });
     render(<Licence />);
     expect(await screen.findByText("This build trusts no signing key.")).toBeTruthy();
-    expect(screen.getByText(/report it with the platform version/)).toBeTruthy();
+    expect(screen.getByText(/Report it with the platform version/)).toBeTruthy();
   });
 
   it("carries the standing note that expiry policy is still open", async () => {
@@ -973,7 +973,11 @@ describe("recorded usage", () => {
     render(<Licence />);
     expect(await screen.findByText("Entitlement meters")).toBeTruthy();
     expect(screen.getByText("Diagnostic meters")).toBeTruthy();
-    expect(screen.getByText(/Telemetry you run yourself is not metered for money\./)).toBeTruthy();
+    // The CLAIM — a diagnostic meter costs nothing — is unchanged. The sentence
+    // that explained why moved to ai/skills/explain/licence.diagnostic-meters.md,
+    // so the (i) that reaches it is pinned beside the claim.
+    expect(screen.getByText(/Nothing here is charged for\./)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about diagnostic meters/ })).toBeTruthy();
   });
 
   it("shows the per-tenant breakdown to the platform owner, and names the installation row", async () => {
