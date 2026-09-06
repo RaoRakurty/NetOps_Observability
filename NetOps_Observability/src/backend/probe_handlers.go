@@ -574,9 +574,15 @@ func (s *server) buildExperienceAPI(store experience.Store, cat dem.Catalogue) (
 		// prober publishing, the store is simply empty and every check grades
 		// ungraded — which the coverage surface states, rather than calling an
 		// ungraded check trustworthy.
-		Runs:    demRunSource{store: s.demRuns},
-		Policy:  experienceScorePolicy(),
-		Enabled: envBool(dem.EnvFeatureFlag),
+		Runs: demRunSource{store: s.demRuns},
+		// The beacon lane (tracker 254) and the incident-record seam (tracker
+		// 255). Both resolve to a typed nil when their backing is absent, so the
+		// module renders its honest 503 / 409 instead of dereferencing a nil
+		// pointer hidden inside a non-nil interface.
+		Events:   s.experienceEventSink(),
+		Promoter: s.experiencePromoter(),
+		Policy:   experienceScorePolicy(),
+		Enabled:  envBool(dem.EnvFeatureFlag),
 		// The AI investigator needs BOTH the platform copilot and its own
 		// switch: a feature that can send evidence to a model gets its own.
 		InvestigatorEnabled: envBool("FEATURE_COPILOT") && envBool(experience.EnvInvestigatorFlag),
@@ -630,6 +636,16 @@ func (s *server) handleDEMEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleDEMBusinessEvents(w http.ResponseWriter, r *http.Request) {
 	s.experienceAPI.HandleBusinessEvents(w, r)
+}
+
+// experienceEventSink returns the beacon lane as the module's seam, or a nil
+// interface when the lane could not be built (never a nil *Queue wrapped in a
+// non-nil interface).
+func (s *server) experienceEventSink() experience.EventSink {
+	if s.experienceEvents == nil {
+		return nil
+	}
+	return s.experienceEvents
 }
 
 // experiencePromoter adapts the platform incident repository onto the

@@ -133,7 +133,7 @@ func TestDEMIngestRefusesATenantInTheBodyAndNarrowsAsTenantOnly(t *testing.T) {
 
 	// as_tenant into ANOTHER org: the selector can only NARROW, so A's key
 	// either writes as A or is refused — never as B.
-	code, resp = do(t, srv, "POST", "/api/dem/events?as_tenant="+b.tenantID, keyA, rawJSON(t, ingestBody))
+	code, _ = do(t, srv, "POST", "/api/dem/events?as_tenant="+b.tenantID, keyA, rawJSON(t, ingestBody))
 	if code == http.StatusAccepted {
 		for _, e := range sink.events {
 			if e.TenantID == b.tenantID {
