@@ -14,15 +14,20 @@ import {
 
 describe("rpkiStateTone", () => {
   it("distinguishes the two invalid reasons an operator acts on differently", () => {
-    expect(rpkiStateTone("invalid", "origin_as").label).toContain("origin");
-    expect(rpkiStateTone("invalid", "max_length").label).toContain("length");
+    // Plain-language labels (owner, 2026-09-06); "RPKI"/"ROA"/"maxLength" moved
+    // into the tooltip, so the LABEL is checked here and the detail carries the
+    // protocol word.
+    expect(rpkiStateTone("invalid", "origin_as").label).toBe("Wrong origin AS");
+    expect(rpkiStateTone("invalid", "origin_as").detail).toMatch(/ROA/);
+    expect(rpkiStateTone("invalid", "max_length").label).toBe("Too specific");
+    expect(rpkiStateTone("invalid", "max_length").detail).toMatch(/maxLength/);
     expect(rpkiStateTone("invalid").tone).toBe("var(--crit)");
   });
 
   it("never renders unavailable or unknown as a passing verdict", () => {
     for (const s of ["unavailable", "unknown", undefined] as const) {
       const t = rpkiStateTone(s);
-      expect(t.label).not.toBe("VALID");
+      expect(t.label).not.toBe("Authorised");
       expect(t.tone).not.toBe("var(--ok)");
     }
   });

@@ -22,7 +22,7 @@ import "@xyflow/react/dist/style.css";
 import { api, type BgpAsPathGraph, type BgpGraphNode } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { NODE_H, NODE_W, edgeWidth, layoutAsPathGraph, nodeLabel, nodeSubLabel, pathLengthHint } from "./bgpDepth.model";
-import { Section, SubBlock } from "./Section";
+import { Details, Section, SubBlock } from "./Section";
 
 // ── node renderer ───────────────────────────────────────────────────────────
 
@@ -54,10 +54,12 @@ function AsNode({ data }: NodeProps) {
       }}
     >
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
-      <div style={{ fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {nodeLabel(d)}
       </div>
-      <div className="mini-meta" style={{ fontSize: 9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      {/* 12.5px is this page's floor for anything a person reads (owner,
+          2026-09-06); the node box is 132×44, which still fits two lines. */}
+      <div className="mini-meta" style={{ fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {nodeSubLabel(d) || (d.origin ? "origin" : d.vantage ? "vantage" : `${d.paths}×`)}
       </div>
       <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
@@ -112,7 +114,7 @@ export function AsPathGraphPanel({ prefix, bare = false }: { prefix?: string; ba
       target: String(e.to),
       style: { strokeWidth: edgeWidth(e.peers, maxPeers), stroke: "var(--border-strong, var(--border))" },
       label: e.peers > 1 ? String(e.peers) : undefined,
-      labelStyle: { fontSize: 9, fill: "var(--fg-muted)" },
+      labelStyle: { fontSize: 12.5, fill: "var(--fg-muted)" },
     }));
     return { nodes, edges };
   }, [laid]);
@@ -122,8 +124,8 @@ export function AsPathGraphPanel({ prefix, bare = false }: { prefix?: string; ba
 
   const body = (
     <>
-      {!prefix && <div className="empty">Look up a prefix to see how the internet reaches it.</div>}
-      {busy && <div className="empty">Building the path graph…</div>}
+      {!prefix && <div className="empty">Pick a prefix to see how the internet reaches it.</div>}
+      {busy && <div className="empty">Drawing the path map…</div>}
       {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
 
       {g && g.error && !g.nodes.length && (
@@ -140,13 +142,13 @@ export function AsPathGraphPanel({ prefix, bare = false }: { prefix?: string; ba
       {laid && laid.nodes.length > 0 && (
         <>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-            <Chip label={`${g?.paths ?? 0} observed paths`} title="Collector peers folded into this graph" />
-            <Chip label={`${laid.nodes.length} ASNs`} />
-            <Chip label={`${laid.edges.length} adjacencies`} />
+            <Chip label={`${g?.paths ?? 0} observed paths`} title="Collector peers folded into this map" />
+            <Chip label={`${laid.nodes.length} networks`} title="Distinct autonomous systems on those paths" />
+            <Chip label={`${laid.edges.length} links`} title="Adjacencies between them" />
             {g?.origins.map((o) => (
               <Chip key={o} label={`origin AS${o}`} tone="var(--accent)" title="Announces this prefix" />
             ))}
-            {hint && <Chip label={`path length ${hint.min}–${hint.max}`} title="Shorter than usual can be a hijack tell; longer, a leak tell." />}
+            {hint && <Chip label={`${hint.min}–${hint.max} hops`} title="Shorter than usual can be a hijack tell; longer, a leak tell." />}
             <Chip label={g?.source === "looking-glass" ? "looking-glass (fallback)" : "RIS bgp-state"}
               title="Which RIPE data call this graph was built from" />
           </div>
@@ -174,20 +176,32 @@ export function AsPathGraphPanel({ prefix, bare = false }: { prefix?: string; ba
               single-peer edges is not drawn.
             </p>
           )}
-          <p className="mini-meta" style={{ marginBottom: 0 }}>
-            Left to right: collector-adjacent AS → transit → <span style={{ color: "var(--accent)" }}>origin</span>.
-            Line thickness is how many collector paths traverse that adjacency — an observation count, not capacity.
-            Your own watched ASNs are outlined in <span style={{ color: "var(--ok)" }}>green</span>. Each AS carries its
-            registry holder.
-          </p>
+          <Details summary="How to read this map">
+            <p className="mini-meta" style={{ marginBottom: 0 }}>
+              Left to right: the network next to a route collector → the carriers in between →{" "}
+              <span style={{ color: "var(--accent)" }}>the origin</span> that announces this prefix. Line thickness is
+              how many observed paths cross that link — an observation count, not capacity. Your own watched networks
+              are outlined in <span style={{ color: "var(--ok)" }}>green</span>, and each one carries its registry
+              holder.
+            </p>
+          </Details>
         </>
       )}
     </>
   );
 
   return bare
-    ? <SubBlock title="AS-path graph" updatedAt={at}>{body}</SubBlock>
-    : <Section id="aspath-graph" title="AS-path graph" updatedAt={at}>{body}</Section>;
+    ? <SubBlock title="Path map" updatedAt={at}>{body}</SubBlock>
+    : (
+      <Section
+        id="aspath-graph"
+        title="Path map"
+        sub="AS paths from public route collectors to the origin"
+        updatedAt={at}
+      >
+        {body}
+      </Section>
+    );
 }
 
 export default AsPathGraphPanel;

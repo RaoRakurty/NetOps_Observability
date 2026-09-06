@@ -1,4 +1,7 @@
-// BogonsPanel — the Bogons tab (BGP ops tracker #1).
+// BogonsPanel — "Addresses that should never be routed" (BGP ops tracker #1).
+//
+// The heading is the NOC admin's sentence; the word "bogon" survives in the
+// section's secondary line and in the row tooltips (owner, 2026-09-06).
 //
 // A bogon is address space that must never appear in the global routing table.
 // The panel shows TWO things and keeps them apart, because they age completely
@@ -18,7 +21,7 @@ import { useEffect, useState } from "react";
 import { api, type BgpBogonsResp } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { groupSightings } from "./bgpAlerts.model";
-import { Section, ShowAll, SubBlock, useCap } from "./Section";
+import { Details, Section, ShowAll, SubBlock, useCap } from "./Section";
 
 /** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
 const FIRST_SIGHTINGS = 8;
@@ -37,7 +40,7 @@ function BogonGroup({ g }: { g: ReturnType<typeof groupSightings>[number] }) {
       <div className="bgp-scroll">
         <table className="tbl bgp-tbl" style={{ width: "100%" }}>
           <thead>
-            <tr><th>Prefix</th><th>Source</th><th>Peer</th><th>Origin</th><th>First seen</th><th>Last seen</th><th>Times</th></tr>
+            <tr><th>Prefix</th><th>Seen by</th><th>Neighbour</th><th>Announced by</th><th>First seen</th><th>Last seen</th><th className="num">Times</th></tr>
           </thead>
           <tbody>
             {cap.rows.map((r) => (
@@ -78,9 +81,14 @@ export function BogonsPanel() {
   const groups = data ? groupSightings(data.sightings) : [];
 
   return (
-    <Section id="bogons" title="Bogons — set in force and sightings" updatedAt={at}>
-      <SubBlock title="Bogon set in force">
-        {busy && <div className="empty">Reading the bogon set…</div>}
+    <Section
+      id="bogons"
+      title="Addresses that should never be routed"
+      sub="Bogons — reserved, private and undelegated space, and any of it seen on your network"
+      updatedAt={at}
+    >
+      <SubBlock title="Blocklist in use">
+        {busy && <div className="empty">Reading the blocklist…</div>}
         {err && <p className="mini-meta" role="alert" style={{ color: "var(--bad)" }}>{err}</p>}
         {data && (
           <>
@@ -97,36 +105,40 @@ export function BogonsPanel() {
                 <Chip label="full-bogons: off" tone="var(--muted)" title={data.feed.note} />
               )}
             </div>
-            <p className="mini-meta">{data.set.note}</p>
-            {!data.feed.enabled && data.feed.note && (
-              <p className="mini-meta" style={{ color: "var(--muted)" }}>{data.feed.note}</p>
-            )}
             {data.feed.enabled && data.feed.error && (
               <p className="mini-meta" style={{ color: "var(--warn)" }}>
                 The full-bogons feed did not refresh: {data.feed.error}. The embedded set is still in force — nothing
                 has been un-flagged.
               </p>
             )}
-            {data.feed.enabled && data.feed.fetched_at && !data.feed.error && (
-              <p className="mini-meta">Feed last fetched {new Date(data.feed.fetched_at).toLocaleString()}.</p>
-            )}
+            <Details summary="What is on this list">
+              <p className="mini-meta">{data.set.note}</p>
+              {!data.feed.enabled && data.feed.note && (
+                <p className="mini-meta" style={{ color: "var(--muted)" }}>{data.feed.note}</p>
+              )}
+              {data.feed.enabled && data.feed.fetched_at && !data.feed.error && (
+                <p className="mini-meta" style={{ marginBottom: 0 }}>
+                  Feed last fetched {new Date(data.feed.fetched_at).toLocaleString()}.
+                </p>
+              )}
+            </Details>
           </>
         )}
       </SubBlock>
 
-      <SubBlock title="Bogons seen">
+      <SubBlock title="Seen on your network">
         {data && data.note && <p className="mini-meta" style={{ color: "var(--warn)" }}>{data.note}</p>}
         {data && groups.length === 0 && (
           <div className="empty">
             {data.note
-              ? "No sighting register is running, so nothing has been screened."
-              : "No bogon prefix has been seen on this tenant's BMP feed or update ring. That is the healthy answer — and it is a measured one."}
+              ? "Nothing is watching for these addresses, so nothing has been screened."
+              : "None of this address space has been seen on your own routers or in the update feed. That is the healthy answer — and it is a measured one."}
           </div>
         )}
         {groups.map((g) => <BogonGroup key={g.block} g={g} />)}
         <p className="mini-meta" style={{ marginBottom: 0 }}>
-          Sightings come from this tenant's OWN feeds only. A bogon here is either a leak into your network or a
-          misconfigured neighbour — it is never normal.
+          Anything listed here is either a leak into your network or a misconfigured neighbour — it is never normal.
+          These rows come from your OWN routers and update feed only.
         </p>
       </SubBlock>
     </Section>

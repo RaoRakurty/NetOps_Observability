@@ -60,7 +60,7 @@ describe("RpkiPanel", () => {
     });
     render(<RpkiPanel />);
     await waitFor(() => expect(screen.getByText("203.0.113.0/24")).toBeInTheDocument());
-    expect(screen.getByText(/INVALID · origin/)).toBeInTheDocument();
+    expect(screen.getByText("Wrong origin AS")).toBeInTheDocument();
     expect(screen.getByText("from your watchlist")).toBeInTheDocument();
   });
 
@@ -70,9 +70,9 @@ describe("RpkiPanel", () => {
       results: [{ prefix: "203.0.113.0/24", state: "unavailable", error: "validator 503", fetched_at: "" }],
     });
     render(<RpkiPanel />);
-    await waitFor(() => expect(screen.getByText("UNAVAILABLE")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Could not check")).toBeInTheDocument());
     expect(screen.getByText(/validator 503/)).toBeInTheDocument();
-    expect(screen.queryByText(/1 VALID/)).toBeNull();
+    expect(screen.queryByText(/Authorised/)).toBeNull();
   });
 
   it("says the sweep was truncated when the watchlist is past the cap", async () => {
@@ -101,9 +101,9 @@ describe("AspaCard", () => {
       },
     });
     render(<AspaCard asn="AS3333" />);
-    await waitFor(() => expect(screen.getByText("NO ASPA DATA SOURCE")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("No source configured")).toBeInTheDocument());
     expect(screen.getByText(/BGP_ASPA_PROVIDER_URL/)).toBeInTheDocument();
-    expect(screen.queryByText(/authorized provider/)).toBeNull();
+    expect(screen.queryByText(/approved provider/)).toBeNull();
   });
 
   it("renders real providers when a source IS configured", async () => {
@@ -113,7 +113,7 @@ describe("AspaCard", () => {
       aspa: { customer_asn: 64500, providers: [{ asn: 3333, afi: "ipv4" }], found: true, source: "routinator", fetched_at: "" },
     });
     render(<AspaCard asn="AS64500" />);
-    await waitFor(() => expect(screen.getByText("1 authorized provider")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("1 approved provider")).toBeInTheDocument());
     expect(screen.getByText("AS3333 · ipv4")).toBeInTheDocument();
     expect(screen.getByText("validator.example")).toBeInTheDocument();
   });
@@ -133,7 +133,7 @@ describe("GeofeedPanel", () => {
       rows_scanned: 0, rows_kept: 0, rows_dropped: 0, truncated: false, fetched_at: "",
     });
     render(<GeofeedPanel resource="203.0.113.0/24" />);
-    await waitFor(() => expect(screen.getByText(/No geofeed is published/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/publishes no locations for it/)).toBeInTheDocument());
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -161,7 +161,7 @@ describe("LiveFeedPanel", () => {
       status: { enabled: false, ring_size: 2000, producer: "ripestat-poll", note: "Set FEATURE_BGP_LIVE_FEED=true to enable it." },
     });
     render(<LiveFeedPanel />);
-    await waitFor(() => expect(screen.getByText("FEED NOT ENABLED")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Feed is off")).toBeInTheDocument());
     expect(screen.getByText(/FEATURE_BGP_LIVE_FEED/)).toBeInTheDocument();
     expect(screen.queryByRole("table")).toBeNull();
   });
@@ -177,9 +177,9 @@ describe("LiveFeedPanel", () => {
       metrics: { polls_total: 3 },
     });
     render(<LiveFeedPanel />);
-    await waitFor(() => expect(screen.getByText("1 announce")).toBeInTheDocument());
-    expect(screen.getByText("1 withdraw")).toBeInTheDocument();
-    expect(screen.getByText("2/2000 buffered")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("1 learned")).toBeInTheDocument());
+    expect(screen.getByText("1 withdrawn")).toBeInTheDocument();
+    expect(screen.getByText("2/2000 held")).toBeInTheDocument();
     expect(screen.getByText("7018 → 3333")).toBeInTheDocument();
     // The panel must not call itself "live".
     expect(screen.getByText(/Near-live, not live/)).toBeInTheDocument();
@@ -222,6 +222,7 @@ describe("AsPathGraphPanel", () => {
     render(<AsPathGraphPanel prefix="193.0.0.0/21" />);
     await waitFor(() => expect(screen.getByTestId("rf")).toBeInTheDocument());
     expect(screen.getByTestId("rf").getAttribute("data-nodes")).toBe("2");
+    expect(screen.getByText("2 networks")).toBeInTheDocument();
     expect(screen.getByText("origin AS3333")).toBeInTheDocument();
     expect(screen.getByText("RIS bgp-state")).toBeInTheDocument();
   });
@@ -282,6 +283,32 @@ describe("section identity", () => {
       await waitFor(() => expect(container.querySelector(`[data-section="${id}"]`)).toBeTruthy());
       unmount();
     }
+  });
+
+  // ── PLAIN LANGUAGE (owner, 2026-09-06) ────────────────────────────────────
+  // Each of these headings WAS the protocol's name. It is now the NOC admin's
+  // question, and the protocol word survives one line down — asserted here so a
+  // future "tidy-up" cannot delete the engineer's half of the answer either.
+  it.each([
+    ["RPKI origin validation", "Prefix origin problems", /RPKI/, <RpkiPanel key="r" />],
+    ["ASPA — AS provider authorization", "Approved upstream providers", /ASPA/, <AspaCard key="a" asn="AS3333" />],
+    ["Geofeed (RFC 8805)", "Where this address space is used", /Geofeed/, <GeofeedPanel key="g" resource="193.0.0.0/21" />],
+    ["Near-live update feed", "Latest route changes", /Near-live/, <LiveFeedPanel key="f" />],
+    ["AS-path graph", "Path map", /AS paths/, <AsPathGraphPanel key="p" />],
+  ])("replaces the jargon heading %s with %s", async (old, plain, protocolWord, el) => {
+    bgpRpki.mockResolvedValue({ results: [], from_watchlist: true, truncated: false, max_prefixes: 50 });
+    bgpAspa.mockResolvedValue({ resource: "AS3333", status: { configured: false, reason: "none configured" } });
+    bgpGeofeed.mockResolvedValue({ resource: "193.0.0.0/21", published: false, entries: [], rows_scanned: 0, rows_kept: 0, rows_dropped: 0, truncated: false, fetched_at: "" });
+    bgpFeed.mockResolvedValue({ updates: [], status: { enabled: false, ring_size: 2000, producer: "ripestat" } });
+    const { container } = render(el);
+    const h2 = await waitFor(() => {
+      const found = container.querySelector("h2");
+      expect(found).toBeTruthy();
+      return found as HTMLElement;
+    });
+    expect(h2.textContent).toBe(plain);
+    expect(h2.textContent).not.toBe(old);
+    expect(container.querySelector(".bgp-sec-sub")?.textContent ?? "").toMatch(protocolWord);
   });
 
   it("the graph and the feed drop their own shell in `bare` mode — the page owns that heading", async () => {

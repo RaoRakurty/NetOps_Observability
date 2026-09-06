@@ -15,41 +15,52 @@ import type {
 
 export type ClassTone = { label: string; tone: string; detail: string };
 
-/** Map an incident class onto its chip. Worst-first ordering is the API's; this
- *  is only the presentation, and `unknown` is deliberately NOT green. */
+/**
+ * Map an incident class onto its chip. Worst-first ordering is the API's; this
+ * is only the presentation, and `unknown` is deliberately NOT green.
+ *
+ * The LABEL is what a NOC admin reads at 2am, so it says what happened in
+ * ordinary words ("Origin changed", "Not fully visible"); the protocol name it
+ * comes from lives in the `detail` tooltip, which is where an engineer looks.
+ * (Owner, 2026-09-06: "too much jargon … NOC admin doesn't need all the
+ * jargon.") The class KEY on the wire is untouched — only the wording changed.
+ */
 export function incidentTone(c: BgpIncidentClass | undefined): ClassTone {
   switch (c) {
     case "origin_change":
       return {
-        label: "ORIGIN CHANGE", tone: "var(--crit)",
-        detail: "An AS outside the expected origin set is announcing this prefix — possible hijack.",
+        label: "Origin changed", tone: "var(--crit)",
+        detail: "Someone else is announcing this prefix: an AS outside the expected origin set. Possible hijack.",
       };
     case "rpki_invalid":
       return {
-        label: "RPKI INVALID", tone: "var(--crit)",
-        detail: "The announcement violates a published ROA. A stale ROA and a hijack look identical here.",
+        label: "Origin not authorised", tone: "var(--crit)",
+        detail: "RPKI invalid — the announcement breaks a published ROA. A stale ROA and a hijack look identical here.",
       };
     case "bogon":
       return {
-        label: "BOGON", tone: "var(--crit)",
-        detail: "This prefix falls inside reserved or undelegated space and must never be in the global table.",
+        label: "Reserved address routed", tone: "var(--crit)",
+        detail: "Bogon — this prefix is reserved or undelegated space and must never appear in the global routing table.",
       };
     case "route_leak":
       return {
-        label: "ROUTE LEAK", tone: "var(--warn)",
-        detail: "An unexpected transit AS carries this prefix — it is not in the declared upstream set.",
+        label: "Unexpected transit", tone: "var(--warn)",
+        detail: "Route leak — a carrier outside your declared upstream set is carrying this prefix.",
       };
     case "visibility_loss":
       return {
-        label: "VISIBILITY LOSS", tone: "var(--warn)",
-        detail: "Fewer route-collector peers see this prefix than the configured threshold.",
+        label: "Not fully visible", tone: "var(--warn)",
+        detail: "Fewer public route collectors see this prefix than your threshold allows — part of the internet cannot reach it.",
       };
     case "none":
-      return { label: "OK", tone: "var(--ok)", detail: "Measured: announced, RPKI not invalid, visibility above threshold." };
+      return {
+        label: "Healthy", tone: "var(--ok)",
+        detail: "Checked and clean: announced, origin authorised, visible to enough collectors.",
+      };
     default:
       return {
-        label: "NOT MEASURED", tone: "var(--muted)",
-        detail: "The routing lookup did not answer. This is an absent measurement, not a clean prefix.",
+        label: "Not checked", tone: "var(--muted)",
+        detail: "The routing lookup did not answer. This is a missing check, not a clean prefix.",
       };
   }
 }
@@ -416,15 +427,15 @@ export function policyDirty(form: PolicyForm, original: PolicyForm): boolean {
 export function emptySetConsequence(field: "expected_origins" | "upstreams", value: string): string | null {
   if (value.trim() !== "") return null;
   return field === "expected_origins"
-    ? "No origin is declared, so the baseline is learned from the first observation and every verdict built on it is marked as learned."
-    : "No upstream is declared, so the route-leak check does not run — a quiet leak column here means unmeasured, not clean.";
+    ? "No AS is declared here, so the baseline is guessed from the first observation and every result built on it is marked as guessed."
+    : "No carriers are declared here, so the unexpected-transit check does not run — a quiet result means unmeasured, not clean.";
 }
 
 /** One sentence about whether a saved policy is currently being evaluated. */
 export function policyEvaluationNote(status: BgpAlertStatus | undefined): string {
-  if (status?.enabled) return "The evaluator reads this policy on every pass.";
+  if (status?.enabled) return "These rules are applied on every automatic check.";
   return (
     (status?.note ? status.note + " " : "") +
-    "The policy is stored either way, and takes effect as soon as BGP alerting runs."
+    "The rules are stored either way, and take effect as soon as BGP checks run."
   );
 }

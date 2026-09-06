@@ -1,4 +1,10 @@
-// RpkiPanel — origin validation for the tenant's watchlist (or one prefix).
+// RpkiPanel — "Prefix origin problems": is the AS announcing each of the
+// tenant's prefixes actually authorised to?
+//
+// The heading is the NOC admin's question; RPKI and ROA live in the section's
+// secondary line and in the chip tooltips (owner, 2026-09-06). Nothing was
+// removed — the validator name and the "unavailable is not a verdict" caveat
+// moved behind the Details disclosure.
 //
 // The panel's job is to make "which of MY prefixes is not protected" answerable
 // in one glance, so it sorts worst-first (the API already does) and keeps
@@ -10,7 +16,7 @@ import { useEffect, useState } from "react";
 import { api, type BgpRpkiResp, type BgpRpkiState } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { rpkiStateTone, rpkiSummary } from "./bgpDepth.model";
-import { Section, ShowAll, useCap } from "./Section";
+import { Details, Section, ShowAll, useCap } from "./Section";
 
 /** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
 const FIRST_ROWS = 8;
@@ -37,8 +43,13 @@ export function RpkiPanel({ resource }: { resource?: string }) {
   const cap = useCap(data?.results ?? [], FIRST_ROWS);
 
   return (
-    <Section id="rpki" title="RPKI origin validation" updatedAt={at}>
-      {busy && <div className="empty">Checking ROAs…</div>}
+    <Section
+      id="rpki"
+      title="Prefix origin problems"
+      sub="RPKI — is the AS announcing each prefix authorised to announce it?"
+      updatedAt={at}
+    >
+      {busy && <div className="empty">Checking who is authorised…</div>}
       {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
 
       {data && summary && (
@@ -53,15 +64,15 @@ export function RpkiPanel({ resource }: { resource?: string }) {
 
           {data.truncated && (
             <p className="mini-meta" style={{ color: "var(--warn)" }}>
-              Only the first {data.max_prefixes} watched prefixes were validated — the sweep is bounded.
+              Only the first {data.max_prefixes} watched prefixes were checked — the sweep is bounded.
             </p>
           )}
 
           {data.results.length === 0 && (
             <div className="empty">
               {data.from_watchlist
-                ? "No prefixes on this tenant's watchlist yet. Watch a prefix and its ROA state shows up here."
-                : "Nothing to validate."}
+                ? "No prefixes are watched yet. Watch one and its origin state shows up here."
+                : "Nothing to check."}
             </div>
           )}
 
@@ -73,15 +84,15 @@ export function RpkiPanel({ resource }: { resource?: string }) {
                   <div key={r.prefix} className="bgp-row">
                     <span className="mono" style={{ minWidth: 160 }}>{r.prefix}</span>
                     <Chip label={t.label} tone={t.tone} title={t.detail} />
-                    {r.origin && <span className="mini-meta">origin {r.origin}</span>}
+                    {r.origin && <span className="mini-meta">announced by {r.origin}</span>}
                     {r.roas?.length ? (
                       <span className="mini-meta" title={r.roas.map((a) => `${a.prefix} → AS${a.origin} (maxLen ${a.max_length}, ${a.validity})`).join(" · ")}>
-                        {r.roas.length} ROA{r.roas.length === 1 ? "" : "s"}
+                        {r.roas.length} authorisation{r.roas.length === 1 ? "" : "s"} published
                       </span>
                     ) : null}
-                    {r.validator && <span className="mini-meta">via {r.validator}</span>}
+                    {r.validator && <span className="mini-meta">checked by {r.validator}</span>}
                     {r.error && <span className="mini-meta" style={{ color: "var(--warn)" }}>{r.error}</span>}
-                    <span className="mini-meta" style={{ marginLeft: "auto" }} title="When this verdict was fetched">
+                    <span className="mini-meta" style={{ marginLeft: "auto" }} title="When this answer was fetched">
                       {r.fetched_at ? new Date(r.fetched_at).toLocaleTimeString() : ""}
                     </span>
                   </div>
@@ -90,10 +101,13 @@ export function RpkiPanel({ resource }: { resource?: string }) {
               <ShowAll cap={cap} noun="prefixes" />
             </div>
           )}
-          <p className="mini-meta" style={{ marginBottom: 0 }}>
-            Validated against RIPE NCC's Routinator view. <strong>Unavailable</strong> means the validator could not be
-            reached — it is not a verdict, and is never counted as valid.
-          </p>
+          <Details summary="How this was checked">
+            <p className="mini-meta" style={{ marginBottom: 0 }}>
+              Each prefix is checked against the route origin authorisations (ROAs) published in RPKI, read through
+              RIPE NCC&apos;s Routinator view. A prefix we could not check is one whose validator was unreachable —
+              that is not a verdict, and is never counted as authorised.
+            </p>
+          </Details>
         </>
       )}
     </Section>

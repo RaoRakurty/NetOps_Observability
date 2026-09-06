@@ -19,9 +19,17 @@
 //     feed is capped to the first N with an explicit control to see the rest.
 //     The cap is what keeps the page's DOM budget flat (perf/budgets.json).
 //
-// Density is deliberate: the type scale, the header pitch and the right-aligned
-// numeric column all live in the `.bgp-*` CSS block, not in inline styles, so
-// the whole page reads as one instrument rather than a stack of cards.
+// Type is for READING (owner, 2026-09-06: "fonts are too small looks hard on
+// eye … make watchable font, elegant and crisp"). The scale, the header pitch
+// and the right-aligned numeric column all live in the `.bgp-*` CSS block, not
+// in inline styles, so the whole page reads as one instrument rather than a
+// stack of cards — and so raising the scale is one edit, not forty.
+//
+// The shell also owns the two things that keep this page plain-language:
+//   * `sub` — the technical name for what the plain heading asks (RPKI, ASPA,
+//     bogon, BMP). Demoted one size, never deleted.
+//   * `Details` — the disclosure secondary detail moved behind instead of into
+//     the bin.
 
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
@@ -34,24 +42,38 @@ export function stamp(at: string | number | null | undefined): string {
 }
 
 export function Section({
-  id, title, updatedAt, note, actions, children,
+  id, title, sub, updatedAt, note, actions, wide, children,
 }: {
   /** Stable machine id — the layout contract the ordering test reads. */
   id: string;
+  /** The PLAIN-LANGUAGE question this section answers. No jargon here. */
   title: string;
+  /**
+   * The technical name for what the heading asks, one size down and muted.
+   * This is where "RPKI", "ASPA", "bogon" and "BMP" live now: an engineer can
+   * still map the section onto the protocol word, and a NOC admin reading the
+   * heading never has to.
+   */
+  sub?: string;
   /** When this section's data was last read. Omitted when it holds no fetch. */
   updatedAt?: string | number | null;
   /** One short qualifier beside the title (a source, a scope). */
   note?: ReactNode;
   /** Controls that belong to the section header rather than its body. */
   actions?: ReactNode;
+  /** Spans BOTH grid columns. Rows are whole: a card is half-width only when
+   *  it is paired with another, so the grid never ends on an orphan. */
+  wide?: boolean;
   children: ReactNode;
 }) {
   const s = stamp(updatedAt);
   return (
-    <section className="bgp-sec" data-section={id} aria-label={title}>
+    <section className={`bgp-sec${wide ? " bgp-wide" : ""}`} data-section={id} aria-label={title}>
       <div className="bgp-sec-hd">
-        <h2>{title}</h2>
+        <div className="bgp-sec-ttl">
+          <h2>{title}</h2>
+          {sub && <span className="bgp-sec-sub">{sub}</span>}
+        </div>
         {note && <span className="bgp-sec-note">{note}</span>}
         <span className="bgp-sec-sp" />
         {actions}
@@ -60,6 +82,41 @@ export function Section({
       <div className="bgp-sec-bd">{children}</div>
     </section>
   );
+}
+
+/**
+ * Details — the disclosure that secondary detail moved BEHIND rather than into
+ * the bin (owner, 2026-09-06: "each section should just show what NOC admin
+ * wants to see"). Nothing is deleted: provenance, protocol caveats, per-row
+ * evidence and long captions all still render, one click away, and stay in the
+ * DOM so they remain searchable and keyboard-reachable.
+ */
+export function Details({ summary, children }: { summary: string; children: ReactNode }) {
+  return (
+    <details className="bgp-details">
+      <summary>{summary}</summary>
+      <div className="bgp-details-bd">{children}</div>
+    </details>
+  );
+}
+
+/** One KPI tile: a number a NOC admin reads from across the room, its plain
+ *  label, and (optionally) what the number means for them right now. */
+export function Kpi({ n, label, interp, tone, title }: {
+  n: ReactNode; label: string; interp?: string; tone?: string; title?: string;
+}) {
+  return (
+    <div className="bgp-kpi" title={title}>
+      <div className="bgp-kpi-n" style={tone ? { color: tone } : undefined}>{n}</div>
+      <div className="bgp-kpi-l">{label}</div>
+      {interp && <div className="bgp-kpi-i">{interp}</div>}
+    </div>
+  );
+}
+
+/** The KPI row. Three or four tiles; below 720px it folds to two columns. */
+export function Kpis({ cols = 4, children }: { cols?: 3 | 4; children: ReactNode }) {
+  return <div className={`bgp-kpis${cols === 3 ? " bgp-kpis-3" : ""}`}>{children}</div>;
 }
 
 /** A titled block INSIDE a section — two related tables under one heading. */

@@ -1,5 +1,10 @@
-// PeersPanel — the Peers tab (BGP ops tracker #4): BGP adjacency and transit in
-// one table.
+// PeersPanel — "Sessions down or flapping" (BGP ops tracker #4): the BGP
+// neighbours on the operator's OWN routers, and who carries their traffic.
+//
+// The heading is the NOC admin's question, not the protocol's name (owner,
+// 2026-09-06). "BMP", "Adj-RIB-In" and the metric name still appear — in the
+// section's secondary line, the row tooltips and the Details disclosure, which
+// is where an engineer looks and a NOC admin does not have to.
 //
 // TWO SOURCES, NEVER CONFLATED. A BMP session is one of the operator's own
 // routers pushing its Adj-RIB-In to us; `device_bgp_peer_state` is an SNMP/gNMI
@@ -24,7 +29,7 @@ import {
   mergePeerRows, peerRowsFromMetrics, peerRowsFromSessions, peersState,
   transitSet, type PeerRow,
 } from "./bgpAlerts.model";
-import { Section, ShowAll, SubBlock, useCap } from "./Section";
+import { Details, Section, ShowAll, SubBlock, useCap } from "./Section";
 
 /** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
 const FIRST_PEERS = 12;
@@ -33,13 +38,13 @@ const FIRST_TRANSIT = 6;
 const PEER_QUERY = "device_bgp_peer_state";
 
 function stateChip(r: PeerRow) {
-  if (r.state === "up") return <Chip label="UP" tone="var(--ok)" title="Established" />;
-  if (r.state === "down") return <Chip label="DOWN" tone="var(--crit)" title={r.reason || "Not established"} />;
+  if (r.state === "up") return <Chip label="Up" tone="var(--ok)" title="The session is established." />;
+  if (r.state === "down") return <Chip label="Down" tone="var(--crit)" title={r.reason || "The session is not established."} />;
   return (
     <Chip
-      label="UNKNOWN"
+      label="Not reported"
       tone="var(--muted)"
-      title="No peer state has been observed for this session. This is an absent measurement, not a healthy peer."
+      title="Nothing has told us the state of this session. That is a missing measurement, not a healthy neighbour."
     />
   );
 }
@@ -83,33 +88,38 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
   const transitCap = useCap(withTransit, FIRST_TRANSIT);
 
   return (
-    <Section id="peers" title="Peers — sessions and transit" updatedAt={at}>
-      <SubBlock title="BGP peers">
+    <Section
+      id="peers"
+      title="Sessions down or flapping"
+      sub="BGP neighbours on your own routers, and who carries your traffic"
+      updatedAt={at}
+    >
+      <SubBlock title="Neighbour sessions">
 
         {busy && rows.length === 0 && <div className="empty">Reading peer state…</div>}
 
         {!busy && state === "bmp_off" && (
           <div className="empty">
-            The BMP receiver is not running (<span className="mono">FEATURE_BMP</span> is off) and no device is
-            reporting <span className="mono">device_bgp_peer_state</span>. This is an absent feed, not a healthy fleet:
-            point a router's BMP export at the platform, or enable the BGP peer OID in the device profile.
+            Nothing is reporting neighbour state: the BMP receiver is off (<span className="mono">FEATURE_BMP</span>)
+            and no router is sending its BGP peer counter. This is an absent feed, not a healthy fleet — point a
+            router&apos;s BMP export at the platform, or enable the BGP peer OID in the device profile.
           </div>
         )}
         {!busy && state === "no_exporter" && (
           <div className="empty">
-            No router is exporting BMP to this platform, and no device peer-state samples arrived. Nothing is being
-            measured here yet — this is an empty FEED, not a converged network.
+            No router is sending neighbour state to this platform yet. Nothing is being measured here — this is an
+            empty feed, not a converged network.
           </div>
         )}
         {!busy && state === "no_peers" && (
           <div className="empty">
-            {sessions?.sessions.length} BMP session(s) are open, but no Peer Up or Peer Down has been observed on any of
-            them. Peer state is reported as unknown rather than assumed.
+            {sessions?.sessions.length} router session(s) are open, but none of them has reported a neighbour coming up
+            or going down yet. The state is left unreported rather than assumed.
           </div>
         )}
         {!busy && state === "error" && (
           <p className="mini-meta" role="alert" style={{ color: "var(--bad)" }}>
-            Peer state could not be read: {err}
+            Neighbour state could not be read: {err}
           </p>
         )}
 
@@ -118,8 +128,8 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
             <table className="tbl bgp-tbl" style={{ width: "100%" }}>
               <thead>
                 <tr>
-                  <th>Device</th><th>Peer</th><th>AS</th><th>State</th>
-                  <th>Source</th><th>Announced</th><th>Withdrawn</th><th>Changed</th>
+                  <th>Router</th><th>Neighbour</th><th>Their AS</th><th>State</th>
+                  <th>Reported by</th><th className="num">Learned</th><th className="num">Withdrawn</th><th>Last change</th>
                 </tr>
               </thead>
               <tbody>
@@ -132,7 +142,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
                     <td>
                       <span className="mini-meta" title={r.source === "bmp"
                         ? "Reported by the router's own BMP export (Adj-RIB-In)."
-                        : "Sampled from the device's own BGP peer-state counter — only 'established' counts as up."}>
+                        : "Sampled from the router's own BGP peer-state counter — only 'established' counts as up."}>
                         {r.source === "bmp" ? "BMP" : "device metric"}
                       </span>
                     </td>
@@ -154,11 +164,11 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
         ) : null}
       </SubBlock>
 
-      <SubBlock title="Transit per watched prefix">
+      <SubBlock title="Who carries your traffic">
         {withTransit.length === 0 ? (
           <div className="empty">
-            No AS paths have been observed for the watched prefixes yet. The transit set is derived from the paths the
-            evaluator measured — with no measurement there is nothing to show, and nothing is assumed.
+            No paths have been observed for the watched prefixes yet, so we cannot say who is carrying them. With no
+            measurement there is nothing to show, and nothing is assumed.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -169,16 +179,16 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
               }}>
                 <span className="mono" style={{ minWidth: 160 }}>{inc.prefix}</span>
                 {inc.class === "route_leak" && (
-                  <Chip label="TRANSIT CHANGED" tone="var(--warn)" title={inc.summary} />
+                  <Chip label="Carrier changed" tone="var(--warn)" title={inc.summary} />
                 )}
                 {inc.class === "visibility_loss" && (
-                  <Chip label="FLAPPING / WITHDRAWN" tone="var(--warn)" title={inc.summary} />
+                  <Chip label="Flapping or withdrawn" tone="var(--warn)" title={inc.summary} />
                 )}
                 {transitSet(inc).slice(0, 10).map((t) => (
                   <span key={t.asn} className="mono" title={t.adjacent
-                    ? "The hop adjacent to the origin — this prefix's actual upstream."
-                    : "Observed further up the path."} style={{
-                    padding: "2px 8px", borderRadius: 999, fontSize: 12,
+                    ? "Your direct upstream — the hop next to the origin."
+                    : "Seen further up the path."} style={{
+                    padding: "2px 8px", borderRadius: 999, fontSize: 13,
                     border: "1px solid var(--border)",
                     background: t.adjacent ? "color-mix(in srgb, var(--accent) 14%, transparent)" : "var(--surface)",
                   }}>
@@ -190,10 +200,22 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
             <ShowAll cap={transitCap} noun="prefixes" />
           </div>
         )}
-        <p className="mini-meta" style={{ marginBottom: 0 }}>
-          The upstream chip is the hop adjacent to the origin. A transit set that changed without a maintenance window
-          is the route-leak signature the incidents section classifies.
+        <p className="mini-meta">
+          The highlighted AS is your direct upstream. A carrier that changed without a maintenance window is what the
+          watchlist flags as unexpected transit.
         </p>
+        <Details summary="Where these rows come from">
+          <p className="mini-meta">
+            Two witnesses, never conflated. A row reported by BMP comes from one of your own routers pushing its
+            Adj-RIB-In to the platform, and it is the only source carrying the reason for a change and the counters; a
+            row reported by a device metric is an SNMP or gNMI sample of the same session seen from outside. Where both
+            describe the same router and neighbour, the router&apos;s own report wins.
+          </p>
+          <p className="mini-meta" style={{ marginBottom: 0 }}>
+            Who carries your traffic is derived from the AS paths the watchlist evaluator measured — it is an
+            observation, never an assumption about your contracts.
+          </p>
+        </Details>
       </SubBlock>
     </Section>
   );

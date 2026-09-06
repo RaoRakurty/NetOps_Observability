@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import { api, type BgpGeofeedResp } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { geofeedCountries } from "./bgpDepth.model";
-import { Section, ShowAll, useCap } from "./Section";
+import { Details, Section, ShowAll, useCap } from "./Section";
 
 /** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
 const FIRST_ROWS = 8;
@@ -39,9 +39,15 @@ export function GeofeedPanel({ resource }: { resource?: string }) {
   const cap = useCap(data?.entries ?? [], FIRST_ROWS);
 
   return (
-    <Section id="geofeed" title="Geofeed (RFC 8805)" updatedAt={at}>
-      {!resource && <div className="empty">Look up a prefix or ASN to see the geofeed its holder publishes.</div>}
-      {busy && <div className="empty">Looking for a published geofeed…</div>}
+    <Section
+      id="geofeed"
+      title="Where this address space is used"
+      sub="Geofeed (RFC 8805) — locations the address-space holder publishes about it"
+      updatedAt={at}
+      wide
+    >
+      {!resource && <div className="empty">Pick a prefix or AS to see the locations its holder publishes.</div>}
+      {busy && <div className="empty">Looking for published locations…</div>}
       {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
 
       {data && data.error && (
@@ -50,10 +56,15 @@ export function GeofeedPanel({ resource }: { resource?: string }) {
 
       {data && !data.published && !data.error && (
         <div className="empty" style={{ textAlign: "left" }}>
-          No geofeed is published for {data.resource}. Holders advertise one with a <span className="mono">geofeed:</span>{" "}
-          attribute (or a <span className="mono">Geofeed &lt;url&gt;</span> remark) on their inet(6)num object; without one,
-          geolocation for this space comes from third-party guesses rather than the holder.
-          {data.note && <div className="mini-meta" style={{ marginTop: 6 }}>{data.note}</div>}
+          The holder of {data.resource} publishes no locations for it, so anything claiming to know where this address
+          space is used is a third-party guess.
+          <Details summary="How a holder publishes them">
+            <p className="mini-meta" style={{ margin: 0 }}>
+              A holder advertises a geofeed with a <span className="mono">geofeed:</span> attribute (or a{" "}
+              <span className="mono">Geofeed &lt;url&gt;</span> remark) on their inet(6)num registry object.
+            </p>
+            {data.note && <p className="mini-meta" style={{ margin: "6px 0 0" }}>{data.note}</p>}
+          </Details>
         </div>
       )}
 
@@ -70,12 +81,7 @@ export function GeofeedPanel({ resource }: { resource?: string }) {
           </div>
           {data.truncated && (
             <p className="mini-meta" style={{ color: "var(--warn)" }}>
-              The feed is larger than this view shows — rows are capped.
-            </p>
-          )}
-          {data.source_url && (
-            <p className="mini-meta">
-              Published at <a href={data.source_url} target="_blank" rel="noreferrer" className="mono">{data.source_url}</a>
+              The published list is larger than this view shows — rows are capped.
             </p>
           )}
           <div className="bgp-scroll">
@@ -97,7 +103,19 @@ export function GeofeedPanel({ resource }: { resource?: string }) {
             </table>
           </div>
           <ShowAll cap={cap} noun="rows" />
-          {data.note && <p className="mini-meta" style={{ marginBottom: 0 }}>{data.note}</p>}
+          <Details summary="Where this came from">
+            {data.source_url && (
+              <p className="mini-meta">
+                Published by the holder at{" "}
+                <a href={data.source_url} target="_blank" rel="noreferrer" className="mono">{data.source_url}</a>
+              </p>
+            )}
+            <p className="mini-meta" style={{ marginBottom: 0 }}>
+              Only rows about address space inside {data.resource} are kept, so a published list cannot make claims
+              about somebody else&apos;s prefixes through this view. Malformed rows are dropped, never repaired.
+              {data.note ? ` ${data.note}` : ""}
+            </p>
+          </Details>
         </>
       )}
     </Section>

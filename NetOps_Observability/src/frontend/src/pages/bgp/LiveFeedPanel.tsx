@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type BgpFeedResp, type BgpFeedUpdate } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { feedCounts, mergeFeed } from "./bgpDepth.model";
-import { Section, ShowAll, SubBlock, useCap } from "./Section";
+import { Details, Section, ShowAll, SubBlock, useCap } from "./Section";
 
 const POLL_MS = 20_000;
 const CLIENT_BUFFER = 500;
@@ -69,7 +69,7 @@ export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
 
       {status && !status.enabled && (
         <div className="empty" style={{ textAlign: "left" }}>
-          <Chip label="FEED NOT ENABLED" tone="var(--muted)" />
+          <Chip label="Feed is off" tone="var(--muted)" />
           <p style={{ margin: "8px 0 0" }}>{status.note || "The near-live BGP update feed is switched off."}</p>
         </div>
       )}
@@ -80,13 +80,13 @@ export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
             <Chip label={status.capped ? "Paused — at capacity" : status.polling ? "Receiving" : "Idle"}
               tone={status.capped ? "var(--warn)" : status.polling ? "var(--ok)" : "var(--muted)"}
               title={status.capped ? status.note : `Every ~${status.interval ?? "60s"}, jittered`} />
-            <Chip label={`${counts.announce} announce`} tone="var(--accent)" />
-            <Chip label={`${counts.withdraw} withdraw`} tone="var(--crit)" />
-            <Chip label={`${status.buffered ?? 0}/${status.ring_size} buffered`}
+            <Chip label={`${counts.announce} learned`} tone="var(--accent)" />
+            <Chip label={`${counts.withdraw} withdrawn`} tone="var(--crit)" />
+            <Chip label={`${status.buffered ?? 0}/${status.ring_size} held`}
               title="Keeps the most recent updates; older ones roll off." />
             {(status.dropped ?? 0) > 0 && (
               <Chip label={`${status.dropped} overwritten`} tone="var(--warn)"
-                title="Updates that rolled out of the ring before this page read them." />
+                title="Updates that rolled out of the buffer before this page read them." />
             )}
           </div>
 
@@ -103,14 +103,14 @@ export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
           )}
 
           {updates.length === 0 && status.resources?.length ? (
-            <div className="empty">No updates buffered yet. The first poll covers the last 30 minutes.</div>
+            <div className="empty">Nothing held yet. The first read covers the last 30 minutes.</div>
           ) : null}
 
           {updates.length > 0 && (
             <div className="bgp-scroll">
               <table className="dm-table bgp-tbl" style={{ width: "100%" }}>
                 <thead>
-                  <tr><th>Time (UTC)</th><th>Type</th><th>Prefix</th><th>AS path</th><th>Collector peer</th></tr>
+                  <tr><th>Time (UTC)</th><th>Change</th><th>Prefix</th><th>Path to the origin</th><th>Seen by</th></tr>
                 </thead>
                 <tbody>
                   {cap.rows.map((u) => (
@@ -118,12 +118,12 @@ export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
                       <td className="mono">{u.time ? new Date(u.time).toISOString().slice(11, 19) : "—"}</td>
                       <td>
                         <span style={{ color: u.type === "W" ? "var(--crit)" : "var(--accent)", fontWeight: 600 }}>
-                          {u.type === "W" ? "withdraw" : "announce"}
+                          {u.type === "W" ? "withdrawn" : "learned"}
                         </span>
                       </td>
                       <td className="mono">{u.prefix || "—"}</td>
-                      <td className="mono" style={{ fontSize: 11 }}>{u.path?.length ? u.path.join(" → ") : "—"}</td>
-                      <td className="mono" style={{ fontSize: 11 }}>{u.peer || "—"}</td>
+                      <td className="mono" style={{ fontSize: 13 }}>{u.path?.length ? u.path.join(" → ") : "—"}</td>
+                      <td className="mono" style={{ fontSize: 13 }}>{u.peer || "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -132,20 +132,31 @@ export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
           )}
           <ShowAll cap={cap} noun="updates" />
 
-          <p className="mini-meta" style={{ marginBottom: 0 }}>
-            <strong>Near-live, not live.</strong> RIS Live is WebSocket-only and no WebSocket client is on this
-            platform's dependency allowlist, so updates arrive from a bounded poll of RIPEstat every
-            ~{status.interval ?? "60s"} (jittered). A dedicated BMP receiver — the on-device, truly live path — is a
-            separate item.
-          </p>
+          <Details summary="How fresh this is">
+            <p className="mini-meta" style={{ marginBottom: 0 }}>
+              <strong>Near-live, not live.</strong> RIS Live is WebSocket-only and no WebSocket client is on this
+              platform&apos;s dependency allowlist, so updates arrive from a bounded read of RIPEstat every
+              ~{status.interval ?? "60s"} (jittered). A dedicated BMP receiver — the on-device, truly live path — is a
+              separate item.
+            </p>
+          </Details>
         </>
       )}
     </>
   );
 
   return bare
-    ? <SubBlock title="Near-live update feed" updatedAt={at}>{body}</SubBlock>
-    : <Section id="updates-feed" title="Near-live update feed" updatedAt={at}>{body}</Section>;
+    ? <SubBlock title="Latest changes" updatedAt={at}>{body}</SubBlock>
+    : (
+      <Section
+        id="updates-feed"
+        title="Latest route changes"
+        sub="Near-live — one read interval behind, and the panel says so"
+        updatedAt={at}
+      >
+        {body}
+      </Section>
+    );
 }
 
 export default LiveFeedPanel;

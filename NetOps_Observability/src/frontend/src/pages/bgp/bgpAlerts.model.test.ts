@@ -25,8 +25,10 @@ describe("incident class presentation", () => {
     const none = incidentTone("none");
     expect(unknown.tone).not.toBe(none.tone);
     expect(unknown.tone).not.toBe("var(--ok)");
-    expect(unknown.label).toMatch(/NOT MEASURED/);
-    expect(unknown.detail).toMatch(/absent measurement/i);
+    // Plain-language labels (owner, 2026-09-06): the operator reads "Not
+    // checked", the protocol word lives in the tooltip.
+    expect(unknown.label).toBe("Not checked");
+    expect(unknown.detail).toMatch(/missing check/i);
   });
 
   it("gives the two hijack-shaped classes the critical tone", () => {
@@ -319,9 +321,9 @@ describe("alert policy — the PUT body", () => {
 });
 
 describe("alert policy — what an empty set means is SAID", () => {
-  it("names the learned baseline and the leak check that does not run", () => {
-    expect(emptySetConsequence("expected_origins", "")).toMatch(/learned from the first observation/);
-    expect(emptySetConsequence("upstreams", "")).toMatch(/route-leak check does not run/);
+  it("names the guessed baseline and the transit check that does not run", () => {
+    expect(emptySetConsequence("expected_origins", "")).toMatch(/guessed from the first observation/);
+    expect(emptySetConsequence("upstreams", "")).toMatch(/unexpected-transit check does not run/);
     expect(emptySetConsequence("expected_origins", "AS64500")).toBeNull();
     expect(emptySetConsequence("upstreams", "AS3356")).toBeNull();
   });
@@ -330,7 +332,7 @@ describe("alert policy — what an empty set means is SAID", () => {
     const off = policyEvaluationNote({ enabled: false, note: "BGP alerting is off." });
     expect(off).toMatch(/BGP alerting is off/);
     expect(off).toMatch(/stored either way/);
-    expect(policyEvaluationNote({ enabled: true })).toMatch(/reads this policy on every pass/);
+    expect(policyEvaluationNote({ enabled: true })).toMatch(/applied on every automatic check/);
   });
 });
 

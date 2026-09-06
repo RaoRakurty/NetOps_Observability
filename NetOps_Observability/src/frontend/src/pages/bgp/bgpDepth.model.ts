@@ -18,22 +18,27 @@ import type {
 
 export type RpkiTone = { label: string; tone: string; detail: string };
 
-/** Map an API RPKI state (+reason) onto the page's chip. `unavailable` is its
- *  OWN presentation — it is not a verdict and must never look like one. */
+/**
+ * Map an API RPKI state (+reason) onto the page's chip. `unavailable` is its
+ * OWN presentation — it is not a verdict and must never look like one.
+ *
+ * Labels are the NOC admin's words; "RPKI", "ROA" and "maxLength" live in the
+ * tooltip (owner, 2026-09-06). The wire state is untouched.
+ */
 export function rpkiStateTone(state: BgpRpkiState | undefined, reason?: string, error?: string): RpkiTone {
   switch (state) {
     case "valid":
-      return { label: "VALID", tone: "var(--ok)", detail: "A ROA covers this announcement from this origin." };
+      return { label: "Authorised", tone: "var(--ok)", detail: "RPKI valid — a ROA authorises this origin AS to announce this prefix." };
     case "invalid":
       if (reason === "origin_as")
-        return { label: "INVALID · origin", tone: "var(--crit)", detail: "A ROA exists but authorises a DIFFERENT origin AS — hijack or a stale ROA." };
+        return { label: "Wrong origin AS", tone: "var(--crit)", detail: "RPKI invalid — a ROA exists but authorises a DIFFERENT origin AS. Hijack, or a stale ROA of your own." };
       if (reason === "max_length")
-        return { label: "INVALID · length", tone: "var(--crit)", detail: "More specific than the ROA's maxLength allows — often an accidental de-aggregation." };
-      return { label: "INVALID", tone: "var(--crit)", detail: "The announcement violates a published ROA." };
+        return { label: "Too specific", tone: "var(--crit)", detail: "RPKI invalid — more specific than the ROA's maxLength allows, often an accidental de-aggregation." };
+      return { label: "Not authorised", tone: "var(--crit)", detail: "RPKI invalid — the announcement breaks a published ROA." };
     case "unknown":
-      return { label: "NO ROA", tone: "var(--muted)", detail: "No ROA covers this prefix. Publishing one is what makes an invalid hijack droppable." };
+      return { label: "Not protected", tone: "var(--muted)", detail: "No ROA covers this prefix. Publishing one is what lets the internet drop a hijack of it." };
     default:
-      return { label: "UNAVAILABLE", tone: "var(--warn)", detail: error || "The validator could not be reached — this is not a verdict." };
+      return { label: "Could not check", tone: "var(--warn)", detail: error || "The validator could not be reached — this is not a verdict." };
   }
 }
 

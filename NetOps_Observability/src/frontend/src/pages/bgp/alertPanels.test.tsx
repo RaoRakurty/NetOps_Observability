@@ -55,8 +55,8 @@ describe("PrefixesPanel", () => {
       />,
     );
     expect(screen.getAllByText(/FEATURE_BGP_ALERTS/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/NOT EVALUATED/i)).toBeTruthy();
-    expect(screen.queryByText(/^OK$/)).toBeNull();
+    expect(screen.getByText("Not checked yet")).toBeTruthy();
+    expect(screen.queryByText(/^Healthy$/)).toBeNull();
   });
 
   it("renders an unmeasured prefix as NOT MEASURED, never as OK", () => {
@@ -67,9 +67,9 @@ describe("PrefixesPanel", () => {
         status={{ enabled: true, runs: 1 }} alerts={[]} active="" onInvestigate={() => {}}
       />,
     );
-    expect(screen.getByText("NOT MEASURED")).toBeTruthy();
+    expect(screen.getByText("Not checked")).toBeTruthy();
     expect(screen.getByText(/upstream 502/)).toBeTruthy();
-    expect(screen.queryByText("OK")).toBeNull();
+    expect(screen.queryByText("Healthy")).toBeNull();
   });
 
   it("shows the evidence and the supporting vantage points for an origin change", () => {
@@ -90,7 +90,7 @@ describe("PrefixesPanel", () => {
         status={{ enabled: true, runs: 1 }} alerts={[]} active="" onInvestigate={() => {}}
       />,
     );
-    expect(screen.getByText("ORIGIN CHANGE")).toBeTruthy();
+    expect(screen.getByText("Origin changed")).toBeTruthy();
     expect(screen.getByText(/rrc00-1, rrc03-4/)).toBeTruthy();
     expect(screen.getByText("AS174 → AS65001")).toBeTruthy();
     expect(screen.getByText(/Seen by 40 of 320/)).toBeTruthy();
@@ -108,7 +108,7 @@ describe("PrefixesPanel", () => {
         status={{ enabled: true, runs: 1 }} alerts={[]} active="" onInvestigate={() => {}}
       />,
     );
-    expect(screen.getByText(/Observed but NOT asserted/)).toBeTruthy();
+    expect(screen.getByText(/Seen but not asserted/)).toBeTruthy();
     expect(screen.getByText(/2 are required/)).toBeTruthy();
   });
 
@@ -120,7 +120,7 @@ describe("PrefixesPanel", () => {
         status={{ enabled: true, runs: 1 }} alerts={[]} active="" onInvestigate={() => {}}
       />,
     );
-    expect(screen.getByText("learned baseline")).toBeTruthy();
+    expect(screen.getByText("guessed baseline")).toBeTruthy();
   });
 
   it("distinguishes a measured quiet from an unwatched one in the alert history", () => {
@@ -153,7 +153,7 @@ describe("PeersPanel", () => {
     bgpBmpSessions.mockResolvedValue({ sessions: [], count: 0, coverage: { receiver_enabled: true, sessions_up: 0, complete: false, notes: [] } });
     metricsQuery.mockResolvedValue({ status: "success", data: { resultType: "vector", result: [] } });
     render(<PeersPanel />);
-    await waitFor(() => expect(screen.getByText(/No router is exporting BMP/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/No router is sending neighbour state/i)).toBeTruthy());
   });
 
   it("renders both sources in one table and names which witness is talking", async () => {
@@ -172,8 +172,8 @@ describe("PeersPanel", () => {
     });
     render(<PeersPanel />);
     await waitFor(() => expect(screen.getByText("10.0.0.5")).toBeTruthy());
-    expect(screen.getByText("DOWN")).toBeTruthy();
-    expect(screen.getByText("UP")).toBeTruthy();
+    expect(screen.getByText("Down")).toBeTruthy();
+    expect(screen.getByText("Up")).toBeTruthy();
     expect(screen.getByText("BMP")).toBeTruthy();
     expect(screen.getByText("device metric")).toBeTruthy();
     expect(screen.getByText(/bounded monitoring feed/)).toBeTruthy();
@@ -193,7 +193,7 @@ describe("PeersPanel", () => {
       class: "route_leak", summary: "Possible route leak via AS65010.",
       evidence: { detail: "", paths: [[3356, 65010, 64496]] },
     })]} />);
-    await waitFor(() => expect(screen.getByText("TRANSIT CHANGED")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Carrier changed")).toBeTruthy());
     expect(screen.getByText("AS65010")).toBeTruthy();
   });
 });
@@ -250,7 +250,7 @@ describe("BogonsPanel", () => {
   it("says nothing was screened when the evaluator is off", async () => {
     bgpBogons.mockResolvedValue({ ...base, note: "The sighting register is fed by the watchlist evaluator, which is off." });
     render(<BogonsPanel />);
-    await waitFor(() => expect(screen.getByText(/No sighting register is running/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Nothing is watching for these addresses/i)).toBeTruthy());
   });
 });
 
@@ -259,6 +259,40 @@ describe("BogonsPanel", () => {
 // The page's ordering test (BgpOps.test.tsx) runs against stubs; these three
 // cases pin the same ids on the REAL components so the stubs cannot drift away
 // from the product.
+
+// ── PLAIN LANGUAGE (owner, 2026-09-06) ──────────────────────────────────────
+// The three headings below were the protocol's vocabulary ("Incidents",
+// "Peers", "Bogons"). They are now the NOC admin's question; the technical word
+// moved one line down, and both halves are asserted so neither can be lost.
+
+describe("plain language for a NOC admin", () => {
+  it("replaces the jargon headings and keeps the technical word one line down", async () => {
+    bgpBmpSessions.mockRejectedValue(new Error("off"));
+    metricsQuery.mockResolvedValue({ status: "success", data: { resultType: "vector", result: [] } });
+    bgpBogons.mockResolvedValue({
+      sightings: [], set: { source: "IANA", date: "2026-09-02", blocks: 1, note: "" },
+      feed: { enabled: false, entries: 0, note: "off" },
+    });
+
+    const prefixes = render(
+      <PrefixesPanel watch={[]} incidents={{}} alerts={[]} active="" onInvestigate={() => {}} />,
+    );
+    expect(prefixes.container.querySelector("h2")?.textContent).toBe("Prefixes you’re watching");
+    expect(prefixes.container.querySelector("h2")?.textContent).not.toBe("Incidents — watched prefixes");
+    prefixes.unmount();
+
+    const peers = render(<PeersPanel />);
+    await waitFor(() => expect(peers.container.querySelector("h2")).toBeTruthy());
+    expect(peers.container.querySelector("h2")?.textContent).toBe("Sessions down or flapping");
+    expect(peers.container.querySelector(".bgp-sec-sub")?.textContent).toMatch(/BGP neighbours/);
+    peers.unmount();
+
+    const bogons = render(<BogonsPanel />);
+    await waitFor(() => expect(bogons.container.querySelector("h2")).toBeTruthy());
+    expect(bogons.container.querySelector("h2")?.textContent).toBe("Addresses that should never be routed");
+    expect(bogons.container.querySelector(".bgp-sec-sub")?.textContent).toMatch(/Bogons/);
+  });
+});
 
 describe("section identity", () => {
   it("the incidents, peers and bogons panels carry the ids the page lays out by", async () => {

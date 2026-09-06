@@ -302,7 +302,10 @@ describe("frontend render budgets (high-EPS payloads)", () => {
         // for the auto-selected prefix, a section that only exists once the
         // watchlist arrived, and the near-live feed's own counters. Without this
         // a broken stub would render ten honest empty states and "pass".
-        verify: showsAll(BGP_SELECTED, "Alert history", "BGP peers", "Bogons seen", "announce"),
+        // Plain-language headings (owner, 2026-09-06). These markers are the
+        // renamed sub-blocks, one per lazy panel, plus the feed's row wording —
+        // they prove every panel actually rendered, not just the page shell.
+        verify: showsAll(BGP_SELECTED, "Recent alerts", "Neighbour sessions", "Seen on your network", "learned"),
       },
     ),
     180_000,

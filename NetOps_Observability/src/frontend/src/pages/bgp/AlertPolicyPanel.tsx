@@ -27,7 +27,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type BgpAlertConfigResp, type BgpAlertStatus } from "../../services/api";
 import { operatorError } from "../../lib/errors";
-import { Section } from "./Section";
+import { Details, Section } from "./Section";
 import {
   EMPTY_POLICY_CONFIG,
   emptySetConsequence,
@@ -65,7 +65,7 @@ function ConfigFields({ id, cfg, errs, keyPrefix, disabled, onChange }: {
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <label style={{ display: "grid", gap: 3 }}>
-        <span className="mini-meta">Expected origin AS</span>
+        <span className="mini-meta">Which AS should announce it</span>
         <input
           className="ccw-input mono"
           type="text"
@@ -80,7 +80,7 @@ function ConfigFields({ id, cfg, errs, keyPrefix, disabled, onChange }: {
       </label>
 
       <label style={{ display: "grid", gap: 3 }}>
-        <span className="mini-meta">Upstream (transit) AS</span>
+        <span className="mini-meta">Which carriers are allowed</span>
         <input
           className="ccw-input mono"
           type="text"
@@ -96,7 +96,7 @@ function ConfigFields({ id, cfg, errs, keyPrefix, disabled, onChange }: {
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <label style={{ display: "grid", gap: 3 }}>
-          <span className="mini-meta">Minimum visibility</span>
+          <span className="mini-meta">Least acceptable reach</span>
           <input
             className="ccw-input mono"
             type="text"
@@ -110,7 +110,7 @@ function ConfigFields({ id, cfg, errs, keyPrefix, disabled, onChange }: {
           <FieldError msg={errs[`${keyPrefix}min_visibility`]} />
         </label>
         <label style={{ display: "grid", gap: 3 }}>
-          <span className="mini-meta">Minimum vantage points</span>
+          <span className="mini-meta">Collectors that must agree</span>
           <input
             className="ccw-input mono"
             type="text"
@@ -201,9 +201,10 @@ export function AlertPolicyPanel({ status }: { status?: BgpAlertStatus }) {
   return (
     <Section
       id="alert-policy"
-      title="Alert policy — what counts as an incident"
+      title="Alert rules"
+      sub="What counts as a problem — the rules behind every result above"
       updatedAt={readAt}
-      note={<span className="mini-meta">this tenant&apos;s own policy</span>}
+      note={<span className="mini-meta">your own rules</span>}
     >
       <p className="mini-meta" style={{ marginTop: 0 }}>
         {policyEvaluationNote(status)}
@@ -224,18 +225,18 @@ export function AlertPolicyPanel({ status }: { status?: BgpAlertStatus }) {
       <div style={{ marginTop: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span className="mini-meta">
-            Per-prefix policies — {form.prefixes.length} of {limits.maxPrefixes}
+            Rules for one prefix — {form.prefixes.length} of {limits.maxPrefixes}
           </span>
-          <button className="btn-ghost" style={{ fontSize: 11 }} disabled={busy} onClick={addPrefix}>
-            Add a prefix policy
+          <button className="btn-ghost" style={{ fontSize: 13 }} disabled={busy} onClick={addPrefix}>
+            Add a rule for one prefix
           </button>
         </div>
         <FieldError msg={errs.prefixes} />
 
         {form.prefixes.length === 0 && (
           <div className="empty">
-            Every watched prefix is judged by the default above. Add a policy here when one prefix has its own origin,
-            its own upstreams or its own thresholds.
+            Every watched prefix is judged by the settings above. Add one here when a single prefix has its own origin,
+            its own carriers or its own thresholds.
           </div>
         )}
 
@@ -258,7 +259,7 @@ export function AlertPolicyPanel({ status }: { status?: BgpAlertStatus }) {
               />
               <button
                 className="btn-ghost"
-                style={{ fontSize: 11 }}
+                style={{ fontSize: 13 }}
                 disabled={busy}
                 aria-label={`Remove the policy for ${row.key || `prefix ${i + 1}`}`}
                 onClick={() => removePrefix(i)}
@@ -283,7 +284,7 @@ export function AlertPolicyPanel({ status }: { status?: BgpAlertStatus }) {
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
         <button className="btn-primary" disabled={busy || !dirty} onClick={() => void save()}>
-          Save policy
+          Save rules
         </button>
         {dirty && !busy && <span className="mini-meta">Unsaved changes.</span>}
         {resp?.updated_by && (
@@ -293,6 +294,14 @@ export function AlertPolicyPanel({ status }: { status?: BgpAlertStatus }) {
           </span>
         )}
       </div>
+
+      <Details summary="What happens when you save">
+        <p className="mini-meta" style={{ marginBottom: 0 }}>
+          Saving tidies what you typed into one canonical form — duplicates dropped, AS numbers sorted, every prefix
+          rewritten to its network address — and this panel then re-renders from what is actually stored, never from
+          what was typed. So what you see here is always the rule the checks are using.
+        </p>
+      </Details>
     </Section>
   );
 }

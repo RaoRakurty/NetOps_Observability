@@ -1,4 +1,4 @@
-// PrefixesPanel — the Prefixes tab (BGP ops tracker #5).
+// PrefixesPanel — "Prefixes you're watching" (BGP ops tracker #5).
 //
 // This IS the watchlist view, extended with the incident class and its
 // evidence. There is deliberately NO second prefix list: the class shown here
@@ -15,13 +15,22 @@
 import { Chip } from "../../components/noc";
 import type { BgpAlert, BgpAlertStatus, BgpIncident, BgpWatchEntry } from "../../services/api";
 import { alertStatusLine, incidentSummary, incidentTone, pathLabel } from "./bgpAlerts.model";
-import { Section, ShowAll, SubBlock, useCap } from "./Section";
+import { Details, Section, ShowAll, SubBlock, useCap } from "./Section";
 
 /** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
 const FIRST_WATCHED = 8;
 const FIRST_ALERTS = 8;
 
 const ORDER = ["origin_change", "rpki_invalid", "bogon", "route_leak", "visibility_loss", "unknown", "none"] as const;
+
+/** True when a row has supporting evidence worth a disclosure. Nothing is
+ *  hidden that would otherwise be shown — an empty disclosure is worse than
+ *  none, so a row with no evidence simply renders without one. */
+function hasEvidence(inc: BgpIncident | undefined): boolean {
+  if (!inc) return false;
+  const e = inc.evidence;
+  return !!(e?.detail || e?.vantages?.length || e?.paths?.length || e?.peers_total);
+}
 
 export function PrefixesPanel({
   watch, incidents, incidentsNote, status, alerts, onInvestigate, active, updatedAt,
@@ -43,8 +52,13 @@ export function PrefixesPanel({
   const alertCap = useCap(alerts, FIRST_ALERTS);
 
   return (
-    <Section id="incidents" title="Incidents — watched prefixes" updatedAt={updatedAt}>
-      <SubBlock title="Watched prefixes">
+    <Section
+      id="incidents"
+      title="Prefixes you’re watching"
+      sub="What the last automatic check found on each one"
+      updatedAt={updatedAt}
+    >
+      <SubBlock title="Current state">
 
         {incidentsNote && <p className="mini-meta" style={{ color: "var(--warn)" }}>{incidentsNote}</p>}
         {statusLine && <p className="mini-meta" style={{ color: "var(--warn)" }}>{statusLine}</p>}
@@ -60,8 +74,8 @@ export function PrefixesPanel({
 
         {watch.length === 0 && (
           <div className="empty">
-            Nothing is watched yet. Investigate a prefix and press “Watch this prefix” — the evaluator classifies what
-            this list holds, and nothing else.
+            Nothing is watched yet. Check a prefix above and press “Watch this prefix” — only what is on this list is
+            checked automatically.
           </div>
         )}
 
@@ -76,57 +90,61 @@ export function PrefixesPanel({
                 border: `1px solid ${wentry.resource === active ? "var(--accent)" : "var(--border)"}`,
               }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                  <button className="btn-ghost mono" style={{ fontSize: 13, padding: 0 }}
+                  <button className="btn-ghost mono" style={{ fontSize: 14, fontWeight: 600, padding: 0 }}
                     onClick={() => onInvestigate(wentry.resource)}>
                     {wentry.resource}
                   </button>
                   {inc ? <Chip label={t.label} tone={t.tone} title={t.detail} />
-                       : <Chip label="NOT EVALUATED" tone="var(--muted)" title="The evaluator has not classified this prefix yet — this is not a clean verdict." />}
+                       : <Chip label="Not checked yet" tone="var(--muted)" title="No automatic check has run on this prefix yet — this is not a clean result." />}
                   {inc?.also?.map((c) => {
                     const at = incidentTone(c);
                     return <Chip key={c} label={`also ${at.label}`} tone={at.tone} title={at.detail} />;
                   })}
                   {inc?.learned_origin && (
-                    <Chip label="learned baseline" tone="var(--muted)"
-                      title="No expected origin is declared for this prefix, so the baseline was learned from the first observation. Declare one to make the verdict stronger." />
+                    <Chip label="guessed baseline" tone="var(--muted)"
+                      title="No expected origin AS is declared for this prefix, so the baseline was learned from the first observation. Declaring one makes the result stronger." />
                   )}
                   {wentry.note && <span className="mini-meta">{wentry.note}</span>}
                   {inc && (
-                    <span className="mini-meta" style={{ marginLeft: "auto" }} title="When this class started">
+                    <span className="mini-meta" style={{ marginLeft: "auto" }} title="When this state started">
                       since {new Date(inc.since).toLocaleString()}
                     </span>
                   )}
                 </div>
 
                 {inc && <p className="mini-meta" style={{ margin: 0 }}>{inc.summary}</p>}
-                {inc?.evidence?.detail && (
-                  <p className="mini-meta" style={{ margin: 0, color: "var(--muted)" }}>{inc.evidence.detail}</p>
-                )}
-                {inc?.evidence?.vantages?.length ? (
-                  <p className="mini-meta" style={{ margin: 0 }}>
-                    Corroborated by {inc.evidence.vantages.length} vantage point(s):{" "}
-                    <span className="mono">{inc.evidence.vantages.join(", ")}</span>
-                  </p>
-                ) : null}
-                {inc?.evidence?.paths?.length ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                    {inc.evidence.paths.slice(0, 4).map((p, i) => (
-                      <span key={i} className="mono mini-meta">{pathLabel(p)}</span>
-                    ))}
-                  </div>
-                ) : null}
-                {inc?.evidence?.peers_total ? (
-                  <p className="mini-meta" style={{ margin: 0 }}>
-                    Seen by {inc.evidence.peers_seeing} of {inc.evidence.peers_total} route-collector peers.
-                  </p>
-                ) : null}
                 {inc?.corroboration_shortfall && (
                   <p className="mini-meta" style={{ margin: 0, color: "var(--warn)" }}>
-                    Observed but NOT asserted: {inc.corroboration_shortfall}.
+                    Seen but not asserted: {inc.corroboration_shortfall}.
                   </p>
                 )}
                 {inc?.error && (
                   <p className="mini-meta" style={{ margin: 0, color: "var(--warn)" }}>{inc.error}</p>
+                )}
+                {hasEvidence(inc) && (
+                  <Details summary="Evidence">
+                    {inc?.evidence?.detail && (
+                      <p className="mini-meta" style={{ margin: 0, color: "var(--muted)" }}>{inc.evidence.detail}</p>
+                    )}
+                    {inc?.evidence?.vantages?.length ? (
+                      <p className="mini-meta" style={{ margin: 0 }}>
+                        Confirmed from {inc.evidence.vantages.length} vantage point(s):{" "}
+                        <span className="mono">{inc.evidence.vantages.join(", ")}</span>
+                      </p>
+                    ) : null}
+                    {inc?.evidence?.paths?.length ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        {inc.evidence.paths.slice(0, 4).map((p, i) => (
+                          <span key={i} className="mono mini-meta">{pathLabel(p)}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {inc?.evidence?.peers_total ? (
+                      <p className="mini-meta" style={{ margin: 0 }}>
+                        Seen by {inc.evidence.peers_seeing} of {inc.evidence.peers_total} route collectors.
+                      </p>
+                    ) : null}
+                  </Details>
                 )}
               </div>
             );
@@ -135,18 +153,18 @@ export function PrefixesPanel({
         </div>
       </SubBlock>
 
-      <SubBlock title="Alert history">
+      <SubBlock title="Recent alerts">
         {alerts.length === 0 ? (
           <div className="empty">
             {status?.enabled
-              ? "No BGP alert has fired for this tenant. The evaluator is running — this is a measured quiet, not an unwatched one."
+              ? "No BGP alert has fired for this tenant. The checks ARE running — this is a measured quiet, not an unwatched one."
               : (status?.note || "BGP alerting is off, so nothing has been evaluated.")}
           </div>
         ) : (
           <div className="bgp-scroll">
             <table className="tbl bgp-tbl" style={{ width: "100%" }}>
               <thead>
-                <tr><th>When</th><th>Resource</th><th>Class</th><th>Severity</th><th>Summary</th></tr>
+                <tr><th>When</th><th>Prefix or AS</th><th>What happened</th><th>How bad</th><th>Detail</th></tr>
               </thead>
               <tbody>
                 {alertCap.rows.map((a, i) => {
@@ -157,7 +175,7 @@ export function PrefixesPanel({
                       <td className="mono">{a.resource}</td>
                       <td>
                         {a.resolved
-                          ? <Chip label="CLEARED" tone="var(--ok)" title="The condition no longer holds." />
+                          ? <Chip label="Cleared" tone="var(--ok)" title="The condition no longer holds." />
                           : <Chip label={t.label} tone={t.tone} title={t.detail} />}
                       </td>
                       <td className="mini-meta">{a.severity}</td>
@@ -171,10 +189,12 @@ export function PrefixesPanel({
         )}
         <ShowAll cap={alertCap} noun="alerts" />
         {status?.enabled && (
-          <p className="mini-meta" style={{ marginBottom: 0 }}>
-            Evaluated every {status.interval}; a repeat of the same incident is held for {status.cooldown} before it
-            pages again (suppressed alerts are counted, not lost).
-          </p>
+          <Details summary="How often this is checked">
+            <p className="mini-meta" style={{ marginBottom: 0 }}>
+              Checked every {status.interval}; a repeat of the same problem is held for {status.cooldown} before it
+              pages anyone again. Held-back alerts are counted, never lost.
+            </p>
+          </Details>
         )}
       </SubBlock>
     </Section>

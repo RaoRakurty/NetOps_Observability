@@ -4,20 +4,129 @@
 import { describe, expect, it } from "vitest";
 import {
   rpkiVerdict, visibilityFraction, compressPath, groupPaths, bucketUpdates, rdapContacts,
-  pickInitial,
+  pickInitial, normalizeAsn, updateTotals, nextSteps,
 } from "./BgpOps";
 
 describe("rpkiVerdict", () => {
-  it("maps the RIPEstat statuses onto honest chips", () => {
-    expect(rpkiVerdict("valid").label).toBe("RPKI VALID");
+  // Plain-language labels (owner, 2026-09-06: "too much jargon"). The chip says
+  // what happened; "RPKI" and "ROA" moved into the tooltip, which is asserted
+  // here so the protocol word cannot quietly vanish along with the jargon.
+  it("maps the RIPEstat statuses onto plain-language chips", () => {
+    expect(rpkiVerdict("valid").label).toBe("Origin authorised");
+    expect(rpkiVerdict("valid").detail).toMatch(/RPKI valid/);
     expect(rpkiVerdict("invalid").tone).toBe("var(--crit)");
-    expect(rpkiVerdict("invalid_asn").label).toContain("origin");
-    expect(rpkiVerdict("unknown").label).toBe("No ROA");
+    expect(rpkiVerdict("invalid").label).toBe("Origin not authorised");
+    expect(rpkiVerdict("invalid_asn").label).toBe("Wrong origin AS");
+    expect(rpkiVerdict("invalid_length").label).toBe("Prefix too specific");
+    expect(rpkiVerdict("unknown").label).toBe("Not protected");
+    expect(rpkiVerdict("unknown").detail).toMatch(/ROA/);
   });
-  it("an absent status renders as unavailable, never as valid", () => {
+  it("no chip label shouts a protocol acronym at the operator", () => {
+    for (const s of ["valid", "invalid", "invalid_asn", "invalid_length", "unknown", undefined]) {
+      expect(rpkiVerdict(s).label).not.toMatch(/RPKI|ROA/);
+    }
+  });
+  it("an absent status renders as unavailable, never as authorised", () => {
     const v = rpkiVerdict(undefined);
-    expect(v.label).not.toContain("VALID");
+    expect(v.label).not.toMatch(/authorised/i);
     expect(v.tone).toBe("var(--muted)");
+  });
+});
+
+describe("normalizeAsn", () => {
+  it("accepts every notation RIPEstat hands back", () => {
+    expect(normalizeAsn("AS64500")).toBe("64500");
+    expect(normalizeAsn("as64500")).toBe("64500");
+    expect(normalizeAsn(64500)).toBe("64500");
+    expect(normalizeAsn("{64500,64501}")).toBe("64500");
+  });
+  it("returns nothing usable rather than a guess", () => {
+    expect(normalizeAsn(undefined)).toBe("");
+    expect(normalizeAsn("")).toBe("");
+    expect(normalizeAsn("not-an-as")).toBe("");
+  });
+});
+
+describe("updateTotals", () => {
+  const ev = (type: string, path?: number[]) =>
+    ({ type, timestamp: "2026-09-06T10:00:00", attrs: path ? { path } : undefined });
+
+  it("counts routes learned and routes withdrawn in the operator's words", () => {
+    const t = updateTotals({ updates: [ev("A"), ev("A"), ev("W")] });
+    expect(t.learned).toBe(2);
+    expect(t.withdrawn).toBe(1);
+  });
+
+  it("calls an announcement from another AS suspicious", () => {
+    const t = updateTotals(
+      { updates: [ev("A", [3356, 64500]), ev("A", [174, 64511]), ev("W")] },
+      "AS64500",
+    );
+    expect(t.suspicious).toBe(1);
+  });
+
+  it("reports NULL, never a reassuring zero, when there is nothing to compare against", () => {
+    // No current origin…
+    expect(updateTotals({ updates: [ev("A", [3356, 64500])] }).suspicious).toBeNull();
+    // …and an origin, but not one update carried a path.
+    expect(updateTotals({ updates: [ev("A"), ev("W")] }, "AS64500").suspicious).toBeNull();
+  });
+
+  it("tolerates absent data", () => {
+    expect(updateTotals(undefined)).toEqual({ learned: 0, withdrawn: 0, suspicious: null });
+  });
+});
+
+describe("nextSteps", () => {
+  const base = { visibility: null as number | null, watched: true, alertingEnabled: true };
+  const inc = (cls: string) => ({
+    prefix: "p", class: cls, severity: "critical", summary: "", evidence: { detail: "" },
+    first_seen: "", last_seen: "", since: "",
+  } as never);
+
+  it("asks for a resource before it asks for anything else", () => {
+    const steps = nextSteps({ ...base, resource: undefined });
+    expect(steps).toHaveLength(1);
+    expect(steps[0].title).toMatch(/Pick a prefix/);
+  });
+
+  it("leads with the hijack-shaped action when the origin changed", () => {
+    const steps = nextSteps({ ...base, resource: "p", incident: inc("origin_change") });
+    expect(steps[0].title).toMatch(/Call your upstream/);
+  });
+
+  it("acts on an unauthorised origin even when the classifier has not run", () => {
+    const steps = nextSteps({ ...base, resource: "p", rpkiStatus: "invalid_asn" });
+    expect(steps.some((s) => /origin authorisation/i.test(s.title))).toBe(true);
+  });
+
+  it("treats a prefix nobody sees as the outage it is", () => {
+    const steps = nextSteps({ ...base, resource: "p", announced: false });
+    expect(steps[0].title).toMatch(/still announcing/);
+  });
+
+  it("is never empty, and never says 'all clear' when nothing was checked", () => {
+    const unwatched = nextSteps({ ...base, resource: "p", watched: false });
+    expect(unwatched[0].title).toMatch(/Add this to the watchlist/);
+    const off = nextSteps({ ...base, resource: "p", alertingEnabled: false });
+    expect(off[0].title).toMatch(/Turn on automatic BGP checks/);
+  });
+
+  it("says nothing needs doing only when the checks actually ran clean", () => {
+    const steps = nextSteps({
+      ...base, resource: "p", incident: inc("none"), announced: true, visibility: 0.99,
+    });
+    expect(steps).toHaveLength(1);
+    expect(steps[0].title).toMatch(/Nothing needs doing/);
+  });
+
+  it("caps the list so it stays a to-do list, not a second dashboard", () => {
+    const many = nextSteps({
+      resource: "p", visibility: 0.1, watched: false, alertingEnabled: false, announced: false,
+      rpkiStatus: "invalid",
+      incident: { ...(inc("origin_change") as object), also: ["bogon", "route_leak"] } as never,
+    });
+    expect(many.length).toBeLessThanOrEqual(5);
   });
 });
 
@@ -191,13 +300,30 @@ function deferred<T>() {
 const statusFor = (resource: string) => ({ resource, kind: "asn" as const });
 const watchEntry = (resource: string) => ({ resource, kind: "asn" as const, note: "", added_by: "t", created_at: "2026-09-01T00:00:00Z" });
 
-/** The order of docs/design/research/BGP_OPS_CONSOLIDATION_RESEARCH §(b), with
- *  the panels that landed on 2026-09-02 slotted into the right-hand column. */
+/**
+ * The layout contract, as WHOLE GRID ROWS (owner, 2026-09-06: "readjust the
+ * panels and fit all of them in harmony"). Each card spans one column — always
+ * paired, so a row is never half-empty — or both. Reading the list two at a
+ * time gives the rows:
+ *
+ *   verdict (pinned, above the grid)
+ *   next-steps          | peers
+ *   updates ......................... (full width)
+ *   paths ........................... (full width)
+ *   incidents           | rpki
+ *   alert-policy        | bogons          ← policy sits under the results it
+ *   ownership           | aspa              decides, same column, next row
+ *   geofeed ......................... (full width)
+ */
 const SECTION_ORDER = [
-  "verdict", "paths", "updates",
-  // 2026-09-05: the alert policy joins the right column directly beneath the
-  // incidents it decides — the verdicts above are this policy's output.
-  "rpki", "incidents", "alert-policy", "peers", "bogons", "ownership", "geofeed", "aspa",
+  "verdict",
+  "next-steps", "peers",
+  "updates",
+  "paths",
+  "incidents", "rpki",
+  "alert-policy", "bogons",
+  "ownership", "aspa",
+  "geofeed",
 ];
 
 function sectionsInDom(container: HTMLElement): string[] {
@@ -236,10 +362,15 @@ describe("one-page layout", () => {
 
   it("names what is deliberately absent instead of showing an empty box", async () => {
     render(<BgpOps />);
+    // Demoted behind a disclosure on 2026-09-06, NOT deleted: it is still in the
+    // DOM, still readable, and the RIPE attribution beside it stays in plain
+    // sight because it is a licence condition rather than a caveat.
     const footer = await screen.findByText(/IRR route-object consistency/);
     expect(footer.textContent).toContain("no IRR mirror is");
     expect(footer.textContent).toContain("looking-glass");
     expect(footer.textContent).toContain("third-party corroboration");
+    expect(footer.closest("details")).toBeTruthy();
+    expect(screen.getByText(/RIPE NCC RIS \/ RIPEstat/).closest("details")).toBeNull();
   });
 
   it("nests the graph and the feed inside their page-owned sections rather than as cards", async () => {
@@ -247,6 +378,129 @@ describe("one-page layout", () => {
     await screen.findByTestId("live-feed-panel");
     expect(panelProps.feed.bare).toBe(true);
     expect(panelProps.graph.bare).toBe(true);
+  });
+});
+
+// ── PLAIN LANGUAGE (owner, 2026-09-06) ──────────────────────────────────────
+//
+// "There is too much jargon. Make it brief, NOC admin doesn't need all the
+//  jargon. Each section should just show what NOC admin wants to see."
+//
+// Every heading below WAS on this page and is now gone from the heading level.
+// The protocol word itself is not banned — it lives in the section's secondary
+// line and in the chip tooltips, which is why this guard is aimed at `h2` and
+// not at the page text.
+
+/** old heading → the plain-language question that replaced it. */
+const RENAMED_HEADINGS: [old: string, plain: string][] = [
+  ["Verdict", "Is BGP healthy?"],
+  ["Updates timeline", "Route changes"],
+  ["Current paths from route collectors", "How the internet reaches this prefix"],
+  ["Ownership & contacts", "Who owns this address space"],
+  // These five belong to the lazy panels (stubbed here); their own tests pin the
+  // new heading on the real component. Listed so ONE place records the rename.
+  ["RPKI origin validation", "Prefix origin problems"],
+  ["Incidents — watched prefixes", "Prefixes you’re watching"],
+  ["Peers — sessions and transit", "Sessions down or flapping"],
+  ["Bogons — set in force and sightings", "Addresses that should never be routed"],
+  ["ASPA — AS provider authorization", "Approved upstream providers"],
+];
+
+describe("plain language for a NOC admin", () => {
+  it("renders no jargon-only heading — every old one was replaced, not reworded", async () => {
+    const { container } = render(<BgpOps />);
+    await waitFor(() => expect(sectionsInDom(container).length).toBe(SECTION_ORDER.length));
+    const headings = [...container.querySelectorAll("h2")].map((h) => h.textContent?.trim() ?? "");
+    for (const [old] of RENAMED_HEADINGS) expect(headings).not.toContain(old);
+    // …and the page's OWN sections carry the replacement, so this is not a test
+    // that would pass on an empty page.
+    expect(headings).toContain("Is BGP healthy?");
+    expect(headings).toContain("Route changes");
+    expect(headings).toContain("How the internet reaches this prefix");
+    expect(headings).toContain("Who owns this address space");
+    expect(headings).toContain("What to do next");
+  });
+
+  it("keeps the protocol word available under the heading rather than deleting it", async () => {
+    const { container } = render(<BgpOps />);
+    const paths = await waitFor(() => container.querySelector('[data-section="paths"]') as HTMLElement);
+    expect(paths.querySelector(".bgp-sec-sub")?.textContent).toMatch(/AS paths/);
+    const own = container.querySelector('[data-section="ownership"]') as HTMLElement;
+    expect(own.querySelector(".bgp-sec-sub")?.textContent).toMatch(/RDAP/);
+  });
+});
+
+describe("what to do next", () => {
+  it("asks for a resource before anything is selected, instead of an empty card", async () => {
+    const { container } = render(<BgpOps />);
+    const todo = await waitFor(() => container.querySelector('[data-section="next-steps"]') as HTMLElement);
+    expect(within(todo).getByText(/Pick a prefix or AS above/)).toBeTruthy();
+  });
+
+  it("turns the health verdict into an action a NOC admin can take", async () => {
+    bgpStatus.mockResolvedValue({
+      resource: "203.0.113.0/24", kind: "prefix",
+      routing_status: { announced: true, last_seen: { origin: "AS64500" } },
+    });
+    bgpWatchlist.mockResolvedValue({
+      watchlist: [watchEntry("203.0.113.0/24")],
+      incidents: {
+        "203.0.113.0/24": {
+          prefix: "203.0.113.0/24", class: "origin_change", severity: "critical",
+          summary: "AS64511 is announcing this prefix.", evidence: { detail: "" },
+          first_seen: "", last_seen: "", since: "2026-09-03T00:00:00Z",
+        },
+      },
+    });
+    const { container } = render(<BgpOps />);
+    const todo = await waitFor(() => {
+      const el = container.querySelector('[data-section="next-steps"]') as HTMLElement;
+      expect(within(el).getByText(/Call your upstream/)).toBeTruthy();
+      return el;
+    });
+    expect(within(todo).getByText(/Ask them to filter the announcement/)).toBeTruthy();
+  });
+});
+
+describe("the numbers a NOC admin reads first", () => {
+  it("shows the at-a-glance tiles, and a dash rather than a reassuring zero", async () => {
+    render(<BgpOps />);
+    const strip = await screen.findByLabelText("At a glance");
+    const tiles = [...strip.querySelectorAll(".bgp-kpi-l")].map((n) => n.textContent);
+    expect(tiles).toEqual([
+      "Prefixes watched", "Needing attention", "Reaching the internet", "Route changes (8 h)",
+    ]);
+    // Visibility is unmeasured with nothing selected: a dash, never "0%".
+    const reach = strip.querySelectorAll(".bgp-kpi")[2] as HTMLElement;
+    expect(reach.querySelector(".bgp-kpi-n")?.textContent).toBe("—");
+    expect(within(reach).getByText(/Not measured/)).toBeTruthy();
+  });
+
+  it("counts learned, withdrawn and suspicious route changes for the selected resource", async () => {
+    bgpStatus.mockResolvedValue({
+      resource: "203.0.113.0/24", kind: "prefix",
+      routing_status: { announced: true, last_seen: { origin: "AS64500" } },
+    });
+    bgpUpdates.mockResolvedValue({
+      resource: "203.0.113.0/24", kind: "prefix",
+      updates: {
+        updates: [
+          { type: "A", timestamp: "2026-09-06T10:00:00", attrs: { path: [3356, 64500] } },
+          { type: "A", timestamp: "2026-09-06T10:05:00", attrs: { path: [174, 64511] } },
+          { type: "W", timestamp: "2026-09-06T10:10:00" },
+        ],
+      },
+    });
+    const { container } = render(<BgpOps />);
+    submitQuery("203.0.113.0/24");
+    const upd = await waitFor(() => {
+      const el = container.querySelector('[data-section="updates"]') as HTMLElement;
+      expect(within(el).getByText("Routes learned")).toBeTruthy();
+      return el;
+    });
+    const tiles = [...upd.querySelectorAll(".bgp-kpi")] as HTMLElement[];
+    expect(tiles.map((t) => t.querySelector(".bgp-kpi-n")?.textContent)).toEqual(["2", "1", "1"]);
+    expect(within(upd).getByText("Suspicious")).toBeTruthy();
   });
 });
 
@@ -284,10 +538,10 @@ describe("verdict bar", () => {
       expect(within(el).getByText("203.0.113.0/24", { selector: "span.device-name" })).toBeTruthy();
       return el;
     });
-    expect(within(verdict).getByText("ORIGIN CHANGE")).toBeTruthy();
-    expect(within(verdict).getByText("origin AS64500")).toBeTruthy();
-    expect(within(verdict).getByText("visibility 40%")).toBeTruthy();
-    expect(within(verdict).getByText("RPKI INVALID (origin)")).toBeTruthy();
+    expect(within(verdict).getByText("Origin changed")).toBeTruthy();
+    expect(within(verdict).getByText("Origin AS64500")).toBeTruthy();
+    expect(within(verdict).getByText("Seen by 40% of collectors")).toBeTruthy();
+    expect(within(verdict).getByText("Wrong origin AS")).toBeTruthy();
     expect(within(verdict).getByText(/AS64511 is announcing this prefix/)).toBeTruthy();
   });
 
@@ -302,7 +556,7 @@ describe("verdict bar", () => {
       expect(within(el).getByText(/RIPEstat timed out/)).toBeTruthy();
       return el;
     });
-    expect(within(verdict).queryByText(/RPKI VALID/)).toBeNull();
+    expect(within(verdict).queryByText(/Origin authorised/)).toBeNull();
   });
 });
 

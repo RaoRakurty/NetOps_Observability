@@ -5922,116 +5922,195 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .chip-btn:hover { border-color: var(--accent); color: var(--fg); }
 .chip-btn-on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 
-/* ── BGP Operations — SINGLE-SCREEN outage view (owner, 2026-09-03) ──────────
-   "Put all the data into one page so that a NOC admin gets a single view during
-   an outage without clicking so much."  The tab switcher is gone; every panel
-   is a SECTION on one dense screen, laid out in the order of the design of
-   record (research §(b)): verdict pinned at the top, then a two-column grid —
-   left is the outage narrative in time order (paths, then updates), right is
-   the standing evidence (RPKI, incidents, peers, bogons, ownership, geofeed,
-   ASPA).
+/* ── BGP Operations — ONE CALM SCREEN for a NOC admin (owner, 2026-09-06) ────
+   The single-screen decision of 2026-09-03 stands ("put all the data into one
+   page so that a NOC admin gets a single view during an outage without clicking
+   so much"). What changed on 2026-09-06 is WHO the screen is written for:
 
-   The type scale is deliberately one step below the rest of the product. This
-   screen is read at 2am with someone on a bridge call: the value is how much
-   true evidence fits above the fold, not how comfortable the leading is. Every
-   number that can be compared down a column is tabular and right-aligned, and
-   every section header carries when it last read its data. */
-.bgp-page { font-size: 12.5px; }
-.bgp-page .mini-meta { font-size: 11px; }
-.bgp-page .empty { padding: 8px 6px; font-size: 12px; font-style: normal; }
+     "There is too much jargon … each section should just show what NOC admin
+      wants to see. Also fonts are too small … make watchable font, elegant and
+      crisp and easy on eye."
+
+   So two rules govern this block now.
+
+   1. TYPE IS FOR READING, NOT FOR PACKING. The old scale was deliberately one
+      step BELOW the product (12.5px body, 11px captions, 11.5px tables, 10px
+      stamps) to fit more evidence above the fold. That trade is reversed: body
+      14px, table cells 14px, section headings 16px, KPI numbers 30px, and
+      12.5px is the floor anywhere on the page (captions only). Nothing was
+      deleted to buy the space — secondary detail moved behind `.bgp-details`.
+
+   2. ONE GRID, WHOLE ROWS. Two flex columns produced ragged card tops and an
+      orphan half-width card at the bottom of the shorter column. The page is
+      now a real two-column grid whose items span either ONE column (paired, so
+      a row is never half-empty) or BOTH; grid's default stretch then gives
+      equal-height cards per row and aligned tops for free. One gutter value
+      (--bgp-gap) is used everywhere, and every table scrolls inside its own
+      card so the page itself never scrolls sideways at 1366px or 1920px. */
+.bgp-page {
+  --bgp-gap: 14px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.bgp-page .mini-meta { font-size: 12.5px; line-height: 1.45; }
+.bgp-page .empty { padding: 12px 10px; font-size: 14px; font-style: normal; line-height: 1.5; }
+/* Chips carry state words an operator reads at a glance — 10.5px was a label
+   for a designer, not for a NOC screen at 2am. */
+.bgp-page .cc-badge { font-size: 12.5px; letter-spacing: 0.01em; font-weight: 650; text-transform: none; }
 
 /* selector: watched resources as chips + the free-form lookup */
 .bgp-selector {
-  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--panel-border);
-  border-radius: var(--r-4); padding: 7px 10px; margin: 8px 0;
+  border-radius: var(--r-4); padding: 10px 12px; margin: 12px 0;
 }
-.bgp-find { display: flex; gap: 6px; flex: 1 1 320px; }
-.bgp-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.bgp-find { display: flex; gap: 8px; flex: 1 1 340px; }
+/* Form controls come from the shared kit at 13px; on this page they are read,
+   typed into and re-read at 2am, so they join the page's 14px body scale. */
+.bgp-page .input,
+.bgp-page .ccw-input,
+.bgp-page select,
+.bgp-page textarea { font-size: 14px; }
+.bgp-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.bgp-page .chip-btn { font-size: 13px; padding: 4px 10px; }
 .bgp-chip-dot {
-  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
   margin-left: 6px; vertical-align: middle;
 }
 
-/* 1. verdict bar — pinned, so the conclusion never scrolls away from evidence */
-.bgp-verdict-wrap { position: sticky; top: 0; z-index: 4; margin-bottom: 8px; }
+/* 1. the health bar — pinned, so the answer never scrolls away from evidence */
+.bgp-verdict-wrap { position: sticky; top: 0; z-index: 4; margin-bottom: var(--bgp-gap); }
 .bgp-verdict-wrap .bgp-sec { border-color: var(--accent); box-shadow: var(--shadow-1); }
-.bgp-verdict { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
-.bgp-verdict .device-name { font-size: 18px; font-weight: 700; }
+.bgp-verdict { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.bgp-verdict .device-name { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
 
-/* the grid */
-.bgp-grid {
-  display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-  gap: 8px; align-items: start;
+/* KPI tiles — the numbers a NOC admin reads from across the room. */
+.bgp-kpis {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--bgp-gap); margin: 0 0 12px;
 }
+/* As a grid ROW of its own the gutter comes from the grid, not from a margin. */
+.bgp-grid > .bgp-kpis { margin: 0; }
+.bgp-kpis-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 720px) { .bgp-kpis, .bgp-kpis-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.bgp-kpi {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; min-width: 0;
+}
+.bgp-kpi-n {
+  font-family: var(--font-mono); font-feature-settings: "tnum" 1;
+  font-size: 30px; font-weight: 680; line-height: 1.05; letter-spacing: -0.02em; color: var(--fg);
+}
+.bgp-kpi-l { font-size: 13px; font-weight: 600; color: var(--fg); margin-top: 6px; }
+.bgp-kpi-i { font-size: 12.5px; color: var(--fg-muted); margin-top: 2px; line-height: 1.4; }
+
+/* the grid: two columns, items span 1 or 2 — never a lone half-width card */
+.bgp-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--bgp-gap); align-items: stretch;
+}
+.bgp-wide { grid-column: 1 / -1; }
 @media (max-width: 1180px) { .bgp-grid { grid-template-columns: minmax(0, 1fr); } }
-.bgp-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 
 /* the section shell (pages/bgp/Section.tsx) */
 .bgp-sec {
   background: var(--panel); border: 1px solid var(--panel-border);
-  border-radius: var(--r-4); padding: 8px 10px; min-width: 0;
+  border-radius: var(--r-4); padding: 14px 16px; min-width: 0;
+  display: flex; flex-direction: column;
 }
 .bgp-sec-hd {
-  display: flex; align-items: baseline; gap: 8px;
-  border-bottom: 1px solid var(--panel-border); padding-bottom: 5px; margin-bottom: 6px;
+  display: flex; align-items: flex-start; gap: 12px;
+  border-bottom: 1px solid var(--panel-border); padding-bottom: 9px; margin-bottom: 12px;
 }
+.bgp-sec-ttl { min-width: 0; }
 .bgp-sec-hd h2 {
-  margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
-  text-transform: uppercase; color: var(--fg);
+  margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.005em;
+  text-transform: none; color: var(--fg); line-height: 1.3;
 }
-.bgp-sec-note { font-size: 11px; color: var(--muted); }
+/* The technical name for what the plain-language heading above is asking. It is
+   still on screen — demoted, never deleted, so an engineer can still map the
+   section onto RPKI / ASPA / bogons. */
+.bgp-sec-sub { display: block; font-size: 12.5px; color: var(--fg-muted); margin-top: 2px; line-height: 1.4; }
+.bgp-sec-note { font-size: 12.5px; color: var(--muted); }
 .bgp-sec-sp { flex: 1 1 auto; }
 .bgp-sec-stamp {
-  font-size: 10px; color: var(--fg-subtle); font-family: var(--font-mono); white-space: nowrap;
+  font-size: 12.5px; color: var(--fg-subtle); font-family: var(--font-mono); white-space: nowrap;
 }
+.bgp-sec-bd { flex: 1 1 auto; min-width: 0; }
 .bgp-sec-bd > *:last-child { margin-bottom: 0; }
-.bgp-sub + .bgp-sub { margin-top: 8px; border-top: 1px dashed var(--panel-border); padding-top: 6px; }
-.bgp-sub-hd { display: flex; align-items: baseline; gap: 8px; }
+.bgp-sub + .bgp-sub { margin-top: 14px; border-top: 1px dashed var(--panel-border); padding-top: 12px; }
+.bgp-sub-hd { display: flex; align-items: baseline; gap: 10px; }
 .bgp-sub-hd h3 {
-  margin: 0 0 4px; font-size: 11px; font-weight: 600; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.04em;
+  margin: 0 0 8px; font-size: 14px; font-weight: 650; color: var(--fg);
+  text-transform: none; letter-spacing: 0;
 }
 .bgp-honest { text-align: left; line-height: 1.5; }
 
+/* the "Details" disclosure — where secondary detail went instead of the bin */
+.bgp-details { margin-top: 10px; border-top: 1px dashed var(--panel-border); padding-top: 8px; }
+.bgp-details > summary {
+  cursor: pointer; font-size: 13px; font-weight: 600; color: var(--accent);
+  list-style: none; padding: 2px 0;
+}
+.bgp-details > summary::-webkit-details-marker { display: none; }
+.bgp-details > summary::before { content: "▸ "; color: var(--fg-subtle); }
+.bgp-details[open] > summary::before { content: "▾ "; }
+.bgp-details > summary:hover { text-decoration: underline; }
+.bgp-details-bd { padding-top: 8px; }
+.bgp-details-bd > *:last-child { margin-bottom: 0; }
+
 /* rows, tables, and the "show all" control that bounds every long list */
 .bgp-row {
-  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-  padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px;
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
 }
-.bgp-scroll { max-height: 260px; overflow: auto; }
-.bgp-tbl { font-size: 11.5px; }
-.bgp-tbl th, .bgp-tbl td { padding: 2px 7px; }
+.bgp-scroll { max-height: 320px; overflow: auto; }
+.bgp-tbl { font-size: 14px; }
+.bgp-tbl th, .bgp-tbl td { padding: 6px 10px; }
+/* Column headers are CELLS, not captions: they stay on the 14px body scale and
+   earn their hierarchy from weight and colour instead of from being smaller. */
+.bgp-tbl th { font-weight: 650; color: var(--fg-muted); letter-spacing: 0.01em; }
 .bgp-tbl td.num, .bgp-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .bgp-more {
-  border: 0; background: transparent; color: var(--accent); font-size: 11px;
-  cursor: pointer; padding: 4px 2px; align-self: flex-start;
+  border: 0; background: transparent; color: var(--accent); font-size: 13px; font-weight: 600;
+  cursor: pointer; padding: 6px 2px; align-self: flex-start;
 }
 .bgp-more:hover { text-decoration: underline; }
 
 /* 2. AS paths as pills inside the grouped path table */
-.bgp-path { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.bgp-hop-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.bgp-path { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.bgp-hop-wrap { display: inline-flex; align-items: center; gap: 5px; }
 .bgp-arrow { color: var(--muted); }
 .bgp-hop {
-  font-family: var(--font-mono); font-size: 11px; padding: 1px 6px; border-radius: 999px;
+  font-family: var(--font-mono); font-size: 13px; padding: 2px 8px; border-radius: 999px;
   border: 1px solid var(--border); background: var(--surface);
 }
 .bgp-hop.origin { background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: var(--accent); }
 
-/* 3. update churn strip */
-.bgp-churn { display: flex; align-items: flex-end; gap: 3px; height: 72px; overflow-x: auto; padding-top: 4px; }
+/* 3. route-change strip (learned vs withdrawn per hour) */
+.bgp-churn { display: flex; align-items: flex-end; gap: 5px; height: 96px; overflow-x: auto; padding-top: 4px; }
 .bgp-churn-col {
   display: flex; flex-direction: column; justify-content: flex-end; gap: 1px;
-  min-width: 20px; height: 100%;
+  min-width: 32px; height: 100%;
 }
 .bgp-churn-w { background: var(--crit); border-radius: 2px; opacity: 0.85; }
 .bgp-churn-a { background: var(--accent); border-radius: 2px; opacity: 0.85; }
-.bgp-churn-l { font-size: 9px; color: var(--muted); text-align: center; }
+.bgp-churn-l { font-size: 12.5px; color: var(--muted); text-align: center; }
+.bgp-legend { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin: 8px 0 0; }
+
+/* what to do next — the action list, one line per action */
+.bgp-todo { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.bgp-todo li {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 10px 12px; border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 6px; background: var(--surface);
+}
+.bgp-todo-t { font-size: 14px; font-weight: 650; color: var(--fg); }
+.bgp-todo-w { font-size: 12.5px; color: var(--fg-muted); margin-top: 2px; line-height: 1.45; }
 
 /* 8. ownership */
-.bgp-contacts { margin: 0; padding-left: 16px; }
-.bgp-footer { margin-top: 10px; }
+.bgp-contacts { margin: 0; padding-left: 18px; }
+.bgp-footer { margin-top: var(--bgp-gap); }
 
 /* Verdict feedback tile (Project 2 P7) — engine quality on the NOC scorecard. */
 .rsc-fb { margin-top: 16px; }

@@ -63,15 +63,15 @@ describe("AlertPolicyPanel", () => {
 
   it("says what an empty origin set and an empty upstream set cost", async () => {
     render(<AlertPolicyPanel />);
-    expect(await screen.findByText(/learned from the first observation/)).toBeTruthy();
-    expect(screen.getByText(/route-leak check does not run/)).toBeTruthy();
+    expect(await screen.findByText(/guessed from the first observation/)).toBeTruthy();
+    expect(screen.getByText(/unexpected-transit check does not run/)).toBeTruthy();
   });
 
   it("stops saying it once the operator declares a set", async () => {
     render(<AlertPolicyPanel />);
     const origins = await screen.findByLabelText("Default expected origin AS");
     fireEvent.change(origins, { target: { value: "AS64500" } });
-    await waitFor(() => expect(screen.queryByText(/learned from the first observation/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/guessed from the first observation/)).toBeNull());
   });
 
   it("PUTs exactly the declared policy and no tenant field", async () => {
@@ -79,7 +79,7 @@ describe("AlertPolicyPanel", () => {
     render(<AlertPolicyPanel />);
     fireEvent.change(await screen.findByLabelText("Default expected origin AS"), { target: { value: "AS64500" } });
     fireEvent.change(screen.getByLabelText("Default minimum vantage points"), { target: { value: "3" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
     await waitFor(() => expect(setBgpAlertConfig).toHaveBeenCalledTimes(1));
     const body = setBgpAlertConfig.mock.calls[0][0];
     expect(body).toEqual({ default: { expected_origins: ["AS64500"], min_vantages: 3 } });
@@ -99,7 +99,7 @@ describe("AlertPolicyPanel", () => {
     render(<AlertPolicyPanel />);
     fireEvent.change(await screen.findByLabelText("Default expected origin AS"),
       { target: { value: "AS64501, AS64500, AS64500" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
     await screen.findByText("Saved.");
     expect((screen.getByLabelText("Default expected origin AS") as HTMLInputElement).value).toBe("64500, 64501");
     expect((screen.getByLabelText("Prefix 1") as HTMLInputElement).value).toBe("193.0.0.0/21");
@@ -109,7 +109,7 @@ describe("AlertPolicyPanel", () => {
     setBgpAlertConfig.mockRejectedValue(new Error('400 Bad Request: {"error":"at most 32 ASNs per set"}'));
     render(<AlertPolicyPanel />);
     fireEvent.change(await screen.findByLabelText("Default upstream AS"), { target: { value: "AS3356" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
     expect(await screen.findByText(/at most 32 ASNs per set/i)).toBeTruthy();
     expect((screen.getByLabelText("Default upstream AS") as HTMLInputElement).value).toBe("AS3356");
   });
@@ -118,23 +118,23 @@ describe("AlertPolicyPanel", () => {
     render(<AlertPolicyPanel />);
     const many = Array.from({ length: 33 }, (_, i) => `AS${i + 1}`).join(",");
     fireEvent.change(await screen.findByLabelText("Default expected origin AS"), { target: { value: many } });
-    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
     expect(await screen.findByText(/At most 32 AS numbers per set/)).toBeTruthy();
     expect(setBgpAlertConfig).not.toHaveBeenCalled();
   });
 
   it("refuses a policy key that is not a prefix before the round trip", async () => {
     render(<AlertPolicyPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Add a prefix policy" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add a rule for one prefix" }));
     fireEvent.change(screen.getByLabelText("Prefix 1"), { target: { value: "AS64500" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
     expect(await screen.findByText(/AS64500 is not a prefix/)).toBeTruthy();
     expect(setBgpAlertConfig).not.toHaveBeenCalled();
   });
 
   it("adds and removes a per-prefix policy, and counts them against the server's cap", async () => {
     render(<AlertPolicyPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Add a prefix policy" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add a rule for one prefix" }));
     expect(screen.getByText(/1 of 200/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Remove the policy for prefix 1/ }));
     expect(screen.getByText(/0 of 200/)).toBeTruthy();
@@ -159,9 +159,9 @@ describe("AlertPolicyPanel", () => {
   it("does not offer a save until something changes", async () => {
     render(<AlertPolicyPanel />);
     await waitFor(() =>
-      expect((screen.getByRole("button", { name: "Save policy" }) as HTMLButtonElement).disabled).toBe(true));
+      expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(true));
     fireEvent.change(screen.getByLabelText("Default minimum visibility"), { target: { value: "0.6" } });
-    expect((screen.getByRole("button", { name: "Save policy" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

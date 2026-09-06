@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { api, type BgpAspaResp } from "../../services/api";
 import { Chip } from "../../components/noc";
-import { Section } from "./Section";
+import { Details, Section } from "./Section";
 
 export function AspaCard({ asn }: { asn?: string }) {
   const [data, setData] = useState<BgpAspaResp | null>(null);
@@ -30,13 +30,18 @@ export function AspaCard({ asn }: { asn?: string }) {
   }, [asn]);
 
   return (
-    <Section id="aspa" title="ASPA — AS provider authorization" updatedAt={at}>
-      {!asn && <div className="empty">Look up an ASN (or a prefix with a determinable origin) to see its ASPA record.</div>}
+    <Section
+      id="aspa"
+      title="Approved upstream providers"
+      sub="ASPA — the carriers the AS holder has authorised to carry their routes"
+      updatedAt={at}
+    >
+      {!asn && <div className="empty">Pick an AS (or a prefix whose origin we can work out) to see who its holder has approved.</div>}
       {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
 
       {data && !data.status.configured && (
         <div className="empty bgp-honest">
-          <Chip label="NO ASPA DATA SOURCE" tone="var(--muted)" />
+          <Chip label="No source configured" tone="var(--muted)" title="ASPA — no data source is configured for it." />
           <p style={{ margin: "6px 0 0" }}>{data.status.reason}</p>
           {data.status.how_to && <p className="mini-meta" style={{ margin: 0 }}>{data.status.how_to}</p>}
         </div>
@@ -51,30 +56,32 @@ export function AspaCard({ asn }: { asn?: string }) {
       {data?.aspa && (
         <>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-            <Chip label={`AS${data.aspa.customer_asn}`} title="Customer AS" />
+            <Chip label={`AS${data.aspa.customer_asn}`} title="The AS whose holder published this list." />
             <Chip
-              label={`${data.aspa.providers.length} authorized provider${data.aspa.providers.length === 1 ? "" : "s"}`}
+              label={`${data.aspa.providers.length} approved provider${data.aspa.providers.length === 1 ? "" : "s"}`}
               tone={data.aspa.providers.length ? "var(--ok)" : "var(--muted)"}
             />
-            {data.status.host && <Chip label={data.status.host} title="Configured ASPA provider" />}
+            {data.status.host && <Chip label={data.status.host} title="The configured ASPA source." />}
           </div>
           {data.aspa.providers.length === 0 ? (
-            <div className="empty">The source holds no ASPA record naming providers for this AS.</div>
+            <div className="empty">The source holds no record naming approved providers for this AS.</div>
           ) : (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {data.aspa.providers.map((p) => (
                 <span key={`${p.asn}-${p.afi ?? ""}`} className="mono" style={{
-                  padding: "2px 8px", borderRadius: 999, border: "1px solid var(--border)", fontSize: 12,
+                  padding: "2px 8px", borderRadius: 999, border: "1px solid var(--border)", fontSize: 13,
                 }} title={p.afi ? `address family: ${p.afi}` : undefined}>
                   AS{p.asn}{p.afi && p.afi !== "any" ? ` · ${p.afi}` : ""}
                 </span>
               ))}
             </div>
           )}
-          {data.aspa.truncated && <p className="mini-meta" style={{ color: "var(--warn)" }}>Provider list truncated.</p>}
-          <p className="mini-meta" style={{ marginBottom: 0 }}>
-            Source: {data.aspa.source}. ASPA is still an IETF draft in deployment terms — display, do not alert on it.
-          </p>
+          {data.aspa.truncated && <p className="mini-meta" style={{ color: "var(--warn)" }}>The provider list is cut short.</p>}
+          <Details summary="Where this came from">
+            <p className="mini-meta" style={{ marginBottom: 0 }}>
+              Source: {data.aspa.source}. ASPA is still an IETF draft in deployment terms — read it, do not alert on it.
+            </p>
+          </Details>
         </>
       )}
     </Section>
