@@ -620,3 +620,105 @@ def test_rebalance_is_skipped_with_the_reason_recorded(tmp_path):
     assert "OWNERSHIP_155_VALIDATION" in reason
     assert "no CLI" in reason
     assert qual.records[0]["evidence"]["graded_elsewhere"] == "leg.phases.stability"
+
+
+# ---------------------------------------------------------------------------
+# the self-test — the suite proving its own logic where the rig does not exist
+# ---------------------------------------------------------------------------
+# A qualification leg is an hour of owner-gated rig time, so between legs
+# NOTHING would catch a change that broke this grader. `--self-test` re-grades
+# the checked-in storm-s11 leg fixture and mutations of it; these tests are the
+# CI hook for it, and — critically — the proof that it is not vacuous.
+def _self_test_args(tmp_path, **over):
+    kwargs = {"run_dir": str(tmp_path / "unused"),
+              "baseline": str(ROOT / "docs" / "scale" / "baselines" /
+                              "storm-s11.v1.json")}
+    kwargs.update(over)
+    return make_args(**kwargs)
+
+
+def test_the_self_test_passes_with_no_stack_no_rig_no_env(tmp_path, capsys):
+    assert rq.self_test(_self_test_args(tmp_path)) == 0
+    out = capsys.readouterr().out
+    assert "SELF-TEST PASS" in out
+    # the grader's own [FAIL] lines belong to the MUTATION checks; a failed
+    # self-test CHECK is the two-space-indented form.
+    assert "\n  [FAIL]" not in out
+    assert "not qualification evidence" in out
+
+
+def test_the_self_test_is_not_vacuous(tmp_path, monkeypatch):
+    """A grader that has stopped detecting an accuracy miss must FAIL the
+    self-test. Without this, a green self-test would prove nothing."""
+    monkeypatch.setattr(rq, "grade_accuracy",
+                        lambda report: (rq.PASS, {"scorer_version": 2}))
+    assert rq.self_test(_self_test_args(tmp_path)) == 1
+
+
+def test_the_self_test_writes_nothing_outside_its_temp_dir(tmp_path):
+    """It must not create the default /var/tmp run dir, touch the repo, or
+    leave a temp tree behind."""
+    seen: list[str] = []
+    real = rq.tempfile.TemporaryDirectory
+
+    class Recording(real):                      # type: ignore[misc,valid-type]
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            seen.append(self.name)
+
+    rq.tempfile.TemporaryDirectory = Recording
+    try:
+        args = _self_test_args(tmp_path, run_dir="/var/tmp/scale-runs/should-not-exist")
+        assert rq.self_test(args) == 0
+    finally:
+        rq.tempfile.TemporaryDirectory = real
+    assert seen and not any(os.path.exists(path) for path in seen)
+    assert not os.path.exists("/var/tmp/scale-runs/should-not-exist")
+
+
+def test_a_missing_fixture_is_a_usage_error_never_a_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr(rq, "SELF_TEST_FIXTURE", str(tmp_path / "gone"))
+    assert rq.self_test(_self_test_args(tmp_path)) == 2
+
+
+def test_the_self_test_needs_no_env_file():
+    """`.env` is generated at install and gitignored — CI has none, and the
+    suite's own proof must not depend on one."""
+    args = rq.parse_args(["--self-test", "--env-file", "/nonexistent/.env"])
+    assert args.self_test is True
+    assert args.project == "self-test"
+
+
+def test_the_self_test_is_not_a_leg_job():
+    for extra in (["--dry-run"], ["--skip-leg", "/tmp"],
+                  ["--extract-baseline", "/tmp"]):
+        with pytest.raises(SystemExit):
+            rq.parse_args(["--self-test"] + extra)
+
+
+def test_main_routes_self_test_before_anything_touches_a_stack(monkeypatch):
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))   # restored on teardown
+    calls: list[str] = []
+    monkeypatch.setattr(rq, "self_test", lambda args: calls.append("ran") or 0)
+    monkeypatch.setattr(rq, "Qualifier", lambda *a, **k: pytest.fail(
+        "a self-test must never build a Qualifier against a stack"))
+    assert rq.main(["--self-test"]) == 0
+    assert calls == ["ran"]
+
+
+def test_the_report_grades_every_clause_against_the_v1_reference(tmp_path):
+    """The dated report must SHOW the per-clause comparison, not just carry it
+    in the JSON: that table is what a release decision is read off."""
+    qual, _leg, run_dir = _skip_leg_qualifier(tmp_path)
+    qual.stage_leg()
+    qual.stage_accuracy()
+    qual.stage_baseline()
+    qual.candidate = {"correlation": [{"image": "23dc2b88e966"}],
+                      "api": {"image": "f6c67a4d0195"}}
+    qual.stage_verdict()
+    md = (run_dir / "qualification.md").read_text()
+    assert "Gated clauses vs the V1 reference" in md
+    for phase in rq.V1_PHASES:
+        assert f"harness gate `{phase}`" in md
+    assert "accuracy >= 0.93 on scorer v2" in md
+    assert "Generated:" in md

@@ -75,9 +75,23 @@ STAGES, IN ORDER
                PRINTED as a table and REPORTED when they regress — never gated,
                because the gates are the harness's own and V1 says so for T1.
 
+SELF-TEST (no rig, no stack, no docker)
+---------------------------------------
+`--self-test` re-grades the CHECKED-IN `storm-s11` leg fixture
+(`tests/fixtures/storm-s11/`) through the real stages and asserts both
+directions: the leg of record grades PASS, and each mutated copy of it — a
+regressed harness gate, accuracy under the floor, a scorer-v1 report,
+aggregation that does not close, a replica that restarted mid-run, an unquiet
+host — produces the FAIL or INVALID it must. It proves THE SUITE'S OWN LOGIC,
+never the build; it touches no stack, issues no docker command beyond the
+stubbed `inspect` the baseline extractor asks for, and needs no `.env`. That is
+what makes it runnable in CI, where the rig does not exist. It is NOT
+qualification evidence and never prints a qualification verdict.
+
 USAGE
 -----
     python3 scripts/release-qualify.py                       # full rerun
+    python3 scripts/release-qualify.py --self-test           # CI: prove the suite
     python3 scripts/release-qualify.py --dry-run             # plan + env only
     python3 scripts/release-qualify.py --skip-leg RUN_DIR    # re-grade a leg
     python3 scripts/release-qualify.py --extract-baseline RUN_DIR
@@ -99,6 +113,7 @@ import select
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import types
 from collections.abc import Callable, Iterable
@@ -1679,6 +1694,20 @@ def render_markdown(doc: dict[str, Any], records: list[dict[str, Any]]) -> str:
 
     baseline: dict[str, Any] = next(
         (r["evidence"] for r in records if r["stage"] == "baseline"), {})
+    gated = baseline.get("gated") or []
+    if gated:
+        lines += [(f"## Gated clauses vs the V1 reference "
+                   f"(`{baseline.get('baseline_leg') or '?'}`, run "
+                   f"`{baseline.get('baseline_runid') or '?'}`)"), "",
+                  "| Clause | V1 reference | This candidate | |", "|---|---|---|---|"]
+        for row in gated:
+            same = row.get("baseline") == row.get("candidate")
+            mark = ("=" if same else
+                    ("REGRESSION" if row.get("baseline") == PASS else "differs"))
+            lines.append(f"| {row['clause']} | {row.get('baseline') or 'n/a'} "
+                         f"| {row.get('candidate') or 'n/a'} | {mark} |")
+        lines += ["", ("A clause that PASSES on the V1 reference and does not "
+                       "here is a REGRESSION and fails the qualification."), ""]
     rows = baseline.get("informational") or []
     if rows:
         lines += ["## Informational deltas (REPORTED, NEVER GATED)", "",
@@ -1712,6 +1741,268 @@ def render_markdown(doc: dict[str, Any], records: list[dict[str, Any]]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# self-test — the suite proving its OWN logic, with no rig in the room
+# ---------------------------------------------------------------------------
+# WHY THIS EXISTS. The qualification itself needs an hour of exclusive rig time
+# and is owner-gated, so between rig legs there is nothing to tell a change
+# that broke this grader from one that did not. The self-test closes that gap:
+# it re-grades the CHECKED-IN `storm-s11` leg — the V1 baseline of record — and
+# then re-grades MUTATED copies of it, asserting BOTH directions. A grader that
+# has stopped detecting a regressed gate, an accuracy miss, a scorer downgrade,
+# an aggregation that does not close or a replica that restarted mid-run fails
+# here, in CI, on a laptop, in seconds.
+#
+# WHAT IT IS NOT: qualification evidence. It measures a fixture, not a build.
+SELF_TEST_FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures", "storm-s11")
+SELF_TEST_IMAGE = "sha256:23dc2b88e966f000988a9d04be1f88d385b6aa9866045d"
+
+
+def self_test_docker(cmd: list[str], timeout: int,
+                     cwd: str | None = None) -> tuple[int, str, str]:
+    """The ONLY command the graded path may shell out to is the baseline
+    extractor's `docker inspect` for a replica's image id. Anything else is a
+    self-test failure, not a silent fallback: it would mean the grader reaches
+    for a stack that CI does not have."""
+    if cmd[:2] == ["docker", "inspect"]:
+        return 0, SELF_TEST_IMAGE + "\n", ""
+    return 127, "", f"self-test: the grading path must not run {' '.join(cmd)!r}"
+
+
+def self_test_args(args: argparse.Namespace, **over: Any) -> argparse.Namespace:
+    """The SAME namespace shape a real run carries — copied from the parsed
+    args so a new flag cannot leave the self-test grading a different object."""
+    ns = argparse.Namespace(**vars(args))
+    ns.self_test = False
+    ns.dry_run = False
+    for key, value in over.items():
+        setattr(ns, key, value)
+    return ns
+
+
+class SelfTestLog:
+    """Ordered checks with a one-line reason each. No check is allowed to be
+    silent: an exception is recorded as a failure, never swallowed."""
+
+    def __init__(self) -> None:
+        self.rows: list[tuple[str, bool, str]] = []
+
+    def check(self, name: str, ok: bool, detail: str = "") -> bool:
+        self.rows.append((name, bool(ok), detail))
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
+              + (f" — {detail}" if detail else ""), flush=True)
+        return bool(ok)
+
+    @property
+    def failures(self) -> list[tuple[str, bool, str]]:
+        return [r for r in self.rows if not r[1]]
+
+
+def self_test(args: argparse.Namespace) -> int:
+    """Exit 0 when every check holds, 1 when one does not, 2 when the fixture
+    the self-test needs is missing (an unrunnable self-test is never a pass)."""
+    if not os.path.isdir(SELF_TEST_FIXTURE):
+        print(f"release-qualify: ERROR: self-test fixture missing: "
+              f"{SELF_TEST_FIXTURE}", file=sys.stderr, flush=True)
+        return 2
+    try:
+        driver = load_ab_driver()
+    except QualifyError as exc:
+        print(f"release-qualify: ERROR: {exc}", file=sys.stderr, flush=True)
+        return 2
+
+    log_ = SelfTestLog()
+    print(f"release-qualify SELF-TEST — grading the checked-in "
+          f"{os.path.basename(SELF_TEST_FIXTURE)} fixture and mutations of it. "
+          f"No stack, no rig, no .env.", flush=True)
+    with tempfile.TemporaryDirectory(prefix="release-qualify-selftest-") as tmp:
+        leg = os.path.join(tmp, "leg")
+        shutil.copytree(SELF_TEST_FIXTURE, leg)
+        base_path = os.path.join(tmp, "baseline.json")
+        fresh = extract_baseline(leg, runner=self_test_docker, driver=driver)
+        write_text(base_path, dump_baseline(fresh))
+
+        # ── the shipped V1 reference numbers are the fixture's own ──────────
+        try:
+            shipped = read_json(args.baseline)
+        except QualifyError as exc:
+            shipped = {}
+            log_.check("shipped V1 baseline is readable", False, str(exc))
+        if shipped:
+            drift = [key for key in ("runid", "workload", "phases", "overall",
+                                     "accuracy", "t1", "harness", "aggregation")
+                     if shipped.get(key) != fresh.get(key)]
+            log_.check("shipped V1 baseline == a fresh extraction of the leg "
+                       "of record (never hand-typed)", not drift,
+                       f"{os.path.basename(args.baseline)}"
+                       + (f"; drifted: {', '.join(drift)}" if drift else ""))
+            log_.check("extraction is byte-stable (a re-run diffs clean)",
+                       dump_baseline(fresh) == dump_baseline(
+                           extract_baseline(leg, runner=self_test_docker,
+                                            driver=driver)))
+
+        # ── direction 1: the leg of record grades PASS ──────────────────────
+        run_dir = os.path.join(tmp, "qualify")
+        os.makedirs(run_dir, exist_ok=True)
+        good = Qualifier(self_test_args(args, run_dir=run_dir, skip_leg=leg,
+                                        baseline=base_path, allow_unquiet=True),
+                         runner=self_test_docker, driver=driver)
+        leg_status = good.stage_leg()
+        leg_ev = good.evidence_of("leg")
+        log_.check("leg: all nine V1 harness gates PASS",
+                   leg_status == PASS and
+                   (leg_ev.get("phases_passed"), leg_ev.get("phases_total"))
+                   == (len(V1_PHASES), len(V1_PHASES)),
+                   f"{leg_ev.get('phases_passed')}/{leg_ev.get('phases_total')} "
+                   f"run {leg_ev.get('runid')}")
+        acc_status = good.stage_accuracy()
+        acc_ev = good.evidence_of("accuracy")
+        log_.check(f"accuracy: >= {V1_MIN_ACCURACY} on scorer v{V1_SCORER_VERSION}",
+                   acc_status == PASS and
+                   acc_ev.get("scorer_version") == V1_SCORER_VERSION,
+                   f"{acc_ev.get('stories_passed')}/{acc_ev.get('stories_total')}")
+        agg_status = good.stage_aggregation()
+        log_.check("aggregation: SKIPPED (no PRE-run capture for a historical "
+                   "leg) — not measured is not passed", agg_status == SKIPPED,
+                   str(good.evidence_of("aggregation").get("reason", ""))[:90])
+        ttur_status = good.stage_ttur()
+        log_.check("T1: published, never gated",
+                   ttur_status == PASS and
+                   bool((good.evidence_of("ttur").get("row") or {}).get("t1p95")),
+                   f"p95 {(good.evidence_of('ttur').get('row') or {}).get('t1p95')} s")
+        log_.check("rebalance: SKIPPED with the 155/199 reason recorded",
+                   good.stage_rebalance() == SKIPPED,
+                   str(good.evidence_of("rebalance").get("reason", ""))[:90])
+        base_status = good.stage_baseline()
+        log_.check("baseline diff: no gated regression against the V1 reference",
+                   base_status == PASS and
+                   good.evidence_of("baseline").get("gated_regressions") == [])
+        good.candidate = {"correlation": [{"image": short_image(SELF_TEST_IMAGE)}],
+                          "api": {"image": "selftest"}}
+        verdict = good.stage_verdict()
+        report_md = os.path.join(run_dir, "qualification.md")
+        report_json = os.path.join(run_dir, "qualification.json")
+        md = read_text(report_md) if os.path.exists(report_md) else ""
+        log_.check("verdict: PASS on the leg of record", verdict == PASS)
+        log_.check("a dated report is written (json + md), per-clause against "
+                   "the V1 reference",
+                   os.path.exists(report_json) and "Generated:" in md and
+                   "Gated clauses vs the V1 reference" in md and
+                   "NOT a pass/fail gate" in md)
+
+        # ── direction 2: each mutation must be CAUGHT ───────────────────────
+        bad_leg = os.path.join(tmp, "leg-regressed")
+        shutil.copytree(SELF_TEST_FIXTURE, bad_leg)
+        report = read_json(os.path.join(bad_leg, "report.json"))
+        for phase in report.get("phases", []):
+            if phase.get("phase") == "memflat":
+                phase["status"] = FAIL
+        write_text(os.path.join(bad_leg, "report.json"), json.dumps(report))
+        bad_dir = os.path.join(tmp, "qualify-regressed")
+        os.makedirs(bad_dir, exist_ok=True)
+        bad = Qualifier(self_test_args(args, run_dir=bad_dir, skip_leg=bad_leg,
+                                       baseline=base_path, allow_unquiet=True),
+                        runner=self_test_docker, driver=driver)
+        bad_leg_status = bad.stage_leg()
+        bad.stage_accuracy()
+        bad_base_status = bad.stage_baseline()
+        regressed = [r["clause"] for r in
+                     bad.evidence_of("baseline").get("gated_regressions", [])]
+        log_.check("MUTATION a regressed harness gate fails the leg AND the "
+                   "baseline diff",
+                   bad_leg_status == FAIL and bad_base_status == FAIL and
+                   regressed == ["harness gate `memflat`"], ", ".join(regressed))
+        bad.candidate = {"correlation": [], "api": {}}
+        log_.check("a failed clause makes the whole verdict FAIL (exit 1)",
+                   bad.stage_verdict() == FAIL)
+
+        acc_doc = read_json(os.path.join(leg, "accuracy-report.json"))
+        under = dict(acc_doc, accuracy_slo=V1_MIN_ACCURACY - 0.01)
+        v1_scorer = dict(acc_doc, scorer_version=1, accuracy_slo=1.0)
+        no_acc = {k: v for k, v in acc_doc.items() if k != "accuracy_slo"}
+        log_.check(f"MUTATION accuracy {under['accuracy_slo']:.2f} < "
+                   f"{V1_MIN_ACCURACY} is a FAIL",
+                   grade_accuracy(under)[0] == FAIL)
+        log_.check("MUTATION a perfect score on scorer v1 is still a FAIL "
+                   "(V1 pins the scorer, not just the number)",
+                   grade_accuracy(v1_scorer)[0] == FAIL)
+        log_.check("MUTATION a missing accuracy is a FAIL, never a silent zero",
+                   grade_accuracy(no_acc)[0] == FAIL)
+
+        closed = {"enabled": 1.0, "observed": 100.0, "suppressed": 30.0,
+                  "forwarded_by_class": {"first": 60.0, "repeat": 10.0},
+                  "forwarded_total": 70.0, "started_at": "T0", "name": "rep"}
+        pre = dict(closed, observed=0.0, suppressed=0.0, forwarded_total=0.0,
+                   forwarded_by_class={"first": 0.0, "repeat": 0.0})
+        open_ = dict(closed, suppressed=29.0)
+        restarted = dict(closed, started_at="T1")
+        log_.check("aggregation accounting closes exactly on a good delta",
+                   agg_delta(pre, closed)["status"] == PASS)
+        log_.check("MUTATION a delta that does not close is a FAIL",
+                   agg_delta(pre, open_)["status"] == FAIL)
+        log_.check("MUTATION a replica that restarted mid-run is INVALID, "
+                   "never a false PASS",
+                   agg_delta(pre, restarted)["status"] == INVALID)
+
+        quiet_fs = [{"path": "/", "free_gib": V1_MIN_FREE_GIB + 5, "error": ""}]
+        small_fs = [{"path": "/", "free_gib": V1_MIN_FREE_GIB - 1, "error": ""}]
+        blind_fs = [{"path": "/", "free_gib": None, "error": "statvfs failed"}]
+        log_.check("environment: a quiet host has no violation",
+                   environment_violations(quiet_fs, 1.0, V1_MIN_FREE_GIB, 6.0) == [])
+        log_.check("MUTATION too little disk refuses the run",
+                   bool(environment_violations(small_fs, 1.0, V1_MIN_FREE_GIB, 6.0)))
+        log_.check("MUTATION an unquiet host refuses the run",
+                   bool(environment_violations(quiet_fs, 9.9, V1_MIN_FREE_GIB, 6.0)))
+        log_.check("MUTATION an UNREADABLE filesystem is a violation, not a pass",
+                   bool(environment_violations(blind_fs, 1.0, V1_MIN_FREE_GIB, 6.0)))
+
+        rec = [{"stage": "a", "status": PASS}, {"stage": "b", "status": SKIPPED}]
+        log_.check("SKIPPED never fails a run and never counts as evidence",
+                   overall_verdict(rec) == PASS)
+        log_.check("one FAIL fails the run",
+                   overall_verdict(rec + [{"stage": "c", "status": FAIL}]) == FAIL)
+        log_.check("INVALID beats FAIL — an untrusted measurement is not a verdict",
+                   overall_verdict(rec + [{"stage": "c", "status": FAIL},
+                                          {"stage": "d", "status": INVALID}])
+                   == INVALID)
+        log_.check("an all-SKIPPED run is INVALID, never PASS",
+                   overall_verdict([{"stage": "a", "status": SKIPPED}]) == INVALID)
+
+        seen: dict[str, Any] = {}
+
+        def capture(argv: list[str], log_path: str, timeout: int,
+                    cwd: str | None = None) -> tuple[int, str]:
+            seen["argv"] = list(argv)
+            return 0, "captured"
+
+        frozen_dir = os.path.join(tmp, "qualify-argv")
+        os.makedirs(frozen_dir, exist_ok=True)
+        Qualifier(self_test_args(args, run_dir=frozen_dir, skip_leg="",
+                                 baseline=base_path),
+                  runner=self_test_docker, driver=driver,
+                  streamer=capture).stage_leg()
+        expected = ["--profile", V1_PROFILE, "--devices", str(V1_DEVICES),
+                    "--eps", str(V1_EPS)]
+        argv = seen.get("argv") or []
+        log_.check("the leg is launched with the FROZEN V1 parameters and "
+                   "nothing else (no flag can silently re-base V1)",
+                   argv[2:2 + len(expected)] == expected and
+                   argv[1].endswith("scale-miniladder.py"),
+                   " ".join(argv[2:]) if argv else "no argv captured")
+
+    total = len(log_.rows)
+    bad_rows = log_.failures
+    print(flush=True)
+    if bad_rows:
+        print(f"SELF-TEST FAIL — {len(bad_rows)} of {total} checks failed: "
+              + "; ".join(name for name, _ok, _d in bad_rows), flush=True)
+        return 1
+    print(f"SELF-TEST PASS — {total}/{total} checks. The SUITE's logic is "
+          f"proven; this is not qualification evidence and grades no build.",
+          flush=True)
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def default_run_dir() -> str:
@@ -1740,6 +2031,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                          "and mark the result qualification_grade: false")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan and the environment reading; run nothing")
+    ap.add_argument("--self-test", action="store_true",
+                    help="prove the SUITE's own logic against the checked-in "
+                         "storm-s11 leg fixture and mutations of it — no stack, "
+                         "no rig, no .env (CI runs this). Never qualification "
+                         "evidence")
     ap.add_argument("--extract-baseline", metavar="RUN_DIR", default="",
                     help="write the machine-readable baseline for a finished run "
                          "dir to --baseline and exit")
@@ -1757,6 +2053,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = ap.parse_args(argv)
     if args.extract_baseline and args.skip_leg:
         ap.error("--extract-baseline and --skip-leg are different jobs; pass one")
+    if args.self_test and (args.dry_run or args.skip_leg or args.extract_baseline):
+        ap.error("--self-test grades a fixture; it takes no leg, plan or "
+                 "extraction job")
     if not args.run_dir:
         args.run_dir = default_run_dir()
     args.run_dir = os.path.abspath(args.run_dir)
@@ -1769,6 +2068,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         if not os.path.isdir(args.extract_baseline):
             ap.error(f"--extract-baseline {args.extract_baseline!r} is not a "
                      f"directory")
+    if not args.project and args.self_test:
+        # The self-test issues no docker command that a project scopes, and CI
+        # has no .env at all (it is generated at install and gitignored). A
+        # missing file must not make the suite's own proof unrunnable.
+        args.project = "self-test"
     if not args.project:
         # An unreadable .env must not silently become the default project name:
         # every docker command this tool issues is scoped by it, so guessing
@@ -1826,6 +2130,9 @@ def main(argv: list[str]) -> int:
         log(f"baseline written: {args.baseline} (leg {doc.get('leg')}, run "
             f"{doc.get('runid')})")
         return 0
+
+    if args.self_test:
+        return self_test(args)
 
     qualifier = Qualifier(args)
     if args.dry_run:

@@ -1,6 +1,7 @@
 # NetOps_Observability — developer make targets.
 .PHONY: test-correlation-e2e mib-index test-ticketing-unit test-servicenow-mock \
-        release-gate release-gate-live bundle bundle-core bundle-status
+        release-gate release-gate-live bundle bundle-core bundle-status \
+        release-qualify release-qualify-selftest
 
 # #97 packaging — customer-bundle lockstep. `bundle` builds the offline
 # installer bundle at HEAD (scripts/make-installer.sh: images + source +
@@ -33,6 +34,20 @@ release-gate:
 release-gate-live: release-gate
 	scripts/ch-query-budget-check.sh
 	scripts/ch-retention-dry-run.sh
+
+# Tracker 203 — the reference-capacity regression suite. `release-qualify`
+# reruns the FROZEN CORRELIX REFERENCE CAPACITY V1 qualification against the
+# DEPLOYED build and grades every clause against the `storm-s11` baseline of
+# record: ~1 h of exclusive rig time, owner-gated, and it refuses on an unquiet
+# host. `release-qualify-selftest` proves the SUITE's own logic against the
+# checked-in leg fixture instead — seconds, no rig, no stack, no .env — and is
+# what CI runs; it is never qualification evidence.
+# Runbook: docs/runbooks/release-qualification.md.
+release-qualify:
+	python3 scripts/release-qualify.py
+
+release-qualify-selftest:
+	python3 scripts/release-qualify.py --self-test
 
 # #101 first-customer acceptance: everything release-gate-live checks PLUS the
 # external critical-alert delivery gate (in-app-only alerting fails). Run with
