@@ -205,3 +205,68 @@ func TestReloadPropagatesRevocation(t *testing.T) {
 		t.Fatalf("after reload, B must reject the revoked key (multi-instance gap)")
 	}
 }
+
+// ---- scope vocabulary (tracker 226) ---------------------------------------
+
+// The closed vocabulary and its display list must not drift apart: KnownScopes
+// is what the UI and the docs render, knownScopes is what Create validates
+// against. A scope in one and not the other is a mint that the UI offers and
+// the API refuses (or worse, the reverse).
+func TestKnownScopesMatchesTheValidationTable(t *testing.T) {
+	display := KnownScopes()
+	if len(display) != len(knownScopes) {
+		t.Fatalf("KnownScopes has %d entries, validation table has %d", len(display), len(knownScopes))
+	}
+	seen := map[string]bool{}
+	for _, s := range display {
+		if !knownScopes[s] {
+			t.Errorf("KnownScopes offers %q, which Create would reject", s)
+		}
+		if seen[s] {
+			t.Errorf("KnownScopes lists %q twice", s)
+		}
+		seen[s] = true
+	}
+	for s := range knownScopes {
+		if !seen[s] {
+			t.Errorf("scope %q is accepted but never offered by KnownScopes", s)
+		}
+	}
+}
+
+func TestNormalizeScopes(t *testing.T) {
+	got, err := NormalizeScopes([]string{" READ:Metrics ", "read:metrics", "", "admin:*"})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if len(got) != 2 || got[0] != "read:metrics" || got[1] != ScopeAdminAll {
+		t.Fatalf("normalize = %v, want [read:metrics admin:*]", got)
+	}
+	// An empty request stays empty (a key with no scopes is read-only, not an error).
+	if got, err := NormalizeScopes(nil); err != nil || len(got) != 0 {
+		t.Fatalf("nil scopes = %v, %v; want empty, nil", got, err)
+	}
+	for _, bad := range []string{"write:tenants", "admin:tenants", "*", "read:"} {
+		if _, err := NormalizeScopes([]string{bad}); err == nil {
+			t.Errorf("scope %q accepted; the vocabulary must be closed", bad)
+		}
+	}
+	if !ScopeKnown(" Admin:* ") || ScopeKnown("write:everything") {
+		t.Error("ScopeKnown disagrees with the vocabulary")
+	}
+}
+
+// Create is the enforcement point: an unknown scope must never reach the store.
+func TestCreateRejectsUnknownScope(t *testing.T) {
+	s := newTestKeyStore(t)
+	if _, _, err := s.Create(Input{Label: "typo", Scopes: []string{"write:tenants"}}, "root"); err == nil {
+		t.Fatal("Create accepted an unknown scope")
+	}
+	rec, _, err := s.Create(Input{Label: "ok", Scopes: []string{" ADMIN:* ", "admin:*"}}, "root")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(rec.Scopes) != 1 || rec.Scopes[0] != ScopeAdminAll {
+		t.Fatalf("stored scopes = %v, want [admin:*]", rec.Scopes)
+	}
+}

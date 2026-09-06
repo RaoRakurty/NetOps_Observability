@@ -33,7 +33,6 @@ import (
 // the dedicated HTTP isolation test is backlog. FROZEN — do not grow.
 var isolationCoverageBaseline = map[string]string{
 	"/api/ai/modules":                         "store/RLS-scoped; dedicated HTTP isolation test is backlog",
-	"/api/apikeys/":                           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/appid/fusion/status":                "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/app-rca":                      "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/apps":                         "store/RLS-scoped; dedicated HTTP isolation test is backlog",

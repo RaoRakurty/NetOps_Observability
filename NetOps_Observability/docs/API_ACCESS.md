@@ -29,9 +29,10 @@ datasource, sync jobs) shouldn't use a human's JWT. That's what API keys add.
 
 - **Creation:** Administration → API Access → *Generate key*. Shown **once**;
   only a hash is stored (`api_keys.hash`).
-- **Scoping:** each key carries a scope list (e.g. `read:metrics`,
-  `read:alerts`, `write:incidents`) and is **tenant-bound** and **RBAC-bound** —
-  a key can never exceed the permissions of the role it's minted under.
+- **Scoping:** each key carries a scope list (see the table below) and is
+  **tenant-bound** and **RBAC-bound** — a key can never exceed the permissions of
+  the role it's minted under, and the mint call refuses (403) a scope set that
+  would out-rank the caller.
 - **Auth:** `Authorization: Bearer <api_key>` (or `X-API-Key`). The middleware
   resolves a key the same way it resolves a JWT — into a `(tenant, permissions)`
   context — so downstream RBAC enforcement is identical.
@@ -39,6 +40,51 @@ datasource, sync jobs) shouldn't use a human's JWT. That's what API keys add.
   (`revoked_at` set, key rejected). Optional expiry per key.
 
 Table shape is in [`IDENTITY_ACCESS.md`](IDENTITY_ACCESS.md#data-model-postgresql).
+
+### Scopes the backend honours
+
+The vocabulary is **closed** — `internal/apikey.KnownScopes()` is the single
+list, validated on every mint (an unknown scope is a `400`, not a stored typo)
+and rendered by the wizard in **Administration → API Access → Generate key**.
+
+What the middleware actually acts on is the **verb** half: `roleFromScopes`
+(auth.go) derives the RBAC role the key runs as. The **resource** half records
+operator intent and shows up in the key row and the audit trail; it does not
+narrow the derived role further today.
+
+| Scope | Derived role | The key may |
+|---|---|---|
+| `read:metrics` | read-only | read metrics, health and topology state |
+| `read:alerts` | read-only | read alerts, incidents and their history |
+| `read:devices` | read-only | read the device inventory |
+| `read:flows` | read-only | read flows, logs and traces |
+| `read:*` | read-only | read everything its tenant can see |
+| `write:incidents` | operator | acknowledge, silence and annotate incidents |
+| `write:alerts` | operator | create, edit and toggle alert rules |
+| `write:devices` | operator | add, edit, monitor and scan devices |
+| `write:*` | operator | every write above |
+| `ingest:cloud` | read-only + service | the cloud-ingest poller surface — honoured ONLY for a key in the platform realm (`cloud_ingest_service.go`); see [`deployment/docker/cloud-ingest/CREDENTIALS.md`](../deployment/docker/cloud-ingest/CREDENTIALS.md) |
+| `admin:*` | administrator | administer the key's tenant: tenants, users, devices, rules, scans |
+
+`read:*` satisfies any `read:<x>`, `write:*` any `write:<x>`, and `admin:*`
+satisfies every scope check (`token.Claims.HasScope`).
+
+### Who may mint what
+
+Minting is `administration:admin`-gated, and then bounded twice more:
+
+1. **Tenant** — the key is stamped with the *caller's* tenant, never the tenant
+   in the request body. A tenant admin's key can only ever act inside its own
+   tenant; cross-tenant list/revoke returns `404`.
+2. **Authority** — the role the key will act under may not out-rank the caller
+   on any module (`authorizeKeyScopes`). An `admin:*` key **in the platform
+   realm** is a cross-tenant super-admin credential and is mintable **only by a
+   platform administrator**; the same scope minted by a tenant admin produces a
+   tenant-administrator key. Every mint is recorded as `API_KEY_CREATED` in the
+   identity audit trail with its scopes and derived role (never the secret).
+
+The wizard offers a caller only the scopes it may actually mint, and an
+administrative key needs an explicit confirmation before it can be generated.
 
 ---
 

@@ -1853,7 +1853,152 @@ export function SessionsAdmin() {
 
 // ---- API Access ------------------------------------------------------------
 
-const SCOPE_OPTIONS = ["read:metrics", "read:alerts", "read:devices", "read:flows", "read:*", "write:incidents"];
+// Scope vocabulary — mirrors internal/apikey.KnownScopes() EXACTLY. The server
+// validates every requested scope against that closed list and refuses one that
+// would give the KEY more authority than the caller holds (403), so:
+//   * an option offered here that the API rejects is a broken promise, and
+//   * an option withheld here that the caller may legitimately mint is the
+//     tracker-226 gap this list closes — the wizard could only ever mint
+//     read-only keys, so tenant creation, device assignment, scans and rule
+//     toggles could not be automated with a UI-minted key at all.
+// The server stays the authority; this list only avoids offering a mint that is
+// going to 403. Scope table + semantics: docs/API_ACCESS.md.
+export type ScopeKind = "read" | "write" | "service" | "admin";
+export type ScopeOption = {
+  id: string;
+  kind: ScopeKind;
+  /** What the credential may do, in the operator's words (shown as the chip's title). */
+  what: string;
+};
+
+export const SCOPE_OPTIONS: ScopeOption[] = [
+  { id: "read:metrics", kind: "read", what: "Read metrics, health and topology state." },
+  { id: "read:alerts", kind: "read", what: "Read alerts, incidents and their history." },
+  { id: "read:devices", kind: "read", what: "Read the device inventory and its attributes." },
+  { id: "read:flows", kind: "read", what: "Read flows, logs and traces." },
+  { id: "read:*", kind: "read", what: "Read everything this tenant can see." },
+  { id: "write:incidents", kind: "write", what: "Acknowledge, silence and annotate incidents." },
+  { id: "write:alerts", kind: "write", what: "Create, edit and toggle alert rules." },
+  { id: "write:devices", kind: "write", what: "Add, edit, monitor and scan devices." },
+  { id: "write:*", kind: "write", what: "Operator authority: every write above." },
+  { id: "ingest:cloud", kind: "service", what: "Cloud-ingest poller service credential (platform realm only)." },
+  { id: "admin:*", kind: "admin", what: "Administer the tenant: tenants, users, devices, rules, scans." },
+];
+
+/** The product areas the permission grid is keyed by (mirrors rbac.Modules). */
+const RBAC_MODULES = [
+  "overview", "explore", "alerts", "infrastructure", "topology", "reports",
+  "administration", "sensitive_data",
+];
+
+/**
+ * scopeAllowed mirrors the server's rule (authorizeKeyScopes): the ROLE a key
+ * will act under may not out-rank the caller on any module, and an
+ * administrative scope in the platform realm is platform-admin-only.
+ *
+ * Derived roles, from auth.go roleFromScopes:
+ *   read:… / ingest:…  → read-only  (read on every module except administration)
+ *   write:…            → operator   (that, plus write on alerts + infrastructure)
+ *   admin:*            → administrator of the key's tenant
+ *
+ * Default-closed: an unknown/absent grid offers nothing.
+ */
+export function scopeAllowed(opt: ScopeOption, perms: Record<string, number>, platformAdmin: boolean): boolean {
+  const level = (m: string) => perms[m] ?? 0;
+  const readsEverything = RBAC_MODULES.every((m) => m === "administration" || level(m) >= 1);
+  switch (opt.kind) {
+    case "read":
+      return readsEverything;
+    case "write":
+      return readsEverything && level("alerts") >= 2 && level("infrastructure") >= 2;
+    case "service":
+      // ingest:cloud is only honoured for a platform-realm credential, so only
+      // the platform owner can mint one that would ever work.
+      return platformAdmin && readsEverything;
+    case "admin":
+      // admin:* derives the administrator role — admin on EVERY module — so the
+      // caller must hold that much itself, not merely administration:admin.
+      return RBAC_MODULES.every((m) => level(m) >= 3);
+    default:
+      return false;
+  }
+}
+
+/** The scopes this caller may actually mint, in display order. */
+export function allowedScopeOptions(perms: Record<string, number> | null, platformAdmin: boolean): ScopeOption[] {
+  if (!perms) return [];
+  return SCOPE_OPTIONS.filter((o) => scopeAllowed(o, perms, platformAdmin));
+}
+
+/** An administrative key is a different kind of credential — it needs a confirmation. */
+export function isAdministrativeScope(scope: string): boolean {
+  return scope === "admin:*";
+}
+
+const SCOPE_GROUPS: { kind: ScopeKind; title: string; blurb: string }[] = [
+  { kind: "read", title: "Read", blurb: "The key can look, never change." },
+  { kind: "write", title: "Write", blurb: "Operator authority — the key can change operational state." },
+  { kind: "service", title: "Service", blurb: "Dedicated machine credential for one platform service." },
+  { kind: "admin", title: "Administrative", blurb: "Full administration through the API. Mint one only for automation you own." },
+];
+
+/**
+ * ScopePicker renders the scopes THIS caller may mint, grouped by the authority
+ * they confer, with the administrative group behind an explicit confirmation.
+ * Exported so the gating and the wording are testable on their own.
+ */
+export function ScopePicker({
+  options, selected, onToggle, platformAdmin, confirmed, onConfirm,
+}: {
+  options: ScopeOption[];
+  selected: string[];
+  onToggle: (scope: string) => void;
+  platformAdmin: boolean;
+  confirmed: boolean;
+  onConfirm: (v: boolean) => void;
+}) {
+  if (options.length === 0) {
+    return <p className="mini-meta" style={{ margin: 0 }}>Checking which scopes your role may issue…</p>;
+  }
+  const adminSelected = selected.some(isAdministrativeScope);
+  return (
+    <>
+      {SCOPE_GROUPS.map((g) => {
+        const inGroup = options.filter((o) => o.kind === g.kind);
+        if (inGroup.length === 0) return null;
+        return (
+          <div key={g.kind} style={{ marginBottom: 12 }}>
+            <h3 style={{ margin: "0 0 2px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>
+              {g.title}
+            </h3>
+            <p className="mini-meta" style={{ margin: "0 0 6px" }}>{g.blurb}</p>
+            <div className="scope-row">
+              {inGroup.map((o) => (
+                <label key={o.id} className={`scope-chip ${selected.includes(o.id) ? "on" : ""}`} title={o.what}>
+                  <input type="checkbox" checked={selected.includes(o.id)} onChange={() => onToggle(o.id)} /> {o.id}
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {adminSelected && (
+        <div className="planned-banner" style={{ borderColor: "var(--warn)" }}>
+          <span className="badge warn">Administrative key</span>
+          <span>
+            {platformAdmin
+              ? "This credential administers the whole platform — every tenant, every user, every device. Treat it like a root password: give it a source-IP allowlist and an expiry."
+              : "This credential administers your tenant — its users, devices, rules and scans. It can never reach another tenant."}
+            <label style={{ display: "block", marginTop: 6 }}>
+              <input type="checkbox" checked={confirmed} onChange={(e) => onConfirm(e.target.checked)} />{" "}
+              I understand, and I am issuing an administrative key.
+            </label>
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
 
 const GRANT_TYPE_OPTIONS = ["authorization_code", "client_credentials", "refresh_token"];
 
@@ -1861,8 +2006,13 @@ type ApiTile = "keys" | "token" | "rest";
 
 export function ApiAccessAdmin() {
   const [keys, err, reload, setErr] = useReload(() => api.listApiKeys());
+  const { user } = useAuth();
   const [label, setLabel] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read:metrics"]);
+  // The caller's OWN permission grid: the wizard offers only scopes this
+  // principal may actually mint (the server refuses the rest with 403).
+  const [perms, setPerms] = useState<Record<string, number> | null>(null);
+  const [adminConfirmed, setAdminConfirmed] = useState(false);
   const [rate, setRate] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
   // Credential metadata
@@ -1878,6 +2028,14 @@ export function ApiAccessAdmin() {
   const [contactPhone, setContactPhone] = useState("");
   // Which tile's modal is open (also driven by the flyout deep-link #/admin/api/<tile>).
   const [open, setOpen] = useState<ApiTile | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api.permissions()
+      .then((p) => { if (live) setPerms(p.permissions ?? {}); })
+      .catch(() => { if (live) setPerms({}); }); // default-closed: offer nothing
+    return () => { live = false; };
+  }, []);
 
   useEffect(() => {
     const read = () => {
@@ -1918,6 +2076,7 @@ export function ApiAccessAdmin() {
     const res = await api.createApiKey(req); // throws → surfaced by the Wizard
     setSecret(res.secret);
     setLabel(""); setRate(""); setClientUri(""); setLogoUri(""); setSourceCidrs("");
+    setAdminConfirmed(false);
     setClientExpires(""); setSecretExpires(""); setContactEmail(""); setContactPhone("");
     reload();
   };
@@ -1980,7 +2139,10 @@ export function ApiAccessAdmin() {
               <tr key={k.id}>
                 <td style={{ fontWeight: 600 }}>{k.client_uri ? <a href={k.client_uri} target="_blank" rel="noreferrer">{k.label}</a> : k.label}</td>
                 <td className="mono">{k.prefix}</td>
-                <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.scopes || []).join(", ") || "—"}</td>
+                <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>
+                  {(k.scopes || []).some(isAdministrativeScope) && <span className="badge warn" style={{ marginRight: 6 }}>admin</span>}
+                  {(k.scopes || []).join(", ") || "—"}
+                </td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.grant_types || []).join(", ") || "—"}</td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.source_cidrs || []).join(", ") || "any"}</td>
                 <td className="mono">{cap > 0 ? <span className={near ? "badge warn" : ""}>{k.window_used}/{cap}</span> : <span className="mini-meta">unlimited</span>}</td>
@@ -2030,16 +2192,18 @@ export function ApiAccessAdmin() {
               {
                 id: "scopes", title: "Scopes & grant",
                 hint: "What the credential may do; its RBAC role is derived from the scopes.",
-                isValid: () => true,
+                // An administrative key needs the operator to say so explicitly.
+                isValid: () => !scopes.some(isAdministrativeScope) || adminConfirmed,
                 render: () => (
                   <>
-                    <div className="scope-row">
-                      {SCOPE_OPTIONS.map((s) => (
-                        <label key={s} className={`scope-chip ${scopes.includes(s) ? "on" : ""}`}>
-                          <input type="checkbox" checked={scopes.includes(s)} onChange={() => toggleScope(s)} /> {s}
-                        </label>
-                      ))}
-                    </div>
+                    <ScopePicker
+                      options={allowedScopeOptions(perms, !!user?.platform_admin)}
+                      selected={scopes}
+                      onToggle={toggleScope}
+                      platformAdmin={!!user?.platform_admin}
+                      confirmed={adminConfirmed}
+                      onConfirm={setAdminConfirmed}
+                    />
                     <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)", display: "flex", alignItems: "center", gap: 5 }}>
                       Grant types<InfoTip label="The OAuth 2.0 grant types this credential supports. client_credentials is the usual machine-to-machine flow.">OAuth 2.0 flows this credential supports. <code>client_credentials</code> is the usual machine-to-machine flow.</InfoTip>
                     </h3>

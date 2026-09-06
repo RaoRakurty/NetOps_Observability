@@ -322,6 +322,88 @@ type Input struct {
 	SecretExpiresAt *time.Time
 }
 
+// ---- scope vocabulary ------------------------------------------------------
+//
+// A key's AUTHORITY is derived from its scopes by the integrator
+// (roleFromScopes in auth.go): a key carrying only read: scopes acts read-only,
+// any write: scope makes it an operator, and admin:* makes it an administrator
+// of the tenant the key is bound to. The resource half of a read:/write: scope
+// is descriptive (audit + operator intent); the verb half is what the middleware
+// acts on. See docs/API_ACCESS.md for the full table.
+//
+// The vocabulary is CLOSED and validated at creation: an unknown scope is
+// rejected rather than stored, so a typo ("write:device") can never silently
+// mint a key with different authority than the operator intended, and the UI,
+// the API and the docs share ONE list. Adding a scope is a deliberate edit here.
+const (
+	// ScopeAdminAll grants administrator authority WITHIN the key's tenant.
+	// Bound to the platform/global realm it is a platform-administrator key —
+	// which is why the integrator only lets a platform admin mint that one.
+	ScopeAdminAll = "admin:*"
+	// ScopeReadAll / ScopeWriteAll are the wildcards HasScope expands.
+	ScopeReadAll  = "read:*"
+	ScopeWriteAll = "write:*"
+	// ScopeIngestCloud is the dedicated service scope for the cloud-ingest
+	// poller; it is honoured only in the platform realm (cloud_ingest_service.go).
+	ScopeIngestCloud = "ingest:cloud"
+)
+
+// knownScopes is the closed vocabulary (immutable lookup table, same shape as
+// validGrantTypes). Order for display comes from KnownScopes().
+var knownScopes = map[string]bool{
+	"read:metrics":    true,
+	"read:alerts":     true,
+	"read:devices":    true,
+	"read:flows":      true,
+	ScopeReadAll:      true,
+	"write:incidents": true,
+	"write:alerts":    true,
+	"write:devices":   true,
+	ScopeWriteAll:     true,
+	ScopeIngestCloud:  true,
+	ScopeAdminAll:     true,
+}
+
+// KnownScopes returns the closed scope vocabulary in display order (read →
+// write → service → admin), so callers never have to restate the list.
+func KnownScopes() []string {
+	return []string{
+		"read:metrics", "read:alerts", "read:devices", "read:flows", ScopeReadAll,
+		"write:incidents", "write:alerts", "write:devices", ScopeWriteAll,
+		ScopeIngestCloud, ScopeAdminAll,
+	}
+}
+
+// ScopeKnown reports whether s is in the closed vocabulary (case/space
+// insensitive, matching the normalization Create applies).
+func ScopeKnown(s string) bool {
+	return knownScopes[strings.ToLower(strings.TrimSpace(s))]
+}
+
+// NormalizeScopes lowercases, trims, drops blanks and de-duplicates a requested
+// scope list, preserving first-seen order. It returns an error naming the first
+// scope outside the closed vocabulary. Exported so the HTTP layer can authorize
+// the SAME normalized list it stores (no second, divergent parse).
+func NormalizeScopes(in []string) ([]string, error) {
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, s := range in {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "" {
+			continue
+		}
+		if !knownScopes[s] {
+			return nil, fmt.Errorf("unknown scope %q", s)
+		}
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out, nil
+}
+
 // validGrantTypes is the set permitted per RFC 6749 / RFC 7591. The "password"
 // grant is intentionally excluded (deprecated by RFC 9700 §2.4).
 var validGrantTypes = map[string]bool{
@@ -340,6 +422,11 @@ func (in *Input) validate() error {
 	if in.RateLimitPerMin < 0 {
 		in.RateLimitPerMin = 0
 	}
+	scopes, err := NormalizeScopes(in.Scopes)
+	if err != nil {
+		return err
+	}
+	in.Scopes = scopes
 	if len(in.GrantTypes) == 0 {
 		in.GrantTypes = []string{"client_credentials"}
 	}

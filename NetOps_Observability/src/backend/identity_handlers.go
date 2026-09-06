@@ -555,6 +555,48 @@ type createAPIKeyRequest struct {
 	SecretExpiresAt *time.Time `json:"secret_expires_at"`
 }
 
+// roleLevelFor resolves the permission LEVEL a role holds on a module, with the
+// super-admin shortcut the role store applies (a built-in super-admin is admin
+// everywhere and need not exist as a stored row).
+func (s *server) roleLevelFor(roleID, module string) int {
+	if isSuperAdminRole(roleID) {
+		return LevelAdmin
+	}
+	if role, ok := s.roles.Get(roleID); ok {
+		return role.Permissions[module]
+	}
+	return LevelNone
+}
+
+// authorizeKeyScopes refuses a mint whose scopes would give the KEY more
+// authority than the principal minting it — the escalation an API-key surface
+// invites (an operator-shaped admin minting `admin:*` for itself, a tenant admin
+// minting a platform-wide credential).
+//
+// Two rules, both derived from how the middleware actually reads a key
+// (roleFromScopes + principalTenant), so the check can never drift from the
+// authority the key really gets:
+//
+//  1. `admin:*` bound to the PLATFORM realm is a cross-tenant super-admin
+//     credential — platform-global plumbing, so platform admins only (§3a.3).
+//     The same scope bound to a tenant is a tenant-administrator key and is
+//     legitimately mintable by that tenant's admin.
+//  2. The role the key will act under may not out-rank the caller on ANY module.
+//     A caller who cannot write alerts cannot mint a key that can.
+func (s *server) authorizeKeyScopes(claims jwtClaims, scopes []string, keyTenant string) error {
+	derived := roleFromScopes(scopes)
+	if isSuperAdminRole(derived) && isPlatformRealm(keyTenant) && !isPlatformOwner(claims) {
+		return errors.New("an administrative key in the platform realm may be minted only by a platform administrator")
+	}
+	for _, module := range rbac.Modules {
+		need := s.roleLevelFor(derived, module)
+		if need > LevelNone && !s.roles.Allows(claims.Role, module, need) {
+			return fmt.Errorf("scope grants %s %s, which exceeds your own permissions", module, rbac.LevelName(need))
+		}
+	}
+	return nil
+}
+
 func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	claims, ok := s.requireAdmin(w, r)
 	if !ok {
@@ -577,9 +619,25 @@ func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		// Zero-trust the payload: normalize the requested scopes onto the CLOSED
+		// vocabulary first, then authorize that exact list, then store it — one
+		// parse, so what is checked is what is minted.
+		scopes, scopeErr := apikey.NormalizeScopes(req.Scopes)
+		if scopeErr != nil {
+			writeError(w, http.StatusBadRequest, scopeErr)
+			return
+		}
+		req.Scopes = scopes
 		// A tenant admin can only mint keys bound to its own tenant.
 		if !cross {
 			req.TenantID = tenant
+		}
+		// ...and only within its OWN authority: a key may never out-rank the
+		// principal that minted it (§3a.1/§3a.3 — the platform-admin scope is a
+		// platform-global capability, not a tenant-admin one).
+		if err := s.authorizeKeyScopes(claims, req.Scopes, req.TenantID); err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
 		}
 		rec, secret, err := s.apiKeys.Create(apikey.Input{
 			TenantID:        req.TenantID,
@@ -600,6 +658,13 @@ func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logInfo("identity", "api key created", map[string]any{"id": rec.ID, "by": claims.Sub})
+		// Minting a credential is a security event — record WHICH authority it
+		// carries (never the secret) so an administrative key is visible in the
+		// audit trail, not only in the key table.
+		s.recordIdentityAudit(r, claims, "API_KEY_CREATED", map[string]any{
+			"key_id": rec.ID, "label": rec.Label, "tenant_id": rec.TenantID,
+			"scopes": rec.Scopes, "derived_role": roleFromScopes(rec.Scopes),
+		})
 		// The plaintext secret is returned exactly once here.
 		writeJSON(w, http.StatusCreated, map[string]any{"key": rec, "secret": secret})
 	default:
