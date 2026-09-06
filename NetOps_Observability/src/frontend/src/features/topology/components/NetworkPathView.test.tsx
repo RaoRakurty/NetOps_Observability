@@ -58,15 +58,22 @@ describe("NetworkPathView — ribbon", () => {
     expect(screen.getAllByText(/3 hops/).length).toBeGreaterThan(0);
   });
 
+  // UI-words sweep 4 (tracker 270): the honesty CLAIM is unchanged — a computed
+  // path still says "not a live trace" on screen, and the word "traced" is still
+  // never used for one. What moved is the sentence that EXPLAINED the inference;
+  // it is ai/skills/explain/path.computed.md now, behind the `(i)` on the chip.
   it("HONESTY: a computed path is never presented as a live trace", () => {
     render(<NetworkPathView view={viewWith({ path_source: "computed" })} />);
     expect(screen.getAllByText(/not a live trace/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Measured · live traceroute/)).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Ask Iris about Computed · not a live trace" }).length).toBeGreaterThan(0);
   });
 
   it("a measured path reads 'Measured'", () => {
     render(<NetworkPathView view={viewWith({ path_source: "measured" })} />);
-    expect(screen.getAllByText(/Measured · live traceroute/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Measured").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Ask Iris about Measured" }).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/not a live trace/i)).toBeNull();
   });
 
   it("surfaces a grounded RCA verdict on the ribbon node", () => {
@@ -97,9 +104,9 @@ describe("NetworkPathView — ribbon", () => {
       stamp: [{ stamp_rtt_ms: 0.7, stamp_pdv_ms: 0.4, stamp_owd_ms: 0.3, stamp_loss_pct: 0 }, undefined, undefined],
     })} />);
     // click the first hop's metric button
-    fireEvent.click(screen.getAllByTitle(/Click for the full per-hop metrics/)[0]);
+    fireEvent.click(screen.getAllByTitle(/Open the full per-hop metrics/)[0]);
     expect(screen.getByText("Latency (round-trip)")).toBeTruthy();
-    expect(screen.getByText("One-way delay (OWD)")).toBeTruthy();
+    expect(screen.getByText("One-way delay")).toBeTruthy();
     expect(screen.getByText("Hop position")).toBeTruthy();
     expect(screen.getByText("1 of 3")).toBeTruthy();
     // not-yet-wired metrics show an honest "—", not a fabricated value
@@ -128,13 +135,15 @@ describe("NetworkPathView — ribbon", () => {
       stamp: [{ trace_rtt_ms: 5, trace_loss_pct: 33.3 }, undefined, undefined],
     })} />);
     expect(screen.getAllByText("5.0 ms").length).toBeGreaterThan(0); // inline LAT from trace_*
-    fireEvent.click(screen.getAllByTitle(/Click for the full per-hop metrics/)[0]);
+    fireEvent.click(screen.getAllByTitle(/Open the full per-hop metrics/)[0]);
     expect(screen.getByText("33.3%")).toBeTruthy(); // packet loss from trace_*
     // provenance: the value tooltip says traceroute, never STAMP
-    expect(screen.getAllByTitle(/Measured by traceroute/).length).toBeGreaterThan(0);
-    expect(screen.queryByTitle(/Measured by a STAMP active probe/)).toBeNull();
-    // OWD/jitter have no traceroute source → honest "—" with the STAMP-only hint
-    expect(screen.getAllByTitle(/STAMP-only metric/).length).toBe(2);
+    expect(screen.getAllByTitle(/Measured by a traceroute probe/).length).toBeGreaterThan(0);
+    expect(screen.queryByTitle(/Measured by a STAMP probe/)).toBeNull();
+    // OWD/jitter have no traceroute source → honest "—" naming what is missing;
+    // what STAMP measures that traceroute cannot is ai/skills/explain/path.stamp.md.
+    expect(screen.getAllByTitle(/No STAMP probe targets this hop yet/).length).toBe(2);
+    expect(screen.getByRole("button", { name: "Ask Iris about Active measurement" })).toBeTruthy();
   });
 
   it("prefers STAMP over traceroute when both measured the hop", () => {
@@ -144,13 +153,16 @@ describe("NetworkPathView — ribbon", () => {
     })} />);
     expect(screen.getAllByText("1.0 ms").length).toBeGreaterThan(0);
     expect(screen.queryByText("9.0 ms")).toBeNull();
-    fireEvent.click(screen.getAllByTitle(/Click for the full per-hop metrics/)[0]);
-    expect(screen.getAllByTitle(/Measured by a STAMP active probe/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByTitle(/Open the full per-hop metrics/)[0]);
+    expect(screen.getAllByTitle(/Measured by a STAMP probe/).length).toBeGreaterThan(0);
   });
 
   it("shows the honest footnote when no hop has a STAMP probe", () => {
     render(<NetworkPathView view={viewWith({ path_source: "computed" })} />);
-    expect(screen.getByText(/add a STAMP target per hop/i)).toBeTruthy();
+    // The CLAIM stays on the ribbon; how to light the hops up is
+    // ai/skills/explain/path.not-measured.md, reached from the `(i)` beside it.
+    expect(screen.getByText(/No probe covers the hops on this path\./i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about No probe covers these hops" })).toBeTruthy();
   });
 
   it("draws nothing for a sub-2-hop path (parent owns the empty state)", () => {

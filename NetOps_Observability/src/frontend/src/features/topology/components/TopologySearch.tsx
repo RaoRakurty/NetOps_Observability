@@ -99,7 +99,7 @@ export default function TopologySearch({
         style={{
           width: "100%",
           boxSizing: "border-box",
-          fontSize: 12,
+          fontSize: 12.5,
           padding: "6px 9px",
           borderRadius: 7,
           border: "1px solid var(--border)",
@@ -126,7 +126,7 @@ export default function TopologySearch({
           }}
         >
           {results.length === 0 ? (
-            <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-muted)" }}>
+            <div style={{ padding: "10px 12px", fontSize: 12.5, color: "var(--fg-muted)" }}>
               No matches for “{query.trim()}”.
             </div>
           ) : (
@@ -150,10 +150,10 @@ export default function TopologySearch({
                   padding: "7px 11px",
                 }}
               >
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>{node.label}</div>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{node.label}</div>
                 <div
                   style={{
-                    fontSize: 11,
+                    fontSize: 12.5,
                     color: "var(--fg-muted)",
                     fontFamily: "var(--font-mono, ui-monospace, monospace)",
                   }}

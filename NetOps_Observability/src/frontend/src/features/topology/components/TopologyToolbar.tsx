@@ -97,7 +97,7 @@ export default function TopologyToolbar({
             color: showAllLabels ? "var(--fg)" : "var(--fg-muted)",
             borderRadius: 6,
             padding: "5px 10px",
-            fontSize: 11,
+            fontSize: 12.5,
             fontWeight: 600,
             cursor: "pointer",
           }}
@@ -116,7 +116,7 @@ export default function TopologyToolbar({
               color: layoutPinned ? "var(--fg-muted)" : "var(--fg-subtle)",
               borderRadius: 6,
               padding: "5px 10px",
-              fontSize: 11,
+              fontSize: 12.5,
               fontWeight: 600,
               cursor: "pointer",
             }}

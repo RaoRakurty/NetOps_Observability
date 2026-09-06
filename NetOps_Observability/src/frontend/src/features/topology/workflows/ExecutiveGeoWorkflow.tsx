@@ -12,7 +12,7 @@ import type { WorkflowDef } from "./workflowTypes";
 export const ExecutiveGeoWorkflow: WorkflowDef = {
   id: "executive_geo",
   label: "Executive / Geo",
-  blurb: "Sites and WAN circuits on a geographic world map. Switch the renderer to “Geo” (top-right) to open it.",
+  blurb: "Sites and WAN circuits on a map.",
   implemented: false,
 };
 

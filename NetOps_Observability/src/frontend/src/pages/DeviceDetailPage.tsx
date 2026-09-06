@@ -11,9 +11,13 @@ import { vrfTerm } from "../lib/vendorTerms";
 
 // DeviceDetailPage — the full-page device drill-down (NetBox/Dynatrace-style):
 // breadcrumb + identity header + a KPI strip, then tabs (Overview · Interfaces ·
-// Routing). Every panel is backed by metrics/topology we already collect — no new
-// backend. Opened full-screen from the Devices inventory (the old narrow inspector
-// couldn't carry the graph rows the reference design needs).
+// Neighbours). Every panel is backed by metrics/topology we already collect — no
+// new backend. Opened full-screen from the Devices inventory (the old narrow
+// inspector couldn't carry the graph rows the reference design needs).
+//
+// UI-words sweep 4 (tracker 270): tab labels are one word each and the KPI strip
+// states the number without a caption. What a neighbour protocol reports is an
+// authored file behind the `(i)` on the Neighbours panel, not a line here.
 
 // Functional type → label + colour (mirrors the list page taxonomy).
 const TYPE_META: Record<string, { label: string; color: string }> = {
@@ -40,7 +44,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
       <div className="ddp" onClick={(e) => e.stopPropagation()}>
         {/* Header — breadcrumb + identity + close */}
         <div className="ddp-head">
-          <div className="ddp-crumb">Network devices <span aria-hidden>›</span> {d.name || d.id}</div>
+          <div className="ddp-crumb">Devices <span aria-hidden>›</span> {d.name || d.id}</div>
           <button className="ddp-x" onClick={onClose} aria-label="Close">×</button>
           <div className="ddp-title">
             <span className="ddp-typedot" style={{ background: t.color }} />
@@ -59,7 +63,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
 
         {/* Tabs */}
         <div className="ddp-tabs" role="tablist">
-          {([["overview", "Overview"], ["interfaces", "Interfaces"], ["vrf", `By ${vrfTerm(d.vendor)}`], ["routing", "Routing & neighbors"], ["config", "Configuration"], ["capture", "Packet capture"]] as [Tab, string][]).map(([id, label]) => (
+          {([["overview", "Overview"], ["interfaces", "Interfaces"], ["vrf", `By ${vrfTerm(d.vendor)}`], ["routing", "Neighbours"], ["config", "Config"], ["capture", "Capture"]] as [Tab, string][]).map(([id, label]) => (
             <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>{label}</button>
           ))}
         </div>
@@ -71,7 +75,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
                 <MetricStat label="Reachability" query={`${seen && !down ? "vector(100)" : "vector(0)"}`} minutes={60} fmt={(v) => `${v}%`} tone={() => (down ? "bad" : "good")} />
                 <MetricStat label="Interfaces up" query={`count(device_if_oper_status${sel} == 1) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
                 <MetricStat label="Interfaces down" query={`count(device_if_oper_status${sel} == 2) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} tone={(n) => (n > 0 ? "warn" : "")} />
-                <MetricStat label="BGP peers established" query={`count(device_bgp_peer_state${sel} == 6) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
+                <MetricStat label="BGP established" query={`count(device_bgp_peer_state${sel} == 6) or vector(0)`} minutes={60} fmt={(v) => String(Math.round(v))} />
                 <MetricStat label="Traffic in" query={`sum(rate(device_if_in_octets${sel}[5m]) * 8) or vector(0)`} minutes={60} fmt={fmtBps} />
                 <MetricStat label="Traffic out" query={`sum(rate(device_if_out_octets${sel}[5m]) * 8) or vector(0)`} minutes={60} fmt={fmtBps} />
               </div>

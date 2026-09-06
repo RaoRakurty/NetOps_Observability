@@ -4,6 +4,7 @@ import DataTable, { Column, Sev } from "../components/DataTable";
 import { latSev, lossSev } from "../tabs/Tunnels";
 import { Section, useCap, ShowAll } from "./bgp/Section";
 import { operatorError } from "../lib/errors";
+import AskIris from "../components/AskIris";
 import {
   MAX_NEXT_HOPS,
   blankNextHopRow,
@@ -155,15 +156,16 @@ function PathsSection({ panel, onRetry, q }: {
   return (
     <Section
       id="wan-measured-paths" title="Measured paths" updatedAt={panel.at || null}
-      note={<>one interface → its own derived target, 1:1</>}
-      actions={<span className="mini-meta">{rows.length} path{rows.length === 1 ? "" : "s"}</span>}
+      note={<>one interface, one derived target<AskIris topic="wan.derived-target" label="Derived target" /></>}
+      actions={<span className="wan-count">{rows.length} path{rows.length === 1 ? "" : "s"}</span>}
     >
       <PanelState panel={panel} what="the measured paths" onRetry={onRetry}>
         {rows.length === 0 ? (
           <div className="empty">
             {q.trim()
               ? "No measured path matches this filter."
-              : "Nothing has been derived yet. A path appears once an interface has an IP address and one end to measure to — a neighbour it sees on the wire, an ISP next-hop declared in the measurement policy below, or a reachability anchor."}
+              : "Nothing has been derived yet."}
+            {!q.trim() && <AskIris topic="wan.nothing-derived" label="Nothing derived yet" />}
           </div>
         ) : (
           <>
@@ -172,7 +174,8 @@ function PathsSection({ panel, onRetry, q }: {
                 <tr>
                   <th>Local device</th><th>Local interface</th><th>Local address</th>
                   <th>Far end</th><th>Far interface</th><th>Measured to</th>
-                  <th>Derived from</th><th>Measuring</th>
+                  <th>Derived from</th>
+                  <th>Measuring<AskIris topic="wan.held" label="Measuring" /></th>
                 </tr>
               </thead>
               <tbody>
@@ -188,7 +191,7 @@ function PathsSection({ panel, onRetry, q }: {
                     <td>
                       {c.enabled
                         ? <span className="badge good">on</span>
-                        : <span className="badge" title="This path is in the registry but is not being measured.">held</span>}
+                        : <span className="badge" title="In the registry, not being measured">held</span>}
                     </td>
                   </tr>
                 ))}
@@ -218,15 +221,14 @@ function EndpointsSection({ panel, onRetry, q }: {
   return (
     <Section
       id="wan-endpoints" title="Endpoint registry" updatedAt={panel.at || null}
-      note={<>derived from interface addresses × neighbours × the policy</>}
-      actions={<span className="mini-meta">{rows.length} of {all.length} interfaces</span>}
+      note={<>derived, never stored<AskIris topic="wan.registry" label="Endpoint registry" /></>}
+      actions={<span className="wan-count">{rows.length} of {all.length} interfaces</span>}
     >
       <PanelState panel={panel} what="the endpoint registry" onRetry={onRetry}>
         {all.length === 0 ? (
           <div className="empty">
-            The registry is empty. It fills with every interface on a device the
-            measurement policy matches by name, plus every interface directly
-            connected to one, as soon as those interfaces report an IP address.
+            The registry is empty.
+            <AskIris topic="wan.registry" label="Empty registry" />
           </div>
         ) : (
           <>
@@ -239,10 +241,9 @@ function EndpointsSection({ panel, onRetry, q }: {
               ))}
             </div>
             {undecided > 0 && (
-              <p className="dp-sub" style={{ marginTop: 0 }}>
-                {undecided} interface{undecided === 1 ? " has" : "s have"} no target to
-                measure to yet. Declare an ISP next-hop below, or leave them to the
-                reachability anchor once they carry an address.
+              <p className="wan-line">
+                {undecided} interface{undecided === 1 ? " has" : "s have"} no target yet.
+                <AskIris topic="wan.derived-target" label="No target derived" />
               </p>
             )}
             {rows.length === 0 ? (
@@ -253,7 +254,7 @@ function EndpointsSection({ panel, onRetry, q }: {
                   <thead>
                     <tr>
                       <th>Device</th><th>Interface</th><th>Address</th>
-                      <th>Address the far end targets</th><th>Site</th>
+                      <th>Far end targets</th><th>Site</th>
                       <th>Measured to</th><th>Derived from</th>
                     </tr>
                   </thead>
@@ -265,7 +266,7 @@ function EndpointsSection({ panel, onRetry, q }: {
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                             {e.interface}
                             {e.connected_to_wan && (
-                              <span className="badge" title="Not on a WAN device itself — directly connected to one, so it is measured too.">linked</span>
+                              <span className="badge" title="Connected to a WAN device, so measured too">linked</span>
                             )}
                           </span>
                         </td>
@@ -337,16 +338,12 @@ function PolicySection({ panel, onRetry, canEdit, onSaved }: {
   return (
     <Section
       id="wan-policy" title="Measurement policy" updatedAt={panel.at || null}
-      note={<>the only thing stored here — everything above is derived from it</>}
+      note={<>the only thing stored here<AskIris topic="wan.policy" label="Measurement policy" /></>}
     >
       <PanelState panel={panel} what="the measurement policy" onRetry={onRetry}>
         {form && (
           <div className="dp-form">
-            <p className="dp-sub" style={{ marginTop: 0 }}>
-              This policy decides which devices count as WAN devices and what each
-              of their interfaces measures to. Saving it re-derives the endpoint
-              registry and the measured paths above.
-            </p>
+            <p className="wan-line">Saving re-derives everything above.</p>
 
             <label className="dp-field">
               <span>WAN device name pattern</span>
@@ -356,9 +353,7 @@ function PolicySection({ panel, onRetry, canEdit, onSaved }: {
                 value={form.pattern} disabled={busy || !editable}
                 onChange={(ev) => patch({ pattern: ev.target.value })}
               />
-              <span className="dp-sub">
-                A device whose name matches is a WAN device. Matching ignores case.
-              </span>
+              <span className="wan-line">A device whose name matches is a WAN device.</span>
             </label>
 
             <label className="dp-check">
@@ -377,25 +372,23 @@ function PolicySection({ panel, onRetry, canEdit, onSaved }: {
                 value={form.anchorsText} disabled={busy || !editable}
                 onChange={(ev) => patch({ anchorsText: ev.target.value })}
               />
-              <span className="dp-sub">
-                Where an interface measures to when it has neither a neighbour on
-                the wire nor a declared ISP next-hop. Separate them with commas.
-              </span>
+              <span className="wan-line">The fallback target, comma separated.</span>
             </label>
+            {/* The `(i)` sits OUTSIDE the label: a <label> may not carry
+                interactive content other than its own control. */}
+            <AskIris topic="wan.anchor" label="Reachability anchors" />
 
             <fieldset className="dp-fieldset" disabled={busy || !editable}>
               <legend>ISP next-hop overrides</legend>
-              <p className="dp-sub" style={{ marginTop: 0 }}>
-                A next-hop is where your ownership of the path hands off to the ISP.
-                Declare one per device, or per single interface with{" "}
-                <code style={mono}>device/interface</code>, and that interface measures
-                to it instead of to an anchor. Up to {MAX_NEXT_HOPS} of them.
+              <p className="wan-line">
+                One per device, or per interface with <code style={mono}>device/interface</code>. Up to {MAX_NEXT_HOPS}.
+                <AskIris topic="wan.next-hop" label="ISP next-hop" />
               </p>
               <table className="dp-tbl">
                 <thead>
                   <tr>
                     <th>Device, or device/interface</th>
-                    <th>ISP next-hop to measure to</th>
+                    <th>ISP next-hop</th>
                     <th aria-label="Row actions" />
                   </tr>
                 </thead>
@@ -454,10 +447,10 @@ function PolicySection({ panel, onRetry, canEdit, onSaved }: {
 
             {msg && <p className={`dp-msg dp-${msg.tone}`} role="status">{msg.text}</p>}
 
-            <p className="dp-sub" style={{ margin: 0 }}>
+            <p className="wan-line">
               {stored?.updated_by
                 ? `Last changed by ${stored.updated_by}${stored.updated_at ? ` on ${new Date(stored.updated_at).toLocaleString()}` : ""}.`
-                : "Nobody has changed this policy — these are the measurement defaults."}
+                : "Nobody has changed this policy. These are the defaults."}
             </p>
 
             {editable ? (
@@ -478,10 +471,9 @@ function PolicySection({ panel, onRetry, canEdit, onSaved }: {
                 </button>
               </div>
             ) : (
-              <p className="dp-sub">
-                You can read the measurement policy but not change it. Changing what
-                the WAN measures needs write access to infrastructure — an
-                administrator for this tenant can grant it.
+              <p className="wan-line">
+                Changing the policy needs write access.
+                <AskIris topic="wan.policy-readonly" label="Read-only policy" />
               </p>
             )}
           </div>
@@ -601,8 +593,8 @@ export default function WanCircuits() {
             title={r.target_label ?? `${r.remote_device ?? ""} ${r.target ?? ""}`}>
             {r.target_kind ? <span className="badge" style={{ textTransform: "none" }}>{targetKindLabelShort[r.target_kind] ?? r.target_kind}</span> : null}
             <span>{r.remote_device || "—"}</span>
-            {r.remote_if ? <span className="mini-meta" style={{ fontFamily: "var(--font-mono, monospace)" }}>{r.remote_if}</span> : null}
-            <span className="mini-meta" style={{ fontFamily: "var(--font-mono, monospace)" }}>{r.target}</span>
+            {r.remote_if ? <span className="wan-mono">{r.remote_if}</span> : null}
+            <span className="wan-mono">{r.target}</span>
           </span>
         : dash },
     { key: "latency", header: "Latency", width: 90, align: "right", sortable: true,
@@ -620,7 +612,7 @@ export default function WanCircuits() {
       text: (r) => r.source_label ?? "", sortValue: (r) => (r.tier ?? 9) * 100 + (r.source_label?.length ?? 0),
       render: (r) => (r.source_label
         ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            {r.tier ? <span className={`badge tier-t${r.tier}`} title={`Tier ${r.tier} — ${r.tier_label} (closer to Tier 1 = closer to user experience)`}>T{r.tier}</span> : null}
+            {r.tier ? <span className={`badge tier-t${r.tier}`} title={`Tier ${r.tier} — ${r.tier_label}`}>T{r.tier}</span> : null}
             <span className="badge" title={`method: ${r.source_label}${r.tier_label ? " · " + r.tier_label : ""}`}>{r.source_label}</span>
           </span>
         : dash) },
@@ -637,18 +629,13 @@ export default function WanCircuits() {
 
   return (
     <div className="card">
-      <h2>WAN Interface Metrics</h2>
-      <p className="mini-meta" style={{ marginTop: -6, marginBottom: 14 }}>
-        One row per WAN interface — plus any interface directly connected to a WAN
-        device (marked <span className="badge" style={{ verticalAlign: "middle" }}>linked</span>),
-        so a lab WAN router <i>and</i> the Spine link to it are both measured. Each
-        interface measures to a <b>derived target</b> (<b>Measured to</b>): a
-        directly-connected peer (LLDP), an ISP next-hop, or a public-DNS reachability
-        anchor. Utilization and status are live; latency / jitter / loss / QoE /
-        availability resolve through the <b>5-tier measurement-source ranking</b> —
-        closest to the user experience wins: <b>T1</b> application → <b>T2</b> active
-        path probe → <b>T3</b> device-native (STAMP) → <b>T4</b> passive → <b>T5</b>
-        flow. The <b>Measured by</b> column shows the winning tier + method per row.
+      <h2>WAN interfaces</h2>
+      <p className="wan-line" style={{ marginTop: -6, marginBottom: 14 }}>
+        One row per WAN interface, and per interface{" "}
+        <span className="badge" style={{ verticalAlign: "middle" }}>linked</span> to one.
+        <AskIris topic="wan.linked" label="Linked interface" />
+        Each row names the tier that measured it.
+        <AskIris topic="wan.tiers" label="Measured by" />
       </p>
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
 
@@ -656,22 +643,22 @@ export default function WanCircuits() {
         <div className={`stat ${rows.length ? "s-good" : "s-muted"}`}>
           <span className="stat-label">WAN interfaces</span>
           <span className="stat-value">{rows.length}</span>
-          <span className="stat-sub">{measured} with measured SLA</span>
+          <span className="stat-foot">{measured} with measured SLA</span>
         </div>
         <div className="stat s-muted">
           <span className="stat-label">Throughput</span>
           <span className="stat-value" style={{ fontSize: 26 }}>{fmtBps(totIn + totOut)}</span>
-          <span className="stat-sub">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)}</span>
+          <span className="stat-foot">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)}</span>
         </div>
         <div className={`stat ${rows.length ? (peak < 70 ? "s-good" : peak < 90 ? "s-warn" : "s-bad") : "s-muted"}`}>
           <span className="stat-label">Peak utilization</span>
           <span className="stat-value">{rows.length ? peak.toFixed(1) : "—"}{rows.length ? <span style={{ fontSize: 20, color: "var(--muted)" }}> %</span> : null}</span>
-          <span className="stat-sub">busiest interface</span>
+          <span className="stat-foot">busiest interface</span>
         </div>
         <div className={`stat ${down ? "s-bad" : "s-muted"}`}>
           <span className="stat-label">Interfaces down</span>
           <span className="stat-value">{down}</span>
-          <span className="stat-sub">{rows.length ? (down ? `${down} down` : "all up") : "none reported"}</span>
+          <span className="stat-foot">{rows.length ? (down ? `${down} down` : "all up") : "none reported"}</span>
         </div>
       </div>
 
@@ -685,11 +672,8 @@ export default function WanCircuits() {
 
       {loaded && rows.length === 0 ? (
         <div className="empty">
-          No WAN interfaces yet. WAN devices are matched by the measurement policy
-          (default name pattern <code>wan|edge|gw|dmz</code>); their interfaces —
-          plus any interface directly connected to them — appear once they export
-          <code>device_if_*</code> metrics. SLA columns populate once a probe
-          measures each interface's derived target.
+          No WAN interfaces yet.
+          <AskIris topic="wan.policy" label="No WAN interfaces" />
         </div>
       ) : (
         <DataTable<WanInterfaceRow>

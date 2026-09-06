@@ -3,6 +3,7 @@ import { api, Rule, PromInstantSeries } from "../services/api";
 import { useShell } from "../context/shell";
 import Wizard from "../components/Wizard";
 import Icon from "../components/Icon";
+import AskIris from "../components/AskIris";
 
 // New Monitor — guided monitor creation over the alert rules engine
 // (build-order #9). Three steps: pick a signal template (every template is
@@ -136,8 +137,8 @@ export default function NewMonitor() {
           <div>
             <h2>Monitor created</h2>
             <p className="form-sub">
-              <code>{created.name}</code> is live — the engine evaluates it every 30 seconds
-              {created.for ? <> and fires after the condition holds for {created.for}s</> : null}.
+              <code>{created.name}</code> is live. Evaluated every 30 seconds
+              {created.for ? <>, fires after {created.for}s</> : null}.
             </p>
           </div>
         </div>
@@ -154,8 +155,8 @@ export default function NewMonitor() {
       <div className="form-head">
         <span className="form-head-icon"><Icon name="alerts" size={18} /></span>
         <div>
-          <h2>Create Monitor</h2>
-          <p className="form-sub">Guided creation of an alerting monitor from supported telemetry signals — every template is backed by telemetry this platform already collects.</p>
+          <h2>Create monitor</h2>
+          <p className="form-sub">Every template is backed by telemetry you collect.<AskIris topic="monitor.templates" label="Monitor templates" /></p>
         </div>
       </div>
 
@@ -206,7 +207,7 @@ export default function NewMonitor() {
           {
             id: "condition",
             title: "Condition",
-            hint: "Scope it, set the threshold, and decide how long it must hold.",
+            hint: "Scope it and set the threshold.",
             isValid: () => (tpl?.id === "custom" ? customExpr.trim() !== "" : true),
             render: () => (
               <div className="form-grid">
@@ -256,7 +257,7 @@ export default function NewMonitor() {
           {
             id: "review",
             title: "Review",
-            hint: "Name it and sanity-check the live preview before creating.",
+            hint: "Name it and check the preview.",
             isValid: () => /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(name) && expr !== "",
             render: () => (
               <div className="form-grid">
@@ -317,18 +318,19 @@ function LivePreview({ expr }: { expr: string }) {
     Object.entries(m).filter(([k]) => k !== "__name__").map(([k, v]) => `${k}=${v}`).join(" ") || m.__name__ || "series";
 
   if (err) return <div className="empty" style={{ color: "var(--bad)" }}>That expression is not valid: {err}</div>;
-  if (series === null) return <div className="mini-meta">Checking what this would fire on right now…</div>;
+  if (series === null) return <div className="cc-empty">Checking what this would fire on…</div>;
   return (
     <div>
       <span className={`badge ${series.length ? "warn" : "good"}`}>
-        {series.length ? `would fire on ${series.length} series right now` : "quiet right now — fires when the condition starts holding"}
+        {series.length ? `would fire on ${series.length} series` : "quiet right now"}
       </span>
+      <AskIris topic="monitor.preview" label="Preview" />
       {series.length > 0 && (
         <ul className="dm-list" style={{ marginTop: 8 }}>
           {series.slice(0, 8).map((s, i) => (
-            <li key={i}><span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{label(s.metric)}</span><strong>{Number(s.value[1]).toFixed(2)}</strong></li>
+            <li key={i}><span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }}>{label(s.metric)}</span><strong>{Number(s.value[1]).toFixed(2)}</strong></li>
           ))}
-          {series.length > 8 && <li className="mini-meta">…and {series.length - 8} more</li>}
+          {series.length > 8 && <li className="list-more">…and {series.length - 8} more</li>}
         </ul>
       )}
     </div>

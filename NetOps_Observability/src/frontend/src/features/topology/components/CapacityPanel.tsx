@@ -14,12 +14,12 @@ import {
   SATURATION_THRESHOLD,
   type HotLink,
 } from "../utils/topologyCapacity";
+import AskIris from "../../../components/AskIris";
 
 const SECTION_LABEL: CSSProperties = {
-  fontSize: 11,
+  fontSize: 12.5,
   fontWeight: 600,
   letterSpacing: 0.4,
-  textTransform: "uppercase",
   color: "var(--fg-subtle)",
   marginBottom: 8,
 };
@@ -46,10 +46,10 @@ function HotRow({ link }: { link: HotLink }) {
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)", fontFamily: MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)", fontFamily: MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {link.sourceLabel} → {link.targetLabel}
         </span>
-        <span style={{ fontSize: 12, fontWeight: 700, color: utilColor(u), fontFamily: MONO, flex: "0 0 auto" }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: utilColor(u), fontFamily: MONO, flex: "0 0 auto" }}>
           {fmtUtil(u)}
         </span>
       </div>
@@ -62,7 +62,7 @@ function HotRow({ link }: { link: HotLink }) {
         {link.errored ? <Badge tone="warning">{link.edge.errors} errors</Badge> : null}
         {link.edge.bundle_id ? <Badge tone="muted">{link.edge.bundle_id}</Badge> : null}
         {link.edge.source_port ? (
-          <span style={{ fontSize: 10, color: "var(--fg-subtle)", fontFamily: MONO }}>
+          <span style={{ fontSize: 12.5, color: "var(--fg-subtle)", fontFamily: MONO }}>
             {link.edge.source_port}↔{link.edge.target_port}
           </span>
         ) : null}
@@ -78,7 +78,7 @@ function Badge({ tone, children }: { tone: "danger" | "warning" | "muted"; child
     muted: { fg: "var(--fg-subtle)", bg: "var(--panel)" },
   }[tone];
   return (
-    <span style={{ fontSize: 10, fontWeight: 600, color: map.fg, background: map.bg, padding: "1px 6px", borderRadius: 999 }}>
+    <span style={{ fontSize: 12.5, fontWeight: 600, color: map.fg, background: map.bg, padding: "1px 6px", borderRadius: 999 }}>
       {children}
     </span>
   );
@@ -95,7 +95,7 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
 
   if (hot.length === 0) {
     return (
-      <div style={{ fontSize: 12, color: "var(--fg-muted)", padding: 12, border: "1px dashed var(--border)", borderRadius: 6, background: "var(--surface)" }}>
+      <div style={{ fontSize: 12.5, color: "var(--fg-muted)", padding: 12, border: "1px dashed var(--border)", borderRadius: 6, background: "var(--surface)" }}>
         No measured link utilization in this view.
       </div>
     );
@@ -120,12 +120,12 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
             return (
               <li key={h.edge.id} style={{ padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", display: "grid", gap: 5 }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: "var(--fg)", fontFamily: MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)", fontFamily: MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {nodeName(h.edge.source)} ↔ {nodeName(h.edge.target)}
                   </span>
                   <span style={{ display: "inline-flex", gap: 6, alignItems: "baseline", flex: "0 0 auto" }}>
-                    {h.spof ? <Badge tone="warning">no ECMP backup</Badge> : null}
-                    <span style={{ fontSize: 11, fontWeight: 700, fontFamily: MONO, color: utilColor(SATURATION_THRESHOLD - h.headroom) }}>
+                    {h.spof ? <Badge tone="warning">no equal-cost backup</Badge> : null}
+                    <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: MONO, color: utilColor(SATURATION_THRESHOLD - h.headroom) }}>
                       {Math.round(h.headroom)}% headroom
                     </span>
                   </span>
@@ -133,7 +133,7 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
                 <button
                   type="button"
                   onClick={() => setDrainId(open ? null : h.edge.id)}
-                  style={{ justifySelf: "start", fontSize: 10, fontWeight: 600, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                  style={{ justifySelf: "start", fontSize: 12.5, fontWeight: 600, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
                 >
                   {open ? "▾ hide" : "▸ what if this drains?"}
                 </button>
@@ -141,11 +141,11 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
                   <div style={{ display: "grid", gap: 4, borderTop: "1px dashed var(--border)", paddingTop: 5 }}>
                     {drain.map((d) =>
                       d.stranded ? (
-                        <div key={d.node} style={{ fontSize: 10, color: "var(--danger, #e5484d)", fontWeight: 600 }}>
+                        <div key={d.node} style={{ fontSize: 12.5, color: "var(--danger, #e5484d)", fontWeight: 600 }}>
                           {d.nodeLabel}: STRANDED — no surviving path
                         </div>
                       ) : (
-                        <div key={d.node} style={{ fontSize: 10, color: "var(--fg-subtle)", fontFamily: MONO }}>
+                        <div key={d.node} style={{ fontSize: 12.5, color: "var(--fg-subtle)", fontFamily: MONO }}>
                           {d.nodeLabel}: {d.redistributed
                             .map((r) => `${r.otherLabel} ${Math.round(r.before)}→${Math.round(r.after)}%${r.saturates ? " ⚠" : ""}`)
                             .join("  ·  ")}
@@ -161,11 +161,12 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
       </div>
 
       <div>
-        <div style={SECTION_LABEL}>
-          ECMP imbalance {imbalance.length ? `· ${imbalance.length}` : ""}
+        <div style={{ ...SECTION_LABEL, display: "flex", alignItems: "center", gap: 4 }}>
+          Equal-cost imbalance {imbalance.length ? `· ${imbalance.length}` : ""}
+          <AskIris topic="topo.ecmp" label="Equal-cost imbalance" />
         </div>
         {imbalance.length === 0 ? (
-          <div style={{ fontSize: 11, color: "var(--fg-subtle)" }}>ECMP sibling sets are balanced.</div>
+          <div style={{ fontSize: 12.5, color: "var(--fg-subtle)" }}>Equal-cost paths are balanced.</div>
         ) : (
           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
             {imbalance.map((g) => (
@@ -174,12 +175,12 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
                 style={{ padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)" }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)", fontFamily: MONO }}>{g.nodeLabel}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--warning, #f5a524)", fontFamily: MONO }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)", fontFamily: MONO }}>{g.nodeLabel}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--warning, #f5a524)", fontFamily: MONO }}>
                     Δ{g.spread}%
                   </span>
                 </div>
-                <div style={{ fontSize: 10, color: "var(--fg-subtle)", marginTop: 3, fontFamily: MONO }}>
+                <div style={{ fontSize: 12.5, color: "var(--fg-subtle)", marginTop: 3, fontFamily: MONO }}>
                   {g.members.map((m) => `${m.otherLabel} ${fmtUtil(m.utilization)}`).join("  ·  ")}
                 </div>
               </li>

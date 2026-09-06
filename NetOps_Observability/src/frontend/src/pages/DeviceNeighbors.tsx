@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { vrfTerm } from "../lib/vendorTerms";
 import { api, Device, TopoLink, PromInstantSeries } from "../services/api";
+import AskIris from "../components/AskIris";
 
-// DeviceNeighbors — the Routing & neighbors tab of the device page. Three live
+// DeviceNeighbors — the Neighbours tab of the device page. Three live
 // views, all from data we already collect: L2/topology neighbors (LLDP/CDP/BGP-LS
 // via /api/topology/links), BGP peers (device_bgp_peer_state, 1..6), and OSPF
 // neighbors (device_ospf_nbr_state, 1..8). State→label + a colour dot so an
@@ -16,16 +17,16 @@ function StateDot({ color }: { color: string }) {
   return <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 999, background: color, marginRight: 8, flex: "none" }} />;
 }
 
-function Section({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
+function Section({ title, sub, ask, children }: { title: string; sub?: string; ask?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="cc-panel" style={{ marginBottom: 14 }}>
-      <div className="cc-panel-h"><h3 className="cc-panel-t">{title}</h3>{sub && <span className="cc-panel-meta">{sub}</span>}</div>
+      <div className="cc-panel-h"><h3 className="cc-panel-t">{title}</h3>{ask}{sub && <span className="cc-panel-meta">{sub}</span>}</div>
       <div style={{ padding: "6px 4px 10px" }}>{children}</div>
     </div>
   );
 }
 
-const th: React.CSSProperties = { textAlign: "left", fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", color: "var(--fg-muted)", padding: "4px 12px", fontWeight: 600 };
+const th: React.CSSProperties = { textAlign: "left", fontSize: 12.5, letterSpacing: ".04em", color: "var(--fg-muted)", padding: "4px 12px", fontWeight: 600 };
 const td: React.CSSProperties = { padding: "5px 12px", fontSize: 12.5, borderTop: "1px solid var(--panel-border, var(--border))" };
 const mono: React.CSSProperties = { ...td, fontFamily: "var(--font-mono)" };
 
@@ -45,8 +46,8 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
 
   return (
     <div style={{ maxWidth: 1100 }}>
-      <Section title="Layer-2 / topology neighbors" sub={links ? `${links.length} adjacenc${links.length === 1 ? "y" : "ies"} · LLDP · CDP · BGP-LS` : "loading…"}>
-        {links === null ? <div className="empty">Loading…</div> : links.length === 0 ? <p className="mini-meta" style={{ padding: "0 12px" }}>No LLDP/CDP/BGP-LS neighbors observed for this device.</p> : (
+      <Section title="Neighbours" sub={links ? `${links.length} adjacenc${links.length === 1 ? "y" : "ies"}` : "loading…"} ask={<AskIris topic="device.neighbors" label="Neighbours" />}>
+        {links === null ? <div className="empty">Loading…</div> : links.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No neighbour protocol reported one here.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Local port</th><th style={th}>Neighbor</th><th style={th}>Remote port</th><th style={th}>Protocol</th></tr></thead>
             <tbody>
@@ -58,7 +59,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
                     <td style={mono}>{(local ? l.local_port : l.remote_port) || "—"}</td>
                     <td style={td}>{nbr || "—"}</td>
                     <td style={mono}>{(local ? l.remote_port : l.local_port) || "—"}</td>
-                    <td style={td}><span className="badge accent-badge" style={{ textTransform: "uppercase", fontSize: 10 }}>{proto}</span></td>
+                    <td style={td}><span className="badge accent-badge" style={{ fontSize: 12.5 }}>{proto}</span></td>
                   </tr>
                 );
               })}
@@ -68,7 +69,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
       </Section>
 
       <Section title="BGP neighbors" sub={bgp ? `${bgp.length} peer${bgp.length === 1 ? "" : "s"}` : "loading…"}>
-        {bgp === null ? <div className="empty">Loading…</div> : bgp.length === 0 ? <p className="mini-meta" style={{ padding: "0 12px" }}>No BGP peers have been seen for this device.</p> : (
+        {bgp === null ? <div className="empty">Loading…</div> : bgp.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No BGP peer seen on this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Peer</th><th style={th}>State</th><th style={th}>AS / {vrfTerm(device.vendor)}</th></tr></thead>
             <tbody>
@@ -89,7 +90,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
       </Section>
 
       <Section title="OSPF neighbors" sub={ospf ? `${ospf.length} adjacenc${ospf.length === 1 ? "y" : "ies"}` : "loading…"}>
-        {ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="mini-meta" style={{ padding: "0 12px" }}>No OSPF neighbours have been seen for this device.</p> : (
+        {ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="cc-empty" style={{ padding: "0 12px" }}>No OSPF neighbour seen on this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Neighbor</th><th style={th}>State</th></tr></thead>
             <tbody>

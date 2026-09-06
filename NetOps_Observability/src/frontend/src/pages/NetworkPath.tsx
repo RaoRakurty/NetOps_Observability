@@ -3,6 +3,7 @@ import { api, ProbePath } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { Group, Panel, MetricTop } from "../components/board/panels";
 import PathHealthList from "../components/PathHealthList";
+import AskIris from "../components/AskIris";
 
 // NetworkPath (Flow Trace) — visualizes the active-measurement pipeline: the
 // hop-by-hop path from traceroute (/api/probe/paths) and the path SLA from STAMP
@@ -15,7 +16,7 @@ type Hop = ProbePath["hops"][number];
 function HopTable({ hops }: { hops: Hop[] }) {
   const cols: Column<Hop>[] = [
     { key: "ttl", header: "Hop", width: "56px", sortable: true, sortValue: (h) => h.ttl, render: (h) => `${h.ttl}` },
-    { key: "ip", header: "Router", sortable: true, text: (h) => h.ip || "*", render: (h) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{h.ip || "* (no reply)"}</span> },
+    { key: "ip", header: "Router", sortable: true, text: (h) => h.ip || "*", render: (h) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }}>{h.ip || "* (no reply)"}</span> },
     // rtt_ms / loss_pct can be absent on a hop (no reply, or a prober that doesn't
     // measure per-hop loss) — guard against undefined.toFixed(), which throws and
     // white-screens the whole Flow Trace page.
@@ -45,15 +46,15 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
 
   return (
     <div className="dm-board">
-      <Group title="Path Behavior Health" hue="#14B8A6">
-        <p className="mini-meta" style={{ margin: "0 0 8px" }}>
-          Is each path behaving normally right now, compared with its own typical behavior?
-          Adaptive baseline (not fixed thresholds), with confidence and likely owner — worst first.
+      <Group title="Path behaviour" hue="#14B8A6">
+        <p className="proto-key">
+          Each path against its own baseline. Worst first.
+          <AskIris topic="path.behaviour" label="Path behaviour" />
         </p>
         <PathHealthList />
       </Group>
 
-      <Group title="Network paths (traceroute)" hue="#F97316">
+      <Group title="Network paths" hue="#F97316">
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
         ) : paths.length === 0 ? (
@@ -61,11 +62,10 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
             <div className="board-empty">
               <div className="board-empty-msg">No active path measurements.</div>
               <div className="board-empty-hint">
-                Enable path discovery: set <code>FEATURE_TRACEROUTE=true</code> and <code>TRACEROUTE_TARGETS</code> (host/IP list) on the API
-                (grant the container <code>CAP_NET_RAW</code>). Choose ICMP or, for firewalled paths, <code>TRACEROUTE_METHOD=tcp</code>.
+                Enable path discovery in the API settings, then name the targets.
               </div>
             </div>
-            {loaded && <p className="mini-meta" style={{ margin: 0 }}>Paris-consistent traceroute → accurate on ECMP/load-balanced networks.</p>}
+            {loaded && <p className="proto-key">Probes stay on one path.<AskIris topic="path.traceroute" label="Traceroute" /></p>}
           </Panel>
         ) : (
           paths.map((p) => (
@@ -81,19 +81,20 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
         )}
       </Group>
 
-      <Group title="Path SLA (STAMP / RFC 8762)" hue="#14B8A6">
+      <Group title="Path SLA" hue="#14B8A6">
         <div className="dm-grid">
           <MetricTop title="Round-trip delay by target (ms)" query="(probe_rtt_ms or synthetic_icmp_rtt_ms)" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="generic" />
           <MetricTop title="One-way delay by target (ms)" query="probe_owd_ms" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="generic" />
           <MetricTop title="Jitter / PDV by target (ms)" query="probe_pdv_ms" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="generic" />
           <MetricTop title="Packet loss by target (%)" query="(probe_loss_pct or synthetic_icmp_loss_pct)" minutes={m} fmtX={(n) => `${n.toFixed(1)}%`} labelKeys={["dst"]} dataKind="generic" />
         </div>
-        <p className="mini-meta" style={{ margin: 0 }}>
-          One-way delay (RFC 7679), loss (RFC 2680) and jitter/PDV (RFC 3393) from STAMP probes. Enable with <code>FEATURE_ACTIVE_PROBE=true</code> + <code>STAMP_TARGETS</code> (and a reflector via <code>FEATURE_STAMP_REFLECTOR</code>). These feed RFC-grade Path Health.
+        <p className="proto-key">
+          Measured by STAMP probes, each direction on its own.
+          <AskIris topic="path.stamp" label="Path SLA" />
         </p>
       </Group>
 
-      <Group title="Service checks (synthetics)" hue="#8B5CF6">
+      <Group title="Service checks" hue="#8B5CF6">
         <div className="dm-grid">
           <MetricTop title="HTTP total time by target (ms)" query="synthetic_http_total_ms" minutes={m} fmtX={(n) => `${n.toFixed(0)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
           <MetricTop title="HTTP time to first byte (ms)" query="synthetic_http_ttfb_ms" minutes={m} fmtX={(n) => `${n.toFixed(0)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
@@ -102,9 +103,9 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
           <MetricTop title="TLS certificate days to expiry" query="synthetic_http_cert_expiry_days" minutes={m} fmtX={(n) => `${n.toFixed(0)} d`} labelKeys={["dst"]} dataKind="synthetics" />
           <MetricTop title="Checks down now" query="1 - synthetic_up" minutes={m} fmtX={(n) => (n >= 1 ? "down" : "up")} labelKeys={["dst", "check"]} dataKind="synthetics" />
         </div>
-        <p className="mini-meta" style={{ margin: 0 }}>
-          Active service checks — HTTP(S) with per-phase timings (DNS · connect · TLS · first byte), ICMP echo (RFC 792) and TCP connect.
-          Enable with <code>FEATURE_SYNTHETICS=true</code> + <code>SYNTHETIC_HTTP_TARGETS</code> / <code>SYNTHETIC_ICMP_TARGETS</code> / <code>SYNTHETIC_TCP_TARGETS</code>.
+        <p className="proto-key">
+          These measure a service, not a path.
+          <AskIris topic="path.synthetics" label="Service checks" />
         </p>
       </Group>
     </div>

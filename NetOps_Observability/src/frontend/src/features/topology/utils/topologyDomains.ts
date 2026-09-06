@@ -24,10 +24,10 @@ export type DomainMeta = {
 export const DOMAINS: DomainMeta[] = [
   // The id stays "lan" (links, saved layouts and the route serialization carry
   // it); the LABEL is honest about what the unfiltered canvas now holds.
-  { id: "lan", label: "All networks", blurb: "The whole discovered estate on one canvas — on-prem fabric plus the projected cloud network. The other options filter this same canvas." },
-  { id: "sdwan", label: "SD-WAN", blurb: "WAN edge: SD-WAN gateways, tunnels/overlays and transport." },
-  { id: "dc", label: "DC", blurb: "Data-center fabric: spine/leaf, ToR, compute/storage rows." },
-  { id: "cloud", label: "Cloud", blurb: "Cloud network: VPCs/VNets, subnets, gateways, NVAs, seams." },
+  { id: "lan", label: "All networks", blurb: "The whole discovered estate on one canvas." },
+  { id: "sdwan", label: "SD-WAN", blurb: "The WAN edge: gateways, tunnels and transport." },
+  { id: "dc", label: "DC", blurb: "The data-centre fabric and its compute rows." },
+  { id: "cloud", label: "Cloud", blurb: "The discovered cloud network and its gateways." },
 ];
 
 const SDWAN_RE = /(wan|sd-?wan|vpn|tunnel|overlay|dmvpn|mpls|transport|gateway|edge|uplink|carrier)/i;

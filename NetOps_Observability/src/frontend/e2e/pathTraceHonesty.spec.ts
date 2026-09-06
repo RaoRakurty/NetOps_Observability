@@ -72,6 +72,12 @@ test("a COMPUTED path is labeled an inference, never a live trace (#8)", async (
   }
   // The non-negotiable: a computed path must NOT be presented as measured.
   await expect(page.getByText("Measured · live traceroute")).toHaveCount(0);
+  await expect(page.getByText("Computed · inferred shortest path (not a live trace)")).toHaveCount(0);
+  // UI-words sweep 4 (tracker 270): the chip gave up the sentence that EXPLAINED
+  // the inference, never the claim. The explanation is authored
+  // (ai/skills/explain/path.computed.md) and reachable from the `(i)` beside it.
+  await expect(page.getByRole("button", { name: "Ask Iris about Computed · not a live trace" }).first())
+    .toBeVisible();
 });
 
 test("a MEASURED path is labeled as measured ground truth", async ({ page }) => {
@@ -79,4 +85,5 @@ test("a MEASURED path is labeled as measured ground truth", async ({ page }) => 
 
   await expect(page.locator("span.netpath-prov")).toContainText(/Measured/);
   await expect(page.getByText(/not a live trace/i)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Ask Iris about Measured" }).first()).toBeVisible();
 });

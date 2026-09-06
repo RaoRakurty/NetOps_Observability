@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, WirelessAP, WirelessBSSID, WirelessController, WirelessWLAN } from "../services/api";
 import { Skeleton, Stat, StatStrip } from "../components/ui";
+import AskIris from "../components/AskIris";
 
 // Wireless (#128 Phase 7) — the wireless canonical inventory: controllers
 // (logical clusters + physical members), APs with radios and their LAN uplink
@@ -51,18 +52,18 @@ function BssidTable({ aps, byAP, read, failed }: {
 }) {
   if (failed || !read) {
     return (
-      <p className="muted" style={{ marginTop: 8 }}>
-        The BSSIDs beneath these access points were not read. What each radio is broadcasting is unknown
-        here — it is not a claim that they broadcast nothing.
+      <p className="cc-empty" style={{ marginTop: 8 }}>
+        The BSSIDs were not read.
+        <AskIris topic="wifi.bssid-unread" label="BSSIDs not read" />
       </p>
     );
   }
   const rows = aps.flatMap((ap) => (byAP.get(ap.ap_id) ?? []).map((b) => ({ ap, b })));
   if (rows.length === 0) {
     return (
-      <p className="muted" style={{ marginTop: 8 }}>
-        The controller connector reported no BSSID for these access points. A controller that does not
-        publish BSSIDs still serves clients; nothing is inferred from the gap.
+      <p className="cc-empty" style={{ marginTop: 8 }}>
+        The controller reported no BSSID here.
+        <AskIris topic="wifi.bssid-none" label="No BSSID reported" />
       </p>
     );
   }
@@ -141,7 +142,7 @@ export default function Wireless() {
   }, [aps]);
 
   if (err) {
-    return <div className="page-pad"><div className="card error-card" role="alert">Wireless inventory unavailable: {err}</div></div>;
+    return <div className="page-pad"><div className="card error-card" role="alert">The wireless inventory could not be read: {err}</div></div>;
   }
   if (loading) {
     return (
@@ -157,19 +158,15 @@ export default function Wireless() {
       <StatStrip>
         <Stat label="Controllers" value={String(controllers!.length)} />
         <Stat label="Access points" value={String(stats.total)} />
-        <Stat label="APs with a radio down" value={String(stats.radioDown)} tone={stats.radioDown ? "bad" : ""} />
-        <Stat label="Stale (not seen last poll)" value={String(stats.stale)} tone={stats.stale ? "warn" : ""} />
+        <Stat label="Radio down" value={String(stats.radioDown)} tone={stats.radioDown ? "bad" : ""} />
+        <Stat label="Stale" value={String(stats.stale)} tone={stats.stale ? "warn" : ""} />
       </StatStrip>
 
       {empty && (
         <div className="card" style={{ marginTop: 16 }}>
-          <h3>No wireless inventory yet</h3>
-          <p className="muted">
-            The wireless view fills from a vendor controller connector. Add a
-            <b> Cisco Catalyst 9800</b> integration under <a href="#/infrastructure/discovery/nms">NMS Integrations</a>
-            {" "}(RESTCONF read-only credentials) and the controllers, APs, radios and
-            WLANs discovered there will appear here — along with AP join / radio
-            state evidence in Correlations.
+          <h3>No wireless inventory<AskIris topic="wifi.inventory-empty" label="No wireless inventory" /></h3>
+          <p className="cc-empty">
+            Add a controller connector under <a href="#/infrastructure/discovery/nms">NMS integrations</a>.
           </p>
         </div>
       )}
@@ -179,7 +176,8 @@ export default function Wireless() {
           <h3>Controllers</h3>
           <table className="data-table">
             <thead>
-              <tr><th>Name</th><th>Vendor</th><th>Cluster</th><th>Members</th><th>Visibility</th><th>Last seen</th></tr>
+              <tr><th>Name</th><th>Vendor</th><th>Cluster</th><th>Members</th><th>Visibility</th>
+                <th>Last seen<AskIris topic="wifi.stale" label="Last seen" /></th></tr>
             </thead>
             <tbody>
               {controllers!.map((c) => (
@@ -202,7 +200,9 @@ export default function Wireless() {
           <h3>Access points</h3>
           <table className="data-table">
             <thead>
-              <tr><th>Name</th><th>Model</th><th>Serial</th><th>Radios</th><th>LAN uplink</th><th>Mgmt address</th><th>Forwarding</th><th>Last seen</th></tr>
+              <tr><th>Name</th><th>Model</th><th>Serial</th><th>Radios</th>
+                <th>Uplink<AskIris topic="wifi.uplink" label="Uplink" /></th>
+                <th>Address</th><th>Forwarding</th><th>Last seen</th></tr>
             </thead>
             <tbody>
               {aps!.map((ap) => (
@@ -211,7 +211,7 @@ export default function Wireless() {
                   <td>{ap.model || "—"}</td>
                   <td>{ap.serial || "—"}</td>
                   <td><RadioChips ap={ap} /></td>
-                  <td title="The AP's switch port — the wireless↔LAN join and the second witness a confirmed wireless verdict needs">
+                  <td title="The access point's switch port">
                     {ap.uplink_switch_ref ? `${ap.uplink_switch_ref}:${ap.uplink_port_ref}` : <span className="muted">unknown</span>}
                   </td>
                   <td>{ap.mgmt_address || "—"}</td>

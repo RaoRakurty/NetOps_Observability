@@ -81,7 +81,11 @@ describe("Wireless — BSSIDs beneath the access points", () => {
     render(<Wireless />);
     // The inventory still renders.
     expect(await screen.findByText("lobby-3")).toBeTruthy();
-    expect(screen.getByText(/not a claim that they broadcast nothing/i)).toBeTruthy();
+    // UI-words sweep 4 (tracker 270): the failure is STATED on screen; "not a
+    // claim that they broadcast nothing" is ai/skills/explain/wifi.bssid-unread.md,
+    // reachable from the `(i)` that replaced it.
+    expect(screen.getByText(/The BSSIDs were not read\./i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about BSSIDs not read" })).toBeTruthy();
     expect(screen.queryByText("BSSIDs")).toBeNull();
   });
 
@@ -89,7 +93,9 @@ describe("Wireless — BSSIDs beneath the access points", () => {
     wirelessBSSIDs.mockResolvedValue([]);
     render(<Wireless />);
     await screen.findByText("lobby-3");
-    expect(screen.getByText(/reported no BSSID for these access points/i)).toBeTruthy();
-    expect(screen.getByText(/nothing is inferred from the gap/i)).toBeTruthy();
+    expect(screen.getByText(/The controller reported no BSSID here\./i)).toBeTruthy();
+    // "a controller that publishes no BSSIDs still serves clients; nothing is
+    // inferred from the gap" is ai/skills/explain/wifi.bssid-none.md now.
+    expect(screen.getByRole("button", { name: "Ask Iris about No BSSID reported" })).toBeTruthy();
   });
 });

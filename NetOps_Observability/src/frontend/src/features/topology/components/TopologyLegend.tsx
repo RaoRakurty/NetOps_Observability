@@ -1,41 +1,49 @@
-// TopologyLegend — a small collapsible card explaining the canvas grammar:
-// health colors (always paired with a glyph), edge styles, and the unresolved
-// node treatment. The note adapts to the active overlay.
+// TopologyLegend — the canvas grammar as a key, not a lesson: health rings
+// (always glyph-paired), edge styles, and the unresolved-node treatment.
+//
+// UI-words sweep 4 (tracker 270). The legend used to end in a sentence that
+// TAUGHT what the active overlay does. Each of those ten sentences is now one
+// authored file under ai/skills/explain/overlay.*, reachable from the `(i)`
+// beside a three- or four-word line. The swatches themselves are the key and
+// stay exactly as they were.
 
 import { useState } from "react";
 import type { OverlayKind, Health } from "../api/topologyTypes";
 import { HEALTH_COLOR, HEALTH_GLYPH, HEALTH_LABEL } from "../utils/topologyHealth";
 import { RCA_OVERLAY, RCA_OVERLAY_ORDER } from "../utils/rcaOverlay";
+import AskIris from "../../../components/AskIris";
 
-const OVERLAY_NOTE: Record<OverlayKind, string> = {
-  health: "Node rings show health; edges keep their relationship style.",
-  utilization: "Edge width scales with link utilization.",
-  interface_errors: "Edges thicken / redden with error & discard rate.",
-  routing_changes: "Highlighted edges changed routing in the window.",
-  config_drift: "Flagged nodes drifted from intended config.",
-  syslog: "Nodes flagged by syslog activity in the window.",
-  flow: "Dashed edges are flow-observed dependencies (lower confidence).",
-  rca_evidence: "Thick accent edges were used by the active RCA.",
-  golden_path_delta: "Compares the live path against the golden path.",
-  historical_diff: "Added / removed / changed objects vs the prior snapshot.",
+/** The short line the legend keeps, and the authored file that carries the rest. */
+const OVERLAY_NOTE: Record<OverlayKind, { line: string; topic: string }> = {
+  health: { line: "Rings carry health", topic: "overlay.health" },
+  utilization: { line: "Width is link load", topic: "overlay.utilization" },
+  interface_errors: { line: "Width is error rate", topic: "overlay.interface-errors" },
+  routing_changes: { line: "Routing moved here", topic: "overlay.routing-changes" },
+  config_drift: { line: "Config differs from intent", topic: "overlay.config-drift" },
+  syslog: { line: "Device logged here", topic: "overlay.syslog" },
+  flow: { line: "Dashed is flow-observed", topic: "overlay.flow" },
+  rca_evidence: { line: "Used by this RCA", topic: "overlay.rca-evidence" },
+  golden_path_delta: { line: "Live path versus golden", topic: "overlay.golden-path-delta" },
+  historical_diff: { line: "Changed since the snapshot", topic: "overlay.historical-diff" },
 };
 
 const HEALTH_ORDER: Health[] = ["ok", "warning", "critical", "maintenance", "unknown"];
 
 function Swatch({ color, glyph, label }: { color: string; glyph: string; label: string }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11, color: "var(--fg-muted)" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: "var(--fg-muted)" }}>
       <span
         style={{
-          width: 14,
-          height: 14,
+          width: 18,
+          height: 18,
+          flex: "0 0 auto",
           borderRadius: "50%",
           border: `2px solid ${color}`,
           background: "var(--surface)",
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
-          fontSize: 8,
+          fontSize: 12.5,
           fontWeight: 700,
           color,
           fontFamily: "var(--font-mono, ui-monospace, monospace)",
@@ -48,11 +56,12 @@ function Swatch({ color, glyph, label }: { color: string; glyph: string; label: 
   );
 }
 
-function EdgeStyle({ label, render }: { label: string; render: React.ReactNode }) {
+function EdgeStyle({ label, render, ask }: { label: string; render: React.ReactNode; ask?: React.ReactNode }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "var(--fg-muted)" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--fg-muted)" }}>
       <span style={{ width: 30, display: "inline-flex", alignItems: "center" }}>{render}</span>
       {label}
+      {ask}
     </div>
   );
 }
@@ -60,18 +69,19 @@ function EdgeStyle({ label, render }: { label: string; render: React.ReactNode }
 /** RCA state swatch: a glyph in the state colour (hollow ring for missing-evidence). */
 function RcaSwatch({ color, glyph, label, hollow }: { color: string; glyph: string; label: string; hollow: boolean }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11, color: "var(--fg-muted)" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: "var(--fg-muted)" }}>
       <span
         style={{
-          width: 14,
-          height: 14,
+          width: 18,
+          height: 18,
+          flex: "0 0 auto",
           borderRadius: "50%",
           border: `2px ${hollow ? "dashed" : "solid"} ${color}`,
           background: hollow ? "transparent" : `color-mix(in srgb, ${color} 16%, transparent)`,
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
-          fontSize: 8,
+          fontSize: 12.5,
           fontWeight: 700,
           color,
           fontFamily: "var(--font-mono, ui-monospace, monospace)",
@@ -117,15 +127,13 @@ export default function TopologyLegend({ overlay, showRca = false }: { overlay: 
           border: "none",
           cursor: "pointer",
           padding: "8px 10px",
-          fontSize: 11,
+          fontSize: 12.5,
           fontWeight: 600,
-          letterSpacing: 0.4,
-          textTransform: "uppercase",
           color: "var(--fg-subtle)",
         }}
       >
         Legend
-        <span style={{ color: "var(--fg-muted)", fontSize: 10 }}>{open ? "▾" : "▸"}</span>
+        <span style={{ color: "var(--fg-muted)", fontSize: 12.5 }}>{open ? "▾" : "▸"}</span>
       </button>
 
       {open ? (
@@ -133,7 +141,7 @@ export default function TopologyLegend({ overlay, showRca = false }: { overlay: 
           {showRca && (
             <>
               <div style={{ display: "grid", gap: 5 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: "var(--fg-subtle)" }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--fg-subtle)" }}>
                   RCA verdict
                 </div>
                 {RCA_OVERLAY_ORDER.map((s) => (
@@ -159,6 +167,7 @@ export default function TopologyLegend({ overlay, showRca = false }: { overlay: 
             />
             <EdgeStyle
               label="Inferred / flow"
+              ask={<AskIris topic="topo.edge-confidence" label="Inferred / flow" />}
               render={
                 <span style={{ width: 30, borderTop: "2px dashed var(--fg-muted)", display: "block" }} />
               }
@@ -184,7 +193,7 @@ export default function TopologyLegend({ overlay, showRca = false }: { overlay: 
             />
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "var(--fg-muted)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--fg-muted)" }}>
             <span
               style={{
                 width: 14,
@@ -193,15 +202,18 @@ export default function TopologyLegend({ overlay, showRca = false }: { overlay: 
                 border: "1px dashed var(--fg-subtle)",
                 background: "var(--surface)",
                 opacity: 0.6,
+                flex: "0 0 auto",
               }}
             />
             Unresolved node
+            <AskIris topic="topo.unresolved" label="Unresolved node" />
           </div>
 
           <div style={{ height: 1, background: "var(--border)" }} />
 
-          <div style={{ fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.4 }}>
-            {OVERLAY_NOTE[overlay]}
+          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12.5, color: "var(--fg-subtle)", lineHeight: 1.4 }}>
+            {OVERLAY_NOTE[overlay].line}
+            <AskIris topic={OVERLAY_NOTE[overlay].topic} label={OVERLAY_NOTE[overlay].line} />
           </div>
         </div>
       ) : null}

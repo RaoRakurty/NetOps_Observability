@@ -15,7 +15,7 @@ import { capacityTopology } from "../mock/index";
 export const CapacityWorkflow: WorkflowDef = {
   id: "capacity",
   label: "Capacity",
-  blurb: "Hot links, ECMP balance and a utilization overlay across the fabric. Saturated paths light up first.",
+  blurb: "Hot links and equal-cost balance.",
   implemented: true,
   view: capacityTopology,
   computeSpotlight(view: TopologyView, selection: TopologySelection): SpotlightResult {

@@ -20,6 +20,7 @@ import { RCA_OVERLAY } from "../utils/rcaOverlay";
 import { ShapeSVG, kindForRole, type ShapeKind } from "../../../components/graph/shapes";
 import { fmtMs, fmtMbps } from "../utils/pathFormat";
 import PathAnalysisPanel from "./PathAnalysisPanel";
+import AskIris from "../../../components/AskIris";
 
 const MONO = "var(--font-mono)";
 
@@ -92,8 +93,8 @@ function hopStamp(n: TopologyNode | undefined): HopStamp {
 /** Provenance tooltip for a measured latency/loss value — the operator must always
  *  be able to see HOW a number was measured. */
 function sourceTip(s: HopMetricSource | undefined): string | undefined {
-  if (s === "trace") return "Measured by traceroute (per-hop probe; routers may deprioritize ICMP replies)";
-  if (s === "stamp") return "Measured by a STAMP active probe";
+  if (s === "trace") return "Measured by a traceroute probe";
+  if (s === "stamp") return "Measured by a STAMP probe";
   return undefined;
 }
 /** A hop's end-to-end latency for segment-delta math: prefer one-way delay (OWD),
@@ -179,8 +180,8 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
   const measured = view.path_source === "measured";
   const provenance = view.path_source
     ? measured
-      ? { label: "Measured · live traceroute", color: "var(--ok, #30a46c)" }
-      : { label: "Computed · inferred shortest path (not a live trace)", color: "var(--warn, #f5a524)" }
+      ? { label: "Measured", topic: "path.measured", color: "var(--ok, #30a46c)" }
+      : { label: "Computed · not a live trace", topic: "path.computed", color: "var(--warn, #f5a524)" }
     : null;
 
   return (
@@ -188,7 +189,7 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
       <div className="netpath-main">
         <header className="netpath-head">
           <div>
-            <div className="netpath-title">Network Path</div>
+            <div className="netpath-title">Network path</div>
             <div className="netpath-route" style={{ fontFamily: MONO }}>
               {srcN?.label ?? path[0]} <span className="netpath-route-arrow" aria-hidden="true">→</span>{" "}
               {dstN?.label ?? path[path.length - 1]}
@@ -196,16 +197,17 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
             </div>
           </div>
           {provenance && (
+            <>
             <span
               className="netpath-prov"
               style={{ color: provenance.color, borderColor: provenance.color,
                 background: `color-mix(in srgb, ${provenance.color} 10%, transparent)` }}
-              title={measured
-                ? "Hops observed by an active traceroute/probe — ground truth."
-                : "Derived from the IGP-weighted topology (shortest path), not an observed forwarding path. Run a traceroute to confirm."}
+              title={measured ? "Every hop was observed by a probe" : "Derived from the topology, not observed"}
             >
               {provenance.label}
             </span>
+            <AskIris topic={provenance.topic} label={provenance.label} />
+            </>
           )}
         </header>
 
@@ -256,7 +258,7 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                   <button type="button"
                     className={`netpath-stamp${openHop === id ? " open" : ""}${st.has ? " live" : ""}`}
                     aria-expanded={openHop === id}
-                    title="Click for the full per-hop metrics (latency, jitter, delay, loss, load, …)"
+                    title="Open the full per-hop metrics"
                     onClick={() => setOpenHop(openHop === id ? null : id)}>
                     <span className="nm"><b>{st.rtt != null ? fmtMs(st.rtt) : "—"}</b><i>LAT</i></span>
                     <span className="nm-div" aria-hidden="true" />
@@ -275,7 +277,7 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                       <path d="M92 9 L84 5 L84 13 Z" fill={seg.color} />
                     </svg>
                     <div className="netpath-link-meta" style={{ color: isBottleneck ? "var(--warn)" : seg.color, fontFamily: MONO }}>
-                      {isBottleneck && <span className="netpath-bottleneck" title="Likely bottleneck on this path">bottleneck · </span>}
+                      {isBottleneck && <span className="netpath-bottleneck" title="Busiest or degraded link on this path">bottleneck · </span>}
                       {seg.meta}
                     </div>
                     {(egress || ingress) && (
@@ -289,9 +291,10 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                       <div className={`netpath-seg-delay${i === worstDelayIdx ? " worst" : ""}`}
                         style={{ fontFamily: MONO }}
                         title={i === worstDelayIdx
-                          ? "This segment adds the most latency on the path (STAMP delta)"
-                          : "Latency this segment adds (downstream STAMP − upstream STAMP)"}>
+                          ? "This segment adds the most latency"
+                          : "Latency this segment adds"}>
                         +{fmtMs(segDelay[i] as number)} {i === worstDelayIdx ? "⤴ most delay" : "added"}
+                        {i === worstDelayIdx && <AskIris topic="path.segment-delay" label="Added latency" />}
                       </div>
                     )}
                   </div>
@@ -331,23 +334,23 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                 <button type="button" className="netpath-hd-close" aria-label="Close" onClick={() => setOpenHop(null)}>✕</button>
               </div>
               <div className="netpath-hopdetail-grid">
-                <div className="netpath-hd-group">Active measurement</div>
+                <div className="netpath-hd-group">Active measurement<AskIris topic="path.stamp" label="Active measurement" /></div>
                 {M("Latency (round-trip)", st.rtt != null ? fmtMs(st.rtt) : null,
-                  "No STAMP probe or traceroute measurement reaches this hop yet", sourceTip(st.rttSource))}
-                {M("One-way delay (OWD)", st.owd != null ? fmtMs(st.owd) : null,
-                  "STAMP-only metric — no STAMP probe targets this hop's IP yet")}
-                {M("Jitter (PDV)", st.pdv != null ? fmtMs(st.pdv) : null,
-                  "STAMP-only metric — no STAMP probe targets this hop's IP yet")}
+                  "No probe reaches this hop yet", sourceTip(st.rttSource))}
+                {M("One-way delay", st.owd != null ? fmtMs(st.owd) : null,
+                  "No STAMP probe targets this hop yet")}
+                {M("Jitter", st.pdv != null ? fmtMs(st.pdv) : null,
+                  "No STAMP probe targets this hop yet")}
                 {M("Packet loss", st.loss != null ? `${st.loss.toFixed(st.loss < 1 ? 2 : 1)}%` : null,
-                  "No STAMP probe or traceroute measurement reaches this hop yet", sourceTip(st.lossSource))}
-                <div className="netpath-hd-group">Link</div>
-                {M("Load (utilization)", loadPct != null ? `${Math.round(loadPct)}%` : null)}
-                {M("Bandwidth", bw != null ? fmtMbps(bw) : null, "Interface link speed (ifSpeed) — no series for this hop's interface")}
-                {M("Throughput", thr != null ? fmtMbps(thr) : null, "Interface octet rate — no series for this hop's interface")}
-                {M("MTU", mtu != null ? `${Math.round(mtu)} bytes` : null, "ifMtu added to the SNMP profile — populates on the next poll")}
+                  "No probe reaches this hop yet", sourceTip(st.lossSource))}
+                <div className="netpath-hd-group">Link<AskIris topic="path.hop-interface" label="Link" /></div>
+                {M("Load", loadPct != null ? `${Math.round(loadPct)}%` : null)}
+                {M("Bandwidth", bw != null ? fmtMbps(bw) : null, "No link-speed series for this interface")}
+                {M("Throughput", thr != null ? fmtMbps(thr) : null, "No octet-rate series for this interface")}
+                {M("MTU", mtu != null ? `${Math.round(mtu)} bytes` : null, "Not in the collection profile yet")}
                 <div className="netpath-hd-group">Path</div>
                 {M("Hop position", `${idx + 1} of ${path.length}`)}
-                {M("Reliability", rel != null ? `${rel.toFixed(2)}%` : null, "oper-status × error-free ratio — no series for this hop's interface")}
+                {M("Reliability", rel != null ? `${rel.toFixed(2)}%` : null, "No reliability series for this interface")}
               </div>
             </div>
           );
@@ -355,9 +358,8 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
 
         {!anyStamp && !openHop && (
           <div className="netpath-stamp-foot" role="note">
-            Per-hop latency / jitter appear here from STAMP active probes and traceroute per-hop
-            measurements. No probe currently covers the hops
-            on this path; add a STAMP target per hop to light them up.
+            No probe covers the hops on this path.
+            <AskIris topic="path.not-measured" label="No probe covers these hops" />
           </div>
         )}
       </div>

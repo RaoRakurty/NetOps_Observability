@@ -188,8 +188,9 @@ export function scanWordBudget(source: string): Breach[] {
 // landed (92 files, 401 breaches); sweep 1 removed 14 of them (78 files, 353
 // breaches), sweep 2 (Security + Data Protection) removed 16 more (62 files,
 // 312 breaches), and sweep 3 (Administration · Licence · Registries · Cloud
-// ingest · Platform tools) removed 6 more, leaving 56 files and 240 breaches.
-// The number is that file's breach count, so the whole
+// ingest · Platform tools) removed 6 more, and sweep 4 (Topology · WAN · Wireless
+// · Device detail · Routing protocols · Path trace · New monitor) removed 8 more,
+// leaving 48 files and 202 breaches. The number is that file's breach count, so the whole
 // backlog is visible in one diff and each sweep is a deletion from this list.
 // Sweep order and the "done" definition are in the design doc; a swept file
 // loses its line here.
@@ -262,10 +263,10 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
   });
 
   // Sweeps 1 (Dashboard/Command Center · Operations · Alerts), 2 (Security ·
-  // Data Protection) and 3 (Administration · Licence · Registries · Cloud
-  // ingest · Platform tools) are DONE, so these files must never reappear in the
-  // debt list — the allowlist may not grow a new entry for one, and its breach
-  // count must stay zero.
+  // Data Protection), 3 (Administration · Licence · Registries · Cloud ingest ·
+  // Platform tools) and 4 (Topology · WAN · Wireless) are DONE, so these files
+  // must never reappear in the debt list — the allowlist may not grow a new entry
+  // for one, and its breach count must stay zero.
   it.each([
     "components/noc.tsx",
     "pages/CommandCenter.tsx",
@@ -320,6 +321,28 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     "pages/platform/Quarantine.tsx",
     "pages/appobs/Registries.tsx",
     "pages/appobs/Ingestion.tsx",
+    // sweep 4 — the topology canvas and its rails (inventory, legend, path trace,
+    // cloud slice, empty states), WAN circuits, Wireless and its remediation
+    // queue, the device drill-down, Routing protocols, Flow Trace and New monitor.
+    "features/topology/renderers/react-flow/TopologyCanvas.tsx",
+    "features/topology/components/TopologyLegend.tsx",
+    "features/topology/components/NetworkPathView.tsx",
+    "features/topology/components/PathAnalysisPanel.tsx",
+    "features/topology/components/ConfidencePanel.tsx",
+    "features/topology/components/CapacityPanel.tsx",
+    "features/topology/components/TopologySideDrawer.tsx",
+    "features/topology/components/TopologyInventoryPanel.tsx",
+    "features/topology/utils/topologyOverlays.ts",
+    "features/topology/utils/topologyDomains.ts",
+    "pages/WanCircuits.tsx",
+    "pages/wanCircuits.model.ts",
+    "pages/Wireless.tsx",
+    "pages/WirelessRemediation.tsx",
+    "pages/DeviceDetailPage.tsx",
+    "pages/DeviceNeighbors.tsx",
+    "pages/BgpOspf.tsx",
+    "pages/NetworkPath.tsx",
+    "pages/NewMonitor.tsx",
   ])("%s stays swept", (label) => {
     expect(ALLOW[label], `${label} is in a completed sweep and may not carry budget debt`).toBeUndefined();
     expect(counted.get(label)?.map((b) => fmtBreach(label, b)) ?? [], `${label} regressed`).toEqual([]);

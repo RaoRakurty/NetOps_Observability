@@ -23,10 +23,9 @@ export default function EvidencePanel({
     <section style={{ marginTop: 14 }}>
       <div
         style={{
-          fontSize: 11,
+          fontSize: 12.5,
           fontWeight: 600,
           letterSpacing: 0.4,
-          textTransform: "uppercase",
           color: "var(--fg-subtle)",
           marginBottom: 8,
         }}
@@ -37,7 +36,7 @@ export default function EvidencePanel({
       {evidence.length === 0 ? (
         <div
           style={{
-            fontSize: 12,
+            fontSize: 12.5,
             color: "var(--fg-muted)",
             padding: "10px 12px",
             border: "1px dashed var(--border)",
@@ -62,7 +61,7 @@ export default function EvidencePanel({
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                 <span
                   style={{
-                    fontSize: 10,
+                    fontSize: 12.5,
                     fontWeight: 700,
                     letterSpacing: 0.3,
                     color: "var(--fg)",
@@ -78,7 +77,7 @@ export default function EvidencePanel({
                 {ev.used_by_rca ? (
                   <span
                     style={{
-                      fontSize: 9,
+                      fontSize: 12.5,
                       fontWeight: 700,
                       letterSpacing: 0.4,
                       color: "var(--accent)",
@@ -93,7 +92,7 @@ export default function EvidencePanel({
                 <span
                   style={{
                     marginLeft: "auto",
-                    fontSize: 11,
+                    fontSize: 12.5,
                     fontFamily: "var(--font-mono, ui-monospace, monospace)",
                     color: "var(--fg-muted)",
                   }}
@@ -102,12 +101,12 @@ export default function EvidencePanel({
                 </span>
               </div>
 
-              <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.4 }}>
+              <div style={{ fontSize: 12.5, color: "var(--fg)", lineHeight: 1.4 }}>
                 {ev.summary ?? ev.detail ?? ""}
               </div>
 
               {ev.observed_at ? (
-                <div style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 4 }}>
+                <div style={{ fontSize: 12.5, color: "var(--fg-subtle)", marginTop: 4 }}>
                   {formatWhen(ev.observed_at)}
                 </div>
               ) : null}
@@ -115,7 +114,7 @@ export default function EvidencePanel({
               {ev.ignored_reason ? (
                 <div
                   style={{
-                    fontSize: 11,
+                    fontSize: 12.5,
                     color: "var(--warn)",
                     marginTop: 5,
                     textDecoration: "line-through",
@@ -127,7 +126,7 @@ export default function EvidencePanel({
               ) : null}
 
               {ev.missing_evidence_if_any ? (
-                <div style={{ fontSize: 11, color: "var(--bad)", marginTop: 4 }}>
+                <div style={{ fontSize: 12.5, color: "var(--bad)", marginTop: 4 }}>
                   missing: {ev.missing_evidence_if_any}
                 </div>
               ) : null}

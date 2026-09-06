@@ -117,7 +117,7 @@ describe("routes", () => {
   it("keeps the existing interface metrics table and its live read", async () => {
     render(<WanCircuits />);
     await waitFor(() => expect(mockApi.wanCircuits).toHaveBeenCalled());
-    expect(screen.getByText("WAN Interface Metrics")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "WAN interfaces" })).toBeTruthy();
     expect(screen.getByText(/No WAN interfaces yet\./)).toBeTruthy();
   });
 });
@@ -150,7 +150,10 @@ describe("measured paths", () => {
     // The house vocabulary: a next-hop is an ownership handoff to the ISP, and
     // the word "boundary" is reserved for spine zones.
     const chip = within(sec).getAllByText("ISP next-hop")[0];
-    expect(chip.getAttribute("title")).toContain("hands off to the ISP");
+    // UI-words sweep 4: the row states the target; the ownership handoff moved
+    // into ai/skills/explain/wan.next-hop.md behind the section's `(i)`.
+    expect(chip.getAttribute("title")).toContain("The ISP next-hop you declared");
+    expect(within(sec).getByRole("button", { name: "Ask Iris about Derived target" })).toBeTruthy();
     expect(sec.textContent ?? "").not.toMatch(/boundary/i);
     expect(sec.textContent ?? "").not.toMatch(/\bhub\b|\bspoke\b/i);
   });
@@ -161,10 +164,10 @@ describe("measured paths", () => {
     await waitFor(() => {
       expect(within(section("wan-measured-paths")).getByText(/Nothing has been derived yet\./)).toBeTruthy();
     });
-    const text = section("wan-measured-paths").textContent ?? "";
-    expect(text).toContain("neighbour it sees on the wire");
-    expect(text).toContain("ISP next-hop");
-    expect(text).toContain("reachability anchor");
+    // The CLAIM stays on screen; what must be true before a path is derived is
+    // ai/skills/explain/wan.nothing-derived.md, reachable from the `(i)` beside it.
+    expect(within(section("wan-measured-paths"))
+      .getByRole("button", { name: "Ask Iris about Nothing derived yet" })).toBeTruthy();
   });
 });
 
@@ -193,7 +196,7 @@ describe("endpoint registry", () => {
     expect(within(sec).getByText("ISP next-hop: 1")).toBeTruthy();
     expect(within(sec).getByText("Reachability anchor: 1")).toBeTruthy();
     expect(within(sec).getByText("No target derived: 1")).toBeTruthy();
-    expect(within(sec).getByText(/1 interface has no target to/)).toBeTruthy();
+    expect(within(sec).getByText(/1 interface has no target yet\./)).toBeTruthy();
   });
 
   it("says what fills the registry, when the derivation is empty", async () => {
@@ -202,7 +205,10 @@ describe("endpoint registry", () => {
     await waitFor(() => {
       expect(within(section("wan-endpoints")).getByText(/The registry is empty\./)).toBeTruthy();
     });
-    expect(section("wan-endpoints").textContent).toContain("report an IP address");
+    // What fills the registry is ai/skills/explain/wan.registry.md, behind the `(i)`.
+    expect(within(section("wan-endpoints"))
+      .getAllByRole("button", { name: /Ask Iris about (Empty registry|Endpoint registry)/ }).length)
+      .toBeGreaterThan(0);
   });
 });
 
@@ -353,15 +359,16 @@ describe("measurement policy", () => {
   it("without write access explains the read-only state instead of offering a dead button", async () => {
     mockApi.permissions.mockResolvedValue({ role: "viewer", permissions: { infrastructure: 1 } });
     render(<WanCircuits />);
-    await waitFor(() => expect(screen.getByText(/You can read the measurement policy but not change it\./)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Changing the policy needs write access\./)).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Save policy" })).toBeNull();
     expect((screen.getByLabelText("WAN device name pattern") as HTMLInputElement).disabled).toBe(true);
-    expect(screen.getByText(/write access to infrastructure/)).toBeTruthy();
+    // Who can grant it is ai/skills/explain/wan.policy-readonly.md, behind the `(i)`.
+    expect(screen.getByRole("button", { name: "Ask Iris about Read-only policy" })).toBeTruthy();
   });
 
   it("treats an unreadable permission check as read-only", async () => {
     mockApi.permissions.mockRejectedValue(new Error("401 Unauthorized: {}"));
     render(<WanCircuits />);
-    await waitFor(() => expect(screen.getByText(/You can read the measurement policy but not change it\./)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Changing the policy needs write access\./)).toBeTruthy());
   });
 });

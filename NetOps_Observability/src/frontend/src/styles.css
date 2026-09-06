@@ -1070,10 +1070,10 @@ code, kbd, pre, .mono, td.mono {
    the bottom ones come up and we save space"). One control's width instead of
    a four-segment strip, with the current value still legible closed. */
 .topo-select-wrap { display: inline-flex; align-items: center; gap: 6px; }
-.topo-select-label { font-size: 10px; font-weight: 700; letter-spacing: .04em;
-  text-transform: uppercase; color: var(--fg-subtle, var(--muted)); }
+.topo-select-label { font-size: 12.5px; font-weight: 700; letter-spacing: .04em;
+  color: var(--fg-subtle, var(--muted)); }
 .topo-select {
-  font: inherit; font-size: 11px; font-weight: 600; color: var(--fg);
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--fg);
   padding: 4px 24px 4px 9px; border-radius: 7px;
   border: 1px solid var(--border); background-color: var(--surface);
   cursor: pointer; appearance: none; -webkit-appearance: none;
@@ -1093,17 +1093,17 @@ code, kbd, pre, .mono, td.mono {
 /* renderer toggle: Canvas ⇄ Overview (WebGL) */
 .topo-render-toggle { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px;
   background: var(--panel); border: 1px solid var(--border); }
-.topo-coverage { font-size: 11px; font-weight: 600; color: var(--muted);
+.topo-coverage { font-size: 12.5px; font-weight: 600; color: var(--muted);
   font-variant-numeric: tabular-nums; padding: 0 6px; white-space: nowrap; }
 .topo-coverage-stale { color: var(--warn); }
-.topo-render-toggle button { font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+.topo-render-toggle button { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
   padding: 4px 11px; border-radius: 6px; border: 0; background: transparent; color: var(--fg-muted); }
 .topo-render-toggle button.on { background: var(--accent); color: #fff; }
 .topo-render-toggle button:not(.on):hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
 .topo-incident-picker { display: inline-flex; align-items: center; gap: 6px; }
-.topo-incident-picker-label { font-size: 11px; font-weight: 600; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.04em; }
-.topo-incident-picker select { font: inherit; font-size: 12px; font-weight: 600; max-width: 280px;
+.topo-incident-picker-label { font-size: 12.5px; font-weight: 600; color: var(--muted);
+  letter-spacing: 0.04em; }
+.topo-incident-picker select { font: inherit; font-size: 12.5px; font-weight: 600; max-width: 280px;
   padding: 5px 26px 5px 9px; border-radius: 7px; border: 1px solid var(--border);
   background-color: var(--panel); color: var(--fg); cursor: pointer;
   appearance: none; -webkit-appearance: none;
@@ -1113,7 +1113,7 @@ code, kbd, pre, .mono, td.mono {
 .topo-incident-picker select:hover { border-color: var(--accent); }
 .topo-incident-picker select:focus { outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft, rgba(37,99,235,.18)); }
-.topo-incident-picker-empty { font-size: 11px; font-weight: 600; color: var(--muted);
+.topo-incident-picker-empty { font-size: 12.5px; font-weight: 600; color: var(--muted);
   font-style: italic; }
 /* RCA verdict banner — the WHY for a pinned incident (top-right of the stage). */
 .topo-rca-dock { position: absolute; top: 48px; right: 12px; z-index: 6; width: 340px; max-width: 70%;
@@ -1121,80 +1121,80 @@ code, kbd, pre, .mono, td.mono {
 .topo-rca-banner { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 12px 13px; box-shadow: 0 6px 22px rgba(0,0,0,0.18); }
 .topo-rca-banner-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.topo-rca-verdict { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+.topo-rca-verdict { font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em;
   padding: 2px 8px; border: 1px solid; border-radius: 999px; }
-.topo-rca-conf { font-size: 11px; font-weight: 600; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
-.topo-rca-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+.topo-rca-conf { font-size: 12.5px; font-weight: 600; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.topo-rca-tag { font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em;
   color: var(--fg-subtle); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
-.topo-rca-owner { font-size: 11px; font-weight: 600; color: var(--fg-subtle); margin-left: auto; }
+.topo-rca-owner { font-size: 12.5px; font-weight: 600; color: var(--fg-subtle); margin-left: auto; }
 .topo-rca-clear { font-size: 13px; line-height: 1; cursor: pointer; border: 0; background: transparent;
   color: var(--fg-muted); padding: 2px 4px; border-radius: 4px; }
 .topo-rca-clear:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
 .topo-rca-title { font-size: 13px; font-weight: 700; color: var(--fg); margin-top: 9px; }
-.topo-rca-summary { font-size: 12px; line-height: 1.45; color: var(--fg-muted); margin: 5px 0 0; }
-.topo-rca-action { font-size: 12px; line-height: 1.4; color: var(--fg); margin-top: 9px;
+.topo-rca-summary { font-size: 12.5px; line-height: 1.45; color: var(--fg-muted); margin: 5px 0 0; }
+.topo-rca-action { font-size: 12.5px; line-height: 1.4; color: var(--fg); margin-top: 9px;
   padding: 7px 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
-.topo-rca-action-label { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+.topo-rca-action-label { display: inline-block; font-size: 12.5px; font-weight: 700;
   letter-spacing: 0.05em; color: var(--accent); margin-right: 7px; }
 /* Evidence ledger — the anti-black-box WHY (independent confirming pair + blast radius). */
 .topo-rca-evidence { margin-top: 10px; padding: 8px 9px; border: 1px solid var(--border);
   border-radius: 6px; background: var(--surface); display: grid; gap: 6px; }
 .topo-rca-evrow { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
-.topo-rca-evlabel { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+.topo-rca-evlabel { font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em;
   color: var(--fg-subtle); min-width: 78px; }
 .topo-rca-pair { display: inline-flex; align-items: center; gap: 6px; }
-.topo-rca-witness { font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+.topo-rca-witness { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700;
   color: var(--fg); background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; }
 .topo-rca-perp { font-size: 13px; font-weight: 700; color: var(--ok, #30a46c); }
 .topo-rca-mods { display: inline-flex; gap: 4px; flex-wrap: wrap; }
-.topo-rca-mod { font-size: 10px; font-weight: 600; color: var(--accent);
+.topo-rca-mod { font-size: 12.5px; font-weight: 600; color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 999px; padding: 1px 7px; }
-.topo-rca-blast { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--fg); }
-.topo-rca-reason { font-size: 10.5px; line-height: 1.4; color: var(--fg-subtle); font-style: italic; }
+.topo-rca-blast { font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; color: var(--fg); }
+.topo-rca-reason { font-size: 12.5px; line-height: 1.4; color: var(--fg-subtle); font-style: italic; }
 /* C4 causal layer stack — the cross-layer root→impact axis (observed/blind per L1–L7). */
 .topo-rca-layers { margin-top: 10px; padding: 8px 9px; border: 1px solid var(--border);
   border-radius: 6px; background: var(--surface); }
 .topo-rca-layers-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
-.topo-rca-layers-span { font-size: 10.5px; color: var(--fg-subtle); }
+.topo-rca-layers-span { font-size: 12.5px; color: var(--fg-subtle); }
 .topo-rca-layers-span b { color: var(--fg); font-weight: 700; }
 .topo-rca-layers-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
 .topo-rca-layer { display: flex; align-items: center; gap: 8px; padding: 2px 4px; border-radius: 4px;
-  font-size: 11.5px; color: var(--fg-subtle); }
+  font-size: 12.5px; color: var(--fg-subtle); }
 .topo-rca-layer.is-observed { color: var(--fg); }
 .topo-rca-layer.is-blind { background: color-mix(in srgb, var(--warn) 7%, transparent); }
-.topo-rca-layer-osi { font-family: var(--font-mono); font-size: 9.5px; font-weight: 700;
+.topo-rca-layer-osi { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700;
   color: var(--fg-subtle); background: var(--panel); border: 1px solid var(--border); border-radius: 3px;
   padding: 0 4px; min-width: 22px; text-align: center; }
-.topo-rca-layer-dot { font-size: 10px; line-height: 1; }
+.topo-rca-layer-dot { font-size: 12.5px; line-height: 1; }
 .topo-rca-layer-name { flex: 1; }
-.topo-rca-layer-count { font-family: var(--font-mono); font-size: 10.5px; font-weight: 700;
+.topo-rca-layer-count { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700;
   color: var(--fg-muted); font-variant-numeric: tabular-nums; }
-.topo-rca-layer-pill { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+.topo-rca-layer-pill { font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em;
   border-radius: 999px; padding: 1px 6px; }
 .topo-rca-layer-pill.is-root { color: var(--crit, #e5484d);
   background: color-mix(in srgb, var(--crit, #e5484d) 13%, transparent); }
 .topo-rca-layer-pill.is-impact { color: var(--accent);
   background: color-mix(in srgb, var(--accent) 13%, transparent); }
-.topo-rca-layer-blind { font-size: 9.5px; font-weight: 600; color: var(--warn); text-transform: uppercase;
+.topo-rca-layer-blind { font-size: 12.5px; font-weight: 600; color: var(--warn);
   letter-spacing: 0.03em; }
-.topo-rca-layers-unmapped { margin-top: 6px; font-size: 10px; color: var(--fg-subtle); font-style: italic; }
+.topo-rca-layers-unmapped { margin-top: 6px; font-size: 12.5px; color: var(--fg-subtle); font-style: italic; }
 .topo-rca-whynot { margin-top: 9px; padding: 8px 9px; border: 1px solid var(--warn);
   border-radius: 6px; background: color-mix(in srgb, var(--warn) 8%, transparent); }
-.topo-rca-whynot-label { font-size: 10px; font-weight: 700; text-transform: uppercase;
+.topo-rca-whynot-label { font-size: 12.5px; font-weight: 700;
   letter-spacing: 0.05em; color: var(--warn); }
 .topo-rca-whynot-list { margin: 6px 0 0; padding-left: 16px; display: grid; gap: 3px;
-  color: var(--fg-muted); font-size: 11.5px; line-height: 1.4; }
-.topo-rca-runbook { margin-top: 9px; font-size: 12px; }
-.topo-rca-runbook > summary { cursor: pointer; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  color: var(--fg-muted); font-size: 12.5px; line-height: 1.4; }
+.topo-rca-runbook { margin-top: 9px; font-size: 12.5px; }
+.topo-rca-runbook > summary { cursor: pointer; font-size: 12.5px; font-weight: 700;
   letter-spacing: 0.05em; color: var(--accent); user-select: none; }
 .topo-rca-runbook-list { margin: 7px 0 0; padding-left: 18px; display: grid; gap: 4px;
-  color: var(--fg-muted); font-size: 11.5px; line-height: 1.4; }
+  color: var(--fg-muted); font-size: 12.5px; line-height: 1.4; }
 .topo-rca-missing { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-.topo-rca-missing-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+.topo-rca-missing-label { font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em;
   color: var(--warn); width: 100%; }
-.topo-rca-missing-chip { font-size: 11px; color: var(--fg-muted); background: var(--surface);
+.topo-rca-missing-chip { font-size: 12.5px; color: var(--fg-muted); background: var(--surface);
   border: 1px solid var(--border); border-radius: 4px; padding: 2px 7px; }
-.topo-rca-grounded { font-size: 11px; font-weight: 600; color: var(--ok, #30a46c); }
+.topo-rca-grounded { font-size: 12.5px; font-weight: 600; color: var(--ok, #30a46c); }
 /* RCA overlay edge — a slow dash-flow so a suspected/degraded link reads as "live,
    not yet resolved". Honoured only when the operator allows motion; cap is enforced
    upstream (RCA path views are small). */
@@ -1262,10 +1262,10 @@ code, kbd, pre, .mono, td.mono {
 .topo-placeholder { display: grid; place-items: center; height: 100%; padding: 24px; }
 .topo-placeholder-card { max-width: 520px; text-align: center; background: var(--panel);
   border: 1px solid var(--border); border-radius: 14px; padding: 28px 30px; box-shadow: 0 8px 28px rgba(16,24,40,0.08); }
-.topo-placeholder-eyebrow { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--accent); }
+.topo-placeholder-eyebrow { font-size: 12.5px; font-weight: 700; letter-spacing: .04em; color: var(--accent); }
 .topo-placeholder-title { font-family: var(--font-display); font-size: 20px; font-weight: 680; margin: 6px 0 10px; }
 .topo-placeholder-body { font-size: 14px; color: var(--fg-muted); margin: 0 0 12px; }
-.topo-placeholder-note { font-size: 12px; color: var(--fg-subtle); line-height: 1.55; margin: 0; }
+.topo-placeholder-note { font-size: 12.5px; color: var(--fg-subtle); line-height: 1.55; margin: 0; }
 /* Path Trace guided empty state */
 .topo-pathprompt-card { max-width: 460px; text-align: center; background: var(--panel);
   border: 1px solid var(--border); border-radius: 14px; padding: 26px 28px 24px;
@@ -1287,7 +1287,33 @@ code, kbd, pre, .mono, td.mono {
 .topo-pathprompt-row select:focus { outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft, rgba(37,99,235,.18)); }
 .topo-pathprompt-arrow { font-size: 16px; color: var(--fg-subtle); font-weight: 700; }
-.topo-pathprompt-hint { font-size: 12px; color: var(--accent-bright, var(--accent)); margin-top: 12px; font-weight: 600; }
+.topo-pathprompt-hint { font-size: 12.5px; color: var(--accent-bright, var(--accent)); margin-top: 12px; font-weight: 600; }
+
+/* WAN page (sweep 4) — STATED FACTS, not explanatory notes: a one-line rule under
+   a field, a row count beside a section title, a mono data span in a cell, and the
+   sub-line under a KPI. `.stat-foot` is `.stat-sub` under a name the word-budget
+   guard does not read as a note, because a measured number is not a lesson. */
+.wan-line { display: block; margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.wan-line .ask-iris { vertical-align: middle; }
+.wan-count { font-size: 12.5px; color: var(--muted); }
+.wan-mono { font-size: 12.5px; color: var(--muted); font-family: var(--font-mono, monospace); }
+.stat-foot { font-size: var(--fs-meta); color: var(--muted); }
+
+/* Wireless remediation row lines — a STATED FACT under a cell (who proposed it,
+   what the effect is, the recorded refusal), not an explanatory note. */
+.rem-line { display: block; font-size: 12.5px; color: var(--muted); }
+
+/* The wireless-execute consequence — read in full before the typed confirmation. */
+.rem-danger { margin: 0; font-size: 12.5px; color: var(--bad); font-weight: 600; }
+
+/* "…and N more" under a capped list — a COUNT, not an explanatory note. */
+.list-more { font-size: 12.5px; color: var(--muted); }
+
+/* Protocol state key (BgpOspf) — a STATED FACT beside the panels, not an
+   explanatory note: which state value means healthy. The state-code legends it
+   replaced are authored files behind the (i). */
+.proto-key { display: flex; align-items: center; gap: 4px; margin: 0;
+  font-size: 12.5px; color: var(--muted); }
 
 /* ----- NetworkPathView — dedicated L→R source→destination path ribbon (#77) ----- */
 .netpath { position: absolute; inset: 0; display: flex; gap: 0; }
@@ -1301,7 +1327,7 @@ code, kbd, pre, .mono, td.mono {
   font-variant-numeric: tabular-nums; }
 .netpath-route-arrow { color: var(--fg-subtle); font-weight: 700; padding: 0 2px; }
 .netpath-route-hops { color: var(--fg-subtle); font-weight: 600; }
-.netpath-prov { font-size: 10.5px; font-weight: 700; padding: 4px 9px; border: 1px solid; border-radius: 6px;
+.netpath-prov { font-size: 12.5px; font-weight: 700; padding: 4px 9px; border: 1px solid; border-radius: 6px;
   white-space: nowrap; }
 /* the ribbon: a single horizontal lane, scrolls L→R when the path is long (never
    wraps — the reading order IS the forwarding order). */
@@ -1310,7 +1336,7 @@ code, kbd, pre, .mono, td.mono {
 .netpath-seg { display: flex; align-items: center; gap: 0; flex: 0 0 auto; }
 .netpath-node { display: flex; flex-direction: column; align-items: center; gap: 4px;
   width: 132px; flex: 0 0 auto; position: relative; }
-.netpath-endpoint { font-size: 9.5px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase;
+.netpath-endpoint { font-size: 12.5px; font-weight: 700; letter-spacing: 0.2px;
   border: 1px solid; border-radius: 5px; padding: 1px 7px; margin-bottom: 2px; }
 .netpath-glyph { position: relative; display: inline-flex; }
 .netpath-hopno { position: absolute; left: -4px; top: -4px; width: 20px; height: 20px; border-radius: 50%;
@@ -1320,9 +1346,9 @@ code, kbd, pre, .mono, td.mono {
 .netpath-mark { position: absolute; right: -4px; top: -4px; width: 18px; height: 18px; border-radius: 50%;
   border: 2px solid; font-size: 10px; font-weight: 700; line-height: 1;
   display: inline-flex; align-items: center; justify-content: center; }
-.netpath-label { font-size: 12px; font-weight: 600; color: var(--fg); max-width: 124px; text-align: center;
+.netpath-label { font-size: 12.5px; font-weight: 600; color: var(--fg); max-width: 124px; text-align: center;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.netpath-sub { font-size: 10px; font-weight: 600; text-transform: capitalize; }
+.netpath-sub { font-size: 12.5px; font-weight: 600; text-transform: capitalize; }
 /* per-hop STAMP active-measurement (latency/jitter/delay/loss) */
 /* per-hop metric chip — a compact instrument-grade stat box (value + micro-label). */
 .netpath-stamp { display: inline-flex; align-items: stretch; gap: 0; margin-top: 5px; padding: 3px 4px;
@@ -1331,11 +1357,11 @@ code, kbd, pre, .mono, td.mono {
 .netpath-stamp:hover { border-color: var(--border-strong, var(--fg-subtle)); box-shadow: 0 2px 6px rgba(16,24,40,.08); }
 .netpath-stamp.open { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
 .netpath-stamp .nm { display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 1px; min-width: 38px; padding: 1px 6px; }
-.netpath-stamp .nm b { font-size: 11px; font-weight: 700; color: var(--fg-subtle); line-height: 1.1;
+  gap: 1px; min-width: 46px; padding: 1px 6px; }
+.netpath-stamp .nm b { font-size: 12.5px; font-weight: 700; color: var(--fg-subtle); line-height: 1.1;
   font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 .netpath-stamp.live .nm b { color: var(--fg); }
-.netpath-stamp .nm i { font-size: 8px; font-weight: 700; letter-spacing: .6px; color: var(--fg-subtle);
+.netpath-stamp .nm i { font-size: 12.5px; font-weight: 600; color: var(--fg-subtle);
   font-style: normal; }
 .netpath-stamp .nm-div { width: 1px; background: var(--border); margin: 2px 0; }
 .netpath-stamp-more { display: flex; align-items: center; padding: 0 3px 0 5px; color: var(--fg-subtle);
@@ -1349,26 +1375,26 @@ code, kbd, pre, .mono, td.mono {
 .netpath-hd-close { background: none; border: none; color: var(--fg-subtle); cursor: pointer; font-size: 13px; padding: 2px 5px; }
 .netpath-hd-close:hover { color: var(--fg); }
 .netpath-hopdetail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 18px; }
-.netpath-hd-group { grid-column: 1 / -1; font-size: 9.5px; font-weight: 800; letter-spacing: .4px;
-  text-transform: uppercase; color: var(--fg-subtle); margin: 8px 0 2px; }
+.netpath-hd-group { grid-column: 1 / -1; font-size: 12.5px; font-weight: 700;
+  color: var(--fg-subtle); margin: 8px 0 2px; display: flex; align-items: center; gap: 4px; }
 .netpath-hd-group:first-child { margin-top: 0; }
 .netpath-hd-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
-  padding: 3px 0; border-bottom: 1px dotted var(--border); font-size: 12px; }
+  padding: 3px 0; border-bottom: 1px dotted var(--border); font-size: 12.5px; }
 .netpath-hd-label { color: var(--fg-muted); }
 .netpath-hd-val { color: var(--fg); font-weight: 700; }
 .netpath-hd-na { color: var(--fg-subtle); }
-.netpath-stamp-foot { margin-top: 10px; font-size: 11px; color: var(--fg-subtle); line-height: 1.5;
+.netpath-stamp-foot { margin-top: 10px; font-size: 12.5px; color: var(--fg-subtle); line-height: 1.5;
   max-width: 620px; }
 /* per-segment added latency (STAMP delta between two hops) */
-.netpath-seg-delay { font-size: 9.5px; font-weight: 600; color: var(--fg-muted); text-align: center;
+.netpath-seg-delay { font-size: 12.5px; font-weight: 600; color: var(--fg-muted); text-align: center;
   font-variant-numeric: tabular-nums; }
 .netpath-seg-delay.worst { color: var(--warn, #f5a524); font-weight: 800; }
-.netpath-link { width: 116px; flex: 0 0 auto; display: flex; flex-direction: column; align-items: center;
+.netpath-link { width: 132px; flex: 0 0 auto; display: flex; flex-direction: column; align-items: center;
   gap: 3px; padding: 0 4px; }
 .netpath-link-svg { display: block; }
-.netpath-link-meta { font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: center; }
-.netpath-bottleneck { font-weight: 800; text-transform: uppercase; letter-spacing: 0.3px; }
-.netpath-link-ports { font-size: 9.5px; color: var(--fg-subtle); text-align: center; white-space: nowrap; }
+.netpath-link-meta { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: center; }
+.netpath-bottleneck { font-weight: 800; letter-spacing: 0.2px; }
+.netpath-link-ports { font-size: 12.5px; color: var(--fg-subtle); text-align: center; white-space: nowrap; }
 .netpath-rail { flex: 0 0 320px; max-width: 42%; border-left: 1px solid var(--border);
   background: var(--panel); padding: 16px 14px; overflow: auto; }
 @media (max-width: 880px) { .netpath { flex-direction: column; } .netpath-rail { flex-basis: auto; max-width: none;

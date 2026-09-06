@@ -14,6 +14,7 @@
 import type React from "react";
 import type { TopologyView, TopologyNode, TopologyEdge, RcaOverlayState } from "../api/topologyTypes";
 import { fmtMbps } from "../utils/pathFormat";
+import AskIris from "../../../components/AskIris";
 
 const MONO = "var(--font-mono, ui-monospace, monospace)";
 
@@ -54,7 +55,7 @@ function utilColor(u: number): string {
 }
 
 const SECTION: React.CSSProperties = {
-  fontSize: 11, fontWeight: 600, letterSpacing: 0.4, textTransform: "uppercase",
+  fontSize: 12.5, fontWeight: 600, letterSpacing: 0.2,
   color: "var(--fg-subtle)", marginBottom: 10,
 };
 
@@ -63,7 +64,7 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
 
   if (path.length === 0) {
     return (
-      <div style={{ fontSize: 12, color: "var(--fg-muted)", padding: 12, border: "1px dashed var(--border)", borderRadius: 6, background: "var(--surface)" }}>
+      <div style={{ fontSize: 12.5, color: "var(--fg-muted)", padding: 12, border: "1px dashed var(--border)", borderRadius: 6, background: "var(--surface)" }}>
         No path selected.
       </div>
     );
@@ -89,8 +90,8 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
   const measured = view.path_source === "measured";
   const provenance = view.path_source
     ? measured
-      ? { label: "Measured · live traceroute", color: "var(--ok, #30a46c)" }
-      : { label: "Computed · inferred shortest path (not a live trace)", color: "var(--warn, #f5a524)" }
+      ? { label: "Measured", topic: "path.measured", color: "var(--ok, #30a46c)" }
+      : { label: "Computed · not a live trace", topic: "path.computed", color: "var(--warn, #f5a524)" }
     : null;
 
   return (
@@ -99,27 +100,25 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
 
       {provenance && (
         <div
-          title={
-            measured
-              ? "Hops observed by an active traceroute/probe — ground truth."
-              : "Derived from the IGP-weighted topology (shortest path), not an observed forwarding path. Run a traceroute to confirm."
-          }
-          style={{ fontSize: 10.5, fontWeight: 600, color: provenance.color, marginBottom: 8,
+          title={measured ? "Every hop was observed by a probe" : "Derived from the topology, not observed"}
+          style={{ fontSize: 12.5, fontWeight: 600, color: provenance.color, marginBottom: 8,
             padding: "4px 8px", border: `1px solid ${provenance.color}`, borderRadius: 5,
             background: `color-mix(in srgb, ${provenance.color} 10%, transparent)`,
-            display: "inline-block" }}
+            display: "inline-flex", alignItems: "center", gap: 4 }}
         >
           {provenance.label}
+          <AskIris topic={provenance.topic} label={provenance.label} />
         </div>
       )}
 
       {bottleneckIdx >= 0 && (
-        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--warn)", marginBottom: 8,
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--warn)", marginBottom: 8,
           padding: "5px 8px", border: "1px solid var(--warn)", borderRadius: 5,
           background: "color-mix(in srgb, var(--warn) 10%, transparent)" }}>
           Likely bottleneck: {byId.get(path[bottleneckIdx])?.label ?? path[bottleneckIdx]} →{" "}
           {byId.get(path[bottleneckIdx + 1])?.label ?? path[bottleneckIdx + 1]}
           {downIdx >= 0 ? " (link down/degraded)" : ` (${Math.round(worstUtil)}% utilized)`}
+          <AskIris topic="path.bottleneck" label="Likely bottleneck" />
         </div>
       )}
 
@@ -153,58 +152,51 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
               <div style={{ display: "flex", gap: 10, padding: "8px 10px", border: "1px solid var(--border)",
                 borderLeft: `3px solid ${band}`, borderRadius: 6, background: "var(--surface)", alignItems: "flex-start" }}>
                 <span style={{ flex: "0 0 auto", width: 22, height: 22, borderRadius: "50%", background: "var(--panel)",
-                  border: `1px solid ${band}`, color: "var(--fg)", fontSize: 11, fontWeight: 700,
+                  border: `1px solid ${band}`, color: "var(--fg)", fontSize: 12.5, fontWeight: 700,
                   display: "flex", alignItems: "center", justifyContent: "center", fontFamily: MONO }}>
                   {i + 1}
                 </span>
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>{node?.label ?? id}</span>
-                    <span style={{ fontSize: 10, fontWeight: 600, color: band, textTransform: "capitalize" }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{node?.label ?? id}</span>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: band, textTransform: "capitalize" }}>
                       {node?.health ?? "unknown"}
                     </span>
                   </div>
-                  <div style={{ fontSize: 11, color: "var(--fg-muted)", marginTop: 2, fontFamily: MONO }}>
+                  <div style={{ fontSize: 12.5, color: "var(--fg-muted)", marginTop: 2, fontFamily: MONO }}>
                     {ingress ? `in ${ingress}` : i === 0 ? "ingress" : "in —"}
                     {"  ·  "}
                     {egress ? `out ${egress}` : i === path.length - 1 ? "egress" : "out —"}
                   </div>
                   {/* #85 hop-edge interface facts: bandwidth / throughput / reliability / MTU. */}
-                  <div style={{ fontSize: 10.5, color: "var(--fg-subtle)", marginTop: 2, fontFamily: MONO }}>
-                    <span title={bw != null
-                      ? "Bandwidth — interface link speed (ifSpeed)"
-                      : "Bandwidth — interface link speed (ifSpeed); no series for this hop's interface yet"}>
+                  <div style={{ fontSize: 12.5, color: "var(--fg-subtle)", marginTop: 2, fontFamily: MONO, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2 }}>
+                    <span title={bw != null ? "Interface link speed" : "No link-speed series for this interface"}>
                       {`bw ${bw != null ? fmtMbps(bw) : "—"}`}
                     </span>
                     {"  ·  "}
-                    <span title={thr != null
-                      ? "Throughput — measured interface octet rate"
-                      : "Throughput — interface octet rate; no series for this hop's interface yet"}>
+                    <span title={thr != null ? "Measured interface throughput" : "No throughput series for this interface"}>
                       {`thr ${thr != null ? fmtMbps(thr) : "—"}`}
                     </span>
                     {"  ·  "}
-                    <span title={rel != null
-                      ? "Reliability — oper-status × error-free ratio"
-                      : "Reliability — oper-status × error-free ratio; no series for this hop's interface yet"}>
+                    <span title={rel != null ? "Up time against error-free traffic" : "No reliability series for this interface"}>
                       {`rel ${rel != null ? `${rel.toFixed(2)}%` : "—"}`}
                     </span>
                     {"  ·  "}
-                    <span title={mtu != null
-                      ? "MTU — interface ifMtu"
-                      : "MTU — ifMtu added to the SNMP profile; populates on the next poll"}>
+                    <span title={mtu != null ? "Interface MTU" : "Not in the collection profile yet"}>
                       {`mtu ${mtu != null ? `${Math.round(mtu)} B` : "—"}`}
                     </span>
+                    <AskIris topic="path.hop-interface" label="Hop interface facts" />
                   </div>
                   {rc && (
                     <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 4,
-                      fontSize: 10.5, fontWeight: 700, color: rc.color, border: `1px solid ${rc.color}`,
+                      fontSize: 12.5, fontWeight: 700, color: rc.color, border: `1px solid ${rc.color}`,
                       borderRadius: 4, padding: "1px 6px",
                       background: `color-mix(in srgb, ${rc.color} 12%, transparent)` }}
-                      title="This hop is part of the incident's RCA — the path is linked to the verdict">
+                      title="This hop is part of the incident's RCA">
                       <span aria-hidden="true">{rc.glyph}</span>{rc.text}
                     </div>
                   )}
-                  {decision ? <div style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 3 }}>{decision}</div> : null}
+                  {decision ? <div style={{ fontSize: 12.5, color: "var(--fg-subtle)", marginTop: 3 }}>{decision}</div> : null}
                 </div>
               </div>
 
@@ -212,7 +204,7 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
               {i < path.length - 1 && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0 3px 21px" }}>
                   <span style={{ width: 2, height: 16, background: isBottleneck ? "var(--warn)" : "var(--border)" }} />
-                  <span style={{ fontSize: 10, fontFamily: MONO,
+                  <span style={{ fontSize: 12.5, fontFamily: MONO,
                     color: linkUtil != null ? utilColor(linkUtil) : "var(--fg-subtle)" }}>
                     {linkE?.status === "down" || linkE?.status === "degraded"
                       ? `link ${linkE.status}`
@@ -227,8 +219,9 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
         })}
       </ol>
 
-      <div style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 10, fontStyle: "italic" }}>
-        Golden-path comparison: not configured
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12.5, color: "var(--fg-subtle)", marginTop: 10 }}>
+        Golden path: not configured
+        <AskIris topic="path.golden" label="Golden path" />
       </div>
     </section>
   );

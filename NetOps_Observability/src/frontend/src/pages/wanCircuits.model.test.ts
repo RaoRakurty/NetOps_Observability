@@ -107,8 +107,11 @@ describe("provenance labels", () => {
     expect(targetKindMeaning("satellite_uplink")).toMatch(/does not recognise/);
   });
 
-  it("says a next-hop is where path ownership hands off to the ISP", () => {
-    expect(targetKindMeaning("next_hop")).toMatch(/hands off to the ISP/);
+  // UI-words sweep 4 (tracker 270): the tooltip NAMES the target; where ownership
+  // hands off to the ISP is ai/skills/explain/wan.next-hop.md, reached from the
+  // `(i)` on the section — the claim did not move, only the word count.
+  it("says a next-hop is the ISP next-hop the operator declared", () => {
+    expect(targetKindMeaning("next_hop")).toMatch(/ISP next-hop you declared/);
     expect(targetKindMeaning("next_hop")).not.toMatch(/boundary/i);
   });
 

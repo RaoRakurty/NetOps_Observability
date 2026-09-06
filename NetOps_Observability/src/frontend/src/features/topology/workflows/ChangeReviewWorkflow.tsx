@@ -9,7 +9,7 @@ import type { WorkflowDef } from "./workflowTypes";
 export const ChangeReviewWorkflow: WorkflowDef = {
   id: "change_review",
   label: "Change Review",
-  blurb: "Before/after diff with golden-path delta to review a change's blast radius (Phase 6).",
+  blurb: "What a change altered, before and after.",
   implemented: false,
 };
 

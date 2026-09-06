@@ -109,6 +109,7 @@ import {
   RcaVerdictBanner,
 } from "../../components";
 import type { RcaPathView } from "../../../../services/api";
+import AskIris from "../../../../components/AskIris";
 
 
 type Density = "executive" | "operator" | "engineer" | "incident";
@@ -868,7 +869,7 @@ function CanvasInner({
             control's worth and lets the rest of the row breathe. The label
             stays visible on the closed control, so "where am I looking" is
             still answerable at a glance without opening it. */}
-        <label className="topo-select-wrap" title="Network domain — which part of the estate the canvas is showing">
+        <label className="topo-select-wrap" title="Which part of the estate this canvas draws">
           <span className="topo-select-label">Domain</span>
           <select
             className="topo-select"
@@ -883,42 +884,47 @@ function CanvasInner({
             ))}
           </select>
         </label>
+        <AskIris topic="topo.domain" label="Domain" />
         <button
           className={`topo-render-toggle topo-carrier${carrier ? " on" : ""}`}
           role="switch"
           aria-checked={carrier}
           onClick={() => setCarrier(!carrier)}
-          title="Overlay the shared carrier / transport network — the fabric that ties LAN, SD-WAN, DC and Cloud together."
+          title="Overlay the shared carrier transport network"
         >
           Carrier
         </button>
+        <AskIris topic="topo.carrier" label="Carrier" />
         {renderer === "canvas" && (
           <button
             className={`topo-render-toggle topo-carrier${showInventory ? " on" : ""}`}
             role="switch"
             aria-checked={showInventory}
             onClick={() => setShowInventory((v) => !v)}
-            title="Device inventory beside the map — status, management IP, first observed."
+            title="Device inventory beside the map"
           >
             Devices
           </button>
         )}
+        {renderer === "canvas" && <AskIris topic="topo.inventory" label="Devices" />}
         <MapWorkflowSelector value={mode} onChange={setMode} workflows={workflowMeta} />
         {/* Data source: live per-mode projection vs the persistent reconciled graph. */}
         <div className="topo-render-toggle" role="tablist" aria-label="Data source">
-          <button role="tab" aria-selected={source === "live"} className={source === "live" ? "on" : ""} onClick={() => setSource("live")} title="Live per-mode projection (recomputed each load)">
+          <button role="tab" aria-selected={source === "live"} className={source === "live" ? "on" : ""} onClick={() => setSource("live")} title="Recomputed on every load">
             Live
           </button>
-          <button role="tab" aria-selected={source === "persisted"} className={source === "persisted" ? "on" : ""} onClick={() => setSource("persisted")} title="Persistent reconciled graph: stable ids, freshness and coverage">
+          <button role="tab" aria-selected={source === "persisted"} className={source === "persisted" ? "on" : ""} onClick={() => setSource("persisted")} title="The reconciled graph, with freshness">
             Persisted
           </button>
         </div>
+        <AskIris topic="topo.data-source" label="Data source" />
         {source === "persisted" && coverage && (
-          <span className="topo-coverage" title="Coverage of the persistent graph">
+          <span className="topo-coverage" title="What the persisted graph holds">
             {coverage.nodes} nodes · {coverage.edges} edges
             {coverage.stale_nodes + coverage.stale_edges > 0 && (
               <span className="topo-coverage-stale"> · {coverage.stale_nodes + coverage.stale_edges} stale</span>
             )}
+            <AskIris topic="topo.coverage" label="Coverage" />
           </span>
         )}
         {/* Freshness (audit S5): data age from the view's own generated_at, with
@@ -939,8 +945,9 @@ function CanvasInner({
         })()}
         {viewStatus === "sample" && (
           <span className="topo-coverage" style={{ color: "var(--warn)" }}
-            title="No live data for this view yet — a sample is shown.">
+            title="No live data for this view yet">
             Sample data
+            <AskIris topic="topo.sample-data" label="Sample data" />
           </span>
         )}
         {mode === "investigate" && (
@@ -956,7 +963,7 @@ function CanvasInner({
               ))}
             </select>
             {incidents.length === 0 && (
-              <span className="topo-incident-picker-empty" title="No open correlations — Investigate is showing the live topology">
+              <span className="topo-incident-picker-empty" title="No open correlations to pin">
                 No active incidents
               </span>
             )}
@@ -988,7 +995,7 @@ function CanvasInner({
         )}
         {view && renderer === "canvas" && <OverlaySelector value={overlay} overlays={overlays} onChange={setOverlay} />}
         {renderer === "canvas" && (
-          <label className="topo-incident-picker" title="Regroup the canvas by a node dimension — Zone segregates by ownership border (LAN · WAN · DC · Cloud · ISP · DX/ExpressRoute)">
+          <label className="topo-incident-picker" title="Collapse the canvas by a node dimension">
             <span className="topo-incident-picker-label">Group</span>
             <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupDimension)} aria-label="Group the canvas by">
               {GROUP_DIMENSIONS.map((d) => (
@@ -997,6 +1004,7 @@ function CanvasInner({
             </select>
           </label>
         )}
+        {renderer === "canvas" && <AskIris topic="topo.group-by" label="Group" />}
         {renderer === "canvas" && (
           /* Owner Step 2: arrange by topology archetype. Auto names what was
              detected and WHY (tooltip); forcing a shape redraws deterministically. */
@@ -1015,6 +1023,7 @@ function CanvasInner({
             </select>
           </label>
         )}
+        {renderer === "canvas" && <AskIris topic="topo.shape" label="Shape" />}
         <div className="topo-render-toggle" role="tablist" aria-label="Renderer">
           <button role="tab" aria-selected={renderer === "canvas"} className={renderer === "canvas" ? "on" : ""} onClick={() => setRenderer("canvas")}>
             Canvas
@@ -1050,8 +1059,9 @@ function CanvasInner({
             {(!view || view.nodes.length === 0) && (
               <span className="topo-coverage" role="status"
                 style={{ position: "absolute", top: 10, left: 10, color: "var(--warn)", background: "var(--panel)", padding: "3px 8px", borderRadius: 6, border: "1px solid var(--border)" }}
-                title="No live topology resolved for this view — a sample fabric is shown instead.">
+                title="No live topology resolved for this view">
                 Sample data — not your network
+                <AskIris topic="topo.sample-data" label="Sample data" />
               </span>
             )}
           </Suspense>
@@ -1114,10 +1124,9 @@ function CanvasInner({
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
                 {view.nodes.length.toLocaleString()} nodes — too many for the interactive canvas
               </div>
-              <div style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.5, marginBottom: 10 }}>
-                Pick a grouping dimension to aggregate the fabric into sites/regions,
-                search for the part you care about and focus the canvas on it, or open
-                the WebGL overview for the whole fabric.
+              <div style={{ fontSize: 12.5, color: "var(--fg-muted)", lineHeight: 1.5, marginBottom: 10 }}>
+                Group it, focus on a search, or open the overview.
+                <AskIris topic="topo.at-scale" label="Too many nodes" />
               </div>
               {/* The search dock lives in the OTHER branch, so an over-ceiling
                   tenant previously had no way to act on the advice above. Mount
@@ -1254,10 +1263,11 @@ function CanvasInner({
                       </div>
                       <div style={{ fontSize: 12.5, color: "var(--fg-muted)", lineHeight: 1.5, marginBottom: 10 }}>
                         {cloudStatus === "loading"
-                          ? "reading the discovered VPC/VNet → subnet → gateway topology"
+                          ? "Reading the discovered cloud network."
                           : cloudFailed
-                            ? "the topology read failed — retry, or check the cloud data sources"
-                            : "connect an AWS / Azure / GCP account and enable discovery — the VPC/VNet → subnet → route-table → gateway graph appears on this canvas as it is discovered"}
+                            ? "The read failed. Retry, or check the cloud data sources."
+                            : "Connect a cloud account and enable discovery."}
+                        {cloudStatus !== "loading" && <AskIris topic="topo.cloud-empty" label="No cloud network discovered yet" />}
                       </div>
                       {cloudStatus !== "loading" && (
                         <button className="btn btn-sm" onClick={() => { location.hash = "#/operations/services/datasources"; }}>
@@ -1277,12 +1287,16 @@ function CanvasInner({
                       ? "The topology could not be read"
                       : mode === "dependency" ? "No service dependencies in this window" : "Nothing to show for this view yet"}
                   </div>
-                  <div style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 12.5, color: "var(--fg-muted)", lineHeight: 1.5 }}>
                     {readFailed
-                      ? "The topology service did not answer, so the shape of your network is unknown — this is NOT an empty network. Retry, or check the topology service."
+                      ? "The shape of your network is unknown. This is not an empty network."
                       : mode === "dependency"
-                        ? "Dependency edges appear when flows are attributed to services. Widen the time range, or confirm flow collection is active."
-                        : "No nodes resolved for the current mode, data source and time range."}
+                        ? "Widen the range, or confirm flow collection is active."
+                        : "No nodes resolved for this mode, source and range."}
+                    <AskIris
+                      topic={readFailed ? "topo.read-failed" : mode === "dependency" ? "topo.dependency-empty" : "topo.data-source"}
+                      label={readFailed ? "The topology could not be read" : "Nothing to show"}
+                    />
                   </div>
                 </div>
               </div>
@@ -1363,8 +1377,8 @@ function PathTracePrompt({
         </div>
         <div className="topo-pathprompt-title">Trace a network path</div>
         <p className="topo-pathprompt-body">
-          Choose a <strong>source</strong> and <strong>destination</strong> device — the path between them is resolved
-          hop&#8209;by&#8209;hop over the discovered topology (LLDP / IGP), with the ingress&nbsp;/&nbsp;egress interface on each hop.
+          Pick a source and a destination device.
+          <AskIris topic="path.trace" label="Trace a network path" />
         </p>
         <div className="topo-pathprompt-row">
           <select value={src} onChange={(e) => onSrc(e.target.value)} aria-label="Path source device">
@@ -1439,9 +1453,8 @@ function PathTraceNoPath({
         </div>
         <div className="topo-pathprompt-title">No path found</div>
         <p className="topo-pathprompt-body">
-          No route between <strong>{srcLabel}</strong> and <strong>{dstLabel}</strong> over the discovered topology — the
-          LLDP/IGP adjacency between them is incomplete or they sit in separate fabrics. Re-aim the trace, or widen
-          discovery so the intervening hops are learned.
+          No route between <strong>{srcLabel}</strong> and <strong>{dstLabel}</strong> over the discovered topology.
+          <AskIris topic="path.no-path" label="No path found" />
         </p>
         <div className="topo-pathprompt-row">
           <select value={src} onChange={(e) => onSrc(e.target.value)} aria-label="Path source device">
@@ -1475,9 +1488,8 @@ function PlaceholderWorkflow({ label, blurb }: { label: string; blurb: string })
         <div className="topo-placeholder-title">Prepared, not yet implemented</div>
         <p className="topo-placeholder-body">{blurb}</p>
         <p className="topo-placeholder-note">
-          Phase 1 ships the React Flow + ELK operator canvas (Explore · Investigate · Path Trace · Dependency). The
-          remaining workflows and the Sigma/cosmos &amp; MapLibre/deck renderers are scaffolded behind clean adapter
-          boundaries.
+          Nothing renders this workflow yet.
+          <AskIris topic="topo.workflow-placeholder" label="Prepared, not yet implemented" />
         </p>
       </div>
     </div>

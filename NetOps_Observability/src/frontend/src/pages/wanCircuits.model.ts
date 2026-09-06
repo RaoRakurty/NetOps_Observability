@@ -70,15 +70,14 @@ const KIND_CHIP: Record<string, string> = {
   "": "None derived",
 };
 
-/** One sentence per provenance: what it means for who owns the measured path. */
+/** Tooltip per provenance: who owns the measured path. The reasoning behind each
+ *  is an authored file (ai/skills/explain/wan.derived-target.md), reachable from
+ *  the `(i)` beside the provenance chips — not repeated on every row. */
 const KIND_MEANING: Record<string, string> = {
-  direct_peer:
-    "The far end is a neighbour this device sees on the wire, so the whole measured path is yours.",
-  next_hop:
-    "The far end is the ISP next-hop you declared — the point where your ownership of the path hands off to the ISP.",
-  anchor:
-    "No neighbour and no declared next-hop, so reachability is measured to a public anchor instead.",
-  "": "Nothing could be derived for this interface, so it is not measured yet.",
+  direct_peer: "A neighbour on the wire, so the whole path is yours.",
+  next_hop: "The ISP next-hop you declared.",
+  anchor: "No neighbour and no next-hop, so a public anchor.",
+  "": "Nothing was derived, so it is not measured.",
 };
 
 /**
@@ -100,7 +99,7 @@ export function targetKindChip(kind: string | undefined | null): string {
 /** What this provenance means for path ownership, as one sentence. */
 export function targetKindMeaning(kind: string | undefined | null): string {
   const k = kind ?? "";
-  return KIND_MEANING[k] ?? "This target was derived a way this screen does not recognise.";
+  return KIND_MEANING[k] ?? "Derived a way this screen does not recognise.";
 }
 
 /** Sort rank; anything unrecognised sorts after every known kind. */

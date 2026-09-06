@@ -157,3 +157,47 @@ Platform tools (Pipeline Debugger, Quarantine). Same four consoles.
 `.adm-line` (Administration) and `.lic-line` (Licence) are new names for ink
 that already existed — a STATED FACT is not an explanatory note, and the word
 budget counts notes. 84 authored files carry what left.
+
+## Vendor observation — what sweep 4 matched (2026-09-06)
+
+Sweep 4 = the topology canvas and everything docked to it (toolbar, device
+inventory rail, legend, overlay picker, side drawer, capacity and confidence
+panels, the path-trace stage and its hop ladder, the cloud slice), WAN circuits
+with its derived registry and measurement policy, Wireless and the wireless
+remediation queue, the device drill-down and its neighbour tab, Routing
+protocols, Flow Trace and New monitor. Same four consoles.
+
+- **Datadog** — a control is a control; what it *does to the data* sits behind
+  an `(i)`. Matched: the canvas toolbar's tooltips were paragraphs ("Regroup the
+  canvas by a node dimension — Zone segregates by ownership border (LAN · WAN ·
+  DC · Cloud · ISP · DX/ExpressRoute)"); every one is now under twelve words with
+  a topic beside the control, and the ten overlay descriptions became ten
+  authored files reached from one `(i)` in the legend.
+- **Kentik** — a caveat is stated once per view, never per row. Matched: WAN's
+  five-tier ranking, the derived-target rules and the "linked interface"
+  explanation appeared on the metrics card, in the empty state, in three
+  provenance tooltips and again per policy field; they are one line plus an
+  `(i)` now, and `targetKindMeaning` per row is a short claim rather than the
+  ownership lecture.
+- **ThousandEyes** — a path shows one status word per hop and puts the protocol
+  vocabulary in the tooltip. Matched: the provenance chip reads **Measured** or
+  **Computed · not a live trace**; STAMP, PDV, OWD, ifSpeed, ifMtu, oper-status,
+  Paris-consistency, RFC 8762/7679/2680/3393/792 and the BGP/OSPF/IS-IS state
+  code tables all left the screen. The honesty states did NOT soften: a computed
+  path still says "not a live trace", a hop with no probe still says so, and a
+  failed read still says the shape of the network is unknown.
+- **Meraki** — sentence case, plain outcomes, small print that is still
+  readable. Matched: nothing on a swept topology, WAN, wireless, device-detail
+  or routing surface renders below 12.5 px (the legend was 8–11 px, the hop
+  ladder 9.5–11 px, the drawer 10–11 px), the SHOUTED section labels
+  ("LEGEND", "RCA VERDICT", "ACTIVE MEASUREMENT", "UTILIZATION") are sentence
+  case, and tab labels are one word ("Neighbours", "Config", "Capture").
+- **All four** — none explains a protocol on the page. 66 more authored files
+  carry it instead.
+
+`.proto-key` (routing/path state facts), `.wan-line` / `.wan-count` /
+`.wan-mono` / `.stat-foot` (WAN) and `.rem-line` / `.rem-danger` (wireless
+remediation) are new names for ink that already existed — a STATED FACT is not
+an explanatory note, and the word budget counts notes. The wireless-execute
+consequence keeps every word for the sweep-3 reason: a consequence you must
+read before typing a confirmation is part of the action.

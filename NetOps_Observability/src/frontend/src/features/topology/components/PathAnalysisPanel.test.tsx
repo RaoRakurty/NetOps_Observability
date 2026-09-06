@@ -33,9 +33,13 @@ function viewWith(path_source?: "measured" | "computed"): TopologyView {
 }
 
 describe("PathAnalysisPanel — path provenance honesty", () => {
+  // UI-words sweep 4 (tracker 270): the chip keeps the CLAIM ("not a live trace")
+  // and gives up the sentence that explained the inference — that is
+  // ai/skills/explain/path.computed.md, behind the `(i)` the chip now carries.
   it("labels a measured path as measured", () => {
     render(<PathAnalysisPanel view={viewWith("measured")} />);
-    expect(screen.getByText(/Measured/)).toBeTruthy();
+    expect(screen.getAllByText(/Measured/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Ask Iris about Measured" })).toBeTruthy();
   });
 
   it("labels a computed path as a non-trace inference (never 'traced')", () => {
@@ -104,9 +108,11 @@ describe("PathAnalysisPanel — #85 hop-edge interface metrics", () => {
     expect(screen.getAllByText("thr —").length).toBeGreaterThan(0);
     expect(screen.getAllByText("rel —").length).toBeGreaterThan(0);
     expect(screen.getAllByText("mtu —").length).toBeGreaterThan(0);
-    // the "—" tooltips explain WHERE the value would come from, not just "missing"
-    expect(screen.getAllByTitle(/ifSpeed/).length).toBeGreaterThan(0);
-    expect(screen.getAllByTitle(/ifMtu/).length).toBeGreaterThan(0);
+    // the "—" tooltips still say WHAT is missing, in plain words; the MIB names
+    // they used to carry are ai/skills/explain/path.hop-interface.md, behind the `(i)`.
+    expect(screen.getAllByTitle(/No link-speed series for this interface/).length).toBeGreaterThan(0);
+    expect(screen.getAllByTitle(/Not in the collection profile yet/).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Ask Iris about Hop interface facts" }).length).toBeGreaterThan(0);
     // no fabricated numbers anywhere
     expect(document.body.textContent).not.toMatch(/Gbps|Mbps/);
   });

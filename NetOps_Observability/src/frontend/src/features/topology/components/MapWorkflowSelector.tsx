@@ -45,7 +45,7 @@ export default function MapWorkflowSelector({
               border: "none",
               borderRadius: 5,
               padding: "4px 9px",
-              fontSize: 11,
+              fontSize: 12.5,
               fontWeight: active ? 600 : 500,
               cursor: disabled ? "not-allowed" : "pointer",
               whiteSpace: "nowrap",
@@ -59,10 +59,9 @@ export default function MapWorkflowSelector({
             {disabled ? (
               <span
                 style={{
-                  fontSize: 8,
+                  fontSize: 12.5,
                   fontWeight: 700,
                   letterSpacing: 0.4,
-                  textTransform: "uppercase",
                   color: "var(--fg-subtle)",
                   border: "1px solid var(--border)",
                   borderRadius: 3,

@@ -46,7 +46,7 @@ export default function OverlaySelector({
               border: "none",
               borderRadius: 5,
               padding: "4px 9px",
-              fontSize: 11,
+              fontSize: 12.5,
               fontWeight: active ? 600 : 500,
               cursor: "pointer",
               whiteSpace: "nowrap",

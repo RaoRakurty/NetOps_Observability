@@ -68,14 +68,17 @@ describe("WirelessRemediation — dormancy and access", () => {
   it("a failed read says what is proposed is UNKNOWN, not nothing", async () => {
     wirelessActions.mockRejectedValue(new Error("500 Internal Server Error: "));
     render(<WirelessRemediation />);
-    expect(await screen.findByText(/unknown, not nothing/i)).toBeTruthy();
+    expect(await screen.findByText(/What is proposed is unknown\./i)).toBeTruthy();
   });
 
   it("a read-only operator sees the queue and no decision controls", async () => {
     permissions.mockResolvedValue({ role: "viewer", permissions: { infrastructure: 1 } });
     render(<WirelessRemediation />);
     await screen.findByRole("table", { name: /waiting on a decision/i });
-    expect(screen.getByText(/need infrastructure write access/i)).toBeTruthy();
+    // UI-words sweep 4 (tracker 270): the refusal is STATED; which permission and
+    // who grants it is ai/skills/explain/wifi.remediation-readonly.md behind the `(i)`.
+    expect(screen.getByText(/Acting on a proposal needs write access\./i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about Read-only" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Execute" })).toBeNull();
   });
@@ -87,7 +90,7 @@ describe("WirelessRemediation — the approval loop", () => {
     const pending = await screen.findByRole("table", { name: /waiting on a decision/i });
     expect(within(pending).getByText("ap-lobby-3")).toBeTruthy();
     expect(within(pending).getByText("ap-lab-1")).toBeTruthy();
-    expect(within(pending).getAllByText(/Restart one access point's radio/i).length).toBeGreaterThan(0);
+    expect(within(pending).getAllByText(/Everything on that radio re-joins\./i).length).toBeGreaterThan(0);
 
     const history = screen.getByRole("table", { name: /remediation history/i });
     expect(within(history).getByText("ap-dc-9")).toBeTruthy();
@@ -162,9 +165,12 @@ describe("WirelessRemediation — the approval loop", () => {
     expect(await screen.findByText(/not in a state that permits this transition/i)).toBeTruthy();
   });
 
-  it("an empty queue says why a proposal is rare, not that wireless is healthy", async () => {
+  it("an empty queue says nothing is waiting, and offers why a proposal is rare", async () => {
     wirelessActions.mockResolvedValue([]);
     render(<WirelessRemediation />);
-    expect(await screen.findByText(/not that the wireless estate\s+is healthy/i)).toBeTruthy();
+    // The CLAIM stays; "an empty queue is not a healthy wireless estate" is
+    // ai/skills/explain/wifi.remediation-empty.md, reachable from the `(i)`.
+    expect(await screen.findByText(/Nothing is waiting\./i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about Nothing is waiting" })).toBeTruthy();
   });
 });

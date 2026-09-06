@@ -23,6 +23,7 @@ import {
 import type { Health } from "../api/topologyTypes";
 import ConfidencePanel from "./ConfidencePanel";
 import EvidencePanel from "./EvidencePanel";
+import AskIris from "../../../components/AskIris";
 
 const CHANGE_LABEL: Record<ChangeState, string> = {
   added: "Added in window",
@@ -50,7 +51,7 @@ function HealthBadge({ health }: { health: Health }) {
         display: "inline-flex",
         alignItems: "center",
         gap: 6,
-        fontSize: 11,
+        fontSize: 12.5,
         fontWeight: 600,
         color,
         border: `1px solid ${color}`,
@@ -67,10 +68,9 @@ function HealthBadge({ health }: { health: Health }) {
 }
 
 const sectionTitle: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: 12.5,
   fontWeight: 600,
   letterSpacing: 0.4,
-  textTransform: "uppercase",
   color: "var(--fg-subtle)",
   marginBottom: 8,
 };
@@ -78,7 +78,7 @@ const sectionTitle: React.CSSProperties = {
 function MetaRow({ label, value }: { label: string; value?: string }) {
   if (!value) return null;
   return (
-    <div style={{ display: "flex", gap: 8, fontSize: 12, lineHeight: 1.6 }}>
+    <div style={{ display: "flex", gap: 8, fontSize: 12.5, lineHeight: 1.6 }}>
       <span style={{ color: "var(--fg-subtle)", minWidth: 78 }}>{label}</span>
       <span style={{ color: "var(--fg)", wordBreak: "break-word" }}>{value}</span>
     </div>
@@ -101,8 +101,11 @@ function UnresolvedBlock({ node }: { node: TopologyNode }) {
         padding: "10px 11px",
       }}
     >
-      <div style={{ ...sectionTitle, marginBottom: 6 }}>Unresolved — why it's here</div>
-      <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 8 }}>{unresolvedReason(node.tags)}</div>
+      <div style={{ ...sectionTitle, marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}>
+        Unresolved
+        <AskIris topic="topo.unresolved" label="Unresolved" />
+      </div>
+      <div style={{ fontSize: 12.5, color: "var(--fg)", marginBottom: 8 }}>{unresolvedReason(node.tags)}</div>
       <div style={{ display: "grid", gap: 2, marginBottom: 8 }}>
         <MetaRow label="Discovered as" value={rawId} />
         <MetaRow label="Suggested" value={suggested} />
@@ -115,7 +118,7 @@ function UnresolvedBlock({ node }: { node: TopologyNode }) {
             type="button"
             title={`${a} — not available yet`}
             style={{
-              fontSize: 11, fontWeight: 600, padding: "4px 9px", cursor: "pointer",
+              fontSize: 12.5, fontWeight: 600, padding: "4px 9px", cursor: "pointer",
               color: "var(--fg-muted)", background: "var(--panel)",
               border: "1px solid var(--border)", borderRadius: 6,
             }}
@@ -168,8 +171,8 @@ function IssuesBlock({ issues }: { issues: NonNullable<TopologyNode["issues"]> }
           <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: issueColor(iss.severity), flex: "0 0 auto", marginTop: 4 }} />
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.45, wordBreak: "break-word" }}>{iss.summary}</div>
-              <div style={{ fontSize: 10, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.3, marginTop: 1 }}>
+              <div style={{ fontSize: 12.5, color: "var(--fg)", lineHeight: 1.45, wordBreak: "break-word" }}>{iss.summary}</div>
+              <div style={{ fontSize: 12.5, color: "var(--fg-subtle)", letterSpacing: 0.3, marginTop: 1, textTransform: "capitalize" }}>
                 {iss.severity}{sinceLabel(iss.since) ? ` · ${sinceLabel(iss.since)}` : ""}
               </div>
             </div>
@@ -207,7 +210,7 @@ function NodeBody({ node }: { node: TopologyNode }) {
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "var(--fg)" }}>{node.label}</h2>
         <HealthBadge health={node.health} />
       </div>
-      <div style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 14 }}>
+      <div style={{ fontSize: 12.5, color: "var(--fg-muted)", marginBottom: 14 }}>
         {[node.kind, node.role].filter(Boolean).join(" · ")}
       </div>
 
@@ -247,7 +250,7 @@ function NodeBody({ node }: { node: TopologyNode }) {
                   padding: "7px 9px",
                 }}
               >
-                <div style={{ fontSize: 10, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.3 }}>
+                <div style={{ fontSize: 12.5, color: "var(--fg-subtle)", letterSpacing: 0.3 }}>
                   {metricLabel(k)}
                 </div>
                 <div
@@ -285,7 +288,7 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
         </h2>
         <HealthBadge health={health} />
       </div>
-      <div style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 14 }}>
+      <div style={{ fontSize: 12.5, color: "var(--fg-muted)", marginBottom: 14 }}>
         {edgeEvidenceSummary(edge)}
       </div>
 
@@ -312,7 +315,7 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             {edge.utilization_pct != null ? (
               <div style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", padding: "7px 9px" }}>
-                <div style={{ fontSize: 10, color: "var(--fg-subtle)", textTransform: "uppercase" }}>Utilization</div>
+                <div style={{ fontSize: 12.5, color: "var(--fg-subtle)" }}>Utilization</div>
                 <div style={{ fontSize: 14, fontWeight: 600, color, fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>
                   {fmtUtil(edge.utilization_pct)}
                 </div>
@@ -320,7 +323,7 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
             ) : null}
             {edge.errors != null ? (
               <div style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", padding: "7px 9px" }}>
-                <div style={{ fontSize: 10, color: "var(--fg-subtle)", textTransform: "uppercase" }}>Errors</div>
+                <div style={{ fontSize: 12.5, color: "var(--fg-subtle)" }}>Errors</div>
                 <div style={{ fontSize: 14, fontWeight: 600, color: "var(--fg)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>
                   {edge.errors}
                 </div>
@@ -360,7 +363,7 @@ function GroupBody({
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "var(--fg)" }}>{group.label}</h2>
         <HealthBadge health={worst} />
       </div>
-      <div style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 14 }}>
+      <div style={{ fontSize: 12.5, color: "var(--fg-muted)", marginBottom: 14 }}>
         {group.group_type} · {members.length} nodes
       </div>
 
@@ -378,7 +381,7 @@ function GroupBody({
           type="button"
           onClick={() => onToggleGroup?.(group.id)}
           style={{
-            width: "100%", padding: "8px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+            width: "100%", padding: "8px 10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
             color: "var(--fg)", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 7,
           }}
         >
@@ -390,10 +393,10 @@ function GroupBody({
         <div style={sectionTitle}>Members</div>
         <div style={{ display: "grid", gap: 4 }}>
           {members.map((m) => (
-            <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--fg)" }}>
+            <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--fg)" }}>
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: HEALTH_COLOR[m.health], flex: "0 0 auto" }} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.label}</span>
-              <span style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--fg-subtle)" }}>{m.role ?? m.kind}</span>
+              <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--fg-subtle)" }}>{m.role ?? m.kind}</span>
             </div>
           ))}
         </div>

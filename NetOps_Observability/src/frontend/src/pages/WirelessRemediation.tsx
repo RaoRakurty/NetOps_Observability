@@ -34,6 +34,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, WirelessActionRow } from "../services/api";
 import { fmtDateTime } from "../lib/time";
 import { httpFailure, operatorError } from "../lib/errors";
+import AskIris from "../components/AskIris";
 
 type Load =
   | { kind: "loading" }
@@ -44,9 +45,9 @@ type Load =
 
 /** What each action kind actually does, in the operator's words. */
 const KIND_COPY: Record<string, string> = {
-  rrm_channel_change: "Move one radio to a different channel. Clients on it re-associate briefly.",
-  ap_radio_reset: "Restart one access point's radio. Everything on that radio drops and re-joins.",
-  client_deauth: "Disconnect one client session. The client re-associates on its own.",
+  rrm_channel_change: "Clients re-associate briefly.",
+  ap_radio_reset: "Everything on that radio re-joins.",
+  client_deauth: "That client re-associates itself.",
 };
 
 const KIND_LABEL: Record<string, string> = {
@@ -138,7 +139,7 @@ export default function WirelessRemediation() {
   const history = useMemo(() => rows.filter((r) => !PENDING.has(r.state)), [rows]);
 
   if (load.kind === "loading") {
-    return <section className="cc-panel" aria-label="Wireless remediation"><div className="cc-empty" role="status">Reading the wireless remediation queue…</div></section>;
+    return <section className="cc-panel" aria-label="Wireless remediation"><div className="cc-empty" role="status">Reading the remediation queue…</div></section>;
   }
   if (load.kind === "dormant") {
     // A dormant workflow is deliberately quiet: rendering an empty approval
@@ -149,7 +150,7 @@ export default function WirelessRemediation() {
     return (
       <section className="cc-panel" aria-label="Wireless remediation">
         <div className="cc-panel-h"><h3 className="cc-panel-t">Wireless remediation</h3></div>
-        <div className="cc-empty">Seeing proposed wireless remediation needs infrastructure access.</div>
+        <div className="cc-empty">Seeing proposals needs infrastructure access.</div>
       </section>
     );
   }
@@ -157,7 +158,7 @@ export default function WirelessRemediation() {
     return (
       <section className="cc-panel" aria-label="Wireless remediation">
         <div className="cc-panel-h"><h3 className="cc-panel-t">Wireless remediation</h3></div>
-        <div className="cc-empty" role="alert">{load.message} What is proposed is unknown, not nothing.</div>
+        <div className="cc-empty" role="alert">{load.message} What is proposed is unknown.</div>
       </section>
     );
   }
@@ -166,25 +167,24 @@ export default function WirelessRemediation() {
     <section className="cc-panel" aria-label="Wireless remediation">
       <div className="cc-panel-h">
         <h3 className="cc-panel-t">Wireless remediation</h3>
-        <span className="cc-panel-meta">
-          proposed from an incident&apos;s own evidence — approved by a person, executed one target at a time
-        </span>
+        <span className="cc-panel-meta">from a confirmed incident&apos;s own evidence</span>
+        <AskIris topic="wifi.remediation" label="Wireless remediation" />
       </div>
 
       {note && <p className="mini-meta" role="status">{note}</p>}
       {rowErr && <p className="mini-meta" role="alert" style={{ color: "var(--bad)" }}>{rowErr}</p>}
       {!canWrite && (
-        <p className="mini-meta">
-          You can see what is proposed. Approving, rejecting and executing need infrastructure write access.
+        <p className="rem-line">
+          Acting on a proposal needs write access.
+          <AskIris topic="wifi.remediation-readonly" label="Read-only" />
         </p>
       )}
 
-      <h4 style={{ margin: "var(--sp-2) 0 var(--sp-1)" }}>Waiting on a decision</h4>
+      <h4 style={{ margin: "var(--sp-2) 0 var(--sp-1)" }}>Waiting</h4>
       {pending.length === 0 ? (
         <div className="cc-empty">
-          Nothing is waiting. A proposal is only created from evidence that took part in a confirmed
-          incident, so an empty queue means no incident has met that bar — not that the wireless estate
-          is healthy.
+          Nothing is waiting.
+          <AskIris topic="wifi.remediation-empty" label="Nothing is waiting" />
         </div>
       ) : (
         <table className="ds-table" aria-label="Wireless remediation, waiting on a decision">
@@ -206,7 +206,7 @@ export default function WirelessRemediation() {
                 <tr key={r.id}>
                   <th scope="row" style={{ fontWeight: 500, textAlign: "left" }}>
                     {kindLabel(r.kind)}
-                    <span className="mini-meta" style={{ display: "block" }}>{KIND_COPY[r.kind] ?? "This action's effect is not described."}</span>
+                    <span className="rem-line">{KIND_COPY[r.kind] ?? "Effect not described."}</span>
                   </th>
                   <td className="mono">{r.target || "not stated"}</td>
                   <td>
@@ -215,12 +215,12 @@ export default function WirelessRemediation() {
                         {r.correlation_id.slice(0, 8)}…
                       </a>
                     ) : "not stated"}
-                    <span className="mini-meta" style={{ display: "block" }}>the evidence that justifies it</span>
+                    <span className="rem-line">the evidence that justifies it</span>
                   </td>
                   <td><span className={`chip ${STATE_TONE[r.state] ?? ""}`}>{r.state}</span></td>
                   <td>
                     {r.created_at ? fmtDateTime(r.created_at) : "—"}
-                    <span className="mini-meta" style={{ display: "block" }}>by {r.proposed_by || "not stated"}</span>
+                    <span className="rem-line">by {r.proposed_by || "not stated"}</span>
                   </td>
                   <td>
                     {canWrite ? (
@@ -264,12 +264,16 @@ export default function WirelessRemediation() {
                         </div>
                         {canExecute && confirming && (
                           <div style={{ marginTop: 6 }}>
-                            <p className="mini-meta" role="note" style={{ margin: 0 }}>
+                            {/* DESTRUCTIVE: a consequence you must read before typing the
+                                confirmation is part of the ACTION, not an explanation, so it
+                                keeps every word (sweep-3 precedent). `.rem-danger` is not an
+                                explanatory-note class for exactly that reason. */}
+                            <p className="rem-danger" role="note">
                               This touches a radio that is serving clients right now, and it cannot be taken back
                               once it runs.
                             </p>
                             <label>
-                              <span className="mini-meta">Type <span className="mono">{r.target}</span> to confirm</span>{" "}
+                              <span className="rem-line">Type <span className="mono">{r.target}</span> to confirm</span>{" "}
                               <input
                                 type="text"
                                 className="mono"
@@ -290,7 +294,7 @@ export default function WirelessRemediation() {
                         )}
                       </>
                     ) : (
-                      <span className="mini-meta">read-only</span>
+                      <span className="rem-line">read-only</span>
                     )}
                   </td>
                 </tr>
@@ -322,8 +326,8 @@ export default function WirelessRemediation() {
                 <td className="mono">{r.target || "not stated"}</td>
                 <td>
                   <span className={`chip ${STATE_TONE[r.state] ?? ""}`}>{r.state}</span>
-                  {r.error && <span className="mini-meta" style={{ display: "block", color: "var(--bad)" }}>{r.error}</span>}
-                  {r.verify_note && <span className="mini-meta" style={{ display: "block" }}>{r.verify_note}</span>}
+                  {r.error && <span className="rem-line" style={{ color: "var(--bad)" }}>{r.error}</span>}
+                  {r.verify_note && <span className="rem-line">{r.verify_note}</span>}
                 </td>
                 <td>{r.approved_by || r.proposed_by || "not stated"}</td>
                 <td>{r.reason || "none recorded"}</td>
@@ -334,9 +338,8 @@ export default function WirelessRemediation() {
         </table>
       )}
       <p className="mini-meta">
-        Every transition above is an audit event. Execution runs through the vendor controller, never over
-        a device login; where no controller write is available the action records itself as refused rather
-        than reporting a change it did not make.
+        Every transition above is an audit event.
+        <AskIris topic="wifi.remediation-audit" label="Audit record" />
       </p>
     </section>
   );

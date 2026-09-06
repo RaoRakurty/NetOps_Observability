@@ -9,43 +9,43 @@ import type { TopologyView, TopologyOverlay, OverlayKind } from "../api/topology
 export const OVERLAY_META: Record<OverlayKind, { label: string; description: string }> = {
   health: {
     label: "Health",
-    description: "Node and link health bands (ok / warning / critical / unknown).",
+    description: "Node rings carry health.",
   },
   utilization: {
     label: "Utilization",
-    description: "Link utilization 0–100% mapped to edge width.",
+    description: "Edge width is link load.",
   },
   interface_errors: {
     label: "Interface errors",
-    description: "Per-link error / discard rate highlighting troubled paths.",
+    description: "Edge width is error rate.",
   },
   routing_changes: {
     label: "Routing changes",
-    description: "Recent BGP/IS-IS/OSPF adjacency or best-path changes in the window.",
+    description: "Where routing moved in the window.",
   },
   config_drift: {
     label: "Config drift",
-    description: "Devices whose running config diverged from intent / golden config.",
+    description: "Devices whose config differs from intent.",
   },
   syslog: {
     label: "Syslog",
-    description: "Devices and links with recent syslog activity in the window.",
+    description: "Devices that logged in the window.",
   },
   flow: {
     label: "Flow dependencies",
-    description: "Observed traffic dependencies (dashed, lower-confidence edges).",
+    description: "Dependencies observed in traffic, not on the wire.",
   },
   rca_evidence: {
     label: "RCA evidence",
-    description: "Evidence and objects an RCA correlation actually used.",
+    description: "What this root-cause verdict actually used.",
   },
   golden_path_delta: {
     label: "Golden-path delta",
-    description: "Difference between the observed path and the approved golden path.",
+    description: "The live path against the golden path.",
   },
   historical_diff: {
     label: "Historical diff",
-    description: "Added / removed / changed objects across the selected time window.",
+    description: "What changed since the snapshot.",
   },
 };
 
