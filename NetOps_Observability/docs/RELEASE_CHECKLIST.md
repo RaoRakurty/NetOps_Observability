@@ -56,6 +56,7 @@ All of these run on every PR and push. None needs a human unless it fails.
 | 1.16d | **OCI image compliance** — the FINAL image is the compliance boundary: inherited base-layer software (BusyBox et al.) is discovered, its corresponding-source obligation evaluated, and the Correlix-retained artifact checksum-verified. Tracker 238 | `supply-chain` · `OCI image compliance (inherited layers, blocking)`; release mode runs per pushed digest in `publish-images` | 🟢 AUTOMATED |
 | 1.17 | Fuzz corpus exploration | `fuzz-nightly` (scheduled, not per-PR) | 🟢 AUTOMATED |
 | 1.18 | **`go.mod` direct requires ⊆ the CLAUDE.md §6 allowlist** | — | 🔴 MISSING — human review only |
+| 1.19 | Helm chart renders and validates (lint · template · kubeconform, Kubernetes 1.30 schemas) — rendered-and-validated only, not cluster-proven (tracker 271) | `fresh-install-integrity` · `helm chart lint · template · kubeconform (blocking)` | 🟢 AUTOMATED |
 
 > **Every one of the gates above also runs on the TAG.** `.github/workflows/release-gate.yml`
 > is a `workflow_call`-only workflow that calls `backend-ci`, `frontend-ci`, `correlation-ci`,

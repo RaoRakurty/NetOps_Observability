@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Registry/app-state backend defaults and upgrade safety (tracker 245).
 
 Two invariants, and they pull in opposite directions on purpose:
@@ -26,8 +29,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import install                        # noqa: E402
-import secret_rotation as sr          # noqa: E402
+import install
+import secret_rotation as sr
 
 
 def parse_env(path: Path) -> dict[str, str]:
@@ -120,7 +123,11 @@ def test_no_shipped_artifact_defaults_a_new_install_to_file():
     """Guards against a stale conflicting default: the installer template is the
     only thing that decides a NEW install's backend."""
     template = (SCRIPTS / "install.py").read_text()
-    assert "\nSTORE_BACKEND=postgres\n" in template
+    # The installer GUI (tracker 266) parameterised the line; the default the
+    # parameter falls back to is what decides a NEW install's backend.
+    assert "\nSTORE_BACKEND={store_backend}\n" in template
+    assert 'os.environ.get("CORRELIX_STORE_BACKEND", "postgres")' in template, \
+        "a fresh install must default to PostgreSQL (tracker 245)"
     assert "\nSTORE_BACKEND=file\n" not in template, \
         "the fresh-install template must not carry the compatibility backend"
 

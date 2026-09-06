@@ -86,6 +86,7 @@ are **not** optional for a release, because `release-gate.yml` runs the whole
 | fresh-install-integrity | `integrity` | the job declares no `name:`, so the check name is the **job id**. Static preflight + real config load |
 | fresh-install-integrity | `ruff (scripts/*.py, blocking)` | job id `scripts-lint` |
 | fresh-install-integrity | `install.py --tls=yes two-phase boot (blocking)` | a real two-phase install on a scratch runner — the slowest check in the repo (~45 min); require it on PRs only if you want every PR to pay for it |
+| fresh-install-integrity | `helm chart lint · template · kubeconform (blocking)` | job id `helm-chart`; the chart is rendered and schema-validated (Kubernetes 1.30), NOT cluster-proven — tracker 271 carries the cluster leg |
 
 ### 1.3 Deliberately NOT required — and why
 
