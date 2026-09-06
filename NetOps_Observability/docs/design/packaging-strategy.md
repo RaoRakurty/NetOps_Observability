@@ -177,3 +177,66 @@ retention ambition.
 4. No operator/CRDs before the chart has users. No Bitnami dependencies.
 5. Licensing gate (§4) — CLOSED 2026-07-03: Redis→Valkey and Redpanda→Apache
    Kafka both shipped; build/preflight/CI guards keep flagged images out.
+
+---
+
+## 8. Bundle size — the measured lever table (tracker 148)
+
+**Why this section exists.** Tracker 148 listed the remaining bundle-size levers
+in leverage order but carried no measurements, so "we could save ~150 MB" and
+"we did save 22 MB" looked the same on the page. Everything below was measured
+on 2026-09-06 on the lab host; anything that was *not* measured says so.
+
+**How the numbers were taken.** Two different sizes matter and they are not the
+same number:
+
+* **on disk** — `docker images` / `docker image inspect` uncompressed size. What
+  the customer's Docker daemon unpacks.
+* **in the bundle** — `docker save <image> | wc -c`. `scripts/make-installer.sh`
+  (line 531) does exactly `docker save $SAVE_REFS | zstd -q -T0 -3`, and the
+  containerd image store already holds layers compressed, so the save stream IS
+  the bundle contribution: measured on `netops-correlation`, `zstd -3` on top of
+  the save removed a further 0.2 % (66 451 456 → 66 302 645 B). **The bundle
+  itself was NOT built here** — that is disk-gated (tracker 125), and this host
+  sat at 93 % — so every bundle figure below is a per-image `docker save`
+  measurement, not a bundle diff.
+
+### 8.1 Shipped levers, measured
+
+| # | Lever | State | Measured effect |
+|---|---|---|---|
+| L1 | Correlation base `python:3.12-slim` → `python:3.12-alpine` (tracker 263) | **shipped 2026-09-06** | image **281 → 182 MB** on disk; bundle **66.45 → 44.22 MB (−22.23 MB)**. Inherited package surface **87 dpkg → 38 apk**; the register of undischarged corresponding-source obligations (`scripts/source-mirror.json`) goes from **60 rows to 14** for this image (58 Debian rows deleted, 12 Alpine rows recorded, the 2 `Simple Launcher` rows unchanged), which the evaluation prints as **18 recorded obligations** because Syft reports `Simple Launcher` under six spellings |
+| L2 | Root `.dockerignore` for the eight services that build with `context: ../..` (tracker 193, `d0a125ce`) | shipped, re-verified here | build context **16.06 GB / 62 889 files → 0.89 GB / 5 824 files**; per service `correlation` 53.15 → 6.29 MB (independently re-measured cold today: 6.35 MB), `api` 79.69 → 37.03 MB. **Zero effect on bundle size** — this is a build-cost, cache-invalidation and *safety* lever (`data/`, `.env` and key material can no longer reach an image), not a size lever. `tests/test_dockerignore_copy_sources.py` guards it |
+| L3 | Go binary: `-trimpath -ldflags="-s -w"`, `CGO_ENABLED=0`, distroless-static runtime | already in `Dockerfile.backend` | `netops-api` = **55 MB** on disk / **13.6 MB** in the bundle, of which `gcr.io/distroless/static-debian12` is 6.12 MB. Stripping measured directly, same tree, same toolchain (go 1.26.8), only the `-s -w` flags differing: **48 085 306 → 36 016 290 B on disk (−12.07 MB, −25.1 %)** and **22 524 626 → 12 767 065 B compressed (−9.76 MB, −43.3 %)**. It applies per Go image, so `netops-api` and `netops-prober` each carry the saving |
+| L4 | No build toolchain in any shipped image (multi-stage) | verified, and extended by L1 | the correlation **build** stage now installs `gcc musl-dev zlib-dev` (aiokafka publishes no `musllinux` wheel at any version, so its C extension is compiled from the hash-locked sdist); none of it reaches the runtime stage — `which gcc` in the shipped image returns nothing |
+| L5 | Dev dependencies never enter an image | verified | the frontend image ships build OUTPUT only: `src/frontend/dist` (6.8 MB) + `docs-portal/build` (9.9 MB). The 682 MB of `node_modules` is excluded by L2. `netops-frontend` = 118 MB on disk / 30 MB in the bundle |
+
+### 8.2 Levers considered and rejected, with the reason
+
+* **Layer squashing — rejected, it would make the bundle BIGGER.** The bundle is
+  a single `docker save` of every image at once, so a layer shared between images
+  is stored **once**. `netops-frontend` and `netops-nginx` share the entire
+  `nginx:1.27-alpine` base (8 layers, 74.5 MB); squashing each image into one
+  layer duplicates that base per image. Squashing is a lever for a *single*
+  image pushed to a registry, which is not the shape we ship.
+* **Dropping the correlation test suite and fixtures from the image — rejected
+  for now.** 163 `test_*.py` (2.7 MB) + `fixtures/` (1.6 MB) ≈ 4.3 MB
+  uncompressed, under ~1 MB in the bundle — and running that suite *inside* both
+  the old and the new image, with the working tree mounted so the source is
+  identical, is how the L1 base swap was qualified (16 failures before, the same
+  16 after). Deleting the evidence to save 1 MB is a bad trade. Revisit if the
+  image ever ships to a size-constrained edge target.
+
+### 8.3 What is still open (unchanged from tracker 148)
+
+These are functional migrations, not build changes, and each needs its own
+validation; none of them was attempted here:
+
+* **syslog-ng → Vector consolidation** (~180 MB + one fewer service).
+* **`apache/kafka` → `apache/kafka-native`** (~150 MB; upstream positions the
+  GraalVM image for dev/test — prod-worthiness for a single-node KRaft appliance
+  has to be established first).
+* **OSD add-on pack trim** (427 MB pack; the same flatten-and-trim treatment the
+  server image already got).
+* **Correlation Python → Go** — after L1 the remaining Python base is ~44 MB in
+  the bundle rather than ~66 MB, which weakens this one considerably.
