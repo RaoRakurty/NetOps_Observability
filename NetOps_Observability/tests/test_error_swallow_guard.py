@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """§16.1 regression guard — no swallowed errors in operational scripts.
 
 The 2026-08 scale test's defect class #3: `ensure_data_dirs` caught the chown
@@ -535,6 +538,28 @@ ALLOWLIST: dict[AllowKey, str] = {
     # ===================================================================
     ("gen-licensing-map.py", "main", "303f7f70"): "--check of a LICENSING.md target: prints 'MISSING: <target>: <errno>' to stderr and appends the target to `stale`, and a non-empty `stale` prints the regeneration command and returns 1 — main()'s return value is the process exit status (sys.exit(main())). Reported and fatal; the `continue` only lets the OTHER root's staleness be reported in the same run rather than hiding it behind the first failure",
     ("licensing-gate.py", "check_spdx", "95be8ea1"): "a source file the SPDX check could not read: appended as a check-A Failure naming the path and the errno, which is what makes the gate exit non-zero (the gate fails closed by design). The `continue` is what lets the remaining files still be checked, so one unreadable file yields a complete report instead of a truncated one. NOT a swallow: the silent `continue` this replaced would have passed an unreadable commercial file as if its header had been verified",
+
+    # ===================================================================
+    # 2026-09-06 — scripts/spdx-headers.py (tracker 240, the SPDX header
+    # sweep). The SAME accumulator shape as the two entries above, and for
+    # the same reason: the sweep visits ~3 200 files in one pass, and an
+    # operator needs the whole list of what it could not do, not the first
+    # item. Both handlers name the path and the errno, append a Violation,
+    # and a non-empty violation list is what makes main() return 1 —
+    # sys.exit(main()) makes that the process exit status. There is no
+    # "carry on and report success" path: --check prints PASS only when the
+    # list is empty, and --write prints the FAIL block and exits non-zero
+    # even after stamping files successfully.
+    #
+    # The read handler is load-bearing in the same way licensing-gate.py's
+    # is: a file the sweep cannot OPEN is a file it did NOT stamp, and
+    # continuing silently would report a clean sweep over a file that has no
+    # header. The write handler caught a real one on the first run —
+    # scripts/reset-admin.sh was root-owned and unwritable, and the failure
+    # was visible only because it is reported rather than skipped.
+    # ===================================================================
+    ("spdx-headers.py", "scan", "285202b9"): "a source file the sweep could not READ: appended as a Violation naming the path and the errno, which is what makes --check/--write exit non-zero. The `continue` lets the remaining ~3 200 files still be swept, so one unreadable file yields a complete report instead of a truncated one. NOT a swallow: skipping silently would report a file as carrying a header the sweep never managed to read",
+    ("spdx-headers.py", "scan", "21205363"): "a source file the sweep could not WRITE: appended as a Violation naming the path and the errno, which is what makes --write exit non-zero even though other files were stamped. The `continue` finishes the sweep so the operator gets every unwritable path in one run; the alternative — stopping at the first — leaves a half-stamped tree AND an incomplete list",
 }
 
 # Rule 1: literal swallows, any text file (catches heredoc Python in .sh too).

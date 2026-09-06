@@ -317,3 +317,97 @@ workflow** or into `scripts/licensing-gate.py --release`.
 
 GA also remains blocked on the two commercial items already recorded in §7: the
 Correlix Enterprise licence TEXT and the CLA signing process, both awaiting legal.
+
+---
+
+## 10. The boundary is finished: four packages are CORE, and every file says so (2026-09-06)
+
+Two things closed on this date, and they are the two halves of §7 build order item 1
+that had been carried since 2026-09-04: the `enterprise/` extraction, and the
+repo-wide SPDX header sweep. Both are recorded in `licensing-policy.json`, which
+`LICENSING.md` is generated from and `scripts/licensing-gate.py` enforces.
+
+### 10.1 Four packages decided CORE on evidence — not deferred
+
+`mixed_directories` is now **empty**, and that is a finished state rather than a
+pending one. Of the original seven, three were separated and are now commercial
+paths under the physical boundary — `internal/hardening` → `enterprise/dialects`
+and `internal/ldap` → `enterprise/sso/ldap` (2026-09-05), and the compliance
+framework CROSSWALKS of `internal/compliancemodel` → `enterprise/frameworks`
+(2026-09-06, the vocabulary staying core).
+
+The four that remained were examined and are **Apache-2.0 core**. The commercial
+capability each touches is enforced by the entitlement machinery at the call
+site, which is where §2a says it belongs — "is feature X entitled?", never "is
+this file Enterprise?". A proposal to move one of these has to answer the
+evidence below first.
+
+| Package | Capability it touches | Why it is core |
+|---|---|---|
+| `src/backend/secapi` | `security_findings` (Team) | The Community/Team line runs THROUGH the files, not between them: `http.go`, `rules.go` and `frameworks.go` each carry both halves, and three core call sites (`correlations.go`, `ai_troubleshoot_deps.go`, `internal/seclane`) depend on the package for shared vocabulary (`Gate`, `Principal`, `Filters`, `SecuritySignalKinds`, `ListFindings`). The gate it needs already exists and is wired where it belongs — `licenceFeature(FeatureSecurityFindings)` at the mux — so secapi never learns about licensing. Re-verified 2026-09-06. |
+| `src/backend/internal/secfindings` | `security_findings` (Team) | **Core by decision, expected to be permanent.** The package is the normalized finding model and nothing else — no HTTP, no bus, no engine, no entitlement awareness — with seventeen non-test importers on both sides of the boundary. It is the contract between a core producer and a commercial consumer, and a contract both sides depend on has to be readable by both. |
+| `src/backend/internal/seclane` | `security_findings` (Team) | Already physically removable — the recipe in its package doc and `security_lane_removability_test.go` delete it wholesale — but its boundary is FEATURE-FLAG shaped, not entitlement shaped: it produces the Community hardening and exposure evidence in the same pass as the Team threat and advisory evidence. Moving it to `enterprise/` would move Community's own entitlement with it. |
+| `src/backend/internal/tenant` | `msp_management` (Enterprise) | **Attempted 2026-09-05 and reverted on the evidence**, and that finding stands. With `enterprise/` deleted, 79 CORE tests fail: nearly every tenant and cross-org isolation test builds its fixture by POSTing two organisations, so the org store is load-bearing for the ISOLATION MODEL'S OWN TESTS — a core that cannot create a second organisation cannot prove it keeps two apart. `governance.go` is a second, independent reason: `internal/rca` (core) imports `tenant.SeamOwnerClasses` and `tenant.SeamOwnerEntry` as core RCA vocabulary. If org-hierarchy MANAGEMENT is commercial at all it is a **ceiling** (`entitlement.CheckCeiling`) in the Apache-2.0 licence machinery, not a separate package. |
+
+This is consistent with §1's rule that isolation is never commercial, and with the
+conservative direction the map has always taken: over-claiming commercial on a
+shared package would wrongly restrict core code, so the open answer wins on a tie
+— and here it wins on evidence, not on a tie.
+
+Recorded in `licensing-policy.json` → `mixed_directories.core_by_evidence`, checked
+by `scripts/licensing-gate.py` check F (each path must still be a directory) and by
+`tests/test_licensing_consistency.py`, which asserts the generated map states the
+empty case explicitly rather than quietly dropping the section.
+
+### 10.2 The SPDX header, and the copyright line it carries
+
+Every first-party source file now declares its own licence. `LICENSE`,
+`LICENSING.md` and the per-directory notices already made a file's licence
+*determinable*; they did not make it determinable **from the file alone**, which is
+the case that actually arises — a `.go` file pasted into a bug report, a script
+copied onto a customer's host, a component quoted in a review. The header is two
+lines, in the comment syntax of the language, as the first comment in the file:
+
+```go
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+```
+
+```go
+// SPDX-License-Identifier: LicenseRef-Correlix-Enterprise
+// Copyright 2026 Correlix
+```
+
+**The copyright line is specified here**, because §1 and the owner's 2026-09-04
+spec named the SPDX identifier and nothing else, and a sweep needs an unambiguous
+answer. It is `Copyright 2026 Correlix` — the same line the root `LICENSE` and
+`NOTICE` already state, so the three agree by construction rather than by
+coincidence. It sits BENEATH the identifier so the map's standing promise ("an SPDX
+header comment, the first comment line of the file") stays true, and so the
+existing `enterprise/` headers gained the line without being restamped. The line
+is held in `licensing-policy.json` → `header_enforcement.copyright_line`; changing
+the year or the holder is a one-line policy edit plus `--write`.
+
+The sweep is `scripts/spdx-headers.py` (`--check` lists violations and exits 1,
+`--write` fixes them, and a second run is a no-op). It respects the prologues that
+have to stay first — a `#!` shebang, a PEP 263 encoding cookie, `"use strict"`,
+`// @ts-check`, a UTF-8 BOM — and on Go files it writes the header ABOVE any
+`//go:build` constraint with a blank line before the package clause, so a package
+doc comment stays a package doc comment. Fixtures for each of those live in
+`tests/test_spdx_headers.py`.
+
+Scope and exemptions are policy, not code: `header_enforcement.sweep_roots`,
+`source_extensions` and `exempt` say what is covered, and `scripts/licensing-gate.py`
+check A reads the scope THROUGH the sweep module so the gate and the tool that
+fixes a failure cannot disagree about which files are covered. Only two classes are
+exempt, each named with its reason — files REGENERATED byte-for-byte from something
+else (stamping them breaks the generator's own drift guard) and fixtures a test
+reads verbatim. Third-party and vendored trees are not in that list at all; they are
+skipped by NAME everywhere in the tree via `excluded_paths`, because their licence
+is not ours to declare.
+
+`header_enforcement.mode` moved from `commercial-required` to **`enforced`** on the
+same date. Before, only the direction that could mis-state a licence was checked: a
+commercial marking in the wrong place, or a commercial path missing its marking.
+Now a core source file with no header fails the gate too, which is what keeps the
+sweep from decaying one new file at a time.

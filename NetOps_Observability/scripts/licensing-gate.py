@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """
 licensing-gate.py — enforce the open-core boundary declared in licensing-policy.json.
 
@@ -16,7 +19,9 @@ as authority, and it FAILS CLOSED: anything unclassified, unknown or
 contradictory is an error, never a warning.
 
 The eight checks
-    A  SPDX headers agree with the policy's classification of their path.
+    A  SPDX headers agree with the policy's classification of their path, and —
+       once `header_enforcement.mode` is `enforced` — every source file in the
+       swept scope actually carries one.
     B  Every commercial directory carries its own LICENSE notice file.
     C  The commercial identifier appears nowhere outside a commercial directory.
     D  Every Dockerfile is classified, and Correlix images declare the licence
@@ -83,6 +88,21 @@ def rel(path: str) -> str:
 def load_policy() -> dict:
     with open(POLICY_PATH, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def load_module(filename: str, name: str):
+    """Load a sibling script by path. Their filenames carry dashes, so they are
+    not importable; this is the same mechanism check G already uses to run
+    license-audit.py's generator rather than grepping its source."""
+    path = os.path.join(HERE, filename)
+    if not os.path.isfile(path):
+        return None
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def excluded_names(policy: dict) -> set[str]:
@@ -157,7 +177,7 @@ def check_spdx(policy: dict) -> list[Failure]:
             continue
 
         if not found:
-            continue  # header mode is commercial-required; core headers are pending
+            continue  # a missing core header is check_headers()'s business
         ident = found.group(1)
         if ident not in known:
             fails.append(Failure("A", relp, f"unknown SPDX identifier {ident!r}"))
@@ -166,7 +186,31 @@ def check_spdx(policy: dict) -> list[Failure]:
             fails.append(Failure("C", relp,
                                  f"declares {comm} but is NOT inside a commercial "
                                  f"directory declared in licensing-policy.json"))
+
+    fails.extend(check_headers(policy))
     return fails
+
+
+def check_headers(policy: dict) -> list[Failure]:
+    """Part of check A: once the sweep has run, EVERY source file in scope must
+    carry the header its path maps to.
+
+    The scope and the exemption list are not restated here. They are read from
+    the same policy section the sweep obeys, THROUGH the sweep itself
+    (scripts/spdx-headers.py), so the gate and the tool that fixes a failure can
+    never disagree about which files are covered."""
+    if policy["header_enforcement"]["mode"] != "enforced":
+        return []  # the sweep has not run yet; only the commercial direction is checked
+    try:
+        spdx = load_module("spdx-headers.py", "_spdx_headers")
+    except Exception as err:  # noqa: BLE001 - any import failure is a real gate failure
+        return [Failure("A", "scripts/spdx-headers.py",
+                        f"could not be evaluated, so no header was checked: {err}")]
+    if spdx is None:
+        return [Failure("A", "scripts/spdx-headers.py",
+                        "header enforcement is on but the sweep script is missing")]
+    violations, _changed = spdx.scan(policy, write=False)
+    return [Failure("A", v.path, v.reason) for v in violations]
 
 
 # ── B: per-directory notice files ────────────────────────────────────────────
@@ -316,6 +360,15 @@ def check_coverage(policy: dict) -> list[Failure]:
                 fails.append(Failure("F", entry["path"],
                                      f"named in {group} but is not a directory"))
 
+    # The packages decided core on evidence are named in the map and in the
+    # design record. If one is renamed or deleted, both statements go stale
+    # silently, so the path is checked exactly like a classified directory.
+    for entry in policy["mixed_directories"]["core_by_evidence"]["entries"]:
+        if not os.path.isdir(os.path.join(PROJ, entry["path"])):
+            fails.append(Failure("F", entry["path"],
+                                 "named in mixed_directories.core_by_evidence but "
+                                 "is not a directory"))
+
     # Every commercial entitlement must exist in the owner's locked set.
     locked = {
         ent["id"]
@@ -358,14 +411,9 @@ def licence_sentence_surfaces(policy: dict) -> list[tuple[str, str]]:
 # generator and reads what it actually produces: the header a customer receives.
 def render_notices_output() -> str | None:
     """The header render_notices() emits, or None if it cannot be loaded."""
-    path = os.path.join(PROJ, "scripts", "license-audit.py")
-    if not os.path.isfile(path):
+    module = load_module("license-audit.py", "_license_audit")
+    if module is None:
         return None
-    spec = importlib.util.spec_from_file_location("_license_audit", path)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
     return module.render_notices([], {})
 
 

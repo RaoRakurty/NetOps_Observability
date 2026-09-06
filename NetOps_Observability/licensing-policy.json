@@ -177,8 +177,8 @@
         "path": "src",
         "licence": "Apache-2.0",
         "state": "mixed",
-        "reason": "Backend, frontend, correlation engine and configuration. Apache-2.0 by default; the commercial add-ons listed under commercial_paths and mixed_directories live inside this tree and are marked individually.",
-        "mixed_note": "Commercial code inside src/ is marked file-by-file and directory-by-directory. Everything cleanly separated today lives under src/backend/enterprise/ (dialects, sso/ldap, frameworks); what is left is named in mixed_directories."
+        "reason": "Backend, frontend, correlation engine and configuration. Apache-2.0 by default; the commercial add-ons listed under commercial_paths live inside this tree, under the physical src/backend/enterprise/ boundary, and are marked file by file.",
+        "mixed_note": "Commercial code inside src/ is marked file-by-file and directory-by-directory, and all of it lives under src/backend/enterprise/ (dialects, sso/ldap, frameworks). Nothing else in src/ mixes the two licences — see mixed_directories.core_by_evidence for the four packages that were examined and decided core."
       },
       {
         "path": "telemetry-catalog",
@@ -301,58 +301,55 @@
     "guarantee": "After those steps `go build ./...`, `go vet ./...` and `go test ./...` are green, and every remaining file is Apache-2.0. Nothing about tenant or organisation isolation, RLS, authorization, integrity or core authentication changes — by construction, because none of it is in enterprise/."
   },
   "mixed_directories": {
-    "_why": "Directories that STILL mix Apache-2.0 core code with code implementing a locked commercial entitlement. They stay Apache-2.0 in full until the commercial part is extracted, because over-claiming commercial on a shared package would wrongly restrict core code. Each names what must move and where, and — where an extraction was attempted and did not hold, or was decided against on evidence — what the attempt proved. Tracked by TRACKER.md row 240. Three of the original seven have been separated and now appear in commercial_paths: internal/hardening → enterprise/dialects and internal/ldap → enterprise/sso/ldap (2026-09-05), and the framework crosswalks of internal/compliancemodel → enterprise/frameworks (2026-09-06). The four that remain are here because the evidence says the line does not run where a directory boundary could hold it — read each why_not_split_today before proposing the move again.",
-    "tracker_row": 240,
+    "_why": "Directories that mix Apache-2.0 core code with code implementing a locked commercial entitlement. THE LIST IS EMPTY, and that is a finished state, not a pending one. Of the original seven, three were separated and now appear in commercial_paths (internal/hardening -> enterprise/dialects and internal/ldap -> enterprise/sso/ldap, 2026-09-05; the framework crosswalks of internal/compliancemodel -> enterprise/frameworks, 2026-09-06), and the remaining four were decided CORE ON EVIDENCE (2026-09-06) and are recorded in core_by_evidence below and in docs/design/LICENSING_MODEL_2026-09-04.md §10. A directory that mixes the two licences again belongs in entries, with what must move and where.",
     "target_layout": "src/backend/enterprise/<module>/",
-    "entries": [
-      {
-        "path": "src/backend/secapi",
-        "entitlement": "security_findings",
-        "tier": "Team",
-        "core_part": "Nothing core depends on this package, but the findings it serves include the hardening and exposure findings Community is entitled to.",
-        "commercial_part": "The findings lane as a paid entitlement, the framework enablement surface, and the (unbuilt) SIEM export route.",
-        "why_not_split_today": "Re-verified 2026-09-05. The Community/Team line runs THROUGH the files, not between them: 4 of 10 handlers in http.go are licence-gated (at the mux, by design, so secapi never learns about licensing), rules.go assembles the Community hardening+exposure families and the Team threat+advisory families into one flat catalogue, and frameworks.go's default-two-vs-the-rest split is data in one registry. Three core call sites (correlations.go, ai_troubleshoot_deps.go, internal/seclane) also depend on secapi for shared vocabulary (Gate, Principal, Filters, SecuritySignalKinds, ListFindings), so the package cannot simply relocate. The gate it needs already exists and is wired: licenceFeature(FeatureSecurityFindings) in main.go."
-      },
-      {
-        "path": "src/backend/internal/secfindings",
-        "entitlement": "security_findings",
-        "tier": "Team",
-        "core_part": "The normalized finding model, which the core compliance checks produce into.",
-        "commercial_part": "The findings lane as a paid entitlement.",
-        "why_not_split_today": "Confirmed 2026-09-05 and expected to be PERMANENT. The package is the normalized finding model and nothing else: no HTTP, no bus, no engine, no entitlement awareness, and seventeen non-test importers spread across core producers and the read API. It is the contract between a core producer and a commercial consumer, and a contract both sides depend on has to be readable by both."
-      },
-      {
-        "path": "src/backend/internal/seclane",
-        "entitlement": "security_findings",
-        "tier": "Team",
-        "core_part": "Lane health and operator visibility.",
-        "commercial_part": "The security evidence lane as a paid entitlement.",
-        "why_not_split_today": "Re-verified 2026-09-05. The lane is ALREADY physically removable — the recipe in its package doc and security_lane_removability_test.go delete it wholesale — but its boundary is FEATURE-FLAG shaped (the whole producer on or off), not entitlement shaped: it produces the Community hardening and exposure evidence in the same pass as the Team threat and advisory evidence. Moving it to enterprise/ would move Community's own entitlement with it."
-      },
-      {
-        "path": "src/backend/internal/tenant",
-        "entitlement": "msp_management",
-        "tier": "Enterprise",
-        "core_part": "Tenant ISOLATION, the tenant store, the collection and routing scope, and — as of the 2026-09-05 attempt — the ORG STORE as well. Core forever, explicitly never commercial.",
-        "commercial_part": "org.go's OrgStore and governance.go — the organisation hierarchy above tenants and its governance registry, which is the MSP fleet-management surface.",
-        "why_not_split_today": "ATTEMPTED 2026-09-05 and REVERTED on the evidence. The extraction was built end to end — a tenant.OrgDirectory interface in core, an Apache-2.0 SingleOrgDirectory default, the many-organisation OrgStore in enterprise/msp with an entitlement gate — and then the removability proof failed it: with enterprise/ deleted, 79 CORE tests fail, because almost every tenant- and cross-org isolation test builds its fixture by POSTing two organisations. The org store is therefore load-bearing for the ISOLATION MODEL'S OWN TESTS, not just for fleet management, and a core that cannot create a second organisation cannot prove it keeps two apart. governance.go is a second, independent reason: internal/rca (core) imports tenant.SeamOwnerClasses and tenant.SeamOwnerEntry for RCA ownership, so the governance registry is core vocabulary. What org-hierarchy MANAGEMENT actually is, if it is commercial at all, is a CEILING on the number of organisations (entitlement.CheckCeiling) — which belongs in the Apache-2.0 licence machinery, not in a separate package."
-      }
-    ]
+    "decided": "2026-09-06",
+    "design_of_record": "docs/design/LICENSING_MODEL_2026-09-04.md",
+    "entries": [],
+    "core_by_evidence": {
+      "_why": "The four packages that were the last mixed_directories entries. Each was examined and each is CORE — not deferred, not 'too hard today'. They stay Apache-2.0 in full, and the commercial capability they touch is gated by the entitlement machinery at the call site instead of by a directory boundary. Nothing here is waiting on an extraction; a proposal to move one must first answer the evidence recorded against it.",
+      "entries": [
+        {
+          "path": "src/backend/secapi",
+          "licence": "Apache-2.0",
+          "was_gated_on": "security_findings",
+          "tier": "Team",
+          "why_core": "The Community/Team line runs THROUGH the files, not between them: http.go, rules.go and frameworks.go each carry both halves, and three core call sites (correlations.go, ai_troubleshoot_deps.go, internal/seclane) depend on the package for shared vocabulary (Gate, Principal, Filters, SecuritySignalKinds, ListFindings). The gate it needs already exists and is wired where it belongs — licenceFeature(FeatureSecurityFindings) at the mux, so secapi never learns about licensing. Re-verified 2026-09-06."
+        },
+        {
+          "path": "src/backend/internal/secfindings",
+          "licence": "Apache-2.0",
+          "was_gated_on": "security_findings",
+          "tier": "Team",
+          "why_core": "CORE BY DECISION, expected to be permanent. The package is the normalized finding model and nothing else — no HTTP, no bus, no engine, no entitlement awareness — with seventeen non-test importers on both sides of the boundary. It is the contract between a core producer and a commercial consumer, and a contract both sides depend on has to be readable by both."
+        },
+        {
+          "path": "src/backend/internal/seclane",
+          "licence": "Apache-2.0",
+          "was_gated_on": "security_findings",
+          "tier": "Team",
+          "why_core": "Already physically removable — the recipe in its package doc and security_lane_removability_test.go delete it wholesale — but its boundary is FEATURE-FLAG shaped, not entitlement shaped: it produces the Community hardening and exposure evidence in the same pass as the Team threat and advisory evidence, so moving it to enterprise/ would move Community's own entitlement with it."
+        },
+        {
+          "path": "src/backend/internal/tenant",
+          "licence": "Apache-2.0",
+          "was_gated_on": "msp_management",
+          "tier": "Enterprise",
+          "why_core": "ATTEMPTED 2026-09-05 and REVERTED on the evidence, and that finding stands. With enterprise/ deleted, 79 CORE tests fail: nearly every tenant and cross-org isolation test builds its fixture by POSTing two organisations, so the org store is load-bearing for the ISOLATION MODEL'S OWN TESTS — a core that cannot create a second organisation cannot prove it keeps two apart. governance.go is a second, independent reason: internal/rca (core) imports tenant.SeamOwnerClasses and tenant.SeamOwnerEntry as core RCA vocabulary. If org-hierarchy MANAGEMENT is commercial at all it is a CEILING (entitlement.CheckCeiling) in the Apache-2.0 licence machinery, not a separate package."
+        }
+      ]
+    }
   },
   "header_enforcement": {
-    "_why": "How check A is scoped TODAY. Stamping an Apache-2.0 header into ~2350 source files is a mechanical sweep that would collide with every branch in flight; it is scheduled, not skipped. What is enforced now is the direction that can actually go wrong: a commercial marking in the wrong place, or a commercial path missing its marking.",
-    "mode": "commercial-required",
+    "_why": "How checks A and C are scoped. Every first-party source file carries its own licence in its own first comment, so a file that leaves the repository — pasted into a bug report, copied onto a host, quoted in a review — still states what may be done with it. LICENSE, LICENSING.md and the per-directory notices make a file's licence determinable; the header makes it determinable from the FILE ALONE. scripts/spdx-headers.py writes and verifies it and this section is its only configuration; scripts/licensing-gate.py check A reads the scope through that module, so the gate and the tool that fixes a failure cannot disagree about which files are covered.",
+    "mode": "enforced",
     "rules": [
+      "Every source file in the swept scope MUST carry the SPDX identifier its path maps to, plus the copyright line, as its first comment.",
       "Every source file under a commercial_paths entry MUST carry the commercial SPDX identifier.",
       "No file outside a commercial_paths entry may carry the commercial SPDX identifier.",
       "Any file that carries an SPDX identifier at all MUST carry the one its path maps to.",
       "Unknown SPDX identifiers anywhere are an error."
     ],
-    "pending": {
-      "what": "Repo-wide `SPDX-License-Identifier: Apache-2.0` headers on core source.",
-      "why_deferred": "A ~2350-file mechanical diff across backend, frontend and correlation would conflict with every concurrent branch. LICENSE, LICENSING.md and the per-directory notices already make the licence of every file determinable today; the headers make it determinable per file in isolation.",
-      "tracker_row": 240
-    },
     "source_extensions": [
       ".go",
       ".py",
@@ -360,8 +357,46 @@
       ".tsx",
       ".mjs",
       ".js",
-      ".sh"
-    ]
+      ".sh",
+      ".css",
+      ".yaml",
+      ".yml"
+    ],
+    "copyright_line": "Copyright 2026 Correlix",
+    "sweep_roots": [
+      "src",
+      "scripts",
+      "deployment",
+      "tests",
+      "docs-portal",
+      "telemetry-catalog"
+    ],
+    "exempt": {
+      "_why": "Files inside the sweep roots that scripts/spdx-headers.py must NOT stamp, each with the reason it is not ours to mark. Two classes only: a file that is REGENERATED byte-for-byte from something else (stamping it makes the generator's own drift guard fail on the next run), and a fixture a test reads verbatim. Third-party and vendored trees are not listed here — they are skipped by NAME in excluded_paths, everywhere in the tree, so vendor/, node_modules/, compliance/ and every build/cache directory never reach this list. The list lives HERE and not in the sweep script on purpose: a sweeper carrying its own exemptions is a second source of truth, and adding one has to be a reviewed policy edit with a reason attached.",
+      "entries": [
+        {
+          "path": "src/correlation/parser_rules.py",
+          "why": "GENERATED by telemetry-catalog/bake_rules.py from events.yaml and compared BYTE FOR BYTE against a fresh bake by src/correlation/test_parser_interpreter_a3.py. A header the generator does not emit would fail that drift guard on every run."
+        },
+        {
+          "path": "deployment/docker/vector-router/processors-default.yaml",
+          "why": "GENERATED: the checked-in seed is pinned byte-for-byte to processors.GenerateRouterConfig(nil) by src/backend/processors/generate_test.go, and the api rewrites the same file at runtime whenever processors change."
+        },
+        {
+          "path": "deployment/helm/correlix/files/vector-router/processors-default.yaml",
+          "why": "The chart's byte mirror of the generated seed above, staged by deployment/helm/stage-configs.sh and drift-checked with cmp."
+        },
+        {
+          "path": "deployment/docker/vector/tests/syslog-admission.yaml",
+          "why": "GENERATED by scripts/gen-syslog-admission.py, which rewrites the whole file and fails --check on any byte it did not write."
+        },
+        {
+          "path": "*/testdata/*",
+          "why": "Go testdata. The go tool ignores these directories and the tests that read them compare bytes; a header would be part of the fixture rather than part of the source."
+        }
+      ]
+    },
+    "enforced_on": "2026-09-06"
   },
   "import_boundary": {
     "_why": "Check E. Apache-2.0 core must never depend on commercially licensed code: a core-only build has to remain buildable and shippable, and an Apache-2.0 file that cannot compile without a commercial package is Apache-2.0 in name only.",

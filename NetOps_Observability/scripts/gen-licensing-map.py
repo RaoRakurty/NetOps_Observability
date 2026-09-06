@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """
 gen-licensing-map.py — render LICENSING.md from licensing-policy.json.
 
@@ -152,7 +155,7 @@ def render(policy: dict) -> str:
     ]
     rows = []
     for e in tl["entries"]:
-        state = "MIXED — pending `ee/` extraction" if e["state"] == "mixed" else e["licence"]
+        state = "MIXED — marked per file" if e["state"] == "mixed" else e["licence"]
         rows.append([f"`{e['path']}/`", state, e["reason"]])
     out += _table(["Directory", "Licence", "Why"], rows)
     out.append("")
@@ -209,37 +212,64 @@ def render(policy: dict) -> str:
 
     # ── still mixed ─────────────────────────────────────────────────────────
     md = policy["mixed_directories"]
-    out += [
-        "## Still mixed",
-        "",
-        "These directories contain BOTH Apache-2.0 core code and code implementing a commercial",
-        f"entitlement. They stay **`{core}` in full** until the commercial part is extracted to",
-        f"`{md['target_layout']}`: over-claiming commercial on a shared package would wrongly",
-        "restrict core code, and the conservative direction is the open one.",
-        "",
-        f"Tracked as **TRACKER.md row {md['tracker_row']}** — the `enterprise/` extraction.",
-        "",
-    ]
-    rows = [
-        [f"`{e['path']}/`", e["tier"], e["commercial_part"], e["why_not_split_today"]]
-        for e in md["entries"]
-    ]
-    out += _table(["Directory", "Tier", "What belongs in `enterprise/`", "Why it has not moved"], rows)
-    out.append("")
+    if md["entries"]:
+        out += [
+            "## Still mixed",
+            "",
+            "These directories contain BOTH Apache-2.0 core code and code implementing a commercial",
+            f"entitlement. They stay **`{core}` in full** until the commercial part is extracted to",
+            f"`{md['target_layout']}`: over-claiming commercial on a shared package would wrongly",
+            "restrict core code, and the conservative direction is the open one.",
+            "",
+        ]
+        rows = [
+            [f"`{e['path']}/`", e["tier"], e["commercial_part"], e["why_not_split_today"]]
+            for e in md["entries"]
+        ]
+        out += _table(["Directory", "Tier", "What belongs in `enterprise/`",
+                       "Why it has not moved"], rows)
+        out.append("")
+    else:
+        cbe = md["core_by_evidence"]
+        out += [
+            "## Nothing is mixed",
+            "",
+            "No directory mixes the two licences. Every commercial file lives under",
+            f"`{md['target_layout']}` and is listed above; **everything else in the tree is",
+            f"`{core}`**.",
+            "",
+            f"That is a finished state, decided {md['decided']}, not a pending extraction. Four",
+            "packages were examined last and each was decided **core on evidence** — they touch a",
+            "commercial capability, but the line does not run where a directory boundary could hold",
+            "it, so the entitlement is enforced at the call site instead. Recorded in",
+            f"[`{md['design_of_record']}`]({md['design_of_record']}).",
+            "",
+        ]
+        rows = [
+            [f"`{e['path']}/`", f"`{e['licence']}`", f"`{e['was_gated_on']}` ({e['tier']})",
+             e["why_core"]]
+            for e in cbe["entries"]
+        ]
+        out += _table(["Directory", "Licence", "Capability it touches",
+                       "Why it is core"], rows)
+        out.append("")
 
     # ── how a file declares its licence ─────────────────────────────────────
     he = policy["header_enforcement"]
     out += [
         "## How a file declares its licence",
         "",
-        "**1. An SPDX header comment**, the first comment line of the file:",
+        "**1. An SPDX header comment**, the first comment line of the file, in the comment",
+        "syntax of the language, with the copyright line beneath it:",
         "",
         "```go",
         f"// SPDX-License-Identifier: {core}",
+        f"// {he['copyright_line']}",
         "```",
         "",
         "```go",
         f"// SPDX-License-Identifier: {comm}",
+        f"// {he['copyright_line']}",
         "```",
         "",
         "**2. A per-directory `LICENSE` notice file.** Every directory listed as commercial above",
@@ -254,12 +284,34 @@ def render(policy: dict) -> str:
         "",
     ]
     out += [f"- {r}" for r in he["rules"]]
-    out += [
-        "",
-        (f"Repo-wide `{core}` headers on core source are **pending**, not skipped: "
-         f"{he['pending']['why_deferred']} Tracked on row {he['pending']['tracker_row']}."),
-        "",
-    ]
+    out.append("")
+    if "pending" in he:
+        out += [
+            (f"Repo-wide `{core}` headers on core source are **pending**, not skipped: "
+             f"{he['pending']['why_deferred']} Tracked on row "
+             f"{he['pending']['tracker_row']}."),
+            "",
+        ]
+    else:
+        exempt = he["exempt"]["entries"]
+        out += [
+            (f"The sweep ran on {he['enforced_on']} and the mode is now **enforced**: a "
+             f"source file in scope that does not carry its header fails the gate."),
+            "The sweep itself is `scripts/spdx-headers.py` — `--check` lists what is missing,",
+            "`--write` fixes it, and running it twice changes nothing the second time.",
+            "",
+            "Scope: `" + "`, `".join(he["sweep_roots"]) + "` — files ending `"
+            + "`, `".join(he["source_extensions"]) + "`.",
+            "",
+            "Exempt, and why. Third-party and vendored trees are not in this list: they are",
+            "skipped by name everywhere (see *Not classified, and why* above). What is left is",
+            "generated output and verbatim fixtures — stamping either would break the drift guard",
+            "that owns the file.",
+            "",
+        ]
+        out += _table(["Path", "Why it carries no header"],
+                      [[f"`{e['path']}`", e["why"]] for e in exempt])
+        out.append("")
 
     # ── container images ────────────────────────────────────────────────────
     ci = policy["container_images"]

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Licensing consistency — the gate that stops the open-core story from drifting.
 
 Correlix adopted Apache-2.0 open core with separately licensed commercial add-ons
@@ -339,17 +342,52 @@ def test_map_is_not_stale():
     )
 
 
-def test_still_mixed_directories_are_named_with_their_tracker_row(policy):
-    """Honesty requirement: a directory that mixes core and commercial code says so."""
+def test_mixed_directories_are_stated_either_way(policy):
+    """Honesty requirement, in BOTH directions.
+
+    While a directory mixes core and commercial code the map must name it and
+    say what has to move. When none does — the state since 2026-09-06 — the map
+    must say THAT, and say it with the evidence: four packages were examined
+    last and each was decided core, and a reader is entitled to know which and
+    why rather than finding a section quietly deleted.
+
+    The failure this prevents is a licence map that looks finished because
+    somebody removed the awkward section, so the empty case is asserted at least
+    as hard as the non-empty one.
+    """
     body = (PROJ / "LICENSING.md").read_text(encoding="utf-8")
-    assert "## Still mixed" in body
     mixed = policy["mixed_directories"]
-    assert mixed["entries"], "the mixed list is empty; if that is true, delete the section"
-    for entry in mixed["entries"]:
-        assert f"`{entry['path']}/`" in body, f"{entry['path']} is not named in the map"
+
+    if mixed["entries"]:
+        assert "## Still mixed" in body
+        for entry in mixed["entries"]:
+            assert f"`{entry['path']}/`" in body, f"{entry['path']} is not named in the map"
+            assert (PROJ / entry["path"]).is_dir(), f"{entry['path']} is not a directory"
+        return
+
+    assert "## Still mixed" not in body, (
+        "mixed_directories is empty but the map still claims directories are mixed"
+    )
+    assert "## Nothing is mixed" in body, (
+        "the map must state that nothing is mixed, not just omit the section"
+    )
+    decided = mixed["core_by_evidence"]["entries"]
+    assert decided, (
+        "no directory is mixed and no package is recorded as core-by-evidence; "
+        "one of the two has to be true, or the map explains nothing"
+    )
+    for entry in decided:
+        assert f"`{entry['path']}/`" in body, (
+            f"{entry['path']} was decided core on evidence but the map does not "
+            f"name it"
+        )
         assert (PROJ / entry["path"]).is_dir(), f"{entry['path']} is not a directory"
-    assert f"row {mixed['tracker_row']}" in body, (
-        "the mixed section must point at the tracker row that owns the extraction"
+        assert entry["licence"] == CORE_ID
+        assert len(entry["why_core"]) > 120, (
+            f"{entry['path']} is recorded as core with no evidence behind it"
+        )
+    assert mixed["design_of_record"] in body, (
+        "the map must point at the design record that carries the decision"
     )
 
 
