@@ -30,3 +30,18 @@ func (db *DB) PoolForTest() *pgxpool.Pool { return db.pool }
 // SUPPORT ONLY, so the pgintegration suite can prove the lock actually
 // excludes a second migrator.
 func MigrationLockKeyForTest() int64 { return migrationLockKey }
+
+// StoredRecordCountForTest reports how many records the Postgres target for a
+// backend key holds — table rows for a normalized collection, the stored blob's
+// record count for an app_kv one. TEST SUPPORT ONLY: production reads the same
+// number through the importer's own verification step, never through an
+// exported accessor. It exists so the cutover rehearsal can print the
+// per-collection file→rows table the runbook asks for.
+func (p *PGStore) StoredRecordCountForTest(ctx context.Context, key string) (int, error) {
+	return p.storedRowCount(ctx, key)
+}
+
+// FileRecordCountForTest reports how many records a file-backend blob holds, by
+// shape (array elements, or 1 for a singleton document). TEST SUPPORT ONLY —
+// the rehearsal's "file count" column.
+func FileRecordCountForTest(data []byte) int { return blobRecordCount(data) }

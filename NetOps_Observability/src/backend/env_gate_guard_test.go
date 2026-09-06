@@ -36,9 +36,15 @@ import (
 // for a var CI could feasibly provide (a database, a compose service) is how
 // the DATABASE_URL_TEST hole happened; prefer wiring the service.
 var envGateExempt = map[string]string{
-	"AI_EVAL_LIVE":                "live LLM evals need a paid provider key; opt-in by hand",
-	"CH_TEST_URL":                 "live ClickHouse integration; run via the docker line in chhttp_integration_test.go",
-	"CLICKHOUSE_URL":              "live ClickHouse settings-precedence contract; needs a real server, run by hand",
+	"AI_EVAL_LIVE":   "live LLM evals need a paid provider key; opt-in by hand",
+	"CH_TEST_URL":    "live ClickHouse integration; run via the docker line in chhttp_integration_test.go",
+	"CLICKHOUSE_URL": "live ClickHouse settings-precedence contract; needs a real server, run by hand",
+	// The file→Postgres cutover rehearsal (import_file_state_pg_test.go) points
+	// at a COPY of a real, POPULATED /data volume. CI has no such volume — a
+	// fresh checkout's data dir is empty, so the rehearsal would assert nothing.
+	// Its mechanism IS covered in CI: the same import path runs against
+	// fixtures in TestDomainCollectionsImportFromFilesPG on DATABASE_URL_TEST.
+	"IMPORT_REHEARSAL_DIR":        "cutover rehearsal against a COPY of a populated /data volume; CI has no populated volume, and the import path itself is covered by the fixture tests",
 	"LIVE_TRACE_DST":              "live traceroute needs CAP_NET_RAW and a real network destination",
 	"NETOPS_LDAP_LIVE":            "live LDAP IdP round-trip; needs lab directory infrastructure",
 	"NETOPS_OIDC_LIVE":            "live OIDC IdP round-trip; needs lab identity provider",

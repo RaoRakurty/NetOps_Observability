@@ -28,6 +28,12 @@ import (
 	"netops/backend/enterprise/dialects"
 	// ENTERPRISE-ASSEMBLY-END
 	// SECURITY-LANE-END
+	// ENTERPRISE-ASSEMBLY-BEGIN (security_dialects)
+	// The commercial compliance-framework crosswalks. Deliberately OUTSIDE the
+	// SECURITY-LANE markers: the compliance READ surface survives the producer's
+	// removal, so this line goes with enterprise/, not with the lane.
+	"netops/backend/enterprise/frameworks"
+	// ENTERPRISE-ASSEMBLY-END
 	"netops/backend/internal/apikey"
 	// VMALERT-WEBHOOK-BEGIN
 	"netops/backend/internal/alertwebhook"
@@ -594,6 +600,16 @@ func newServer() *server {
 	// Select where the identity/saved stores persist (file by default; Postgres
 	// when STORE_BACKEND=postgres). Must run before any store is constructed.
 	if err := initStoreBackend(); err != nil {
+		log.Fatalf("store backend: %v", err)
+	}
+	// One-time file→Postgres cutover for the collections whose Postgres target
+	// is a DOMAIN table (dem targets, iris memory, config versions/drift, the
+	// security control plane, the BGP watchlist, metering, …). The blob-shaped
+	// collections are imported inside NewPGStore; these cannot be, because
+	// internal/platformdb must not import the packages that import it — so the
+	// composition root injects them. A failure ABORTS THE BOOT: a half-imported
+	// control plane that comes up looks exactly like a complete one.
+	if err := importDomainCollections(); err != nil {
 		log.Fatalf("store backend: %v", err)
 	}
 
@@ -2027,6 +2043,125 @@ func initStoreBackend() error {
 		// file or memory: a misconfigured persistent deployment that comes up on
 		// the wrong backend is exactly the failure tracker 245 closes.
 		return fmt.Errorf("unknown STORE_BACKEND %q (want postgres|file|memory)", os.Getenv("STORE_BACKEND"))
+	}
+}
+
+// importDomainCollections is the WIRING for the one-time file→Postgres import
+// of every collection whose Postgres target is a normalized DOMAIN table.
+//
+// It is a list, not logic: each entry names the collection, the file under
+// IMPORT_FILE_STATE_DIR, and the owning package's own Count/Import pair. The
+// mechanism (the at-most-once marker, the skipped-populated decision, the
+// row-count verification, the fail-the-boot contract) lives in
+// platformdb.ImportCollections; the ROW SHAPE lives in the owning package,
+// which is the only place that knows it.
+//
+// The file names are the stores' DEFAULT basenames. A deployment that moved a
+// store with its own env knob is out of scope by construction — the same
+// contract the blob-key importer has always had, and it is stated in
+// docs/DEPLOY_POSTGRES_APPSTATE.md rather than guessed at here.
+//
+// No-op unless IMPORT_FILE_STATE_DIR is set AND the Postgres backend is active.
+func importDomainCollections() error {
+	dir := strings.TrimSpace(os.Getenv("IMPORT_FILE_STATE_DIR"))
+	if dir == "" {
+		return nil
+	}
+	ps, ok := platformdb.ActivePG()
+	if !ok {
+		return nil // file/memory backend: the files ARE the store
+	}
+	// Bounded like every other boot step (§9). Generous, because this runs once,
+	// before the listener opens, over an install's whole durable state.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	return platformdb.ImportCollections(ctx, dir, domainImportCollections(ps.DB()))
+}
+
+// domainImportCollections is the list itself, split from the wiring above so a
+// guard test can inspect it without a database: no collection name may collide
+// with a blob-key basename (they would share an import marker and the second
+// one would silently never run).
+func domainImportCollections(db *platformdb.DB) []platformdb.Collection {
+	return []platformdb.Collection{
+		{
+			Name: "dem_targets", File: "dem_targets.json",
+			Count:  func(c context.Context) (int, error) { return dem.CountRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return dem.ImportFile(c, db, raw) },
+		},
+		{
+			Name: "dem_experience", File: "dem_experience.json",
+			Count:  func(c context.Context) (int, error) { return experience.CountRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return experience.ImportFile(c, db, raw) },
+		},
+		{
+			Name: "iris_investigations", File: "iris_investigations.json",
+			Count:  func(c context.Context) (int, error) { return ai.CountInvestigationRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return ai.ImportInvestigationFile(c, db, raw) },
+		},
+		{
+			Name: "config_backup_versions", File: "config_backup_versions.json",
+			Count:  func(c context.Context) (int, error) { return configstore.CountRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return configstore.ImportFile(c, db, raw) },
+		},
+		{
+			Name: "config_drift_state", File: "config_drift_state.json",
+			Count:  func(c context.Context) (int, error) { return configdrift.CountRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return configdrift.ImportFile(c, db, raw) },
+		},
+		{
+			Name: "security_control_plane", File: "security_control_plane.json",
+			Count:  func(c context.Context) (int, error) { return secapi.CountControlPlaneRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return secapi.ImportControlPlaneFile(c, db, raw) },
+		},
+		{
+			Name: "security_frameworks", File: "security_frameworks.json",
+			Count:  func(c context.Context) (int, error) { return secapi.CountFrameworkRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return secapi.ImportFrameworkFile(c, db, raw) },
+		},
+		{
+			Name: "bgp_watchlist", File: "bgp_watchlist.json",
+			Count:  func(c context.Context) (int, error) { return bgpwatch.CountWatchlistRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return bgpwatch.ImportWatchlistFile(c, db, raw) },
+		},
+		{
+			Name: "bgp_alert_policy", File: "bgp_alert_policy.json",
+			Count:  func(c context.Context) (int, error) { return bgpwatch.CountPolicyRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return bgpwatch.ImportPolicyFile(c, db, raw) },
+		},
+		{
+			Name: "maintenance_windows", File: "maintenance_windows.json",
+			Count:  func(c context.Context) (int, error) { return maintenance.CountRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return maintenance.ImportFile(c, db, raw) },
+		},
+		{
+			Name: "pcap_captures", File: "pcap_captures.json",
+			Count:  func(c context.Context) (int, error) { return pcap.CountRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return pcap.ImportFile(c, db, raw) },
+		},
+		{
+			Name: "pipeline_processors", File: "pipeline_processors.json",
+			Count:  func(c context.Context) (int, error) { return processors.CountRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return processors.ImportFile(c, db, raw) },
+		},
+		{
+			Name: "rca_feedback", File: "rca_feedback.json",
+			Count:  func(c context.Context) (int, error) { return rcafeedback.CountRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return rcafeedback.ImportFile(c, db, raw) },
+		},
+		{
+			Name: "tac_templates", File: "tac_templates.json",
+			Count:  func(c context.Context) (int, error) { return tac.CountTemplateRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return tac.ImportTemplateFile(c, db, raw) },
+		},
+		{
+			// The metering history lives BESIDE the licence, under /data/api —
+			// one operational object an operator copies out whole. It is the one
+			// collection whose file is not at the top of the import dir.
+			Name: "metering_daily", File: "api/metering.json",
+			Count:  func(c context.Context) (int, error) { return metering.CountRows(c, db) },
+			Import: func(c context.Context, raw []byte) (int, error) { return metering.ImportFile(c, db, raw) },
+		},
 	}
 }
 
@@ -4879,12 +5014,46 @@ func (s *server) securityAPIDeps() secapi.Deps {
 		// framework selection + scorecards keep answering.
 		ComplianceInputs: securityComplianceInputs,
 		// SECURITY-LANE-END
+		// ENTERPRISE-ASSEMBLY-BEGIN (security_dialects)
+		// The crosswalks for the frameworks beyond the default two are a
+		// commercial add-on module (enterprise/frameworks). This is the ONLY
+		// place that names it: secapi takes the packs as data and never learns
+		// about licensing, exactly as the security lane takes the dialect packs.
+		FrameworkCrosswalks: s.licensedFrameworkCrosswalks,
+		// ENTERPRISE-ASSEMBLY-END
 		Metrics:    s.secFindMetrics,
 		Audit:      s.securityAudit,
 		WriteJSON:  writeJSON,
 		WriteError: writeError,
 	}
 }
+
+// ENTERPRISE-ASSEMBLY-BEGIN (security_dialects)
+// licensedFrameworkCrosswalks is the compliance-framework half of the
+// `security_dialects` entitlement, whose locked scope is "device-hardening
+// dialects beyond the default set, AND compliance frameworks beyond the default
+// two". NIST SP 800-53 Rev5 and CIS Controls v8.1 are CORE and are not gated
+// here — their crosswalks live in Apache-2.0 internal/compliancemodel and this
+// function never sees them.
+//
+// It is a FUNCTION, not a slice computed once at start-up, because entitlement
+// is live state: installing or letting a licence lapse must change what the
+// next request is scored against without a restart — the same reason
+// licenceDialectAllowed is a predicate.
+//
+// Degradation is honest and is the projection's job, not this function's: an
+// enabled framework whose crosswalk this deployment does not carry gets a
+// scorecard with a NULL score and a sentence saying so
+// (compliancemodel.NotLicensedCoverage), never a silent disappearance from the
+// page and never a 0 % that would read as total failure.
+func (s *server) licensedFrameworkCrosswalks() []compliancemodel.FrameworkPack {
+	if !entitlement.Entitled(s.entitlements, entitlement.FeatureSecurityDialects) {
+		return nil
+	}
+	return frameworks.Packs()
+}
+
+// ENTERPRISE-ASSEMBLY-END
 
 // SECURITY-LANE-BEGIN
 // securityComplianceInputs adapts the shipped hardening catalogue into the

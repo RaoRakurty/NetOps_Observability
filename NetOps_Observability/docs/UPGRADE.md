@@ -211,10 +211,17 @@ PostgreSQL, which is empty. An upgrade must never make a registry look empty, so
 it does not switch.
 
 If you *want* to move to PostgreSQL, it is a deliberate migration with a
-documented, partial importer —
+documented, marker-gated importer —
 [`DEPLOY_POSTGRES_APPSTATE.md`](DEPLOY_POSTGRES_APPSTATE.md) lists exactly which
-collections `IMPORT_FILE_STATE_DIR` carries over and which you must re-create
-(including the sealing vault's wrapped keys). Read it before you flip the value.
+collections `IMPORT_FILE_STATE_DIR` carries over, which stay files because they
+are meant to (the licence document, the backup/verify reports, the derived
+enrichment exports), and which are deliberately dropped as transient (sessions
+and refresh tokens — everyone re-logs in). Since 2026-09-06 that list covers
+every durable collection an install actually has, custody material included: the
+sealing vault's wrapped keys, the internal mesh CA, and the cloud workload issuer
+key. It also carries an ordered **cutover runbook** with the verification lines
+and the one-edit rollback. Read it before you flip the value — an import failure
+aborts the boot on purpose, naming the collection.
 
 One behaviour does change on upgrade regardless of backend: a registry that has
 no implementation on your configured backend now **says so** (`501` + an explicit

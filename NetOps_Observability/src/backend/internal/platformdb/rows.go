@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -167,8 +169,20 @@ func (p *PGStore) markImported(ctx context.Context, key, how string) error {
 
 // importKey writes one collection's imported data AND its marker in a single
 // transaction (normalized rows under platform scope, or an app_kv blob).
-func (p *PGStore) importKey(ctx context.Context, key string, data []byte) error {
+//
+// `records` is the optional PER-RECORD subtree that belongs to the SAME
+// collection (the device store's "<key>.d/…" rows). It travels in this
+// transaction, not a later one, because it is not a separate collection: one
+// decision, one marker, one commit. A crash cannot leave a marked-done
+// collection with half its records — which for devices would be half a fleet.
+func (p *PGStore) importKey(ctx context.Context, key string, data []byte, records map[string][]byte) error {
 	if spec, ok := specFor(key); ok {
+		if len(records) > 0 {
+			// Structurally impossible today (per-record keys are hash-named and
+			// never collide with the rowSpecs registry) — refused rather than
+			// silently dropped, because dropping them would lose data.
+			return fmt.Errorf("collection %s is normalized and cannot carry per-record rows", spec.table)
+		}
 		rows, err := explode(spec, data)
 		if err != nil {
 			return fmt.Errorf("explode %s: %w", spec.table, err)
@@ -185,10 +199,18 @@ func (p *PGStore) importKey(ctx context.Context, key string, data []byte) error 
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // best-effort: deferred rollback is a no-op after Commit
-	if _, err := tx.Exec(ctx, `INSERT INTO app_kv (key, data, updated_at)
+	const upsert = `INSERT INTO app_kv (key, data, updated_at)
 		VALUES ($1, $2, now())
-		ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`, key, data); err != nil {
-		return err
+		ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`
+	if len(data) > 0 {
+		if _, err := tx.Exec(ctx, upsert, key, data); err != nil {
+			return err
+		}
+	}
+	for _, name := range sortedKeys(records) { // deterministic order: a failure reproduces
+		if _, err := tx.Exec(ctx, upsert, key+".d/"+name, records[name]); err != nil {
+			return fmt.Errorf("per-record row %s: %w", name, err)
+		}
 	}
 	if err := markImportedTx(ctx, tx, key, "blob"); err != nil {
 		return err
@@ -196,49 +218,71 @@ func (p *PGStore) importKey(ctx context.Context, key string, data []byte) error 
 	return tx.Commit(ctx)
 }
 
+// sortedKeys returns a map's keys in byte order.
+func sortedKeys(m map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // importFileState migrates the file-backend app-state (the /data/*.json
 // collections) into the normalized tables / app_kv. Each collection is imported
 // AT MOST ONCE, gated on the import marker (see importDone) — never on row
 // count, which reads a deliberately-emptied collection as "never imported" and
-// resurrects the frozen snapshot on the next boot (M5). Transient state (refresh
-// tokens, the audit ring, ITSM ticket dedup) is intentionally NOT imported — it
-// rebuilds. The durable config (users/tenants/roles/SNMP creds/SSO/contact
-// points/policies) carries over so a cutover preserves logins and secrets, and
-// so does the CUSTODY material (sealing-vault wrapped keys + the internal mesh
-// CA) without which a TLS/sealed install cannot be cut over at all.
+// resurrects the frozen snapshot on the next boot (M5).
 //
-// What this list does NOT cover is documented collection by collection in
+// The inventory lives in rows_import_files.go (fileStateBlobKeys), which also
+// explains the three classes of collection and why the always-file ones are
+// deliberately absent from it. Collections whose Postgres target is a DOMAIN
+// table are imported separately, through the Collection seam, because their row
+// shape belongs to the owning package (ImportCollections).
+//
+// Transient state (sessions, refresh tokens, rendered report artifacts) is
+// intentionally NOT imported — it rebuilds, and everyone re-logs in. What this
+// list does NOT cover is documented collection by collection in
 // docs/DEPLOY_POSTGRES_APPSTATE.md — an operator must be able to SEE the gap
 // rather than discover it after the switch (tracker 245).
 func (p *PGStore) importFileState(ctx context.Context, dir string) error {
-	keys := []string{
-		"/data/tenants.json", "/data/roles.json", "/data/users.json",
-		"/data/snmp_credentials.json", "/data/snmp_profiles.json",
-		"/data/apikeys.json", "/data/saved.json", "/data/contact_points.json",
-		"/data/notify_config.json", "/data/oidc_config.json", "/data/ldap_config.json",
-		"/data/sso_idp_config.json",
-		"/data/tacacs_config.json", "/data/token_policy.json", "/data/copilot_config.json",
-		"/data/export_policy.json",
-		// CUSTODY, not configuration — and the reason a TLS/sealed install could
-		// not be cut over at all before (tracker 245). These three keys are BARE
-		// on both backends (relative on the file backend, anchored on DATA_DIR;
-		// a row key here), so they round-trip unchanged:
-		//   secrets_wrapped_keys.json — the vault's WRAPPED data-encryption keys.
-		//     Without them every value sealed on the file backend (SNMP
-		//     credentials, connector secrets) is undecryptable after a cutover.
-		//   tls_internal_ca_*         — the internal mesh CA. Without them the api
-		//     mints a NEW CA and every SVID issued by the old one stops being
-		//     trusted, which on a fail-closed mesh is a stack outage.
-		// Both are already encrypted/sealed at rest; this moves the same bytes
-		// between the platform's own stores, once, under the same marker gate.
-		"secrets_wrapped_keys.json",
-		"tls_internal_ca_cert.pem", "tls_internal_ca_key.enc",
+	prefixed := map[string]bool{}
+	for _, k := range fileStatePrefixKeys() {
+		prefixed[k] = true
 	}
 	imported := 0
-	for _, key := range keys {
-		data, err := os.ReadFile(filepath.Join(dir, filepath.Base(key)))
-		if err != nil || len(data) == 0 {
-			continue // missing/empty file → nothing to import
+	for _, key := range fileStateBlobKeys() {
+		path := filepath.Join(dir, filepath.Base(key))
+		// #nosec G304 G703 -- `path` is filepath.Base of a COMPILED-IN key
+		// (fileStateBlobKeys) joined under the operator-configured
+		// IMPORT_FILE_STATE_DIR. No request, tenant or caller string reaches
+		// it, and Base() strips any separator, so there is nothing here for a
+		// traversal to traverse; gosec's taint analysis cannot see that the
+		// directory came from the process environment.
+		data, err := os.ReadFile(path)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			data = nil // never written on this install; a per-record subtree may still exist
+		case err != nil:
+			// A file that EXISTS but cannot be read is a FAILURE, not an empty
+			// collection. Folding the two together (the pre-2026-09-06
+			// `err != nil || len(data) == 0`) is how a permissions or IO fault
+			// silently turns a cutover into data loss (§10).
+			return fmt.Errorf("import %s: read %s: %w", key, path, err)
+		}
+		// The PER-RECORD subtree is part of the same collection. It is read
+		// here, before any decision, because on an install newer than the
+		// device store's per-record switch the legacy blob may not exist at all
+		// and the subtree is ALL of the data (tracker 245, 2026-09-06).
+		var records map[string][]byte
+		if prefixed[key] {
+			records, err = collectPrefixRecords(path + ".d")
+			if err != nil {
+				return fmt.Errorf("import %s: per-record subtree: %w", key, err)
+			}
+		}
+		if len(data) == 0 && len(records) == 0 {
+			continue // nothing on disk for this collection
 		}
 		done, err := p.importDone(ctx, key)
 		if err != nil {
@@ -258,13 +302,28 @@ func (p *PGStore) importFileState(ctx context.Context, dir string) error {
 			if err := p.markImported(ctx, key, "skipped-populated"); err != nil {
 				return err
 			}
+			logInfo("db", "skipped file-backend collection (target already populated)",
+				map[string]any{"key": key})
 			continue
 		}
-		if err := p.importKey(ctx, key, data); err != nil {
+		if err := p.importKey(ctx, key, data, records); err != nil {
 			return fmt.Errorf("import %s: %w", key, err)
 		}
+		// Per-collection verification: count what actually landed and compare
+		// it with what the file held. A silently short import (an explode that
+		// dropped elements, an insert that collapsed on conflict) would
+		// otherwise be recorded as done and frozen in place.
+		want := blobRecordCount(data)
+		got, err := p.storedRowCount(ctx, key)
+		if err != nil {
+			return fmt.Errorf("import %s: verify: %w", key, err)
+		}
+		if got != want {
+			return fmt.Errorf("import %s: the file holds %d records but the target holds %d after the import", key, want, got)
+		}
 		imported++
-		logInfo("db", "imported file-backend collection", map[string]any{"key": key})
+		logInfo("db", "imported file-backend collection",
+			map[string]any{"key": key, "rows": got, "records": len(records)})
 	}
 	if imported > 0 {
 		logInfo("db", "imported file-backend app-state into Postgres", map[string]any{"collections": imported})
@@ -291,7 +350,12 @@ func (p *PGStore) targetEmpty(ctx context.Context, key string) (bool, error) {
 		return n == 0, nil
 	}
 	var present bool
-	if err := p.db.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM app_kv WHERE key=$1)`, key).Scan(&present); err != nil {
+	if err := p.db.pool.QueryRow(ctx,
+		// The per-record subtree counts as data for this collection: a target
+		// holding device records but no legacy blob is NOT empty, and importing
+		// a stale snapshot over it would resurrect deleted devices.
+		`SELECT EXISTS (SELECT 1 FROM app_kv WHERE key = $1 OR key LIKE $2 ESCAPE '\')`,
+		key, escapeLike(key+".d/")+"%").Scan(&present); err != nil {
 		return false, err
 	}
 	return !present, nil
@@ -580,7 +644,7 @@ func (p *PGStore) importLegacy(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := p.importKey(ctx, it.key, it.data); err != nil {
+		if err := p.importKey(ctx, it.key, it.data, nil); err != nil {
 			return fmt.Errorf("import %s: %w", it.key, err)
 		}
 		imported++
