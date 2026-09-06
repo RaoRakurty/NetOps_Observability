@@ -328,7 +328,7 @@
     },
     "python": {
       "license": "PSF-2.0",
-      "note": "CPython under PSF-2.0 on a debian:12-slim rootfs; the Debian userland carries GPL-2.0/GPL-3.0 utilities, unmodified, source available from Debian.",
+      "note": "CPython under PSF-2.0. The two images that use it no longer share a rootfs: netops-correlation moved to python:3.12-alpine on 2026-09-06 (tracker 263) and inherits 38 apk packages, whose GPL/LGPL members are recorded individually in scripts/source-mirror.json `deferred` with their aports source coordinates; the cloud-ingest image stays on python:3.12-slim, whose Debian userland carries GPL-2.0/GPL-3.0 utilities, unmodified, source available from Debian.",
       "unit": "correlation + cloud-ingest images runtime base",
       "usage": "separate-container"
     },

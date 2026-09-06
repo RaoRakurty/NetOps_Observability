@@ -478,7 +478,9 @@ at the distro — but it should be understood rather than assumed away:
 - **Alpine-based images** (~12 of ours): mostly MIT/BSD, but `busybox` and
   `apk-tools` are **GPL-2.0-only** (BusyBox is explicit that v2 is the *only*
   version it may be distributed under). Shipped unmodified.
-- **Debian/Ubuntu-based** (`python:3.12-slim`, syslog-ng, gotenberg, netbox):
+- **Debian/Ubuntu-based** (syslog-ng, gotenberg, netbox — `python:3.12-slim` left
+  this list on 2026-09-06 when tracker 263 moved `netops-correlation` to
+  `python:3.12-alpine`, deleting 58 recorded Debian source obligations):
   mixed, including GPL-2.0/GPL-3.0 userland utilities. Source availability is
   satisfied by Debian/Ubuntu themselves.
 - **Red Hat UBI** (Keycloak): UBI EULA — see D6.

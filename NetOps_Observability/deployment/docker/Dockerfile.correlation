@@ -1,21 +1,77 @@
-# Correlation/AI Engine — Python/FastAPI.
+# Correlation/AI Engine — Python/FastAPI on Alpine (musl).
 #
-# The pip install step uses --trusted-host so the build works on
-# corporate networks that do TLS interception (re-signed HTTPS) without
-# requiring the corporate CA to be present inside the build container.
-# This is a build-time-only relaxation; runtime TLS to external APIs is
-# unaffected.
+# WHY ALPINE AND NOT `python:3.12-slim` (tracker 263).
+# The final image is the compliance boundary (docs/compliance/OCI_SOURCE_COMPLIANCE.md).
+# `python:3.12-slim` carried 87 Debian packages into every shipped
+# `netops-correlation` — glibc, bash, coreutils, dpkg, apt, perl-base,
+# util-linux, systemd libs, gcc runtime — of which the engine executes
+# essentially none, and 57 of the 59 recorded corresponding-source obligations
+# were exactly those packages (~228 MB of retained Debian source in every
+# release bundle, forever). Deleting the packages deletes the obligation.
+# `python:3.12-alpine` carries 38 apk packages and stays on CPython **3.12**,
+# which the pinned, hash-locked requirement set is compiled for.
+#
+# A distroless Python base was the other candidate and was rejected here:
+# `gcr.io/distroless/python3-debian12` ships Python **3.11**, so every cp312
+# wheel in `src/correlation/requirements.txt` (asyncpg, cramjam, pydantic-core,
+# uvloop, httptools, watchfiles, websockets, PyYAML — eight native extensions)
+# would have to be re-resolved against a different interpreter ABI.
+#
+# WHEELS, WITH ONE MEASURED EXCEPTION. Eight of the nine native dependencies
+# (asyncpg, cramjam, pydantic-core, uvloop, httptools, watchfiles, websockets,
+# PyYAML) publish `musllinux` cp312 x86_64 wheels, so they install as bytes.
+# **aiokafka does not, at ANY released version** (checked 0.9.0 → 0.14.0 on
+# 2026-09-06: 31 files each, zero musllinux) — its `_crecords` C extension has
+# only manylinux wheels, so on musl it is compiled from the hash-locked sdist.
+# That is why the BUILD stage — and only the build stage — installs gcc.
+# `AIOKAFKA_NO_EXTENSIONS=1` would have avoided the compiler by falling back to
+# the pure-Python record parser, and was rejected: that parser sits on the
+# consume hot path of the service whose starvation caused the 2026-09-02
+# outage, and a silent throughput regression is not a packaging decision.
+#
+# `--only-binary=:all: --no-binary=aiokafka` makes the split a CONTRACT rather
+# than a hope: exactly one package may be compiled, and if a future pin loses
+# its musl wheel the build FAILS with that package named instead of quietly
+# compiling something the toolchain may not even be able to build
+# (scripts/CLAUDE.md §16.1 — fail closed).
+#
+# THE FINAL IMAGE HAS NO TOOLCHAIN. gcc/musl-dev live in the discarded build
+# stage; the runtime stage receives only site-packages.
+#
+# TLS-INTERCEPTED EGRESS. Two mechanisms, both build-time only, neither of them
+# a disabled certificate check:
+#   * pip uses --trusted-host, so a re-signed HTTPS index does not need the
+#     corporate CA inside the build container;
+#   * apk uses APK_REPO_SCHEME, exactly as deployment/docker/vector-router does
+#     — apk verifies SIGNED package indexes either way, so http loses nothing
+#     the signature does not still guarantee. The tracked default stays https;
+#     docker-compose.yml passes ${APK_REPO_SCHEME:-https} through.
+#         docker compose build correlation                      # normal hosts / CI
+#         APK_REPO_SCHEME=http docker compose build correlation # TLS-intercepted egress
+# Runtime TLS to external APIs is unaffected by either.
+#
+# HASHES STILL RULE. requirements.txt is hash-locked (pip-compile
+# --generate-hashes), so pip enforces --require-hashes automatically; the musl
+# wheels and the aiokafka sdist are covered by the same recorded hashes as the
+# manylinux wheels were.
 
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203 AS build
+FROM python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a AS build
+ARG APK_REPO_SCHEME=https
+# No `sed` back to https afterwards (vector-router does that because it SHIPS
+# the modified file): this stage is discarded, and /etc/apk/repositories never
+# reaches the runtime image.
+RUN sed -i "s|^https://|${APK_REPO_SCHEME}://|" /etc/apk/repositories \
+    && apk add --no-cache gcc musl-dev zlib-dev
 WORKDIR /app
 COPY src/correlation/requirements.txt ./
 RUN pip install --no-cache-dir --root-user-action=ignore \
+        --only-binary=:all: --no-binary=aiokafka \
         --trusted-host pypi.org \
         --trusted-host files.pythonhosted.org \
         --trusted-host pypi.python.org \
         -r requirements.txt
 
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
+FROM python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a
 
 # The image's licence, in OCI metadata, so `docker image inspect` answers it
 # without unpacking the image. Correlix core is Apache-2.0; see LICENSING.md for
@@ -37,8 +93,14 @@ COPY src/correlation/ ./
 COPY docs/THIRD_PARTY_LICENSES.md NOTICE /app/licenses/
 ENV PYTHONUNBUFFERED=1
 # SC-008: drop to a non-root system user. The app reads world-readable code and
-# binds an unprivileged port (8000), so it needs no root.
-RUN useradd --system --uid 10001 appuser
+# binds an unprivileged port (8000), so it needs no root. UID 10001 is load
+# bearing: scripts/install.py chowns the durable dead-letter volume to it
+# (`correlation/deadletter` → 10001:999) and scripts/clean-slate.sh documents
+# it, so it must not drift when the base image changes. BusyBox `adduser`
+# replaces Debian's `useradd`; -S is a system account, -D no password, -H no
+# home directory to create.
+RUN addgroup -S -g 10001 appuser \
+    && adduser -S -D -H -u 10001 -G appuser appuser
 USER appuser
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

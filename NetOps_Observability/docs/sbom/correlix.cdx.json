@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:b63d330d-5055-575f-aabd-8cc9b5df195d",
+  "serialNumber": "urn:uuid:a19723a6-2045-5863-9551-eb6877bb290e",
   "version": 1,
   "metadata": {
     "timestamp": "2026-09-06T04:44:18+00:00",
@@ -917,6 +917,41 @@
     },
     {
       "type": "container",
+      "bom-ref": "container:python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a",
+      "name": "python",
+      "version": "sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a",
+      "purl": "pkg:oci/python@sha256%3Ab64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a?tag=3.12-alpine",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "container-images"
+        },
+        {
+          "name": "correlix:image:ref",
+          "value": "python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+        },
+        {
+          "name": "correlix:image:tag",
+          "value": "3.12-alpine"
+        },
+        {
+          "name": "correlix:image:digest-pinned",
+          "value": "true"
+        },
+        {
+          "name": "correlix:origin",
+          "value": "deployment/docker/Dockerfile.correlation"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+        }
+      ]
+    },
+    {
+      "type": "container",
       "bom-ref": "container:python:3.12-slim",
       "name": "python",
       "version": "3.12-slim",
@@ -941,41 +976,6 @@
         {
           "name": "correlix:origin",
           "value": "docker-compose.flowgen.yml(flowgen),deployment/docker/cloud-ingest/Dockerfile,scripts/lab/traffic-generator/Dockerfile"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203",
-      "name": "python",
-      "version": "sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203",
-      "purl": "pkg:oci/python@sha256%3A090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203?tag=3.12-slim",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "3.12-slim"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "true"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "deployment/docker/Dockerfile.correlation"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203"
         }
       ]
     },
@@ -6979,6 +6979,626 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/base64@1.1.2",
+      "name": "@jsonjoy.com/base64",
+      "version": "1.1.2",
+      "purl": "pkg:npm/%40jsonjoy.com/base64@1.1.2",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "aba5c09d640320c037f854e23986a3a18ab24a43be2526add32b57192b9176af6e5c4ee8f76833b90c10335e3168246504b1aadefe66883182e2f9154e7e78c4"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/base64@17.67.0",
+      "name": "@jsonjoy.com/base64",
+      "version": "17.67.0",
+      "purl": "pkg:npm/%40jsonjoy.com/base64@17.67.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "e5212c246b26d7968ff134069037c9bf3f5ac603f00049bdf12e43c4eb987bc7b511b7da8dc0e681e5d7cdc7048e1fa62e78ea10aae405d8c7592e6f14dc0377"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/buffers@1.2.1",
+      "name": "@jsonjoy.com/buffers",
+      "version": "1.2.1",
+      "purl": "pkg:npm/%40jsonjoy.com/buffers@1.2.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "d7671d943c17e1150cdd0c6651b5495aa67f9ab2ba745407e19c6aebeaf56172976013606579ddc76a9b089c21dfe5969024a7ebb2239e51b75d84ef9af62d80"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/buffers@17.67.0",
+      "name": "@jsonjoy.com/buffers",
+      "version": "17.67.0",
+      "purl": "pkg:npm/%40jsonjoy.com/buffers@17.67.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "b5f13146963106f8b7daf3ecf591da4e348fe1f1c07f34a671a84e7cdc6dbc61dcc897a5f9a89b90f94678107eec0a02ea12fb957204fbef2891e701c71ee573"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/codegen@1.0.0",
+      "name": "@jsonjoy.com/codegen",
+      "version": "1.0.0",
+      "purl": "pkg:npm/%40jsonjoy.com/codegen@1.0.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "13c3b2fb4f1c9827f410afcd331a5a25998ec4fa8cfba8927b64b89e5481acf64e391a032482f1b5b494103290c936a69bf055021206965381354efdfddc1fd2"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/codegen@17.67.0",
+      "name": "@jsonjoy.com/codegen",
+      "version": "17.67.0",
+      "purl": "pkg:npm/%40jsonjoy.com/codegen@17.67.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "89d9e45299513a9741395d0731cc21b02512e534548bda686a0746b3bd00e92e2ec7dfbf68fb8a6e1f3e5184532d8407b57bc074d7d05970ea644c799380e3d9"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/fs-core@4.71.0",
+      "name": "@jsonjoy.com/fs-core",
+      "version": "4.71.0",
+      "purl": "pkg:npm/%40jsonjoy.com/fs-core@4.71.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "f43151fe3f9b9beb6283569bb350964b5febd08563354753a7ffaae91fcf5dac97a4ed6b81b521eed91a9c660fe34234cddc5b3ab78dded9b306954781f30ace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/fs-fsa@4.71.0",
+      "name": "@jsonjoy.com/fs-fsa",
+      "version": "4.71.0",
+      "purl": "pkg:npm/%40jsonjoy.com/fs-fsa@4.71.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "751c39a23c737a9de59ed5465412f34143188f58572c7f83033f6c2b4bca53ee7de31ff30369d83ce8a2b65ca162d389da7bf515736aedce79ae0c003649c85b"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/fs-node-builtins@4.71.0",
+      "name": "@jsonjoy.com/fs-node-builtins",
+      "version": "4.71.0",
+      "purl": "pkg:npm/%40jsonjoy.com/fs-node-builtins@4.71.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "052ce5f90152c59179f01c468d5d70a8227ea929f76f62199dbfb3de10d0aba828a8e3b946ec45f20462863b05c75ec07e91296bb5e361c3fc5e942d0d4f11ad"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/fs-node-to-fsa@4.71.0",
+      "name": "@jsonjoy.com/fs-node-to-fsa",
+      "version": "4.71.0",
+      "purl": "pkg:npm/%40jsonjoy.com/fs-node-to-fsa@4.71.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "3a55c164a21e0f1e5b2067109a7d30fa75642e17828ae4127a92a20408964968a649d9fc43a61cf62876cbccd2b5c264df57e27aa9e8bfd57ea3c5d35a7ff947"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/fs-node-utils@4.71.0",
+      "name": "@jsonjoy.com/fs-node-utils",
+      "version": "4.71.0",
+      "purl": "pkg:npm/%40jsonjoy.com/fs-node-utils@4.71.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "62dcc22f78db298c7a2c7c6a4bdca627d39bed23bd72e708fa4a4d3b72e28c634512315bbcdb1394792f160a1c00c023524f7a4e94130ac624cc5422d4276500"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/fs-node@4.71.0",
+      "name": "@jsonjoy.com/fs-node",
+      "version": "4.71.0",
+      "purl": "pkg:npm/%40jsonjoy.com/fs-node@4.71.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "cade40934a2d3dd1cf22598cbc5d7a68b1b6a9264be7611827b1ce918a417083d6c3e9264f516d4d28f8a225763949096c6f292f303e461320ae5465f3942e07"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/fs-print@4.71.0",
+      "name": "@jsonjoy.com/fs-print",
+      "version": "4.71.0",
+      "purl": "pkg:npm/%40jsonjoy.com/fs-print@4.71.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "3a17c349dbf23bcb86574535d4e3fe98e79508f823b8fd47a82191fd374140bc47a031162402b728e3f97cf5e8e7b1fb8b71b4c74566bfcc4f4470e57b85c6cc"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/fs-snapshot@4.71.0",
+      "name": "@jsonjoy.com/fs-snapshot",
+      "version": "4.71.0",
+      "purl": "pkg:npm/%40jsonjoy.com/fs-snapshot@4.71.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "99df96a2fdfae716bd0379df5bd6104c72dcc1e1c701e7bf7bfd14a1545b95d107c5ba0f2649ee3b7b0490d5551023b4753a8aadafc445a432940311ac659dd1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/json-pack@1.21.0",
+      "name": "@jsonjoy.com/json-pack",
+      "version": "1.21.0",
+      "purl": "pkg:npm/%40jsonjoy.com/json-pack@1.21.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "f80286f91d9c7d9312873ac5dae430df8bf7cdb783614aa743e8e0ece462737046b5fc3da7ff8de9125babf92457c2666196883649da110da6d3f7faf7764fa6"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/json-pack@17.67.0",
+      "name": "@jsonjoy.com/json-pack",
+      "version": "17.67.0",
+      "purl": "pkg:npm/%40jsonjoy.com/json-pack@17.67.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "b747a3511706699b27d4295b27fde416a48e8e5af277dd9e418e3ae4862b7b3b1798f71f1cf13f6afe2dc114b17fa584f9391980b63eef5bc265b888885280ff"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/json-pointer@1.0.2",
+      "name": "@jsonjoy.com/json-pointer",
+      "version": "1.0.2",
+      "purl": "pkg:npm/%40jsonjoy.com/json-pointer@1.0.2",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "16c9fac0cdb3943cd8d54fafe0d73c6e8ddb56a81f35319c9fa74c82ce858eb127b786427bad28e81c8a463386948da0a30d1a13f438d503a281d4ea9322b97e"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/json-pointer@17.67.0",
+      "name": "@jsonjoy.com/json-pointer",
+      "version": "17.67.0",
+      "purl": "pkg:npm/%40jsonjoy.com/json-pointer@17.67.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "fa2a8e1489c7f90646992b9ac9b05435d87bcaf36b5efa91fa1df08d79b437fdc92b5132c8501e189bea9e640beb57750112e593fc097452922fe2c727579a50"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/util@1.9.0",
+      "name": "@jsonjoy.com/util",
+      "version": "1.9.0",
+      "purl": "pkg:npm/%40jsonjoy.com/util@1.9.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "a4bb90a3e54f46737c85f3ea5132d31e4d76eb0b9875757113a6839a349e578342020cb159b88e21e34956d203de1d55ce9a22f66e235decdfef723a2e069b81"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40jsonjoy.com/util@17.67.0",
+      "name": "@jsonjoy.com/util",
+      "version": "17.67.0",
+      "purl": "pkg:npm/%40jsonjoy.com/util@17.67.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "ebef3105acf5acb4a88651a1ebc0f5a5dc370300e2f71c9d9bc40d940164be76af089612cdefa9c685b654a3fca77d3c8ed94c44bb393531df3e564b778c3b7b"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:npm/%40leichtgewicht/ip-codec@2.0.5",
       "name": "@leichtgewicht/ip-codec",
       "version": "2.0.5",
@@ -7051,6 +7671,37 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/%40noble/hashes@1.4.0",
+      "name": "@noble/hashes",
+      "version": "1.4.0",
+      "purl": "pkg:npm/%40noble/hashes@1.4.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "575249d564d152a1c7ace4a1e7dee151170ca9529518bfde6b792fd204a711db04674ffe5723e084cd6530d19cd34cfb088428ad2bdb2a9b89931bee1dbbdd6e"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:npm/%40nodelib/fs.scandir@2.1.5",
       "name": "@nodelib/fs.scandir",
       "version": "2.1.5",
@@ -7118,6 +7769,378 @@
         {
           "alg": "SHA-512",
           "content": "a0607e53196059c810920c28f067041b07a6a1316ddc520ef5a6da6c199a1b05c8a01299f864f2d293f5f396de1a0ecb96287f3521d25765c0b35967ce7a1c4a"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/asn1-cms@2.9.4",
+      "name": "@peculiar/asn1-cms",
+      "version": "2.9.4",
+      "purl": "pkg:npm/%40peculiar/asn1-cms@2.9.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "71b7a7ee8c6642c50666aa2dbacef2b74b2b61d9dc393e9135671343bed3d9114e5de8d855891769dadf78f75172b5693bd2bde4844b28a8251b6937f23297bb"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/asn1-csr@2.9.4",
+      "name": "@peculiar/asn1-csr",
+      "version": "2.9.4",
+      "purl": "pkg:npm/%40peculiar/asn1-csr@2.9.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c5de18378be94639030105957d96647aed76204343ec33a992a6874881f1665d6e82050d6bd26ed10c58da31ef0c04bda4fd33851072b60f227ec9c6a375748f"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/asn1-ecc@2.9.4",
+      "name": "@peculiar/asn1-ecc",
+      "version": "2.9.4",
+      "purl": "pkg:npm/%40peculiar/asn1-ecc@2.9.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "2495de7c5b21440b95023590a3fdfd6e4835cb073555a88ee384bc4510be624bdffeed8a0e661f7e80dbd1904f091e6e272e0018a42197c997f90f1285c59a5d"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/asn1-pfx@2.9.4",
+      "name": "@peculiar/asn1-pfx",
+      "version": "2.9.4",
+      "purl": "pkg:npm/%40peculiar/asn1-pfx@2.9.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "921b86cc74f337393818394804420bc88b3a2dc7b4ca7d1905da08f6ff7792636771f651843f8043938316a761be813c70c245fc931343cc80fadd43d7892a0b"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/asn1-pkcs8@2.9.4",
+      "name": "@peculiar/asn1-pkcs8",
+      "version": "2.9.4",
+      "purl": "pkg:npm/%40peculiar/asn1-pkcs8@2.9.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "76e45da2d954c7d78365ee90ad0a502a5eb545b5b29021c10a429ac8ff15f1774417094a1d9f2a1860ccc92e8fc9eece5fb9cb16db534e946425e7adefc724c1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/asn1-pkcs9@2.9.4",
+      "name": "@peculiar/asn1-pkcs9",
+      "version": "2.9.4",
+      "purl": "pkg:npm/%40peculiar/asn1-pkcs9@2.9.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "91a2f870dc41a5d404d9d2a5c9906acf8ca00abc1f7cefbcc1fa314c4a8cd59f1169dbc27842c147372fd1dcccf1a63d6b31ccc0e0cee67c54eb9cd79a14e839"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/asn1-rsa@2.9.4",
+      "name": "@peculiar/asn1-rsa",
+      "version": "2.9.4",
+      "purl": "pkg:npm/%40peculiar/asn1-rsa@2.9.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "a59f7a783d4fa6da2f71643f1929ae3455ddffb11024d94a7c368d0b2136af1dd6d2fe9015e964ceab95a91491cb20d75c2603ebd657243cd9f06848890ccaa0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/asn1-schema@2.9.4",
+      "name": "@peculiar/asn1-schema",
+      "version": "2.9.4",
+      "purl": "pkg:npm/%40peculiar/asn1-schema@2.9.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "1a3cde3dc4fd230f0dcde38f7fbde2352f7133e4c185dfc58a501f3fe4501a44cc4094d55adcad3772472400828dffc004d6aee52ee64b783e0dcbb199181812"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/asn1-x509-attr@2.9.4",
+      "name": "@peculiar/asn1-x509-attr",
+      "version": "2.9.4",
+      "purl": "pkg:npm/%40peculiar/asn1-x509-attr@2.9.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "7a14176e941a418c9c82ef0eaef8a0c123d315f55172ed0408d6025b0fb2cc1a74d8bc39a5a46acf3854a5f3a03b62b7f3e59f159b84cffd113ed6a6e60d0e32"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/asn1-x509@2.9.4",
+      "name": "@peculiar/asn1-x509",
+      "version": "2.9.4",
+      "purl": "pkg:npm/%40peculiar/asn1-x509@2.9.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "0b1841a3f45d11b30ca1bed3df565d4231aea324452d5c2b0f34e7db96e287305ab1183d9119bfd08c483ef86042d70affd74d70ed5740bd9fb8fba0c042cbd1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/utils@2.0.3",
+      "name": "@peculiar/utils",
+      "version": "2.0.3",
+      "purl": "pkg:npm/%40peculiar/utils@2.0.3",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "fa82f71cf151219d52b762b9d255825e28a82204a8c73cfb475277b85ea778edb2975b209a9818e975c91f805da680e4316ce741379817aa1634364b09d43879"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40peculiar/x509@1.14.3",
+      "name": "@peculiar/x509",
+      "version": "1.14.3",
+      "purl": "pkg:npm/%40peculiar/x509@1.14.3",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "0b65e3f05674b8759e0975ea5f9078fe0545426b52922b8ea25cc082eb634dfb1e34e1d3de95239630d9b134b15c51a08a8e786c2cd516a984394ac8564f110c"
         }
       ]
     },
@@ -9133,54 +10156,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40types/eslint-scope@3.7.7",
-      "name": "@types/eslint-scope",
-      "version": "3.7.7",
-      "purl": "pkg:npm/%40types/eslint-scope@3.7.7",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3333059522c1a8d17681c1d63b41b5bcffd84327efaf16746c5faeee6cd4759d7fc4ae00e2caeefa7ada673e62de2108935975bb289c68355307841b6c490062"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40types/eslint@9.6.1",
-      "name": "@types/eslint",
-      "version": "9.6.1",
-      "purl": "pkg:npm/%40types/eslint@9.6.1",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "157c76a4a80877f5b2628da35f0eb7924efff9363bbbb0338842712409d21731e5a93012dd89dce92be060037f938fcf4299e756ece832e56707228adaaa746a"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/%40types/estree-jsx@1.0.5",
       "name": "@types/estree-jsx",
       "version": "1.0.5",
@@ -9279,6 +10254,37 @@
         {
           "alg": "SHA-512",
           "content": "d364b97e6a9ea0acd56421cf6627786fc247d9e3391f340b656376168850132ff47974eaf155d97d237a3dcaf717a37d47fbcdae3edca606e18e27ba9bfd6d08"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40types/express-serve-static-core@4.19.9",
+      "name": "@types/express-serve-static-core",
+      "version": "4.19.9",
+      "purl": "pkg:npm/%40types/express-serve-static-core@4.19.9",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "40fd844847bf226598d070f03409caf4fbc47df53284b4e75a493b297cc77f279602796b0ded5f37bedb5e5ea26bc293df03e5980eedf7f54f4699dfe04c7db2"
         }
       ]
     },
@@ -9692,30 +10698,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40types/node-forge@1.3.14",
-      "name": "@types/node-forge",
-      "version": "1.3.14",
-      "purl": "pkg:npm/%40types/node-forge@1.3.14",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9a1545d819c3e013be8ed3a9ef3d4277368ae266ee2b42cb41802f74e2ea1d36afc4536ae33035126624a671633fc1ce53379d7d09119e9d04dae9520184b303"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/%40types/node@17.0.45",
       "name": "@types/node",
       "version": "17.0.45",
@@ -10073,10 +11055,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40types/retry@0.12.0",
+      "bom-ref": "pkg:npm/%40types/retry@0.12.2",
       "name": "@types/retry",
-      "version": "0.12.0",
-      "purl": "pkg:npm/%40types/retry@0.12.0",
+      "version": "0.12.2",
+      "purl": "pkg:npm/%40types/retry@0.12.2",
       "scope": "required",
       "properties": [
         {
@@ -10088,10 +11070,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "c1628e0a54d38a2cdc6615e73d8e308a4540c267581e9f2ae83982f84254cc032cc9c6fb1c1df62a1f51378fb4804c6398f9994804238144572060133de800bc"
+          "content": "5c84918032764dce6ae1346abe026dcec464158349cd9ae14ddb4ca06541b6dc33cd02643e74b75964c573b92e0d1a0fb4f6a497e4fe39f7445236098fb25ba3"
         }
       ]
     },
@@ -11129,30 +12118,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/acorn-import-assertions@1.9.0",
-      "name": "acorn-import-assertions",
-      "version": "1.9.0",
-      "purl": "pkg:npm/acorn-import-assertions@1.9.0",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "726330a29f71fbc285871bcaaca7cf62637afe92936181c1a8b6b40dfbd565c28c25637258b9daa8d0fb771fea9fae91edec0cd545f95cc68354fe709554da54"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/acorn-jsx@5.3.2",
       "name": "acorn-jsx",
       "version": "5.3.2",
@@ -11633,6 +12598,37 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/ansis@3.17.0",
+      "name": "ansis",
+      "version": "3.17.0",
+      "purl": "pkg:npm/ansis@3.17.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "d2a594825b7d244a8b16bdf0d48d696eb0a19f582b85a880476a1c5f53cffdf9519b182dc13ccf1451677c8943e9a30e2d06604ae091962743ef496fc7cca1ce"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:npm/anymatch@3.1.3",
       "name": "anymatch",
       "version": "3.1.3",
@@ -11796,6 +12792,37 @@
         {
           "alg": "SHA-512",
           "content": "1c6cb1a0e4d853208ceacb547ba1098277781287b0008ef331d7ea3be9068e79599810f3fdc479a5ff2bfdc4785aaeb4b0bfe9d0891c8d41043f04b7185ac8cb"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/asn1js@3.0.10",
+      "name": "asn1js",
+      "version": "3.0.10",
+      "purl": "pkg:npm/asn1js@3.0.10",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "4b6b3768ecad88a74545dba5c36a8f139d4cce3cd53a2b29a5c56fee354547e2b0d24c70bc5ac371803487b35da9b9a3d0790c2176166a88fb7e58bc920c757a"
         }
       ]
     },
@@ -12484,6 +13511,37 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/bundle-name@4.1.0",
+      "name": "bundle-name",
+      "version": "4.1.0",
+      "purl": "pkg:npm/bundle-name@4.1.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "b63c0ce5ec4c83a046448fa43664e7b4db2f7594b55fc045612ead9c9da1747d2457133afde559db1cbe16a4ad496bd89ad7c53032c8c6eae8ac7c0329f0f3e5"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:npm/bytes@3.0.0",
       "name": "bytes",
       "version": "3.0.0",
@@ -12527,6 +13585,37 @@
         {
           "alg": "SHA-512",
           "content": "fcd7fb4f2cd3c7a4b7c9124e6ce015efde7aafc72bdbe3a3f000b976df3048fdc1400a1e5f9f0da07c8253c3fccc690d5d2b634d28ba7f33ba174a4175c61b12"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/bytestreamjs@2.0.1",
+      "name": "bytestreamjs",
+      "version": "2.0.1",
+      "purl": "pkg:npm/bytestreamjs@2.0.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "53567fa1bef557f6d77d5001bcdaff2ae99fe55c9e4110449ba4f16f43d0e92ed5e46a41337c3809bab3ff13c389c479b4dd2ebc389f9e0f02fb9a8409e1b0c9"
         }
       ]
     },
@@ -13466,6 +14555,13 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
@@ -13787,10 +14883,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/consola@2.15.3",
+      "bom-ref": "pkg:npm/consola@3.4.2",
       "name": "consola",
-      "version": "2.15.3",
-      "purl": "pkg:npm/consola@2.15.3",
+      "version": "3.4.2",
+      "purl": "pkg:npm/consola@3.4.2",
       "scope": "required",
       "properties": [
         {
@@ -13802,10 +14898,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f6f01d61b1e3eb1d9f2ca0b8fa83c7d2417363fa2b319c86d808fe90dca51f128627f11de1da4dc80418c0939da8ee3374ced7a551e6c9e8d00dc407ae7b976f"
+          "content": "e4829c757d279d86af8ba1bb4ed3a1c24633ca37c995ab5b8cc8ee2d27c4da4613e693033a2959e0ebcc862eb7ec27032024e6cf7c0044fa3286ac97d58f97bc"
         }
       ]
     },
@@ -15080,10 +16183,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/default-gateway@6.0.3",
-      "name": "default-gateway",
-      "version": "6.0.3",
-      "purl": "pkg:npm/default-gateway@6.0.3",
+      "bom-ref": "pkg:npm/default-browser-id@5.0.1",
+      "name": "default-browser-id",
+      "version": "5.0.1",
+      "purl": "pkg:npm/default-browser-id@5.0.1",
       "scope": "required",
       "properties": [
         {
@@ -15095,10 +16198,48 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "7f048e26c6db37367f094169a8506a61f60d2e3d4d6cc3e6f0c3022331e30bcde248944110698353153e58febad4168140899e0b6c87c17b73f8ffcef68f9712"
+          "content": "c75542c5d5f8b7ef3055f775b28ffdc3ebd0e2fc7b94a776429e6d0d1bad12bc2647ce4e8267d7ed194b44c59a7d1318ee16c489721bb9d36b8ce00f6bf84bf1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/default-browser@5.5.1",
+      "name": "default-browser",
+      "version": "5.5.1",
+      "purl": "pkg:npm/default-browser@5.5.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "9b5a40cda26067f82cb04aa53a12643c9a7c5e5cbb4325bac5cae451ad8a29c0de0d210c3fb5fcc62a54dec9d471f8ac4d0c74c3500669efbd52d2527d59d71b"
         }
       ]
     },
@@ -15171,6 +16312,37 @@
         {
           "alg": "SHA-512",
           "content": "0ecd3da8d87ccb0de48528e22638942276865fdc65a990d8ec956bc86c5dc55ecd3debaa41fa653a943aeb224566eb778cb6b9ccec245f0d60f44236b8a8783a"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/define-lazy-prop@3.0.0",
+      "name": "define-lazy-prop",
+      "version": "3.0.0",
+      "purl": "pkg:npm/define-lazy-prop@3.0.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "37e31e5d8a2aaf7a4e827f317f244f44437b8076a42d88e1b07856193ddf58088be08900b74883c35e108a2126d9b137d1ce575f9ab416d000dc22b97fdfc152"
         }
       ]
     },
@@ -16078,10 +17250,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/enhanced-resolve@5.24.1",
+      "bom-ref": "pkg:npm/enhanced-resolve@5.24.5",
       "name": "enhanced-resolve",
-      "version": "5.24.1",
-      "purl": "pkg:npm/enhanced-resolve@5.24.1",
+      "version": "5.24.5",
+      "purl": "pkg:npm/enhanced-resolve@5.24.5",
       "scope": "required",
       "properties": [
         {
@@ -16093,10 +17265,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ec37546938e637031c1f680baf5ab271eb0a208dc12b844bcbf99d01bef1d742eaedb47868d287b75051d5900b4afd2b3ccfe1179c181743e11a8a7fac99bcbf"
+          "content": "2f597c4cdbe89a6e94556e41db9dc01b141a81242bfaf1b084c96badf452daa9a1c78e8032931524a4182ef5986f2b13318f15a2270ebf31f3a0731bcb307ee0"
         }
       ]
     },
@@ -16313,6 +17492,37 @@
         {
           "alg": "SHA-512",
           "content": "8c44280b093c8726f6019ce220e2e10eaa66e7edb0c39b8813a9643bfea370e0aeb1f93a2e1307a575df04b5d367b61dcadd23e15a1442feae18d61b756fa404"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/es-module-lexer@2.3.2",
+      "name": "es-module-lexer",
+      "version": "2.3.2",
+      "purl": "pkg:npm/es-module-lexer@2.3.2",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "a681c6a4e4400688c926e72757d29b39abc44d6f250559e98645bbec4479fc1439173ee85d2a0235e93b207def4799d18ddb04cfddba89b1585fc2ad2d099dcb"
         }
       ]
     },
@@ -16541,30 +17751,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/eslint-scope@5.1.1",
-      "name": "eslint-scope",
-      "version": "5.1.1",
-      "purl": "pkg:npm/eslint-scope@5.1.1",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "d8dc706c5fe16742a97a960dd1c35ba3e14de97a0aec6687950860c7f848665e956b46c5e3945038ec212c8cbc9500dbb8289a7522c20671f608562aba2b796f"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/esprima@4.0.1",
       "name": "esprima",
       "version": "4.0.1",
@@ -16584,78 +17770,6 @@
         {
           "alg": "SHA-512",
           "content": "786b85170ed4a5d6be838a7e407be75b44724d7fd255e2410ccfe00ad30044ed1c2ee4f61dc10a9d33ef86357a6867aaac207fb1b368a742acce6d23b1a594e0"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/esrecurse@4.3.0",
-      "name": "esrecurse",
-      "version": "4.3.0",
-      "purl": "pkg:npm/esrecurse@4.3.0",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2a67ca2f76fa1be457bcff0dd6faf74ead642ffa021609f63585c4b6a3fcfcbde929aa540381bc70555aa05dd2537db7083e17ca947f7df8a81e692d8bafd36a"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/estraverse@4.3.0",
-      "name": "estraverse",
-      "version": "4.3.0",
-      "purl": "pkg:npm/estraverse@4.3.0",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "dfd9e729f7d6cfcc4dd4153fd9cefd9fd9c1f470f3a349e2614ab1eb1caa527ca8027432c96a4e4dd6447a209c87c041bb9d79b78c29f599a055f5619fd101a7"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/estraverse@5.3.0",
-      "name": "estraverse",
-      "version": "5.3.0",
-      "purl": "pkg:npm/estraverse@5.3.0",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "30c74046e54443388d4de243f0380caa6870475d41450fdc04ffa92ed61d4939dfdcc20ef1f15e8883446d7dfa65d3657d4ffb03d7f7814c38f41de842cbf004"
         }
       ]
     },
@@ -16992,30 +18106,6 @@
         {
           "alg": "SHA-512",
           "content": "990c3ed9f9106c02f343b574318d08a9d9d734e793b4fe2bd2537dcfb0006b009782a79aedb0e28b6d0062b201ac577f1f1d0cd8e733e92d75d4268591471bd1"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/execa@5.1.1",
-      "name": "execa",
-      "version": "5.1.1",
-      "purl": "pkg:npm/execa@5.1.1",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "f2e4a9659a1c01944100f20420d263dcba3d1f21a2b6595ccdcdbb121e586288e3305327f321cc0cc6941c4d89a9fab4e43ff0b9cc08e091944725edd6f721ca"
         }
       ]
     },
@@ -18098,10 +19188,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/glob-to-regexp@0.4.1",
-      "name": "glob-to-regexp",
-      "version": "0.4.1",
-      "purl": "pkg:npm/glob-to-regexp@0.4.1",
+      "bom-ref": "pkg:npm/glob-to-regex.js@1.2.0",
+      "name": "glob-to-regex.js",
+      "version": "1.2.0",
+      "purl": "pkg:npm/glob-to-regex.js@1.2.0",
       "scope": "required",
       "properties": [
         {
@@ -18113,10 +19203,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "9645f51c95f0c8c729af0ff961465cdacec3ae90221c1db5fd5f84d6b1d4ad5368924bc1e9ba8ccd3d157d5ebff3a64d69bb75935e18388693ee70ef397dc88b"
+          "content": "40cc25390294fc8cea314380656b9b50e4fc41fb7e6342905a75fd9caddc874089834b53a784ef199b137ee7582afd8dce8412c8f72703a4d87884378c689c85"
         }
       ]
     },
@@ -19010,30 +20107,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/html-entities@2.6.0",
-      "name": "html-entities",
-      "version": "2.6.0",
-      "purl": "pkg:npm/html-entities@2.6.0",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "92283eacc9ff40e551bebedcf3a810f25597abe1e4bfa09b007d612eef911b7dfc4ad4e913c6746f8e120d56aa56eec718a7f6edfadd994604b3d853517fdc2d"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/html-escaper@2.0.2",
       "name": "html-escaper",
       "version": "2.0.2",
@@ -19418,10 +20491,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/human-signals@2.1.0",
-      "name": "human-signals",
-      "version": "2.1.0",
-      "purl": "pkg:npm/human-signals@2.1.0",
+      "bom-ref": "pkg:npm/hyperdyperid@1.2.0",
+      "name": "hyperdyperid",
+      "version": "1.2.0",
+      "purl": "pkg:npm/hyperdyperid@1.2.0",
       "scope": "required",
       "properties": [
         {
@@ -19433,10 +20506,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "07814567aabf4f68e1864b2091b116dc706f5887c35bce6c9e44206b0b74ed2ec9e505d393a064355fb4c80799acce50a4c01d625a1c1a89639f4b09fd642417"
+          "content": "63dde50b31d880659dac9ebac8892dc6268650b61cea81a2001c6170ee40b9f05e3b2a0875917b6c87cb68eadb33488620e5d0420c7146b1449dbf98eb0d67e0"
         }
       ]
     },
@@ -20090,6 +21170,37 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/is-docker@3.0.0",
+      "name": "is-docker",
+      "version": "3.0.0",
+      "purl": "pkg:npm/is-docker@3.0.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "7a58dc8040e5127b3fec05c5a2c0792bfda708ce0fec540f90673f0d62f2e6b985116bd96b21ab8a4d5df7f4086399c9e1ff58b15bc1900ea42691e7f6b21275"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:npm/is-extendable@0.1.1",
       "name": "is-extendable",
       "version": "0.1.1",
@@ -20210,6 +21321,37 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/is-inside-container@1.0.0",
+      "name": "is-inside-container",
+      "version": "1.0.0",
+      "purl": "pkg:npm/is-inside-container@1.0.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "28860b08226085f1d9c6a8d8044eeb132d0e06e4dde710874bbb47560bc22e4c7b4ad2286b1c0d5b784200b80452315f79193e306fd0c66a7fbed113105ded44"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:npm/is-installed-globally@0.4.0",
       "name": "is-installed-globally",
       "version": "0.4.0",
@@ -20229,6 +21371,37 @@
         {
           "alg": "SHA-512",
           "content": "8b01aa3b7276d5a692902ee35a71cffdd89f6b3c12ed215e22ac6feb012d2d4f18e4a9731538f2a9c4884f477cb38f9d0e12b2b6c93d3c96760644b9799c1045"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/is-network-error@1.3.2",
+      "name": "is-network-error",
+      "version": "1.3.2",
+      "purl": "pkg:npm/is-network-error@1.3.2",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "3e1058f3acdac4d654b963fa875dd5bb9a057b45d8ebf5252b342760510bcc6547ca03f73319af4df6121bb18ddda21a6ff896b9d48c8234a71bd0eafa71eb80"
         }
       ]
     },
@@ -20522,30 +21695,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/is-stream@2.0.1",
-      "name": "is-stream",
-      "version": "2.0.1",
-      "purl": "pkg:npm/is-stream@2.0.1",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "845a222624e5eb79e7fa4b2d1c606d7b05922a740ba726f5e7928785e035977f6ebed3bd9d6228a75a77b9da8f71477fc5b17554b30ee27ece23aa7b45b9e00e"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/is-typedarray@1.0.0",
       "name": "is-typedarray",
       "version": "1.0.0",
@@ -20589,6 +21738,37 @@
         {
           "alg": "SHA-512",
           "content": "7cacc0adad2b18951407018180d90766e4e865c9fe4ed5c7a5e0a09a430930c631d6c40361a092ca32414826b69c7d431a6eecde7d68067a21a154c168decbc3"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/is-wsl@3.1.1",
+      "name": "is-wsl",
+      "version": "3.1.1",
+      "purl": "pkg:npm/is-wsl@3.1.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "7baaef7540a240202eba666c971449591fc3a2ae15a4f47cda4a9c96f712d1e7e0b78df44a5188934e6f742379f3e56bce0b4871f34e0e3a335627a5c9c0f84b"
         }
       ]
     },
@@ -20751,6 +21931,13 @@
         {
           "name": "correlix:dev",
           "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
         }
       ],
       "hashes": [
@@ -21344,30 +22531,6 @@
         {
           "alg": "SHA-512",
           "content": "ef297295eb1943f3d5dbd8e110397751f8e8e995fb802a89af917b3caaea73ddefedfcd2ca6b75069c0453c9c0517b3cab3cefaa16e384ae50660e8cb7f1e406"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/loader-runner@4.3.2",
-      "name": "loader-runner",
-      "version": "4.3.2",
-      "purl": "pkg:npm/loader-runner@4.3.2",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0c512a4378a17d2f5b95b6b4f1c2df61fd4d4402049be7438e2734ef70d10dcdff26ca48ffcc189ad0ec1f0777fb8870bddc522bb3c668495f4e69b46b0589e3"
         }
       ]
     },
@@ -22438,6 +23601,37 @@
         {
           "alg": "SHA-512",
           "content": "5044732ecc7396572169dbdb3ece5aa251e1eb9212a4aa4cf9c70b6ce27cfefbe904a98059ffa56bb757172eccaf4c921db747ac5bf99061425071dee861449b"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/memfs@4.71.0",
+      "name": "memfs",
+      "version": "4.71.0",
+      "purl": "pkg:npm/memfs@4.71.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "670ae4ed3a535c192273bb5a64bfb641ea696dab86d103ae7d1b13d73b970d82d6f2309a8c7d16d55499d7bf88ece0ea88d6c7f49d557f54090aa16509fbab0e"
         }
       ]
     },
@@ -23667,6 +24861,37 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/mime-types@3.0.2",
+      "name": "mime-types",
+      "version": "3.0.2",
+      "purl": "pkg:npm/mime-types@3.0.2",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "2db833764d21e23ba843d7c22975b86f2d1426a8fe9ce3ab23d309d6c4a3e2723c688d9ea35aa6bd01227b8543d6096c4b6e749f5e4bb16b18b42ba0892b52e4"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:npm/mime@1.6.0",
       "name": "mime",
       "version": "1.6.0",
@@ -23686,30 +24911,6 @@
         {
           "alg": "SHA-512",
           "content": "c74567f2ca48fb0b89d4ee92ee09db69083c3f187834d1dbeca4883661162a23c4e1128ea65be28e7f8d92662699180febc99cef48f611b793151b2bb306907a"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/mimic-fn@2.1.0",
-      "name": "mimic-fn",
-      "version": "2.1.0",
-      "purl": "pkg:npm/mimic-fn@2.1.0",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3aa6ce939a0441e019f165d6c9d96ef47263cfd59574422f6a63027179aea946234e49c7fecaac5af850def830285451d47a63bcd04a437ee76c9818cc6a8672"
         }
       ]
     },
@@ -23878,6 +25079,37 @@
         {
           "alg": "SHA-512",
           "content": "db2c8047ca8190ddd8ba17896a7529582e54ddb6f9a2c0f2c0d07c4730d5943c031dba1c009bdeaaa8f5bbcf92543ee39164f8cafb070a95aaa96a80c5bd3308"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/minimizer-webpack-plugin@5.9.0",
+      "name": "minimizer-webpack-plugin",
+      "version": "5.9.0",
+      "purl": "pkg:npm/minimizer-webpack-plugin@5.9.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "3804aabfe75ec2ff2f8e43818ea30e1efc5469786d1812d9017abb25b99813c4d2cc1bceb30886ab925c05d73cca9b8b2fff18513d4e132ba981aebf8aa7724c"
         }
       ]
     },
@@ -24161,30 +25393,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/node-forge@1.4.0",
-      "name": "node-forge",
-      "version": "1.4.0",
-      "purl": "pkg:npm/node-forge@1.4.0",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2daac51f4fba55fae2121a8c31c2d7d85ed2c125de5b09c400912c626e50296721895615bc9c95f6fed40ef52ffb0e473b6dd9a504d70effc6c5d0dd3323aea1"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/node-releases@2.0.54",
       "name": "node-releases",
       "version": "2.0.54",
@@ -24259,30 +25467,6 @@
         {
           "alg": "SHA-512",
           "content": "2587340cf969196078d241f9834ee0193ad8b8ca95eb9de4dee04a63ab884cf59db37334a2fdc66961a9f656c4dc1ce7831f3e5e47f382f0126fdbe4f490c55d"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/npm-run-path@4.0.1",
-      "name": "npm-run-path",
-      "version": "4.0.1",
-      "purl": "pkg:npm/npm-run-path@4.0.1",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "4b8f16cd95bbefbce1348ae7ee0c4e94848d02a8bd642fee4059d175b7881e1661080e94aa990e4fc4f51bb06f7dd80fe04afc805e2c51b692d22ed0bc87c25b"
         }
       ]
     },
@@ -24552,10 +25736,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/onetime@5.1.2",
-      "name": "onetime",
-      "version": "5.1.2",
-      "purl": "pkg:npm/onetime@5.1.2",
+      "bom-ref": "pkg:npm/open@10.2.0",
+      "name": "open",
+      "version": "10.2.0",
+      "purl": "pkg:npm/open@10.2.0",
       "scope": "required",
       "properties": [
         {
@@ -24567,10 +25751,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "91ba5a4921894d674063928f55e30e2974ab3edafc0bc0bbc287496dcb1de758d19e60fe199bbc63456853a0e6e59e2f5abd0883fd4d2ae59129fee3e5a6984a"
+          "content": "6200697491cfc90d94139c7e8654977277a3cc0bc3d1bdb65363ae00ffbc3a79494fe3e358fc6d8261aa28a73e4604cceb753d80dd18ceb61cef5476593fe14c"
         }
       ]
     },
@@ -24816,10 +26007,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/p-retry@4.6.2",
+      "bom-ref": "pkg:npm/p-retry@6.2.1",
       "name": "p-retry",
-      "version": "4.6.2",
-      "purl": "pkg:npm/p-retry@4.6.2",
+      "version": "6.2.1",
+      "purl": "pkg:npm/p-retry@6.2.1",
       "scope": "required",
       "properties": [
         {
@@ -24831,10 +26022,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "df5d88777f7a11b25dbd138d967814c7437275fac843996c62ed339ca554cd5bc0af3108b74f15d6a86dc8449b1957751465fb50ab62169e6ec0a65d33cc08b9"
+          "content": "844b74d8ee2151cb79c2dc20e07e0a716803766fa5d5b39a132fe15b377cc6d5c1f41ab14d604185bfb622602d1f80afe2b3e357beb137766e9aa93793702185"
         }
       ]
     },
@@ -25586,6 +26784,37 @@
         {
           "alg": "SHA-512",
           "content": "9c3cb04e1164d62e0140ae2dc0f43a4c0e114fc6c363deb27ae0950562f778f0110a210a0d14ab3466c5220509a4ba7e5de211eb9bfcadaed6b89385501b6430"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/pkijs@3.4.0",
+      "name": "pkijs",
+      "version": "3.4.0",
+      "purl": "pkg:npm/pkijs@3.4.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "7a611c2eea26b768f4defc43e78822541e12c538e7b2a914ebddb164e6571c3568632ca9126f9bde3a624dc73e09ffa6ca8a1cfbf2f2d33d358ea78d1d58091b"
         }
       ]
     },
@@ -26942,10 +28171,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/qs@6.15.3",
-      "name": "qs",
-      "version": "6.15.3",
-      "purl": "pkg:npm/qs@6.15.3",
+      "bom-ref": "pkg:npm/pvtsutils@1.3.6",
+      "name": "pvtsutils",
+      "version": "1.3.6",
+      "purl": "pkg:npm/pvtsutils@1.3.6",
       "scope": "required",
       "properties": [
         {
@@ -26957,10 +28186,79 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "3bd825df30a5e61e5b970d4a194cd02a1039a145d297caf0508339a344b79c25cc9624afcb90f3c7bfc325c23e4b08080aff889de499c21061d684b210703bd4"
+          "content": "3cb8105d0e87d8558269e45a93cbef935196e3ada5331079b37266ebbdcdf36cc8e2faad5543ee65d7df7596cf0c546853c900848b5616d3c25a23e9a78fc40e"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/pvutils@1.2.0",
+      "name": "pvutils",
+      "version": "1.2.0",
+      "purl": "pkg:npm/pvutils@1.2.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "05bb9b7821324ee42354c6a4bc943f4b16dcf77176a7099bb3138d4ff651af053b51adfc77cba7613c17a5354b00a278043b87f481b3b428d071dfcdff7f43be"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/qs@6.16.0",
+      "name": "qs",
+      "version": "6.16.0",
+      "purl": "pkg:npm/qs@6.16.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "87a7e1388691ac80f609b118d9faacfbbb7e517668f8c2c09d4e60448abce6e16d76250f09db00a4c947857a202953381ccd8355b22318d4d3607d8e7263f5bc"
         }
       ]
     },
@@ -27038,30 +28336,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/randombytes@2.1.0",
-      "name": "randombytes",
-      "version": "2.1.0",
-      "purl": "pkg:npm/randombytes@2.1.0",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "bd897788e5fee022945aec468bd5248627ba7eca97a92f4513665a89ce2d3450f637641069738c15bb8a2b84260c70b424ee81d59a78d49d0ba53d2847af1a99"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/range-parser@1.2.0",
       "name": "range-parser",
       "version": "1.2.0",
@@ -27123,6 +28397,13 @@
         {
           "name": "correlix:dev",
           "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
         }
       ],
       "hashes": [
@@ -27774,6 +29055,37 @@
         {
           "alg": "SHA-512",
           "content": "ead0c0f20f7c59ed337741af55e313f5aac43a74f0f6a334dcbf5c2576828eb8a9d4e3bbeb844304b05fac1e1cc333460e3e4e0398a8ca60bd1a48b381624352"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/reflect-metadata@0.2.2",
+      "name": "reflect-metadata",
+      "version": "0.2.2",
+      "purl": "pkg:npm/reflect-metadata@0.2.2",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "bab07081faef54ffde0325f1e2196e262bc12b3b846d242cf6b2960ab0a46d2c4dbfc9b13dc51929eba8177532e26265dcbc29ae9eb2cb9ff7f555a2819e0ae9"
         }
       ]
     },
@@ -28442,6 +29754,13 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
@@ -28573,6 +29892,37 @@
         {
           "alg": "SHA-512",
           "content": "148fa91c49fb59ce0da8a5cc5c533e54060a123fe6448716e21db8615c15b728c8f84a86acb7361f1fcdcb496b676d5c0565368282f2dfa7aa31c363dc04098a"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/run-applescript@7.1.0",
+      "name": "run-applescript",
+      "version": "7.1.0",
+      "purl": "pkg:npm/run-applescript@7.1.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "0cf7b9a5515a02c8a749a57a42343a81d89e7560dc4426d4ba241f41adb099657bfb10bd6c6ba5188f3e4dd466a059003da05793c0ab01b9e56362129e2278ed"
         }
       ]
     },
@@ -28897,10 +30247,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/selfsigned@2.4.1",
+      "bom-ref": "pkg:npm/selfsigned@5.5.0",
       "name": "selfsigned",
-      "version": "2.4.1",
-      "purl": "pkg:npm/selfsigned@2.4.1",
+      "version": "5.5.0",
+      "purl": "pkg:npm/selfsigned@5.5.0",
       "scope": "required",
       "properties": [
         {
@@ -28912,10 +30262,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "b61e41e0bd94f9e18bab54d587bccd44605aa62a1239151eca6232771805a70c30f5ddaac8abedb8f5368c9b87bd8030c2a8b6639f7a4012f7784a9c3c460bf1"
+          "content": "7ed9eedd35b8fb77817cb4459c3124cc6c5217fd7404906468b26e047657d2488f4bb6d1765a591aee981ade0a9e0324753c0913a31b8dabc5a6a1efa95b7e13"
         }
       ]
     },
@@ -29024,10 +30381,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/serialize-javascript@6.0.2",
+      "bom-ref": "pkg:npm/serialize-javascript@7.1.1",
       "name": "serialize-javascript",
-      "version": "6.0.2",
-      "purl": "pkg:npm/serialize-javascript@6.0.2",
+      "version": "7.1.1",
+      "purl": "pkg:npm/serialize-javascript@7.1.1",
       "scope": "required",
       "properties": [
         {
@@ -29039,10 +30396,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "49a6b5c4f0724d3ab681d7856582cba3e445137e4d1d99006ea65e58d777069ce9a5e562b00aa90e3729f1dc9feae22f12a251778ea37a69b203888521e564f2"
+          "content": "93708cb1a22fbdd4b09bca0b0783174a5d301f6fdcc251fbc4672745dd8369e4660646f3626c93f23d2db17eb40f00f5791c074e93691fc9632aef68513d4c79"
         }
       ]
     },
@@ -30231,30 +31595,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/strip-final-newline@2.0.0",
-      "name": "strip-final-newline",
-      "version": "2.0.0",
-      "purl": "pkg:npm/strip-final-newline@2.0.0",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-docs-portal"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "06ba6f7cd004ddd72fabb965df156e9b38ca8d9439b48d6c11420aaf752892cd17525e394addc595ab55a9e7fda6b9388d10f3856e96660fb76e4f77cbaa4b8c"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/strip-indent@3.0.0",
       "name": "strip-indent",
       "version": "3.0.0",
@@ -30646,10 +31986,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/terser@5.48.0",
+      "bom-ref": "pkg:npm/terser@5.51.2",
       "name": "terser",
-      "version": "5.48.0",
-      "purl": "pkg:npm/terser@5.48.0",
+      "version": "5.51.2",
+      "purl": "pkg:npm/terser@5.51.2",
       "scope": "required",
       "properties": [
         {
@@ -30661,10 +32001,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "27ff409fabecf54b3ac0a46b89215705675165aa51107a85cdd3542a4d299aef34e04311e9dafac229f0a3b7b9243c4de316a1c50b2ecacc981709708f85cdfd"
+          "content": "6d69e348db1c9ae23e189cdee99ba99c73fc1bf71372c245f9b5c279092793648742c81b3499cbaea887f636765b84933d55c7da60ca2915f78b03e173d0a7fd"
         }
       ]
     },
@@ -30689,6 +32036,37 @@
         {
           "alg": "SHA-512",
           "content": "37ef148ac0170c693c3c55cfe07033551f676df995277cd82c05a24c8a2a0b9bf98ac8a786bfabe6e68ef3eeebdc131fb8d22e7c8b00ed176956069c0b6712a7"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/thingies@2.6.1",
+      "name": "thingies",
+      "version": "2.6.1",
+      "purl": "pkg:npm/thingies@2.6.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "715fc23064cadcce0c96727fd00b7a8ac98ec3f0341049e20cd49c6a38f3fc1af7735b2a13bd980f4d6b1a93d32b0776ef00312393ebfbafb4c3cca87f315163"
         }
       ]
     },
@@ -31078,6 +32456,37 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/tree-dump@1.1.0",
+      "name": "tree-dump",
+      "version": "1.1.0",
+      "purl": "pkg:npm/tree-dump@1.1.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "accbaf854e0c0836dc6e795e65315ecd6b1a6574457a64aa00cfbb8cf9f3525d5fa3dc3760428ec407ae8b47f3dce238114e217f6de2c80eee411564a3e51a04"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:npm/trim-lines@3.0.1",
       "name": "trim-lines",
       "version": "3.0.1",
@@ -31121,6 +32530,37 @@
         {
           "alg": "SHA-512",
           "content": "b663292b4d018d9894c95cafac12bb9277ab3609a0bdc57f28b572ba66bf482f9340dd7aec6acc45c880353cf4f7e937cd6f0bf2deb48d63b51a97e465d8d36b"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/tslib@1.14.1",
+      "name": "tslib",
+      "version": "1.14.1",
+      "purl": "pkg:npm/tslib@1.14.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "0BSD"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "5e78b7e4d2b38e032bc1ebf2b074c202bb4b0e93efc9ef3357fd04e04c989f8dcfeffeeabd0c0f87d0469077b06ccba5567b5b8a099c4fbadd5f704da3dc1126"
         }
       ]
     },
@@ -31176,6 +32616,37 @@
         {
           "alg": "SHA-512",
           "content": "a0916ef781d06fe29576e49440bef09e99aa9df98bb0e03f9c087a6fa107d30084a0ad3f98f79753a737c0a0d5f373243ae1cf447b525ca294f7d2016b34bfdb"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/tsyringe@4.10.0",
+      "name": "tsyringe",
+      "version": "4.10.0",
+      "purl": "pkg:npm/tsyringe@4.10.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "6b1af721d36e548c6768ae571845054eedd898043a965960aefa9f128475ea0fc71a7618ffa59ee2858436d027ccaebf2e9276babf4f01bf34441b7bfd4e2e83"
         }
       ]
     },
@@ -31994,10 +33465,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/uuid@8.3.2",
+      "bom-ref": "pkg:npm/uuid@11.1.1",
       "name": "uuid",
-      "version": "8.3.2",
-      "purl": "pkg:npm/uuid@8.3.2",
+      "version": "11.1.1",
+      "purl": "pkg:npm/uuid@11.1.1",
       "scope": "required",
       "properties": [
         {
@@ -32009,10 +33480,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f8d62cd9078c5b2f865853849bdc679fa1c20e9d25ed0043ee697cccb52627ef77439345d0da1c12b9f09139175453625f7fdfa42e9a7d2f0385bfe0cfb47b7a"
+          "content": "bc8631ac1082fcdfcaf89b37a9237cf20a3b9087cd3ecb2bfe11c27ac28240d0239a0bd84b6a2aafaf6422e7c41be3b8f8f7decce1f811b21e1c27c5a2ff1981"
         }
       ]
     },
@@ -32354,10 +33832,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/webpack-dev-middleware@5.3.4",
+      "bom-ref": "pkg:npm/webpack-dev-middleware@7.4.6",
       "name": "webpack-dev-middleware",
-      "version": "5.3.4",
-      "purl": "pkg:npm/webpack-dev-middleware@5.3.4",
+      "version": "7.4.6",
+      "purl": "pkg:npm/webpack-dev-middleware@7.4.6",
       "scope": "required",
       "properties": [
         {
@@ -32369,19 +33847,26 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "055753aa186cfb421fa1e01fec4a07e5613e7b10a6a867ab1df0ccd082f4f7a3f1eb44ead8c9fd3006e768651ee8788c6b8d4a302605d7d832cd998172afe8e1"
+          "content": "c8158232f21f526ba1004f2f76a50acc7d2f83d92e58dd0a786e2f067a91a655051d153b94c423922256c55433be8d814dec2a84f84394c078d6b02dda3540f4"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/webpack-dev-server@4.15.2",
+      "bom-ref": "pkg:npm/webpack-dev-server@5.2.6",
       "name": "webpack-dev-server",
-      "version": "4.15.2",
-      "purl": "pkg:npm/webpack-dev-server@4.15.2",
+      "version": "5.2.6",
+      "purl": "pkg:npm/webpack-dev-server@5.2.6",
       "scope": "required",
       "properties": [
         {
@@ -32393,10 +33878,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "d176af0196cd279b03ac26e4a562fc9a26b4a3958f39dd981adc6b12266404af458cba692142b64e0c4aeaa183d8fde15174c934d3d589badeaca731e56911d6"
+          "content": "1cd2d199a991bd56af650f9abdc79989f9aff2199d523838dede8c2384aa243c05756ed13d0c07e6fcc6843459497e7d4a07db78784b9eade0faea285a8ee957"
         }
       ]
     },
@@ -32426,10 +33918,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/webpack-sources@3.5.0",
+      "bom-ref": "pkg:npm/webpack-sources@3.5.1",
       "name": "webpack-sources",
-      "version": "3.5.0",
-      "purl": "pkg:npm/webpack-sources@3.5.0",
+      "version": "3.5.1",
+      "purl": "pkg:npm/webpack-sources@3.5.1",
       "scope": "required",
       "properties": [
         {
@@ -32441,19 +33933,26 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "1cfbb2faeba84c269aa04a08d4b43724df7ebeb3c1bc47ac9e75f58c00c7cbbdbc70748c96ae3051ce1a7d8a9a86ad81d66850559c425ce90d4e75e5b6bfb6bd"
+          "content": "8f2ba218976dbd8e37e33e5b519ae3cfaeefefafde3cdbc5653a7d31dcf6f48947e3e18fb20c868e2bf47ca23e33b05d914e800e3ba551c280777b542b75a513"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/webpack@5.88.2",
+      "bom-ref": "pkg:npm/webpack@5.110.3",
       "name": "webpack",
-      "version": "5.88.2",
-      "purl": "pkg:npm/webpack@5.88.2",
+      "version": "5.110.3",
+      "purl": "pkg:npm/webpack@5.110.3",
       "scope": "required",
       "properties": [
         {
@@ -32465,19 +33964,26 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "266720359d622a3f9a891d0ebd362d590a89c2adfb3dfebcddd63d6d5391c156d4ac384b85d9ff3e53b6b07b051cf923eec1cd405dc9c1a024a78f55f92ab5b5"
+          "content": "1ae8b307346fa3d60fa72a0d31fdda83b033c5b696f39aab452a9385adf8e4ac896c014fb77fdc33304cd21f915a0ed22bfec377344b20d3f72ef43486faf886"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/webpackbar@5.0.2",
+      "bom-ref": "pkg:npm/webpackbar@7.0.0",
       "name": "webpackbar",
-      "version": "5.0.2",
-      "purl": "pkg:npm/webpackbar@5.0.2",
+      "version": "7.0.0",
+      "purl": "pkg:npm/webpackbar@7.0.0",
       "scope": "required",
       "properties": [
         {
@@ -32489,10 +33995,17 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "066149a3bbde043810cdf59797fc30617aff545bacd3ad78a99f22f739ea725f5f9c476256475b8b44de74b43ac402bdd876470c9d109b24347e6b993c080261"
+          "content": "692f6ca2a48eda208782a1e80ab8f82db7c64146e80c26093d214e01c8442bef69b088cdadf4965b8634604cfaecc29444dbcc99fa34c9c3a0f5dffe38e7fdfd"
         }
       ]
     },
@@ -32853,6 +34366,37 @@
         {
           "alg": "SHA-512",
           "content": "56ca76f1bec345c8a6150bebaaed967a4df3d626310c25aa1d807c42c9e4fd2e117da090ccf18fc8136e563255ddc77a5222ad52da7ab0d33bee05afcdc087fa"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/wsl-utils@0.1.0",
+      "name": "wsl-utils",
+      "version": "0.1.0",
+      "purl": "pkg:npm/wsl-utils@0.1.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "npm-docs-portal"
+        },
+        {
+          "name": "correlix:dev",
+          "value": "false"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "87715b8ac6b69ca18fc42a66f3d1e4df79412ec9da181bdcb50a2968148e5bfb88b3a1537b5013c809ca149af356cf6fa4676c4deef7585dd5e2522c93819a73"
         }
       ]
     },

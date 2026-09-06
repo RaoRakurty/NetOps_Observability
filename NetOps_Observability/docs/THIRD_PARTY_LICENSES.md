@@ -99,7 +99,8 @@ distributed and carries no notice obligation.
 
 | Component | Version | Licence | Notes |
 |---|---|---|---|
-| `python` | 3.12-slim | PSF-2.0 | CPython under PSF-2.0 on a debian:12-slim rootfs; the Debian userland carries GPL-2.0/GPL-3.0 utilities, unmodified, source available from Debian. |
+| `python` | 3.12-alpine | PSF-2.0 | CPython under PSF-2.0. The two images that use it no longer share a rootfs: netops-correlation moved to python:3.12-alpine on 2026-09-06 (tracker 263) and inherits 38 apk packages, whose GPL/LGPL members are recorded individually in scripts/source-mirror.json `deferred` with their aports source coordinates; the cloud-ingest image stays on python:3.12-slim, whose Debian userland carries GPL-2.0/GPL-3.0 utilities, unmodified, source available from Debian. |
+| `python` | 3.12-slim | PSF-2.0 | CPython under PSF-2.0. The two images that use it no longer share a rootfs: netops-correlation moved to python:3.12-alpine on 2026-09-06 (tracker 263) and inherits 38 apk packages, whose GPL/LGPL members are recorded individually in scripts/source-mirror.json `deferred` with their aports source coordinates; the cloud-ingest image stays on python:3.12-slim, whose Debian userland carries GPL-2.0/GPL-3.0 utilities, unmodified, source available from Debian. |
 
 ## correlation image (netops-correlation)
 
@@ -222,97 +223,53 @@ distributed and carries no notice obligation.
 
 | Component | Version | Licence | Notes |
 |---|---|---|---|
-| `adduser` | 3.152 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `apt` | 3.0.3 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `base-files` | 13.8+deb13u5 | GPL-2.0-or-later | origin: inherited-base-layer; source: verified; corresponding source retained as source-offer/base-files_13.8+deb13u5.tar.xz (distro-exact) |
-| `base-passwd` | 3.6.7 | GPL-2.0-only | origin: inherited-base-layer; source: missing |
-| `bash` | 5.2.37-2+b9 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `bsdutils` | 1:2.41-5 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `ca-certificates` | 20250419 | GPL-2.0-or-later ; MPL-2.0 | origin: inherited-base-layer; source: missing |
-| `coreutils` | 9.7-3 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `dash` | 0.5.12-12 | BSD-3-Clause ; GPL-2.0-or-later | origin: inherited-base-layer; source: manual-review |
-| `debconf` | 1.5.91 | BSD-2-Clause | origin: inherited-base-layer; source: not-required |
-| `debian` | 13 | UNKNOWN | origin: unknown; source: not-required |
-| `debian-archive-keyring` | 2025.1 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `debianutils` | 5.23.2 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `diffutils` | 1:3.10-4 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `dpkg` | 1.22.22 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `findutils` | 4.10.0-3 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `gcc-14-base` | 14.2.0-19 | GPL-3.0-or-later WITH GCC-exception-3.1 | origin: inherited-base-layer; source: missing |
-| `grep` | 3.11-4 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `gzip` | 1.13-1 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `hostname` | 3.25 | GPL-2.0-only | origin: inherited-base-layer; source: verified; corresponding source retained as source-offer/hostname_3.25.tar.xz (distro-exact) |
-| `init-system-helpers` | 1.69~deb13u1 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libacl1` | 2.3.2-2+b1 | LGPL-2.0-or-later ; GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libapt-pkg7.0` | 3.0.3 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libattr1` | 1:2.5.2-3 | LGPL-2.0-or-later ; GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libaudit-common` | 1:4.0.2-2 | GPL-2.0-only ; LGPL-2.1-only | origin: inherited-base-layer; source: missing |
-| `libaudit1` | 1:4.0.2-2+b2 | GPL-2.0-only ; LGPL-2.1-only | origin: inherited-base-layer; source: missing |
-| `libblkid1` | 2.41-5 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libbsd0` | 0.12.2-2 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
-| `libbz2-1.0` | 1.0.8-6 | BSD-variant | origin: inherited-base-layer; source: not-required |
-| `libc-bin` | 2.41-12+deb13u3 | LGPL-2.1-or-later | origin: inherited-base-layer; source: missing |
-| `libc6` | 2.41-12+deb13u3 | LGPL-2.1-or-later | origin: inherited-base-layer; source: missing |
-| `libcap-ng0` | 0.8.5-4+b1 | LGPL-2.1-or-later | origin: inherited-base-layer; source: missing |
-| `libcap2` | 1:2.75-10+deb13u1+b1 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
-| `libcrypt1` | 1:4.4.38-1 | LGPL-2.1-or-later | origin: inherited-base-layer; source: missing |
-| `libdb5.3t64` | 5.3.28+dfsg2-9 | Sleepycat | origin: inherited-base-layer; source: missing |
-| `libdebconfclient0` | 0.280 | BSD-2-Clause | origin: inherited-base-layer; source: not-required |
-| `libffi8` | 3.4.8-2 | MIT | origin: inherited-base-layer; source: not-required |
-| `libgcc-s1` | 14.2.0-19 | GPL-3.0-or-later WITH GCC-exception-3.1 | origin: inherited-base-layer; source: missing |
-| `libgdbm6t64` | 1.24-2 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `libgmp10` | 2:6.3.0+dfsg-3 | GPL-2.0-or-later ; LGPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `libhogweed6t64` | 3.10.1-1 | LGPL-3.0-or-later ; GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `liblastlog2-2` | 2.41-5 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `liblz4-1` | 1.10.0-4 | BSD-2-Clause | origin: inherited-base-layer; source: not-required |
-| `liblzma5` | 5.8.1-1 | 0BSD | origin: inherited-base-layer; source: not-required |
-| `libmd0` | 1.1.0-2+b1 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
-| `libmount1` | 2.41-5 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libncursesw6` | 6.5+20250216-2 | MIT ; X11 | origin: inherited-base-layer; source: not-required |
-| `libnettle8t64` | 3.10.1-1 | LGPL-3.0-or-later ; GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libpam-modules` | 1.7.0-5 | GPL-2.0-or-later ; LGPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libpam-modules-bin` | 1.7.0-5 | LGPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libpam-runtime` | 1.7.0-5 | GPL-3.0-only | origin: inherited-base-layer; source: missing |
-| `libpam0g` | 1.7.0-5 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
-| `libpcre2-8-0` | 10.46-1~deb13u1 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
-| `libreadline8t64` | 8.2-6 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `libseccomp2` | 2.6.0-2 | LGPL-2.1-only | origin: inherited-base-layer; source: verified; corresponding source retained as source-offer/libseccomp_2.6.0.orig.tar.gz (distro-exact) |
-| `libselinux1` | 3.8.1-1 | public-domain | origin: inherited-base-layer; source: not-required |
-| `libsemanage-common` | 3.8.1-1 | LGPL-2.1-or-later | origin: inherited-base-layer; source: missing |
-| `libsemanage2` | 3.8.1-1 | LGPL-2.1-or-later | origin: inherited-base-layer; source: missing |
-| `libsepol2` | 3.8.1-1 | LGPL-2.1-or-later | origin: inherited-base-layer; source: missing |
-| `libsmartcols1` | 2.41-5 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libsqlite3-0` | 3.46.1-7+deb13u1 | public-domain | origin: inherited-base-layer; source: not-required |
-| `libssl3t64` | 3.5.6-1~deb13u1 | Apache-2.0 | origin: inherited-base-layer; source: not-required |
-| `libstdc++6` | 14.2.0-19 | GPL-3.0-or-later WITH GCC-exception-3.1 | origin: inherited-base-layer; source: missing |
-| `libsystemd0` | 257.13-1~deb13u1 | LGPL-2.1-or-later | origin: inherited-base-layer; source: missing |
-| `libtinfo6` | 6.5+20250216-2 | MIT ; X11 | origin: inherited-base-layer; source: not-required |
-| `libudev1` | 257.13-1~deb13u1 | LGPL-2.1-or-later | origin: inherited-base-layer; source: missing |
-| `libuuid1` | 2.41-5 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `libxxhash0` | 0.8.3-2 | BSD-2-Clause | origin: inherited-base-layer; source: not-required |
-| `libzstd1` | 1.5.7+dfsg-1 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
-| `login` | 1:4.16.0-2+really2.41-5 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `login.defs` | 1:4.17.4-2 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
-| `mawk` | 1.3.4.20250131-1 | GPL-2.0-only | origin: inherited-base-layer; source: missing |
-| `mount` | 2.41-5 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `ncurses-base` | 6.5+20250216-2 | MIT ; X11 | origin: inherited-base-layer; source: not-required |
-| `ncurses-bin` | 6.5+20250216-2 | MIT ; X11 | origin: inherited-base-layer; source: not-required |
-| `netbase` | 6.5 | GPL-2.0-only | origin: inherited-base-layer; source: verified; corresponding source retained as source-offer/netbase_6.5.tar.xz (distro-exact) |
-| `openssl` | 3.5.6-1~deb13u1 | Apache-2.0 | origin: inherited-base-layer; source: not-required |
-| `openssl-provider-legacy` | 3.5.6-1~deb13u1 | Apache-2.0 | origin: inherited-base-layer; source: not-required |
-| `passwd` | 1:4.17.4-2 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `perl-base` | 5.40.1-6 | GPL-1.0-or-later ; Artistic-1.0-Perl | origin: inherited-base-layer; source: missing |
+| `.python-rundeps` | 20260901.001029 | UNKNOWN | origin: inherited-base-layer; source: not-required |
+| `alpine` | 3.24.1 | UNKNOWN | origin: unknown; source: not-required |
+| `alpine-baselayout` | 3.7.2-r1 | GPL-2.0-only | origin: inherited-base-layer; source: missing |
+| `alpine-baselayout-data` | 3.7.2-r1 | GPL-2.0-only | origin: inherited-base-layer; source: missing |
+| `alpine-keys` | 2.6-r0 | MIT | origin: inherited-base-layer; source: not-required |
+| `alpine-release` | 3.24.1-r0 | MIT | origin: inherited-base-layer; source: not-required |
+| `apk-tools` | 3.0.6-r0 | GPL-2.0-only | origin: inherited-base-layer; source: missing |
+| `busybox` | 1.37.0-r31 | GPL-2.0-only | origin: inherited-base-layer; source: verified; corresponding source retained as source-offer/busybox-1.37.0.tar.bz2 (distro-packaging-mismatch) |
+| `busybox-binsh` | 1.37.0-r31 | GPL-2.0-only | origin: inherited-base-layer; source: verified; corresponding source retained as source-offer/busybox-1.37.0.tar.bz2 (distro-packaging-mismatch) |
+| `ca-certificates` | 20260611-r0 | MIT ; MPL-2.0 | origin: inherited-base-layer; source: not-required |
+| `ca-certificates-bundle` | 20260611-r0 | MIT ; MPL-2.0 | origin: inherited-base-layer; source: not-required |
+| `gdbm` | 1.26-r0 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
+| `keyutils-libs` | 1.6.3-r4 | GPL-2.0-or-later ; LGPL-2.0-or-later | origin: inherited-base-layer; source: missing |
+| `krb5-conf` | 1.0-r2 | MIT | origin: inherited-base-layer; source: not-required |
+| `krb5-libs` | 1.22.2-r1 | MIT | origin: inherited-base-layer; source: not-required |
+| `libapk` | 3.0.6-r0 | GPL-2.0-only | origin: inherited-base-layer; source: missing |
+| `libcom_err` | 1.47.4-r0 | GPL-2.0-or-later ; LGPL-2.0-or-later ; BSD-3-Clause ; MIT | origin: inherited-base-layer; source: missing |
+| `libcrypto3` | 3.5.8-r0 | Apache-2.0 | origin: inherited-base-layer; source: not-required |
+| `libffi` | 3.5.2-r1 | MIT | origin: inherited-base-layer; source: not-required |
+| `libintl` | 1.0-r0 | LGPL-2.1-or-later | origin: inherited-base-layer; source: missing |
+| `libncursesw` | 6.6_p20260516-r0 | X11 | origin: inherited-base-layer; source: not-required |
+| `libnsl` | 2.0.1-r2 | LGPL-2.0-or-later | origin: inherited-base-layer; source: missing |
+| `libpanelw` | 6.6_p20260516-r0 | X11 | origin: inherited-base-layer; source: not-required |
+| `libssl3` | 3.5.8-r0 | Apache-2.0 | origin: inherited-base-layer; source: not-required |
+| `libtirpc` | 1.3.5-r1 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
+| `libtirpc-conf` | 1.3.5-r1 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
+| `libuuid` | 2.42.1-r0 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
+| `libverto` | 0.3.2-r2 | MIT | origin: inherited-base-layer; source: not-required |
+| `musl` | 1.2.6-r2 | MIT | origin: inherited-base-layer; source: not-required |
+| `musl-utils` | 1.2.6-r2 | MIT ; BSD-2-Clause ; GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
+| `ncurses-terminfo-base` | 6.6_p20260516-r0 | X11 | origin: inherited-base-layer; source: not-required |
 | `pip` | 25.0.1 | MIT | origin: inherited-base-layer; source: not-required |
-| `python` | 3.12.13 | PSF-2.0 | origin: inherited-base-layer; source: not-required |
-| `readline-common` | 8.2-6 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `sed` | 4.9-2+deb13u1 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
+| `python` | 3.12.14 | PSF-2.0 | origin: inherited-base-layer; source: not-required |
+| `readline` | 8.3.3-r1 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
+| `scanelf` | 1.3.9-r1 | GPL-2.0-only | origin: inherited-base-layer; source: missing |
 | `Simple Launcher` | 1.1.0.14 | UNKNOWN | origin: inherited-base-layer; source: manual-review |
-| `sqv` | 1.3.0-3+b2 | LGPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `sysvinit-utils` | 3.14-4 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `tar` | 1.35+dfsg-3.1 | GPL-3.0-or-later | origin: inherited-base-layer; source: missing |
-| `tzdata` | 2026b-0+deb13u1 | public-domain | origin: inherited-base-layer; source: not-required |
-| `util-linux` | 2.41-5 | GPL-2.0-or-later | origin: inherited-base-layer; source: missing |
-| `zlib1g` | 1:1.3.dfsg+really1.3.1-1+b1 | Zlib | origin: inherited-base-layer; source: not-required |
+| `sqlite-libs` | 3.53.4-r0 | blessing | origin: inherited-base-layer; source: not-required |
+| `ssl_client` | 1.37.0-r31 | GPL-2.0-only | origin: inherited-base-layer; source: verified; corresponding source retained as source-offer/busybox-1.37.0.tar.bz2 (distro-packaging-mismatch) |
+| `tzdata` | 2026c-r0 | Public-Domain | origin: inherited-base-layer; source: not-required |
+| `xz-libs` | 5.8.3-r0 | 0BSD ; Public-Domain | origin: inherited-base-layer; source: not-required |
+| `zlib` | 1.3.2-r0 | Zlib | origin: inherited-base-layer; source: not-required |
+
+## inherited base-image layers of: netops-correlation, netops-frontend, netops-nginx
+
+| Component | Version | Licence | Notes |
+|---|---|---|---|
+| `libbz2` | 1.0.8-r6 | bzip2-1.0.6 | origin: inherited-base-layer; source: not-required |
 
 ## inherited base-image layers of: netops-frontend, netops-nginx
 
@@ -338,7 +295,6 @@ distributed and carries no notice obligation.
 | `gettext-envsubst` | 0.22.5-r0 | GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT | origin: inherited-base-layer; source: verified; corresponding source retained as source-offer/gettext-0.22.5.tar.xz (distro-exact) |
 | `libavif` | 1.0.4-r0 | BSD-2-Clause | origin: inherited-base-layer; source: not-required |
 | `libbsd` | 0.12.2-r0 | BSD-3-Clause | origin: inherited-base-layer; source: not-required |
-| `libbz2` | 1.0.8-r6 | bzip2-1.0.6 | origin: inherited-base-layer; source: not-required |
 | `libcrypto3` | 3.3.3-r0 | Apache-2.0 | origin: inherited-base-layer; source: not-required |
 | `libcurl` | 8.12.1-r1 | curl | origin: inherited-base-layer; source: not-required |
 | `libdav1d` | 1.5.0-r0 | BSD-2-Clause | origin: inherited-base-layer; source: not-required |

@@ -66,8 +66,9 @@ findings:**
 
 (`docker-compose.flowgen.yml` and `scripts/lab/traffic-generator/Dockerfile` share the first of
 those two references.) The CIS-Docker gate requires digest pins only on the four *owned*
-Dockerfiles, which is how these slipped through. Note also that `scripts/lab/twin/docker/Dockerfile`
-pins a **different** `python:3.12-slim` digest than `Dockerfile.correlation` — two pins of one tag
+Dockerfiles, which is how these slipped through. Note that `scripts/lab/twin/docker/Dockerfile`
+pins a `python:3.12-slim` digest that `Dockerfile.correlation` no longer shares — tracker 263 moved
+the correlation image to `python:3.12-alpine`, so what used to be two divergent pins of one tag
 drifting apart.
 
 > **Not a finding:** `compose.offline-images.yml` is tag-only *by design*, and cannot drift. It is

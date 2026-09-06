@@ -597,17 +597,22 @@ customer release on its own.
 python3 scripts/oci-compliance.py --reviews      # counts + every needs_human item
 ```
 
-**State on 2026-09-05.** 95 review entries covering the 94 components the scan
-could not resolve (`Simple Launcher` is recorded twice, once per package type
-Syft can report it under — see below). 59 confirmed a real obligation, 33 found
-none, 2 came back `unclear`, and **all 95 are awaiting owner sign-off**. The two
-unclear ones:
+**State on 2026-09-06.** 17 review entries. 95 were written on 2026-09-05, but 82
+of them described `netops-correlation`'s Debian userland and the CPython build
+that sat on it; tracker 263 moved that image to `python:3.12-alpine` and those
+packages are no longer shipped, so their reviews were deleted with them (a review
+of bytes nobody distributes rots exactly the way the register does — `git show`
+recovers them if a past release has to be re-audited). What remains: 2 Debian
+reviews for `netops-api`, 9 Alpine reviews for `netops-frontend`/`netops-nginx`,
+the CPython interpreter re-reviewed at its new 3.12.14 version (the licence text
+is byte-identical to 3.12.13's, same sha256 — only the version moved), and three
+new Alpine reviews for the packages whose metadata the scan could not resolve
+(`.python-rundeps`, a virtual meta-package that installs zero files;
+`sqlite-libs`, licence id `blessing`; `xz-libs`, whose origin package's licence
+LIST includes GPL-2.0-or-later but whose own file list is `liblzma.so.5` alone).
+**All 17 are awaiting owner sign-off.** `dash 0.5.12-12` — the other 2026-09-05
+`unclear` — went away with the Debian base; the remaining unclear one:
 
-* **`dash 0.5.12-12`** — `Files: *` is BSD-3-Clause and the only copyleft stanza
-  is `Files: src/mksignames.c  License: GPL-2+`. `mksignames.c` is a build-time
-  generator whose *output* is compiled into `/usr/bin/dash`. Whether the shipped
-  binary is a derivative of a GPL-2+ work is a legal judgement, not a parsing
-  one.
 * **`Simple Launcher 1.1.0.14`** — six **Windows** PE stubs vendored inside pip
   (`pip/_vendor/distlib/{t32,t64,t64-arm,w32,w64,w64-arm}.exe`). They cannot
   execute in a Linux image and nothing links them, but the image ships no
@@ -660,16 +665,22 @@ regenerate the notices (§10 step 6).
   per-package review (§12) rather than left as a shrug — but the reviews are an
   automated first pass over the evidence and are not a legal opinion until the
   owner signs them.
-* **The residue is a surface problem, not a mirroring problem.** 57 of the 59
-  recorded obligations are the Debian userland of `netops-correlation`
-  (`python:3.12-slim`). Retaining their source is ~228 MB across 38 source
-  packages, in every release bundle, forever. Moving that service to a
-  distroless or Alpine base removes most of them outright (tracker 263); the
-  Correlix-controlled archive (tracker 262,
-  `docs/compliance/SOURCE_ARCHIVE.md`) is where whatever remains is RETAINED,
-  and `deferred_source_coordinates` already holds each one's exact source
-  package, version, URL and Debian-attested sha256, so ingesting them is
-  mechanical.
+* **The residue was a surface problem, and the surface was cut (2026-09-06,
+  tracker 263).** 58 of the 60 recorded obligations were the Debian userland of
+  `netops-correlation` (`python:3.12-slim`) — glibc, bash, coreutils, dpkg, apt,
+  perl-base, util-linux — none of it executed by the correlation engine, and
+  retaining its source was ~228 MB across 38 source packages in every release
+  bundle, forever. The service moved to `python:3.12-alpine`; the packages left
+  the image and the obligation left with them. The register now holds **18**
+  rows for that image: 12 Alpine packages (10 origin packages) and the 6
+  `Simple Launcher` spellings. Those 12 are recorded the same way, with
+  `deferred_source_coordinates` naming the aports packaging archive at the exact
+  commit the image records (`c:` in `/lib/apk/db/installed`, self-measured
+  sha256 — GitLab publishes no digest of its own, so it was fetched twice and
+  required to be byte-identical) plus every upstream file with the sha512
+  Alpine's own APKBUILD declares. The Correlix-controlled archive (tracker 262,
+  `docs/compliance/SOURCE_ARCHIVE.md`) is where they get RETAINED; ingesting
+  them is mechanical, and now roughly a tenth of the size.
 * **The committed inventory is a snapshot.** `docs/compliance/oci-inventory.json`
   records the digests of images built on the machine that ran the scan. The
   authoritative evaluation for a release runs in `publish-images.yml` against the

@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:86a061b1-0ebe-599d-be3a-7f72954686ed",
+  "serialNumber": "urn:uuid:326c763c-9fd7-5280-a432-4949ed95b989",
   "version": 1,
   "metadata": {
     "timestamp": "2026-09-06T04:44:18+00:00",
@@ -917,6 +917,41 @@
     },
     {
       "type": "container",
+      "bom-ref": "container:python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a",
+      "name": "python",
+      "version": "sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a",
+      "purl": "pkg:oci/python@sha256%3Ab64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a?tag=3.12-alpine",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "container-images"
+        },
+        {
+          "name": "correlix:image:ref",
+          "value": "python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+        },
+        {
+          "name": "correlix:image:tag",
+          "value": "3.12-alpine"
+        },
+        {
+          "name": "correlix:image:digest-pinned",
+          "value": "true"
+        },
+        {
+          "name": "correlix:origin",
+          "value": "deployment/docker/Dockerfile.correlation"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+        }
+      ]
+    },
+    {
+      "type": "container",
       "bom-ref": "container:python:3.12-slim",
       "name": "python",
       "version": "3.12-slim",
@@ -941,41 +976,6 @@
         {
           "name": "correlix:origin",
           "value": "docker-compose.flowgen.yml(flowgen),deployment/docker/cloud-ingest/Dockerfile,scripts/lab/traffic-generator/Dockerfile"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203",
-      "name": "python",
-      "version": "sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203",
-      "purl": "pkg:oci/python@sha256%3A090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203?tag=3.12-slim",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "3.12-slim"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "true"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "deployment/docker/Dockerfile.correlation"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203"
         }
       ]
     },

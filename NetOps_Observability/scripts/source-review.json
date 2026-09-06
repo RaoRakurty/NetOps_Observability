@@ -42,35 +42,14 @@
     "",
     "WHAT `reviewer` MEANS. \"Claude Fable 5.1 — automated first pass\" is exactly that:",
     "a first pass over the evidence, recorded so a human reviews a written argument",
-    "instead of 94 copyright files. It is not a legal opinion."
+    "WHAT `reviewer` MEANS. \"Claude Fable 5.1 — automated first pass\" is exactly that:\na first pass over the evidence, recorded so a human reviews a written argument\ninstead of a hundred copyright files. It is not a legal opinion.",
+    "",
+    "2026-09-06 (tracker 263). netops-correlation moved from python:3.12-slim to\npython:3.12-alpine, so the 81 Debian reviews written for that image on 2026-09-05\ndescribe packages no longer shipped and were DELETED with the packages — a review\nof bytes nobody distributes is the same rot the register guards against, and\n`git show` recovers them if a past release ever has to be re-audited. The two\nnetops-api Debian reviews and the nine netops-frontend/netops-nginx Alpine reviews\nare untouched. Four entries were written in their place: the CPython interpreter at\nits new 3.12.14 version (same licence text, byte for byte), and the three Alpine\npackages whose licence metadata the scan could not resolve on its own."
   ],
   "schema_version": 1,
-  "reviewed": "2026-09-05",
-  "tracker": 238,
+  "reviewed": "2026-09-06",
+  "tracker": "238, 263",
   "reviews": [
-    {
-      "component": "adduser",
-      "version": "3.152",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/adduser/copyright",
-        "sha256": "46a62796c410dd88c0df99066519127a29ddca803078f7a8554fc779c30101bb"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "The dpkg copyright file's catch-all `Files: *` stanza is GPL-2+ and the shipped adduser/deluser programs are named in GPL-2+ stanzas of their own, so the binary is a GPL-2.0-or-later work.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
     {
       "component": "aom-libs",
       "version": "3.11.0-r0",
@@ -92,29 +71,6 @@
       "source_required": false,
       "needs_human": false,
       "rationale": "Alpine's APKBUILD at the aports commit this image records states license=\"BSD-2-Clause AND custom\"; the custom term is the Alliance for Open Media Patent License 1.0, a patent grant. Neither is copyleft.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "apt",
-      "version": "3.0.3",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/apt/copyright",
-        "sha256": "77ab918ade9bce20b07524572fc8eab3f8c0cab4d246f282043892aaa9538803"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-2+ and both the apt tools and libapt-pkg are compiled from that tree, so the shipped binaries carry a corresponding-source obligation.",
       "reviewer": "Claude Fable 5.1 — automated first pass",
       "reviewed": "2026-09-05",
       "owner_signoff": false
@@ -143,842 +99,6 @@
       "owner_signoff": false
     },
     {
-      "component": "base-files",
-      "version": "13.8+deb13u5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/base-files/copyright",
-        "sha256": "576859a65409c99cb1632c8b3de4b3deb26910800832beda76aca33d00720134"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "base-files ships no machine-readable copyright; its free-text copyright states the package is distributed under the GNU GPL 'version 2 of the License, or (at your option) any later version'.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "base-passwd",
-      "version": "3.6.7",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/base-passwd/copyright",
-        "sha256": "0f1cde79bd80a75f9029ae9a8c252b642223027ef36f6989c63a8230aae576a7"
-      },
-      "governing_licences": [
-        "GPL-2.0-only"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-2 (no 'or later'), and the shipped update-passwd binary and the base passwd/group files come from that tree.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "bash",
-      "version": "5.2.37-2+b9",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/bash/copyright",
-        "sha256": "06319d84c3e5ed096036f6a9310a030c7e84e50dff2b8a6792285c83ec0ada73"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-3+ and /usr/bin/bash is compiled from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "bsdutils",
-      "version": "1:2.41-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/bsdutils/copyright",
-        "sha256": "56b67e2eb8bac5a15d91e261d558d73f1f029113cced229753138194997366b6"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "All of these binary packages are built from the util-linux source package, whose `Files: *` stanza is GPL-2+; the shipped programs and shared libraries are compiled from that tree.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "ca-certificates",
-      "version": "20250419",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/ca-certificates/copyright",
-        "sha256": "e85e1bcad3a915dc7e6f41412bc5bdeba275cadd817896ea0451f2140a93967c"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later",
-        "MPL-2.0"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "The shipped /usr/sbin/update-ca-certificates comes from the GPL-2+ `sbin/*` stanza and the shipped CA bundle is Mozilla's under MPL-2.0; both are file-level or stronger copyleft, so corresponding source is required.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "coreutils",
-      "version": "9.7-3",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/coreutils/copyright",
-        "sha256": "3a63d4b11a7ba4c1c17175072ea28e07b0f80c7bc1ca042b27431fe65a14755b"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-3+ and every shipped utility is compiled from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "dash",
-      "version": "0.5.12-12",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/dash/copyright",
-        "sha256": "d98c53f281321baad38164aa9ae6e368a9253be6ec51bd26a759b5e72b326f4a"
-      },
-      "governing_licences": [
-        "BSD-3-Clause",
-        "GPL-2.0-or-later"
-      ],
-      "source_required": "unclear",
-      "needs_human": true,
-      "rationale": "`Files: *` is BSD-3-Clause and the only copyleft stanza is `Files: src/mksignames.c  License: GPL-2+`; mksignames.c is a build-time generator whose OUTPUT (a signal-name table) is compiled into /usr/bin/dash, so whether the shipped binary is a derivative of a GPL-2+ work is a legal judgement this pass will not make.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "debian-archive-keyring",
-      "version": "2025.1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/debian-archive-keyring/copyright",
-        "sha256": "8f918c0bebd1454a084698a95c09d9a03cec8453dad1fc6eab9e6427da9d33a9"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "Free-text copyright: 'The keys in the keyrings don't fall under any copyright. Everything else in the package is covered by the GNU GPL' — the support files are GPL 'either version 2, or (at your option) any later version'.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "debianutils",
-      "version": "5.23.2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/debianutils/copyright",
-        "sha256": "aeb68ea374f488431b8963df24f05482692edfa70d7556d7e528dd06d255461c"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-2+ and the shipped utilities are compiled from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "diffutils",
-      "version": "1:3.10-4",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/diffutils/copyright",
-        "sha256": "ac6fcf18142bab7569188ae75b204a9e1c73c050c0f9467adaf080759e516123"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-3+ and the shipped diff/cmp/sdiff binaries come from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "dpkg",
-      "version": "1.22.22",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/dpkg/copyright",
-        "sha256": "3376ec6f7bebf6b1e55da9d5dc591c73e752b45dccb0488e8365d2cf216a1746"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-2+ and the shipped dpkg tools are compiled from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "findutils",
-      "version": "4.10.0-3",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/findutils/copyright",
-        "sha256": "f51541fbdfe15c01cd3fd3a06ad3b74478902d36a958d95b1756434979d97ed5"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "The catch-all stanza covers documentation only, but `find/*`, `lib/*`, `locate/*` and `xargs/*` — the trees the shipped find/xargs binaries are compiled from — are each GPL-3+.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "gcc-14-base",
-      "version": "14.2.0-19",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/gcc-14-base/copyright",
-        "sha256": "20390f8a6f3b1e4d7cb45dd8652dabb259bbef688cbad839bcdb0b9ba7252f79"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later WITH GCC-exception-3.1"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "The GCC runtime libraries are GPL-3+ with the GCC Runtime Library Exception; the exception frees programs COMPILED with GCC, it does not remove the obligation to offer source for libgcc_s/libstdc++ themselves, which this image ships.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "grep",
-      "version": "3.11-4",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/grep/copyright",
-        "sha256": "42d9b4d610396b1e8d1303dcb9487af3f5a2d2709623cf03a04cf76acdf6c5e3"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-3+.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "gzip",
-      "version": "1.13-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/gzip/copyright",
-        "sha256": "02c197fa26ad056ed2382bb8c3e6323d47edfda4539f727b4ab3f4dbf64ac413"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-3+.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "init-system-helpers",
-      "version": "1.69~deb13u1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/init-system-helpers/copyright",
-        "sha256": "7534601cc4fa513804d16490359f5831e7b6a1212da3bbf948bebdd4c8799783"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is BSD-3-clause, but the package ships /usr/sbin/service, /usr/sbin/invoke-rc.d and /usr/sbin/update-rc.d, each named in its own GPL-2+ stanza (verified against the package's dpkg file list in the image).",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libacl1",
-      "version": "2.3.2-2+b1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libacl1/copyright",
-        "sha256": "9a2dfb4a5abc7e84be2cc41f1089be665519c9409549296f6c19de57ab1d37c2"
-      },
-      "governing_licences": [
-        "LGPL-2.0-or-later",
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "The acl source package is GPL-2+ with the shared library under LGPL-2+; either way the shipped libacl.so is copyleft.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libapt-pkg7.0",
-      "version": "3.0.3",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libapt-pkg7.0/copyright",
-        "sha256": "77ab918ade9bce20b07524572fc8eab3f8c0cab4d246f282043892aaa9538803"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-2+ and both the apt tools and libapt-pkg are compiled from that tree, so the shipped binaries carry a corresponding-source obligation.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libattr1",
-      "version": "1:2.5.2-3",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libattr1/copyright",
-        "sha256": "0cbec745d85ea775450b2d54fac55277197f429e52d611f72852ed420450620e"
-      },
-      "governing_licences": [
-        "LGPL-2.0-or-later",
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "The attr source package is GPL-2+ with the shared library under LGPL-2+; the shipped libattr.so is copyleft either way.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libaudit-common",
-      "version": "1:4.0.2-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libaudit-common/copyright",
-        "sha256": "6c7011e93f643b112c4cc3622131e28a30477afad6c4f5efe466b13aa7f603cc"
-      },
-      "governing_licences": [
-        "GPL-2.0-only",
-        "LGPL-2.1-only"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-2 and the audit shared library is LGPL-2.1; both carry a corresponding-source obligation.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libaudit1",
-      "version": "1:4.0.2-2+b2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libaudit1/copyright",
-        "sha256": "6c7011e93f643b112c4cc3622131e28a30477afad6c4f5efe466b13aa7f603cc"
-      },
-      "governing_licences": [
-        "GPL-2.0-only",
-        "LGPL-2.1-only"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-2 and the audit shared library is LGPL-2.1; both carry a corresponding-source obligation.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libblkid1",
-      "version": "2.41-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libblkid1/copyright",
-        "sha256": "56b67e2eb8bac5a15d91e261d558d73f1f029113cced229753138194997366b6"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "All of these binary packages are built from the util-linux source package, whose `Files: *` stanza is GPL-2+; the shipped programs and shared libraries are compiled from that tree.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libbsd0",
-      "version": "0.12.2-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libbsd0/copyright",
-        "sha256": "47eaa031b1741a33a93e7cc8909bfe153acaec7ddff12e4dc7377d0e2ec10e91"
-      },
-      "governing_licences": [
-        "BSD-3-Clause"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "The copyright file contains no GPL/LGPL/AGPL stanza at all: every licence in it (BSD-2/3/4-clause variants, Beerware, ISC, Expat, public-domain) is notice-only.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libbz2-1.0",
-      "version": "1.0.8-6",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libbz2-1.0/copyright",
-        "sha256": "832ed535ff3c3d025a8d2348eb1b697b89addcf2eaadbc17650262040b9145e2"
-      },
-      "governing_licences": [
-        "BSD-variant"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is the bzip2 BSD-variant licence and the package ships only libbz2.so; the single GPL-2 stanza covers `debian/*` packaging, none of which is installed as a program by this binary package.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libc-bin",
-      "version": "2.41-12+deb13u3",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libc-bin/copyright",
-        "sha256": "f5788886720a2605a946e81d571e6c8162b09f58d2e2ceb8d36e5768fccd850d"
-      },
-      "governing_licences": [
-        "LGPL-2.1-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` for the glibc source package is LGPL-2.1+, and the shipped C library and its helper programs are compiled from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libc6",
-      "version": "2.41-12+deb13u3",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libc6/copyright",
-        "sha256": "f5788886720a2605a946e81d571e6c8162b09f58d2e2ceb8d36e5768fccd850d"
-      },
-      "governing_licences": [
-        "LGPL-2.1-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` for the glibc source package is LGPL-2.1+, and the shipped C library and its helper programs are compiled from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libcap-ng0",
-      "version": "0.8.5-4+b1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libcap-ng0/copyright",
-        "sha256": "567997de097e3738564c90e6fe13343b2daae21a7926d6fb161df41322c1840b"
-      },
-      "governing_licences": [
-        "LGPL-2.1-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is LGPL-2.1+ and the shipped libcap-ng.so comes from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libcap2",
-      "version": "1:2.75-10+deb13u1+b1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libcap2/copyright",
-        "sha256": "04f9fb974e10f6ca0cd226811f72b3855f8383daad0e5de7adac8d5b0b7796c3"
-      },
-      "governing_licences": [
-        "BSD-3-Clause"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is 'BSD-3-clause or GPL-2' and the package ships only libcap.so and libpsx.so from that tree; Correlix takes the BSD-3-Clause branch of the disjunction, which is notice-only.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libcrypt1",
-      "version": "1:4.4.38-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libcrypt1/copyright",
-        "sha256": "5a5e7ca0e9f3f9679977e3a3e9ede45ad92885a3297ea78e766979f9866c5a16"
-      },
-      "governing_licences": [
-        "LGPL-2.1-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "Free-text copyright: 'The overall license for libxcrypt is the GNU Lesser General Public License, version 2.1 (or, at your option, any later version)', and the shipped libcrypt.so is that library.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libdb5.3t64",
-      "version": "5.3.28+dfsg2-9",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libdb5.3t64/copyright",
-        "sha256": "8b53da37d73289d9df7317b3a2dbe16491f1fa9fec8b77b86d69704b40ce2c26"
-      },
-      "governing_licences": [
-        "Sleepycat"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is 'Sleepycat and BSD-3-clause'. The GPL terms in this copyright cover lang/perl and lang/sql/odbc/debian, which this binary package does not ship — but the Sleepycat licence itself requires that 'redistributions in any form must be accompanied by information on how to obtain complete source code', so an obligation applies regardless of the GPL stanzas.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libdebconfclient0",
-      "version": "0.280",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libdebconfclient0/copyright",
-        "sha256": "cf63099896d1c0f6529c41b8d95738e6fea342ffba609187d339c4f38ce36ecc"
-      },
-      "governing_licences": [
-        "BSD-2-Clause"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is BSD-2-Clause and the package ships only libdebconfclient.so; every GPL-2+ stanza covers `debian/po/*` and `debian/rules`, which are not part of the shipped library.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libffi8",
-      "version": "3.4.8-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libffi8/copyright",
-        "sha256": "25ee86cfccc2b7eb9a156a127f1e1b38c46c231f516ff201912223eaf62ee186"
-      },
-      "governing_licences": [
-        "MIT"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is Expat/MIT and the package ships only libffi.so; the GPL stanzas cover build and test tooling (libtool-ldflags, make_sunver.pl, msvcc.sh, testsuite/*, debian/*), none of it linked in.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libgcc-s1",
-      "version": "14.2.0-19",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libgcc-s1/copyright",
-        "sha256": "20390f8a6f3b1e4d7cb45dd8652dabb259bbef688cbad839bcdb0b9ba7252f79"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later WITH GCC-exception-3.1"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "The GCC runtime libraries are GPL-3+ with the GCC Runtime Library Exception; the exception frees programs COMPILED with GCC, it does not remove the obligation to offer source for libgcc_s/libstdc++ themselves, which this image ships.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libgdbm6t64",
-      "version": "1.24-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libgdbm6t64/copyright",
-        "sha256": "c68f7e6c9b84dd360916a21c951a11829cc55b8793d66094dbfc39eba1618696"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-3+ and the shipped libgdbm.so comes from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libgmp10",
-      "version": "2:6.3.0+dfsg-3",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libgmp10/copyright",
-        "sha256": "7d366aef5ba325150246de1d7820c4c9926cd27ca61a69948492b26cd3b61601"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later",
-        "LGPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is 'GPL-2+ or LGPL-3+'; BOTH branches of the disjunction are copyleft, so corresponding source is required whichever a recipient takes.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libhogweed6t64",
-      "version": "3.10.1-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libhogweed6t64/copyright",
-        "sha256": "344396197142cd506468b20029ea5722d507c980129bb3db4af02424ed6f39c6"
-      },
-      "governing_licences": [
-        "LGPL-3.0-or-later",
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is 'LGPL-3+ or GPL-2+'; both branches are copyleft.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
       "component": "libjpeg-turbo",
       "version": "3.0.4-r0",
       "package_type": "apk",
@@ -1000,75 +120,6 @@
       "source_required": false,
       "needs_human": false,
       "rationale": "Alpine's APKBUILD states license=\"BSD-3-Clause AND IJG AND Zlib\" — three notice-only licences.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "liblastlog2-2",
-      "version": "2.41-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/liblastlog2-2/copyright",
-        "sha256": "56b67e2eb8bac5a15d91e261d558d73f1f029113cced229753138194997366b6"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "All of these binary packages are built from the util-linux source package, whose `Files: *` stanza is GPL-2+; the shipped programs and shared libraries are compiled from that tree.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "liblz4-1",
-      "version": "1.10.0-4",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/liblz4-1/copyright",
-        "sha256": "8dce0cb8c5a4486e4aac00466e4dd4b0b5b28d70efe3b3256ea4594099a8509c"
-      },
-      "governing_licences": [
-        "BSD-2-Clause"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-2+ for the lz4 COMMAND-LINE programs, but this package ships only /usr/lib/*/liblz4.so.*, and `Files: lib/*` — the tree the library is built from — is BSD-2-clause.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "liblzma5",
-      "version": "5.8.1-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/liblzma5/copyright",
-        "sha256": "d755588e2d89d7845d0d4e718ac45d49ae9fc53cec4540af105963c20598f9d7"
-      },
-      "governing_licences": [
-        "0BSD"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is 0BSD and the package ships only liblzma.so; the GPL-2+/LGPL-2.1+ stanzas cover src/scripts/*, the gnulib getopt compatibility code used by the xz CLI, and an autoconf macro — none of them in this library.",
       "reviewer": "Claude Fable 5.1 — automated first pass",
       "reviewed": "2026-09-05",
       "owner_signoff": false
@@ -1102,631 +153,6 @@
       "owner_signoff": false
     },
     {
-      "component": "libmd0",
-      "version": "1.1.0-2+b1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libmd0/copyright",
-        "sha256": "4365ef6255ad553fce69dd4bc0e093472c5d0e41b8ea493a545cc926ce171aa6"
-      },
-      "governing_licences": [
-        "BSD-3-Clause"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "The copyright file has no GPL/LGPL/AGPL stanza; libmd is BSD/ISC/Beerware/public-domain throughout.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libmount1",
-      "version": "2.41-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libmount1/copyright",
-        "sha256": "56b67e2eb8bac5a15d91e261d558d73f1f029113cced229753138194997366b6"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "All of these binary packages are built from the util-linux source package, whose `Files: *` stanza is GPL-2+; the shipped programs and shared libraries are compiled from that tree.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libncursesw6",
-      "version": "6.5+20250216-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libncursesw6/copyright",
-        "sha256": "f838d6048fbc59356b7e56c207a7cb32dc6bf4adea95514a002596bde8f6e1e7"
-      },
-      "governing_licences": [
-        "MIT",
-        "X11"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "The ncurses copyright file lists only MIT/X11, X11 and BSD-3-clause — there is no copyleft stanza; the audit's 'unknown licence' verdict came from the non-SPDX spelling 'MIT/X11'.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libnettle8t64",
-      "version": "3.10.1-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libnettle8t64/copyright",
-        "sha256": "344396197142cd506468b20029ea5722d507c980129bb3db4af02424ed6f39c6"
-      },
-      "governing_licences": [
-        "LGPL-3.0-or-later",
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is 'LGPL-3+ or GPL-2+'; both branches are copyleft.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libpam-modules",
-      "version": "1.7.0-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libpam-modules/copyright",
-        "sha256": "6b11ef9ab5429d9618cc72e8dfd4efefde363165ef174be0549918e0c44f5dcb"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later",
-        "LGPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is the historic 'BSD-3-clause or GPL' dual licence, but the package ships pam_keyinit.so and pam_loginuid.so (GPL-2+ stanzas) and pam_mkhomedir.so and pam_issue.so (LGPL-2+ stanza) — verified against the package's dpkg file list in the image.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libpam-modules-bin",
-      "version": "1.7.0-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libpam-modules-bin/copyright",
-        "sha256": "6b11ef9ab5429d9618cc72e8dfd4efefde363165ef174be0549918e0c44f5dcb"
-      },
-      "governing_licences": [
-        "LGPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "The package ships /usr/sbin/mkhomedir_helper, which the copyright file places under LGPL-2+ (modules/pam_mkhomedir/mkhomedir_helper.c).",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libpam-runtime",
-      "version": "1.7.0-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libpam-runtime/copyright",
-        "sha256": "6b11ef9ab5429d9618cc72e8dfd4efefde363165ef174be0549918e0c44f5dcb"
-      },
-      "governing_licences": [
-        "GPL-3.0-only"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "The package ships /usr/sbin/pam-auth-update, which comes from `Files: debian/local/pam-auth-update*  License: GPL-3`.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libpam0g",
-      "version": "1.7.0-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libpam0g/copyright",
-        "sha256": "6b11ef9ab5429d9618cc72e8dfd4efefde363165ef174be0549918e0c44f5dcb"
-      },
-      "governing_licences": [
-        "BSD-3-Clause"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is the 'BSD-3-clause or GPL' dual licence and this package ships only libpam.so, libpam_misc.so and libpamc.so, all from that catch-all; Correlix takes the BSD-3-Clause branch. (The GPL-only stanzas cover pam modules and helpers, which live in libpam-modules / libpam-modules-bin — reviewed separately and NOT cleared.)",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libpcre2-8-0",
-      "version": "10.46-1~deb13u1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libpcre2-8-0/copyright",
-        "sha256": "e915cde4251f96ec6af107ecd2e194440a4e69440893b0c982802f8a1e4ae40a"
-      },
-      "governing_licences": [
-        "BSD-3-Clause"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is the BSD-3-clause Cambridge licence with the binary-library exception; the copyright file has no copyleft stanza at all.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libreadline8t64",
-      "version": "8.2-6",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libreadline8t64/copyright",
-        "sha256": "854c6f5f249a109a913e1e58528445c4fec96f063ae8ba496bfb2b460bcc6866"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-3+ and the shipped libreadline.so and its data files come from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libselinux1",
-      "version": "3.8.1-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libselinux1/copyright",
-        "sha256": "864f1bb189f609075d580b8c4aada16d85a44546884f1687989e1cacc8c56751"
-      },
-      "governing_licences": [
-        "public-domain"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is public-domain and the package ships only libselinux.so; the two GPL-2 stanzas cover utils/avcstat.c (in libselinux-utils, not shipped here) and `debian/*`.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libsemanage-common",
-      "version": "3.8.1-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libsemanage-common/copyright",
-        "sha256": "fe5876a94047cafbeb8b164fd98304912d94b6028e19415f08b7a8a2f90645fe"
-      },
-      "governing_licences": [
-        "LGPL-2.1-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is LGPL-2.1+ and the shipped shared libraries come from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libsemanage2",
-      "version": "3.8.1-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libsemanage2/copyright",
-        "sha256": "fe5876a94047cafbeb8b164fd98304912d94b6028e19415f08b7a8a2f90645fe"
-      },
-      "governing_licences": [
-        "LGPL-2.1-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is LGPL-2.1+ and the shipped shared libraries come from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libsepol2",
-      "version": "3.8.1-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libsepol2/copyright",
-        "sha256": "78d2a34606a0302057ec499a3b3c07bcbc43ca334064ce4c80891a0f69c8f6c6"
-      },
-      "governing_licences": [
-        "LGPL-2.1-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is LGPL-2.1+ and the shipped shared libraries come from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libsmartcols1",
-      "version": "2.41-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libsmartcols1/copyright",
-        "sha256": "56b67e2eb8bac5a15d91e261d558d73f1f029113cced229753138194997366b6"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "All of these binary packages are built from the util-linux source package, whose `Files: *` stanza is GPL-2+; the shipped programs and shared libraries are compiled from that tree.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libsqlite3-0",
-      "version": "3.46.1-7+deb13u1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libsqlite3-0/copyright",
-        "sha256": "7b1679aaa97e6e49ec12460eefa85a82b432053bc468dd89dbdb50f2326589f3"
-      },
-      "governing_licences": [
-        "public-domain"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is public-domain and the package ships only libsqlite3.so; the single GPL-2+ stanza covers `debian/*` packaging.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libssl3t64",
-      "version": "3.5.6-1~deb13u1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libssl3t64/copyright",
-        "sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35"
-      },
-      "governing_licences": [
-        "Apache-2.0"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is Apache-2.0; the only copyleft stanza covers external/perl/Text-Template-1.56, a build-time Perl template module that is neither compiled nor shipped in these binary packages.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libstdc++6",
-      "version": "14.2.0-19",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libstdc++6/copyright",
-        "sha256": "20390f8a6f3b1e4d7cb45dd8652dabb259bbef688cbad839bcdb0b9ba7252f79"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later WITH GCC-exception-3.1"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "The GCC runtime libraries are GPL-3+ with the GCC Runtime Library Exception; the exception frees programs COMPILED with GCC, it does not remove the obligation to offer source for libgcc_s/libstdc++ themselves, which this image ships.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libsystemd0",
-      "version": "257.13-1~deb13u1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libsystemd0/copyright",
-        "sha256": "a79e4b379cabbd960bb44f6cc1a069081a3778c59a25ee529b68df5a2cb7d27d"
-      },
-      "governing_licences": [
-        "LGPL-2.1-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` for the systemd source package is LGPL-2.1+ and the shipped libsystemd/libudev come from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libtinfo6",
-      "version": "6.5+20250216-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libtinfo6/copyright",
-        "sha256": "f838d6048fbc59356b7e56c207a7cb32dc6bf4adea95514a002596bde8f6e1e7"
-      },
-      "governing_licences": [
-        "MIT",
-        "X11"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "The ncurses copyright file lists only MIT/X11, X11 and BSD-3-clause — there is no copyleft stanza; the audit's 'unknown licence' verdict came from the non-SPDX spelling 'MIT/X11'.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libudev1",
-      "version": "257.13-1~deb13u1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libudev1/copyright",
-        "sha256": "a79e4b379cabbd960bb44f6cc1a069081a3778c59a25ee529b68df5a2cb7d27d"
-      },
-      "governing_licences": [
-        "LGPL-2.1-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` for the systemd source package is LGPL-2.1+ and the shipped libsystemd/libudev come from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libuuid1",
-      "version": "2.41-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libuuid1/copyright",
-        "sha256": "56b67e2eb8bac5a15d91e261d558d73f1f029113cced229753138194997366b6"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "All of these binary packages are built from the util-linux source package, whose `Files: *` stanza is GPL-2+; the shipped programs and shared libraries are compiled from that tree.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libxxhash0",
-      "version": "0.8.3-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libxxhash0/copyright",
-        "sha256": "81affefe3047c8a88a9e4c94c8c698f51a7e0787e75b58e901bf1f8fcd433f58"
-      },
-      "governing_licences": [
-        "BSD-2-Clause"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is BSD-2-clause and the package ships only libxxhash.so; the GPL-2+ stanzas cover `cli/*`, `tests/*` and `debian/*`.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "libzstd1",
-      "version": "1.5.7+dfsg-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/libzstd1/copyright",
-        "sha256": "5cec9fef4d3fa7e0371fbef4ec3fc416e0105dc2a9922117f84e825cb11f50f8"
-      },
-      "governing_licences": [
-        "BSD-3-Clause"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is 'BSD-3-clause or GPL-2' and the package ships only libzstd.so; Correlix takes the BSD-3-Clause branch.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "login",
-      "version": "1:4.16.0-2+really2.41-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/login/copyright",
-        "sha256": "56b67e2eb8bac5a15d91e261d558d73f1f029113cced229753138194997366b6"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "All of these binary packages are built from the util-linux source package, whose `Files: *` stanza is GPL-2+; the shipped programs and shared libraries are compiled from that tree.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "login.defs",
-      "version": "1:4.17.4-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/login.defs/copyright",
-        "sha256": "305494b6f5f6bb65ead9160077d4fdf45ccdf06de7c958ff96f27a632b8729a3"
-      },
-      "governing_licences": [
-        "BSD-3-Clause"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is BSD-3-clause and this package ships exactly one file, /etc/login.defs, which comes from that catch-all; the shadow copyright's GPL stanzas cover src/su.c, src/vipw.c, contrib/ and translated man pages, none of which is in this package (verified against its dpkg file list in the image).",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "mawk",
-      "version": "1.3.4.20250131-1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/mawk/copyright",
-        "sha256": "f6b94f461b09398ef192207356d89d7bf59833fe03082a14b910b3c740f2a318"
-      },
-      "governing_licences": [
-        "GPL-2.0-only"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-2.0-only (no 'or later') and /usr/bin/mawk is compiled from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
       "component": "media-types",
       "version": "10.0.0",
       "package_type": "deb",
@@ -1745,77 +171,6 @@
       "source_required": false,
       "needs_human": false,
       "rationale": "The whole copyright file is four lines: `Files: *  Copyright: public-domain  License: ad-hoc  This package contains public information compiled from around the 'net and many people.` — no copyleft, no source obligation.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "mount",
-      "version": "2.41-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/mount/copyright",
-        "sha256": "56b67e2eb8bac5a15d91e261d558d73f1f029113cced229753138194997366b6"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "All of these binary packages are built from the util-linux source package, whose `Files: *` stanza is GPL-2+; the shipped programs and shared libraries are compiled from that tree.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "ncurses-base",
-      "version": "6.5+20250216-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/ncurses-base/copyright",
-        "sha256": "f838d6048fbc59356b7e56c207a7cb32dc6bf4adea95514a002596bde8f6e1e7"
-      },
-      "governing_licences": [
-        "MIT",
-        "X11"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "The ncurses copyright file lists only MIT/X11, X11 and BSD-3-clause — there is no copyleft stanza; the audit's 'unknown licence' verdict came from the non-SPDX spelling 'MIT/X11'.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "ncurses-bin",
-      "version": "6.5+20250216-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/ncurses-bin/copyright",
-        "sha256": "f838d6048fbc59356b7e56c207a7cb32dc6bf4adea95514a002596bde8f6e1e7"
-      },
-      "governing_licences": [
-        "MIT",
-        "X11"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "The ncurses copyright file lists only MIT/X11, X11 and BSD-3-clause — there is no copyleft stanza; the audit's 'unknown licence' verdict came from the non-SPDX spelling 'MIT/X11'.",
       "reviewer": "Claude Fable 5.1 — automated first pass",
       "reviewed": "2026-09-05",
       "owner_signoff": false
@@ -1946,168 +301,6 @@
       "owner_signoff": false
     },
     {
-      "component": "openssl",
-      "version": "3.5.6-1~deb13u1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/openssl/copyright",
-        "sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35"
-      },
-      "governing_licences": [
-        "Apache-2.0"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is Apache-2.0; the only copyleft stanza covers external/perl/Text-Template-1.56, a build-time Perl template module that is neither compiled nor shipped in these binary packages.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "openssl-provider-legacy",
-      "version": "3.5.6-1~deb13u1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/openssl-provider-legacy/copyright",
-        "sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35"
-      },
-      "governing_licences": [
-        "Apache-2.0"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "`Files: *` is Apache-2.0; the only copyleft stanza covers external/perl/Text-Template-1.56, a build-time Perl template module that is neither compiled nor shipped in these binary packages.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "passwd",
-      "version": "1:4.17.4-2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/passwd/copyright",
-        "sha256": "305494b6f5f6bb65ead9160077d4fdf45ccdf06de7c958ff96f27a632b8729a3"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is BSD-3-clause, but the package ships /usr/sbin/vipw, which the copyright file places under GPL-2+ (`Files: src/vipw.c`) — verified against the package's dpkg file list in the image.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "perl-base",
-      "version": "5.40.1-6",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/perl-base/copyright",
-        "sha256": "8adf04cb72ca0719dee8fdb8d711768548d10373905eac21e8a640881c230257"
-      },
-      "governing_licences": [
-        "GPL-1.0-or-later",
-        "Artistic-1.0-Perl"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is 'GPL-1+ or Artistic'. The GPL branch obviously obliges source; the Artistic-1.0 (Perl) branch also conditions distribution in object form on making the source available, so no branch of this disjunction is notice-only.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "python",
-      "version": "3.12.13",
-      "package_type": "generic",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "in-image-licence-file",
-        "image": "netops-correlation",
-        "path": "/usr/local/lib/python3.12/LICENSE.txt",
-        "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
-      },
-      "governing_licences": [
-        "PSF-2.0"
-      ],
-      "source_required": false,
-      "needs_human": false,
-      "rationale": "Syft's binary classifier matched /usr/local/bin/python3.12 and /usr/local/lib/libpython3.12.so.1.0 and recorded no licence. The image carries CPython's own licence text at /usr/local/lib/python3.12/LICENSE.txt (sha256 3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf), which is the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2 — permissive, notice only.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "readline-common",
-      "version": "8.2-6",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/readline-common/copyright",
-        "sha256": "854c6f5f249a109a913e1e58528445c4fec96f063ae8ba496bfb2b460bcc6866"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-3+ and the shipped libreadline.so and its data files come from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "sed",
-      "version": "4.9-2+deb13u1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/sed/copyright",
-        "sha256": "719320e425e8e6da53a55e0fcfa2f2ed9b1332cea16abd65321bd651b2a88568"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: * doc/local.mk` is GPL-3+ and /usr/bin/sed is compiled from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
       "component": "Simple Launcher",
       "version": "1.1.0.14",
       "package_type": "nuget",
@@ -2150,98 +343,6 @@
       "owner_signoff": false
     },
     {
-      "component": "sqv",
-      "version": "1.3.0-3+b2",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/sqv/copyright",
-        "sha256": "b7ae2cde83ad585eae83cded853d125b034fcef480f6c4cee6d9ddd63327181a"
-      },
-      "governing_licences": [
-        "LGPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is LGPL-2.0-or-later and /usr/bin/sqv is built from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "sysvinit-utils",
-      "version": "3.14-4",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/sysvinit-utils/copyright",
-        "sha256": "53c7ef3839f64b24cc25a0937d11ce228517a48be0cc794f0d67b7e209b2a9ba"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-2.0+ and the shipped utilities come from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "tar",
-      "version": "1.35+dfsg-3.1",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/tar/copyright",
-        "sha256": "a0a44d41b2a045eb5946a8952487151cfa6ff0cd080bbf4b2eec220751d23024"
-      },
-      "governing_licences": [
-        "GPL-3.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "`Files: *` is GPL-3+ and /usr/bin/tar is compiled from it.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
-      "component": "util-linux",
-      "version": "2.41-5",
-      "package_type": "deb",
-      "images": [
-        "netops-correlation"
-      ],
-      "evidence": {
-        "kind": "dpkg-copyright",
-        "image": "netops-correlation",
-        "path": "/usr/share/doc/util-linux/copyright",
-        "sha256": "56b67e2eb8bac5a15d91e261d558d73f1f029113cced229753138194997366b6"
-      },
-      "governing_licences": [
-        "GPL-2.0-or-later"
-      ],
-      "source_required": true,
-      "needs_human": false,
-      "rationale": "All of these binary packages are built from the util-linux source package, whose `Files: *` stanza is GPL-2+; the shipped programs and shared libraries are compiled from that tree.",
-      "reviewer": "Claude Fable 5.1 — automated first pass",
-      "reviewed": "2026-09-05",
-      "owner_signoff": false
-    },
-    {
       "component": "xz-libs",
       "version": "5.6.3-r1",
       "package_type": "apk",
@@ -2263,6 +364,379 @@
       "rationale": "Alpine records ONE licence for the whole xz source package, but the xz-libs subpackage ships only liblzma.so.5 (verified against the image's apk database file list) and liblzma is 0BSD upstream — Debian reaches the same determination independently for the same library (liblzma5 copyright, `Files: *` -> 0BSD). The GPL-2.0-or-later term covers the xz shell scripts and the GNU build system, which this subpackage does not ship.",
       "reviewer": "Claude Fable 5.1 — automated first pass",
       "reviewed": "2026-09-05",
+      "owner_signoff": false
+    },
+    {
+      "component": "python",
+      "version": "3.12.14",
+      "package_type": "generic",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "in-image-licence-file",
+        "image": "netops-correlation",
+        "path": "/usr/local/lib/python3.12/LICENSE.txt",
+        "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+      },
+      "governing_licences": [
+        "PSF-2.0"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "Syft's binary classifier matched /usr/local/bin/python3.12 and /usr/local/lib/libpython3.12.so.1.0 and recorded no licence. The image carries CPython's own licence text at /usr/local/lib/python3.12/LICENSE.txt, which is the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2 — permissive, notice only. This supersedes the 3.12.13 review of 2026-09-05: the base moved from python:3.12-slim to python:3.12-alpine (tracker 263) and the interpreter version moved with it. The licence text is byte-identical across the two images (same sha256), which is the evidence that only the version changed.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": ".python-rundeps",
+      "version": "20260901.001029",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apk-db-record",
+        "image": "netops-correlation",
+        "path": "/lib/apk/db/installed (the P:.python-rundeps record)",
+        "sha256": "a756b795087d987ff7294ea0fcb7552de0079557fb883553c8b3db49d1c3b242"
+      },
+      "governing_licences": [],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "Not a work at all. The apk database record the image carries reads T:'virtual meta package', S:0, I:0, L: empty, and carries NO F:/R: lines — the package installs zero files. It is the `apk add --virtual .python-rundeps` marker the upstream python:3.12-alpine build uses to pin the shared libraries CPython links (its D: line lists so:libbz2, so:libssl, so:libsqlite3 …), each of which is inventoried and evaluated in its own right. A package that distributes no bytes can carry no corresponding-source obligation; the obligation, where there is one, belongs to the packages it depends on.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "sqlite-libs",
+      "version": "3.53.4-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/sqlite/APKBUILD @ a9c3ba8b9129ec0f294d0a9bf538c2f1632bb016",
+        "sha256": "8e0cdc5e9d36fa52760c2b89b538e0125552ee0b53451a0712c33b7dcdd609dd"
+      },
+      "governing_licences": [
+        "blessing"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "Alpine's APKBUILD at the aports commit this image records states license=\"blessing\" — the SQLite Blessing, SPDX id `blessing`, which is SQLite's public-domain dedication ('may you do good and not evil'). It is not on this policy's permissive list only because the id is unusual, not because it is unresolved: it grants unlimited use with no reciprocal obligation and no source requirement. The shipped binary is libsqlite3.so.0, built from that same public-domain amalgamation.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "xz-libs",
+      "version": "5.8.3-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/xz/APKBUILD @ ce9944f1daadb681dd6f0f81a06e9cce97127377",
+        "sha256": "2edc494eb48c9bab6864dc20d9ed51bbc336dc20b4fa04cc543a7b7fc132d6f6"
+      },
+      "governing_licences": [
+        "0BSD",
+        "Public-Domain"
+      ],
+      "source_required": false,
+      "needs_human": false,
+      "rationale": "The origin package's licence field is a LIST covering the whole xz source tree — 'GPL-2.0-or-later AND 0BSD AND Public-Domain AND LGPL-2.1-or-later' — which is exactly the shape this policy refuses to guess at. The question is what governs the SHIPPED BINARY, and the package's own file list in the image answers it: xz-libs installs R:liblzma.so.5 and R:liblzma.so.5.8.3 and nothing else. Upstream xz states that liblzma is public domain / 0BSD; the GPL-2.0-or-later components are the xz, xzdec and lzmainfo command-line tools and the build scripts, and the LGPL-2.1-or-later component is GNU getopt_long, none of which is in this subpackage. No copyleft work is distributed by xz-libs.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "alpine-baselayout",
+      "version": "3.7.2-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/alpine-baselayout/APKBUILD @ 60a7585bbab2fa0f762504eb617dbca90216e31f",
+        "sha256": "aef255516b71e39109860b92eb027a0986d90197427fb93ec91ebcd04bf59763"
+      },
+      "governing_licences": [
+        "GPL-2.0-only"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: the Alpine base directory structure and its init scripts are GPL-2.0-only, and Correlix distributes them inside every netops-correlation image.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "alpine-baselayout-data",
+      "version": "3.7.2-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/alpine-baselayout/APKBUILD @ 60a7585bbab2fa0f762504eb617dbca90216e31f",
+        "sha256": "aef255516b71e39109860b92eb027a0986d90197427fb93ec91ebcd04bf59763"
+      },
+      "governing_licences": [
+        "GPL-2.0-only"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: a subpackage of the alpine-baselayout origin package (the /etc data files), under the same GPL-2.0-only terms; one corresponding-source artifact discharges both.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "apk-tools",
+      "version": "3.0.6-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/apk-tools/APKBUILD @ 1403ea7a8ae3fb8e5a11207ddb1ff536eb8de912",
+        "sha256": "5fa1b3168b587ae9a95c3106accfaaa2f738934d66f4bb0b52ddb51f3962af63"
+      },
+      "governing_licences": [
+        "GPL-2.0-only"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: the apk package manager itself is GPL-2.0-only. It is not used at run time — the runtime stage of Dockerfile.correlation installs nothing — but it is PRESENT in the image, and presence is what creates the obligation.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "libapk",
+      "version": "3.0.6-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/apk-tools/APKBUILD @ 1403ea7a8ae3fb8e5a11207ddb1ff536eb8de912",
+        "sha256": "5fa1b3168b587ae9a95c3106accfaaa2f738934d66f4bb0b52ddb51f3962af63"
+      },
+      "governing_licences": [
+        "GPL-2.0-only"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: a subpackage of the apk-tools origin package (the shared library apk links), under the same GPL-2.0-only terms; one artifact discharges both.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "gdbm",
+      "version": "1.26-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/gdbm/APKBUILD @ 1ea03990396db618edfcc8a9a0bc6b72662bac8f",
+        "sha256": "862f63ae6868bb40b80a3da3c97d6e603af549e05c3051ceadcfa4ad7b135f1b"
+      },
+      "governing_licences": [
+        "GPL-3.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: GNU dbm is GPL-3.0-or-later. It is in the image because CPython's `dbm.gnu` stdlib module links it (the .python-rundeps virtual package pins so:libgdbm.so.6); the correlation engine does not import it, but the library ships either way.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "keyutils-libs",
+      "version": "1.6.3-r4",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/keyutils/APKBUILD @ 8bac74716d06c84627ab02d101fd9d2bafd0a34c",
+        "sha256": "6b0c294e67f58f31ced1ed2b9f849a855395d6f8ae5942669b5fbb3f529daa7b"
+      },
+      "governing_licences": [
+        "GPL-2.0-or-later",
+        "LGPL-2.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: keyutils' library is LGPL-2.0-or-later with GPL-2.0-or-later components; it arrives as a dependency of krb5-libs, which CPython's ssl/socket surface pulls in.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "libcom_err",
+      "version": "1.47.4-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/e2fsprogs/APKBUILD @ 8683a6972cb245fbbdb535dad6435a9930bb9374",
+        "sha256": "fdeebc52e727e071462ef6616e1d24064fb94a9ed4df88e0b16a3e77d1baa5f3"
+      },
+      "governing_licences": [
+        "GPL-2.0-or-later",
+        "LGPL-2.0-or-later",
+        "BSD-3-Clause",
+        "MIT"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: the com_err error-table library is a subpackage of e2fsprogs, whose recorded expression includes GPL-2.0-or-later. A narrower reading (upstream describes com_err itself as MIT) would be a review ARGUING WITH A RESOLVED EXPRESSION, which this policy forbids — so the obligation stands as recorded until the source is retained or the package leaves the image.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "libintl",
+      "version": "1.0-r0",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/gettext/APKBUILD @ a0b12dbf67fb047e79a1b76c6dfe6f2904d0d391",
+        "sha256": "e22f0eecaf4e5f1f5febe725f47ee019481ded75cdcf76d3c9dd5e7a9e590d13"
+      },
+      "governing_licences": [
+        "LGPL-2.1-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: the gettext runtime library is LGPL-2.1-or-later; Alpine's own apk metadata records exactly that for this subpackage, so the obligation is definite.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "libnsl",
+      "version": "2.0.1-r2",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports community/libnsl/APKBUILD @ a9e2a2dc46f377eb25884f7fea9834492de7f518",
+        "sha256": "08617ed63fa2fcbd890f5437b8b61a3adad2e4b3a5600c0ba4853c8ea1c94f86"
+      },
+      "governing_licences": [
+        "LGPL-2.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: the NIS/RPC client library is LGPL-2.0-or-later. Like gdbm it is present because the upstream python:3.12-alpine build pins it for CPython's optional modules, not because the engine calls it.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "musl-utils",
+      "version": "1.2.6-r2",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/musl/APKBUILD @ f5640d3a10f664c9119720c60515265d3d6f6d01",
+        "sha256": "db4e568cdf2b256815fdfdb55704cd2efdffdc0e8ecd0cb935fdc3e89e2140f4"
+      },
+      "governing_licences": [
+        "MIT",
+        "BSD-2-Clause",
+        "GPL-2.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: musl itself is MIT, but this SUBPACKAGE (getent/getconf/iconv/ldconfig) carries the GPL-2.0-or-later component of the recorded expression, and its sources live in the aports tree rather than the musl tarball — which is why the packaging archive is the part that actually discharges it. The same distinction is already recorded for musl 1.2.5-r9 in netops-frontend/netops-nginx.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "readline",
+      "version": "8.3.3-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/readline/APKBUILD @ a854c03acdac188901fb012f7acbee70a36e8041",
+        "sha256": "d6ea7771ae1475b0f0843ed543664beba1beea893a99000dbb34ef20878cf4e9"
+      },
+      "governing_licences": [
+        "GPL-3.0-or-later"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: GNU readline is GPL-3.0-or-later. It is in the image because CPython links it for the interactive interpreter; the service runs uvicorn non-interactively and never uses it, but it ships.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
+      "owner_signoff": false
+    },
+    {
+      "component": "scanelf",
+      "version": "1.3.9-r1",
+      "package_type": "apk",
+      "images": [
+        "netops-correlation"
+      ],
+      "evidence": {
+        "kind": "alpine-apkbuild",
+        "image": "netops-correlation",
+        "path": "aports main/pax-utils/APKBUILD @ c61801eeacb3ffcd9c2025b09e402153bb93fb39",
+        "sha256": "f33df75f467601dcd73038b4e15029de60338a5f3f7d9a37574475a723b07c20"
+      },
+      "governing_licences": [
+        "GPL-2.0-only"
+      ],
+      "source_required": true,
+      "needs_human": false,
+      "rationale": "Alpine records this licence as an SPDX EXPRESSION in the apk database the image itself carries (the `L:` field of /lib/apk/db/installed), and the APKBUILD at the aports commit the same database records agrees. The scan therefore RESOLVED it — there is no licence LIST to interpret and nothing for a review to settle. This entry exists to state the obligation in writing, as the register requires, not to reopen it: scanelf is a subpackage of pax-utils, GPL-2.0-only. The upstream python:3.12-alpine build uses it to derive the .python-rundeps dependency list and leaves the binary in the image.",
+      "reviewer": "Claude Fable 5.1 — automated first pass",
+      "reviewed": "2026-09-06",
       "owner_signoff": false
     }
   ]
