@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Normalization engine — applies the normalization catalog to a raw gNMI event
 and yields canonical single-contract series. Code-owned and unit-tested (this is
 the "not buried in gnmic YAML" part): the gnmic processor chain is a derived

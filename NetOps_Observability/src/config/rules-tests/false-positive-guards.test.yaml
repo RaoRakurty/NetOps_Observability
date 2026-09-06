@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # promtool unit tests for the three false-positive fixes of 2026-09-03.
 #
 # WHY THIS FILE EXISTS. vmalert ran `-notifier.blackhole` until 2026-09-02, so

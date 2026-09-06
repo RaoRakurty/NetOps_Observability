@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # Event / parser catalog — Phase 2 + A3 (the catalog IS the executor).
 #
 # The metric catalog (normalization.yaml) covers state/counters/gauges. Half of

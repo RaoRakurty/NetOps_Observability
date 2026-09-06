@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Event parser engine — applies the event/parser catalog (events.yaml) to a raw
 syslog event and yields a canonical event sharing the SAME identity model as the
 metric plane (so events ⨝ metrics on device/ifName/peer).

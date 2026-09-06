@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # promtool unit tests for the #209 flood-stage alerts (storage-loss-observability).
 #
 # WHY THIS FILE EXISTS. storm-s10 (run 09012025x578, 2026-09-01) lost 291,296

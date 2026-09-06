@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Pytest: the coverage matrix is DERIVED, and its two Go/engine mirrors are true.
 
 `docs/design/telemetry-coverage-matrix.md` is the artifact a design partner is

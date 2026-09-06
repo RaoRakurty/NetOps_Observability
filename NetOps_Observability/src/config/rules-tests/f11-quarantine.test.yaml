@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # promtool unit tests for the F-11 quarantine alerts (ingest-integrity group).
 #
 # Acceptance criterion (same as security-posture.test.yaml): each rule fires on

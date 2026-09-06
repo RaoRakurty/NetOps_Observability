@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Pytest: event/parser catalog — grammar parsing + the correlation invariant.
 
 The fixtures carry an embedded `_expect` (the canonical event the parser must

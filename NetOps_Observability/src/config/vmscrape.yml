@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # VictoriaMetrics self-monitoring scrape config (-promscrape.config).
 #
 # Prometheus was removed from the stack (#97 footprint pass): VM scrapes these

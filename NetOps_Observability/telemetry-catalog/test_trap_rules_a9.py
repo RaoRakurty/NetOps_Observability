@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Pytest: the A9 trap-coverage rows, replayed through the REAL producer.
 
 A9 is the tracker-184 exercise applied to SNMP traps: for every syslog symptom

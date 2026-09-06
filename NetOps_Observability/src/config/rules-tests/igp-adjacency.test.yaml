@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # promtool unit tests for the four IGP adjacency alerts in rules.yaml
 # (OSPFAdjacencyDown/Flapping, ISISAdjacencyDown/Flapping).
 #

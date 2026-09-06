@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Generate `docs/design/telemetry-coverage-matrix.md` — "what does Correlix
 recognize?", per symptom, per source, per vendor, with its fidelity.
 

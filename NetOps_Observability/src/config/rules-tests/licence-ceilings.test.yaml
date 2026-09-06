@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # promtool unit tests for the `licence-ceilings` alert group — the soft-overage
 # warnings at 80 / 90 / 100 % of a licensed allowance (owner decision,
 # 2026-09-05; docs/design/TIERING_PLAN_2026-09-03.md §9).

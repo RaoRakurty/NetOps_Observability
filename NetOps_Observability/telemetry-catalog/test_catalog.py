@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Pytest: catalog invariants + conformance replay + explicit canonical assertions.
 
 Run:  cd telemetry-catalog && python3 -m pytest -q

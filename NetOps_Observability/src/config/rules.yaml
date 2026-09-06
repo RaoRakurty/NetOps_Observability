@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # NetOps alerting rules — Prometheus rules-file subset consumed by the Go alert
 # engine (src/backend/alerts/engine.go parseRulesYAML). Each `expr` is sent
 # verbatim to VictoriaMetrics /api/v1/query, so full PromQL/MetricsQL is allowed

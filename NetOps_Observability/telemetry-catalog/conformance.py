@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Conformance harness — the gNMI equivalent of LibreNMS .snmprec replay.
 
 For every lab/live-validated collection row, replay its captured fixture through

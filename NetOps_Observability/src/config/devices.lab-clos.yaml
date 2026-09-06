@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # Static device inventory — containerlab "clos-multivendor" fabric (172.40.40.0/24).
 #
 # SNMP community/credentials are configured in the GUI (Administration → SNMP

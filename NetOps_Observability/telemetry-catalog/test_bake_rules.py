@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Pytest: the rule table and its bake (A3).
 
 `events.yaml` is now the SOURCE of the correlation engine's parser, not a

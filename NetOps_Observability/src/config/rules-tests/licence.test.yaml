@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # promtool unit tests for the `licence` alert group (Correlix licence mechanism).
 #
 # The thing that MUST be proven here is not "the rules fire" — it is that a

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Typed loader + invariant checks for the three-catalog telemetry catalog.
 
 Run standalone:  python3 telemetry-catalog/catalog.py   (exit 1 on any violation)

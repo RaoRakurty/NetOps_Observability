@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Pytest: the A9b config-change rows, replayed through the REAL producers.
 
 A9 audited the trap lane and recorded one finding it deliberately did NOT act

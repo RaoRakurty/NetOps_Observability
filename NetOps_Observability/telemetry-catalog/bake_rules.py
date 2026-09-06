@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Bake `events.yaml` into `src/correlation/parser_rules.py` (A3).
 
 WHY A BAKE AND NOT A RUNTIME READ. The correlation image copies `src/correlation/`
