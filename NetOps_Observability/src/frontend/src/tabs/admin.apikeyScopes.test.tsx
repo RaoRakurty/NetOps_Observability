@@ -21,6 +21,7 @@ import {
   ScopePicker,
   allowedScopeOptions,
   isAdministrativeScope,
+  isIngestOnlyKey,
   scopeAllowed,
 } from "./admin";
 
@@ -43,14 +44,24 @@ describe("scope vocabulary", () => {
     const body = go.match(/func KnownScopes\(\) \[\]string \{[\s\S]*?\n\}/)?.[0];
     expect(body, "KnownScopes() not found in internal/apikey/store.go").toBeTruthy();
     // Literals plus the exported constants the Go list uses by name.
+    // Every constant KnownScopes() names must appear here, or a scope the
+    // backend mints would be invisible to this guard — which is exactly how
+    // ingest:experience stayed missing from the picker (tracker 272).
     const constants: Record<string, string> = {
       ScopeReadAll: "read:*", ScopeWriteAll: "write:*",
-      ScopeIngestCloud: "ingest:cloud", ScopeAdminAll: "admin:*",
+      ScopeIngestCloud: "ingest:cloud", ScopeIngestExperience: "ingest:experience",
+      ScopeAdminAll: "admin:*",
     };
     const backend = [
       ...(body!.match(/"[a-z]+:[a-z*]+"/g) ?? []).map((s) => s.replace(/"/g, "")),
       ...Object.keys(constants).filter((c) => body!.includes(c)).map((c) => constants[c]),
     ];
+    const unmapped = [...new Set(body!.match(/\bScope[A-Za-z]+\b/g) ?? [])]
+      .filter((c) => !(c in constants));
+    expect(
+      unmapped,
+      "KnownScopes() names a constant this guard cannot resolve — add it to `constants`",
+    ).toEqual([]);
     expect([...backend].sort()).toEqual([...ids(SCOPE_OPTIONS)].sort());
   });
 
@@ -84,6 +95,16 @@ describe("allowedScopeOptions", () => {
     expect(got).toContain("admin:*");
     expect(got).toContain("write:devices");
     expect(got).not.toContain("ingest:cloud");
+  });
+
+  it("offers the experience-ingest scope to a caller who may mint at all", () => {
+    // ingest:experience derives the zero-permission ingest role, so it can
+    // out-rank nobody: any administration:admin caller may mint one, and a
+    // caller who cannot administer is offered none.
+    expect(ids(allowedScopeOptions(SUPER_ADMIN, false))).toContain("ingest:experience");
+    expect(ids(allowedScopeOptions(SUPER_ADMIN, true))).toContain("ingest:experience");
+    expect(ids(allowedScopeOptions(OPERATOR, false))).not.toContain("ingest:experience");
+    expect(ids(allowedScopeOptions(READ_ONLY, false))).not.toContain("ingest:experience");
   });
 
   it("stops an operator-grade caller short of administrative keys", () => {
@@ -120,6 +141,13 @@ describe("ScopePicker", () => {
     expect(screen.getByLabelText(/write:devices/)).toBeInTheDocument();
   });
 
+  it("puts the ingest scope in its own group, with Iris carrying the detail", () => {
+    render(<ScopePicker options={opts} selected={[]} onToggle={() => {}} platformAdmin={false} confirmed={false} onConfirm={() => {}} />);
+    expect(screen.getByText("Ingest")).toBeInTheDocument();
+    expect(screen.getByLabelText(/ingest:experience/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask Iris about ingest keys" })).toBeInTheDocument();
+  });
+
   it("says nothing about administrative keys until one is selected", () => {
     render(<ScopePicker options={opts} selected={["write:devices"]} onToggle={() => {}} platformAdmin={false} confirmed={false} onConfirm={() => {}} />);
     expect(screen.queryByText(/Administrative key/)).not.toBeInTheDocument();
@@ -153,5 +181,26 @@ describe("ScopePicker", () => {
     render(<ScopePicker options={opts} selected={[]} onToggle={onToggle} platformAdmin={false} confirmed={false} onConfirm={() => {}} />);
     fireEvent.click(screen.getByLabelText(/read:flows/));
     expect(onToggle).toHaveBeenCalledWith("read:flows");
+  });
+});
+
+// ── the derived-role badge ──────────────────────────────────────────────────
+//
+// A key whose scopes are all `ingest:` runs as rbac.RoleIngest and reads
+// nothing (auth.go roleFromScopes). The table says so, and this mirrors that
+// rule exactly — including the ONE case that is not ingest-only: an ingest
+// scope sitting beside anything else.
+describe("isIngestOnlyKey", () => {
+  it("is true only when every scope is an ingest scope", () => {
+    expect(isIngestOnlyKey(["ingest:experience"])).toBe(true);
+    expect(isIngestOnlyKey(["ingest:cloud", "ingest:experience"])).toBe(true);
+    expect(isIngestOnlyKey(["ingest:experience", "read:metrics"])).toBe(false);
+    expect(isIngestOnlyKey(["read:*"])).toBe(false);
+  });
+
+  it("is false for a key with no scopes at all, and normalises like the server", () => {
+    expect(isIngestOnlyKey([])).toBe(false);
+    expect(isIngestOnlyKey(undefined)).toBe(false);
+    expect(isIngestOnlyKey([" INGEST:experience "])).toBe(true);
   });
 });

@@ -88,8 +88,8 @@ served to the public — and it is pinned by
 > with the key's tenant, and a key with no concrete tenant has no owner to
 > stamp.
 
-> **Known gap (2026-09-06):** the admin UI's API-key scope picker does not yet
-> offer `ingest:experience` as a chip. Mint it through the API above.
+> The scope is also mintable from the UI: **Administration → API Access →
+> Generate key**, "Ingest" group (tracker 272).
 
 ## 5. Installing the snippet
 

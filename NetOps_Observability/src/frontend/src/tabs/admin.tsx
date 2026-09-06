@@ -1868,7 +1868,7 @@ export function SessionsAdmin() {
 //     toggles could not be automated with a UI-minted key at all.
 // The server stays the authority; this list only avoids offering a mint that is
 // going to 403. Scope table + semantics: docs/API_ACCESS.md.
-export type ScopeKind = "read" | "write" | "service" | "admin";
+export type ScopeKind = "read" | "write" | "service" | "ingest" | "admin";
 export type ScopeOption = {
   id: string;
   kind: ScopeKind;
@@ -1887,6 +1887,7 @@ export const SCOPE_OPTIONS: ScopeOption[] = [
   { id: "write:devices", kind: "write", what: "Add, edit, monitor and scan devices." },
   { id: "write:*", kind: "write", what: "Operator authority: every write above." },
   { id: "ingest:cloud", kind: "service", what: "Service credential for collecting cloud telemetry (platform realm only)." },
+  { id: "ingest:experience", kind: "ingest", what: "Lets a browser snippet send experience beacons. Reads nothing." },
   { id: "admin:*", kind: "admin", what: "Administer the tenant: tenants, users, devices, rules, scans." },
 ];
 
@@ -1902,7 +1903,8 @@ const RBAC_MODULES = [
  * administrative scope in the platform realm is platform-admin-only.
  *
  * Derived roles, from auth.go roleFromScopes:
- *   read:… / ingest:…  → read-only  (read on every module except administration)
+ *   read:…             → read-only  (read on every module except administration)
+ *   ingest:… ALONE     → ingest     (zero permissions: it posts, it reads nothing)
  *   write:…            → operator   (that, plus write on alerts + infrastructure)
  *   admin:*            → administrator of the key's tenant
  *
@@ -1920,6 +1922,11 @@ export function scopeAllowed(opt: ScopeOption, perms: Record<string, number>, pl
       // ingest:cloud is only honoured for a platform-realm credential, so only
       // the platform owner can mint one that would ever work.
       return platformAdmin && readsEverything;
+    case "ingest":
+      // An ingest-only key derives rbac.RoleIngest — a zero-permission identity
+      // that reads NOTHING — so it can never out-rank whoever mints it. The only
+      // bound left is the mint gate itself: administration:admin.
+      return level("administration") >= 3;
     case "admin":
       // admin:* derives the administrator role — admin on EVERY module — so the
       // caller must hold that much itself, not merely administration:admin.
@@ -1940,10 +1947,25 @@ export function isAdministrativeScope(scope: string): boolean {
   return scope === "admin:*";
 }
 
-const SCOPE_GROUPS: { kind: ScopeKind; title: string; blurb: string }[] = [
+/**
+ * True when EVERY scope on a key is an ingest scope — the condition auth.go
+ * roleFromScopes uses to derive rbac.RoleIngest, the zero-permission machine
+ * identity. Such a key posts what its scope admits and reads nothing at all, so
+ * the key table says so rather than leaving the reader to infer it from a
+ * scope string.
+ */
+export function isIngestOnlyKey(scopes: string[] | undefined | null): boolean {
+  const s = (scopes ?? []).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  return s.length > 0 && s.every((x) => x.startsWith("ingest:"));
+}
+
+// `topic` hands the group's explanation to Iris instead of spending the
+// operator's reading budget on it (docs/design/UI_WORDS_IRIS_EXPLAINS_2026-09-06.md).
+const SCOPE_GROUPS: { kind: ScopeKind; title: string; blurb: string; topic?: string; ask?: string }[] = [
   { kind: "read", title: "Read", blurb: "Looks, never changes." },
   { kind: "write", title: "Write", blurb: "Changes operational state." },
   { kind: "service", title: "Service", blurb: "One platform service, machine to machine." },
+  { kind: "ingest", title: "Ingest", blurb: "Sends data, reads nothing.", topic: "apikeys.ingest-scope", ask: "ingest keys" },
   { kind: "admin", title: "Administrative", blurb: "Full administration through the API." },
 ];
 
@@ -1974,7 +1996,10 @@ export function ScopePicker({
         return (
           <div key={g.kind} style={{ marginBottom: 12 }}>
             <h3 className="adm-grouphead">{g.title}</h3>
-            <p className="adm-line adm-mt">{g.blurb}</p>
+            <p className="adm-line adm-mt">
+              {g.blurb}
+              {g.topic && <AskIris topic={g.topic} label={g.ask ?? g.title} />}
+            </p>
             <div className="scope-row">
               {inGroup.map((o) => (
                 <label key={o.id} className={`scope-chip ${selected.includes(o.id) ? "on" : ""}`} title={o.what}>
@@ -2144,6 +2169,7 @@ export function ApiAccessAdmin() {
                 <td className="mono">{k.prefix}</td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>
                   {(k.scopes || []).some(isAdministrativeScope) && <span className="badge warn" style={{ marginRight: 6 }}>admin</span>}
+                  {isIngestOnlyKey(k.scopes) && <span className="badge" style={{ marginRight: 6 }}>Ingest only</span>}
                   {(k.scopes || []).join(", ") || "—"}
                 </td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.grant_types || []).join(", ") || "—"}</td>

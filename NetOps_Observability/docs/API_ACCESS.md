@@ -64,6 +64,7 @@ narrow the derived role further today.
 | `write:devices` | operator | add, edit, monitor and scan devices |
 | `write:*` | operator | every write above |
 | `ingest:cloud` | read-only + service | the cloud-ingest poller surface — honoured ONLY for a key in the platform realm (`cloud_ingest_service.go`); see [`deployment/docker/cloud-ingest/CREDENTIALS.md`](../deployment/docker/cloud-ingest/CREDENTIALS.md) |
+| `ingest:experience` | ingest (reads nothing) | POST the DEM experience lane (`/api/dem/events`, `/api/dem/business-events`) and nothing else — honoured ONLY for a key bound to a CONCRETE tenant, since the events are stamped with it; write-only on purpose, because the RUM snippet's key is served inside a public page (see [`docs/design/dem-rum-snippet.md`](design/dem-rum-snippet.md)) |
 | `admin:*` | administrator | administer the key's tenant: tenants, users, devices, rules, scans |
 
 `read:*` satisfies any `read:<x>`, `write:*` any `write:<x>`, and `admin:*`
