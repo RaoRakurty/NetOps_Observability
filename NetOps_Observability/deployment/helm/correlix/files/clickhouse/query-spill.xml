@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<!--
+  Spill heavy aggregations to disk instead of dying on the container memory cap.
+
+  The lab-sized cgroup limit (CLICKHOUSE_MEM_LIMIT, default 2560m) bounds the
+  whole server; a single GROUP BY src,dst over a high-fps flow window (e.g. the
+  Flows "Top talkers"/"Fanout" panels under generated or real load) can exceed
+  it and get killed by the OvercommitTracker (MEMORY_LIMIT_EXCEEDED), returning
+  an empty panel. These profile defaults make any query whose aggregation/sort
+  state crosses the threshold spill to /var/lib/clickhouse/tmp and finish
+  (slower) instead of failing. Thresholds come from the resource plan (#102) via CH_SPILL_BYTES /
+  CH_BG_MEM env — compose defaults equal the previous constants.
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <!-- 1.5 GiB each (cap 4g): typical panels aggregate fully in RAM and stay
+                 fast; only pathological queries spill instead of being killed. -->
+            <max_bytes_before_external_group_by from_env="CH_SPILL_BYTES"/>
+            <max_bytes_before_external_sort from_env="CH_SPILL_BYTES"/>
+            <!-- Hard per-query ceiling (2026-07-09 incident): a single 2.6 GiB read
+                 (wide columns sorted through a latest-version fold) pushed the whole
+                 server to its cgroup limit and the OvercommitTracker killed *other*
+                 queries — platform-wide 502s from one bad query shape. 2 GiB sits
+                 above the spill thresholds (a heavy query spills at 1.5 GiB and
+                 finishes) but at half the server allowance, so a runaway query fails
+                 alone instead of taking the stack down. Scale with
+                 CLICKHOUSE_MEM_LIMIT at prod sizing. -->
+            <max_memory_usage from_env="CH_BG_MEM"/>
+        </default>
+    </profiles>
+</clickhouse>

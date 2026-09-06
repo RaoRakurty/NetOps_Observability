@@ -1,0 +1,2236 @@
+# NetOps alerting rules — Prometheus rules-file subset consumed by the Go alert
+# engine (src/backend/alerts/engine.go parseRulesYAML). Each `expr` is sent
+# verbatim to VictoriaMetrics /api/v1/query, so full PromQL/MetricsQL is allowed
+# (rate, clamp_min, avg_over_time, stddev_over_time, predict_linear, changes,
+# delta, increase, count by, and/or/unless). A rule fires when the query returns
+# ≥1 series, so every expr ends in a comparison.
+#
+# NOTE on the parser: it reads block-style labels only (severity: under labels:)
+# and strips trailing # comments — so the [NEEDS METRIC] notes below are
+# documentation; those rules reference telemetry the collectors do not emit yet,
+# so they simply never fire until the metric exists (see
+# docs/research/noc-alert-rules.md §2.4). ~33 of these fire on metrics we collect
+# today; the rest are forward-compatible.
+#
+# Metric vocabulary + thresholds rationale: docs/research/noc-alert-rules.md.
+
+groups:
+
+  # ----------------------------------------------------------------------------
+  # Reachability / availability
+  # ----------------------------------------------------------------------------
+  - name: noc-availability
+    interval: 30s
+    rules:
+      - alert: ScrapeTargetDown
+        # Scoped to the always-on jobs: cadvisor/node/grafana belong to the
+        # optional self-monitoring add-on and legitimately read up==0 while it
+        # is disabled (vmscrape.yml keeps their targets, errors suppressed).
+        expr: up{job=~"netops-api|victoria|clickhouse|vector"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          layer: platform
+        annotations:
+          summary: "{{ $labels.instance }} down >5m"
+
+      - alert: DeviceUnreachable
+        # netconf is an opportunistic capability probe (it tries every device's
+        # :830 by design) — a device without NETCONF is not "unreachable".
+        # Authoritative reachability comes from the polling collectors.
+        expr: collector_target_up{collector!="netconf"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} unreachable from {{ $labels.collector }}"
+
+      - alert: InterfaceDown
+        expr: device_if_oper_status == 2 and device_if_admin_status == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} DOWN (admin-up)"
+
+      - alert: InterfaceLowerLayerDown
+        expr: device_if_oper_status == 7
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} lowerLayerDown"
+
+      - alert: InterfaceFlapping
+        expr: changes(device_if_oper_status[10m]) >= 4
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} flapping ({{ $value }} transitions/10m)"
+
+      - alert: AdminDownButReceivingTraffic
+        expr: device_if_admin_status == 2 and rate(device_if_in_octets[5m]) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} admin-down yet receiving traffic"
+
+      - alert: DeviceRebooted
+        expr: device_sysuptime < 6000
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} recently rebooted (uptime {{ $value }} cs)"
+
+  # ----------------------------------------------------------------------------
+  # Errors / discards
+  # ----------------------------------------------------------------------------
+  - name: noc-errors
+    interval: 30s
+    rules:
+      - alert: InterfaceInputErrors
+        expr: rate(device_if_in_errors[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} input errors {{ $value }}/s"
+
+      - alert: InterfaceOutputErrors
+        expr: rate(device_if_out_errors[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} output errors {{ $value }}/s"
+
+      - alert: InterfaceInputErrorsHigh
+        expr: rate(device_if_in_errors[5m]) > 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} HIGH input errors {{ $value }}/s"
+
+      - alert: InterfaceInputDiscards
+        expr: rate(device_if_in_discards[5m]) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} input discards {{ $value }}/s (congestion)"
+
+      - alert: InterfaceOutputDiscards
+        expr: rate(device_if_out_discards[5m]) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} output discards {{ $value }}/s (egress congestion)"
+
+      - alert: InterfaceErrorRatioHigh
+        expr: rate(device_if_in_errors[5m]) / clamp_min(rate(device_if_in_ucast_pkts[5m]) + rate(device_if_in_mcast_pkts[5m]) + rate(device_if_in_bcast_pkts[5m]), 1) > 0.001
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} error ratio >0.1% of input pkts"
+
+      - alert: InterfaceErrorAnomaly
+        expr: (rate(device_if_in_errors[5m]) - avg_over_time(rate(device_if_in_errors[5m])[1h:5m])) / clamp_min(stddev_over_time(rate(device_if_in_errors[5m])[1h:5m]), 0.01) > 3
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} error-rate z-score anomaly"
+
+      - alert: InterfaceCRCErrors   # [NEEDS METRIC] dot3StatsFCSErrors
+        expr: rate(device_if_crc_errors[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} CRC/FCS errors {{ $value }}/s (cabling/optic)"
+
+  # ----------------------------------------------------------------------------
+  # Saturation (CPU / memory / link util / storage / sessions)
+  # ----------------------------------------------------------------------------
+  - name: noc-saturation
+    interval: 30s
+    rules:
+      - alert: HighCPU
+        # avg without(index): device-level CPU, not per-core. Containerized NOS
+        # (cEOS) exposes the HOST's cores via HOST-RESOURCES, so a single busy
+        # host core would otherwise fire on every cEOS device at once.
+        expr: avg without (index) (device_cpu_percent) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} ({{ $labels.vendor }}) CPU {{ $value }}%"
+
+      - alert: CriticalCPU
+        expr: avg without (index) (device_cpu_percent) > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} CPU critically high {{ $value }}%"
+
+      - alert: HighMemory
+        expr: device_mem_percent > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} memory {{ $value }}%"
+
+      - alert: CriticalMemory
+        expr: device_mem_percent > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} memory critically high {{ $value }}%"
+
+      - alert: HighMemoryBytes
+        expr: device_mem_used_bytes / clamp_min(device_mem_used_bytes + device_mem_free_bytes, 1) > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} memory >90% (Cisco byte counters)"
+
+      - alert: LinkInboundUtilHigh
+        expr: rate(device_if_in_octets[5m]) * 8 / (device_if_speed * 1e6 > 0) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} inbound >80% of link"
+
+      - alert: LinkInboundUtilCritical
+        expr: rate(device_if_in_octets[5m]) * 8 / (device_if_speed * 1e6 > 0) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} inbound SATURATED (>95%)"
+
+      - alert: LinkOutboundUtilHigh
+        expr: rate(device_if_out_octets[5m]) * 8 / (device_if_speed * 1e6 > 0) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} outbound >80% of link"
+
+      - alert: LinkOutboundUtilCritical
+        expr: rate(device_if_out_octets[5m]) * 8 / (device_if_speed * 1e6 > 0) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} outbound SATURATED (>95%)"
+
+      - alert: StorageUtilHigh
+        expr: device_storage_used / clamp_min(device_storage_size, 1) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} storage{{ $labels.index }} >85%"
+
+      - alert: StorageUtilCritical
+        expr: device_storage_used / clamp_min(device_storage_size, 1) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} storage{{ $labels.index }} >95% (full risk)"
+
+      - alert: FirewallDiskHigh
+        expr: device_disk_used_mb / clamp_min(device_disk_capacity_mb, 1) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} firewall disk >90%"
+
+      - alert: FirewallSessionsHigh
+        expr: (device_session_count - avg_over_time(device_session_count[6h])) / clamp_min(stddev_over_time(device_session_count[6h]), 1) > 4
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} session-count spike (z>4) — flood/leak?"
+
+  # ----------------------------------------------------------------------------
+  # Environmental (temp / power / fan / optics / sensors)
+  # ----------------------------------------------------------------------------
+  - name: noc-environmental
+    interval: 30s
+    rules:
+      - alert: TemperatureHigh
+        expr: device_temp_celsius > 55
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} sensor{{ $labels.index }} {{ $value }}C"
+
+      - alert: TemperatureCritical
+        expr: device_temp_celsius > 70
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} sensor{{ $labels.index }} {{ $value }}C (thermal)"
+
+      - alert: TemperatureStateAbnormal
+        expr: device_temp_state >= 2
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} temp sensor{{ $labels.index }} state {{ $value }} (CISCO-ENVMON !normal)"
+
+      - alert: FanFailed
+        expr: device_fan_state >= 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} fan{{ $labels.index }} state {{ $value }} (failed/warning)"
+
+      - alert: PowerSupplyFailed
+        expr: device_psu_state >= 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} PSU{{ $labels.index }} state {{ $value }} (failed/warning)"
+
+      - alert: GenericSensorAnomaly
+        expr: (device_sensor_value - avg_over_time(device_sensor_value[6h])) / clamp_min(stddev_over_time(device_sensor_value[6h]), 0.5) > 4
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} ENTITY sensor{{ $labels.index }} anomaly (z>4)"
+
+      - alert: OpticRxPowerLow   # [NEEDS METRIC] device_optic_rx_power_dbm
+        expr: device_optic_rx_power_dbm < -14
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} optic Rx {{ $value }}dBm low"
+
+      - alert: OpticRxPowerCritical   # [NEEDS METRIC]
+        expr: device_optic_rx_power_dbm < -18
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} optic Rx {{ $value }}dBm — LOS imminent"
+
+      - alert: OpticTxPowerLow   # [NEEDS METRIC]
+        expr: device_optic_tx_power_dbm < -8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} optic Tx {{ $value }}dBm low (failing laser)"
+
+      - alert: OpticTemperatureHigh   # [NEEDS METRIC]
+        expr: device_optic_temp_c > 70
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} transceiver {{ $value }}C"
+
+      - alert: OpticBiasDrift   # [NEEDS METRIC] laser ageing
+        expr: (device_optic_bias_ma - avg_over_time(device_optic_bias_ma[6h])) / clamp_min(stddev_over_time(device_optic_bias_ma[6h]), 0.1) > 3
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} optic bias drift"
+
+  # ----------------------------------------------------------------------------
+  # Routing / control-plane   [all NEEDS METRIC — collectors don't emit yet]
+  # ----------------------------------------------------------------------------
+  - name: noc-routing
+    interval: 30s
+    rules:
+      # BGP is gNMI-owned (canonical device_bgp_*, labelled {device,peer,vrf};
+      # session-state mapped to BGP4-MIB numerics, 6=established).
+      - alert: BGPSessionDown
+        expr: device_bgp_peer_state != 6
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} BGP peer {{ $labels.peer }} not established"
+
+      - alert: BGPPeerFlapping
+        expr: increase(device_bgp_fsm_transitions[15m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} BGP peer {{ $labels.peer }} flapping"
+
+      - alert: BGPPrefixDrop   # device_bgp_pfx_in = OpenConfig afi-safi prefixes/received
+        expr: delta(device_bgp_pfx_in[10m]) < -1000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} BGP peer {{ $labels.peer }} dropped >1000 prefixes"
+
+      - alert: BGPAllPeersDown
+        expr: count by (device) (device_bgp_peer_state == 6) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} has zero established BGP peers (isolation)"
+
+      - alert: OSPFAdjacencyDown   # OSPF-MIB ospfNbrState (8=full); SNMP-owned, labelled {neighbor}
+        expr: device_ospf_nbr_state != 8
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} OSPF neighbor {{ $labels.neighbor }} not full"
+
+      - alert: OSPFAdjacencyFlapping
+        expr: changes(device_ospf_nbr_state[15m]) >= 4
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} OSPF neighbor {{ $labels.neighbor }} flapping"
+
+      # IS-IS is the fabric IGP (gNMI device_isis_adj_state; 3=up), labelled
+      # {device, ifName, isis_level, isis_neighbor (system-id)}.
+      - alert: ISISAdjacencyDown
+        expr: device_isis_adj_state != 3
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} IS-IS adjacency to {{ $labels.isis_neighbor }} on {{ $labels.ifName }} not up"
+
+      - alert: ISISAdjacencyFlapping
+        expr: changes(device_isis_adj_state[15m]) >= 4
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} IS-IS adjacency to {{ $labels.isis_neighbor }} flapping"
+
+      - alert: RouteTableShrink   # [NEEDS METRIC]
+        expr: delta(device_route_count[10m]) < -500
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} RIB shrank >500 routes/10m"
+
+      - alert: FIBNearCapacity   # [NEEDS METRIC] TCAM exhaustion
+        expr: device_fib_count / clamp_min(device_fib_max, 1) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} FIB/TCAM >90% (blackhole risk)"
+
+  # ----------------------------------------------------------------------------
+  # Capacity / trend (z-score & linear prediction over real metrics)
+  # ----------------------------------------------------------------------------
+  - name: noc-capacity
+    interval: 30s
+    rules:
+      - alert: TrafficZScoreAnomalyIn
+        expr: (rate(device_if_in_octets[5m]) - avg_over_time(rate(device_if_in_octets[5m])[1h:5m])) / clamp_min(stddev_over_time(rate(device_if_in_octets[5m])[1h:5m]), 1) > 3
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} inbound traffic anomaly (z>3)"
+
+      - alert: TrafficDropAnomaly
+        expr: (rate(device_if_in_octets[5m]) - avg_over_time(rate(device_if_in_octets[5m])[1h:5m])) / clamp_min(stddev_over_time(rate(device_if_in_octets[5m])[1h:5m]), 1) < -3 and device_if_oper_status == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} traffic collapsed while up (z<-3)"
+
+      - alert: SustainedLinkGrowth
+        expr: avg_over_time(rate(device_if_in_octets[5m])[1h:5m]) * 8 / (device_if_speed * 1e6 > 0) > 0.70
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} sustained >70% — plan upgrade"
+
+      - alert: MemoryLeakTrend
+        expr: delta(device_mem_percent[6h]) > 20
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} memory +{{ $value }}pp/6h — possible leak"
+
+      - alert: StorageWillFill24h
+        expr: predict_linear(device_storage_used[6h], 86400) > device_storage_size
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} storage{{ $labels.index }} projected full <24h"
+
+      - alert: CPUBaselineRising
+        expr: delta(avg_over_time((avg without (index) (device_cpu_percent))[1h:5m])[12h:1h]) > 15
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} baseline CPU rising +{{ $value }}pp/12h"
+
+  # ----------------------------------------------------------------------------
+  # Latency / jitter / SLA   [NEEDS METRIC + VM mirror — see research §2.4]
+  # ----------------------------------------------------------------------------
+  - name: noc-sla
+    interval: 30s
+    rules:
+      - alert: TunnelDown   # [NEEDS METRIC] tunnel_status to VictoriaMetrics
+        expr: tunnel_status == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} DOWN"
+
+      - alert: TunnelLatencyHigh   # [NEEDS METRIC]
+        expr: tunnel_latency_ms > 150
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} latency {{ $value }}ms > SLA"
+
+      - alert: TunnelLatencyCritical   # [NEEDS METRIC]
+        expr: tunnel_latency_ms > 300
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} latency {{ $value }}ms — SLA breach"
+
+      - alert: TunnelJitterHigh   # [NEEDS METRIC]
+        expr: tunnel_jitter_ms > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} jitter {{ $value }}ms (voice/video risk)"
+
+      - alert: TunnelLossHigh   # [NEEDS METRIC]
+        expr: tunnel_loss_pct > 2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} loss {{ $value }}% — SLA breach"
+
+      - alert: TunnelLatencyAnomaly   # [NEEDS METRIC]
+        expr: (tunnel_latency_ms - avg_over_time(tunnel_latency_ms[2h])) / clamp_min(stddev_over_time(tunnel_latency_ms[2h]), 1) > 3
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} latency anomaly (z>3)"
+
+  # ----------------------------------------------------------------------------
+  # Security / syslog   [NEEDS METRIC — syslog counterization not wired]
+  # ----------------------------------------------------------------------------
+  - name: noc-security
+    interval: 30s
+    rules:
+      - alert: AuthFailureBurst   # [NEEDS METRIC] device_auth_failures_total
+        expr: rate(device_auth_failures_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} {{ $value }} auth failures/s (brute force?)"
+
+      - alert: AuthFailureCritical   # [NEEDS METRIC]
+        expr: rate(device_auth_failures_total[5m]) > 20
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} sustained login failures — credential attack"
+
+      - alert: ConfigChanged   # [NEEDS METRIC] device_config_change_total
+        expr: increase(device_config_change_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} running-config changed"
+
+      - alert: PortAuthFailure   # [NEEDS METRIC] device_dot1x_failures_total
+        expr: rate(device_dot1x_failures_total[5m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} 802.1X failures"
+
+  # ----------------------------------------------------------------------------
+  # TLS posture (SEC-019.1). The 2026-08-05 incident: services that load
+  # certificates once at start SERVED expired copies while the on-disk SVIDs
+  # were perfectly fresh — the first signal was every client failing at once.
+  # netops_tls_peer_cert_expiry_seconds is measured on the WIRE by the api's
+  # prober, so these fire on the certificate clients actually see. Dormant on
+  # plaintext installs (the series simply doesn't exist).
+  # ----------------------------------------------------------------------------
+  - name: tls-posture
+    interval: 60s
+    rules:
+      - alert: TLSServedCertExpiringSoon
+        expr: netops_tls_peer_cert_expiry_seconds < 86400
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.endpoint }} is SERVING a TLS certificate that expires in under 24h — the loading service needs a reload/restart to pick up the re-minted SVID"
+
+      - alert: TLSServedCertExpiryCritical
+        expr: netops_tls_peer_cert_expiry_seconds < 21600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.endpoint }} serves a certificate expiring in under 6h — clients of this endpoint WILL start failing; reload/restart it now"
+
+      - alert: TLSPeerProbeFailed
+        expr: netops_tls_peer_probe_ok == 0
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "served-certificate probe of {{ $labels.endpoint }} has captured nothing for 20m — endpoint down, not serving TLS, or unreachable; its expiry is UNWATCHED while this fires"
+
+      - alert: TLSApiCertExpiringSoon
+        expr: netops_tls_cert_expiry_seconds < 86400
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "the api's own served certificate expires in under 24h — the in-process reloader should have rotated it; investigate the reissue loop"
+
+      # Renewal-loop dead-man (TLS benchmark 2026-08-23, delta #3 — the
+      # cert-manager-mixin pattern: place a threshold PAST the expected
+      # renewal point so crossing it can only mean the loop is dead, hours
+      # to days before the expiry alerts above start counting down).
+      # The api's own cert is minted by the in-process TTL/2 loop and
+      # hot-swapped with no propagation dependency, so with the deployed
+      # TLS_SVID_TTL=168h it must always show >= 84h remaining; under 72h
+      # (12h slack) means the re-issue loop has missed at least one full
+      # period. ADJUST WITH TLS_SVID_TTL: threshold ~= TTL/2 - slack.
+      - alert: TLSReissueLoopSuspect
+        expr: netops_tls_cert_expiry_seconds < 259200
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "the api's own cert shows under 72h left, below the TTL/2=84h floor the re-issue loop maintains — the mint loop is dead or wedged; every service's SVID stops refreshing from here (check api logs for 'SVID re-issue')"
+
+  # ----------------------------------------------------------------------------
+  # Security posture (SEC-020.2) — alerts over the SEC-020.1 vocabulary.
+  # Signals that exist today only; a rule on a reserved (not-yet-emitted)
+  # family would never fire and read as "covered" (the silent-misfire class).
+  # ----------------------------------------------------------------------------
+  - name: security-posture
+    interval: 60s
+    rules:
+      # A running configuration with fatal-class findings would REFUSE to boot
+      # in production. In lab/staging it runs — but must page, not idle, or the
+      # gap ships. Guarded by absent() logic elsewhere: the metric is emitted
+      # unconditionally from newServer, so ==0 is a real all-clear.
+      - alert: SecurityPostureFatalFindings
+        expr: max(netops_sec_posture_findings{severity="fatal"}) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "the boot security validator counts {{ $value }} fatal finding(s) in the RUNNING configuration — production would refuse this boot; fix the control or consciously accept it before it ships"
+
+      # HLD §11 standing risk: declared plaintext degenerating into a rubber
+      # stamp. 90 days without a review (the inventory's accepted date) makes
+      # the exception loud again. 7776000s = 90d.
+      - alert: SecurityExceptionStale
+        expr: netops_sec_exception_age_seconds > 7776000
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "declared plaintext exception {{ $labels.edge }} was accepted over 90 days ago and never revisited — re-review it and bump its accepted date in the transport inventory (or retire the exception)"
+
+      # A trickle of handshake errors is normal noise (scanners, restarts); a
+      # sustained rate means a peer with broken/expired material is retrying in
+      # a loop — the 2026-08-05 nginx incident's signature.
+      - alert: TLSHandshakeErrorsSustained
+        expr: rate(netops_tls_handshake_errors_total[15m]) > 0.05
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "the api listener is failing TLS handshakes at {{ $value | printf \"%.2f\" }}/s sustained — some peer is presenting broken or expired material in a retry loop (the 2026-08-05 nginx-expired-SVID signature)"
+
+      # Trusted chain + disallowed identity = a VALID mesh certificate is being
+      # presented from the wrong workload. That is never noise.
+      - alert: TLSIdentityRejected
+        expr: increase(netops_tls_identity_rejected_total[30m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "the api rejected {{ $value | printf \"%.0f\" }} mTLS peer(s) in 30m whose chain was TRUSTED but whose identity is not allowed — a valid mesh credential is knocking from the wrong workload; investigate before widening any allowlist"
+
+  # ----------------------------------------------------------------------------
+  # Licence / entitlement (Correlix licence mechanism).
+  #
+  # Two gauges, both emitted by internal/licence.Service.WriteMetrics on the
+  # api's OWN /metrics, and both present from the first scrape on EVERY
+  # deployment — including a Community one that has no licence file at all.
+  # That is the whole design: "no licence" is a VALUE, never a missing series,
+  # so these rules can tell "this customer is on the free tier" apart from "the
+  # api stopped reporting". A state that is only visible by its absence is the
+  # 2026-09-02 ambiguity that turned a 5-minute incident into a 3-hour one.
+  #
+  #   netops_licence_days_to_expiry
+  #       whole days until the installed licence expires; NEGATIVE once it has
+  #       expired; the sentinel 36500 (100 years — licence.NoExpirySentinel)
+  #       means "no licence installed, nothing to expire".
+  #
+  #   netops_licence_state{tier,degraded,in_grace}
+  #       1 on the combination in force, 0 on every other one. tier is
+  #       community|team|enterprise; degraded and in_grace are the STRINGS
+  #       "true"/"false". Every combination is emitted on every scrape, so a
+  #       series that vanishes is a scrape failure, not a state change.
+  #
+  # A COMMUNITY DEPLOYMENT MUST NEVER FIRE ANY RULE IN THIS GROUP. How each
+  # expression guarantees that is written on the rule itself; read that note
+  # before touching a threshold or a matcher.
+  #
+  # NOT A PAGE — EVER. The page tier is fixed at four conditions by owner ruling
+  # (CLAUDE.md "Monitoring"), and a licence is none of them. A lapsed licence
+  # drops the commercial CEILINGS back to Community: nothing is deleted, nothing
+  # is hidden, and isolation, permissions and sign-in are unaffected. That is a
+  # commercial problem to fix in office hours, not a reason to wake anyone at
+  # 3am. severity stays `warning` for the same reason — the host route pushes
+  # the page tier straight to a phone and digests everything else.
+  #
+  # LABEL COLLISION, ON PURPOSE. netops_licence_state carries its own `tier`
+  # label (the LICENCE tier) and the routing label is also called `tier`. Rule
+  # labels win over sample labels in Prometheus, so the explicit
+  # `tier: warning` below overwrites community|team|enterprise on the fired
+  # alert — which is exactly what we want: a licence tier can never end up
+  # being read as a routing tier. The consequence is that {{ $labels.tier }} in
+  # an annotation here would print "warning", so these summaries deliberately
+  # do not name the tier; the tier in force is on the admin licence page and in
+  # the gauge itself.
+  # ----------------------------------------------------------------------------
+  - name: licence
+    interval: 60s
+    rules:
+      # Renewal runway. 14 days is the lead time a purchase order realistically
+      # needs, and it opens as a warning so the operator meets it in the digest
+      # long before anything about the product changes.
+      #
+      # The expression is a CLOSED RANGE and both ends carry weight:
+      #   >= 0  an already-expired licence is not "expiring soon" — that is what
+      #         LicenceInGrace and LicenceExpired below say, accurately. Without
+      #         this bound a lapsed deployment would fire this rule forever
+      #         alongside the rule that actually describes its situation.
+      #   < 14  this is ALSO the Community guard. A deployment with no licence
+      #         reports the 36500 sentinel and 36500 < 14 is false, so the series
+      #         never enters the range at all. The exclusion is STRUCTURAL — it
+      #         needs no `!= 36500` clause that a later edit could quietly drop —
+      #         but it only holds while the threshold stays far below 36500. Any
+      #         future widening must be checked against the sentinel first.
+      # for: 1h — the gauge steps once a day, so an hour costs no real warning
+      # time and suppresses a value seen through a single bad scrape.
+      - alert: LicenceExpiringSoon
+        expr: netops_licence_days_to_expiry >= 0 and netops_licence_days_to_expiry < 14
+        for: 1h
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "the installed Correlix licence expires in {{ $value }} day(s) — renew it before then; on expiry the commercial ceilings fall back to Community, nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected"
+
+      # Grace: the licence has expired but its ceilings are still being honoured
+      # for a fixed window. Nothing has changed for the user YET — this is the
+      # last quiet moment to install a renewal before LicenceExpired is the
+      # rule that fires and the ceilings really have moved.
+      #
+      # Community guard: this matches on the LABEL and on the VALUE. A Community
+      # deployment does publish netops_licence_state{...,in_grace="true"} —
+      # every combination is emitted every scrape — but publishes it as 0, so
+      # `== 1` cannot select it. Matching the value rather than the presence of
+      # the series is what makes that true; `netops_licence_state{in_grace="true"}`
+      # on its own would fire on every install in the world.
+      - alert: LicenceInGrace
+        expr: netops_licence_state{in_grace="true"} == 1
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "the Correlix licence has expired and the deployment is running on its grace period — the commercial ceilings are still honoured for now, but when grace ends they fall back to Community; nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected; install a renewed licence before grace runs out"
+
+      # Past grace. evaluate() has emptied the granted feature set, so the
+      # commercial ceilings ARE Community ceilings from this moment on, and
+      # CREATING or CONFIGURING paid capability is refused.
+      #
+      # Loud, because the operator's experience changes here (writes start
+      # meeting ceilings they have never met), but still not a page: the data is
+      # intact, every read and export of what already exists keeps working, and
+      # the platform is serving.
+      #
+      # Named LicenceExpired since 2026-09-05 (it was LicenceDegraded): the
+      # owner's state machine is valid → in_grace → post_grace, and "degraded"
+      # described an internal flag rather than the thing that happened.
+      #
+      # Community guard: identical to LicenceInGrace — the degraded="true"
+      # series exists on a free-tier install but sits at 0, and `== 1` skips it.
+      # Community is the un-expired resting state, not an expiry of itself.
+      - alert: LicenceExpired
+        expr: netops_licence_state{degraded="true"} == 1
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "the Correlix licence has lapsed past its grace period — the commercial ceilings have fallen back to Community, so creating or configuring paid capability is now refused; everything already here stays visible and exportable, everything over a ceiling is listed, and nothing has been disabled or deleted; isolation, permissions and sign-in are unaffected; install a renewed licence to lift the ceilings again"
+
+  # ----------------------------------------------------------------------------
+  # Licence ceilings — the SOFT-OVERAGE warnings (owner decision, 2026-09-05;
+  # docs/design/TIERING_PLAN_2026-09-03.md §9, Team/Enterprise "Soft overage +
+  # alerts (80/90/100 %)").
+  #
+  # A SEPARATE GROUP from `licence` above, deliberately. That group carries the
+  # standing invariant "a Community deployment must never fire any rule in it",
+  # and these rules have a different guard of their own — stated below — so
+  # mixing them would put two guards under one promise and make both harder to
+  # verify.
+  #
+  # THE SERIES (internal/licence.Service.WriteUsageMetrics, on the api's own
+  # /metrics, every scrape):
+  #
+  #   netops_licence_ceiling{ceiling,unit}      the licensed limit; -1 = unlimited
+  #   netops_licence_usage{ceiling,unit}        current usage. ABSENT for a
+  #                                             ceiling this deployment does not
+  #                                             measure — a fabricated 0 would be
+  #                                             divided below, so silence is the
+  #                                             deliberate failure direction
+  #   netops_licence_ceiling_soft{ceiling}      1 where going over is ALLOWED and
+  #                                             recorded, 0 where it is refused
+  #   netops_licence_overage_devices            monitored devices above the
+  #                                             allowance; always present, 0 when
+  #                                             there is none
+  #
+  # THE COMMUNITY GUARD, and it is the whole reason these can be warnings at
+  # all: every rule joins on `netops_licence_ceiling_soft == 1`. Community
+  # ceilings are HARD — the 26th monitored device is refused, so a free-tier
+  # deployment cannot accumulate an overage and, more to the point, publishes
+  # soft=0 and is excluded by the join before any threshold is considered. The
+  # guard is a label match on a value, not the absence of a series, so it cannot
+  # be defeated by a scrape gap.
+  #
+  # THE DIVISION GUARD: `netops_licence_ceiling > 0` on every rule. An unlimited
+  # ceiling reports -1 (a negative ratio, which no threshold selects) and a
+  # pathological 0 would divide to +Inf and fire everything. Neither is a real
+  # deployment; both are one line of arithmetic away from a false page.
+  #
+  # NOT A PAGE — EVER, for the same reason as the group above: an overage is a
+  # commercial fact. Nothing has been blocked, disabled or deleted; the excess is
+  # recorded for true-up. Waking someone at 3am over an invoice would be absurd.
+  #
+  # THE BANDS are disjoint so exactly one fires: 80–90 %, 90–100 %, over 100 %.
+  # Overlapping bands would page twice for one condition and read as two
+  # problems.
+  # ----------------------------------------------------------------------------
+  - name: licence-ceilings
+    interval: 60s
+    rules:
+      # 80 %. Informational runway: at this point a renewal or an expansion is a
+      # planned purchase rather than a scramble. for: 1h because the underlying
+      # count moves when an operator enables a device, not continuously.
+      - alert: LicenceCeilingApproaching
+        expr: |
+          (
+            (netops_licence_usage / netops_licence_ceiling >= 0.8 < 0.9)
+            and on(ceiling) netops_licence_ceiling_soft == 1
+            and on(ceiling) netops_licence_ceiling > 0
+          )
+        for: 1h
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "Correlix is using {{ $value | humanizePercentage }} of the licensed {{ $labels.ceiling }} allowance — nothing is limited yet; this is the point to plan an expansion rather than discover it mid-incident"
+
+      # 90–100 %. The last band before the allowance is spent. Still nothing is
+      # blocked on a paid tier — that is what SOFT means — so the wording says
+      # what will actually happen next, which is a true-up and not an outage.
+      - alert: LicenceCeilingReached
+        expr: |
+          (
+            (netops_licence_usage / netops_licence_ceiling >= 0.9 <= 1)
+            and on(ceiling) netops_licence_ceiling_soft == 1
+            and on(ceiling) netops_licence_ceiling > 0
+          )
+        for: 1h
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "Correlix is at {{ $value | humanizePercentage }} of the licensed {{ $labels.ceiling }} allowance — on your tier this ceiling does not block, so going past it is allowed and recorded for true-up; nothing will be disabled"
+
+      # Over 100 %. Keyed off the overage gauge rather than the ratio, so the
+      # number in the alert is the number on the Licence page and on the invoice
+      # conversation. `and on()` joins against the single soft series for the
+      # devices ceiling: an empty `on()` matches every series, which is what is
+      # wanted for a metric that carries no labels of its own.
+      #
+      # NOTE the deliberate asymmetry with the two rules above: a deployment
+      # whose licence has LAPSED runs at Community ceilings, publishes soft=0,
+      # and is therefore excluded here — its situation is described by
+      # LicenceExpired, accurately, and a second alert saying "you are over" would
+      # add nothing but noise.
+      - alert: LicenceOverage
+        expr: |
+          (
+            netops_licence_overage_devices > 0
+            and on() netops_licence_ceiling_soft{ceiling="devices"} == 1
+          )
+        for: 1h
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "{{ $value }} monitored device(s) above the licensed allowance — every one of them is still being collected from and nothing has been blocked, disabled or deleted; the overage is recorded for true-up"
+
+  # ----------------------------------------------------------------------------
+  # Usage metering (tracker 258).
+  #
+  # A SEPARATE GROUP from the two licence groups above, deliberately: those
+  # watch what a customer is ENTITLED to and how close they are to it; this one
+  # watches whether we are still writing down what they USED. The series and the
+  # failure mode are different, and mixing them would put a bookkeeping problem
+  # in the same panel as a commercial one.
+  #
+  #   netops_metering_snapshot_timestamp_seconds
+  #       unix time of the last usage snapshot folded into the daily rows.
+  #       0 means NONE YET — a value, not a gap. The api takes one immediately
+  #       at boot and then hourly, so 0 is a window of seconds on a fresh start
+  #       and a permanent state only if the recorder never ran at all.
+  #
+  #   netops_metering_daily_rows        rows currently persisted
+  #   netops_metering_snapshot_failures_total   snapshots that did not land
+  #
+  # NOT A PAGE — EVER, and this one is the clearest case in the file. Metering
+  # gates NOTHING: no admission path reads a meter, so a stopped recorder cannot
+  # refuse a device, break a query or affect isolation. What it costs is
+  # precision in a usage report — an office-hours problem, and one that keeps
+  # costing until someone looks, which is exactly what a digested warning is for.
+  #
+  # NO `layer` LABEL, deliberately: this is a product-notifier warning, not stack
+  # self-health, so it must not be normalised onto the platform paging lane.
+  #
+  # NO TENANT LABEL either — the metering SERIES carry none. A per-tenant label
+  # on an outbound alert is refused by the platform route as a cross-tenant
+  # disclosure, and there would be nothing to gain: the recorder either runs for
+  # every tenant or for none.
+  # ----------------------------------------------------------------------------
+  - name: metering
+    interval: 60s
+    rules:
+      # No snapshot in over 3 hours. Three, not one, because the cadence is
+      # hourly: a single missed hour is a restart or a slow store and self-heals,
+      # while three consecutive misses means the recorder is not running.
+      #
+      # `and on()` is required, not decorative: `time() - metric` drops __name__
+      # while `metric > 0` keeps it, so a bare `and` would never match. The
+      # `> 0` guard is what separates NEVER from STALE — `time() - 0` is ~57
+      # years, so without it every fresh install would fire for ever, in the
+      # seconds before the boot snapshot lands. A recorder that genuinely never
+      # runs is caught by MeteringNeverRecorded below, which says something an
+      # operator can act on rather than mislabelling a boot as a stall.
+      - alert: MeteringSnapshotStale
+        expr: |
+          (time() - netops_metering_snapshot_timestamp_seconds) > 10800
+          and on() (netops_metering_snapshot_timestamp_seconds > 0)
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "no usage snapshot has been recorded in over 3 hours — the daily usage roll-up is missing hours, so a usage report for today will understate what was in use; nothing about collection, alerting or isolation is affected"
+          description: >-
+            Usage metering samples hourly and folds each sample into that day's
+            per-tenant rows. A stale timestamp means the recorder is not
+            completing: check netops_metering_snapshot_failures_total and the
+            api log for "metering". Metering gates nothing — no device, query or
+            permission depends on it — so this is an office-hours fix, but it
+            keeps costing precision in the usage report until it is made.
+          runbook: "docs/runbooks/licensing.md#usage-metering-is-not-recording"
+
+      # Never recorded at all. Separate from the staleness rule because the two
+      # have different causes and different fixes: this one means the recorder
+      # never started (a wiring or store problem), not that it stalled. for: 1h
+      # is generous on purpose — a boot snapshot lands in seconds, so an hour of
+      # zero is a real absence and not a slow start.
+      - alert: MeteringNeverRecorded
+        expr: netops_metering_snapshot_timestamp_seconds == 0
+        for: 1h
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "no usage snapshot has EVER been recorded on this installation — usage reports will be empty; check that the metering store is writable"
+          description: >-
+            The api takes a usage snapshot immediately at start-up, so a
+            timestamp still at zero an hour later means the recorder never
+            completed one. The usual cause is a metering store that cannot be
+            written (a file backend with no permission on /data/api, or a
+            Postgres backend whose migration has not applied). Metering gates
+            nothing, so nothing else is degraded.
+          runbook: "docs/runbooks/licensing.md#usage-metering-is-not-recording"
+
+      # Snapshots are being attempted and failing. Distinct from staleness: a
+      # partial failure can leave the timestamp fresh (some hours land) while
+      # hours go missing, which the staleness rule cannot see.
+      - alert: MeteringSnapshotsFailing
+        expr: increase(netops_metering_snapshot_failures_total[3h]) >= 3
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "usage snapshots are failing — hours are missing from the daily usage roll-up even though some are still landing; a usage report for the period will understate what was in use"
+          runbook: "docs/runbooks/licensing.md#usage-metering-is-not-recording"
+
+  # ----------------------------------------------------------------------------
+  # Stack self-health
+  # ----------------------------------------------------------------------------
+  - name: noc-self-health
+    interval: 30s
+    rules:
+      - alert: CollectorDown
+        expr: collector_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Collector {{ $labels.collector }} is down"
+
+      # The watcher's own death (2026-08-05): when the API's metric-push path
+      # broke (bare client vs the TLS store), EVERY collector_* series vanished
+      # at once — and `collector_up == 0` cannot fire on a series that does not
+      # exist, so all of noc-self-health went blind together for 9 hours.
+      # collector_up{collector="snmpv2c"} always exists on a default install
+      # (ENABLE_SNMP_COLLECTION defaults true), so absence = the push path is
+      # dead, not "nothing enabled".
+      - alert: CollectorTelemetryMissing
+        expr: absent(collector_up)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No collector telemetry is reaching the metric store — every collector alert in this group is blind"
+
+      - alert: CollectorAllTargetsUnreachable
+        expr: collector_targets_reachable == 0 and collector_targets > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Collector {{ $labels.collector }} cannot reach any target"
+
+      - alert: CollectorPartialReachability
+        expr: collector_targets_reachable / clamp_min(collector_targets, 1) < 0.8 and collector_targets > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collector {{ $labels.collector }} reaching <80% of targets"
+
+      - alert: CollectorPollSlow
+        expr: collector_poll_duration_ms > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collector {{ $labels.collector }} poll {{ $value }}ms (slow)"
+
+      - alert: NoSamplesIngested
+        expr: collector_samples == 0 and collector_targets > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collector {{ $labels.collector }} produced 0 samples"
+
+      # G1 (2026-09-02): THIS RULE USED TO LIE ABOUT ITS OWN COVERAGE.
+      #
+      # It selected up{job=~"opensearch|clickhouse|victoria|postgres|redis"},
+      # which reads as "all five stores are watched". Only TWO of those jobs
+      # exist in src/config/vmscrape.yml — `clickhouse` and `victoria`. There
+      # is no opensearch, postgres or redis scrape job, so those three names
+      # matched nothing, contributed nothing, and made the rule look three
+      # stores broader than it was. A selector that silently matches nothing is
+      # the same defect class as the blackholed notifier: the control appears to
+      # exist, and it is not there.
+      #
+      # The selector is now exactly the jobs that are scraped. What covers the
+      # other three today (see docs/runbooks/engine-liveness-matrix.md):
+      #   * opensearch — NOT `up`, but its real health signals:
+      #     OpenSearchClusterRed / …NotGreen (opensearch_cluster_status, polled
+      #     by vector) and OpenSearchStatsMissing, which is the meta-alert for
+      #     that lane going away. Stronger than `up` would be: it reports
+      #     cluster state, not just TCP reachability.
+      #   * postgres, redis — container healthcheck + the compose service loop
+      #     in scripts/stack-watchdog.sh ONLY. Neither has an exporter. That is
+      #     a real gap and it is recorded as such in the matrix; it is NOT
+      #     papered over with a selector that cannot fire.
+      - alert: StorageBackendDown
+        expr: up{job=~"clickhouse|victoria"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Stack backend {{ $labels.job }} is DOWN (scrape target unreachable) — writes to it are failing"
+          description: >-
+            Covers ONLY the stores with a scrape job: clickhouse and victoria.
+            OpenSearch is covered by OpenSearchClusterRed / OpenSearchStatsMissing
+            instead; postgres and redis have no exporter and rest on their
+            container healthcheck plus the external watchdog. Do not widen this
+            selector to job names that are not in vmscrape.yml — an unmatched
+            name is not coverage.
+
+      # The companion meta-alert. `up == 0` means "scraped and failed"; it
+      # CANNOT fire when there is no `up` series at all, which is what a
+      # deleted or renamed scrape job produces. Same reasoning as
+      # ContainerMetricsMissing and KafkaLagMetricsMissing above: the absence of
+      # a signal has to be its own signal, or config drift silently disarms the
+      # rule that depends on it.
+      #
+      # This is deliberately NOT a standing "postgres has no exporter" advisory.
+      # A rule that fires forever is how an operator learns to ignore the pager
+      # — the un-scraped stores are documented in the matrix instead. This one
+      # is quiet until something that IS scraped stops being scraped.
+      - alert: StorageExporterAbsent
+        expr: |
+          absent_over_time(up{job="clickhouse"}[10m])
+          or absent_over_time(up{job="victoria"}[10m])
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No scrape target for stack backend {{ $labels.job }} — StorageBackendDown is BLIND for it"
+          description: >-
+            The job vanished from the metrics store entirely (not "up == 0",
+            which would mean scraped-and-failing). Usual cause is an edit to
+            src/config/vmscrape.yml, or victoria running the mTLS variant
+            (vmscrape-mtls.yml) with this job dropped. Until it returns, that
+            store's liveness is unwatched by this rule set.
+
+  # ===========================================================================
+  # STACK RESILIENCE — self-monitoring of the platform's own containers + host.
+  # Backed by cAdvisor (per-container) + node-exporter (host). These fire when
+  # auto-heal has NOT recovered a component (down / restart-loop / OOM) or when
+  # a resource is being exhausted — the "alert when no auto-heal" layer.
+  # ===========================================================================
+  # F-35 (2026-07-21) — LABEL CONTRACT. Every rule in this group used to select
+  # {name=~"netops-.+"} and matched ZERO series, so the entire container safety
+  # net was dead while reading, on a dashboard, as coverage. Two separate causes,
+  # both fixed:
+  #
+  #   1. cAdvisor produced no per-container series AT ALL. Its docker handler
+  #      cannot start a container handler under docker's containerd image store
+  #      (no image/<driver>/layerdb tree to read the rw-layer id from), and it
+  #      claims the docker-*.scope cgroups ahead of every other handler, so
+  #      nothing else picked them up. Live evidence: container_last_seen had
+  #      exactly one series, {id="/"}. Fixed in docker-compose.yml by running
+  #      cAdvisor's containerd handler against docker's "moby" namespace.
+  #
+  #   2. The label. cAdvisor's containerd handler sets name=<container-id-hash>,
+  #      not name="netops-api-1", so "netops-.+" could never match even once
+  #      per-container series existed. The selector is now {name!=""}, which is
+  #      what genuinely distinguishes a CONTAINER from a cgroup slice (slices
+  #      carry name="") and does not depend on the cgroup driver, the image
+  #      store, or the compose project name.
+  #
+  # Annotations use {{ $labels.image }} because it is the human-readable
+  # identifier this handler actually provides; the id hash is in {{ $labels.name }}.
+  #
+  # ContainerMetricsMissing below is the load-bearing part of this fix: an alert
+  # whose selector matches nothing is indistinguishable from an alert that is
+  # simply not firing, which is how this stayed broken. It asserts the input.
+  - name: stack-resilience
+    rules:
+      - alert: ContainerMetricsMissing
+        # THE META-ALERT. If this fires, every other rule in this group is
+        # silently vacuous — treat it as "container monitoring is DOWN", not as
+        # "no containers". A healthy stack has ~20+ containers; <5 means the
+        # cAdvisor handler is broken again (image-store change, socket moved,
+        # cgroup driver change) rather than that the stack shrank.
+        # Runbook: docker logs netops-cadvisor-1 | grep -i "failed to create"
+        #          curl cadvisor:8080/metrics | grep -c '^container_last_seen'
+        expr: count(container_last_seen{name!=""}) < 5 or absent(container_last_seen{name!=""})
+        for: 10m
+        labels: { severity: critical, layer: stack }
+        annotations:
+          summary: "cAdvisor is reporting {{ $value }} containers — the container OOM/restart/memory alerts below are matching nothing and cannot fire"
+          description: "An alert that matches zero series reads as coverage. Fix the exporter, not the rule."
+
+      - alert: ContainerDown
+        # cAdvisor stops reporting a container that has died/been removed.
+        # No absent() arm: cadvisor going blind (e.g. docker's containerd image
+        # store, unsupported by cadvisor's docker handler as of v0.52.1) is not
+        # "every container is down" — that false-fired platform-wide. The
+        # external stack-watchdog cron is the authoritative container-down
+        # sentinel either way; this rule is the in-platform per-container view.
+        expr: time() - container_last_seen{name!=""} > 120
+        for: 2m
+        labels: { severity: critical, layer: stack }
+        annotations:
+          summary: "Container {{ $labels.image }} ({{ $labels.name }}) is down (no cAdvisor data >2m)"
+          description: "Auto-heal did not bring it back — investigate."
+
+      - alert: ContainerRestartLoop
+        # Start time changing repeatedly = crash/restart looping.
+        expr: changes(container_start_time_seconds{name!=""}[15m]) > 3
+        for: 5m
+        labels: { severity: critical, layer: stack }
+        annotations:
+          summary: "Container {{ $labels.image }} ({{ $labels.name }}) restart-looping ({{ $value }} restarts/15m)"
+
+      - alert: ContainerOOMKilled
+        expr: increase(container_oom_events_total{name!=""}[10m]) > 0
+        labels: { severity: critical, layer: stack }
+        annotations:
+          summary: "Container {{ $labels.image }} ({{ $labels.name }}) was OOM-killed — raise its mem_limit or fix the leak"
+
+      - alert: ContainerMemoryNearLimit
+        # Working set within 10% of the container's mem_limit → OOM risk / leak.
+        expr: container_memory_working_set_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""} > 0.90 and container_spec_memory_limit_bytes{name!=""} > 0
+        for: 10m
+        labels: { severity: warning, layer: stack }
+        annotations:
+          summary: "Container {{ $labels.image }} ({{ $labels.name }}) at {{ $value | humanizePercentage }} of its memory limit"
+
+      - alert: ContainerCPUSaturated
+        # Sustained near its CPU ceiling (quota/period = limit in cores).
+        expr: rate(container_cpu_usage_seconds_total{name!=""}[5m]) / on(name) group_left() (container_spec_cpu_quota{name!=""} / container_spec_cpu_period{name!=""}) > 0.90
+        for: 15m
+        labels: { severity: warning, layer: stack }
+        annotations:
+          summary: "Container {{ $labels.image }} ({{ $labels.name }}) CPU-saturated against its limit for 15m"
+
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.08
+        for: 5m
+        labels: { severity: critical, layer: host }
+        annotations:
+          summary: "Host memory available {{ $value | humanizePercentage }} — OOM-killer risk"
+
+      - alert: HostOOMKillerFired
+        # #102: the kernel actually reaped a process — a platform FAILURE, not
+        # pressure. HostMemoryLow is the pre-OOM proxy; this is the event.
+        # Runbook: dmesg -T | grep -i oom; identify the victim cgroup, compare
+        # its resource-plan limit vs usage, then --replan or grow the host.
+        expr: increase(node_vmstat_oom_kill[10m]) > 0
+        for: 0m
+        labels: { severity: critical, layer: host }
+        annotations:
+          summary: "Host OOM-killer fired ({{ $value }} kill(s)/10m) — a process was reaped"
+
+      - alert: HostDiskLow
+        # 2026-07-21: this rule matched ZERO series and could never fire — the
+        # same disease as the container rules above, on the one alert that would
+        # have caught the disk exhaustion in F-55. node-exporter runs with
+        # --path.rootfs=/host, which STRIPS that prefix from the reported
+        # mountpoint, so the label is "/" and never "/host". Confirmed against
+        # the live store: mountpoints emitted are / /boot /run ... — no /host.
+        # fstype filter keeps tmpfs/overlay mounts out of the comparison.
+        expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} < 0.10
+        for: 5m
+        labels: { severity: critical, layer: host }
+        annotations:
+          summary: "Host disk {{ $labels.mountpoint }} below 10% free — ingestion will read-only-lock"
+
+      - alert: HostCPULoadHigh
+        expr: node_load5 / count(count(node_cpu_seconds_total) by (cpu)) > 2
+        for: 10m
+        labels: { severity: warning, layer: host }
+        annotations:
+          summary: "Host 5m load {{ $value }}× core count — sustained overload"
+
+  # ----------------------------------------------------------------------------
+  # Correlation-engine ingest health (#99 R6) — silent ingestion failures page.
+  # ----------------------------------------------------------------------------
+  # #100 ClickHouse bounded-IO guardrails (2026-07-09 incident). CH counters come
+  # from ClickHouse's native prometheus exporter (:9363, vmscrape job
+  # 'clickhouse'); corr_versions from the correlation /metrics exposition.
+  # ----------------------------------------------------------------------------
+  - name: noc-ch-bounded-io
+    interval: 60s
+    rules:
+      - alert: CHMemoryLimitExceeded
+        # (renamed from CHQueryMemoryKilled 2026-07-11 #102: the error metric
+        # counts every thrown MEMORY_LIMIT_EXCEEDED — query OR background — so
+        # the old name overclaimed a query kill. Attribution = runbook step.)
+        # A MEMORY_LIMIT_EXCEEDED exception was actually thrown — a query died
+        # against the per-query cap (query-spill.xml) or the server total. One
+        # kill = investigate; run scripts/ch-query-budget-check.sh to attribute
+        # it by log_comment (api:<endpoint> / worker:*).
+        # NOT ProfileEvents_QueryMemoryLimitExceeded: that counter also ticks on
+        # non-fatal internal allocation denials (overcommit probes) with zero
+        # failed queries — it false-fired critical while query_log and
+        # system.errors were clean.
+        expr: increase(ClickHouseErrorMetric_MEMORY_LIMIT_EXCEEDED[10m]) > 0
+        labels: { severity: critical, layer: clickhouse }
+        annotations:
+          summary: "ClickHouse threw MEMORY_LIMIT_EXCEEDED {{ $value }}x in 10m — attribute (query vs background) via ch-query-budget-check.sh + system.query_log"
+
+      - alert: CHMemoryPressureSustained
+        # #102 capacity PRESSURE (vs the failure above): tracked server memory
+        # sustained above 85% of the plan-asserted ceiling (CH_MEM_RATIO x
+        # cgroup). Fires BEFORE queries start dying — the 2026-07-11 incident
+        # shape. Runbook: check merges/mutations + query mix, then --replan.
+        # Self-contained from CH's own scrape: CGroupMemoryTotal is the cgroup
+        # limit CH detected (live-verified = the container mem_limit), x0.9 =
+        # the asserted server ceiling. No cadvisor, no constants.
+        expr: ClickHouseMetrics_MemoryTracking / (ClickHouseAsyncMetrics_CGroupMemoryTotal * 0.9) > 0.85
+        for: 10m
+        labels: { severity: warning, layer: clickhouse }
+        annotations:
+          summary: "ClickHouse tracked memory sustained >85% of its plan ceiling — investigate before queries die"
+
+      - alert: CHFailedQueriesRising
+        expr: increase(ClickHouseProfileEvents_FailedQuery[15m]) > 25
+        for: 10m
+        labels: { severity: warning, layer: clickhouse }
+        annotations:
+          summary: "ClickHouse failing {{ $value }} queries/15m — check system.query_log exceptions (read paths or ingest)"
+
+      - alert: CorrVersionChurnUndamped
+        # Sustained persists with ZERO suppression of ANY kind means the
+        # material-hash gate stopped suppressing storm churn (regression or
+        # heartbeat misconfig) — corr_objects growth is heading back to the
+        # pre-#100 30x rate.
+        # Suppression is TWO outcomes since P3 change A (46934f3f): `damped`
+        # (re-persist skipped entirely) and `heartbeat_touch` (the 900 s
+        # heartbeat wrote the corr_current freshness row and NO corr_objects
+        # version). The engine's own damping_ratio counts both as suppressed
+        # (_flush_tenant_write_amp), so this rule must too — otherwise an engine
+        # whose unchanged re-persists all land on heartbeats reads as a
+        # regression. Both collapse to 0 together when the gate really breaks: a
+        # touch requires an unchanged material_hash.
+        # `ignoring(outcome)` is REQUIRED — the two sides are the same metric
+        # with different `outcome` label values, and a bare `and` matches only on
+        # identical label sets, so it could never pair them (the pre-P3 expr
+        # could not fire).
+        expr: >
+          increase(corr_versions{outcome="persisted"}[30m]) > 60
+          and ignoring(outcome)
+          sum without (outcome) (increase(corr_versions{outcome=~"damped|heartbeat_touch"}[30m])) == 0
+        for: 15m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Correlation persisting {{ $value }} versions/30m with ZERO damped writes — the #100 write damper is not suppressing storm churn"
+
+      - alert: CorrCurrentProjectionFailing
+        # #101: corr_current is the hot-read source of truth for Command Center.
+        # A lost projection dual-write = a STALE incident list (an incident that
+        # closed still shows open, or never appears). The engine's history write
+        # succeeded, so nothing else looks broken — this counter is the only
+        # signal. Recovery: docs/runbooks/correlation-storm.md §projection;
+        # the Go corr-current-reconcile worker force-repairs hourly.
+        expr: increase(corr_current_projection_write_failures_total[10m]) > 0
+        for: 5m
+        labels: { severity: critical, layer: correlation }
+        annotations:
+          summary: "corr_current projection lost {{ $value }} write(s)/10m — Command Center may be serving STALE incidents; check correlation logs (corr_current projection write FAILED) and ClickHouse health"
+
+      - alert: CorrTenantWriteAmpOverBudget
+        # #101 tenant storm budget, RE-DERIVED for P3 change A (46934f3f).
+        #
+        # WHAT STILL PERSISTS a corr_objects version: the first version, a
+        # material change (evidence growth / verdict change), a terminal
+        # transition (close/merge), and the CORR_VERSION_KEEPALIVE_S=21600 s
+        # floor for a never-moving open object. An unchanged 900 s heartbeat no
+        # longer persists — it writes one corr_current row and counts as
+        # suppressed (outcome=heartbeat_touch, folded into the rollup's `damped`
+        # column). So `persisted` is now MATERIAL churn only, and the old
+        # "heartbeat-paced ~1 version/object/15min" floor this budget was set
+        # against is gone.
+        #
+        # ARITHMETIC (version anatomy, run p2-s05 — 39,388 versions over ~65 min
+        # for ~10.7k incidents; docs/scale/P2_STEP5_2P5K_VERDICT_2026-08-29.md §5
+        # + docs/design/AGGREGATION_PLANE_P3_2026-08-29.md §0): first 32 %,
+        # terminal 32 %, evidence growth 17 %, verdict change 7 %, unchanged
+        # heartbeat 15 % (shares rounded, sum 103 %).
+        #   * the 15 % heartbeat share stops persisting, so the SAME workload now
+        #     writes 0.85x the versions: like-for-like 120 x 0.85 = 102 -> 100.
+        #   * keepalive floor is negligible: a never-moving open object mints
+        #     300/21,600 = 1/72 version per 5-min window, so even 1,000 open
+        #     objects add ~14 — inside that rounding. Pacing no longer sets the
+        #     budget; material churn does.
+        #   * what 100 MEANS at the post-heartbeat mix (first 36 %, terminal
+        #     36 %, evidence 19 %, verdict 8 % of persists): ~36 incidents opened
+        #     + ~36 closed + ~27 material changes in ONE 5-min window, for ONE
+        #     tenant, sustained 15 min.
+        #   * headroom: the ratified 2.5k storm persists 39,388 x 0.85 / 13
+        #     windows ~= 2,575 per window — 26x over budget, so a real storm
+        #     still trips immediately.
+        #
+        # Bounded cardinality by design: the metric only carries the top-K
+        # noisiest tenants. Attribution + full history: SELECT from
+        # netops.corr_tenant_write_amp (correlation-storm runbook).
+        expr: max by (tenant_id) (corr_tenant_writes_window{outcome="persisted"}) > 100
+        for: 15m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Tenant {{ $labels.tenant_id }} persisted {{ $value }} correlation versions in one write-amp window — storm exceeding write budget; see correlation-storm runbook (chaos fixture? damping regression? real multi-entity incident?)"
+
+      - alert: CorrHeartbeatTouchNotEngaging
+        # P3 change A (46934f3f) made an unchanged 900 s heartbeat write ONE
+        # corr_current row instead of a full corr_objects version (2.35 ->
+        # 0.11 ms per heartbeat; the heartbeat share was 15 % of versions on the
+        # ratified 2.5k storm). If CORR_HEARTBEAT_TOUCH_ONLY is flipped off, or
+        # the touch path stops being reached, NOTHING looks broken — history is
+        # still written, damping still damps — so the regression is invisible
+        # except on this counter, while corr_objects growth and the
+        # persist.decision cost silently return to the pre-P3 rate. That is the
+        # "the component knew and the knowledge stopped there" shape the
+        # storage-loss group below exists to break.
+        # Guarded for small/quiet deployments: damped > 0 proves objects ARE
+        # being re-evaluated with an unchanged material_hash, and 6 h is 24
+        # heartbeat periods — at least one such object must have crossed a
+        # heartbeat and touched. Zero touches while damping is alive = the touch
+        # path is off or unreachable. (Not a keepalive check: the 21,600 s
+        # keepalive persists a real version and shows up as `persisted`.)
+        expr: >
+          increase(corr_versions{outcome="damped"}[6h]) > 0
+          and ignoring(outcome)
+          increase(corr_versions{outcome="heartbeat_touch"}[6h]) == 0
+        for: 1h
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Correlation heartbeat-touch path not engaging — zero heartbeat_touch outcomes in 6h while damping is active; corr_objects version growth is back at the pre-P3 rate (check CORR_HEARTBEAT_TOUCH_ONLY)"
+
+  # Counters come from the correlation /metrics exposition (vmscrape job
+  # 'correlation'); they are monotonic per process, so increase()/rate() are safe
+  # across restarts.
+  # ----------------------------------------------------------------------------
+  - name: noc-corr-ingest
+    interval: 60s
+    rules:
+      - alert: CorrDeadLettersRising
+        expr: increase(corr_deadletters[15m]) > 0
+        for: 5m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Correlation dead-letters rising ({{ $value }} in 15m) — malformed events are being parked; check correlation logs"
+
+      - alert: CorrEventsDroppedRising
+        expr: sum by (counter) (increase(corr_ingest_events{counter=~".*_dropped"}[15m])) > 10
+        for: 5m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Correlation lane {{ $labels.counter }} rising ({{ $value }} in 15m) — events are being rejected (tenancy/normalization); check correlation logs"
+          description: >-
+            Usual cause is per-event: a tenancy or normalization rejection, i.e.
+            the engine IS consuming and is throwing individual events away.
+            But read this alongside CorrelationConsumerDead
+            (rules-scale-slo.yaml) before concluding that. Drops spiking as the
+            engine RECOVERS — the shape seen on 2026-09-02, when this fired on
+            the recovery edge of a 3h outage — mean the backlog that piled up
+            while the consumer was not joined is now being replayed and
+            partially rejected. In that case the drop counter is a SYMPTOM of
+            the outage, not the fault: fix the consumer first
+            (docs/runbooks/engine-not-consuming.md), then re-read this.
+
+      - alert: CorrProbeLaneFlatlined
+        # The prober ticks 24/7 (30-60s interval), so probes_received must always
+        # advance — a flat line means bus→consumer ingest is dead even if every
+        # container looks healthy (the failure mode that hid the July lab outage).
+        #
+        # DEFECT (first real delivery run, 2026-09-03): "the prober ticks 24/7"
+        # is FALSE on a deployment where the prober has no targets. The prober
+        # is a `prober` COMPOSE PROFILE whose every active-measurement feature
+        # (FEATURE_ACTIVE_PROBE / FEATURE_SYNTHETICS / FEATURE_WAN_ECHO /
+        # FEATURE_TRACEROUTE) is off by default with empty *_TARGETS, so on this
+        # lab the container is up and emits NOTHING —
+        # `corr_ingest_events{counter="probes_received"}` reads a hard 0 and this
+        # CRITICAL fires forever. That is the cries-wolf shape the whole
+        # engine-liveness programme exists to prevent: a pager that is always red
+        # gets muted, and then the 2026-09-02 outage (which this very rule caught,
+        # at 19:18, into a blackhole notifier) goes unseen next time.
+        #
+        # GUARD — expected activity, same house pattern as NoSamplesIngested's
+        # `and collector_targets > 0` / CollectorAllTargetsUnreachable's
+        # `collector_targets_reachable == 0 and collector_targets > 0`. A
+        # prober-side "configured targets" gauge would be the better guard, but
+        # NONE EXISTS: the prober is not a vmscrape job at all (job labels in the
+        # live store are cadvisor/clickhouse/cloud-ingest/correlation/grafana/
+        # kafka/netops-api/node/vector/victoria — no prober), so it exports no
+        # gauge any rule can read. The only honest evidence that this lane is
+        # SUPPOSED to be live here is the lane's own trailing history, so the
+        # guard is "it ran in the last 24h and then stopped".
+        #
+        # THE TRADE, stated plainly: this buys a COLD-START BLIND SPOT — a brand
+        # new install whose probe lane has NEVER once delivered will not fire
+        # this rule, because there is no history to distinguish "never
+        # configured" from "configured and dead". That window is covered by
+        # CorrelationConsumerDead (rules-scale-slo.yaml, tier: page, consumer
+        # group membership — independent of whether any probe exists) and by
+        # stack-watchdog.sh's consumer-group probe, which run off Kafka
+        # membership rather than lane traffic. Sensitivity for a lab that DOES
+        # have probe traffic is unchanged: 15m flat, still critical, still the
+        # first thing to look at.
+        # NOT weakened to `warning`: when the guard passes, a flat probe lane is
+        # a dead bus→engine path and nothing else.
+        expr: >
+          increase(corr_ingest_events{counter="probes_received"}[15m]) == 0
+          and
+          increase(corr_ingest_events{counter="probes_received"}[24h]) > 0
+        for: 15m
+        labels: { severity: critical, layer: correlation }
+        annotations:
+          summary: "Correlation probe intake flat-lined 30m — bus→engine ingest is dead; MOST LIKELY the engine is not consuming (dead Kafka consumer), then vector, then kafka"
+          description: >-
+            The single most common cause is THE ENGINE IS NOT CONSUMING: its
+            Kafka consumer never joined the group, or joined and died. That is
+            what happened on 2026-09-02 (a failed multi-topic subscribe took all
+            14 lanes down for one optional topic) and this alert fired at 19:18
+            — into a blackhole notifier, so nobody saw it. Check
+            CorrelationConsumerDead and
+            kafka_consumergroup_members{consumergroup="netops-correlation"}
+            FIRST; the container healthcheck will read "healthy" throughout and
+            is not evidence of anything here. Only after ruling the consumer out
+            should you work back up the pipe: vector-router, then the broker,
+            then the prober itself.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      - alert: CorrSyslogLaneFlatlined
+        expr: increase(corr_ingest_events{counter="flows_received"}[30m]) == 0 and increase(corr_ingest_events{counter="metrics_received"}[30m]) == 0
+        for: 30m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Correlation flow+metric intake flat-lined 1h — telemetry sources silent (lab down or edge-ingest broken)"
+
+  # ============================================================================
+  # STORAGE-LOSS OBSERVABILITY (F-17 / F-18 / F-19 / F-04)
+  # ============================================================================
+  #
+  # The theme these rules exist to break: EVERY silent-loss finding in the
+  # 2026-07-21 audit had the same shape — the failing component KNEW, and the
+  # knowledge stopped there. Vector knew (it logged and counted). OpenSearch
+  # knew (it returned a 400 per bulk item). The knowledge died in an unscraped
+  # log line, or landed in a metric with no rule attached to it.
+  #
+  # The authoritative measurement that motivated this group: 1,127 documents
+  # rejected in 4.75 h = ~5,700/day = 0.93% of ALL application logs,
+  # permanently lost, while every dashboard showed a healthy cluster and the
+  # external watchdog stayed green for the entire incident.
+  #
+  # Metric provenance:
+  #   vector_*     -> vmscrape job 'vector' (both tiers, :9598)
+  #   opensearch_* -> vector-aggregator's opensearch_indexing_stats /
+  #                   opensearch_cluster_health http_client sources ->
+  #                   prometheus_remote_write -> VM. See vector/vector.yaml.
+  # ----------------------------------------------------------------------------
+  - name: storage-loss-observability
+    interval: 60s
+    rules:
+      - alert: OpenSearchDocumentsRejected
+        # ####################################################################
+        # DO NOT "SIMPLIFY" THIS TO index_failed. THAT COUNTER LIES.
+        #
+        # Measured simultaneously, on the same node, in the same response:
+        #     "index_failed" : 0        <- while documents were being discarded
+        #     "doc_status"   : { "2xx": 120029, "4xx": 1127 }
+        # index_failed counts whole-REQUEST failures. Bulk indexing rejects
+        # PER ITEM: OpenSearch returns HTTP 200 for the batch and a 400 inside
+        # the individual item, so index_failed never moves. A dashboard panel
+        # built on index_failed is worse than no panel — it actively asserts
+        # health during data loss.
+        #
+        # doc_status.4xx is per-DOCUMENT and does move. It is a mapping
+        # rejection (wrong type for a field, field-limit exceeded); those are
+        # NOT retriable, so every increment is a document destroyed for good.
+        # Threshold is > 0 because the correct rate of permanent loss is zero.
+        #
+        # It is a gauge holding an absolute counter, so delta() not increase():
+        # an OpenSearch restart resets it to 0, which yields a negative delta
+        # and cannot false-fire.
+        # ####################################################################
+        # ####################################################################
+        # 2026-08-05 ADDENDUM — everything above remains true AND incomplete:
+        # doc_status.4xx ALSO counts OpenSearch's own housekeeping conflicts
+        # (ISM retention/snapshot jobs update lock/policy docs with optimistic
+        # concurrency; a lost race is a per-doc 409 in the same 4xx bucket).
+        # Measured: ~0.8/min of 4xx overnight with ZERO router-sink drops and
+        # every lane indexing — so `>0` alone fires forever on a healthy
+        # cluster, which buries the real signal (the alert equivalent of the
+        # F-18 lesson). The composite below keeps doc_status as the COUNTER
+        # (it does move on real loss — the 1127-doc incident above) but only
+        # FIRES when a Vector opensearch sink simultaneously reports
+        # unintentional discards — i.e. a rejection some writer actually
+        # suffered. Non-vector writers log their own OS errors loudly and are
+        # not silenced by this (they don't tick vector metrics either way).
+        # ####################################################################
+        expr: >
+          delta(opensearch_indexing_doc_status{code="4xx"}[15m]) > 0
+          and on()
+          sum(increase(vector_component_discarded_events_total{component_id=~"opensearch.*",intentional="false"}[15m])) > 0
+        for: 5m
+        labels: { severity: critical, layer: storage }
+        annotations:
+          summary: "OpenSearch REJECTED {{ $value }} documents in 15m — permanent loss, not a retry"
+          description: "Per-item bulk rejection (mapping conflict or field-limit). Find them: curl netops-opensearch-1:9200/_nodes/stats/indices/indexing | jq .nodes[].indices.indexing.doc_status ; then check the lane's index template. index_failed will read ~0 — ignore it."
+
+      - alert: OpenSearchRejectionRatioHigh
+        # The same signal as a proportion, so a busy day cannot hide a
+        # proportionally worse failure inside a bigger absolute number.
+        expr: delta(opensearch_indexing_doc_status{code="4xx"}[1h]) / clamp_min(delta(opensearch_indexing_index_total[1h]), 1) > 0.001
+        for: 15m
+        labels: { severity: critical, layer: storage }
+        annotations:
+          summary: "OpenSearch is rejecting {{ $value | humanizePercentage }} of all documents (>0.1%)"
+
+      - alert: VectorEventsDiscarded
+        # F-18: this metric was exported by BOTH Vector tiers and confirmed
+        # present in VictoriaMetrics for the whole incident. The data needed to
+        # detect the loss within 60 seconds was in the metrics store the entire
+        # time; the only thing missing was this rule. intentional="false" is
+        # load-bearing — intentional="true" is ordinary filtering and is
+        # constantly non-zero.
+        expr: sum by (component_id, instance) (increase(vector_component_discarded_events_total{intentional="false"}[15m])) > 0
+        for: 5m
+        labels: { severity: critical, layer: ingest }
+        annotations:
+          summary: "Vector discarded {{ $value }} events UNINTENTIONALLY at {{ $labels.component_id }} ({{ $labels.instance }})"
+          description: "Unintentional discard = a bug or a rejected write, never normal filtering. Check the component's errors and netops-deadletter-*."
+
+      - alert: VectorComponentErrors
+        expr: sum by (component_id, error_type, instance) (increase(vector_component_errors_total[15m])) > 0
+        for: 10m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "Vector {{ $labels.component_id }} error_type={{ $labels.error_type }} ({{ $value }} in 15m)"
+
+      - alert: OpenSearchFloodStageBlock
+        # ####################################################################
+        # #209 (storm-s10, run 09012025x578, 2026-09-01). Flood stage is not a
+        # precursor — it is an ACTIVE data-integrity event. At 95% used
+        # OpenSearch puts EVERY index into read-only-allow-delete and answers
+        # every _bulk with HTTP **200** carrying a per-ITEM 429
+        # cluster_block_exception. Nothing in the HTTP status moves: the router
+        # only ever exported vector_http_client_responses_total{status="200"}
+        # through the whole 11-minute s10 block, so an alarm keyed on 429s
+        # would have been permanently silent. Built instead from the two
+        # signals this stack ALREADY scrapes:
+        #   * the shared filesystem at or under the flood-stage watermark
+        #     (node-exporter — the same selector as the disk-headroom group),
+        #   * AND the write path actually suffering it: per-DOCUMENT 4xx
+        #     climbing (opensearch_indexing_doc_status, the F-17 counter — a
+        #     per-item 429 lands in the 4xx bucket) or 2xx flat-lined.
+        # Why this is NOT redundant with what already exists:
+        # DiskFloodStageImminent (disk-headroom) fires at <7% free and says
+        # "this is coming"; this one says "it has ARRIVED and evidence is being
+        # delayed right now". And OpenSearchDocumentsRejected deliberately
+        # cannot cover it any more: it requires a SIMULTANEOUS Vector discard,
+        # and the #209 sink fix means there is no longer one to find.
+        # ####################################################################
+        expr: >
+          (min(node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}
+               / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}) < 0.05)
+          and
+          (sum(delta(opensearch_indexing_doc_status{code="4xx"}[5m])) > 0
+           or sum(delta(opensearch_indexing_doc_status{code="2xx"}[5m])) == 0)
+        for: 2m
+        labels: { severity: critical, layer: storage }
+        annotations:
+          summary: "OpenSearch is at FLOOD STAGE — every index is read-only-allow-delete and every bulk write is being refused"
+          description: "Evidence is DELAYED, not lost: the router retries partial-bulk 429s and back-pressures into Kafka, which retains 72h (#209). The delay becomes LOSS if the block outlives the router's ~43min retry envelope or the topic retention. Free space now — docker builder prune -f; verify ISM is deleting EVERY lane (_plugins/_ism/explain/netops-*); check Kafka retention.bytes — then, once free is back over 5%, clear the block: PUT _all/_settings {index.blocks.read_only_allow_delete: null}. Never shrink Kafka retention to buy disk (soak-2 lesson)."
+
+      - alert: VectorSinkBufferFilling
+        # ####################################################################
+        # #209, the other half. Converting a storage block from LOSS into
+        # BACK-PRESSURE is only an improvement if the back-pressure is VISIBLE
+        # — otherwise "delayed" quietly becomes "delayed forever" and nobody
+        # learns until Kafka retention expires.
+        # Every OpenSearch sink carries the pinned 500-event memory buffer
+        # (deployment/docker/vector-router/vector.yaml); a healthy sink's
+        # buffer returns to zero between flushes — measured 0 on EVERY lane on
+        # the live router. min_over_time keeps the FLOOR, so this fires only
+        # when the buffer never once dropped below 80% of capacity across ten
+        # minutes, i.e. the sink is not draining at all. That is precisely
+        # what a read-only-allow-delete block looks like from the router side,
+        # and it also catches the non-disk shapes (OpenSearch OOM, a wedged
+        # bulk queue) that the flood-stage rule above cannot see.
+        # 400 = 0.8 x max_events; tests/test_ingest_contract.py pins the
+        # threshold and the sink's max_events together so they cannot drift.
+        # ####################################################################
+        expr: min_over_time(vector_buffer_events{component_id=~"opensearch_.*",component_kind="sink"}[10m]) > 400
+        for: 5m
+        labels: { severity: critical, layer: ingest }
+        annotations:
+          summary: "Vector sink {{ $labels.component_id }} has been over 80% buffered for 10m — its store is not accepting writes"
+          description: "Back-pressure has reached the Kafka source: offsets stop committing and consumer lag grows, which is the CORRECT degradation (netops.* retains 72h, so this is delayed, not lost). Check OpenSearchFloodStageBlock, disk headroom and OpenSearch heap. If the block outlives the router's ~43min retry envelope the batches ARE dropped and become VectorEventsDiscarded."
+
+      - alert: VectorOpenSearchRetryStorm
+        # ####################################################################
+        # #209, third leg — the POISON-STALL alarm, and it is not optional.
+        # `request_retry_partial: true` retries the WHOLE bulk batch and Vector
+        # 0.40 cannot tell a transient 429 cluster_block from a PERMANENT
+        # per-item 400 mapping rejection (the F-17 class, 1,127 docs in
+        # 2026-08). So one poisoned document now holds its lane for the full
+        # ~43-minute retry envelope, and again for every batch it lands in.
+        # That trade is only acceptable while the stall is VISIBLE.
+        #
+        # VectorSinkBufferFilling CANNOT see it. Measured on a mock cluster
+        # refusing every write (netops-vector-router:0.40.0-curl, 2026-09-02):
+        # after 45 s of continuous retrying the sink showed
+        #   vector_http_client_requests_sent_total = 835   (climbing hard)
+        #   vector_http_client_responses_total{status="200"} = 835
+        #   vector_component_sent_events_total   = SERIES ABSENT (0 delivered)
+        #   vector_utilization  = 0.99
+        #   vector_buffer_events = 137 / 500  ← only 27% — WELL under the
+        #                                       80% buffer threshold
+        # so the buffer rule stays silent through a retry storm on any lane
+        # whose arrival rate is below the retry rate. The discriminator is
+        # "requests going OUT while no events are DELIVERED", which is exactly
+        # what a retried-forever batch looks like and cannot be confused with a
+        # healthy sink (every delivered batch ticks sent_events).
+        # `unless` rather than `and … == 0` on purpose: during a full storm the
+        # sent_events series is ABSENT, not zero, and `== 0` would match
+        # nothing — the F-35 "selector that matches nothing reads as coverage"
+        # trap. 10m window + for:2m ⇒ fires after ~12 minutes of solid retrying.
+        #
+        # DEFECT (first real delivery run, 2026-09-03): this fired continuously
+        # with activeAt 2026-09-02T01:02 — the moment the notifier stopped being
+        # a blackhole — while vector-router had had NO OpenSearch errors for
+        # hours. It was never latched by the window and never re-armed by state
+        # restoration; BOTH of those hypotheses are wrong and worth writing down
+        # so nobody re-tests them:
+        #   · `increase(...[10m])` over a counter that stopped moving decays to
+        #     0 within 10 minutes, so an ENDED storm does resolve on its own.
+        #   · vmalert's ALERTS_FOR_STATE restore only replays `activeAt` so the
+        #     `for:` clock is not restarted across a restart; it does not hold an
+        #     alert whose expression has gone empty. The rule still has to
+        #     evaluate truthy every interval, and this one did.
+        # The actual fault is a SELECTOR MISMATCH between the two legs. The LHS
+        # said only `component_id=~"opensearch_.*"`, which on the live store
+        # matches vector-aggregator's two OpenSearch http_client *SOURCES* —
+        #   vector_http_client_requests_sent_total{component_id="opensearch_cluster_health",
+        #     component_kind="source",method="GET",instance="vector-aggregator:9598"}
+        #   …{component_id="opensearch_indexing_stats",component_kind="source",…}
+        # — the health/stats pollers, which issue a GET every 15 s forever. The
+        # RHS is pinned to `component_kind="sink"`, so those two source series
+        # can NEVER have a right-hand partner to subtract, `unless` never removes
+        # them, and the rule fires 24/7 on a perfectly healthy stack. Confirmed
+        # by evaluating the old expression against the live store: it returned
+        # exactly those two source series and nothing else, and ALERTS carried
+        # component_kind="source" on both firing instances.
+        # FIX: pin BOTH legs to `component_kind="sink"` so the rule only ever
+        # measures the thing it is about — a bulk sink issuing requests and
+        # delivering nothing. Sensitivity is untouched: during a real storm the
+        # sink's requests counter still climbs while its sent_events series goes
+        # absent, so the `unless` still yields the sink (the poison-stall test in
+        # rules-tests/os-flood-stage-block.test.yaml already drives exactly that
+        # shape with component_kind="sink" on the fixture). No window was
+        # lengthened; a storm that ends now resolves within 10m + 2m.
+        # ####################################################################
+        expr: >
+          increase(vector_http_client_requests_sent_total{component_id=~"opensearch_.*",component_kind="sink"}[10m]) > 0
+          unless on (component_id, instance)
+          increase(vector_component_sent_events_total{component_id=~"opensearch_.*",component_kind="sink"}[10m]) > 0
+        for: 2m
+        labels: { severity: critical, layer: ingest }
+        annotations:
+          summary: "Vector sink {{ $labels.component_id }} has been issuing bulk requests for 10m and delivering NOTHING — it is stuck retrying"
+          description: "Either OpenSearch is refusing writes (see OpenSearchFloodStageBlock and disk headroom) or a permanently-rejected document is poisoning the batch: request_retry_partial retries the whole batch and cannot tell a transient 429 from a per-item 400. The lane is STALLED, not losing — Kafka holds 72h and the batch is dropped after the ~43min retry envelope. Identify the poison with GET _nodes/stats/indices/indexing (doc_status.4xx) and the router's bulk error log, then fix the lane's template or drop the offending key in its transform (the del(.label) precedent in vector/vector.yaml)."
+
+      - alert: LogIngestRateDegraded
+        # ####################################################################
+        # F-19: PARTIAL loss, not total stall.
+        #
+        # The external watchdog's ingest check was `count == 0` — it can only
+        # see a pipeline that has stopped completely. During the measured
+        # incident the count was ~14,000/h and the watchdog stayed GREEN while
+        # 4,390 documents/day were being destroyed. "Ingesting correctly" and
+        # "ingesting with a 5% hole" are identical under a zero-test.
+        #
+        # This compares the current 15m indexing rate against the trailing 6h
+        # baseline of itself. The `> 100` floor stops an idle lab (where the
+        # baseline is legitimately near zero) from firing continuously — the
+        # rule is deliberately silent below a real traffic level rather than
+        # noisy, because an alert nobody trusts is worse than none.
+        #
+        # DEFECT (first real delivery run, 2026-09-03): two syslog-ng restarts
+        # put this into a 4-hour continuous CRITICAL on a healthy pipeline. The
+        # mechanism is NOT the dip — it is the RECOVERY. Measured on the live
+        # store, sum(delta(...[15m])) across the restart:
+        #   19:05  9,601   ← steady state
+        #   20:05  1,191
+        #   20:20      0   ← pipeline stopped
+        #   20:35      0
+        #   20:50 200,429  ← Kafka backlog drains in one 15m bucket
+        #   21:05 114,389
+        #   21:20  5,845   ← healthy steady state again … and firing
+        # `avg_over_time` is a MEAN, so those two catch-up buckets alone add
+        # ~13,100 to a 24-point baseline: the baseline read 17,693 while the
+        # actual healthy rate was ~5,400, i.e. 30% of "baseline", so the rule
+        # screamed partial-loss at a pipeline that was fine — for the full 6h
+        # the poisoned sample stayed in the window. A restart therefore
+        # guarantees hours of false CRITICAL, which is precisely how a pager
+        # gets muted. (The dip itself is the smaller half: a 1–2 min stop only
+        # removes ~13% of a 15m delta and cannot cross the 50% line on its own,
+        # but the ~30 min of genuine zero seen here does cross it.)
+        #
+        # FIX, two parts, and deliberately NOT a wider window (a wider mean is
+        # more poisoned, not less):
+        #  1. quantile_over_time(0.5, …) — a MEDIAN baseline. Robust to both
+        #     tails by construction: the drain spike and the zero buckets are
+        #     each just one order statistic and cannot move the centre. On the
+        #     measured series above the median baseline is ~5,500 against the
+        #     mean's 17,693, so the post-restart steady state reads as normal.
+        #  2. for: 20m → 45m. The restart's own zero window was true for ~30 min;
+        #     45m outlives it. That does NOT create a hole: a TOTAL stop is
+        #     LogIngestStalled's job (`== 0`, for: 15m, critical) and it fires
+        #     inside that same window. This rule's job is the F-19 shape —
+        #     PARTIAL, SUSTAINED loss, measured over weeks at ~5% — for which 45
+        #     extra minutes of latency costs nothing.
+        # Severity critical → warning: this is a heuristic self-baseline
+        # comparison, not a proven outage; total stalls and refused writes keep
+        # their critical rules. The trade being accepted: a degradation that
+        # persists long enough to become the median itself (roughly >3h at the
+        # new rate) stops being visible to this rule — a self-baseline cannot
+        # see a new normal, and pretending otherwise with a longer window only
+        # trades that blind spot for more restart noise.
+        # ####################################################################
+        expr: >
+          sum(delta(opensearch_indexing_doc_status{code="2xx"}[15m]))
+            < 0.5 * sum(quantile_over_time(0.5, delta(opensearch_indexing_doc_status{code="2xx"}[15m])[6h:15m]))
+          and
+          sum(quantile_over_time(0.5, delta(opensearch_indexing_doc_status{code="2xx"}[15m])[6h:15m])) > 100
+        for: 45m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "Log indexing rate has been under half its 6h MEDIAN baseline for 45m ({{ $value }} docs/15m) — sustained partial ingest loss, not a stall"
+          description: "A total stall is caught by LogIngestStalled and the watchdog; this is the PARTIAL shape that hid for weeks. Baseline is a MEDIAN on purpose — a restart's Kafka-backlog drain spike used to poison a mean baseline for 6h and fire this on a healthy pipeline (2026-09-03), so if you are reading this within an hour of a syslog-ng/router restart, confirm against the raw series before chasing it. Check vector-router discards, Kafka consumer lag, and OpenSearch rejections."
+
+      - alert: LogIngestStalled
+        expr: sum(delta(opensearch_indexing_doc_status{code="2xx"}[15m])) == 0
+        for: 15m
+        labels: { severity: critical, layer: ingest }
+        annotations:
+          summary: "OpenSearch indexed ZERO documents in 15m — the log pipeline has stopped"
+
+      - alert: OpenSearchStatsMissing
+        # Meta-alert, same reasoning as ContainerMetricsMissing: the two rules
+        # above are vacuous if this lane stops. An alert whose selector matches
+        # zero series reads as coverage.
+        expr: absent(opensearch_indexing_doc_status)
+        for: 15m
+        labels: { severity: critical, layer: storage }
+        annotations:
+          summary: "The OpenSearch doc_status lane is gone — document-rejection alerting is BLIND (check vector-aggregator's opensearch_indexing_stats source)"
+
+  # ----------------------------------------------------------------------------
+  # OpenSearch cluster shape (F-53 / F-54)
+  # ----------------------------------------------------------------------------
+  - name: opensearch-cluster-shape
+    interval: 60s
+    rules:
+      - alert: OpenSearchClusterNotGreen
+        # YELLOW IS A REAL SIGNAL AGAIN — it was not, and that is the finding.
+        # netops-snmptrap-* had no index template, so it defaulted to 1 replica
+        # on a single-node cluster, its replica was permanently UNASSIGNED, and
+        # 33 ISM audit-history indices did the same: 35 permanently unassigned
+        # shards. The cluster was ALWAYS yellow, so yellow meant nothing and the
+        # genuine problem hid inside the noise. Templates now pin
+        # number_of_replicas: 0 and apply-ism.sh pins it for the plugin indices,
+        # so the cluster sits at green and any departure is actionable.
+        expr: opensearch_cluster_status > 0
+        for: 15m
+        labels: { severity: warning, layer: storage }
+        annotations:
+          summary: "OpenSearch cluster is {{ $labels.status_text }} ({{ $value }}) — a lane is missing a template, or a shard cannot be allocated"
+
+      - alert: OpenSearchUnassignedShards
+        expr: opensearch_cluster_unassigned_shards > 0
+        for: 30m
+        labels: { severity: warning, layer: storage }
+        annotations:
+          summary: "{{ $value }} unassigned shards — on a single-node cluster this is almost always number_of_replicas > 0 on a new index pattern"
+
+      - alert: OpenSearchShardCountHigh
+        # Heap, not disk, is what fails first. At ~1.8 GB heap the accepted
+        # density is roughly 20 shards/GB (~36 shards); the per-tenant DAILY
+        # index scheme adds ~26 shards/day and reaches ~365 at the 14-day ISM
+        # steady state. Heap/GC death arrives well before the 1000-shard cap,
+        # and AT the cap index creation is rejected outright and ingest stops
+        # silently. Warn early, while consolidating index granularity is still
+        # a planning decision instead of an incident.
+        expr: opensearch_cluster_active_shards / clamp_min(opensearch_cluster_data_nodes, 1) > 300
+        for: 30m
+        labels: { severity: warning, layer: storage }
+        annotations:
+          summary: "{{ $value }} shards/node — heap exhaustion risk; consolidate to weekly or aliased per-tenant indices, and verify ISM deletes every lane"
+
+      - alert: OpenSearchShardCountCritical
+        expr: opensearch_cluster_active_shards / clamp_min(opensearch_cluster_data_nodes, 1) > 700
+        for: 15m
+        labels: { severity: critical, layer: storage }
+        annotations:
+          summary: "{{ $value }} shards/node — approaching cluster.max_shards_per_node (1000), where index creation is REJECTED and ingest stops with no error"
+
+  # ----------------------------------------------------------------------------
+  # Ingest integrity (F-03 / F-11 / F-59) — the signals that only exist because
+  # the pipeline was made to EMIT them. Each of these replaces an
+  # indistinguishable-from-normal failure with a number.
+  # ----------------------------------------------------------------------------
+  - name: ingest-integrity
+    interval: 60s
+    rules:
+      - alert: VectorDeadLetters
+        # F-03/F-14: nothing lands in netops-deadletter-* during normal
+        # operation — it is fed only by transforms that could not process an
+        # event. So ANY document here means a producer broke its contract, or
+        # a transform did. Before this, the same events were `drop_on_error`d
+        # into a counter shared with ordinary filtering: a genuine VRL failure
+        # and "this syslog line is not a cloud line" were the same number, with
+        # no payload kept for either.
+        #
+        # Measured at the SINKS, not per-lane: `opensearch_deadletter` (router)
+        # and `kafka_deadletter` (aggregator) are the two exits of the whole
+        # dead-letter path, so a lane added later is covered the day it is
+        # wired, without editing this rule. Both are already exported by the
+        # vector job in vmscrape.yml — no new scrape target.
+        expr: sum by (component_id, instance) (increase(vector_component_sent_events_total{component_id=~"opensearch_deadletter|kafka_deadletter"}[15m])) > 0
+        for: 5m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "{{ $value }} events dead-lettered via {{ $labels.component_id }} in 15m — a producer or transform is failing"
+          description: "Read them: curl 'netops-opensearch-1:9200/netops-deadletter-*/_search?size=20&sort=dropped_at:desc' | jq '.hits.hits[]._source | {lane, reason, detail}'. reason=error is a processing failure (data would have been lost); reason=abort is a rejected/filtered record, e.g. a bus-bridge write to a non-netops topic."
+
+      - alert: TenantEnrichmentMissRateJumped
+        # ####################################################################
+        # F-11: tenant_id = "" is a LEGITIMATE value (platform-owned
+        # telemetry), which is exactly why a broken device→tenant enrichment
+        # table is invisible: every device lane collapses into the shared
+        # -untagged- index and the pipeline reports perfect health. Measured
+        # 2026-07-21: 400/400 sampled messages on all six device lanes carried
+        # tenant_id="". From the outside that is indistinguishable from a lab
+        # whose devices genuinely have no tenant.
+        #
+        # So alert on the CHANGE, not the level. A deployment that never
+        # matched anything stays silent forever (correct — nothing broke); a
+        # deployment whose match rate collapses is a broken enrichment table,
+        # a stale CSV export, or a device inventory that lost its tenant
+        # column. At-rest tenant separation (#20 Phase 3) silently degrades to
+        # one shared bucket when this happens, leaving isolation resting on
+        # the API query filter alone — a single-layer defence where a
+        # two-layer one was designed.
+        #
+        # METRIC NAME: `netops_tenant_attribution_events`, NO `_total` suffix.
+        # Verified empirically against timberio/vector:0.40.0-alpine's
+        # prometheus_exporter — it does NOT append `_total` to counters, unlike
+        # most Prometheus client libraries. The first draft of this rule said
+        # `_total` and would have matched ZERO series forever, i.e. exactly the
+        # F-35 defect this audit found five times over: an alert whose selector
+        # matches nothing reads as coverage. Check the exporter output before
+        # renaming this.
+        # ####################################################################
+        expr: |
+          (sum by (topic) (rate(netops_tenant_attribution_events{outcome="unmatched"}[15m]))
+             / clamp_min(sum by (topic) (rate(netops_tenant_attribution_events[15m])), 0.001))
+          >
+          (sum by (topic) (rate(netops_tenant_attribution_events{outcome="unmatched"}[6h] offset 1h))
+             / clamp_min(sum by (topic) (rate(netops_tenant_attribution_events[6h] offset 1h)), 0.001)) + 0.25
+        for: 20m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "Tenant enrichment miss rate on {{ $labels.topic }} jumped to {{ $value | humanizePercentage }} above its 6h baseline"
+          description: "The device→tenant CSV (data/api/enrichment/device_tenant.csv) is stale, empty, or not mounted. Every unmatched event lands in the shared netops-*-untagged-* index, so per-tenant at-rest separation is not in effect for that lane."
+
+      - alert: TenantAttributionLaneMissing
+        # Meta-alert: the rule above is vacuous if the counter stops. An alert
+        # whose selector matches zero series reads as coverage (the F-35 lesson).
+        expr: absent(netops_tenant_attribution_events)
+        for: 30m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "The tenant-attribution counter is gone — enrichment-miss alerting is BLIND (check vector-router's tenant_attribution_metric transform)"
+
+      - alert: VectorQuarantineSealFailures
+        # F-11 (INV-F11-06): the quarantine seal stage is fail-closed by
+        # design — a runtime seal failure ABORTS the event (drop_on_abort, no
+        # reroute to the plaintext deadletter), so it can never continue
+        # plaintext to the shared sinks. The cost of that honesty is silent
+        # LOSS unless the drop is alerted on: this rule is the other half of
+        # the invariant. Vector counts the aborts in component_errors_total on
+        # the generated <lane>_quarantine transforms (syslog_quarantine,
+        # snmptrap_quarantine, flows_quarantine); ANY error here means
+        # unattributable events are being dropped right now.
+        expr: sum by (component_id) (increase(vector_component_errors_total{component_id=~".*_quarantine"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          layer: ingest
+        annotations:
+          summary: "quarantine seal stage {{ $labels.component_id }} is failing — unattributable events are being DROPPED (fail-closed, INV-F11-06); check the router's sealing key delivery and the vector-router error log"
+
+      - alert: QuarantineGrowthAbnormal
+        # F-11: a steady trickle into netops-quarantine-* is normal life (a
+        # new device in the window before assignment, the F-10 <=75s reload
+        # window). A RISE against the deployment's own baseline is not: the
+        # enrichment CSV went stale or empty, or a fleet of unknown senders
+        # appeared. Same change-not-level shape as
+        # TenantEnrichmentMissRateJumped: last-hour intake at the
+        # opensearch_quarantine sink vs 3x the prior-6h hourly average, plus a
+        # 10-event floor so single-digit noise cannot trip it.
+        expr: |
+          sum(increase(vector_component_sent_events_total{component_id="opensearch_quarantine"}[1h]))
+          >
+          (sum(increase(vector_component_sent_events_total{component_id="opensearch_quarantine"}[6h] offset 1h)) / 6) * 3 + 10
+        for: 15m
+        labels:
+          severity: warning
+          layer: ingest
+        annotations:
+          summary: "quarantine intake over the last hour is far above its 6h baseline — tenant attribution is failing at scale (stale/empty device_tenant.csv, or a fleet of unknown senders); triage via GET /api/quarantine"
+
+      - alert: QuarantineAttributionStalled
+        # F-11: quarantined events are recoverable only until ISM deletes them
+        # (QUARANTINE_RETENTION_DAYS, default 30). An envelope older than 7
+        # days means nobody is re-attributing and the backlog is drifting
+        # toward the retention cliff. Source: the api's quarantine sampler
+        # (netops_sec_quarantine_oldest_seconds, secobs vocabulary — scraped
+        # from the api job, not a Vector transform).
+        expr: netops_sec_quarantine_oldest_seconds > 7 * 86400
+        for: 6h
+        labels:
+          severity: warning
+          layer: ingest
+        annotations:
+          summary: "the oldest quarantined event has been unattributed for over 7 days — assign its device to a tenant and POST /api/quarantine/reattribute before retention deletes it"
+
+      # NOTE ON F-59 (backup freshness): there is deliberately NO metric-based
+      # snapshot-age rule here. The metrics path runs INSIDE the stack, and a
+      # backup alarm that dies with the thing it protects is theatre — the same
+      # reasoning that keeps scripts/stack-watchdog.sh independent of the
+      # platform's own notifiers. Snapshot age is checked out-of-band by the
+      # watchdog (`check_backup_freshness`), which pages over its own channel.
+
+  # ----------------------------------------------------------------------------
+  # Bus consumer lag (F-46) — the only signal that separates "quiet bus" from
+  # "dead consumer". Source: kafka-exporter (vmscrape job 'kafka').
+  # ----------------------------------------------------------------------------
+  - name: bus-consumer-lag
+    interval: 60s
+    rules:
+      - alert: KafkaConsumerLagGrowing
+        # THE POINT OF THIS RULE. Every flat-line rule in this file requires
+        # `increase(...) == 0` EXACTLY, so a consumer running 10x slow — the
+        # realistic shape when ClickHouse or OpenSearch is degraded — tripped
+        # absolutely nothing. Sustained GROWTH is the 10x-slowdown signature:
+        # the consumer is still alive and still committing, it just cannot keep
+        # up, and it will never catch up on its own.
+        expr: delta(kafka_consumergroup_lag_sum[30m]) > 1000 and kafka_consumergroup_lag_sum > 1000
+        for: 15m
+        labels: { severity: critical, layer: bus }
+        annotations:
+          summary: "Kafka lag GROWING on {{ $labels.consumergroup }}/{{ $labels.topic }} (+{{ $value }} in 30m) — the consumer is falling behind and will not recover unaided"
+
+      - alert: KafkaConsumerLagHigh
+        expr: kafka_consumergroup_lag_sum > 50000
+        for: 15m
+        labels: { severity: warning, layer: bus }
+        annotations:
+          summary: "Kafka lag {{ $value }} on {{ $labels.consumergroup }}/{{ $labels.topic }}"
+
+      - alert: KafkaConsumerStalled
+        # Lag present AND the consumer's committed offset is not advancing =
+        # dead/wedged consumer, as distinct from a quiet topic (lag 0).
+        expr: kafka_consumergroup_lag_sum > 100 and delta(kafka_consumergroup_current_offset_sum[15m]) == 0
+        for: 15m
+        labels: { severity: critical, layer: bus }
+        annotations:
+          summary: "Kafka consumer {{ $labels.consumergroup }} is STALLED on {{ $labels.topic }} — {{ $value }} messages behind and its offset is not moving"
+
+      - alert: KafkaLagMetricsMissing
+        # Meta-alert (see ContainerMetricsMissing). Before 2026-07-21 there was
+        # no lag metric at all and that absence was itself invisible.
+        expr: absent(kafka_consumergroup_lag_sum)
+        for: 30m
+        labels: { severity: warning, layer: bus }
+        annotations:
+          summary: "No Kafka consumer-lag metrics — kafka-exporter is down and every bus-lag alert above is blind"
+
+  # ----------------------------------------------------------------------------
+  # Disk headroom (F-55) — fire well BEFORE OpenSearch's flood stage.
+  # ----------------------------------------------------------------------------
+  # All six stores share ONE 77 GB filesystem, measured at 83% used with ~2.3 GB
+  # of margin against each store's own configured steady state. It has already
+  # run out once: 3,018 NOT_ENOUGH_SPACE errors, last 2026-07-17. At 95%
+  # OpenSearch sets EVERY index read-only and ingestion stops with no error —
+  # the 2026-06-10 outage mode. HostDiskLow in stack-resilience fires at <10%
+  # free, which on this filesystem is ~2 GB away from flood stage and far too
+  # late to do anything but delete data under pressure.
+  - name: disk-headroom
+    interval: 60s
+    rules:
+      - alert: DiskHeadroomLow
+        expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} < 0.17
+        for: 15m
+        labels: { severity: warning, layer: host }
+        annotations:
+          summary: "Only {{ $value | humanizePercentage }} free on the shared store filesystem — act now, not at flood stage"
+          description: "Order of operations: docker builder prune -f; verify ISM is deleting EVERY lane (_plugins/_ism/explain/netops-*); check Kafka retention.bytes per topic; only then consider growing the volume."
+
+      - alert: DiskWillFillIn24h
+        # Trend, not level. The value of this over a static threshold is that it
+        # fires while there is still time to choose a remedy rather than take
+        # whichever one is fastest.
+        expr: predict_linear(node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}[6h], 24 * 3600) < 0
+        for: 30m
+        labels: { severity: critical, layer: host }
+        annotations:
+          summary: "Shared filesystem trending to FULL within 24h — OpenSearch flood stage (95%) sets every index read-only and stops ingest"
+
+      - alert: DiskFloodStageImminent
+        expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} < 0.07
+        for: 2m
+        labels: { severity: critical, layer: host }
+        annotations:
+          summary: "Under {{ $value | humanizePercentage }} free — OpenSearch flood stage is at 5%. Every index goes read-only and ingestion stops SILENTLY."
+
+  # ── Digital Experience (S17, 2026-09-05) ────────────────────────────────────
+  # Alerts about what a USER experiences, not about what a device reports. Their
+  # subject is a synthetic TARGET from the per-tenant catalogue, so:
+  #
+  #   * the identity is (tenant, target, kind, site, app) — there is no `device`
+  #     label on a dem_* series and there deliberately never will be: a target
+  #     is a service, and the device in front of it is one hypothesis about why
+  #     it is slow, not the thing being measured;
+  #   * they are DELIVERED BY THE PRODUCT NOTIFIER (the in-API alerts engine,
+  #     which reads this same file), which resolves the owning tenant for a
+  #     device-less experience alert from the `tenant` label — a value our own
+  #     prober writes from the catalogue row, never device-supplied telemetry.
+  #     The platform vmalert→webhook lane REFUSES them on sight, exactly as it
+  #     refuses every other customer-identity alert, and that is correct: a
+  #     tenant's slow application is not a platform page.
+  #   * every threshold is a GAUGE the prober publishes beside the measurement
+  #     (dem_target_availability_budget_pct / dem_target_latency_budget_ms), so
+  #     the comparison is pure PromQL and keeps evaluating while the api — which
+  #     owns the catalogue — is the thing that is down.
+  #
+  # Tier: warning, all of them. The owner's ruling stands — exactly four
+  # conditions are page-worthy, and none of them is "an application is slow".
+  # Runbook: docs/runbooks/digital-experience.md
+  - name: noc-experience
+    interval: 60s
+    rules:
+      - alert: ExperienceAvailabilityBelowBudget
+        # Availability over the last 15 minutes against the target's OWN budget.
+        # Both sides are folded to the same label set so this is a plain vector
+        # comparison — no group_left, which is what keeps it readable and keeps
+        # the promtool test honest about the label set that comes out.
+        #
+        # The denominator is count_over_time, not a rate: probe samples arrive
+        # on the target's own interval (15s..1h) and a rate would report a
+        # 1-hour target as a hole rather than as one sample.
+        expr: >
+          100 * (
+            sum by (tenant,target,kind,site,app) (sum_over_time(dem_probe_success[15m]))
+            /
+            sum by (tenant,target,kind,site,app) (count_over_time(dem_probe_success[15m]))
+          )
+          <
+          max by (tenant,target,kind,site,app) (dem_target_availability_budget_pct)
+        for: 10m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "Experience target {{ $labels.target }} ({{ $labels.kind }}) is at {{ $value | printf \"%.2f\" }}% availability, under its budget"
+          description: >-
+            Site {{ $labels.site }}, application {{ $labels.app }}. This is the SYNTHETIC view: a probe from
+            the prober's vantage failed. Confirm the failure reason on the target's drill-down (dns / tls /
+            connect_refused / connect_timeout / timeout / status) before assuming the service is down —
+            a vantage that lost its own path reports the same shape as a service that stopped answering.
+          runbook: "docs/runbooks/digital-experience.md#availability-below-budget"
+
+      - alert: ExperienceLatencyOverBudget
+        # p95 over the last 15 minutes against the target's DECLARED latency
+        # budget. The budget gauge exists only where an operator declared one,
+        # so this rule cannot fire against a threshold nobody set.
+        expr: >
+          max by (tenant,target,kind,site,app) (quantile_over_time(0.95, dem_probe_latency_ms[15m]))
+          >
+          max by (tenant,target,kind,site,app) (dem_target_latency_budget_ms)
+        for: 10m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "Experience target {{ $labels.target }} ({{ $labels.kind }}) p95 is {{ $value | printf \"%.0f\" }} ms, over its declared budget"
+          description: >-
+            Site {{ $labels.site }}, application {{ $labels.app }}. Read it WITH the phase split on the
+            target's drill-down: DNS, TCP connect, TLS and time-to-first-byte fail in different places and
+            a total that doubled tells you nothing about which one moved.
+          runbook: "docs/runbooks/digital-experience.md#latency-over-budget"
+
+      - alert: ExperiencePathUnstable
+        # A forward path that keeps changing under a target that is otherwise
+        # up. It is deliberately NOT scored as an outage: a re-route is normal
+        # and only becomes evidence when it is frequent and sustained.
+        expr: sum by (tenant,target,site,app) (changes(dem_path_fingerprint[30m])) > 6
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "The measured path to experience target {{ $labels.target }} changed {{ $value }} times in 30m"
+          description: >-
+            Site {{ $labels.site }}. Frequent re-routing under a reachable target is the shape of an
+            unstable upstream or a flapping link, and it is usually visible in the experience numbers
+            as jitter long before it is visible as loss. The hop-by-hop view is on the target's drill-down.
+          runbook: "docs/runbooks/digital-experience.md#path-instability"
+
+      - alert: ExperienceProberNotReporting
+        # The prober is not a scrape target and exports no `up` gauge, so the
+        # only evidence it is alive is that its samples are arriving. This rule
+        # is the one that stops an empty experience page reading as "all well".
+        #
+        # Guarded exactly like CorrProbeLaneFlatlined: it fires only where
+        # samples USED to arrive, so a tenant that has declared no target — or
+        # an install where DEM was never switched on — is silent rather than
+        # paging forever about a feature nobody enabled.
+        # `unless`, not `== 0`: when the samples stop, the [15m] range is EMPTY
+        # and count_over_time returns NO SERIES at all — so `== 0` matches
+        # nothing and the rule would be silent for exactly the condition it
+        # exists to catch. Set subtraction is the shape that survives absence.
+        expr: >
+          sum by (tenant) (count_over_time(dem_probe_success[24h])) > 0
+          unless
+          sum by (tenant) (count_over_time(dem_probe_success[15m])) > 0
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "No experience measurement has arrived for 15m, though this tenant was being measured today"
+          description: >-
+            The experience page is now showing 'not measured' for every target, which is the honest
+            answer and NOT a healthy one. Most likely, in order: the prober container is not running
+            (docker compose --profile prober ps), FEATURE_DEM is off on it, or the api stopped
+            publishing the work queue and the published list has expired.
+          runbook: "docs/runbooks/digital-experience.md#prober-not-reporting"

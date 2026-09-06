@@ -1,0 +1,123 @@
+{{/*
+Services.
+
+EVERY NAME HERE IS LITERAL. rules.yaml, vmscrape.yml, vector.yaml,
+vector-router/vector.yaml, gnmic.yaml, nginx/default.conf and the api's env all
+address peers as `kafka`, `victoria`, `opensearch`, `clickhouse`, `api`,
+`correlation`, `vector-aggregator`, `frontend`, `postgres`, `redis`. Renaming
+one breaks the pipeline silently — the request just goes nowhere. One Correlix
+release per namespace is the price of keeping the compose configuration files
+byte-identical.
+
+The correlation Service is HEADLESS on purpose: vmscrape.yml discovers it with
+dns_sd A records so every replica is scraped as its own instance. Correlation
+counters are per-process monotonic; one series stitched from N processes makes
+every increase()/flat-line alert lie.
+*/}}
+{{- define "correlix.svc" -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .name }}
+  labels:
+{{ include "correlix.labels" (dict "root" .root "component" .component) | indent 4 }}
+spec:
+  type: {{ .type | default "ClusterIP" }}
+  {{- if .headless }}
+  clusterIP: None
+  {{- end }}
+  {{- if .loadBalancerIP }}
+  loadBalancerIP: {{ .loadBalancerIP | quote }}
+  {{- end }}
+  selector:
+{{ include "correlix.selectorLabels" (dict "root" .root "component" .component) | indent 4 }}
+  ports:
+{{ toYaml .ports | indent 4 }}
+{{- end -}}
+{{- if .Values.postgres.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "postgres" "component" "postgres" "ports" (list (dict "name" "postgres" "port" 5432 "targetPort" 5432))) }}
+---
+{{- end }}
+{{- if .Values.redis.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "redis" "component" "redis" "ports" (list (dict "name" "redis" "port" 6379 "targetPort" 6379))) }}
+---
+{{- end }}
+{{- if .Values.kafka.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "kafka" "component" "kafka" "ports" (list (dict "name" "kafka" "port" 9092 "targetPort" 9092) (dict "name" "controller" "port" 9093 "targetPort" 9093))) }}
+---
+{{- end }}
+{{- if .Values.opensearch.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "opensearch" "component" "opensearch" "ports" (list (dict "name" "http" "port" 9200 "targetPort" 9200) (dict "name" "transport" "port" 9300 "targetPort" 9300))) }}
+---
+{{- end }}
+{{- if .Values.clickhouse.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "clickhouse" "component" "clickhouse" "ports" (list (dict "name" "http" "port" 8123 "targetPort" 8123) (dict "name" "native" "port" 9000 "targetPort" 9000) (dict "name" "metrics" "port" 9363 "targetPort" 9363))) }}
+---
+{{- end }}
+{{- if .Values.victoria.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "victoria" "component" "victoria" "ports" (list (dict "name" "http" "port" 8428 "targetPort" 8428))) }}
+---
+{{- end }}
+{{- if .Values.vmalert.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "vmalert" "component" "vmalert" "ports" (list (dict "name" "http" "port" 8880 "targetPort" 8880))) }}
+---
+{{- end }}
+{{- if .Values.vmauth.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "vmauth" "component" "vmauth" "ports" (list (dict "name" "http" "port" 8427 "targetPort" 8427))) }}
+---
+{{- end }}
+{{- if .Values.api.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "api" "component" "api" "ports" (concat (list (dict "name" "http" "port" 8080 "targetPort" 8080)) (ternary (list (dict "name" "snmptrap" "port" (int .Values.api.snmpTraps.port) "targetPort" (int .Values.api.snmpTraps.port) "protocol" "UDP")) (list) .Values.api.snmpTraps.enabled) (ternary (list (dict "name" "bmp" "port" (int .Values.api.bmp.port) "targetPort" (int .Values.api.bmp.port) "protocol" "TCP")) (list) .Values.api.bmp.enabled))) }}
+---
+{{- end }}
+{{- if .Values.correlation.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "correlation" "component" "correlation" "headless" true "ports" (list (dict "name" "http" "port" 8000 "targetPort" 8000) (dict "name" "health" "port" 8094 "targetPort" 8094))) }}
+---
+{{- end }}
+{{- if .Values.frontend.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "frontend" "component" "frontend" "ports" (list (dict "name" "http" "port" 8080 "targetPort" 8080))) }}
+---
+{{- end }}
+{{- if .Values.gateway.enabled }}
+{{/* The `:8000`-equivalent. The Ingress forwards here; nothing is published on
+     a host port. */}}
+{{ include "correlix.svc" (dict "root" $ "name" "nginx" "component" "gateway" "ports" (list (dict "name" "http" "port" 8080 "targetPort" 8080))) }}
+---
+{{- end }}
+{{- if .Values.vectorAggregator.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "vector-aggregator" "component" "vector-aggregator" "ports" (list (dict "name" "api" "port" 8686 "targetPort" 8686) (dict "name" "syslog-in" "port" 6601 "targetPort" 6601) (dict "name" "traps-in" "port" 8688 "targetPort" 8688) (dict "name" "probes-in" "port" 8689 "targetPort" 8689) (dict "name" "metrics-in" "port" 8690 "targetPort" 8690) (dict "name" "bus-in" "port" 8692 "targetPort" 8692) (dict "name" "metrics" "port" 9598 "targetPort" 9598))) }}
+---
+{{- end }}
+{{- if .Values.vectorRouter.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "vector-router" "component" "vector-router" "ports" (list (dict "name" "api" "port" 8686 "targetPort" 8686) (dict "name" "metrics" "port" 9598 "targetPort" 9598))) }}
+---
+{{- end }}
+{{- if .Values.syslogNg.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "syslog-ng" "component" "syslog-ng" "type" .Values.syslogNg.service.type "loadBalancerIP" .Values.syslogNg.service.loadBalancerIP "ports" (list (dict "name" "syslog-udp" "port" 514 "targetPort" 514 "protocol" "UDP") (dict "name" "syslog-tcp" "port" 514 "targetPort" 514 "protocol" "TCP"))) }}
+---
+{{- end }}
+{{- if .Values.goflow2.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "goflow2" "component" "goflow2" "type" .Values.goflow2.service.type "loadBalancerIP" .Values.goflow2.service.loadBalancerIP "ports" (list (dict "name" "netflow" "port" 2055 "targetPort" 2055 "protocol" "UDP") (dict "name" "ipfix" "port" 4739 "targetPort" 4739 "protocol" "UDP") (dict "name" "sflow" "port" 6343 "targetPort" 6343 "protocol" "UDP"))) }}
+---
+{{- end }}
+{{- if .Values.kafkaExporter.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "kafka-exporter" "component" "kafka-exporter" "ports" (list (dict "name" "metrics" "port" 9308 "targetPort" 9308))) }}
+---
+{{- end }}
+{{- if .Values.grafana.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "grafana" "component" "grafana" "ports" (list (dict "name" "http" "port" 3000 "targetPort" 3000))) }}
+---
+{{- end }}
+{{- if .Values.opensearchDashboards.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "opensearch-dashboards" "component" "opensearch-dashboards" "ports" (list (dict "name" "http" "port" 5601 "targetPort" 5601))) }}
+---
+{{- end }}
+{{- if .Values.gotenberg.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "gotenberg" "component" "gotenberg" "ports" (list (dict "name" "http" "port" 3000 "targetPort" 3000))) }}
+---
+{{- end }}
+{{- if .Values.hostExporters.enabled }}
+{{ include "correlix.svc" (dict "root" $ "name" "node-exporter" "component" "node-exporter" "ports" (list (dict "name" "metrics" "port" 9100 "targetPort" 9100))) }}
+---
+{{ include "correlix.svc" (dict "root" $ "name" "cadvisor" "component" "cadvisor" "ports" (list (dict "name" "http" "port" 8080 "targetPort" 8080))) }}
+{{- end }}

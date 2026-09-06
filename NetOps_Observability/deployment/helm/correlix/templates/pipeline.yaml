@@ -1,0 +1,346 @@
+{{/*
+Ingestion + routing tier.
+
+KNOWN KUBERNETES GAP (documented, not hidden). vector-aggregator's `docker`
+source is `docker_logs` — it tails the Docker json-file logs of the platform's
+own containers to build the `netops.applogs` lane. There is no Docker socket in
+a Kubernetes pod, so that ONE lane does not collect here: the aggregator logs
+docker-socket errors and netops.applogs stays empty. Every other lane (syslog,
+traps, probes, metrics, bus bridge, flows) is socket-based and works unchanged.
+docs/DEPLOY_KUBERNETES.md states this under "What is not supported yet".
+*/}}
+{{- if .Values.vectorAggregator.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vector-aggregator
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "vector-aggregator") | indent 4 }}
+spec:
+  # StatefulSet, not Deployment: Vector's disk buffers are durability state.
+  # A rescheduled pod must come back to the same spool or the events parked in
+  # it during a broker outage are gone.
+  serviceName: vector-aggregator
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "vector-aggregator") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "vector-aggregator") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: vector
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.vectorAggregator.image "name" "vector-aggregator") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          command: ["/bin/sh", "/etc/vector/conf/cx-enrichment-reload.sh"]
+          args: ["--config", "/etc/vector/conf/vector.yaml"]
+          env:
+            - {name: BROKER_URLS, value: {{ include "correlix.brokerUrls" $ | quote }}}
+            - {name: INGEST_USER, value: "netops-ingest"}
+            # Per-lane tokens are the ONLY credentials the four HTTP lanes
+            # accept; the shared INGEST_TOKEN opens no lane (SEC-013.1).
+            - name: INGEST_TOKEN_TRAPS
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN_TRAPS}}
+            - name: INGEST_TOKEN_PROBES
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN_PROBES}}
+            - name: INGEST_TOKEN_METRICS
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN_METRICS}}
+            - name: INGEST_TOKEN_BUS
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN_BUS}}
+          ports:
+            - {name: api, containerPort: 8686}
+            - {name: syslog-in, containerPort: 6601}
+            - {name: traps-in, containerPort: 8688}
+            - {name: probes-in, containerPort: 8689}
+            - {name: metrics-in, containerPort: 8690}
+            - {name: bus-in, containerPort: 8692}
+            - {name: metrics, containerPort: 9598}
+          readinessProbe:
+            httpGet: {path: /health, port: 8686}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+            initialDelaySeconds: 20
+          livenessProbe:
+            httpGet: {path: /health, port: 8686}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+            initialDelaySeconds: 60
+          resources:
+{{ toYaml .Values.vectorAggregator.resources | indent 12 }}
+          volumeMounts:
+            - {name: conf, mountPath: /etc/vector/conf, readOnly: true}
+            - {name: data, mountPath: /var/lib/vector}
+            {{- if .Values.sharedData.enabled }}
+            - {name: shared, mountPath: /etc/vector/enrichment, subPath: enrichment, readOnly: true}
+            {{- end }}
+      volumes:
+        - {name: conf, configMap: {name: correlix-vector-aggregator, defaultMode: 0555}}
+        {{- if .Values.sharedData.enabled }}
+        - {name: shared, persistentVolumeClaim: {claimName: api-data, readOnly: true}}
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: 10Gi
+{{- end }}
+{{- if .Values.vectorRouter.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vector-router
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "vector-router") | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "vector-router") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "vector-router") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: vector
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.vectorRouter.image "name" "vector-router") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          # The SAME entrypoint wrapper the aggregator uses — compose mounts
+          # ./vector at /etc/vector/shared for exactly this, because Vector's
+          # --watch-config watches config files only and reads enrichment
+          # tables once at load. cx-secret-backend.sh is NOT an entrypoint: it
+          # is the `exec` secret backend vector.yaml invokes at config load,
+          # which is why the router's ConfigMap is mounted executable below.
+          command: ["/bin/sh", "/etc/vector/shared/cx-enrichment-reload.sh"]
+          args:
+            - --config
+            - /etc/vector/conf/vector.yaml
+            - --config
+            - /etc/vector/processors/processors.yaml
+            - --watch-config
+          env:
+            - {name: BROKER_URLS, value: {{ include "correlix.brokerUrls" $ | quote }}}
+            - {name: CLICKHOUSE_USER, value: {{ .Values.clickhouse.user | quote }}}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: CLICKHOUSE_PASSWORD}}
+            - {name: SEALING_API_URL, value: "http://api:8080"}
+            - {name: INGEST_USER, value: "netops-ingest"}
+            - name: INGEST_TOKEN
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN}}
+          ports:
+            - {name: api, containerPort: 8686}
+            - {name: metrics, containerPort: 9598}
+          readinessProbe:
+            httpGet: {path: /health, port: 8686}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+            initialDelaySeconds: 20
+          livenessProbe:
+            httpGet: {path: /health, port: 8686}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+            initialDelaySeconds: 60
+          resources:
+{{ toYaml .Values.vectorRouter.resources | indent 12 }}
+          volumeMounts:
+            - {name: conf, mountPath: /etc/vector/conf, readOnly: true}
+            - {name: shared-conf, mountPath: /etc/vector/shared, readOnly: true}
+            - {name: buffers, mountPath: /var/lib/vector}
+            {{- if .Values.sharedData.enabled }}
+            - {name: shared, mountPath: /etc/vector/enrichment, subPath: enrichment, readOnly: true}
+            - {name: shared, mountPath: /etc/vector/processors, subPath: processors/router, readOnly: true}
+            {{- else }}
+            # No RWX volume: the router falls back to the default processor set
+            # baked into the chart. Hot-reloaded, operator-authored processors
+            # are unavailable — a named limitation, not a silent degradation.
+            - {name: conf, mountPath: /etc/vector/processors/processors.yaml, subPath: processors-default.yaml, readOnly: true}
+            {{- end }}
+      volumes:
+        # 0555: Vector EXECUTES cx-secret-backend.sh directly (vector.yaml's
+        # `secret:` block), so the mode is load-bearing — without it the
+        # config load fails and the router refuses to start, which is the
+        # correct failure but an avoidable one.
+        - {name: conf, configMap: {name: correlix-vector-router, defaultMode: 0555}}
+        - {name: shared-conf, configMap: {name: correlix-vector-aggregator, defaultMode: 0555}}
+        - {name: buffers, emptyDir: {sizeLimit: 5Gi}}
+        {{- if .Values.sharedData.enabled }}
+        - {name: shared, persistentVolumeClaim: {claimName: api-data, readOnly: true}}
+        {{- end }}
+{{- end }}
+{{- if .Values.syslogNg.enabled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: syslog-ng
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "syslog-ng") | indent 4 }}
+spec:
+  serviceName: syslog-ng
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "syslog-ng") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "syslog-ng") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: syslog-ng
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.syslogNg.image "name" "syslog-ng") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            # 514 is privileged. `restricted` PodSecurity permits exactly one
+            # added capability and this is it.
+{{ include "correlix.containerSecurity" (dict "netBind" true) | indent 12 }}
+          args: ["-F", "-e", "-f", "/etc/syslog-ng/conf.d/syslog-ng.conf"]
+          ports:
+            - {name: syslog-udp, containerPort: 514, protocol: UDP}
+            - {name: syslog-tcp, containerPort: 514, protocol: TCP}
+          readinessProbe:
+            tcpSocket: {port: 514}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+            initialDelaySeconds: 30
+          livenessProbe:
+            tcpSocket: {port: 514}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+            initialDelaySeconds: 60
+          resources:
+{{ toYaml .Values.syslogNg.resources | indent 12 }}
+          volumeMounts:
+            - {name: conf, mountPath: /etc/syslog-ng/conf.d, readOnly: true}
+            - {name: data, mountPath: /var/lib/syslog-ng}
+      volumes:
+        - {name: conf, configMap: {name: correlix-syslog-ng}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if or .Values.syslogNg.persistence.storageClass .Values.global.storageClass }}
+        storageClassName: {{ .Values.syslogNg.persistence.storageClass | default .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.syslogNg.persistence.size }}
+{{- end }}
+{{- if .Values.goflow2.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: goflow2
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "goflow2") | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "goflow2") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "goflow2") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 65532 "gid" 65532) | indent 6 }}
+      containers:
+        - name: goflow2
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.goflow2.image "name" "goflow2") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          args:
+            - -listen
+            - netflow://:2055,sflow://:6343,netflow://:4739
+            - -format
+            - json
+            - -transport
+            - kafka
+            - -transport.kafka.brokers
+            - {{ include "correlix.brokerUrls" $ | quote }}
+            # Scale P0: goflow2 produces to the RAW topic; the router re-keys
+            # it onto netops.flows by tenant.
+            - -transport.kafka.topic
+            - netops.flows.raw
+            - -transport.kafka.compression
+            - snappy
+          env:
+            - {name: GOMEMLIMIT, value: {{ .Values.goflow2.goMemLimit | quote }}}
+          ports:
+            - {name: netflow, containerPort: 2055, protocol: UDP}
+            - {name: ipfix, containerPort: 4739, protocol: UDP}
+            - {name: sflow, containerPort: 6343, protocol: UDP}
+          # NO PROBE, stated rather than faked. Configured this way goflow2
+          # listens on UDP only and exposes no TCP or HTTP endpoint, so there
+          # is nothing a kubelet probe can honestly ask. An invented HTTP path
+          # would be a probe that always passes, which is worse than none.
+          # Liveness for this lane is the flow ingest rate in rules.yaml.
+          resources:
+{{ toYaml .Values.goflow2.resources | indent 12 }}
+{{- end }}
+{{- if .Values.gnmic.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gnmic
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "gnmic") | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "gnmic") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "gnmic") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 65532 "gid" 65532) | indent 6 }}
+      containers:
+        - name: gnmic
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.gnmic.image "name" "gnmic") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          args: ["subscribe", "--config", "/app/conf/{{ .Values.gnmic.configFile }}"]
+          env:
+            - {name: VICTORIA_WRITE_URL, value: "http://victoria:8428/api/v1/write"}
+            # Tracker 212: the gnmic->Kafka hop has no mTLS shape and is OFF in
+            # every shipped profile. Leave it off.
+            - {name: ENABLE_GNMI_CORRELATION, value: "false"}
+            - {name: GNMI_CORRELATION_BROKERS, value: {{ include "correlix.brokerUrls" $ | quote }}}
+          # NO PROBE. The shipped gnmic.yaml configures no api-server, so the
+          # process opens no listening socket at all. Same reasoning as goflow2:
+          # the honest liveness signal is the gNMI metric arrival rate in
+          # VictoriaMetrics, not a fabricated endpoint.
+          resources:
+{{ toYaml .Values.gnmic.resources | indent 12 }}
+          volumeMounts:
+            - {name: conf, mountPath: /app/conf, readOnly: true}
+      volumes:
+        - {name: conf, configMap: {name: correlix-gnmic}}
+{{- end }}

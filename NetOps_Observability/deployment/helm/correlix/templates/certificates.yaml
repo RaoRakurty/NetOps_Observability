@@ -1,0 +1,47 @@
+{{- if and .Values.tls.enabled .Values.certManager.enabled }}
+{{/*
+cert-manager path for the internal mesh.
+
+WHAT THIS IS NOT. compose.tls.yml's mesh is minted by the api's OWN internal
+CA, whose root is sealed to a swtpm sidecar — a host TPM device with no
+Kubernetes equivalent, and the api REFUSES to enable TLS_INTERNAL_CA without
+that custody (the seal gate in tls_ca.go). So the chart does not port that
+design; it offers the cluster-native equivalent instead, and the custody story
+becomes your issuer's, not Correlix's.
+
+Each Certificate below is issued for the bare Service DNS name, because that is
+what every peer dials. Manual path (certManager.enabled=false): mint the same
+SANs yourself and list the Secret names under tls.existingSecrets.
+*/}}
+{{- $svcs := list "api" "correlation" "nginx" "vector-aggregator" "vector-router" "syslog-ng" "kafka" "postgres" "clickhouse" "opensearch" "redis" "victoria" }}
+{{- range $svc := $svcs }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: correlix-{{ $svc }}
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "tls") | indent 4 }}
+spec:
+  secretName: correlix-{{ $svc }}-tls
+  duration: {{ $.Values.certManager.duration }}
+  renewBefore: {{ $.Values.certManager.renewBefore }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages: [server auth, client auth]
+  dnsNames:
+    - {{ $svc | quote }}
+    - {{ printf "%s.%s.svc" $svc $.Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" $svc $.Release.Namespace | quote }}
+  uris:
+    # SPIFFE-shaped identity, matching the trust domain the compose mesh uses
+    # and the principal strings in deployment/docker/kafka/apply-acls.sh.
+    - {{ printf "spiffe://%s/ns/default/sa/%s" $.Values.tls.trustDomain $svc | quote }}
+  issuerRef:
+    name: {{ $.Values.certManager.issuerRef.name }}
+    kind: {{ $.Values.certManager.issuerRef.kind }}
+    group: {{ $.Values.certManager.issuerRef.group }}
+---
+{{- end }}
+{{- end }}

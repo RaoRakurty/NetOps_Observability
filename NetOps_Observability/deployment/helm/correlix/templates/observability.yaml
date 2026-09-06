@@ -1,0 +1,526 @@
+{{/*
+Alerting, metrics fronts and the optional self-monitoring add-on.
+
+Three monitoring layers exist and EACH MUST WORK WITHOUT THE OTHER TWO — that
+requirement comes from the 2026-09-02 outage, where the correlation engine
+consumed nothing for three hours while every container read healthy and the one
+alert that fired was delivered nowhere. Layer 1 (vmalert rules) and layer 2
+(delivery into the api's Alertmanager-v2 receiver) are rendered here. Layer 3
+is scripts/stack-watchdog.sh and is deliberately OUT of the cluster — see
+cronjob-watchdog.yaml.
+*/}}
+{{- if .Values.vmalert.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vmalert
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "vmalert") | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "vmalert") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "vmalert") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: vmalert
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.vmalert.image "name" "vmalert") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          args:
+            - -rule=/etc/vmalert/config/rules.yaml
+            # vmalert-ONLY on purpose: the scale-SLO rules keep firing when the
+            # api is the thing that is down, so they must not depend on it.
+            - -rule=/etc/vmalert/config/rules-scale-slo.yaml
+            - -datasource.url=http://victoria:8428
+            - -remoteWrite.url=http://victoria:8428
+            - -remoteRead.url=http://victoria:8428
+            - -evaluationInterval={{ .Values.vmalert.evaluationInterval }}
+            - -configCheckInterval=60s
+            - -external.label=stack={{ .Release.Name }}
+            # The shared secret is read from a FILE, never a flag: a token on
+            # the command line is visible in every process listing.
+            - -notifier.basicAuth.username=vmalert
+            - -notifier.basicAuth.passwordFile=/run/secrets/vmalert_notifier_password
+            {{- if .Values.vmalert.notifierBlackhole }}
+            - -notifier.blackhole
+            {{- else }}
+            - -notifier.url=http://api:8080/api/internal/vmalert
+            {{- end }}
+          ports:
+            - {name: http, containerPort: 8880}
+          readinessProbe:
+            httpGet: {path: /health, port: 8880}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+            initialDelaySeconds: 15
+          livenessProbe:
+            httpGet: {path: /health, port: 8880}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+            initialDelaySeconds: 60
+          resources:
+{{ toYaml .Values.vmalert.resources | indent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/vmalert/config, readOnly: true}
+            - {name: notifier-secret, mountPath: /run/secrets, readOnly: true}
+      volumes:
+        - {name: config, configMap: {name: correlix-config}}
+        - name: notifier-secret
+          secret:
+            secretName: {{ include "correlix.secretName" $ }}
+            items:
+              - {key: VMALERT_WEBHOOK_TOKEN, path: vmalert_notifier_password}
+{{- end }}
+{{- if .Values.vmauth.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vmauth
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "vmauth") | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "vmauth") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "vmauth") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: vmauth
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.vmauth.image "name" "vmauth") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          args:
+            - -auth.config=/etc/vmauth/config/vmauth.yml
+            - -httpListenAddr=:8427
+          envFrom:
+            # vmauth.yml expands the per-identity credentials with %{ENV}.
+            - secretRef: {name: {{ include "correlix.secretName" $ }}}
+          ports:
+            - {name: http, containerPort: 8427}
+          readinessProbe:
+            httpGet: {path: /health, port: 8427}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 8427}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+{{ toYaml .Values.vmauth.resources | indent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/vmauth/config, readOnly: true}
+      volumes:
+        - {name: config, configMap: {name: correlix-config}}
+{{- end }}
+{{- if .Values.kafkaExporter.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "kafka-exporter") | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "kafka-exporter") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "kafka-exporter") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 65534 "gid" 65534) | indent 6 }}
+      containers:
+        - name: kafka-exporter
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.kafkaExporter.image "name" "kafka-exporter") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict "readOnlyRootFilesystem" true) | indent 12 }}
+          # Consumer-group LAG is the ONLY signal that tells "quiet bus, quiet
+          # network" apart from "quiet bus, dead consumer": producer and
+          # consumer rates read zero in both cases, lag only grows in the second.
+          args:
+            - --kafka.server={{ include "correlix.brokerUrls" $ }}
+            - --topic.filter=^netops\..*
+            - --group.filter=^netops-.*
+          ports:
+            - {name: metrics, containerPort: 9308}
+          readinessProbe:
+            httpGet: {path: /metrics, port: 9308}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet: {path: /metrics, port: 9308}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+{{ toYaml .Values.kafkaExporter.resources | indent 12 }}
+{{- end }}
+{{- if .Values.grafana.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "grafana") | indent 4 }}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "grafana") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "grafana") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 472 "gid" 472) | indent 6 }}
+      containers:
+        - name: grafana
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.grafana.image "name" "grafana") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          env:
+            # Served behind the gateway at /grafana/, which is auth_request
+            # gated against the api. Anonymous access is off.
+            - {name: GF_SERVER_ROOT_URL, value: "%(protocol)s://%(domain)s/grafana/"}
+            - {name: GF_SERVER_SERVE_FROM_SUB_PATH, value: "true"}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: GRAFANA_ADMIN_PASSWORD}}
+          ports:
+            - {name: http, containerPort: 3000}
+          readinessProbe:
+            httpGet: {path: /grafana/api/health, port: 3000}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+            initialDelaySeconds: 20
+          livenessProbe:
+            httpGet: {path: /grafana/api/health, port: 3000}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+            initialDelaySeconds: 60
+          resources:
+{{ toYaml .Values.grafana.resources | indent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/grafana}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: grafana-data}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "grafana") | indent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if or .Values.grafana.persistence.storageClass .Values.global.storageClass }}
+  storageClassName: {{ .Values.grafana.persistence.storageClass | default .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.grafana.persistence.size }}
+{{- end }}
+{{- if .Values.opensearchDashboards.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-dashboards
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "opensearch-dashboards") | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "opensearch-dashboards") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "opensearch-dashboards") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: opensearch-dashboards
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.opensearchDashboards.image "name" "opensearch-dashboards") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          env:
+            - {name: OPENSEARCH_HOSTS, value: '["http://opensearch:9200"]'}
+            - {name: SERVER_BASEPATH, value: "/search"}
+            - {name: SERVER_REWRITEBASEPATH, value: "true"}
+            - {name: DISABLE_SECURITY_DASHBOARDS_PLUGIN, value: {{ ternary "false" "true" .Values.tls.enabled | quote }}}
+          ports:
+            - {name: http, containerPort: 5601}
+          readinessProbe:
+            httpGet: {path: /search/api/status, port: 5601}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 10
+            initialDelaySeconds: 60
+          livenessProbe:
+            httpGet: {path: /search/api/status, port: 5601}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
+            initialDelaySeconds: 120
+          resources:
+{{ toYaml .Values.opensearchDashboards.resources | indent 12 }}
+{{- end }}
+{{- if .Values.gotenberg.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gotenberg
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "gotenberg") | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "gotenberg") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "gotenberg") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1001 "gid" 1001) | indent 6 }}
+      containers:
+        - name: gotenberg
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.gotenberg.image "name" "gotenberg") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          ports:
+            - {name: http, containerPort: 3000}
+          readinessProbe:
+            httpGet: {path: /health, port: 3000}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 3000}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+{{ toYaml .Values.gotenberg.resources | indent 12 }}
+{{- end }}
+{{- if .Values.prober.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prober
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "prober") | indent 4 }}
+  annotations:
+    correlix.io/pod-security: >-
+      baseline — NOT restricted. This pod adds CAP_NET_RAW, which restricted
+      forbids. Deploy it in a namespace labelled
+      pod-security.kubernetes.io/enforce=baseline.
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "prober") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "prober") | indent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: prober
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.prober.image "name" "prober") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile: {type: RuntimeDefault}
+            capabilities:
+              drop: ["ALL"]
+              # Hop-by-hop path measurement needs per-packet IP TTL control and
+              # raw ICMP construction (x/net ipv4 + icmp). Nothing less works.
+              add: ["NET_RAW"]
+          env:
+            - {name: PROBER_ONLY, value: "true"}
+            - {name: PROBER_ID, value: "prober"}
+            - {name: GOMEMLIMIT, value: {{ .Values.prober.goMemLimit | quote }}}
+            - {name: REDIS_HOST, value: "redis"}
+            - {name: REDIS_PORT, value: "6379"}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: REDIS_PASSWORD}}
+            - {name: VICTORIA_URL, value: "http://victoria:8428"}
+            - {name: METRICS_URL, value: "http://victoria:8428"}
+            - {name: PROBE_EVENT_SINK_URL, value: "http://vector-aggregator:8689/"}
+            - {name: INGEST_USER, value: "netops-ingest"}
+            - name: INGEST_TOKEN_PROBES
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN_PROBES}}
+          ports:
+            - {name: metrics, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /metrics, port: 8080}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet: {path: /metrics, port: 8080}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+{{ toYaml .Values.prober.resources | indent 12 }}
+{{- end }}
+{{- if .Values.hostExporters.enabled }}
+---
+{{/*
+cAdvisor + node-exporter. BOTH need hostPath mounts and host namespaces:
+`privileged` PodSecurity, not `restricted`. Most clusters already run node
+metrics of their own — prefer those. This exists so a bare cluster can still
+answer the host-resource questions rules.yaml asks (HostOOMKillerFired,
+HostMemoryLow, ContainerMemoryNearLimit).
+*/}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "node-exporter") | indent 4 }}
+  annotations:
+    correlix.io/pod-security: "privileged — hostPath + hostNetwork/hostPID"
+spec:
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "node-exporter") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "node-exporter") | indent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      hostPID: true
+      hostNetwork: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: node-exporter
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.hostExporters.nodeExporter.image "name" "node-exporter") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+            seccompProfile: {type: RuntimeDefault}
+          args: ["--path.rootfs=/host", "--web.listen-address=:9100"]
+          ports:
+            - {name: metrics, containerPort: 9100, hostPort: 9100}
+          readinessProbe:
+            httpGet: {path: /metrics, port: 9100}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet: {path: /metrics, port: 9100}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+{{ toYaml .Values.hostExporters.nodeExporter.resources | indent 12 }}
+          volumeMounts:
+            - {name: rootfs, mountPath: /host, readOnly: true, mountPropagation: HostToContainer}
+      volumes:
+        - {name: rootfs, hostPath: {path: /}}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cadvisor
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "cadvisor") | indent 4 }}
+  annotations:
+    correlix.io/pod-security: "privileged — hostPath into the container runtime"
+spec:
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "cadvisor") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "cadvisor") | indent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: cadvisor
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.hostExporters.cadvisor.image "name" "cadvisor") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            # cAdvisor reads the runtime's cgroup and image state; it cannot do
+            # that unprivileged. This is why hostExporters is off by default.
+            privileged: true
+            allowPrivilegeEscalation: true
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+{{ toYaml .Values.hostExporters.cadvisor.resources | indent 12 }}
+          volumeMounts:
+            - {name: rootfs, mountPath: /rootfs, readOnly: true}
+            - {name: var-run, mountPath: /var/run, readOnly: true}
+            - {name: sys, mountPath: /sys, readOnly: true}
+            - {name: containerd, mountPath: /run/containerd/containerd.sock, readOnly: true}
+      volumes:
+        - {name: rootfs, hostPath: {path: /}}
+        - {name: var-run, hostPath: {path: /var/run}}
+        - {name: sys, hostPath: {path: /sys}}
+        - {name: containerd, hostPath: {path: /run/containerd/containerd.sock}}
+{{- end }}

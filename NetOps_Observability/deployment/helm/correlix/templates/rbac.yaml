@@ -1,0 +1,20 @@
+{{- if .Values.serviceAccount.create }}
+{{/*
+One ServiceAccount, NO Role and NO RoleBinding, and every pod sets
+automountServiceAccountToken: false. Nothing in this stack talks to the
+Kubernetes API — zero trust §3 means no component holds an API credential it
+has no use for. If you add a component that genuinely needs the API, give it
+its OWN ServiceAccount with its own narrow Role; do not widen this one.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccount.name }}
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "rbac") | indent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+{{- end }}

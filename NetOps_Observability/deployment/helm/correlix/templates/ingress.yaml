@@ -1,0 +1,39 @@
+{{- if .Values.ingress.enabled }}
+{{/*
+The single entry point — the Kubernetes equivalent of the compose stack's
+`${BASE_PORT:-8000}:8080` publish. It forwards ONE path to the gateway Service,
+which owns the whole routing table (/, /api, /admin, /metrics, /grafana,
+/search, /netbox, /auth) and the auth_request gates in front of the iframe
+surfaces. Splitting those paths across Ingress rules would drop the gates.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: correlix
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "ingress") | indent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: nginx
+                port:
+                  number: 8080
+{{- end }}

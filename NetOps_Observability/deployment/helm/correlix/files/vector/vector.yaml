@@ -1,0 +1,1830 @@
+# Vector — AGGREGATION tier.
+#
+# Receives from edge collectors (syslog-ng, goflow2) plus container
+# stdout. Parses, normalizes, enriches, buffers, ships to the Kafka bus
+# topics keyed by signal:
+#
+#   syslog   → topic netops.syslog
+#   netflow  → topic netops.flows
+#   applogs  → topic netops.applogs
+#   metrics  → topic netops.metrics  (RCA-filtered canonical MetricEvents)
+#
+# Two metric paths, by purpose:
+#   • Dashboard/PromQL/history: the Go SNMP collector writes the FULL sample set
+#     straight to VictoriaMetrics (remote_write) — it does NOT flow through
+#     Vector. VM is the metric store/query backend.
+#   • Live correlation: the same collector POSTs a FILTERED, canonical subset
+#     (RCA families only) as NDJSON to the metrics_in source below → netops.metrics
+#     → correlation engine (device_telemetry modality). Canonical normalization
+#     lives in typed Go (collectors/metric_events.go), not in this YAML.
+
+api:
+  enabled: true
+  address: 0.0.0.0:8686
+
+# ----------------------------------------------------------------------------
+# DURABILITY (F-04) — end-to-end acknowledgements.
+#
+# THE DEFECT THIS FIXES: the sources on this tier are `http_server`
+# (trap_in:8688, probe_in:8689, metrics_in:8690, bus_in:8692). With
+# acknowledgements off — the Vector default — an http_server source returns
+# **HTTP 200 the moment it has parsed the body**, long before the event reaches
+# Kafka. src/backend/bus_producer.go therefore recorded a SUCCESS for events
+# that were still sitting in a 500-event in-MEMORY buffer and were lost outright
+# if this process restarted. That is a 2xx-without-persistence bug at the
+# ingestion boundary: the platform told its own backend the data was safe when
+# it was not.
+#
+# With this enabled the 200 is withheld until every sink the event reached has
+# durably accepted it (for the kafka sinks: until the broker acks). A failing
+# or unreachable bus now produces an HONEST non-2xx to the caller instead of a
+# false success. That is the intended behaviour — do not "fix" a sudden
+# appearance of 5xx here by turning this back off; it means the bus is broken
+# and it was always broken, just invisibly.
+acknowledgements:
+  enabled: true
+
+# Disk-buffer spool (see the `buffer:` blocks on the kafka sinks below). Mounted
+# from the host so the spool survives a container recreate, which is the whole
+# point of it.
+data_dir: /var/lib/vector
+
+# ----------------------------------------------------------------------------
+# ENRICHMENT TABLES — device → tenant attribution (#20 multi-tenant telemetry).
+#
+# The Go API exports a CSV (identity,tenant_id) — one row per device name and per
+# management address — to a shared volume; we load it here and stamp .tenant_id
+# onto every event by matching its source-device identity (syslog hostname, flows
+# sampler_address). The file is loaded at config load; it always exists (the
+# stack seeds a header-only CSV), and an empty/missing match yields tenant_id=""
+# (global/platform). See docs/design/multitenant-telemetry-isolation.md.
+# ----------------------------------------------------------------------------
+
+enrichment_tables:
+  device_tenant:
+    type: file
+    file:
+      path: /etc/vector/enrichment/device_tenant.csv
+      encoding:
+        type: csv
+    schema:
+      identity: string
+      tenant_id: string
+
+# ----------------------------------------------------------------------------
+# SOURCES
+# ----------------------------------------------------------------------------
+
+sources:
+  # Container stdout/stderr — application logs (Go API, frontend nginx, etc).
+  # goflow2 no longer writes here at all (F-49: native kafka:// transport); the
+  # docker_misrouted_flows filter below exists only to make a rollback loud.
+  docker:
+    type: docker_logs
+
+  # syslog-ng forwards parsed events here in RFC5424 frame.
+  #
+  # F-1 (SEC-014.1): env-gated mesh TLS, same idiom as the ingest lanes below —
+  # unquoted bool substitution (lesson h) and verify_certificate on the SAME
+  # gate as enabled, so "TLS on" always means a mesh client certificate is
+  # REQUIRED (verify_certificate on a Vector server = client-cert requirement,
+  # proven SEC-013.1). syslog-ng presents its own SVID; there is no app-layer
+  # token on this hop (the syslog frame carries none), so transport identity is
+  # the whole authentication story. Plaintext stays the base-compose default;
+  # compose.tls.yml / the lab override flip the gate.
+  syslog_in:
+    type: syslog
+    address: 0.0.0.0:6601
+    mode: tcp
+    tls:
+      enabled: ${SYSLOG_TLS_ENABLED:-false}
+      crt_file: "${INGEST_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${INGEST_TLS_KEY:-/tls/ca.pem}"
+      ca_file: "${INGEST_TLS_CA:-/tls/ca.pem}"
+      verify_certificate: ${SYSLOG_TLS_ENABLED:-false}
+
+  # --------------------------------------------------------------------------
+  # INGEST AUTHENTICATION (F-08) — every http_server source below is gated.
+  #
+  # THE DEFECT THIS FIXES: all four ingest sources accepted unauthenticated
+  # writes from anything that could reach the compose network. The `bus_bridge`
+  # transform enforced only that the requested topic starts with `netops.` —
+  # a topic-PREFIX check, not an identity check — so a foothold anywhere on the
+  # network could inject events onto any netops.* topic carrying a FORGED
+  # tenant_id, which vector-router then routes into that tenant's OpenSearch
+  # index via .tenant_seg. That is cross-tenant data injection, and it violates
+  # CLAUDE.md §3 ("all service-to-service communication must be authenticated")
+  # outright. The comment that used to sit here asserted "internal compose
+  # network only — never exposed on the host": true of today's compose file,
+  # but a network-topology ASSUMPTION is not an enforced control, and it stops
+  # being true the moment someone adds a port mapping or runs the stack on a
+  # shared network.
+  #
+  # Vector's http_server auth is HTTP Basic. The credentials are per-lane
+  # ingest secrets (INGEST_USER/INGEST_TOKEN_<LANE>) generated by install.py
+  # alongside the other stack secrets, because every client here is a
+  # stack-internal component, not a customer.
+  #
+  # FAILURE PATH, stated explicitly: a client that does not send the credential
+  # gets 401. Vector counts it (`vector_component_errors_total`) and the Go
+  # forwarders log + count it (see collectors/*_events.go — they no longer
+  # discard the status code, precisely so a bad token cannot silently delete
+  # three telemetry lanes).
+  # --------------------------------------------------------------------------
+
+  # SNMP trap receiver (the in-API collectors/snmptrap.go listener on UDP/162)
+  # POSTs each decoded trap here as a JSON object. Kept on the log bus so traps
+  # inherit the same tenant-stamp/retention/export as syslog. (#SNMP traps)
+  # SEC-013.1: the shared &ingest_auth anchor is GONE on purpose. One token
+  # opening all four lanes — including the bus bridge — was the epic's named
+  # defect ("exactly today's INGEST_TOKEN problem", HLD §10). Each lane
+  # verifies its OWN credential. NARROWED (enforce wave step 4): compose no
+  # longer defaults a lane var to the shared token — install.py seeds
+  # distinct per-lane tokens (fresh install AND .env migration), and the
+  # shared INGEST_TOKEN opens no lane.
+  # SEC-013.2: each lane carries an env-driven tls block (unquoted bool
+  # interpolation, the kafka-sink pattern): the enabling override serves the
+  # aggregator SVID and REQUIRES a mesh client certificate
+  # (verify_certificate on a server = client-cert enforcement, proven
+  # empirically 2026-08-06: no-cert handshake refused, SVID accepted).
+  trap_in:
+    type: http_server
+    address: 0.0.0.0:8688
+    auth:
+      username: "${INGEST_USER:-netops-ingest}"
+      password: "${INGEST_TOKEN_TRAPS:?INGEST_TOKEN_TRAPS required — see F-08/SEC-013 (narrowed: no shared fallback); install.py seeds per-lane tokens}"
+    tls: &ingest_tls
+      enabled: ${INGEST_TLS_ENABLED:-false}
+      crt_file: "${INGEST_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${INGEST_TLS_KEY:-/tls/ca.pem}"
+      ca_file: "${INGEST_TLS_CA:-/tls/ca.pem}"
+      verify_certificate: ${INGEST_TLS_ENABLED:-false}
+    decoding:
+      codec: json
+
+  # Active-measurement probe events (#67 build ⑦). The STAMP sender and the
+  # synthetics runner POST each observation here so the correlation engine
+  # receives active_probe-modality evidence over the bus (→ netops.probes).
+  probe_in:
+    type: http_server
+    address: 0.0.0.0:8689
+    auth:
+      username: "${INGEST_USER:-netops-ingest}"
+      password: "${INGEST_TOKEN_PROBES:?INGEST_TOKEN_PROBES required — see F-08/SEC-013 (narrowed: no shared fallback); install.py seeds per-lane tokens}"
+    tls: *ingest_tls
+    decoding:
+      codec: json
+
+  # Canonical metric events (the live correlation metric lane). The Go SNMP
+  # collector POSTs a FILTERED, canonical subset of its samples (RCA families
+  # only — see collectors/metric_events.go) here as newline-delimited JSON, one
+  # MetricEvent per line, in addition to the VictoriaMetrics remote_write path.
+  # → topic netops.metrics, consumed by the correlation engine (device_telemetry
+  # modality). VM remains the dashboard/PromQL/history store; this is RCA signal.
+  metrics_in:
+    type: http_server
+    address: 0.0.0.0:8690
+    auth:
+      username: "${INGEST_USER:-netops-ingest}"
+      password: "${INGEST_TOKEN_METRICS:?INGEST_TOKEN_METRICS required — see F-08/SEC-013 (narrowed: no shared fallback); install.py seeds per-lane tokens}"
+    tls: *ingest_tls
+    decoding:
+      codec: json
+    framing:
+      method: newline_delimited
+
+  # Bus bridge (replaces the Redpanda pandaproxy). The stdlib-only Go backend
+  # has no Kafka client, so it POSTs bus records here as JSON envelopes
+  # {topic, key, event} (bus_producer.go) and this lane forwards each event to
+  # its topic. Authenticated (F-08): the netops.* prefix check in bus_bridge is
+  # a routing guard, never an identity guard.
+  bus_in:
+    type: http_server
+    address: 0.0.0.0:8692
+    auth:
+      username: "${INGEST_USER:-netops-ingest}"
+      password: "${INGEST_TOKEN_BUS:?INGEST_TOKEN_BUS required — see F-08/SEC-013 (narrowed: no shared fallback); install.py seeds per-lane tokens}"
+    tls: *ingest_tls
+    decoding:
+      codec: json
+
+  # Vector's own internal metrics. Exposed at /metrics on port 9598
+  # so Prometheus can scrape it (added as a target in prometheus.yml).
+  internal_metrics:
+    type: internal_metrics
+    scrape_interval_secs: 30
+
+  # --------------------------------------------------------------------------
+  # OpenSearch indexing outcome (F-17) — THE COUNTER THAT ACTUALLY MOVES.
+  #
+  # OpenSearch's obvious health counter LIES about this failure mode. During a
+  # measured window in which 1,127 documents were rejected and permanently lost
+  # (0.93% of all app logs, ~5,700/day), `_nodes/stats/indices/indexing`
+  # reported:
+  #     "index_total"  : 114168
+  #     "index_failed" : 0          <-- while documents were being discarded
+  #     "doc_status"   : { "2xx": 120029, "4xx": 1127 }
+  # `index_failed` counts whole-REQUEST failures. Bulk rejections are PER ITEM:
+  # OpenSearch returns HTTP 200 for the batch with a 400 inside each bad item,
+  # so index_failed never moves. An operator checking the obvious counter — or
+  # a dashboard panel built on it — sees a perfectly healthy cluster.
+  # `doc_status.4xx` is the counter that does move, and it is per-document.
+  #
+  # Nothing in the stack scraped it, because _nodes/stats is JSON and
+  # VictoriaMetrics' promscrape only speaks the Prometheus exposition format.
+  # So poll it here and convert it to metrics on the remote_write path that
+  # already exists for the cloud lane — no new service, no OpenSearch plugin,
+  # no broker change. Alerted by OpenSearchDocumentsRejected in rules.yaml.
+  #
+  # index_failed is scraped ALONGSIDE it deliberately: a dashboard that shows
+  # both makes the lie self-evident instead of folklore.
+  opensearch_indexing_stats:
+    type: http_client
+    endpoint: "${OPENSEARCH_STATS_URL:-http://opensearch:9200/_nodes/stats/indices/indexing}"
+    scrape_interval_secs: 60
+    scrape_timeout_secs: 10
+    # SEC-008: credential is ALWAYS presented (the SEC-010 doctrine, see the
+    # victoria_cloud_metrics sink): a plaintext cluster ignores Authorization
+    # entirely, so the default deployment is unchanged, while a secured
+    # cluster gets svc_aggregator — cluster-monitor only, no index access.
+    # An explicit auth block, not URL userinfo: it keeps the credential out
+    # of the endpoint string (and any log line that prints it) and needs no
+    # URL-encoding of special characters. TLS trust rides SSL_CERT_FILE in
+    # the enabling override (all of this process's https egress is mesh).
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_STATS_USER:-svc_aggregator}"
+      password: "${OPENSEARCH_STATS_PASSWORD:-unused-on-plaintext-opensearch}"
+    decoding:
+      codec: json
+
+  # Cluster health + shard census (F-53 / F-54). Two reasons this is worth a
+  # second poll:
+  #   * YELLOW is now a usable alarm signal again. It was not: netops-snmptrap-*
+  #     had no template, so it defaulted to 1 replica on a SINGLE-NODE cluster,
+  #     its replica sat UNASSIGNED forever, and 33 ISM audit-history indices did
+  #     the same — 35 permanently unassigned shards. The cluster was always
+  #     yellow, so nobody could ever act on yellow. Replicas are pinned to 0
+  #     now and the cluster is green, which only means something if something
+  #     watches it.
+  #   * Shard count is the heap-exhaustion leading indicator. At 1.8 GB heap the
+  #     accepted density is ~20 shards/GB ~= 36 shards, and the per-tenant daily
+  #     index scheme adds ~26 shards/day. Disk is NOT the first thing to fail
+  #     here; heap is, and at the 1000-shard cap index creation is rejected
+  #     outright and ingest stops silently.
+  opensearch_cluster_health:
+    type: http_client
+    endpoint: "${OPENSEARCH_HEALTH_URL:-http://opensearch:9200/_cluster/health}"
+    scrape_interval_secs: 60
+    scrape_timeout_secs: 10
+    # Same identity and doctrine as opensearch_indexing_stats above.
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_STATS_USER:-svc_aggregator}"
+      password: "${OPENSEARCH_STATS_PASSWORD:-unused-on-plaintext-opensearch}"
+    decoding:
+      codec: json
+
+# ----------------------------------------------------------------------------
+# TRANSFORMS — parsing, normalization, enrichment
+# ----------------------------------------------------------------------------
+
+transforms:
+  # --------------------------------------------------------------------------
+  # F-49 — flows no longer travel through container stdout.
+  #
+  # THE DEFECT THIS FIXES: goflow2 wrote flow records to stdout, Vector read
+  # them back out of the Docker json-file log, and the two streams were told
+  # apart by `contains(.container_name, "goflow2")`. Two failure modes, both
+  # silent:
+  #   1. Rotation is a LOSS WINDOW. The json-file driver caps at 3x50 MB; if
+  #      this source falls behind while a file rotates out, those flow records
+  #      are gone and nothing counts them.
+  #   2. A container RENAME (goflow2 -> flowcollector, a vendor swap, a
+  #      compose refactor) makes the substring stop matching, at which point
+  #      EVERY flow record silently becomes an app log and is indexed into
+  #      netops-applogs-* with no error anywhere.
+  # goflow2 has a native kafka:// transport — the config comment in
+  # goflow2/goflow2.yaml has said "switch to kafka:// when wiring Kafka"
+  # since the beginning. docker-compose.yml now does exactly that, so flows
+  # go straight to netops.flows and the split is gone.
+  #
+  # THE FAILURE PATH IS EXPLICIT: this filter still recognises the goflow2
+  # RECORD SHAPE (not its container name). If goflow2 is ever rolled back to
+  # stdout, or a second flow exporter is added that logs to stdout, those
+  # records are dead-lettered with a named reason instead of being quietly
+  # mixed into the application-log index. Shape, not name: renaming the
+  # container cannot defeat it.
+  docker_misrouted_flows:
+    type: filter
+    inputs: [docker]
+    condition: |
+      m = string(.message) ?? ""
+      contains(m, "\"sampler_address\"") && contains(m, "\"time_received_ns\"")
+
+  docker_applogs:
+    type: filter
+    inputs: [docker]
+    condition: |
+      m = string(.message) ?? ""
+      !(contains(m, "\"sampler_address\"") && contains(m, "\"time_received_ns\""))
+
+  misrouted_flows_deadletter:
+    type: remap
+    inputs: [docker_misrouted_flows]
+    source: |
+      . = {
+        "dropped_at": format_timestamp!(now(), format: "%+"),
+        "lane": "docker_misrouted_flows",
+        "reason": "misroute",
+        "detail": "flow-shaped record on the container-log lane: goflow2 (or another exporter) is writing flows to stdout instead of the kafka:// transport — F-49",
+        "raw": encode_json(.)
+      }
+
+  # Parse app log lines as JSON when possible so structured fields are
+  # available downstream (level, component, msg).
+  applogs_normalized:
+    type: remap
+    inputs: [docker_applogs]
+    source: |
+      msg = string!(.message)
+      parsed, err = parse_json(msg)
+      if err == null && is_object(parsed) {
+        # merge() of two objects can't fail; no ?? . needed.
+        . = merge(., object!(parsed))
+      }
+      # Promote the compose service label before dropping the label map.
+      .service   = string(.label."com.docker.compose.service") ?? string(.container_name) ?? "unknown"
+
+      # ── log_class: platform-infra vs application (operator directive) ──
+      #
+      # `docker_logs` collects stdout from EVERY container, so the platform's own
+      # datastores and pipeline (OpenSearch, Vector, Kafka, ClickHouse, Victoria,
+      # Grafana, cAdvisor, node-exporter, nginx) emit into the SAME lane as the
+      # Correlix application. Their self-health chatter — "OpenSearch rejected N
+      # documents", "Vector discarded N events" — was surfacing in the app-log
+      # view an operator uses to watch tenant infrastructure, where it reads as a
+      # tenant incident. It is not: it is the observability platform observing
+      # itself, and belongs with Grafana/self-monitoring.
+      #
+      # Classify here so the value is queryable immediately and the router can
+      # split the stream. NOTHING is dropped — platform logs are kept, just kept
+      # SEPARATE (an operator debugging an ingest stall still needs them).
+      platform_services = ["opensearch", "opensearch-dashboards", "vector-aggregator",
+        "vector-router", "kafka", "kafka-exporter", "clickhouse", "victoria",
+        "vmalert", "grafana", "cadvisor", "node-exporter", "nginx", "redis",
+        "postgres", "goflow2", "syslog-ng", "gotenberg", "prober"]
+      .log_class = "application"
+      .log_index_base = "applogs"
+      if includes(platform_services, .service) {
+        .log_class = "platform"
+        # Platform logs index into netops-platformlogs-* (see the router sink).
+        # The GUI reads netops-applogs-*, so they leave the device-monitoring
+        # view while staying retained for Grafana/operators.
+        .log_index_base = "platformlogs"
+      }
+
+      # Drop the Docker label map: its dotted keys (com.docker.compose.*)
+      # collide in OpenSearch, which reads dots as nested objects and rejects
+      # every applog doc with a mapping conflict. Not needed downstream.
+      del(.label)
+      .level     = string(.level)     ?? "info"
+      .component = string(.component) ?? "container"
+      # App logs are emitted by stack-internal services, not tenant devices →
+      # global/platform tenant.
+      .tenant_id = ""
+
+      # ── F-05: the merge above is producer-controlled; the mapping is not ──
+      #
+      # `merge()` lifts EVERY key of an arbitrary service's structured log line
+      # to the top level. Two consequences, and the index template alone only
+      # closes one of them:
+      #
+      #  (a) UNBOUNDED FIELD GROWTH — 67 top-level fields measured on
+      #      netops-applogs-untagged against a 1000-field hard limit that fails
+      #      CLOSED (at the limit OpenSearch rejects every remaining document
+      #      for the day: a full-day, all-tenant app-log blackout). Closed in
+      #      opensearch/index-templates.json with `dynamic: false`, which
+      #      freezes the mapping at the declared set.
+      #
+      #  (b) TYPE POISONING of the fields that ARE declared. `dynamic: false`
+      #      does not help here, and neither does `ignore_malformed`, which
+      #      does NOT cover an object/array landing on a `text` field — that
+      #      still rejects the whole document. One service logging
+      #      {"message": {...}} or {"level": ["a"]} would therefore destroy its
+      #      own log line permanently, with a 400 inside a 200 bulk response
+      #      (F-17: index_failed stays 0).
+      #
+      # So coerce every DECLARED scalar back to a string after the merge. A
+      # structured value is preserved as its JSON text rather than dropped, so
+      # the offending producer stays greppable instead of invisible.
+      #
+      # The list must cover EVERY string-typed field the applogs template
+      # declares (finder 2026-08-14: the first fix listed 12 fields but the
+      # template also declares container_id / image / source_type — a producer
+      # logging {"image": {...}} still destroyed its own line).
+      # tests/test_ingest_contract.py now derives the required set from the
+      # template, so a newly declared scalar cannot ship uncoerced.
+      for_each(["message", "msg", "level", "component", "service", "log_class",
+                "log_index_base", "container_name", "container_id", "image",
+                "source_type", "host", "stream", "error", "trace_id",
+                "timestamp_raw"]) -> |_i, name| {
+        v = get(., [name]) ?? null
+        if v != null && !is_string(v) {
+          . = set!(., [name], encode_json(v))
+        }
+      }
+
+      # `timestamp` is declared `date` and CANNOT ride the loop above —
+      # encode_json() would JSON-quote the NATIVE timestamp docker_logs stamps
+      # on every normal doc. But the merge lets a producer clobber it with an
+      # object/array ({"timestamp": {...}}), which ignore_malformed does NOT
+      # cover on a date field either — whole-doc rejection, silent loss.
+      # Guard it separately: native and string values pass through untouched
+      # (a malformed STRING is a scalar, which ignore_malformed does tolerate);
+      # anything else is re-parsed if its string render is a timestamp, else
+      # moved aside to timestamp_raw (declared keyword — the offending
+      # producer stays greppable) and dropped so the router derives ts from
+      # its receive-time fallback instead of the doc being destroyed.
+      if exists(.timestamp) && !is_timestamp(.timestamp) && !is_string(.timestamp) {
+        tparsed, terr = parse_timestamp(to_string(.timestamp) ?? "", "%+")
+        if terr == null {
+          .timestamp = tparsed
+        } else {
+          .timestamp_raw = encode_json(.timestamp)
+          del(.timestamp)
+        }
+      }
+
+  syslog_normalized:
+    type: remap
+    inputs: [syslog_in]
+    source: |
+      .signal   = "syslog"
+      .hostname = string(.hostname) ?? "unknown"
+      .severity = string(.severity) ?? "info"
+      .appname  = string(.appname)  ?? "unknown"
+
+      # Tenant attribution (#20) — and what it is NOT (TENANT-HIGH-3).
+      #
+      # The hostname survives NAT in the RFC5424 message, which makes it a
+      # usable device KEY. It is NOT an authenticated identity: syslog-ng
+      # listens on UDP+TCP/514 with no ACL and keeps whatever hostname the
+      # sender wrote (see deployment/docker/syslog-ng/syslog-ng.conf). The
+      # previous comment here called it "the reliable device key", which
+      # conflated NAT-survival with authentication — it is neither claimed nor
+      # true that the sender is who it says it is.
+      #
+      # So the ONLY authority on tenancy is device_tenant.csv, exported by the
+      # Go API from its own inventory. `.tenant_id` is UNCONDITIONALLY reset
+      # first: whatever tenant a producer put on the wire is discarded here,
+      # and the value that survives is always exactly what the registry says
+      # for the hostname this event carries. An unknown hostname stays ""
+      # (untagged → platform-only under the strict row policy), never a guess.
+      # The correlation consumer re-derives the same lookup and REFUSES any
+      # event whose tenant_id it cannot reproduce (main.py verified_tenant), so
+      # this stamp is checkable rather than merely trusted.
+      #
+      # `tenant_resolved` mirrors .tenant_id as a plain VRL local (same shape as
+      # `vendor` below). The FortiGate branch needs to COMPARE against it, and
+      # `to_string(.tenant_id)` would be infallible once .tenant_id is known to
+      # be a string — a dangling `??` on an infallible call is a VRL COMPILE
+      # error, i.e. vector exits 78 at boot (the floor()/to_timestamp lesson).
+      # F-11: the registry-MISS discriminator. A registry HIT that maps a
+      # KNOWN platform/global device to "" is the platform's own telemetry
+      # (the load-bearing untagged bucket); a MISS is a sender the inventory
+      # does not know at all — TENANT_UNATTRIBUTABLE, quarantined by the
+      # router's generated stage when sealing is enabled. The two used to be
+      # indistinguishable (both left .tenant_id == "").
+      .tenant_id = ""
+      .tenant_registry = "miss"
+      tenant_resolved = ""
+      if .hostname != "unknown" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": .hostname }) ?? []
+        if length(trows) > 0 {
+          tenant_resolved = to_string(trows[0].tenant_id) ?? ""
+          .tenant_id = tenant_resolved
+          .tenant_registry = "hit"
+        }
+      }
+
+      # Vendor classification from the log signature (heuristic). The
+      # authoritative vendor still comes from SNMP sysObjectID at discovery;
+      # this labels each log — and any log-only device — by its distinctive
+      # syslog format, so logs are filterable/colorable by vendor downstream.
+      # Order matters: the distinctive formats are tested before Cisco's
+      # generic "%FAC-SEV-MNEMONIC" (which Arista EOS also emits).
+      msg = string(.message) ?? ""
+      app = downcase(.appname)
+      vendor = "unknown"
+      if match(msg, r'devname=\S+') && match(msg, r'logid=') {
+        vendor = "fortinet"
+      } else if match(msg, r',(TRAFFIC|THREAT|SYSTEM|CONFIG|HIPMATCH),') {
+        vendor = "paloalto"
+      } else if match(msg, r'\[junos@2636') || match(msg, r'\bRT_FLOW') ||
+                includes(["mgd", "rpd", "chassisd", "eventd", "dcd", "kmd", "l2cpd"], app) {
+        vendor = "juniper"
+      } else if includes(["ebra", "mlag", "mrouted", "stp", "lldp", "sand", "fwk"], app) {
+        vendor = "arista"
+      } else if match(msg, r'%[A-Z][A-Z0-9_]+-[0-7]-[A-Z0-9_]+') {
+        vendor = "cisco"
+      }
+      .vendor = vendor
+
+      # FortiOS parser. FortiGate's "default" log format is space-separated
+      # key="value" pairs and carries NO clean RFC hostname — Vector keys it to
+      # the source IP, so the real device id lives in devname= inside the body.
+      # Parse the kv pairs (quoted-value aware), refine the device name from
+      # devname, surface type/subtype as appname and lift the FortiOS severity.
+      # Parsed fields go under .fgt to avoid OpenSearch dynamic-mapping
+      # collisions with other log types.
+      #
+      # TENANT-HIGH-3 — THE DEFECT REMOVED HERE: this block used to RE-ATTRIBUTE
+      # the tenant a second time from `devname=`, a field inside the LOG BODY.
+      # The body is written by the sender: anyone able to reach :514 could put
+      # a victim's device name in it and have their log filed under that
+      # victim's tenant, overriding the (already unauthenticated, but at least
+      # registry-derived) hostname attribution above. Log CONTENT may never set
+      # tenancy. The lookup is gone; `.tenant_id` keeps whatever the registry
+      # said for the hostname, full stop.
+      #
+      # devname may still refine the DEVICE NAME, and only to a name the
+      # registry knows AND that resolves to the tenant already attributed —
+      # because .hostname is the identity the correlation consumer re-verifies
+      # the tenant against, so letting the body rewrite it to an unverifiable
+      # value would (correctly) get the event refused downstream. When it does
+      # not qualify, the name is still captured — it is right there in
+      # .fgt.devname — it just does not become the device identity.
+      if vendor == "fortinet" {
+        kv, kverr = parse_key_value(msg)
+        if kverr == null {
+          .fgt = kv
+          dn = string(kv.devname) ?? ""
+          if dn != "" {
+            drows = find_enrichment_table_records("device_tenant", { "identity": dn }) ?? []
+            if length(drows) > 0 &&
+               (to_string(drows[0].tenant_id) ?? "") == tenant_resolved {
+              .hostname = dn
+              .host = dn
+            }
+          }
+          t  = string(kv.type) ?? ""
+          st = string(kv.subtype) ?? ""
+          if t != "" && st != "" { .appname = t + "/" + st } else if t != "" { .appname = t }
+          lvl = string(kv.level) ?? ""
+          if lvl != "" { .severity = lvl }
+          # #81 P-NGFW: lift the FortiGate App-ID classification (on-box DPI) + its
+          # 5-tuple to a vendor-NEUTRAL contract (.app_id/.app_src/.app_dst/
+          # .app_dport/.app_proto) so the app-identity resolver can consume an
+          # authoritative app label without knowing the vendor. Only when the
+          # traffic log actually carries an app classification (app=, not N/A).
+          # Flat top-level keys (no dots) to avoid OpenSearch mapping collisions.
+          fapp = string(kv.app) ?? ""
+          if fapp != "" && fapp != "N/A" {
+            .app_id = fapp
+            .app_vendor = "fortinet"
+            asrc = string(kv.srcip) ?? ""
+            adst = string(kv.dstip) ?? ""
+            if asrc != "" { .app_src = asrc }
+            if adst != "" { .app_dst = adst }
+            dpt = string(kv.dstport) ?? ""
+            if dpt != "" { .app_dport = dpt }
+            prt = string(kv.proto) ?? ""
+            if prt != "" { .app_proto = prt }
+          }
+        }
+      }
+
+      # ── Structured-body parsers (#31): turn the vendor log body into canonical
+      # normalized fields (subsystem/facility/event_type/summary + embedded
+      # severity) so Events/RCA read structure, not raw text. Infallible: every
+      # parse uses the (_, err) form and falls back — a parser miss never drops the
+      # event. parser_status makes coverage observable (no silent failure).
+      .parser_status = "unparsed"
+      embedded_sev = 99
+      if vendor != "fortinet" {
+        # Cisco IOS/IOS-XE + NX-OS + Arista EOS converge on %FAC-SEV-MNEMONIC: text
+        cm, cmerr = parse_regex(msg, r'%(?P<facility>[A-Z][A-Z0-9_]+)-(?P<sev>[0-7])-(?P<mnemonic>[A-Z0-9_]+):\s*(?P<text>.*)')
+        if cmerr == null {
+          .facility = cm.facility
+          .event_type = downcase(string(cm.mnemonic) ?? "")
+          .summary = cm.text
+          embedded_sev = to_int(cm.sev) ?? 6
+          .parser_id = "ios_style.v1"
+          .parser_status = "parsed"
+        } else if match(msg, r'\|\d+\|\d+\|\d+\|') {
+          # Nokia SR Linux: <lvlword>|<pid>|<tid>|<seq>|<subsys>||<S>: <text>
+          sm, smerr = parse_regex(msg, r'\w+\|\d+\|\d+\|\d+\|(?P<subsys>[^|]*)\|[^|]*\|(?P<sevchar>[A-Z]):\s*(?P<text>.*)')
+          if smerr == null {
+            .vendor = "nokia"
+            .subsystem = strip_whitespace(string(sm.subsys) ?? "")
+            .summary = strip_whitespace(string(sm.text) ?? "")
+            sc = string(sm.sevchar) ?? ""
+            embedded_sev = if sc == "C" { 2 } else if sc == "E" { 3 } else if sc == "W" { 4 } else if sc == "N" { 5 } else if sc == "I" { 6 } else { 7 }
+            .parser_id = "srlinux.v1"
+            .parser_status = "parsed"
+          }
+        }
+      }
+
+      # Severity reconcile: the body's embedded level overrides the syslog PRI when
+      # stronger (lower RFC5424 number wins) — e.g. PRI=notice + body "W:" → warning.
+      # .severity was already coalesced to a string above (line ~173), so a second
+      # `?? "info"` here is flagged E651 (unnecessary) by a fresh vector compile.
+      # SHORT keywords included deliberately: Vector 0.40's syslog source emits
+      # the ABBREVIATED severity for PRI-derived values — a PRI-0 frame arrives
+      # as "emerg", not "emergency" (proven empirically against
+      # timberio/vector:0.40.0-alpine, RFC5424 and RFC3164 both; finder
+      # 2026-08-14). Without "emerg"/"panic" here the single most severe syslog
+      # class fell through to else=info and sorted below a warning.
+      # tests/test_ingest_contract.py pins the keyword→severity map.
+      sysv = downcase(string(.severity))
+      sysint = if sysv == "emergency" || sysv == "emerg" || sysv == "panic" || sysv == "alert" || sysv == "critical" || sysv == "crit" { 2 } else if sysv == "error" || sysv == "err" { 3 } else if sysv == "warning" || sysv == "warn" { 4 } else if sysv == "notice" { 5 } else if sysv == "debug" { 7 } else { 6 }
+      eff = if embedded_sev < sysint { embedded_sev } else { sysint }
+      .normalized_severity = if eff <= 2 { "critical" } else if eff == 3 { "error" } else if eff == 4 { "warning" } else if eff == 5 { "notice" } else { "info" }
+
+      # Clock-skew flagging (log-time standard S5/R5): compare the ORIGIN
+      # timestamp (parsed from the syslog frame; UTC) against this aggregator's
+      # receive clock. |skew| > 300s ⇒ stamp clock_skew_s (signed seconds,
+      # positive = device clock ahead) so the record is searchable in
+      # OpenSearch and the correlation service raises a per-device finding off
+      # the bus copy. The timestamp itself is NEVER rewritten (R2: origin time
+      # preserved; R3: receive time alongside).
+      # (`to_timestamp` does not exist in this Vector's VRL — exit 78 at boot,
+      # caught in deploy 2026-07-17. Render→parse handles both a native
+      # timestamp and a string form of .timestamp.)
+      ots = to_unix_timestamp(parse_timestamp(to_string(.timestamp) ?? "", "%+") ?? now())
+      skew_s = ots - to_unix_timestamp(now())
+      if abs(skew_s) > 300 { .clock_skew_s = skew_s }
+
+      # ── Scale P0: tenant partition key ──────────────────────────────────
+      # Kafka message key = the tenant this event was attributed to ("global"
+      # for platform/untagged — the same fold canon_tenant applies in the
+      # consumer), so one tenant's events land on ONE partition of every
+      # topic and `--scale correlation=N` instances own disjoint tenant
+      # slices. Stripped from the payload at the sink (except_fields); the
+      # sink's murmur2_random partitioner keeps the hash Java-compatible
+      # across every producer. NEVER key by hostname/device — high-cardinality
+      # keys scatter a tenant across partitions and break co-partitioning.
+      .__key = "global"
+      if .tenant_id != "" { .__key = .tenant_id }
+
+      # ── W2 pipeline-debugger — PARSER DECISION HOOK (marked records only) ─
+      #
+      # `correlix-debug trace` collects this stage with
+      # `vector tap --outputs-of syslog_normalized` (docs/runbooks/pipeline-debug.md
+      # §5). A tap shows the EVENT, never the DECISION PATH: which vendor branch
+      # matched, whether the tenant registry answered, which body parser ran —
+      # and, the part the debugger exists for, the REASON a record ends up
+      # unattributed or unparsed. This hook writes that path down.
+      #
+      # THE GUARD, and why it costs nothing. Every record the debugger injects
+      # carries the literal token `cx_debug=<26-char ulid>` inside its free-text
+      # field (internal/pipedebug — MarkerField / MarkerTag / MarkerPayload). No
+      # production record ever carries it, so the price for real traffic is ONE
+      # substring compare against `msg`, a string this transform already built
+      # above. Nothing below runs, and nothing about an unmarked record changes.
+      # It also needs no config reload — which matters, because Vector reads
+      # VECTOR_LOG once at process start and has NO runtime log-level switch
+      # (pipedebug's VectorLevelReason says so on the record), so a reload-based
+      # debug flag would be a promise this stack cannot keep.
+      if contains(msg, "cx_debug=") {
+        # ── the tenant decision, with the reason named ─────────────────────
+        # F-11: the two ways to end up with tenant_id="" are NOT the same
+        # thing, and a trace that printed only the empty value would hide the
+        # distinction the whole discriminator exists to make.
+        cx_tid = .tenant_id
+        if cx_tid == "" { cx_tid = "(none)" }
+        cx_tenant_reason = "registry-hit"
+        if .hostname == "unknown" {
+          cx_tenant_reason = "DROPPED-ATTRIBUTION:no-hostname-in-frame(the lookup is not even attempted; the record stays untagged)"
+        } else if .tenant_registry == "miss" {
+          cx_tenant_reason = "DROPPED-ATTRIBUTION:device_tenant-registry-MISS(no inventory row for this hostname; TENANT_UNATTRIBUTABLE — the router quarantines it when sealing is on)"
+        } else if tenant_resolved == "" {
+          cx_tenant_reason = "registry-hit-maps-to-platform-global(untagged by design, not a miss)"
+        }
+        # ── the body-parser decision, with the reason a parse did NOT happen ─
+        cx_parse_reason = "NO-PARSE:neither %FAC-SEV-MNEMONIC nor the SR-Linux pipe format matched the body"
+        if vendor == "fortinet" {
+          cx_parse_reason = "NO-PARSE:fortinet-kv branch, parse_key_value FAILED — body left raw"
+          if exists(.fgt) {
+            cx_parse_reason = "fortinet-kv branch, parsed into .fgt (the structured-body parsers are skipped for this vendor by design)"
+          }
+        } else if .parser_status == "parsed" {
+          cx_parse_reason = "matched " + (string(.parser_id) ?? "?")
+        }
+        cx_line = "component=syslog_normalized" +
+          " hostname=" + .hostname +
+          " vendor=" + vendor +
+          " tenant_registry=" + .tenant_registry +
+          " tenant_id=" + cx_tid +
+          " tenant_reason=" + cx_tenant_reason +
+          " parser_status=" + .parser_status +
+          " parser_reason=" + cx_parse_reason +
+          # `string()` not `to_string()`: to_string(null) renders "", which
+          # would print `facility=` and read as "the parser produced an empty
+          # facility" rather than "there is no facility field at all".
+          " facility=" + (string(.facility) ?? "-") +
+          " event_type=" + (string(.event_type) ?? "-") +
+          " severity_in=" + .severity +
+          " embedded_sev=" + to_string(embedded_sev) +
+          " normalized_severity=" + .normalized_severity +
+          " appname=" + .appname +
+          " partition_key=" + .__key +
+          " clock_skew_s=" + to_string(skew_s) +
+          # The admission screen is the GENERATED syslog_admission_stamp, one
+          # hop downstream, and hand-editing between its markers is forbidden
+          # (scripts/gen-syslog-admission.py owns that block and a drift test
+          # fails on a stale copy); splicing a component in after it would
+          # break the topology tests/test_syslog_admission.py pins. So this
+          # stage reports the INPUTS the screen will read and the router lane's
+          # hook reports the verdict it produced, off `.cx_admission`.
+          " admission=downstream(generated syslog_admission_stamp; verdict reported by the router lane)"
+        # (i) STAMP — ONE FLAT STRING field, no dots in the key name, never an
+        # array and never an object. The CLAUDE.md dotted-key gotcha (Docker's
+        # `.label` map, whose com.docker.compose.* keys OpenSearch read as
+        # object paths) silently dropped EVERY app log once; a debug field must
+        # not be able to do that again. Appended rather than replaced so one
+        # field carries the whole path (this stage, then the router's), bounded
+        # so it can never grow without limit.
+        cx_prev = string(.cx_parse_trace) ?? ""
+        if cx_prev != "" && length(cx_prev) < 2000 {
+          .cx_parse_trace = cx_prev + " | " + cx_line
+        } else {
+          .cx_parse_trace = cx_line
+        }
+        # (ii) LOG — level "info", DELIBERATELY, not "debug". Vector reads
+        # VECTOR_LOG at process start, docker-compose.yml does not set it, and
+        # there is no runtime switch, so the aggregator runs at `info`: a
+        # "debug" line here would NEVER be emitted and the operator would be
+        # told nothing while believing they had been told something. That is
+        # the defect this feature exists to remove, so the honest level for a
+        # line that must actually appear in `docker logs vector-aggregator` is
+        # info. rate_limit_secs: 0 for the same reason — log() de-duplicates by
+        # default, and a silently suppressed line during a burst of probes is
+        # the same silence in a different costume.
+        log(cx_line, level: "info", rate_limit_secs: 0)
+      }
+
+  # ── A4 Phase 1: syslog ADMISSION SPLIT (built, default OFF) ───────────────
+  #
+  # The correlation engine admits ~6 % of the syslog firehose as evidence
+  # (storm-s11: 54,767 of 900,001) and proves the other 94 % uninteresting
+  # in-process, after a full JSON decode. `producers.syslog_promotable` is the
+  # screen that decides it. These two components run THE SAME SCREEN here, one
+  # hop earlier, and publish the admitted subset onto a SECOND topic
+  # (netops.syslog.control) so the engine can one day subscribe to the 6 %
+  # instead of the 100 %.
+  #
+  # NOTHING CHANGES TODAY. `kafka_syslog` still carries every line to
+  # netops.syslog; the engine still consumes that topic and still applies its
+  # own screen. The only new behaviour is (a) an additive `.cx_admission`
+  # stamp on the syslog documents and (b) a second, currently unread topic.
+  # Flipping the engine over is a separate, release-qualified change — see
+  # docs/INGESTION.md "What reaches correlation".
+  #
+  # The VRL below is GENERATED from src/correlation/producers.py by
+  # scripts/gen-syslog-admission.py; `--check` (run by
+  # tests/test_syslog_admission.py) fails on a stale copy, and the generated
+  # `vector test` suite proves case-by-case that this program admits exactly
+  # the lines `syslog_promotable` admits. Do not hand-edit between the markers.
+  # >>> BEGIN GENERATED-SYSLOG-ADMISSION (scripts/gen-syslog-admission.py)
+  # The admission stamp. GENERATED — edit scripts/gen-syslog-admission.py
+  # (or the screen in src/correlation/producers.py) and re-run it; the
+  # drift test in tests/test_syslog_admission.py fails on a stale copy.
+  #
+  # Additive and non-filtering: every line leaves this transform, so
+  # kafka_syslog still carries the WHOLE lane. Only the `syslog_admission`
+  # route below narrows, and only onto the opt-in control topic.
+  syslog_admission_stamp:
+    type: remap
+    inputs: [syslog_normalized]
+    source: |
+      # syslog-admission.vrl — GENERATED by scripts/gen-syslog-admission.py.
+      # DO NOT EDIT BY HAND: re-run the generator, or CI's drift test fails.
+      #
+      # Compiled from src/correlation/producers.py — the same screen the
+      # correlation engine applies in-process (`syslog_promotable`). Sets
+      # `.cx_admission = {"v": <rules_hash prefix>, "by": <gate>}` on a line
+      # the engine COULD promote, and leaves the field unset otherwise. It
+      # never drops, rewrites or reorders anything: the stamp is additive.
+      #
+      #   rules_hash : 0538afc1b47c3bc4d4d350e5088a4ecf300e8bdc0c8b3a317bb91f2a193209f0
+      #   v          : 0538afc1b47c
+      #   floor      : ALARM_SEVERITY_FLOOR = 4
+      #   screen     : 61 literals
+      #
+      # Field parity: this runs immediately after `syslog_normalized`, so it
+      # reads exactly the document `kafka_syslog` serializes onto
+      # netops.syslog — the same dict `syslog_promotable` receives.
+
+      # ── severity (producers.syslog_severity_num) ────────────────────────
+      # `99` is the no-severity sentinel: Python's `min([]) -> None`,
+      # which never satisfies the floor. Keyword AND tag digit are both read;
+      # the MOST severe (numerically smallest) of the two wins.
+      cx_sev = 99
+      cx_kw = downcase(strip_whitespace(string(.severity) ?? ""))
+      if includes(["emerg", "emergency"], cx_kw) {
+        cx_sev = 0
+      } else if includes(["alert"], cx_kw) {
+        cx_sev = 1
+      } else if includes(["c", "crit", "critical"], cx_kw) {
+        cx_sev = 2
+      } else if includes(["e", "err", "error"], cx_kw) {
+        cx_sev = 3
+      } else if includes(["w", "warn", "warning"], cx_kw) {
+        cx_sev = 4
+      } else if includes(["n", "note", "notice"], cx_kw) {
+        cx_sev = 5
+      } else if includes(["i", "info", "informational"], cx_kw) {
+        cx_sev = 6
+      } else if includes(["d", "debug"], cx_kw) {
+        cx_sev = 7
+      }
+
+      cx_tag = upcase(string(.appname) ?? "")
+      cx_tag_sev = 99
+      cx_m = parse_regex(cx_tag, r'%[A-Z0-9_]+-(?P<d>\d)-[A-Z0-9_]+') ?? {}
+      if is_string(cx_m.d) {
+        cx_tag_sev = to_int(cx_m.d) ?? 99
+      }
+      if cx_tag_sev < cx_sev {
+        cx_sev = cx_tag_sev
+      }
+
+      # ── gate 1: the device called it warning-or-worse ───────────────────
+      if cx_sev <= 4 {
+        .cx_admission = { "v": "0538afc1b47c", "by": "severity" }
+      }
+
+      # ── gate 2: a known typed symptom marker, at any severity ───────────
+      # The haystack is `message + " " + upcase(appname) + " " + facility +
+      # " " + event_type`, lower-cased — byte-for-byte the join
+      # `syslog_promotable` builds. The alternation below is the screen's
+      # 61 literals (longest first, as in the Python tuple); Rust's
+      # regex compiles an alternation of plain literals into a literal-set
+      # matcher, so this is one pass, not 61 substring searches.
+      if !exists(.cx_admission) {
+        cx_hay = downcase(
+          (string(.message) ?? "") + " " + cx_tag + " " +
+          (string(.facility) ?? "") + " " + (string(.event_type) ?? ""))
+        if match(cx_hay, r'unsupported_transceiver|is flapping between|isisadjacencychange|has moved between|between nve and|duplicate host|vxlan_mac_move|corrected_fec|uncorrectable|notification|prefix-limit|remote_fault|rx_power_low|blacklisted|local_fault|signal_loss|temperature|transceiver|unqualified|unsupported|remotepeer|adjchange|bias_high|corrected|nbr_reset|qualified|temp_high|threshold|dup_host|mac_move|spantree|macflap|standby|warning|adjchg|deskew|maxpfx|remote|signal|updown|alarm|align|error|light|local|optic|power|clns|evpn|flap|hsrp|lldp|move|post|vrrp|vtep|ber|hmm|los|nve|pre') {
+          .cx_admission = { "v": "0538afc1b47c", "by": "marker" }
+        }
+      }
+
+      # The scratch locals never reach the wire (VRL locals are not fields).
+  # <<< END GENERATED-SYSLOG-ADMISSION
+
+  # The admitted subset, and only it, reaches kafka_syslog_control.
+  #
+  # `reroute_unmatched: false`: the rejected majority is already carried in
+  # full by kafka_syslog, so an `_unmatched` output no sink consumes would be
+  # dead topology — and a route output with no consumer is exactly the kind of
+  # silent sink-to-nowhere this repo keeps finding (F-03).
+  syslog_admission:
+    type: route
+    inputs: [syslog_admission_stamp]
+    reroute_unmatched: false
+    route:
+      # `.cx_admission` is unset on a rejected line, so the path read is null
+      # and the condition is false. The gate NAME ("severity" / "marker" /
+      # "unscreenable") is deliberately not tested here: which gate answered is
+      # provenance for the operator, not admission policy.
+      control: '.cx_admission.by != null'
+
+  # SNMP traps — the receiver already decoded the PDU into structured fields
+  # (trap_oid, trap_name, severity, varbinds, snmp_version, device/host). Here we
+  # just stamp the tenant the same way syslog does: match the device id (or the
+  # source IP) against the device→tenant table. No match → "" (global/platform).
+  snmptrap_normalized:
+    type: remap
+    inputs: [trap_in]
+    source: |
+      .signal   = "snmptrap"
+      .severity = string(.severity) ?? "notice"
+      dev = string(.device) ?? ""
+      host = string(.host) ?? ""
+      .hostname = dev
+      if .hostname == "" { .hostname = host }
+      key = dev
+      if key == "" { key = host }
+      # F-11: registry-MISS discriminator — see the syslog lane's note.
+      .tenant_id = ""
+      .tenant_registry = "miss"
+      if key != "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": key }) ?? []
+        if length(trows) > 0 {
+          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+          .tenant_registry = "hit"
+        }
+      }
+      # Scale P0: tenant partition key — see the syslog lane's note.
+      .__key = "global"
+      if .tenant_id != "" { .__key = .tenant_id }
+
+      # ── W2 pipeline-debugger — PARSER DECISION HOOK (marked records only) ─
+      # Same contract, same guard and the same level reasoning as the syslog
+      # lane above: `correlix-debug trace` taps this transform's output for
+      # parser.log, the marker `cx_debug=<ulid>` rides in the trap's free text
+      # (the receiver folds every varbind VALUE into .message, and the probe's
+      # marker varbind carries pipedebug.MarkerPayload), and no production trap
+      # ever carries the token — so unmarked traffic pays one substring compare.
+      cx_msg = string(.message) ?? ""
+      if contains(cx_msg, "cx_debug=") {
+        cx_tid = .tenant_id
+        if cx_tid == "" { cx_tid = "(none)" }
+        cx_dev = dev
+        if cx_dev == "" { cx_dev = "(none)" }
+        cx_host = host
+        if cx_host == "" { cx_host = "(none)" }
+        cx_key = key
+        if cx_key == "" { cx_key = "(none)" }
+        cx_tenant_reason = "registry-hit"
+        if key == "" {
+          cx_tenant_reason = "DROPPED-ATTRIBUTION:the trap carries neither a device id nor a source host — there is no key to look up"
+        } else if .tenant_registry == "miss" {
+          cx_tenant_reason = "DROPPED-ATTRIBUTION:device_tenant-registry-MISS on " + key + " (no inventory row; TENANT_UNATTRIBUTABLE — the router quarantines it when sealing is on)"
+        } else if .tenant_id == "" {
+          cx_tenant_reason = "registry-hit-maps-to-platform-global(untagged by design, not a miss)"
+        }
+        cx_line = "component=snmptrap_normalized" +
+          " hostname=" + .hostname +
+          " device=" + cx_dev +
+          " source_host=" + cx_host +
+          " lookup_key=" + cx_key +
+          " tenant_registry=" + .tenant_registry +
+          " tenant_id=" + cx_tid +
+          " tenant_reason=" + cx_tenant_reason +
+          " trap_oid=" + (string(.trap_oid) ?? "-") +
+          " trap_name=" + (string(.trap_name) ?? "-") +
+          " parser_status=" + (string(.parser_status) ?? "-") +
+          " event_type=" + (string(.event_type) ?? "-") +
+          " severity=" + .severity +
+          " partition_key=" + .__key
+        # (i) STAMP — one flat string, appended; see the syslog lane for why
+        # the shape (and the key name) may never become nested or dotted.
+        cx_prev = string(.cx_parse_trace) ?? ""
+        if cx_prev != "" && length(cx_prev) < 2000 {
+          .cx_parse_trace = cx_prev + " | " + cx_line
+        } else {
+          .cx_parse_trace = cx_line
+        }
+        # (ii) LOG at info, rate_limit_secs: 0 — see the syslog lane's note:
+        # `debug` is unreachable in this process (VECTOR_LOG is start-time only
+        # and unset), so info is the only honest level for a line that must be
+        # visible in `docker logs vector-aggregator`.
+        log(cx_line, level: "info", rate_limit_secs: 0)
+      }
+
+  # Probe events: stamp the tenant when the target matches a device identity.
+  # Most probe targets are external hosts → "" (global/platform); the
+  # correlation service re-resolves against the same table either way.
+  probe_normalized:
+    type: remap
+    inputs: [probe_in]
+    source: |
+      .signal = "probe"
+      tgt = string(.target) ?? ""
+      .tenant_id = ""
+      if tgt != "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": tgt }) ?? []
+        if length(trows) > 0 {
+          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+        }
+      }
+      # Scale P0: tenant partition key — see the syslog lane's note.
+      .__key = "global"
+      if .tenant_id != "" { .__key = .tenant_id }
+
+  # Metric events: the Go collector already canonicalized them (typed code), so
+  # this is minimal — tag the signal and stamp the tenant from the device id, the
+  # same enrichment every other plane uses. No regex/parse chain here.
+  metrics_normalized:
+    type: remap
+    inputs: [metrics_in]
+    source: |
+      .signal = "metric"
+      dev = string(.device) ?? ""
+      .tenant_id = ""
+      if dev != "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": dev }) ?? []
+        if length(trows) > 0 {
+          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+        }
+      }
+      # Scale P0: tenant partition key — see the syslog lane's note.
+      .__key = "global"
+      if .tenant_id != "" { .__key = .tenant_id }
+
+  # Cloud provider metrics (CloudWatch / Azure Monitor) → real VALUES in
+  # VictoriaMetrics, so the Service View counters render measured numbers. The
+  # SNMP collector already remote_writes device metrics itself; only the cloud
+  # lane needs this bridge, so we filter to it and convert log→metric.
+  cloud_metrics_only:
+    type: filter
+    inputs: [metrics_normalized]
+    condition: '.signal_family == "cloud_resource"'
+
+  cloud_metrics_vm:
+    type: log_to_metric
+    inputs: [cloud_metrics_only]
+    metrics:
+      - type: gauge
+        field: value
+        name: "{{ metric }}"
+        tags:
+          device: "{{ device }}"
+          resource_id: "{{ index }}"
+          provider: "{{ vendor }}"
+          tenant_id: "{{ tenant_id }}"
+
+  # F-17: flatten the _nodes/stats response into one event per counter. The
+  # response is keyed by node id, so walk the map rather than assuming a name.
+  # Emitted as GAUGES holding the absolute counter value (they reset to 0 when
+  # OpenSearch restarts), so rules.yaml uses delta() over a window rather than
+  # increase() — a restart then produces a negative delta and cannot false-fire.
+  opensearch_indexing_flat:
+    type: remap
+    inputs: [opensearch_indexing_stats]
+    drop_on_abort: true
+    drop_on_error: true
+    # F-03: this lane is the platform's ONLY view of OpenSearch document
+    # rejection (F-17). If the _nodes/stats response ever changes shape, the
+    # abort below silently deletes the poll and the loss alerting goes blind
+    # while every dashboard stays green. Reroute so the failure is a document
+    # in netops-deadletter-* with the actual reason on it.
+    reroute_dropped: true
+    source: |
+      nodes, nerr = object(.nodes)
+      if nerr != null { abort }
+      out = []
+      for_each(nodes) -> |_id, node| {
+        n = object(node) ?? {}
+        idx = object(get(n, ["indices", "indexing"]) ?? {}) ?? {}
+        ds  = object(get(idx, ["doc_status"]) ?? {}) ?? {}
+        host = to_string(get(n, ["host"]) ?? "") ?? ""
+        # doc_status is keyed "2xx"/"4xx"/"5xx" — per-DOCUMENT outcomes, which
+        # is the granularity bulk rejection actually happens at.
+        for_each(ds) -> |code, count| {
+          out = push(out, {
+            "os_metric": "opensearch_indexing_doc_status",
+            "code": code,
+            "node": host,
+            "value": to_float(count) ?? 0.0
+          })
+        }
+        # The lying counter, kept next to the truthful one on purpose.
+        out = push(out, {
+          "os_metric": "opensearch_indexing_index_failed",
+          "code": "none",
+          "node": host,
+          "value": to_float(get(idx, ["index_failed"]) ?? 0) ?? 0.0
+        })
+        out = push(out, {
+          "os_metric": "opensearch_indexing_index_total",
+          "code": "none",
+          "node": host,
+          "value": to_float(get(idx, ["index_total"]) ?? 0) ?? 0.0
+        })
+      }
+      . = { "rows": out }
+
+  opensearch_indexing_rows:
+    type: remap
+    inputs: [opensearch_indexing_flat]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true          # F-03 — see opensearch_indexing_flat
+    source: |
+      rows = array(.rows) ?? []
+      if length(rows) == 0 { abort }
+      . = rows
+
+  opensearch_indexing_vm:
+    type: log_to_metric
+    inputs: [opensearch_indexing_rows]
+    metrics:
+      - type: gauge
+        field: value
+        name: "{{ os_metric }}"
+        tags:
+          code: "{{ code }}"
+          node: "{{ node }}"
+
+  # F-53/F-54: cluster status as a NUMBER (green=0 yellow=1 red=2 — ordered so
+  # a single ">= 1" threshold means "not green") plus the shard census.
+  opensearch_health_vm:
+    type: remap
+    inputs: [opensearch_cluster_health]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true          # F-03 — see opensearch_indexing_flat
+    source: |
+      st = to_string(.status) ?? ""
+      code = 3
+      if st == "green" { code = 0 } else if st == "yellow" { code = 1 } else if st == "red" { code = 2 }
+      . = {
+        "cluster": to_string(.cluster_name) ?? "unknown",
+        "status_text": st,
+        "cluster_status": code,
+        "active_shards": to_float(.active_shards) ?? 0.0,
+        "active_primary_shards": to_float(.active_primary_shards) ?? 0.0,
+        "unassigned_shards": to_float(.unassigned_shards) ?? 0.0,
+        "number_of_data_nodes": to_float(.number_of_data_nodes) ?? 0.0
+      }
+
+  opensearch_health_metrics:
+    type: log_to_metric
+    inputs: [opensearch_health_vm]
+    metrics:
+      - type: gauge
+        field: cluster_status
+        name: "opensearch_cluster_status"
+        tags: { cluster: "{{ cluster }}", status_text: "{{ status_text }}" }
+      - type: gauge
+        field: active_shards
+        name: "opensearch_cluster_active_shards"
+        tags: { cluster: "{{ cluster }}" }
+      - type: gauge
+        field: active_primary_shards
+        name: "opensearch_cluster_active_primary_shards"
+        tags: { cluster: "{{ cluster }}" }
+      - type: gauge
+        field: unassigned_shards
+        name: "opensearch_cluster_unassigned_shards"
+        tags: { cluster: "{{ cluster }}" }
+      - type: gauge
+        field: number_of_data_nodes
+        name: "opensearch_cluster_data_nodes"
+        tags: { cluster: "{{ cluster }}" }
+
+  # Bus-bridge envelopes → topic-tagged events. Zero-trust guard: only
+  # netops.* topics are producible through the bridge; anything else (or a
+  # non-object event) is dropped, not forwarded.
+  bus_bridge:
+    type: remap
+    inputs: [bus_in]
+    drop_on_abort: true
+    drop_on_error: true
+    # F-03: a REJECTED bus write is a security-relevant event (something tried
+    # to produce onto a non-netops topic) and an operational one (a producer
+    # sent a malformed envelope). Both used to vanish into a counter with no
+    # payload, so neither the producer nor the operator could ever see it.
+    reroute_dropped: true
+    source: |
+      t = to_string(.topic) ?? ""
+      if !starts_with(t, "netops.") { abort }
+      k = to_string(.key) ?? ""
+      ev, err = object(.event)
+      if err != null { abort }
+      . = ev
+      .__topic = t
+      # Scale P0: the partition key must be the tenant the correlation engine
+      # will attribute the event to (co-partitioned tenant slices — see the
+      # syslog lane's note). For bus-bridge lanes that attribution is the
+      # event's own tenant_id claim (cloud/app/verification/wireless lanes
+      # accept the authenticated producer's claim), so prefer it; fall back to
+      # the envelope key the producer chose (the Go producers already set
+      # key=tenant), then to "global" — never an absent key, which would land
+      # on a RANDOM partition and split a tenant across instances.
+      kt = to_string(.tenant_id) ?? ""
+      if kt == "" { kt = k }
+      if kt == "" { kt = "global" }
+      .__key = kt
+
+      # ── F-10: `ts` is the canonical event-time field on EVERY topic ─────
+      # Measured 2026-07-21: netops.controller_events carried NO time field at
+      # all — not `ts`, not `timestamp` — on 400/400 sampled messages. Every
+      # consumer that orders or windows those events was therefore silently
+      # using ARRIVAL time, which is the exact class of defect that made RCA
+      # causal ordering wrong (F-34). Producers reach this bridge over HTTP, so
+      # this is the last place the platform can still tell "the producer sent
+      # no time" from "the producer sent a bad time".
+      #
+      # Stamp receive time as `ts` when the producer sent none, and record in
+      # .ts_source that it is DERIVED — an honest, labelled approximation beats
+      # an invisible one. `timestamp` is never rewritten (log-time R2).
+      if !exists(.ts) {
+        if exists(.timestamp) {
+          bts, bterr = parse_timestamp(to_string(.timestamp) ?? "", format: "%+")
+          if bterr == null {
+            .ts = to_unix_timestamp(bts, unit: "milliseconds")
+            .ts_source = "timestamp"
+          }
+        }
+      }
+      if !exists(.ts) {
+        .ts = to_unix_timestamp(now(), unit: "milliseconds")
+        .ts_source = "bridge_receive"
+      }
+
+  # --------------------------------------------------------------------------
+  # F-03 — DEAD-LETTER LANE FOR THE AGGREGATOR TIER.
+  #
+  # There was no DLQ on this tier at all: four transforms used
+  # `drop_on_error`/`drop_on_abort` with no `reroute_dropped`, so any future
+  # VRL error (a producer adds a field, a regex stops matching) deleted data
+  # and looked EXACTLY like normal filtering. The router tier grew a DLQ during
+  # the DEF-6 fix; this tier did not — the same instance-not-class pattern this
+  # audit is about.
+  #
+  # Shape is byte-identical to the router's deadletter_encoded so ONE
+  # netops-deadletter-* index and ONE template (`dynamic: false`, nothing
+  # dynamically typed) serve both tiers. It ships over the bus rather than
+  # straight to OpenSearch on purpose: this tier has no storage sink, and
+  # routing storage writes through the router keeps the tier boundary intact.
+  #
+  # `lane` comes from Vector's own dropped-metadata component_id, so a new
+  # rerouting transform is labelled correctly without touching this encoder.
+  # See the router config for the measured proof of where that metadata lives.
+  deadletter_encoded:
+    type: remap
+    inputs:
+      - bus_bridge.dropped
+      - cloud_parsed.dropped
+      - opensearch_indexing_flat.dropped
+      - opensearch_indexing_rows.dropped
+      - opensearch_health_vm.dropped
+    source: |
+      lane = to_string(.metadata.dropped.component_id) ?? ""
+      if lane == "" { lane = "unknown" }
+      kind = to_string(.metadata.dropped.reason) ?? ""
+      if kind == "" { kind = "unknown" }
+      why = to_string(.metadata.dropped.message) ?? ""
+      if why == "" { why = "no dropped-metadata captured — check Vector's log namespace (F-14)" }
+      . = {
+        "dropped_at": format_timestamp!(now(), format: "%+"),
+        "lane": lane,
+        "reason": kind,
+        "detail": why,
+        "raw": encode_json(.)
+      }
+
+# ----------------------------------------------------------------------------
+# SINKS — Kafka netops.* topics, one per signal.
+# ----------------------------------------------------------------------------
+
+  # Cloud fault-lab / cloud-workload app logs arrive as RFC5424 syslog whose msg
+  # is "cloud=<provider> {json}" (json: service, app_id, level, journey_ok,
+  # trace_id, run_id). Fault lines (failed journey or error/crit) ALSO become
+  # netops.cloud cloud_health events so the correlation engine sees an APP-entity
+  # cloud signal (#81 P3G lane). Healthy lines stay syslog-only. Tenant: cloud
+  # events must carry an explicit tenant_id; the device_tenant enrichment keyed
+  # on the sending hostname decides it, "" (no match) → "global" platform view.
+  # F-03 — INTENTIONAL FILTERING IS NOW A `filter`, NOT AN `abort`.
+  #
+  # THE DEFECT THIS FIXES: `drop_on_error: true` + `drop_on_abort: true` put a
+  # deliberate `abort` (this syslog line is not a cloud line — normal, ~46k
+  # events) and a genuine VRL RUNTIME ERROR (a producer changed shape, a regex
+  # stopped matching — data loss) into the SAME counter, with no payload kept
+  # for either. `vector_component_discarded_events_total{intentional="true"}`
+  # read 45,937 on both cloud lanes, so the one signal that would reveal a
+  # broken transform was permanently buried inside ordinary filtering.
+  #
+  # Splitting them is the whole point: this filter carries the bulk
+  # "not a cloud line" decision (still intentional=true, still 46k, still
+  # boring), which leaves the remaps below with only rare aborts and any real
+  # error — and those now reroute to the dead-letter lane with a reason.
+  cloud_syslog_only:
+    type: filter
+    inputs: [syslog_normalized]
+    condition: |
+      match(string(.message) ?? "", r'cloud=[a-z0-9]+ \{')
+
+  # Parse ONCE, for both cloud lanes. This is the only transform in the cloud
+  # path that can still drop an event, and every drop it makes is a genuine
+  # malformed cloud line — i.e. exactly the thing the dead-letter lane exists
+  # for. (Before F-03 both lanes parsed independently and each swallowed its
+  # own failures into the same intentional=true counter as ordinary filtering.)
+  cloud_parsed:
+    type: remap
+    inputs: [cloud_syslog_only]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true
+    source: |
+      raw = string!(.message)
+      parsed, rerr = parse_regex(raw, r'cloud=(?P<provider>[a-z0-9]+) (?P<body>\{.+\})')
+      if rerr != null { abort }
+      body, jerr = parse_json(parsed.body)
+      if jerr != null { abort }
+      if !is_object(body) { abort }
+      .cloud_provider = parsed.provider
+      .cloud_body = object!(body)
+
+  # Fault selection is a FILTER (F-03): "this cloud line is healthy" is an
+  # ordinary, high-volume, intentional decision and must never share a counter
+  # — or a dead-letter index — with "this cloud line could not be parsed".
+  cloud_fault_only:
+    type: filter
+    inputs: [cloud_parsed]
+    condition: |
+      lvl = downcase(string(.cloud_body.level) ?? "info")
+      (.cloud_body.journey_ok == false) || lvl == "error" || lvl == "crit"
+
+  cloud_app_health:
+    type: remap
+    inputs: [cloud_fault_only]
+    source: |
+      body = object(.cloud_body) ?? {}
+      lvl = downcase(string(body.level) ?? "info")
+      journey_failed = body.journey_ok == false
+      svc = string(body.service) ?? "unknown"
+      appid = string(body.app_id) ?? svc
+      host = string(.hostname) ?? "unknown"
+      tenant = string(.tenant_id) ?? ""
+      if tenant == "" { tenant = "global" }
+      sev = "high"
+      metric = "app_error"
+      if journey_failed {
+        sev = "crit"
+        metric = "journey_failed"
+      }
+      provider = string(.cloud_provider) ?? "unknown"
+      ts, tserr = format_timestamp(.timestamp, format: "%+")
+      if tserr != null { ts = format_timestamp!(now(), format: "%+") }
+      . = {
+        "kind": "cloud_health",
+        # Scale P0: tenant partition key (already "global"-folded above) —
+        # see the syslog lane's note. Stripped at the kafka_cloud sink.
+        "__key": tenant,
+        "tenant_id": tenant,
+        "app": svc,
+        "severity": sev,
+        "metric_name": metric,
+        "value": 1.0,
+        "ts": ts,
+        "entity_tokens": [host, appid, svc],
+        "attrs": {
+          "provider": provider,
+          "host": host,
+          "app_id": appid,
+          "trace_id": string(body.trace_id) ?? "",
+          "run_id": string(body.run_id) ?? "",
+          "failed_step": string(body.failed_step) ?? "",
+          "error": string(body.error) ?? ""
+        }
+      }
+
+  # Unified Cloud Logs — the HOST family. Cloud-workload app/host log lines
+  # (RFC5424 syslog whose msg is "cloud=<provider> {json}") become tagged RAW
+  # cloud logs (cloud_family=host) searchable in the Cloud Logs view, alongside
+  # the WAF/LB/DNS/flow lanes the poller tags. Distinct from cloud_app_health
+  # above (which keeps ONLY fault lines as correlation signals) — here we keep
+  # EVERY cloud host line as a searchable record, healthy or not. Non-cloud
+  # syslog is dropped (abort). Tenant carried from the device enrichment; "" →
+  # "global" platform view (never an untagged cross-tenant bucket).
+  cloud_host_log:
+    type: remap
+    inputs: [cloud_parsed]
+    source: |
+      raw = string!(.message)
+      body = object(.cloud_body) ?? {}
+      svc = string(body.service) ?? "unknown"
+      appid = string(body.app_id) ?? svc
+      host = string(.hostname) ?? "unknown"
+      tenant = string(.tenant_id) ?? ""
+      if tenant == "" { tenant = "global" }
+      lvl = downcase(string(body.level) ?? "info")
+      provider = string(.cloud_provider) ?? "unknown"
+      ts, tserr = format_timestamp(.timestamp, format: "%+")
+      if tserr != null { ts = format_timestamp!(now(), format: "%+") }
+      . = {
+        "tenant_id": tenant,
+        "cloud_family": "host",
+        "cloud_provider": provider,
+        "resource_id": appid,
+        "message": raw,
+        "timestamp": ts,
+        "level": lvl,
+        "host": host,
+        "app": appid,
+        "source_type": "cloud",
+        "signal": "cloud"
+      }
+
+sinks:
+  kafka_cloud:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    inputs: [cloud_app_health]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.cloud"
+    key_field: "__key"
+    # Scale P0: keyed by tenant (__key, stamped in the lane transform) with the
+    # JAVA-compatible murmur2 partitioner, so the same tenant hashes to the
+    # same partition NUMBER at every producer on the bus (librdkafka's default
+    # consistent_random is CRC32 and would disagree with kafka-python/Java —
+    # silently splitting a tenant across correlation instances).
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
+    compression: snappy
+
+  # Tagged raw cloud HOST logs → the cloudlogs topic (vector-router indexes it
+  # into netops-cloudlogs-{tenant}-*). Same topic the cloud poller produces the
+  # WAF/LB/DNS/flow/change lanes onto.
+  kafka_cloudlogs:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    inputs: [cloud_host_log]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.cloudlogs"
+    encoding: { codec: json }
+    compression: snappy
+
+  kafka_applogs:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    # Rotation-race DISK buffer (finder 2026-08-14; the F-49 loss mechanism,
+    # still live for applogs). docker_logs tails the json-file logs that
+    # containers keep writing during a Kafka outage; with the default 500-event
+    # memory buffer this sink blocks the source as soon as the broker stalls,
+    # and the json-file driver's 3x50 MB cap then rotates unread lines away —
+    # silent, uncounted, unrecoverable (exactly how flows were lost before
+    # F-49 moved them off stdout). The disk buffer decouples the tail from the
+    # broker: docker_logs keeps draining container logs into the spool for the
+    # length of the outage, and the spool replays into Kafka on recovery.
+    #
+    # This is NOT an ack-backed durability promise — docker_logs supports no
+    # acknowledgements (see the F-04 note on the http_server lanes); it
+    # narrows the loss window from "any stall longer than 500 events" to
+    # "a stall that fills 256 MiB AND then outlasts the json-file window".
+    #
+    # when_full: block parks the docker_logs tail at its last read offset when
+    # the spool fills (backpressure, never a silent drop). 256 MiB is Vector's
+    # topology-build FLOOR — a smaller value is rejected at boot, and NOT by
+    # `vector validate` (see the F-04 note).
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+    inputs: [applogs_normalized]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.applogs"
+    encoding: { codec: json }
+    compression: snappy
+
+  kafka_syslog:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    # A4 Phase 1: fed from the admission STAMP, not from syslog_normalized —
+    # every line still arrives (the stamp transform filters nothing), it now
+    # additionally carries `.cx_admission` when the screen admits it. That
+    # marker riding the FULL lane is what makes the split auditable before it
+    # is trusted: the same field is queryable in OpenSearch across the whole
+    # firehose, so the control topic's coverage can be measured against
+    # production traffic rather than assumed.
+    inputs: [syslog_admission_stamp]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.syslog"
+    key_field: "__key"
+    # Scale P0: keyed by tenant (__key, stamped in the lane transform) with the
+    # JAVA-compatible murmur2 partitioner, so the same tenant hashes to the
+    # same partition NUMBER at every producer on the bus (librdkafka's default
+    # consistent_random is CRC32 and would disagree with kafka-python/Java —
+    # silently splitting a tenant across correlation instances).
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
+    compression: snappy
+
+  # A4 Phase 1: the PRE-SCREENED syslog lane. Same records, same tenant key,
+  # same partitioner, same TLS — a strict SUBSET of netops.syslog, carrying
+  # only the lines `producers.syslog_promotable` would admit.
+  #
+  # NOBODY CONSUMES THIS YET (that is the point: it is built, not switched on).
+  # The correlation engine still reads netops.syslog; pointing it here is one
+  # env var (CORR_SYSLOG_TOPIC) plus a release-qualify leg, owned separately.
+  # vector-router is deliberately NOT granted READ on the topic — OpenSearch
+  # must keep indexing the FULL lane from netops.syslog, and a second indexing
+  # consumer would duplicate every admitted document.
+  #
+  # Co-partitioning: the topic is created with BUS_PARTITIONS like every other
+  # netops.* topic (kafka-init in docker-compose.yml + compose.tls.yml) and
+  # keyed identically, so partition k here holds the same tenant slice as
+  # partition k of netops.syslog — a consumer can switch topics without
+  # resharding.
+  kafka_syslog_control:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    inputs: [syslog_admission.control]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.syslog.control"
+    key_field: "__key"
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
+    compression: snappy
+
+  # F-03 — dead letters from THIS tier, onto the bus like every other signal.
+  # vector-router consumes netops.deadletter and indexes it into the single
+  # netops-deadletter-* index shared with the router's own DLQ. A non-empty
+  # dead-letter index is itself the alarm: nothing lands here in normal
+  # operation, so any document means a producer broke its contract (or a
+  # transform did). Alerted by VectorDeadLetters in rules.yaml.
+  kafka_deadletter:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    inputs: [deadletter_encoded, misrouted_flows_deadletter]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.deadletter"
+    encoding: { codec: json }
+    compression: snappy
+
+  kafka_snmptrap:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    # F-04: DISK buffer, not the 500-event in-memory default.
+    #
+    # Buffered on these four lanes for the DURABILITY PROMISE: they are fed by
+    # `http_server` sources (trap_in / probe_in / metrics_in / bus_in) — the
+    # lanes where the platform ISSUES that promise by returning HTTP 200 to
+    # its own backend, and which have no upstream that can replay.
+    # kafka_syslog stays unbuffered HERE because the syslog source supports no
+    # acknowledgements (Vector warns about this at boot) and the signal already
+    # has its reliable disk-buffer one hop upstream in syslog-ng.conf — the
+    # correct place for it. kafka_applogs carries a disk buffer too, for a
+    # DIFFERENT reason (the json-file rotation race, not an ack-backed
+    # promise) — see the comment on that sink.
+    #
+    # when_full: block applies backpressure to the source rather than dropping,
+    # so together with the global `acknowledgements` block a full buffer becomes
+    # an honest non-2xx to the producer instead of a silent discard.
+    #
+    # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
+    # 268435488 bytes at topology-build time. Note that `vector validate` does
+    # NOT catch a smaller value — it only fails when the process actually starts,
+    # so validate-then-deploy is not sufficient for this setting. Five buffered
+    # sinks x 256 MiB cap the spool at 1.25 GiB, which the 77 GB shared
+    # filesystem (F-55) can absorb; files are allocated lazily, steady-state ~0.
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+    inputs: [snmptrap_normalized]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.snmptrap"
+    key_field: "__key"
+    # Scale P0: keyed by tenant (__key, stamped in the lane transform) with the
+    # JAVA-compatible murmur2 partitioner, so the same tenant hashes to the
+    # same partition NUMBER at every producer on the bus (librdkafka's default
+    # consistent_random is CRC32 and would disagree with kafka-python/Java —
+    # silently splitting a tenant across correlation instances).
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
+    compression: snappy
+
+  kafka_probes:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    # F-04: DISK buffer, not the 500-event in-memory default.
+    #
+    # Buffered on these four lanes for the DURABILITY PROMISE: they are fed by
+    # `http_server` sources (trap_in / probe_in / metrics_in / bus_in) — the
+    # lanes where the platform ISSUES that promise by returning HTTP 200 to
+    # its own backend, and which have no upstream that can replay.
+    # kafka_syslog stays unbuffered HERE because the syslog source supports no
+    # acknowledgements (Vector warns about this at boot) and the signal already
+    # has its reliable disk-buffer one hop upstream in syslog-ng.conf — the
+    # correct place for it. kafka_applogs carries a disk buffer too, for a
+    # DIFFERENT reason (the json-file rotation race, not an ack-backed
+    # promise) — see the comment on that sink.
+    #
+    # when_full: block applies backpressure to the source rather than dropping,
+    # so together with the global `acknowledgements` block a full buffer becomes
+    # an honest non-2xx to the producer instead of a silent discard.
+    #
+    # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
+    # 268435488 bytes at topology-build time. Note that `vector validate` does
+    # NOT catch a smaller value — it only fails when the process actually starts,
+    # so validate-then-deploy is not sufficient for this setting. Five buffered
+    # sinks x 256 MiB cap the spool at 1.25 GiB, which the 77 GB shared
+    # filesystem (F-55) can absorb; files are allocated lazily, steady-state ~0.
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+    inputs: [probe_normalized]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.probes"
+    key_field: "__key"
+    # Scale P0: keyed by tenant (__key, stamped in the lane transform) with the
+    # JAVA-compatible murmur2 partitioner, so the same tenant hashes to the
+    # same partition NUMBER at every producer on the bus (librdkafka's default
+    # consistent_random is CRC32 and would disagree with kafka-python/Java —
+    # silently splitting a tenant across correlation instances).
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
+    compression: snappy
+
+  victoria_cloud_metrics:
+    type: prometheus_remote_write
+    # F-17: the OpenSearch doc_status lane rides the remote_write path that
+    # already exists for the cloud lane — no new service, no extra scrape job.
+    inputs: [cloud_metrics_vm, opensearch_indexing_vm, opensearch_health_metrics]
+    endpoint: "${VM_REMOTE_WRITE_URL:-http://victoria:8428/api/v1/write}"
+    # SEC-010: credential is ALWAYS presented; plaintext VictoriaMetrics
+    # ignores Authorization entirely, so the default deployment is unchanged,
+    # while a vmauth deployment (VM_REMOTE_WRITE_URL -> https://vmauth:8427)
+    # gets the scoped write-only identity. TLS trust rides SSL_CERT_FILE in
+    # the enabling override (this sink is the aggregator's only https-capable
+    # egress, so replacing the process root store with the mesh CA is safe).
+    auth:
+      strategy: basic
+      user: "${VMAUTH_VECTOR_USER:-svc-vector}"
+      password: "${VMAUTH_VECTOR_PASSWORD:-unused-on-plaintext-victoria}"
+    healthcheck: false
+
+  kafka_metrics:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    # F-04: DISK buffer, not the 500-event in-memory default.
+    #
+    # Buffered on these four lanes for the DURABILITY PROMISE: they are fed by
+    # `http_server` sources (trap_in / probe_in / metrics_in / bus_in) — the
+    # lanes where the platform ISSUES that promise by returning HTTP 200 to
+    # its own backend, and which have no upstream that can replay.
+    # kafka_syslog stays unbuffered HERE because the syslog source supports no
+    # acknowledgements (Vector warns about this at boot) and the signal already
+    # has its reliable disk-buffer one hop upstream in syslog-ng.conf — the
+    # correct place for it. kafka_applogs carries a disk buffer too, for a
+    # DIFFERENT reason (the json-file rotation race, not an ack-backed
+    # promise) — see the comment on that sink.
+    #
+    # when_full: block applies backpressure to the source rather than dropping,
+    # so together with the global `acknowledgements` block a full buffer becomes
+    # an honest non-2xx to the producer instead of a silent discard.
+    #
+    # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
+    # 268435488 bytes at topology-build time. Note that `vector validate` does
+    # NOT catch a smaller value — it only fails when the process actually starts,
+    # so validate-then-deploy is not sufficient for this setting. Five buffered
+    # sinks x 256 MiB cap the spool at 1.25 GiB, which the 77 GB shared
+    # filesystem (F-55) can absorb; files are allocated lazily, steady-state ~0.
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+    inputs: [metrics_normalized]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.metrics"
+    key_field: "__key"
+    # Scale P0: keyed by tenant (__key, stamped in the lane transform) with the
+    # JAVA-compatible murmur2 partitioner, so the same tenant hashes to the
+    # same partition NUMBER at every producer on the bus (librdkafka's default
+    # consistent_random is CRC32 and would disagree with kafka-python/Java —
+    # silently splitting a tenant across correlation instances).
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
+    compression: snappy
+
+  # Bus-bridge events land on whatever netops.* topic their envelope named
+  # (today: netops.app.identities.v1 from the fusion worker and
+  # netops.controller_events from the NMS scheduler). The __topic/__key
+  # routing fields are stripped from the encoded payload so the on-topic
+  # value stays exactly the record the producer sent.
+  kafka_bus:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    # F-04: DISK buffer, not the 500-event in-memory default.
+    #
+    # Buffered on these four lanes for the DURABILITY PROMISE: they are fed by
+    # `http_server` sources (trap_in / probe_in / metrics_in / bus_in) — the
+    # lanes where the platform ISSUES that promise by returning HTTP 200 to
+    # its own backend, and which have no upstream that can replay.
+    # kafka_syslog stays unbuffered HERE because the syslog source supports no
+    # acknowledgements (Vector warns about this at boot) and the signal already
+    # has its reliable disk-buffer one hop upstream in syslog-ng.conf — the
+    # correct place for it. kafka_applogs carries a disk buffer too, for a
+    # DIFFERENT reason (the json-file rotation race, not an ack-backed
+    # promise) — see the comment on that sink.
+    #
+    # when_full: block applies backpressure to the source rather than dropping,
+    # so together with the global `acknowledgements` block a full buffer becomes
+    # an honest non-2xx to the producer instead of a silent discard.
+    #
+    # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
+    # 268435488 bytes at topology-build time. Note that `vector validate` does
+    # NOT catch a smaller value — it only fails when the process actually starts,
+    # so validate-then-deploy is not sufficient for this setting. Five buffered
+    # sinks x 256 MiB cap the spool at 1.25 GiB, which the 77 GB shared
+    # filesystem (F-55) can absorb; files are allocated lazily, steady-state ~0.
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+    inputs: [bus_bridge]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "{{ __topic }}"
+    key_field: "__key"
+    # Scale P0: same Java-murmur2 partitioner as every other keyed sink — see
+    # the kafka_syslog note.
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__topic", "__key"]
+    compression: snappy
+
+  # Operator metrics — exposed for Prometheus to scrape.
+  prometheus_exporter:
+    type: prometheus_exporter
+    inputs: [internal_metrics]
+    address: 0.0.0.0:9598

@@ -1,0 +1,23 @@
+{{- if .Values.namespace.create }}
+{{/*
+Optional. `helm install --create-namespace` is the usual idiom, but a namespace
+Helm creates cannot carry the Pod Security labels, and those labels are the
+whole enforcement mechanism behind the securityContexts in this chart. Set
+namespace.create=true to have the chart own it and stamp them, or stamp them
+yourself:
+
+  kubectl label ns <ns> \
+    pod-security.kubernetes.io/enforce=restricted \
+    pod-security.kubernetes.io/enforce-version=latest
+*/}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace.name | default .Release.Namespace }}
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "namespace") | indent 4 }}
+    pod-security.kubernetes.io/enforce: {{ .Values.namespace.podSecurityStandard }}
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: {{ .Values.namespace.podSecurityStandard }}
+    pod-security.kubernetes.io/warn: {{ .Values.namespace.podSecurityStandard }}
+{{- end }}

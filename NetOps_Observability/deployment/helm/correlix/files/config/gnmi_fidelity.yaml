@@ -1,0 +1,102 @@
+# gNMI telemetry fidelity catalog.
+#
+# Source of truth for WHAT gNMI telemetry the platform can actually be trusted to
+# collect, per (vendor, platform, os, signal_family, path, mode, collector_mode).
+# The status column is enforced by tests/test_gnmi_fidelity.py — a row may only be
+# advertised as "supported" when its status is lab_validated or live_validated.
+# This is the guard against claiming "vendor X supports telemetry" on vendor docs
+# alone (doc_claimed) or advertising a degraded path as working.
+#
+# status taxonomy (most→least trusted):
+#   live_validated  — proven end-to-end on the live lab fabric, canonical output asserted
+#   lab_validated   — proven against a captured fixture / standalone lab device
+#   doc_claimed     — vendor documents it; NOT yet validated here → NOT supported
+#   degraded        — works only under specific conditions; must not be advertised as full
+#   failed          — attempted and does not work
+#
+# Today this is hand-maintained from the validated single-contract work
+# (commit 8c5e776, telemetry-baseline-research.md 25/25). A future fixture-replay
+# harness (Layer 6A) will regenerate the *_validated rows automatically from
+# captured subscribe streams; until it exists, do not promote a row to validated
+# without real evidence.
+
+rows:
+  # ── Nokia SR Linux (native paths; canonical lane proven on the clos lab) ──
+  - vendor: nokia
+    platform: sr_linux
+    os: "23.x"
+    signal_family: interfaces
+    path: /interface[name=*]/statistics
+    mode: sample
+    collector_mode: persistent_multi_target
+    status: live_validated
+    notes: canonical device_if_* on the live fabric
+
+  - vendor: nokia
+    platform: sr_linux
+    os: "23.x"
+    signal_family: bgp_peer_state
+    path: /network-instance/protocols/bgp/neighbor
+    mode: on_change
+    collector_mode: persistent_multi_target
+    status: live_validated
+    notes: on-change + heartbeat; per-AFI prefixes
+
+  - vendor: nokia
+    platform: sr_linux
+    os: "23.x"
+    signal_family: device_resource
+    path: /platform/control/.../memory
+    mode: sample
+    collector_mode: persistent_multi_target
+    status: live_validated
+    notes: device_mem_percent — gNMI-owned (no SNMP source); the proven flip
+
+  # ── Arista cEOS (OpenConfig) ──
+  - vendor: arista
+    platform: ceos
+    os: "4.x"
+    signal_family: interfaces
+    path: /interfaces/interface/state/counters
+    mode: sample
+    collector_mode: persistent_multi_target
+    status: live_validated
+    notes: OpenConfig interface counters on the live fabric
+
+  # cEOS leaf BGP — the KNOWN regression. Standalone subscribe works; the same
+  # subscribe in the persistent multi-target collector fails for leaf BGP. Pinned
+  # degraded so the UI/catalog/API can NEVER advertise it as fully supported until
+  # fixed. See ceos-bgp-gnmi-issue.md.
+  - vendor: arista
+    platform: ceos
+    os: "4.x"
+    signal_family: bgp_peer_state
+    path: /network-instances/.../bgp/neighbors/neighbor/state
+    mode: on_change
+    collector_mode: standalone
+    status: lab_validated
+    notes: standalone single-target subscribe works
+
+  - vendor: arista
+    platform: ceos
+    os: "4.x"
+    signal_family: bgp_peer_state
+    path: /network-instances/.../bgp/neighbors/neighbor/state
+    mode: on_change
+    collector_mode: persistent_multi_target
+    status: degraded
+    notes: >-
+      leaf BGP subscribe fails under the persistent multi-target collector while
+      it works standalone — must not be advertised as fully validated cEOS BGP
+      streaming for this platform/version/mode until fixed.
+
+  # ── Cisco 8000v / IOS XR — Phase 2 target, documented only (NOT supported) ──
+  - vendor: cisco
+    platform: c8000v
+    os: "7.x"
+    signal_family: interfaces
+    path: /interfaces/interface/state/counters
+    mode: sample
+    collector_mode: persistent_multi_target
+    status: doc_claimed
+    notes: vendor-documented; no lab validation here yet — must not be claimed

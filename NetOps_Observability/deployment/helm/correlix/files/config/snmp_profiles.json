@@ -1,0 +1,117 @@
+[
+  {
+    "_comment": "Generic — standard MIBs (HOST-RESOURCES, IF-MIB, ENTITY-SENSOR). Applies to every device; vendor profiles below layer platform OIDs on top. Modeled on leading NMS platforms / Zabbix generic SNMP templates.",
+    "name": "generic",
+    "enterprise": 0,
+    "metrics": [
+      { "name": "device_sysuptime",       "oid": "1.3.6.1.2.1.1.3" },
+      { "name": "device_if_oper_status",  "oid": "1.3.6.1.2.1.2.2.1.8",        "table": true },
+      { "name": "device_if_admin_status", "oid": "1.3.6.1.2.1.2.2.1.7",        "table": true },
+      { "name": "device_if_in_octets",    "oid": "1.3.6.1.2.1.31.1.1.1.6",     "table": true },
+      { "name": "device_if_out_octets",   "oid": "1.3.6.1.2.1.31.1.1.1.10",    "table": true },
+      { "name": "device_if_in_errors",    "oid": "1.3.6.1.2.1.2.2.1.14",       "table": true },
+      { "name": "device_if_out_errors",   "oid": "1.3.6.1.2.1.2.2.1.20",       "table": true },
+      { "name": "device_if_in_discards",  "oid": "1.3.6.1.2.1.2.2.1.13",       "table": true },
+      { "name": "device_if_out_discards", "oid": "1.3.6.1.2.1.2.2.1.19",       "table": true },
+      { "name": "device_if_in_ucast_pkts",  "oid": "1.3.6.1.2.1.31.1.1.1.7",  "table": true },
+      { "name": "device_if_out_ucast_pkts", "oid": "1.3.6.1.2.1.31.1.1.1.11", "table": true },
+      { "name": "device_if_in_mcast_pkts",  "oid": "1.3.6.1.2.1.31.1.1.1.8",  "table": true },
+      { "name": "device_if_out_mcast_pkts", "oid": "1.3.6.1.2.1.31.1.1.1.12", "table": true },
+      { "name": "device_if_in_bcast_pkts",  "oid": "1.3.6.1.2.1.31.1.1.1.9",  "table": true },
+      { "name": "device_if_out_bcast_pkts", "oid": "1.3.6.1.2.1.31.1.1.1.13", "table": true },
+      { "name": "device_if_speed",        "oid": "1.3.6.1.2.1.31.1.1.1.15",    "table": true },
+      { "name": "device_if_mtu",          "oid": "1.3.6.1.2.1.2.2.1.4",        "table": true },
+      { "name": "device_cpu_percent",     "oid": "1.3.6.1.2.1.25.3.3.1.2",     "table": true },
+      { "name": "device_mem_total_kb",    "oid": "1.3.6.1.2.1.25.2.2" },
+      { "name": "device_storage_size",    "oid": "1.3.6.1.2.1.25.2.3.1.5",     "table": true },
+      { "name": "device_storage_used",    "oid": "1.3.6.1.2.1.25.2.3.1.6",     "table": true },
+      { "name": "device_sensor_value",    "oid": "1.3.6.1.2.1.99.1.1.1.4",     "table": true },
+      { "_comment": "BGP4-MIB bgpPeerTable (index = bgpPeerRemoteAddr) — owner=gnmi: WITHHELD on devices that have gNMI (it owns BGP, richer: per-AFI prefixes + vrf), but SNMP stays the floor for agentless gear WITHOUT gNMI. index_label=peer matches gNMI's canonical {peer} contract so the dashboard/alerts work for either source.",
+        "name": "device_bgp_peer_state",      "oid": "1.3.6.1.2.1.15.3.1.2",  "table": true, "owner": "gnmi", "index_label": "peer" },
+      { "name": "device_bgp_fsm_transitions", "oid": "1.3.6.1.2.1.15.3.1.15", "table": true, "owner": "gnmi", "index_label": "peer" },
+      { "name": "device_bgp_in_updates",      "oid": "1.3.6.1.2.1.15.3.1.10", "table": true, "owner": "gnmi", "index_label": "peer" },
+      { "_comment": "OSPF-MIB — ospfNbrState (1=down..8=full); ospfIfState (1=down..7=DR). SNMP-OWNED: gNMI carries IS-IS (the fabric IGP) here, not OSPF — OSPF is the agentless Cisco/edge IGP, so no collision. index_label=neighbor is the canonical adjacency identity.",
+        "name": "device_ospf_nbr_state",      "oid": "1.3.6.1.2.1.14.10.1.6", "table": true, "index_label": "neighbor" },
+      { "name": "device_ospf_if_state",       "oid": "1.3.6.1.2.1.14.7.1.12", "table": true },
+      { "_comment": "OSPF DEPTH (frontend-wave #11). OIDs index-resolved against the vendored OSPF-MIB (mibs/index/oididx.json), NOT transcribed. doc_claimed: no OSPF-speaking SNMP device on this deployment, so a walk returns nothing until one exists. LSDB size = ospfAreaLsaCount PER AREA (the collector walks columns and cannot count ospfLsdbTable rows; AS-external LSAs are area-less and excluded). SPF runs are per-area in OSPF-MIB — there is no global counter. Hello/dead are PER INTERFACE: ospfNbrTable has no timer column, so a per-neighbour hold timer is not collectable over SNMP at all; these keep ospfIfTable's own index so they join device_ospf_if_state.",
+        "name": "device_ospf_lsdb_count",     "oid": "1.3.6.1.2.1.14.2.1.7",  "table": true, "index_label": "area" },
+      { "name": "device_ospf_area",           "oid": "1.3.6.1.2.1.14.2.1.10", "table": true, "index_label": "area" },
+      { "name": "device_ospf_spf_runs_total", "oid": "1.3.6.1.2.1.14.2.1.4",  "table": true, "index_label": "area" },
+      { "name": "device_ospf_if_hello_seconds", "oid": "1.3.6.1.2.1.14.7.1.9",  "table": true },
+      { "name": "device_ospf_if_dead_seconds",  "oid": "1.3.6.1.2.1.14.7.1.10", "table": true }
+    ]
+  },
+  {
+    "_comment": "Cisco IOS/IOS-XE (c8000v) — CISCO-PROCESS-MIB (CPU), CISCO-MEMORY-POOL-MIB (memory), CISCO-ENVMON-MIB (environment). Enterprise 9.",
+    "name": "cisco",
+    "enterprise": 9,
+    "metrics": [
+      { "name": "device_cpu_percent",     "oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.8",  "table": true },
+      { "name": "device_cpu_1min_percent","oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.7",  "table": true },
+      { "name": "device_mem_used_bytes",  "oid": "1.3.6.1.4.1.9.9.48.1.1.1.5",     "table": true },
+      { "name": "device_mem_free_bytes",  "oid": "1.3.6.1.4.1.9.9.48.1.1.1.6",     "table": true },
+      { "name": "device_temp_celsius",    "oid": "1.3.6.1.4.1.9.9.13.1.3.1.3",     "table": true },
+      { "name": "device_temp_state",      "oid": "1.3.6.1.4.1.9.9.13.1.3.1.6",     "table": true },
+      { "name": "device_fan_state",       "oid": "1.3.6.1.4.1.9.9.13.1.4.1.3",     "table": true },
+      { "name": "device_psu_state",       "oid": "1.3.6.1.4.1.9.9.13.1.5.1.3",     "table": true }
+    ]
+  },
+  {
+    "_comment": "Arista EOS — CPU/memory via HOST-RESOURCES (EOS exposes the CPU as hrProcessorLoad and RAM via hrStorage), temperature via ENTITY-SENSOR. Enterprise 30065.",
+    "name": "arista",
+    "enterprise": 30065,
+    "metrics": [
+      { "name": "device_cpu_percent",     "oid": "1.3.6.1.2.1.25.3.3.1.2",  "table": true },
+      { "name": "device_mem_total_kb",    "oid": "1.3.6.1.2.1.25.2.2" },
+      { "name": "device_storage_size",    "oid": "1.3.6.1.2.1.25.2.3.1.5",  "table": true },
+      { "name": "device_storage_used",    "oid": "1.3.6.1.2.1.25.2.3.1.6",  "table": true },
+      { "name": "device_temp_celsius",    "oid": "1.3.6.1.2.1.99.1.1.1.4",  "table": true }
+    ]
+  },
+  {
+    "_comment": "Juniper Junos (vJunos) — JUNIPER-MIB jnxOperatingTable: CPU, buffer/memory %, temperature. Enterprise 2636.",
+    "name": "juniper",
+    "enterprise": 2636,
+    "metrics": [
+      { "name": "device_cpu_percent",   "oid": "1.3.6.1.4.1.2636.3.1.13.1.8",  "table": true },
+      { "name": "device_mem_percent",   "oid": "1.3.6.1.4.1.2636.3.1.13.1.11", "table": true },
+      { "name": "device_temp_celsius",  "oid": "1.3.6.1.4.1.2636.3.1.13.1.7",  "table": true },
+      { "name": "device_dram_bytes",    "oid": "1.3.6.1.4.1.2636.3.1.13.1.15", "table": true }
+    ]
+  },
+  {
+    "_comment": "Fortinet FortiGate — FORTINET-FORTIGATE-MIB fgSystemInfo scalars. Verified against FortiOS 6.2.2 (sysObjectID 12356.101.1.60): .3 CPU%, .4 mem%, .5 mem KB, .6/.7 disk MB used/total, .8 sessions. Disk fields are MB (not %). The fgHwSensors temp table is absent on VMs, so no device_temp_celsius here. Enterprise 12356.",
+    "name": "fortinet",
+    "enterprise": 12356,
+    "metrics": [
+      { "name": "device_cpu_percent",       "oid": "1.3.6.1.4.1.12356.101.4.1.3" },
+      { "name": "device_mem_percent",       "oid": "1.3.6.1.4.1.12356.101.4.1.4" },
+      { "name": "device_mem_total_kb",      "oid": "1.3.6.1.4.1.12356.101.4.1.5" },
+      { "name": "device_disk_used_mb",      "oid": "1.3.6.1.4.1.12356.101.4.1.6" },
+      { "name": "device_disk_capacity_mb",  "oid": "1.3.6.1.4.1.12356.101.4.1.7" },
+      { "name": "device_session_count",     "oid": "1.3.6.1.4.1.12356.101.4.1.8" }
+    ]
+  },
+  {
+    "_comment": "Nokia SR Linux / SR OS — TIMETRA-SYSTEM-MIB sgi* (CPU, memory) + TIMETRA-CHASSIS-MIB tmnxHwTemperature. SR Linux does NOT implement HOST-RESOURCES (hrProcessorLoad), so the generic CPU OID returns nothing — these native OIDs are required. Verified against SR Linux v26.3.2 on a 7220 IXR-D3L (sysObjectID 6527.1.20.27): sgiCpuUsage=45, tmnxHwTemperature=50C. Enterprise 6527.",
+    "name": "nokia",
+    "enterprise": 6527,
+    "metrics": [
+      { "name": "device_cpu_percent",      "oid": "1.3.6.1.4.1.6527.3.1.2.1.1.1" },
+      { "name": "device_mem_used_kb",      "oid": "1.3.6.1.4.1.6527.3.1.2.1.1.9" },
+      { "name": "device_mem_available_kb", "oid": "1.3.6.1.4.1.6527.3.1.2.1.1.10" },
+      { "name": "device_temp_celsius",     "oid": "1.3.6.1.4.1.6527.3.1.2.2.1.8.1.18", "table": true }
+    ]
+  },
+  {
+    "_comment": "Palo Alto NGFW — PAN-COMMON-MIB panSession/panSys (enterprise 25461). doc_claimed FROM THE MIB — NOT yet validated against a live PAN or snmpsim (no PAN in the lab). Mgmt-plane CPU/mem come from the generic HOST-RESOURCES profile (PAN implements hrProcessorLoad); these are the firewall-specific layer, mirroring the fortinet profile. panSessionActive .3 / Max .2 / Utilization% .1 under panSession 25461.2.1.2.3; panSysHAState under panSys 25461.2.1.2.1.11. VERIFY OIDs against PAN-OS before advertising (snmpwalk or snmpsim).",
+    "name": "palo_alto",
+    "enterprise": 25461,
+    "metrics": [
+      { "name": "device_session_count",        "oid": "1.3.6.1.4.1.25461.2.1.2.3.3" },
+      { "name": "device_session_max",          "oid": "1.3.6.1.4.1.25461.2.1.2.3.2" },
+      { "name": "device_session_util_percent", "oid": "1.3.6.1.4.1.25461.2.1.2.3.1" },
+      { "name": "device_ha_state",             "oid": "1.3.6.1.4.1.25461.2.1.2.1.11" }
+    ]
+  }
+]

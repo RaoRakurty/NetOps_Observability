@@ -1,0 +1,62 @@
+# vmauth route/user config (SEC-010.1) — the authenticating TLS front for
+# VictoriaMetrics. One scoped user per SERVICE identity (owner steer: simplest
+# sufficient native auth); passwords come from the installer-generated .env
+# (VMAUTH_*_PASSWORD) via vmauth's percent-brace env expansion — never from
+# this file. NOTE: vmauth expands percent-brace tokens EVERYWHERE in this
+# file, comments included — never write a literal one here.
+#
+# Route scoping is per-SERVICE least privilege, NOT a tenant boundary: VM
+# tenant scoping remains the application-side device/tenant label filter
+# (backlog SEC-010 tenant-impact note). Direct container-to-container reach of
+# victoria:8428 on the compose network is closed only by pointing every client
+# here and keeping victoria's port unpublished; true network segmentation is
+# SEC-017 territory. An unmatched or unauthenticated request gets 401 and is
+# counted by vmauth's own metrics (vmauth_http_request_errors_total).
+#
+# EDITING RULE: a new client identity = a new user block here + a credential
+# in install.py generate_secrets() (+ rotation class in secret_rotation.py) +
+# the client's cutover — never a shared credential.
+
+users:
+  # The api: reads for dashboards/forecasts/path-health, writes via the NMS
+  # poll scheduler and seam bootstrap.
+  - username: "svc-api"
+    password: "%{VMAUTH_API_PASSWORD}"
+    url_prefix: "http://victoria:8428"
+
+  # gNMI metric lane (gnmic prometheus_write) — WRITE ONLY. The epic's
+  # telemetry-risk note: a broken route here silently kills the gNMI lane, so
+  # the lab cutover asserts on sample counts, not just 2xx.
+  - username: "svc-gnmic"
+    password: "%{VMAUTH_GNMIC_PASSWORD}"
+    url_map:
+      - src_paths: ["/api/v1/write", "/api/v1/import.*"]
+        url_prefix: "http://victoria:8428"
+
+  # Vector aggregator remote_write sinks (cloud metrics) — WRITE ONLY.
+  - username: "svc-vector"
+    password: "%{VMAUTH_VECTOR_PASSWORD}"
+    url_map:
+      - src_paths: ["/api/v1/write", "/api/v1/import.*"]
+        url_prefix: "http://victoria:8428"
+
+  # Prober collector-sample pushes (emitMetrics -> /api/v1/import/prometheus)
+  # — WRITE ONLY. Same silent-lane risk as gnmic: the cutover asserts sample
+  # flow (collector_up freshness), never just 2xx.
+  - username: "svc-prober"
+    password: "%{VMAUTH_PROBER_PASSWORD}"
+    url_map:
+      - src_paths: ["/api/v1/write", "/api/v1/import.*"]
+        url_prefix: "http://victoria:8428"
+
+  # vmalert: rule evaluation reads + ALERTS/recording writes + remoteRead.
+  - username: "svc-vmalert"
+    password: "%{VMAUTH_VMALERT_PASSWORD}"
+    url_prefix: "http://victoria:8428"
+
+  # Grafana dashboards — READ ONLY.
+  - username: "svc-grafana"
+    password: "%{VMAUTH_GRAFANA_PASSWORD}"
+    url_map:
+      - src_paths: ["/api/v1/query.*", "/api/v1/series.*", "/api/v1/label.*", "/api/v1/export.*", "/prometheus/.*"]
+        url_prefix: "http://victoria:8428"

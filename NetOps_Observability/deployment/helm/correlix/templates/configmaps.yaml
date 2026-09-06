@@ -1,0 +1,96 @@
+{{/*
+ConfigMaps.
+
+Content comes from files/ — checked-in mirrors of the canonical configuration,
+refreshed by `bash deployment/helm/stage-configs.sh` and drift-gated by
+tests/test_helm_chart.py. Helm cannot read outside the chart root, so a chart
+that renders its own ConfigMaps has to carry the copies; the same
+mirror-plus-drift-gate shape the repository already uses for the AI docs
+corpus.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: correlix-config
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "config") | indent 4 }}
+data:
+{{ (.Files.Glob "files/config/*").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: correlix-vector-aggregator
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "vector-aggregator") | indent 4 }}
+data:
+{{ (.Files.Glob "files/vector/*").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: correlix-vector-router
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "vector-router") | indent 4 }}
+data:
+{{ (.Files.Glob "files/vector-router/*").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: correlix-gnmic
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "gnmic") | indent 4 }}
+data:
+{{ (.Files.Glob "files/gnmic/*").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: correlix-syslog-ng
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "syslog-ng") | indent 4 }}
+data:
+{{ (.Files.Glob "files/syslog-ng/*").AsConfig | indent 2 }}
+---
+{{/*
+The gateway config. default.conf differs from the compose file by exactly one
+line — `resolver`, because Docker's embedded DNS at 127.0.0.11 does not exist
+in a pod. stage-configs.sh performs that rewrite and fails loudly if the
+upstream directive ever moves; the drift test asserts it is the ONLY change.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: correlix-gateway
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "gateway") | indent 4 }}
+data:
+{{ (.Files.Glob "files/nginx/*").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: correlix-clickhouse
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "clickhouse") | indent 4 }}
+data:
+{{ (.Files.Glob "files/clickhouse/*").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: correlix-opensearch-init
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "opensearch-init") | indent 4 }}
+data:
+{{ (.Files.Glob "files/opensearch/*").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: correlix-kafka-acls
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "kafka-acls") | indent 4 }}
+data:
+{{ (.Files.Glob "files/kafka/*").AsConfig | indent 2 }}

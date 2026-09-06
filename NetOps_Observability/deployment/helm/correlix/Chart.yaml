@@ -1,0 +1,34 @@
+apiVersion: v2
+name: correlix
+description: Correlix NetOps observability platform — discovery, multi-protocol telemetry ingestion, event bus, storage (search / time-series / OLAP), anomaly correlation, API and dashboard.
+type: application
+
+# Chart version — the version OF THE PACKAGING. Bump on every change to the
+# templates or the pinned image set, independently of the product version.
+version: 0.1.0
+
+# The Correlix release these templates were written against. The chart pins the
+# same third-party image digests deployment/docker/docker-compose.yml pins; see
+# values.yaml `images`.
+appVersion: "0.9.0-rc1"
+
+kubeVersion: ">=1.27.0-0"
+
+home: https://github.com/correlix/NetOps_Observability
+sources:
+  - https://github.com/correlix/NetOps_Observability
+
+keywords:
+  - netops
+  - observability
+  - telemetry
+  - correlation
+  - network
+
+maintainers:
+  - name: Correlix platform engineering
+
+annotations:
+  # SPDX identifier for the chart itself. deployment/ is Apache-2.0 core
+  # (licensing-policy.json project_top_level); nothing tier-gated lives here.
+  licenses: Apache-2.0

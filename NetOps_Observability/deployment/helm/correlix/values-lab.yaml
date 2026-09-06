@@ -1,0 +1,106 @@
+# values-lab.yaml — a small single-node cluster (k3s / kind / minikube).
+#
+# The point of this variant is to exercise the SHAPES the default values do not:
+# no ingress controller, no ReadWriteMany class, the `file` app-state backend,
+# the self-monitoring add-on on, gnmic on, and every optional workload the
+# default leaves off. tests/test_helm_chart.py renders this file too, so those
+# code paths are validated on every run rather than only when someone happens
+# to enable them.
+#
+#   helm install correlix deployment/helm/correlix -f deployment/helm/correlix/values-lab.yaml
+#
+# NOT a production configuration: single replica of everything, small volumes,
+# lab-sized resource limits.
+
+global:
+  # k3s ships local-path; kind ships standard. Set whichever your cluster has.
+  storageClass: local-path
+
+ingress:
+  # No ingress controller on a bare single-node cluster. Reach the UI with
+  #   kubectl port-forward svc/nginx 8000:8080
+  # which is the exact `:8000` the compose stack publishes.
+  enabled: false
+
+networkPolicy:
+  enabled: true
+  # EXAMPLE ONLY — replace with your estate's real ranges. Wide-open RFC1918 is
+  # the compose scaffold default, not a production posture.
+  deviceCIDRs:
+    - 10.0.0.0/8
+
+sharedData:
+  # A single-node cluster has no ReadWriteMany class. The consequence is stated
+  # rather than discovered: tenant enrichment falls back to the default tenant
+  # and the router's hot-reloaded processors are unavailable.
+  enabled: false
+
+store:
+  # Explicit compatibility mode. The Applications / Service-catalog / Cloud
+  # business-service registries answer 501 on this backend BY DESIGN — they
+  # have no file implementation, and the UI says so rather than pretending.
+  backend: file
+  databaseUrlFromSecret: false
+
+env:
+  ENABLE_GNMI_COLLECTION: "true"
+  BUS_PARTITIONS: "1"
+
+# ── optional workloads, all on, so the templates are exercised ──────────────
+gnmic:
+  enabled: true
+kafkaExporter:
+  # Consumer-group lag: without it the in-cluster watchdog below has no series
+  # to read and correctly FAILS rather than reporting green.
+  enabled: true
+opensearchDashboards:
+  enabled: true
+gotenberg:
+  enabled: true
+vmauth:
+  # Rendered here to validate the template. It only does useful work with
+  # tls.enabled, which this variant does not turn on.
+  enabled: true
+watchdog:
+  enabled: true
+
+bootstrap:
+  kafkaAcls:
+    # Rendered to validate the template. Against a PLAINTEXT broker the ACL
+    # matrix is a no-op that looks like coverage — do not read a green job here
+    # as authorization being enforced.
+    enabled: true
+
+# ── lab sizing ──────────────────────────────────────────────────────────────
+postgres:
+  persistence: {size: 5Gi}
+kafka:
+  persistence: {size: 5Gi}
+opensearch:
+  heap: 512m
+  persistence: {size: 10Gi}
+  snapshots: {size: 5Gi}
+  resources:
+    requests: {cpu: 250m, memory: 1536Mi}
+    limits:   {cpu: "2",  memory: 1536Mi}
+clickhouse:
+  persistence: {size: 20Gi}
+  resources:
+    requests: {cpu: 250m, memory: 2Gi}
+    limits:   {cpu: "2",  memory: 2Gi}
+victoria:
+  retention: 7d
+  persistence: {size: 10Gi}
+correlation:
+  # The 1280Mi ceiling is qualified for a measured workload; a lab does not
+  # generate it. Halved, with the window buffer halved to match so the buffer
+  # still does not bind before the memory limit does.
+  windowBuffer: "75000"
+  resources:
+    requests: {cpu: 250m, memory: 640Mi}
+    limits:   {cpu: "1",  memory: 640Mi}
+grafana:
+  enabled: true
+  persistence: {size: 2Gi}
+syslogNg:
+  persistence: {size: 2Gi}

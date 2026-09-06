@@ -1,0 +1,1745 @@
+# Vector — ROUTER tier.
+#
+# Consumes the netops.* topics from the Kafka bus and fans into the storage
+# tier. Decoupling consumers via Kafka means:
+#   * Storage outages don't drop ingestion — events buffer on the bus.
+#   * Replay is one Vector restart + offset reset away.
+#   * We can add new consumers (a SIEM, a data lake) without touching
+#     the aggregator.
+#
+# Metrics (Telegraf) bypass Kafka and go directly to VictoriaMetrics
+# via Telegraf's own remote_write — Vector's kafka sink doesn't fit
+# the Metric encoding model cleanly. See telegraf.conf.
+
+api:
+  enabled: true
+  address: 0.0.0.0:8686
+
+# ----------------------------------------------------------------------------
+# SEALED FIELDS (#129) — per-tenant key delivery.
+#
+# `seal` processors compile to VRL that references SECRET[cxseal.<tenant>] and
+# SECRET[cxmac.<tenant>]. Vector resolves those ONCE, here, at config load, by
+# executing the backend below and holding the result IN MEMORY — secret backends
+# never write to disk, which is what makes it acceptable for key material to
+# reach the edge at all.
+#
+# Dormant unless a tenant actually has a seal processor: with no SECRET[...]
+# reference in the generated config, Vector never invokes the backend, so a
+# deployment without Sealed Fields pays nothing and serves nothing.
+#
+# If a key cannot be resolved the backend returns an error for that secret and
+# Vector REFUSES TO START (verified against 0.40.0: exit 78, "secret for key
+# '<tenant>' was not retrieved"). That is deliberate: a router that started
+# without a tenant's seal key would run the pipeline with sealing silently
+# absent and write the very values the operator believes are protected straight
+# to storage.
+#
+# CAVEAT, verified the same way: `vector validate` does NOT resolve secrets, so
+# a config carrying SECRET[...] can validate cleanly and still fail to start.
+# Pre-flight checks that shell out to `validate` therefore prove syntax, not key
+# availability — do not read a green validate as "the router will come up".
+secret:
+  # The backend KIND rides as an argv because Vector strips the backend name
+  # from the request: `SECRET[cxseal.<tenant>]` reaches the child as
+  # {"secrets":["<tenant>"]} — bare key, no prefix (verified on the wire
+  # against 0.40.0, 2026-08-09; the F-7 fix made this path executable for the
+  # first time and immediately surfaced it). Without the argv the script
+  # cannot know whether the seal or the MAC key is being asked for.
+  cxseal:
+    type: exec
+    command: ["/etc/vector/conf/cx-secret-backend.sh", "seal"]
+  cxmac:
+    type: exec
+    command: ["/etc/vector/conf/cx-secret-backend.sh", "mac"]
+
+# ----------------------------------------------------------------------------
+# DURABILITY (F-04) — end-to-end acknowledgements.
+#
+# THE DEFECT THIS FIXES: every source on this tier is a `kafka` source. With
+# acknowledgements off — the Vector default — those sources commit their
+# consumer-group offset when the message is READ, not when the sink has
+# accepted it. A router crash therefore lost up to 500 events per sink (the
+# in-memory buffer) AND had already advanced the offset past them, so replay
+# from Kafka could never recover them. The bus was doing its job; the router
+# was throwing away the receipt.
+#
+# With this enabled the offset is only committed once the event is durably
+# accepted downstream (OpenSearch / ClickHouse). Kafka is then a real replay
+# buffer, which is why this tier needs no disk buffers of its own: the retained
+# topic IS the buffer, and a restart resumes from the last acknowledged offset.
+acknowledgements:
+  enabled: true
+
+# Sink healthchecks are enabled per-sink below (F-04). require_healthy stays
+# FALSE on purpose: a healthcheck that refuses to start the router when
+# OpenSearch is briefly down converts a storage blip into an ingestion outage,
+# and Kafka is already buffering. false = report loudly (error log +
+# component_errors_total), keep running, keep retrying.
+healthchecks:
+  enabled: true
+  require_healthy: false
+
+# ----------------------------------------------------------------------------
+# ENRICHMENT TABLES — device → tenant attribution (#20 multi-tenant telemetry).
+#
+# Same CSV the aggregator loads (exported by the Go API to a shared volume).
+# The router needs it because F-49 moved flows off container stdout onto
+# goflow2's native kafka:// transport: they no longer pass through the
+# aggregator at all, so the tenant stamp had to move to the tier that still
+# sees them. Everything else about the contract is unchanged — the file always
+# exists (the stack seeds a header-only CSV) and no match yields tenant_id=""
+# (global/platform), which is now COUNTED rather than assumed (F-11).
+# ----------------------------------------------------------------------------
+
+enrichment_tables:
+  device_tenant:
+    type: file
+    file:
+      path: /etc/vector/enrichment/device_tenant.csv
+      encoding:
+        type: csv
+    schema:
+      identity: string
+      tenant_id: string
+
+sources:
+  internal_metrics:
+    type: internal_metrics
+
+  kafka_applogs:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.applogs"]
+    group_id: "netops-router-applogs"
+    decoding: { codec: json }
+
+  # Scale P0 — the RAW flow feed from goflow2, consumed only to be re-keyed.
+  #
+  # WHY THIS HOP EXISTS: horizontal correlation scale partitions every bus
+  # topic by TENANT (Java-murmur2 on the tenant key) so `--scale
+  # correlation=N` instances own disjoint tenant slices. goflow2 cannot key
+  # by tenant — it has no device→tenant knowledge, and its sarama client's
+  # hash partitioner (FNV-1a) disagrees with the Java/librdkafka/kafka-python
+  # murmur2 everything else on the bus uses. The router is the tier that
+  # already owns flow tenancy (see the enrichment-tables F-49 note), so
+  # goflow2 now produces netops.flows.raw and THIS lane republishes each
+  # record — payload untouched — onto netops.flows keyed by the exporter's
+  # tenant. The storage pipeline (the kafka_flows source) keeps consuming
+  # netops.flows, so the F-11 quarantine-restore loop (restores re-enter on
+  # netops.flows) and the correlation consumer are unchanged.
+  kafka_flows_raw:
+    type: kafka
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.flows.raw"]
+    group_id: "netops-router-flows-rekey"
+    decoding: { codec: json }
+
+  kafka_syslog:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.syslog"]
+    group_id: "netops-router-syslog"
+    decoding: { codec: json }
+
+  kafka_flows:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.flows"]
+    group_id: "netops-router-flows"
+    decoding: { codec: json }
+
+  kafka_snmptrap:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.snmptrap"]
+    group_id: "netops-router-snmptrap"
+    decoding: { codec: json }
+
+  # Unified Cloud Logs — tagged raw cloud log lines (cloud_family/cloud_provider/
+  # resource_id) produced by the cloud poller (S3/CloudWatch lanes + CloudTrail)
+  # and the aggregator's host lane. Indexed into netops-cloudlogs-{tenant}-* so
+  # they are searchable as RAW logs, not only as correlation signals.
+  kafka_cloudlogs:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.cloudlogs"]
+    group_id: "netops-router-cloudlogs"
+    decoding: { codec: json }
+
+  # Security evidence (P3-L1) — the generic secbus.EvidenceEvent envelope that
+  # every security provider (posture / exposure / signal) produces through
+  # internal/secbus. Indexed into netops-secfindings-{tenant}-* so findings are
+  # searchable, facetable and trendable as RAW verdicts, exactly as the
+  # syslog/flows/cloudlogs lanes are (SECURITY_FINDINGS_STORE_DECISION
+  # 2026-08-28). Kafka fan-out: the T2b Python engine consumes the SAME topic
+  # independently to ground Exposure Stories — neither consumer blocks the other.
+  kafka_security:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.security"]
+    group_id: "netops-router-security"
+    decoding: { codec: json }
+
+  # F-03: dead letters produced by the AGGREGATOR tier (which has no storage
+  # sink of its own). Already in the flat dead-letter shape, so this lane goes
+  # straight to the opensearch_deadletter sink with no transform — a
+  # dead-letter record must never be re-processed by the machinery that can
+  # itself drop it.
+  kafka_deadletter:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.deadletter"]
+    group_id: "netops-router-deadletter"
+    decoding: { codec: json }
+
+  # DEM experience events (tracker 254) — the first-party RUM / business-event
+  # lane. The api validates, stamps the owning tenant from the caller's
+  # credential and publishes onto netops.experience through the bus bridge; this
+  # is the ONLY consumer. Routed to ClickHouse (analytics over user behaviour;
+  # STRICT tenant row policy) — an experience beacon is not a log, so no
+  # OpenSearch index.
+  kafka_experience:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.experience"]
+    group_id: "netops-router-experience"
+    decoding: { codec: json }
+
+  # Cloud cost records (Wave 5 #18) — normalized daily cloud_cost records
+  # produced by the cloud poller's cost lanes (AWS Cost Explorer / Azure Cost
+  # Management). Routed to ClickHouse netops.cloud_costs (analytics; tenant
+  # row policy) — cost is not a log, so no OpenSearch index.
+  kafka_cloudcosts:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.cloudcosts"]
+    group_id: "netops-router-cloudcosts"
+    decoding: { codec: json }
+
+transforms:
+  # #20 Phase 3 — per-tenant OpenSearch index routing (at-rest separation).
+  # Each event already carries .tenant_id (stamped at the aggregator from the
+  # device→tenant enrichment table; "" = untagged/global). Derive a filesystem-
+  # /index-safe segment from it so the elasticsearch sinks can route each tenant's
+  # docs into its OWN daily index (netops-{signal}-{tenant}-{date}). Untagged data
+  # goes to a shared "untagged" index. The API read path only ever names the
+  # caller's own index pattern, so another tenant's docs are unreachable even if a
+  # query filter is missed. Keep the segment lowercase + [a-z0-9_-] only (OS index
+  # naming rules); an empty/odd tenant collapses to "untagged".
+  applogs_tagged:
+    type: remap
+    inputs: [kafka_applogs]
+    # &log_lane: the tenant-segment + timestamp normalisation every log-shaped
+    # lane needs. Anchored (not copy-pasted) so the four lanes can never drift
+    # apart again — divergence between sibling lanes is what caused DEF-6.
+    source: &log_lane |
+      # ── F-11: the quarantine mark is MINTED here, never accepted ────────
+      # The store routes below steer `.cx_quarantine == true` docs into the
+      # operator-only netops-quarantine-* index, trusting that only the
+      # generated <lane>_quarantine stage (which runs AFTER this transform)
+      # can set the field. Bus producers' JSON passes verbatim, so an inbound
+      # cx_quarantine must be stripped FIRST — otherwise a compromised
+      # producer could stamp it and plant full-plaintext docs in the
+      # quarantine index / divert its events past the tenant stores (the
+      # del(.label) lesson: hostile-capable fields die at the head of the
+      # lane). Restored quarantine events do NOT carry the field (the sealed
+      # payload is the pre-envelope event), so re-attribution is unaffected.
+      del(.cx_quarantine)
+      # ── the other producer-forgeable control marks (2026-08-14) ─────────
+      # .cx_drop is minted ONLY by an operator drop_event processor in the
+      # generated <lane>_rules chain, which runs AFTER this transform; the
+      # lane's filter then discards marked events. Inbound it is a forged
+      # kill-switch — a compromised producer pre-marks its events and this
+      # tier silently discards them: no dead-letter, no cx_applied metric
+      # attributing the drop. Same fate as cx_quarantine, unconditionally.
+      del(.cx_drop)
+      # .cx_event_id becomes the OpenSearch document _id (`id_key` on every
+      # OS sink): whoever controls it can OVERWRITE the doc bearing that id
+      # or collapse N events into one (silent suppression). It CANNOT be
+      # stripped unconditionally: the operator restore path
+      # (internal/quarantine) re-injects restored events onto the ORIGINAL
+      # lane topics carrying the envelope's uuid precisely so a re-run
+      # UPSERTS instead of duplicating (INV-F11-08) — an unconditional strip
+      # here would break that replay idempotency. Strongest safe variant:
+      # keep the field ONLY when it looks like a restore — uuid_v4-shaped
+      # AND accompanied by the cx_restored_from provenance marker — and
+      # strip everything else (including every id on the applogs/cloudlogs
+      # lanes, which no restore ever re-enters, since restores only ride
+      # netops.{syslog,snmptrap,flows}).
+      # RESIDUAL, accepted + documented: the marker itself is unauthenticated,
+      # so a compromised bus producer can still forge the pair on this lane.
+      # The damage is bounded — uuid_v4 ids are unguessable and restored-doc
+      # ids are operator-visible only, so there is no practical overwrite
+      # target — and self-evidencing: cx_restored_from is stored on the doc,
+      # so forged "restores" are queryable. Closing it fully needs a MAC over
+      # the id under the quarantine key scope, verified in the GENERATED
+      # config where SECRET[] material exists; this static config must stay
+      # secret-free or plaintext deployments refuse to boot (SEC-018).
+      if !((to_string(.cx_restored_from) ?? "") == "quarantine" && match(to_string(.cx_event_id) ?? "", r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')) {
+        del(.cx_event_id)
+      }
+      # ── F-18 idempotent indexing (2026-08-22, run 08221846o1fo) ─────────
+      # A slow OpenSearch made a bulk request time out CLIENT-side after the
+      # server had applied it; the sink retried and 24,063 docs (one ~60s
+      # window) were indexed twice — same Kafka partition+offset, two auto
+      # _ids, measured live. Every OS log sink already routes `id_key:
+      # cx_event_id` (the F-11 upsert mechanism), so stamping the record's
+      # KAFKA COORDINATE as the id makes retries collapse into upserts for
+      # the whole lane. Safety, in order: the strip above already ran, so a
+      # producer cannot smuggle an id; `offset`/`partition` are CONSUMER-side
+      # source metadata that overwrite any payload-forged value (probed live:
+      # forged 424242/99 → stored 3381593/1), so the id is unforgeable; the
+      # restore path's uuid ids survive (exists-guard); and an event somehow
+      # missing coordinates keeps an auto id rather than collapsing into a
+      # shared fallback id — duplication is recoverable, collapse is not.
+      if !exists(.cx_event_id) && exists(.offset) && exists(.partition) {
+        .cx_event_id = join!(["cxk", to_string(.topic) ?? "t", to_string!(.partition), to_string!(.offset)], ":")
+      }
+      seg = downcase(to_string(.tenant_id) ?? "")
+      if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
+      .tenant_seg = seg
+      # Default the index base so a message produced before the aggregator
+      # learned log_index_base (an upgrade-window in-flight record) can never
+      # render a broken "netops--untagged-*" index. Harmless no-op for the
+      # syslog/snmptrap lanes that share this anchor and never read it.
+      if !exists(.log_index_base) { .log_index_base = "applogs" }
+
+      # ── enrichment-miss observability (F-11) ────────────────────────────
+      # An empty tenant_id is a VALID value (platform-owned telemetry), which
+      # is exactly why a BROKEN device→tenant enrichment table is invisible:
+      # every device lane collapses into the shared -untagged- index and looks
+      # completely normal. Measured 2026-07-21: 400/400 sampled messages on all
+      # six device lanes carried tenant_id="" — indistinguishable, from the
+      # config alone, from "the CSV never loaded". Stamp the attribution
+      # OUTCOME as its own field so the miss rate is a queryable number and
+      # rules.yaml can alert on it (TenantEnrichmentMissRateHigh).
+      #
+      # F-11 Case 1: a tenant present WITHOUT a registry stamp on this lane
+      # means an AUTHENTICATED producer supplied it (cloudlogs connector /
+      # bus bridge / a re-attributed quarantine restore) — the device may be
+      # unknown to inventory, and that is fine: tenant identity came from
+      # the transport credential, never from a payload hostname. Stamped as
+      # its own outcome so "device unknown but tenant authoritative" is
+      # never conflated with a registry hit — and never quarantined.
+      if seg == "untagged" {
+        .tenant_attribution = "unmatched"
+      } else if exists(.tenant_registry) {
+        .tenant_attribution = "enriched"
+      } else {
+        .tenant_attribution = "producer_stamped"
+      }
+
+      # ── `ts` normalisation (DEF-6, 2026-07-21) ──────────────────────────
+      # Producers on these topics emit `ts` in three incompatible shapes:
+      # float epoch-SECONDS (Python time.time()), an RFC3339 string, and
+      # absent. `ts` is not declared in the index template, so OpenSearch
+      # DYNAMICALLY mapped it as a date from the first integer it saw — every
+      # float after that died with mapper_parsing_exception. A mapping
+      # rejection is not retriable, so Vector dropped those events for good:
+      # measured 217 events lost in 30 min on the applogs lane alone (~10k/day),
+      # with no dead-letter and no alert.
+      #
+      # Coerce every shape to integer epoch MILLISECONDS — the same contract
+      # flows_decoded already enforces. The unit is inferred by magnitude, so a
+      # producer that changes precision (s → ms → µs → ns) can never silently
+      # poison the index again. An unparseable value is preserved as a STRING
+      # in .ts_invalid rather than dropped, so the bad producer is greppable
+      # instead of invisible.
+      if exists(.ts) {
+        if is_string(.ts) {
+          parsed, perr = parse_timestamp(to_string(.ts) ?? "", format: "%+")
+          if perr == null {
+            .ts = to_unix_timestamp(parsed, unit: "milliseconds")
+          } else {
+            .ts_invalid = to_string(.ts) ?? ""
+            del(.ts)
+          }
+        } else {
+          n = to_float(.ts) ?? -1.0
+          if n <= 0.0 {
+            .ts_invalid = to_string(.ts) ?? ""
+            del(.ts)
+          } else if n < 100000000000.0 {
+            # < 1e11 → epoch seconds (1e11 s is year 5138; no real ms value is
+            # this small), e.g. Python time.time() = 1784658034.77
+            .ts = to_int(floor(n * 1000.0))
+          } else if n < 100000000000000.0 {
+            .ts = to_int(floor(n))                 # already milliseconds
+          } else if n < 100000000000000000.0 {
+            .ts = to_int(floor(n / 1000.0))        # microseconds
+          } else {
+            .ts = to_int(floor(n / 1000000.0))     # nanoseconds
+          }
+        }
+      }
+
+      # ── `ts` is the CANONICAL event-time field (F-10) ───────────────────
+      # Measured 2026-07-21 across 400 messages/topic: `ts` was present on
+      # applogs/metrics/probes/cloud/cloudcosts/app.edge, ABSENT on
+      # syslog/snmptrap/flows/cloudlogs (which carry only `timestamp`), and
+      # absent on BOTH counts for controller_events. So the field the index
+      # template declares as the time axis — and that every date-range query,
+      # sort and time picker uses — simply did not exist on four of the six
+      # lanes this tier indexes. Nothing failed; the docs just had no `ts`,
+      # which reads exactly like "no data in that window".
+      #
+      # Derive it from `timestamp` so ONE field means event time on every
+      # lane. `timestamp` is never rewritten (log-time standard R2: origin
+      # time preserved) and .ts_source records that this value was derived
+      # rather than sent, so a producer that starts sending `ts` is
+      # distinguishable from one that never did.
+      if !exists(.ts) && exists(.timestamp) {
+        dts, dterr = parse_timestamp(to_string(.timestamp) ?? "", format: "%+")
+        if dterr == null {
+          .ts = to_unix_timestamp(dts, unit: "milliseconds")
+          .ts_source = "timestamp"
+        }
+      }
+
+      # ── W2 pipeline-debugger — ROUTER DECISION HOOK (marked records only) ─
+      #
+      # `correlix-debug trace` collects the router stage with
+      # `vector tap --outputs-of syslog_tagged` / `snmptrap_tagged`
+      # (docs/runbooks/pipeline-debug.md §5). The tap shows the event; this
+      # writes down WHY it looks like that — which attribution outcome the
+      # anchor reached and why, where the document _id came from, what happened
+      # to `ts`, and (on the syslog lane) the verdict the generated admission
+      # screen returned upstream.
+      #
+      # THE GUARD. Every record the debugger injects carries the literal token
+      # `cx_debug=<26-char ulid>` in its free text (internal/pipedebug —
+      # MarkerField / MarkerTag / MarkerPayload); no production record does. So
+      # unmarked traffic — which is all of it — pays one substring compare and
+      # nothing else, on every lane that shares this anchor.
+      cx_msg = string(.message) ?? ""
+      if contains(cx_msg, "cx_debug=") {
+        cx_topic = to_string(.topic) ?? "(unknown)"
+        # Attribution outcome WITH the reason. "untagged" is the answer that
+        # needs one: it is either a genuine platform-owned record or a broken
+        # device→tenant table, and F-11 exists precisely because those two look
+        # identical from the document alone.
+        cx_attr_reason = "tenant came from an AUTHENTICATED producer (no registry stamp on this lane); the device may be unknown to inventory and that is legitimate"
+        if seg == "untagged" {
+          cx_attr_reason = "UNATTRIBUTED:tenant_id is empty so this doc goes to the SHARED -untagged- index"
+          if exists(.tenant_registry) {
+            cx_attr_reason = cx_attr_reason + ", upstream device_tenant registry said " + (to_string(.tenant_registry) ?? "?")
+          } else {
+            cx_attr_reason = cx_attr_reason + ", and no upstream registry stamp either"
+          }
+        } else if exists(.tenant_registry) {
+          cx_attr_reason = "upstream device_tenant registry hit"
+        }
+        # Document identity — an AUTO id is the F-18 duplicate-on-retry case
+        # and must be named, not inferred from the absence of a field.
+        cx_id = "AUTO(no kafka coordinate on this record — a bulk retry can index it twice)"
+        if exists(.cx_event_id) { cx_id = to_string(.cx_event_id) ?? "?" }
+        # `ts` outcome — including the DROP: an unparseable value is moved to
+        # .ts_invalid and removed, which is the difference between "no data in
+        # that window" and "this producer is sending garbage".
+        cx_ts_reason = "ABSENT:no ts and no parseable timestamp — every date-range query and time picker will miss this doc"
+        if exists(.ts_invalid) {
+          cx_ts_reason = "DROPPED:unparseable ts preserved as .ts_invalid=" + (to_string(.ts_invalid) ?? "?") + " and removed from .ts"
+        } else if exists(.ts) {
+          cx_ts_reason = "present, source=" + (to_string(.ts_source) ?? "producer")
+        }
+        # The admission verdict the GENERATED aggregator screen reached. It is
+        # reported here and not at syslog_normalized because that screen is the
+        # generated syslog_admission_stamp block, which may not be hand-edited
+        # and whose surrounding topology is pinned by
+        # tests/test_syslog_admission.py — so this is the first traced stage
+        # that can see `.cx_admission` at all.
+        cx_adm = "n/a(this lane carries no admission stamp)"
+        if exists(.cx_admission) {
+          cx_adm = "ADMITTED by=" + (to_string(.cx_admission.by) ?? "?") + " v=" + (to_string(.cx_admission.v) ?? "?")
+        } else if cx_topic == "netops.syslog" {
+          cx_adm = "NOT-ADMITTED(the generated syslog_admission_stamp set no .cx_admission: neither the severity floor nor a symptom marker matched, so this line is not correlation-evidence material)"
+        }
+        cx_line = "component=log_lane" +
+          " topic=" + cx_topic +
+          " tenant_seg=" + seg +
+          " tenant_attribution=" + .tenant_attribution +
+          " attribution_reason=" + cx_attr_reason +
+          " index_segment=netops-<signal>-" + seg + "-<date>" +
+          " doc_id=" + cx_id +
+          " ts_reason=" + cx_ts_reason +
+          " admission=" + cx_adm +
+          " quarantine_mark=stripped-at-lane-head(only the generated <lane>_quarantine stage, downstream of here, may mint .cx_quarantine)"
+        # (i) STAMP — ONE FLAT STRING, appended to whatever the aggregator's
+        # parser hook already wrote, so a single field carries the whole
+        # decision path. Flat and dot-free on purpose: the CLAUDE.md `.label`
+        # gotcha (dotted keys read as object paths) once dropped every app log,
+        # and a debug field must never be able to repeat it. Bounded so it
+        # cannot grow without limit across stages.
+        cx_prev = string(.cx_parse_trace) ?? ""
+        if cx_prev != "" && length(cx_prev) < 2000 {
+          .cx_parse_trace = cx_prev + " | " + cx_line
+        } else {
+          .cx_parse_trace = cx_line
+        }
+        # (ii) LOG at level "info", deliberately, and NOT "debug": Vector reads
+        # VECTOR_LOG once at process start and offers no runtime log-level
+        # switch (pipedebug's VectorLevelReason), and docker-compose.yml does
+        # not set it — so vector-router runs at `info` and a "debug" line here
+        # would NEVER be emitted. Claiming to log at a level that cannot be
+        # reached is the silent failure this feature exists to remove.
+        # rate_limit_secs: 0 because log() de-duplicates by default and a
+        # suppressed line during a burst of probes is that same silence.
+        log(cx_line, level: "info", rate_limit_secs: 0)
+      }
+
+  syslog_tagged:
+    type: remap
+    inputs: [kafka_syslog]
+    source: *log_lane
+
+  snmptrap_tagged:
+    type: remap
+    inputs: [kafka_snmptrap]
+    source: *log_lane
+
+  # Cloud logs carry an explicit tenant_id from the source (cloud logs have no
+  # device to enrich from — the poller/aggregator stamp it). Derive the same
+  # index segment; a `.timestamp` is stamped at the source, so the API's
+  # timestamp sort/range works unchanged.
+  cloudlogs_tagged:
+    type: remap
+    inputs: [kafka_cloudlogs]
+    source: *log_lane
+
+  # Security findings carry an explicit tenant_id stamped upstream from the
+  # AUTHENTICATED principal (secfindings.Finding.TenantID → EvidenceEvent), so
+  # this lane is `producer_stamped` by construction. Same shared anchor as the
+  # other log-shaped lanes: the forgeable control marks (cx_quarantine /
+  # cx_drop / cx_event_id) die at the head, the tenant segment is derived once,
+  # and `ts` (RFC3339 on this topic) is normalised to epoch-millis.
+  security_tagged:
+    type: remap
+    inputs: [kafka_security]
+    source: *log_lane
+
+  # DOC IDENTITY (SECURITY_FINDINGS_STORE_DECISION 2026-08-28, "Doc identity"):
+  #   _id = sha2(native_id | scan_id)
+  # Every scan's verdict is RETAINED (so trend/drift over time is queryable),
+  # while a redelivery or a bulk retry of the SAME verdict UPSERTS instead of
+  # duplicating. "Current state" is a query-time collapse (latest-by-ts per
+  # native_id), never a mutable upsert — which is why the id must be
+  # deterministic and must NEVER fall back to a random/auto id: an auto id
+  # would silently re-insert the same verdict on every replay and inflate every
+  # facet count the CTEM funnel is built on.
+  #
+  # Both halves are MANDATORY. `native_id` is the producer's deterministic
+  # verdict identity (secbus.nativeIDOf) and `scan_id` is the assessment run
+  # (attrs.scan_id, where secbus.attrsOf puts it). A document missing either is
+  # UNIDENTIFIABLE — it can be neither deduped nor collapsed — so it is
+  # QUARANTINED (operator-only index) rather than written with an invented id.
+  # That is the F-11 posture applied to this lane: an unattributable record is
+  # kept and made visible, never guessed at and never silently dropped.
+  security_identity:
+    type: remap
+    inputs: [security_tagged]
+    source: |
+      # The CLAUDE.md dotted-key gotcha: a `.label` map (Docker's
+      # com.docker.compose.* keys) is read by OpenSearch as an object PATH and
+      # produces a mapping conflict that silently drops EVERY doc on the lane.
+      # Hostile-capable/dotted fields die at the head, same as the anchor's
+      # control marks.
+      del(.label)
+      nid = to_string(.native_id) ?? ""
+      sid = to_string(.attrs.scan_id) ?? ""
+      if nid == "" || sid == "" {
+        # F-11 posture: mint the quarantine mark HERE (after the anchor
+        # stripped any inbound one), so only this stage can set it.
+        .cx_quarantine = true
+        .lane = "security"
+        .reason = "secfindings identity incomplete: native_id and attrs.scan_id are both required for the deterministic _id"
+        del(.cx_finding_id)
+      } else {
+        .cx_finding_id = sha2(nid + "|" + sid, variant: "SHA-256")
+      }
+
+  # ── PROCESSOR HOOK — GENERATED, not declared here ──────────────────────────
+  # `security_rules_apply` / `security_rules` are emitted for this lane by the
+  # API's processor compiler (src/backend/processors/generate.go: laneInputs
+  # `"security": "security_identity"` + LaneOrder), exactly as for every other
+  # lane, and reach the router through the second --config file
+  # (/etc/vector/processors/processors.yaml, seeded from
+  # processors-default.yaml). They must NEVER be re-declared here: Vector
+  # refuses to start on a duplicate component id across its two --config files,
+  # which would take the whole router down. tests/test_security_lane.py pins
+  # that mutual exclusion.
+
+  # goflow2 renders the IP protocol as a NAME ("TCP"/"UDP"/"ICMP"…), but the
+  # ClickHouse flows.proto column is UInt8 (the IANA number). Without this
+  # coercion every flow batch fails the CH insert with a 400 and is dropped —
+  # which is why netops.flows stayed empty. Map the common names to numbers;
+  # leave already-numeric values (NetFlow v9/IPFIX) untouched.
+  flows_decoded:
+    type: remap
+    inputs: [kafka_flows]
+    source: |
+      # F-11: strip the inbound quarantine mark before anything else — only
+      # the generated flows_quarantine stage (downstream of this transform)
+      # may mint it. Same rationale and same position as the &log_lane head.
+      del(.cx_quarantine)
+      # Producer-forgeable control marks — same rationale, ordering and
+      # restore-guard as the &log_lane head (see applogs_tagged): cx_drop is
+      # a forged kill-switch and dies unconditionally; cx_event_id is the
+      # storage doc id and is kept ONLY for a uuid-shaped id carried by the
+      # quarantine restore path (INV-F11-08 replay idempotency — restores
+      # re-enter on this very topic), stripped otherwise. This lane
+      # hand-rolls its head, so it must be audited whenever the anchor
+      # changes — the F-11 lesson repeated.
+      del(.cx_drop)
+      if !((to_string(.cx_restored_from) ?? "") == "quarantine" && match(to_string(.cx_event_id) ?? "", r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')) {
+        del(.cx_event_id)
+      }
+      proto_names = {
+        "HOPOPT": 0, "ICMP": 1, "IGMP": 2, "TCP": 6, "UDP": 17,
+        "GRE": 47, "ESP": 50, "AH": 51, "ICMPv6": 58, "EIGRP": 88,
+        "OSPF": 89, "SCTP": 132
+      }
+      if is_string(.proto) {
+        .proto = to_int(get(proto_names, [.proto]) ?? 0) ?? 0
+      } else {
+        .proto = to_int(.proto) ?? 0
+      }
+      # tcpControlBits (IPFIX IE6 / NetFlow TCP_FLAGS): ClickHouse column is
+      # UInt16 — coerce like .proto so a string-typed value can't 400 the batch.
+      .tcp_flags = to_int(.tcp_flags) ?? 0
+      # Log-time standard: derive the ClickHouse `ts` from goflow2's receive
+      # stamp (time_received_ns, UTC epoch) instead of leaving it to the column
+      # DEFAULT now64() — which re-stamps every flow with the INSERT time, so
+      # bus lag/replay would misplace flows on the timeline. Inserted as an
+      # epoch-ms INTEGER (S4/R1): ClickHouse reads an integer as a scaled UTC
+      # Unix timestamp for DateTime64(3), so unlike a zone-less string it can
+      # never be re-interpreted in the server/column timezone. Flow start/end
+      # capture is a schema follow-up (goflow2 time_flow_start/end_ns).
+      trcv = to_int(.time_received_ns) ?? 0
+      if trcv > 0 {
+        # floor() of an already-coalesced int is infallible — VRL rejects a
+        # dangling `??` on it (exit 78 at boot, caught in deploy 2026-07-17).
+        .ts = to_int(floor(trcv / 1000000))
+      }
+      # Preserve the flow protocol family (goflow2 `type`) so the UI can tell
+      # NetFlow vs IPFIX vs sFlow apart — they otherwise share one schema.
+      ft = to_string(.type) ?? ""
+      if starts_with(ft, "NETFLOW") {
+        .flow_type = "netflow"
+      } else if ft == "IPFIX" {
+        .flow_type = "ipfix"
+      } else if starts_with(ft, "SFLOW") {
+        .flow_type = "sflow"
+      } else {
+        .flow_type = "unknown"
+      }
+      # Tenant attribution: match the flow exporter (sampler_address) to its
+      # device's tenant. No match → "" (global). #20. This lookup used to live
+      # in the aggregator's flows_normalized; it moved here with F-49, because
+      # flows now reach the bus straight from goflow2 and never touch the
+      # aggregator. `.signal` moved with it for the same reason.
+      #
+      # TENANT-HIGH-4 — THE DEFECT FIXED HERE: the lookup used to run ONLY when
+      # the record arrived with no tenant_id (`... && .tenant_id == ""`), i.e.
+      # the registry was a fallback for ABSENCE and a self-declared tenant on
+      # netops.flows was carried through UNCHECKED into that tenant's index and
+      # ClickHouse rows. goflow2 never sets one, so the field could only ever
+      # come from something else writing to the topic — which is precisely the
+      # case that must not be trusted. The registry is now UNCONDITIONALLY
+      # authoritative: any inbound claim is dropped on the floor before the
+      # lookup, exactly like the aggregator's syslog lane. sampler_address is
+      # still unauthenticated (spoofable UDP), so this bounds the damage to
+      # "whatever the registry says about the exporter you can impersonate"; it
+      # is not a substitute for authenticated flow export.
+      #
+      # The resolved value is held in a VRL local and assigned to .tenant_id
+      # ONCE. That is not cosmetic: unconditionally assigning `.tenant_id = ""`
+      # first would make the path a known string, and the later
+      # `to_string(.tenant_id) ?? ""` would then be a dangling coalesce on an
+      # infallible call — a VRL COMPILE error, i.e. vector exits 78 at boot.
+      .signal = "netflow"
+      claimed_tenant = to_string(.tenant_id) ?? ""
+      tenant_resolved = ""
+      sampler = to_string(.sampler_address) ?? ""
+      # F-11: registry-MISS discriminator (see the aggregator's syslog note):
+      # hit-with-"" = KNOWN platform exporter (stays untagged, load-bearing);
+      # miss = unknown exporter, quarantined by the generated stage when
+      # sealing is on.
+      .tenant_registry = "miss"
+      if sampler != "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
+        if length(trows) > 0 {
+          tenant_resolved = to_string(trows[0].tenant_id) ?? ""
+          .tenant_registry = "hit"
+        }
+      }
+      .tenant_id = tenant_resolved
+
+      # #20 Phase 3 — per-tenant index segment (see applogs_tagged).
+      seg = downcase(tenant_resolved)
+      if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
+      .tenant_seg = seg
+      # F-11: same enrichment-miss stamp the anchored lanes carry. This lane
+      # hand-rolls its tenant block (it has extra flow-specific work), which is
+      # precisely why it must be audited whenever the anchor changes — a fix
+      # applied to the anchor alone would leave flows unmeasured.
+      #
+      # A THIRD outcome (TENANT-HIGH-4): "claim_rejected" — the record asserted
+      # a tenant the registry does not agree with. The registry's answer is what
+      # gets written (never the claim, and never a permissive fallback), but the
+      # outcome is stamped so the miss-rate metric separates "no inventory row"
+      # from "somebody is writing tenanted flows onto the bus", which is a
+      # security event and not an enrichment gap.
+      .tenant_attribution = if seg == "untagged" { "unmatched" } else { "enriched" }
+      if claimed_tenant != "" && claimed_tenant != tenant_resolved {
+        .tenant_attribution = "claim_rejected"
+      }
+
+
+      # ── W2 pipeline-debugger — FLOW DECISION HOOK (marked records only) ───
+      #
+      # THE GUARD, and why it is shaped differently from the log lanes. A
+      # goflow2 flow record has NO free-text field (see the netops-flows index
+      # template: every property is an ip/int/keyword), and NetFlow v5 — the
+      # wire form the probe uses, because v9/IPFIX would need a template packet
+      # first — has no vendor-extension space either. So the `cx_debug=<ulid>`
+      # token the log lanes carry inside `.message` has nowhere to ride, and a
+      # field the injector cannot set would be an inert hook that reads like
+      # coverage.
+      #
+      # The marker therefore travels as a deterministic FLOW FINGERPRINT in RFC
+      # 5737 documentation address space (internal/pipedebug/flow.go:
+      # src 192.0.2.0/24 TEST-NET-1, dst 198.51.100.0/24 TEST-NET-2, ephemeral
+      # ports, RFC 6996 private ASNs, one byte, one packet). TEST-NET-1 is
+      # reserved for documentation and carries no production traffic, so the
+      # guard below is ONE prefix compare on a field every flow already has and
+      # no real flow ever matches. The full tuple is printed in the trace line;
+      # the api verifies it exactly before filing a record as a trace's
+      # evidence (verifyFlowRecords).
+      cx_src = string(.src_addr) ?? ""
+      if starts_with(cx_src, "192.0.2.") {
+        cx_tid = tenant_resolved
+        if cx_tid == "" { cx_tid = "(none)" }
+        cx_sampler = sampler
+        if cx_sampler == "" { cx_sampler = "(none)" }
+        # Attribution outcome with the reason — the three cases are genuinely
+        # different and the trace must not collapse them.
+        cx_tenant_reason = "registry-hit"
+        if sampler == "" {
+          cx_tenant_reason = "UNATTRIBUTED:the flow carries no sampler_address, so the exporter cannot be identified and no lookup is attempted"
+        } else if .tenant_registry == "miss" {
+          cx_tenant_reason = "UNATTRIBUTED:device_tenant-registry-MISS on " + sampler + " (unknown exporter; the generated flows_quarantine stage diverts this when sealing is on)"
+        } else if tenant_resolved == "" {
+          cx_tenant_reason = "registry-hit-maps-to-platform-global(untagged by design, not a miss)"
+        }
+        if claimed_tenant != "" && claimed_tenant != tenant_resolved {
+          cx_tenant_reason = cx_tenant_reason + " | REFUSED-CLAIM:the record asserted tenant_id=" + claimed_tenant + " on the bus and the registry disagrees; the claim was discarded (a tenanted flow on netops.flows is a security event, not an enrichment gap)"
+        }
+        cx_ts_reason = "derived from time_received_ns"
+        if trcv <= 0 {
+          cx_ts_reason = "DROPPED:time_received_ns absent or zero — no .ts is set and ClickHouse falls back to the insert-time column DEFAULT, which misplaces the flow on the timeline"
+        }
+        cx_ft_reason = "goflow2 type=" + ft
+        if .flow_type == "unknown" {
+          cx_ft_reason = "UNRECOGNISED:goflow2 type=" + ft + " matched none of NETFLOW*/IPFIX/SFLOW*"
+        }
+        cx_line = "component=flows_decoded" +
+          " flow_type=" + .flow_type +
+          " flow_type_reason=" + cx_ft_reason +
+          " proto=" + to_string(.proto) +
+          " sampler_address=" + cx_sampler +
+          " tenant_registry=" + .tenant_registry +
+          " tenant_id=" + cx_tid +
+          " tenant_seg=" + seg +
+          " tenant_attribution=" + .tenant_attribution +
+          " tenant_reason=" + cx_tenant_reason +
+          " ts_reason=" + cx_ts_reason
+        # (i) STAMP — one flat string. SAFE FOR BOTH FLOW STORES, checked
+        # rather than assumed: the ClickHouse sink `clickhouse_flows` sets
+        # `skip_unknown_fields: true`, so a column that does not exist is
+        # dropped instead of 400-ing the whole insert batch (the .proto lesson);
+        # and the netops-flows index template is `dynamic: false`, so an
+        # undeclared field is kept in _source and simply not indexed — no
+        # mapping conflict, no rejected document.
+        cx_prev = string(.cx_parse_trace) ?? ""
+        if cx_prev != "" && length(cx_prev) < 2000 {
+          .cx_parse_trace = cx_prev + " | " + cx_line
+        } else {
+          .cx_parse_trace = cx_line
+        }
+        # (ii) LOG at info, rate_limit_secs: 0 — see the log-lane anchor above
+        # for why "debug" would be a line that is never emitted.
+        log(cx_line, level: "info", rate_limit_secs: 0)
+      }
+  # Scale P0 — re-key the raw goflow2 feed by tenant (see kafka_flows_raw).
+  # PASS-THROUGH on purpose: the payload the correlation consumer sees on
+  # netops.flows must stay byte-equivalent to what goflow2 produced (its
+  # tenancy is re-verified there against the same registry), so this stamps
+  # ONLY the routing key and strips the kafka-source/log-schema metadata the
+  # source added. Tenant resolution mirrors flows_decoded: sampler_address →
+  # device_tenant registry; miss/platform → "global" (canon_tenant's fold).
+  flows_rekey:
+    type: remap
+    inputs: [kafka_flows_raw]
+    source: |
+      # Fields the kafka source / log schema stamped on ingest — not part of
+      # the goflow2 record; deleting them restores the raw payload shape.
+      del(.timestamp)
+      del(.source_type)
+      del(.topic)
+      del(.partition)
+      del(.offset)
+      del(.message_key)
+      del(.headers)
+      sampler = to_string(.sampler_address) ?? ""
+      k = ""
+      if sampler != "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
+        if length(trows) > 0 {
+          k = to_string(trows[0].tenant_id) ?? ""
+        }
+      }
+      if k == "" { k = "global" }
+      .__key = k
+      # ── W2 pipeline-debugger — LOG-ONLY DECISION HOOK ─────────────────────
+      # This lane is a declared PASS-THROUGH: the payload on netops.flows must
+      # stay byte-equivalent to what goflow2 produced, so this hook must NOT
+      # stamp `.cx_parse_trace` (or any other field) the way the others do —
+      # adding one would break the very contract the comment above states. It
+      # logs the keying decision and nothing else. Guard and level: identical
+      # to flows_decoded (the RFC 5737 documentation source prefix, because a
+      # flow record has no free text to carry a token; info because Vector's
+      # level is start-time only and `debug` would never be emitted;
+      # rate_limit_secs: 0 so a burst of probes is not silently de-duplicated).
+      cx_src = string(.src_addr) ?? ""
+      if starts_with(cx_src, "192.0.2.") {
+        cx_reason = "device_tenant registry hit on sampler_address " + sampler
+        if sampler == "" {
+          cx_reason = "UNATTRIBUTED:no sampler_address on the record — no lookup attempted"
+        } else if k == "global" {
+          cx_reason = "UNATTRIBUTED:device_tenant registry miss (or a hit mapping to platform/global) for sampler_address " + sampler + " — canon_tenant folds both to the 'global' partition key"
+        }
+        log("component=flows_rekey partition_key=" + k + " sampler_address=" + sampler +
+            " key_reason=" + cx_reason +
+            " note=pass-through lane, no .cx_parse_trace stamped (the netops.flows payload must stay byte-equivalent to goflow2's)",
+            level: "info", rate_limit_secs: 0)
+      }
+
+  # Cloud cost records → the ClickHouse cloud_costs schema. Zero-trust gate on
+  # the bus payload: only kind=cloud_cost with a well-formed day passes; the
+  # amount is coerced to a float so a string-typed value can't 400 the whole
+  # insert batch (the flows proto lesson). `ts` is converted to epoch-ms
+  # (log-time standard S4/R1 — an integer can never be re-interpreted in the
+  # server timezone); an unparseable ts is dropped so the column DEFAULT
+  # (insert time) applies rather than failing the batch.
+  cloudcosts_normalized:
+    type: remap
+    inputs: [kafka_cloudcosts]
+    drop_on_abort: true
+    drop_on_error: true
+    # Aborted/errored records used to vanish with no trace. Reroute them to the
+    # `.dropped` output so the dead-letter sink below can keep the evidence
+    # (DEF-6 follow-up: nothing may be discarded invisibly).
+    reroute_dropped: true
+    source: |
+      if (to_string(.kind) ?? "") != "cloud_cost" { abort }
+      if !match(to_string(.day) ?? "", r'^\d{4}-\d{2}-\d{2}$') { abort }
+      .amount = to_float(.amount) ?? 0.0
+      .tenant_id = to_string(.tenant_id) ?? ""
+      tsp, terr = parse_timestamp(to_string(.ts) ?? "", format: "%+")
+      if terr == null {
+        .ts = to_unix_timestamp(tsp, unit: "milliseconds")
+      } else {
+        del(.ts)
+      }
+
+  # DEM experience lane (tracker 254). ONE topic carries both record shapes, so
+  # the first job is to split them; `record_type` is stamped by the api's
+  # producer and is the only routing field. A record with neither value is
+  # aborted into the dead letter rather than guessed at — an experience event
+  # written into the business table would silently corrupt the impact figure
+  # that answers "what did this outage cost".
+  #
+  # `tenant_id` is NOT derived here and is never taken from anything the browser
+  # sent: the api stamped it from the caller's credential before publishing
+  # (§3a rule 2), and a router-side default would be a way to re-introduce
+  # untagged rows into a STRICT-policy table.
+  experience_split:
+    type: route
+    inputs: [kafka_experience]
+    route:
+      events: '.record_type == "experience_event"'
+      business: '.record_type == "business_event"'
+
+  # Both branches flatten the nested API JSON into the ClickHouse column shape
+  # and convert the two timestamps to epoch-ms (log-time standard S4/R1: an
+  # integer can never be re-interpreted in the server's timezone). A record
+  # missing its tenant or its event time is ABORTED to the dead letter: an
+  # untagged row in a STRICT-policy table is invisible to every tenant, which is
+  # a silent loss, and a row with no event time cannot be correlated with the
+  # outage it belongs to.
+  experience_events_normalized:
+    type: remap
+    inputs: [experience_split.events]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true
+    source: &experience_lane |
+      .tenant_id = to_string(.tenant_id) ?? ""
+      if .tenant_id == "" || .tenant_id == "*" { abort }
+      .event_id = to_string(.id) ?? ""
+      if .event_id == "" { abort }
+      del(.id)
+      del(.record_type)
+
+      # provenance.* -> flat columns
+      .source = to_string(.provenance.source) ?? ""
+      .producer = to_string(.provenance.producer) ?? ""
+      .observation = to_string(.provenance.observation) ?? ""
+      .data_class = to_string(.provenance.data_class) ?? ""
+      .schema_name = to_string(.provenance.schema_name) ?? ""
+      .schema_version = to_int(.provenance.schema_version) ?? 0
+      ev, everr = parse_timestamp(to_string(.provenance.event_at) ?? "", format: "%+")
+      if everr != null { abort }
+      .event_at = to_unix_timestamp(ev, unit: "milliseconds")
+      ob, oberr = parse_timestamp(to_string(.provenance.observed_at) ?? "", format: "%+")
+      if oberr == null {
+        .observed_at = to_unix_timestamp(ob, unit: "milliseconds")
+      } else {
+        .observed_at = .event_at
+      }
+      del(.provenance)
+
+      # cohort.* -> flat columns. An absent dimension stays "" rather than
+      # becoming "unknown": two cohorts differing only in a dimension nobody
+      # recorded are ONE cohort, not two.
+      .cohort_site = to_string(.cohort.site) ?? ""
+      .cohort_isp = to_string(.cohort.isp) ?? ""
+      .cohort_region = to_string(.cohort.region) ?? ""
+      .cohort_device = to_string(.cohort.device_type) ?? ""
+      .cohort_browser = to_string(.cohort.browser) ?? ""
+      .cohort_version = to_string(.cohort.app_version) ?? ""
+      .cohort_network = to_string(.cohort.network_type) ?? ""
+      del(.cohort)
+
+  experience_events_flat:
+    type: remap
+    inputs: [experience_events_normalized]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true
+    source: |
+      .event_type = to_string(.type) ?? ""
+      del(.type)
+      # vitals.* -> flat columns. Absent stays ABSENT (null), never 0: a 0 CLS
+      # is excellent and a 0 LCP is impossible, so a shared zero would be read
+      # two different wrong ways.
+      .lcp_ms = to_float(.vitals.lcp_ms) ?? null
+      .inp_ms = to_float(.vitals.inp_ms) ?? null
+      .cls = to_float(.vitals.cls) ?? null
+      .ttfb_ms = to_float(.vitals.ttfb_ms) ?? null
+      .fcp_ms = to_float(.vitals.fcp_ms) ?? null
+      del(.vitals)
+      .duration_ms = to_float(.duration_ms) ?? null
+      .status_code = to_int(.status_code) ?? 0
+      .success = to_bool(.success) ?? false
+      # The agent context is a Phase N reservation with no column yet; drop it
+      # rather than let skip_unknown_fields silently swallow a nested object.
+      del(.agent)
+
+  experience_business_flat:
+    type: remap
+    inputs: [experience_split.business]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true
+    source: *experience_lane
+
+  experience_business_typed:
+    type: remap
+    inputs: [experience_business_flat]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true
+    source: |
+      .value = to_float(.value) ?? null
+      .quantity = to_int(.quantity) ?? 0
+      .success = to_bool(.success) ?? false
+
+  # Dead-letter encoder — the last stop before an event would be discarded.
+  # Every field is flattened into ONE json string so a poisoned document can
+  # never conflict with the dead-letter index's own mapping (a dead-letter that
+  # can itself be rejected is worthless). Keep this shape boring on purpose.
+  #
+  # F-14 — THE DEFECT THIS FIXES, measured (not inferred) against
+  # timberio/vector:0.40.0-alpine on 2026-07-22 with a throwaway abort→dropped
+  # pipeline:
+  #
+  #   .metadata.dropped.reason       -> "abort"                  <- the truth
+  #   .metadata.dropped.message      -> "aborted"                <- the truth
+  #   .metadata.dropped.component_id -> "t"                      <- the truth
+  #   .metadata.message              -> ""                       <- what we read
+  #   %vector.dropped.reason         -> ""                       (vector-namespace
+  #                                                                only; this
+  #                                                                config is
+  #                                                                legacy)
+  #
+  # Vector annotates a rerouted event under `<log_schema.metadata_key>.dropped`,
+  # i.e. the event FIELD `.metadata.dropped` in the default (legacy) log
+  # namespace — one path segment deeper than the old expression looked. And
+  # `to_string(null)` returns "" rather than erroring, so the `??` fallback
+  # never fired either: every dead-letter document was written with
+  # **reason: ""**, not even the placeholder string. The DLQ kept the payload
+  # and threw away the only field that says why it is there — which is most of
+  # the way to having no DLQ at all.
+  #
+  # `lane` is now derived from component_id rather than hardcoded, so this one
+  # encoder serves every rerouting transform on this tier and a new lane cannot
+  # be added with a wrong-but-plausible constant label.
+  deadletter_encoded:
+    type: remap
+    inputs: [cloudcosts_normalized.dropped, experience_events_normalized.dropped,
+             experience_events_flat.dropped, experience_business_flat.dropped,
+             experience_business_typed.dropped]
+    source: |
+      lane = to_string(.metadata.dropped.component_id) ?? ""
+      if lane == "" { lane = "unknown" }
+      kind = to_string(.metadata.dropped.reason) ?? ""
+      if kind == "" { kind = "unknown" }
+      why = to_string(.metadata.dropped.message) ?? ""
+      # An empty reason means Vector changed where it annotates dropped events
+      # (namespace switch / schema change). Say so explicitly instead of
+      # writing a blank field that reads like "no reason recorded".
+      if why == "" { why = "no dropped-metadata captured — check Vector's log namespace (F-14)" }
+      . = {
+        "dropped_at": format_timestamp!(now(), format: "%+"),
+        "lane": lane,
+        "reason": kind,
+        "detail": why,
+        "raw": encode_json(.)
+      }
+
+  # OS gets a 1-in-50 SAMPLE of flows — ClickHouse is the canonical flow store.
+  # An unsampled mirror at generator/production fps wrote ~4 GB/day into one
+  # index, hit the disk flood-stage watermark, and turned EVERY log index
+  # read-only (2026-06-10 outage: syslog/traps/applogs all stopped).
+  # Input is the processor hook (item 121) so the OS sample and the ClickHouse
+  # canonical store see the SAME shaped records.
+  # F-11 seal-or-quarantine: storage routing for the device-attribution lanes.
+  # The generated processors config (when sealing is enabled) replaces a
+  # registry-MISS event with a sealed quarantine envelope stamped
+  # `cx_quarantine: true`; these routes steer such envelopes to the dedicated
+  # operator-only index and everything else to the normal per-lane stores.
+  # STATIC on purpose: routes carry no secrets, so plaintext deployments are
+  # unaffected (without the generated stage nothing ever matches the route).
+  syslog_store_route:
+    type: route
+    inputs: [syslog_rules]
+    route:
+      quarantine: 'to_bool(.cx_quarantine) ?? false'
+  snmptrap_store_route:
+    type: route
+    inputs: [snmptrap_rules]
+    route:
+      quarantine: 'to_bool(.cx_quarantine) ?? false'
+  flows_store_route:
+    type: route
+    inputs: [flows_rules]
+    route:
+      quarantine: 'to_bool(.cx_quarantine) ?? false'
+  # Security lane: same predicate, different mint site — the mark is set by
+  # security_identity when a finding carries no usable (native_id, scan_id)
+  # identity, so an unidentifiable verdict lands in the operator-only
+  # quarantine index instead of the tenant findings index under a made-up id.
+  security_store_route:
+    type: route
+    inputs: [security_rules]
+    route:
+      quarantine: 'to_bool(.cx_quarantine) ?? false'
+
+  flows_os_sample:
+    type: sample
+    inputs: [flows_store_route._unmatched]
+    rate: 50
+
+  # Sample honesty (finder 2026-08-14): every doc written to the sampled OS
+  # store carries the rate it was sampled at. The Logs API/UI/export serve
+  # this lane for signal=flows and must never present its counts as exact —
+  # the stamp is what lets them (and any future consumer) disclose "1:50
+  # sample — totals are estimates (×50)" instead of understating traffic 50x.
+  # The literal here MUST match flows_os_sample.rate, logs.go
+  # flowsOSSampleRate and Logs.tsx FLOWS_OS_SAMPLE_RATE —
+  # tests/test_ingest_contract.py pins all four to the sampler's rate.
+  # ClickHouse stays the canonical UNSAMPLED store and never sees this stamp.
+  flows_os_stamped:
+    type: remap
+    inputs: [flows_os_sample]
+    source: |
+      .sample_rate = 50
+
+  # F-11 — make a broken device→tenant enrichment table VISIBLE.
+  #
+  # THE DEFECT THIS FIXES: tenant_id="" is a legitimate value (platform-owned
+  # telemetry), so "the enrichment CSV never loaded" and "these devices really
+  # are platform-owned" produce byte-identical events, byte-identical indices
+  # and byte-identical dashboards. The design's at-rest guarantee ("another
+  # tenant's docs are unreachable even if a query filter is missed") quietly
+  # degrades to one shared -untagged- bucket, and isolation falls back to the
+  # single API-layer query filter it was meant to backstop.
+  #
+  # Counting the attribution OUTCOME per topic turns that into a number:
+  # a miss RATE that jumps to 1.0 on lanes that previously matched is an
+  # enrichment failure, while a lab whose devices genuinely have no tenant
+  # simply reads a steady 1.0 and never alerts (rules.yaml scopes the alert to
+  # a RISE, not to a level). Exported on the existing :9598 exporter that
+  # vmscrape.yml already scrapes — no new service, no new scrape job.
+  tenant_attribution_metric:
+    type: log_to_metric
+    inputs:
+      - applogs_tagged
+      - syslog_tagged
+      - snmptrap_tagged
+      - cloudlogs_tagged
+      - security_tagged
+      - flows_decoded
+    metrics:
+      - type: counter
+        field: tenant_attribution
+        name: netops_tenant_attribution_events
+        tags:
+          outcome: "{{ tenant_attribution }}"
+          # The kafka source stamps the source topic on every event, so the
+          # lane label needs no per-lane transform (and therefore cannot drift
+          # away from the lane it actually describes).
+          topic: "{{ topic }}"
+
+  # F-18: the DLQ lane bypasses the log_lane anchor, so it gets its own
+  # coordinate stamp. Deliberately UNCONDITIONAL here (unlike the anchor's
+  # exists-guard on cx_event_id): a dead-letter record may CARRY the original
+  # event's id in its envelope, and two dead-letters about one event must
+  # never collapse into one DLQ document — the DLQ doc's identity is the DLQ
+  # RECORD (its own Kafka coordinate), never the event it describes. Records
+  # minted in-pipeline (deadletter_encoded) have no coordinate and keep auto
+  # ids.
+  deadletter_id_stamped:
+    type: remap
+    inputs: [deadletter_encoded, kafka_deadletter]
+    source: |
+      del(.cx_event_id)
+      if exists(.offset) && exists(.partition) {
+        .cx_event_id = join!(["cxk", to_string(.topic) ?? "t", to_string!(.partition), to_string!(.offset)], ":")
+      }
+
+sinks:
+  prometheus_internal:
+    type: prometheus_exporter
+    # cx_processor_metrics is defined in the GENERATED processors config (second
+    # --config): one counter per Pipeline Processor that fired, so per-processor
+    # match rates are observable without an execution-log row per event. Listed
+    # here because the generated file cannot edit this sink's inputs.
+    inputs: [internal_metrics, tenant_attribution_metric, cx_processor_metrics]
+    address: 0.0.0.0:9598
+
+  # ── per-tenant processor hooks (item 121) ────────────────────────────────
+  # Every storage sink below reads its lane's *_rules hook, NOT the *_tagged
+  # transform directly. The hooks are defined in a SECOND config file —
+  # /etc/vector/processors/processors.yaml, generated by the api from the
+  # tenant-scoped rules (seeded by install.py from processors-default.yaml;
+  # hot-applied via --watch-config). tenant_attribution_metric deliberately
+  # stays on the *_tagged transforms: attribution is measured BEFORE shaping,
+  # and a rule cannot touch the attribution fields anyway (protected).
+
+  # Application + container logs → OpenSearch
+  opensearch_applogs:
+    type: elasticsearch
+    inputs: [applogs_rules]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
+    mode: bulk
+    # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
+    # UPSERT on replay — without this, a re-run of the operator restore
+    # duplicated the tenant document (caught live 2026-08-12). F-18
+    # (2026-08-22): normal events now ALSO carry it — the log_lane anchor
+    # stamps the record's Kafka coordinate — so a bulk retry after a
+    # timed-out-but-applied request upserts instead of duplicating.
+    id_key: cx_event_id
+    bulk:
+      # log_index_base is "applogs" for application services and "platformlogs"
+      # for the platform's own infra (classified in the aggregator). Platform
+      # self-health logs therefore leave the netops-applogs-* pattern the GUI
+      # reads. Fail-safe: an older producer without the field defaults below.
+      index: "netops-{{ log_index_base }}-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
+
+  # Dead-letter → OpenSearch. Small by construction (only genuinely malformed
+  # records land here), so a non-empty netops-deadletter-* index is itself the
+  # signal that a producer has broken its contract.
+  # F-11 seal-or-quarantine: TENANT_UNATTRIBUTABLE envelopes (payload sealed
+  # under the quarantine key by the generated stage) land in a dedicated
+  # dateful index with NO tenant segment — the deadletter shape. No tenant
+  # read path ever names it; the operator workflow is the only consumer.
+  # id_key: every envelope carries a uuid cx_event_id, so a replayed write
+  # (router restart, kafka redelivery) UPSERTS instead of duplicating — the
+  # F11.11 idempotency half at the storage layer.
+  opensearch_quarantine:
+    type: elasticsearch
+    inputs: [syslog_store_route.quarantine, snmptrap_store_route.quarantine, flows_store_route.quarantine, security_store_route.quarantine]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # Write-only identity — same rationale as the other lanes (SEC-008).
+    healthcheck: false
+    mode: bulk
+    id_key: cx_event_id
+    bulk:
+      index: "netops-quarantine-%Y.%m.%d"
+      action: index
+    api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
+
+  opensearch_deadletter:
+    type: elasticsearch
+    inputs: [deadletter_id_stamped]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
+    mode: bulk
+    id_key: cx_event_id
+    bulk:
+      index: "netops-deadletter-%Y.%m.%d"
+      action: index
+    api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
+
+  # Syslog from network devices → OpenSearch
+  opensearch_syslog:
+    type: elasticsearch
+    inputs: [syslog_store_route._unmatched]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
+    mode: bulk
+    # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
+    # UPSERT on replay — without this, a re-run of the operator restore
+    # duplicated the tenant document (caught live 2026-08-12). F-18
+    # (2026-08-22): normal events now ALSO carry it — the log_lane anchor
+    # stamps the record's Kafka coordinate — so a bulk retry after a
+    # timed-out-but-applied request upserts instead of duplicating.
+    id_key: cx_event_id
+    bulk:
+      index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    # ── #209 — a storage BLOCK must degrade to DELAYED, never to LOST ───────
+    # THE DEFECT THIS FIXES (storm-s10, run 09012025x578, 2026-09-01):
+    # the host root-fs crossed OpenSearch's flood-stage watermark (95 %; trough
+    # 3.45 GiB free on the shared 77 GiB volume), OpenSearch put EVERY index
+    # into read-only-allow-delete for 11 minutes (20:39:04→20:50:04 UTC), and
+    # THIS sink dropped 291,296 syslog events: 900,001 injected → 610,001 OS
+    # docs. The Kafka→correlation lane was untouched (345 incidents, identical
+    # to the passing leg) — what died was the search/EVIDENCE copy, permanently.
+    # Full diagnosis: /var/tmp/scale-runs/storm-s10-09012025/s10-discard-diagnosis.md
+    #
+    # WHY IT WAS LOST — measured against THIS image, not inferred
+    # (netops-vector-router:0.40.0-curl / vector 0.40.0, 2026-09-02):
+    # a blocked OpenSearch answers _bulk with HTTP **200** carrying a per-ITEM
+    # `"status":429, cluster_block_exception`. Vector 0.40 classifies a
+    # 200-with-`"errors":true` body as NON-retriable unless
+    # `request_retry_partial` is set, and that option DEFAULTS TO FALSE.
+    # Reproduced against a mock returning that exact body:
+    #   false → every batch sent ONCE (84 requests / 84 distinct bodies) and
+    #           vector_component_discarded_events_total{intentional="false"}
+    #           = 500 after 30 s — the exact counter s10 measured, and NOTHING
+    #           is logged at the default level.
+    #   true  → the same batches are retried (584 requests / 91 distinct
+    #           bodies), WARN `Retrying after response. reason=partial error,
+    #           status: 429 Too Many Requests, error type:
+    #           cluster_block_exception`, and the discard counter never appears.
+    # The HTTP status stays 200 for the whole block, so
+    # vector_http_client_responses_total{status="429"} can NEVER see this —
+    # do not build an alarm on it (rules.yaml OpenSearchFloodStageBlock does not).
+    # `id_key: cx_event_id` above is what makes the retry safe: the replayed
+    # batch UPSERTS instead of duplicating (the F-18 idempotency contract).
+    request_retry_partial: true
+    request:
+      # RETRY ENVELOPE — deliberately long, deliberately NOT infinite.
+      # Measured on 0.40.0: `retry_max_duration_secs` caps the DELAY BETWEEN
+      # retries, it is NOT a total deadline (a 5 s setting still retried for a
+      # 40 s run with zero drops), and `retry_attempts` is what actually
+      # bounds the batch (3 attempts → `Events dropped … reason="Service call
+      # failed. No retries or retries exhausted."`, the s10 log line verbatim).
+      # Backoff is 1,2,4,8,16 then flat at retry_max_duration_secs, so
+      #     envelope = 1+2+4+8+16 + 30 × (retry_attempts − 5)
+      #              = 31 s + 30 s × 85 = **2,581 s ≈ 43 min** at 90 attempts,
+      # which still covers s10's 660 s block 3.9× over.
+      # SIZED DOWN FROM AN EARLIER 3.3 h ON PURPOSE. `request_retry_partial`
+      # retries the WHOLE batch and CANNOT tell a transient 429 from a
+      # permanent per-item 400 (mapping rejection — the F-17 class, 1,127 docs
+      # in 2026-08), so one poisoned document stalls its lane for the whole
+      # envelope, and repeatedly if more arrive: too long an envelope turns
+      # "lossy but flowing" into "stall-prone", the opposite failure for an
+      # evidence lane. 43 min is the balance — a real storage block costs
+      # nothing, a poison batch costs one batch after 43 min of Kafka lag
+      # (netops.* retains 72 h, so nothing is lost meanwhile), and the stall is
+      # VISIBLE within ~12 min via VectorOpenSearchRetryStorm.
+      # Measured 2026-09-02 on the live router: per-item 4xx runs a flat
+      # 33–48/h — the ISM/optimistic-lock 409 housekeeping rate, NOT Vector
+      # bulk items — and router sink discards over the last 3 h are ZERO, so no
+      # lane is carrying a poison document today.
+      # All three fields are pinned explicitly because the arithmetic above is
+      # only true if they are.
+      retry_attempts: 90
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 30
+    buffer:
+      # NO DISK BUFFER HERE — ON PURPOSE, and that is the other half of #209.
+      # Sizing one honestly from the measured numbers: this sink's events
+      # average **478 B** (vector_component_sent_event_bytes_total /
+      # vector_component_sent_events_total = 15,488,574,206 / 32,421,173, read
+      # off the live router), so s10's 291,296 lost events were ~139 MB and a
+      # 30-minute block at the V1 rate (1,000 eps → 1.8 M events) needs
+      # ~860 MB — call it **~2 GiB** with headroom for the other OS lanes.
+      # This container has NO writable data volume, and the only host path
+      # available (`../../data`) sits on the SAME 77 GiB root filesystem whose
+      # 3.45 GiB trough CAUSED the block: a 2 GiB spool there would eat most of
+      # the remaining flood-stage margin and hold OpenSearch past the watermark
+      # LONGER. Buffering onto the disk that is full is self-defeating.
+      # Kafka is the buffer instead, and already is: `acknowledgements:
+      # enabled` (F-04) withholds the consumer-group offset until this sink
+      # acks, and the netops.* topics retain 72 h. `when_full: block` therefore
+      # pushes back buffer → kafka source → uncommitted offsets, and the topic
+      # replays on recovery. Pinned explicitly (these ARE Vector's defaults)
+      # so that a future edit to `drop_newest` is a test failure
+      # (tests/test_ingest_contract.py) instead of a silent return to s10.
+      type: memory
+      max_events: 500
+      when_full: block
+
+  # SNMP traps from network devices → OpenSearch
+  opensearch_snmptrap:
+    type: elasticsearch
+    inputs: [snmptrap_store_route._unmatched]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
+    mode: bulk
+    # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
+    # UPSERT on replay — without this, a re-run of the operator restore
+    # duplicated the tenant document (caught live 2026-08-12). F-18
+    # (2026-08-22): normal events now ALSO carry it — the log_lane anchor
+    # stamps the record's Kafka coordinate — so a bulk retry after a
+    # timed-out-but-applied request upserts instead of duplicating.
+    id_key: cx_event_id
+    bulk:
+      index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
+
+  # Tagged raw cloud logs → OpenSearch (the unified Cloud Logs search plane).
+  opensearch_cloudlogs:
+    type: elasticsearch
+    inputs: [cloudlogs_rules]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
+    mode: bulk
+    # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
+    # UPSERT on replay — without this, a re-run of the operator restore
+    # duplicated the tenant document (caught live 2026-08-12). F-18
+    # (2026-08-22): normal events now ALSO carry it — the log_lane anchor
+    # stamps the record's Kafka coordinate — so a bulk retry after a
+    # timed-out-but-applied request upserts instead of duplicating.
+    id_key: cx_event_id
+    bulk:
+      index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
+
+  # Security findings → OpenSearch (P3-L1). The durable findings store per
+  # SECURITY_FINDINGS_STORE_DECISION 2026-08-28: per-tenant index, read back
+  # through TenantIndexPattern("secfindings", …) + TenantFilter (§3a — the read
+  # path names only the caller's own pattern, so at-rest separation backstops a
+  # missed query filter, exactly as on the other lanes).
+  opensearch_secfindings:
+    type: elasticsearch
+    inputs: [security_store_route._unmatched]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
+    mode: bulk
+    # NOT cx_event_id (the Kafka coordinate every other lane uses): this lane's
+    # document identity is the VERDICT identity, sha2(native_id | scan_id),
+    # computed in security_identity. A record that could not produce one never
+    # reaches this sink (it peels off to quarantine), so the id is always
+    # present and always deterministic — a redelivery, a replay from the
+    # retained topic, or a #209 partial-bulk retry all UPSERT the same document
+    # instead of duplicating a verdict and inflating every facet count.
+    id_key: cx_finding_id
+    bulk:
+      index: "netops-secfindings-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    # s10 back-reference: this is the sink class that silently discarded
+    # 291,296 syslog events during an 11-minute OpenSearch block because
+    # request_retry_partial defaults to FALSE. Evidence lanes degrade to
+    # DELAYED, never to LOST.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
+
+  # Flow records → both OpenSearch (search) and ClickHouse (analytics)
+  opensearch_flows:
+    type: elasticsearch
+    # Reads the STAMPED sample (sample honesty — see flows_os_stamped), never
+    # the raw sampler output: every doc in netops-flows-* carries sample_rate.
+    inputs: [flows_os_stamped]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
+    mode: bulk
+    # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
+    # UPSERT on replay — without this, a re-run of the operator restore
+    # duplicated the tenant document (caught live 2026-08-12). F-18
+    # (2026-08-22): normal events now ALSO carry it — the log_lane anchor
+    # stamps the record's Kafka coordinate — so a bulk retry after a
+    # timed-out-but-applied request upserts instead of duplicating.
+    id_key: cx_event_id
+    bulk:
+      index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    # FAN-OUT NOTE: flows_store_route also feeds clickhouse_flows, so a blocked
+    # OpenSearch now pauses the whole flows lane instead of quietly dropping the
+    # OS copy. That is the intended trade — ClickHouse resumes from the retained
+    # topic, and s10 proved the alternative is permanent evidence loss.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
+
+  # Scale P0 — the tenant-keyed flow feed (see kafka_flows_raw). Same
+  # Java-murmur2 partitioner as every keyed producer on the bus (the
+  # aggregator's kafka sinks, kafka-python in cloud-ingest): the same tenant
+  # key MUST hash to the same partition NUMBER everywhere, or a tenant's
+  # flows land on a different correlation instance than its other lanes.
+  # Offsets on kafka_flows_raw commit only after this sink acks (global
+  # `acknowledgements`), so the retained raw topic is the replay buffer —
+  # no disk buffer needed, same reasoning as the storage sinks.
+  kafka_flows_keyed:
+    type: kafka
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    inputs: [flows_rekey]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.flows"
+    key_field: "__key"
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
+    compression: snappy
+
+  clickhouse_flows:
+    type: clickhouse
+    inputs: [flows_store_route._unmatched]
+    endpoint: "${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}"  # SEC-009: TLS deployments point this at :8443
+    database: netops
+    table: flows
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    skip_unknown_fields: true
+    healthcheck: { enabled: true }
+
+  # Daily cloud cost records → ClickHouse (Wave 5 #18). skip_unknown_fields
+  # drops the record's `kind` routing field; schema growth is a plain
+  # ALTER TABLE ADD COLUMN, same contract as flows.
+  clickhouse_cloudcosts:
+    type: clickhouse
+    inputs: [cloudcosts_normalized]
+    endpoint: "${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}"  # SEC-009: TLS deployments point this at :8443
+    database: netops
+    table: cloud_costs
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    skip_unknown_fields: true
+    healthcheck: { enabled: true }
+
+  # DEM experience-event lane (tracker 254) → ClickHouse. Two sinks over one
+  # topic because the two record shapes have different columns, different
+  # volumes and different retention horizons (30 d vs 400 d): merging them into
+  # one table would force the business-impact denominator to expire with the
+  # beacons.
+  #
+  # `acknowledgements` is global on this tier, so offsets on netops.experience
+  # commit only after ClickHouse acks — a ClickHouse outage back-pressures into
+  # the retained topic instead of discarding a user's bad minute. The api's own
+  # producer is bounded and returns 503 when its queue is full, so the
+  # back-pressure reaches the browser as a retry rather than as silent loss.
+  clickhouse_experience_events:
+    type: clickhouse
+    inputs: [experience_events_flat]
+    endpoint: "${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}"  # SEC-009: TLS deployments point this at :8443
+    database: netops
+    table: experience_events
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    skip_unknown_fields: true
+    healthcheck: { enabled: true }
+
+  clickhouse_business_events:
+    type: clickhouse
+    inputs: [experience_business_typed]
+    endpoint: "${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}"  # SEC-009: TLS deployments point this at :8443
+    database: netops
+    table: business_events
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    skip_unknown_fields: true
+    healthcheck: { enabled: true }

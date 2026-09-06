@@ -1,0 +1,16 @@
+# Static device inventory (optional).
+#
+# A fresh Correlix install starts EMPTY: add devices in the UI (Inventory →
+# Add device, or Administration → Discovery to scan a subnet you authorize),
+# or list them here and restart the api service.
+#
+# Example:
+#   devices:
+#     core-sw1:
+#       address: 10.0.0.1
+#       preferred_protocol: snmp
+#       vendor: cisco
+#       credential_ref: my-snmp-profile   # Administration → SNMP Credentials
+#       labels:
+#         site: hq
+devices: {}

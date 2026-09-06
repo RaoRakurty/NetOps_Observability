@@ -1,0 +1,966 @@
+# Platform SLO + engine-liveness alert rules — evaluated by vmalert ONLY.
+#
+# Companion to rules.yaml. Loaded via an additional -rule= flag on the vmalert
+# service (docker-compose.yml AND compose.tls.yml — the TLS variant replaces
+# the whole `command:` list, so both carry the flag). The in-API engine
+# (RULES_FILE=/config/rules.yaml) does NOT read this file, and that is the
+# defining property of everything in it: no rule here is a tenant-facing NOC
+# alert, and every one must keep firing when the api itself is the thing that
+# is down, wedged or drowning.
+#
+# Two groups live here:
+#   scale-slo                      — GA scale budgets (thresholds below).
+#   correlation-consumer-liveness  — "is the engine consuming at all?"
+#                                    (added 2026-09-02 after a 3h silent
+#                                    outage; see that group's header).
+#
+# Thresholds are tied to the MEASURED L0/L1 ceilings in
+# docs/scale/CORRELIX_SCALE_TEST_REPORT.md (4 vCPU / 16 GiB rig):
+#   - correlation engine processes ~850–1,050 events/s (single event loop);
+#     consumer-group lag therefore converts to RCA staleness at ~1k msg/s.
+#   - Kafka lag grew unbounded under 8k EPS (peak ~3.1M) and drained ~10k/s
+#     once input stopped; disk drained ~3 GB during that run (~1 h to full).
+#   - VictoriaMetrics idled at ~21k active hourly series; cardinality was NOT
+#     pushed on the L1 rig, so the growth alert is a change-detector, not a cap.
+# Every metric name below was verified against the live stack (VM
+# /api/v1/query) or this branch's exposition code — none is invented.
+#
+# Each alert's `runbook` annotation anchors into
+# docs/ops/OBSERVABILITY_AUDIT.md — the operator first-response plays.
+
+groups:
+
+  - name: scale-slo
+    interval: 30s
+    rules:
+
+      # ------------------------------------------------------------------
+      # RCA staleness budget (bus → correlation). kafka_consumergroup_lag_sum
+      # comes from the kafka-exporter sidecar (self-monitoring add-on;
+      # KafkaLagMetricsMissing in rules.yaml meta-alerts its absence).
+      # Measured: correlation drains ~1k events/s, so lag ≈ seconds of RCA
+      # staleness / 1000. 60k lag ≈ 1 min behind; 300k ≈ 5 min behind.
+      # The generic bus alerts (bus-consumer-lag group) watch every group;
+      # these two watch the SLOWEST, highest-value consumer specifically.
+      # ------------------------------------------------------------------
+      - alert: CorrelationRcaLagBudgetWarning
+        expr: sum(kafka_consumergroup_lag_sum{consumergroup="netops-correlation"}) > 60000
+        for: 5m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "RCA pipeline is ~{{ $value }} events behind (≈1+ min of incident-detection staleness at the measured ~1k evt/s drain rate)"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-consumer-lag"
+
+      - alert: CorrelationRcaLagBudgetBreached
+        expr: sum(kafka_consumergroup_lag_sum{consumergroup="netops-correlation"}) > 300000
+        for: 5m
+        labels: { severity: critical, layer: correlation, slo: scale }
+        annotations:
+          summary: "RCA staleness SLO breached: correlation is {{ $value }} events behind (≥5 min at ~1k evt/s). Storage stays current; RCA does not."
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-consumer-lag"
+
+      # ------------------------------------------------------------------
+      # VictoriaMetrics ingestion health. Slow inserts = the active-series
+      # working set no longer fits the fast path (VM's own guidance: sustained
+      # >5% means cardinality/memory pressure). Verified live: both counters
+      # exist (vm_slow_row_inserts_total, vm_rows_inserted_total).
+      # ------------------------------------------------------------------
+      - alert: VMSlowInsertRatioHigh
+        expr: >
+          rate(vm_slow_row_inserts_total[5m])
+            / clamp_min(sum(rate(vm_rows_inserted_total[5m])), 1) > 0.05
+        for: 15m
+        labels: { severity: warning, layer: metrics, slo: scale }
+        annotations:
+          summary: "VictoriaMetrics slow-insert ratio {{ $value | humanizePercentage }} (>5% for 15m) — active series exceed the memory fast path"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-vm-series-growth"
+
+      # Active-series surge (cardinality explosion). The hourly active-series
+      # gauge is vm_cache_entries{type="storage/hour_metric_ids"} (~21k idle
+      # on the L1 rig). +100k in one hour is never organic on a single-node
+      # bundle — it is a label-cardinality bug or a discovery storm.
+      - alert: VMActiveSeriesSurge
+        expr: delta(vm_cache_entries{type="storage/hour_metric_ids"}[1h]) > 100000
+        for: 10m
+        labels: { severity: warning, layer: metrics, slo: scale }
+        annotations:
+          summary: "VictoriaMetrics active series grew by {{ $value }} in 1h — cardinality explosion (bad label, discovery storm, or scrape misconfig)"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-vm-series-growth"
+
+      # ------------------------------------------------------------------
+      # Correlation internal queue depths (engine-side, distinct from bus lag).
+      # corr_window_signals is the in-memory correlation window buffer; its
+      # deque cap is max(50000, CORR_WINDOW_BUFFER) — at the cap, oldest
+      # signals are silently evicted before correlation. Verified live.
+      # ------------------------------------------------------------------
+      - alert: CorrWindowBufferNearCap
+        expr: corr_window_signals > 40000
+        for: 10m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation window buffer at {{ $value }} signals (cap floor 50k) — nearing silent eviction of oldest signals"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+      # Batched corr_signals writer backlog. pending>0 is normal (≤2 s of
+      # traffic); a sustained multi-thousand backlog means ClickHouse inserts
+      # cannot keep pace. NOTE: corr_signal_batch_pending ships with this
+      # branch's correlation build — on an older deployed image the series is
+      # absent and this rule is a silent no-op (never false-fires).
+      - alert: CorrSignalBatchBacklog
+        expr: corr_signal_batch_pending > 5000
+        for: 10m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "corr_signals batch writer backlog {{ $value }} rows for 10m — ClickHouse insert path not keeping up"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+      # Rows a REJECTED ClickHouse batch parked in the durable DLQ: the write
+      # path is doing its durability job, but those rows are missing from
+      # netops.corr_signals until replayed. Same branch-build note as above.
+      - alert: CorrSignalRowsQuarantined
+        expr: increase(corr_signal_batch{event="rows_quarantined"}[15m]) > 0
+        for: 1m
+        labels: { severity: critical, layer: correlation, slo: scale }
+        annotations:
+          summary: "{{ $value }} corr_signals rows parked in the durable DLQ in 15m — ClickHouse rejected a batch; rows need replay"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-dlq"
+
+      # ------------------------------------------------------------------
+      # Consumer-group membership + event-loop health (Phase 1 contract,
+      # main.py:4628-4663). All five metric names were read from that
+      # exposition code on this branch — none is inferred from a design doc.
+      #
+      # corr_consumer_state is a FOUR-valued gauge carrying 1 for the current
+      # state and 0 for the other three, so match on the label and compare to
+      # 1 — never string-compare the value.
+      #
+      # TWO SEMANTICS THESE RULES MUST NOT VIOLATE (engine docstring):
+      #   * "cold_window" is a TIME-BASED PROXY for "the sliding window has not
+      #     had time to refill". It is NOT a measurement of carried-over state,
+      #     so it means RCA is temporarily DEGRADED (thin), never WRONG.
+      #   * "active" does NOT mean "no state was lost". Tracker 155 is open:
+      #     OPEN_OBJECTS has no rehydration path, so merges and continuations
+      #     whose open objects lived in another replica's memory are simply
+      #     gone, and no elapsed time repairs them. No rule or annotation here
+      #     may imply active ⇒ correct.
+      # ------------------------------------------------------------------
+
+      # A replica that joined the group and holds nothing. Before this state
+      # existed it serialized to `{}` — byte-identical to "pending" — and read
+      # as healthy. 15m is deliberately well past any rebalance transient.
+      - alert: CorrelationReplicaIdle
+        expr: corr_consumer_state{state="idle"} == 1
+        for: 15m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation replica {{ $labels.instance }} is alive and joined but holds ZERO partitions — it is consuming nothing"
+          description: >-
+            The replica is healthy as a process; it simply has no work. With the
+            range assignor, replicas beyond BUS_PARTITIONS are assigned an empty
+            set and consume nothing for as long as they run. Compare the
+            correlation replica count against BUS_PARTITIONS. EITHER action can
+            be the right one: scaling the surplus replicas down costs nothing
+            and is often correct. Raising BUS_PARTITIONS is raise-only, needs a
+            controlled drain, and is currently gated — see
+            docs/scale-correlation.md and tracker 155 before choosing it.
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-consumer-lag"
+
+      # Lag past the RCA budget while EVERY reporting replica already holds
+      # work. This bounds what more replicas could achieve; it does NOT
+      # diagnose the cause. The 2026-08-17 P1 was exactly this shape — full
+      # assignment, high lag — and the cause was event-loop blocking on giant
+      # object serialization, not partition count.
+      - alert: CorrelationLagWhileFullyAssigned
+        expr: |
+          sum(kafka_consumergroup_lag_sum{consumergroup="netops-correlation"}) > 60000
+          and on() (min(corr_consumer_owned_partitions) > 0)
+        for: 15m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation is {{ $value }} events behind while every reporting replica holds partitions — adding replicas alone cannot add parallelism"
+          description: >-
+            This says only that consumer parallelism is capped: a group cannot
+            have more active members than partitions, and every replica that is
+            REPORTING already owns at least one. It does NOT establish that the
+            partition count is the bottleneck, and raising partitions may fix
+            nothing. Investigate in this order BEFORE changing topology —
+            corr_loop_lag_stalls_total and corr_loop_lag_max_ms (event-loop
+            starvation), per-partition lag skew (a hot tenant pins one
+            partition and more partitions will not move it), downstream
+            persistence latency (ClickHouse/OpenSearch insert path),
+            corr_consumer_revoke_commits_total{outcome!="ok"} (rebalance churn),
+            CPU saturation, and broker health. Also confirm no replica is DOWN:
+            a stopped replica reports no series at all, which this expression
+            cannot see.
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-consumer-lag"
+
+      # The leading indicator for the whole thrash class, and the regression
+      # guard for the 2026-08-17 P1 fix (giant-object serialization offloaded
+      # off the loop). If this rises, the loop is being starved again — expect
+      # heartbeat/commit failures to follow rather than precede it.
+      - alert: CorrelationEventLoopStalling
+        expr: increase(corr_loop_lag_stalls_total[15m]) > 0
+        for: 5m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation event loop stalled {{ $value }} time(s) in 15m on {{ $labels.instance }} — check corr_loop_lag_max_ms for the worst drift"
+          description: >-
+            Loop-lag samples exceeded the warn threshold, meaning coroutines
+            were not scheduled on time. aiokafka runs heartbeat and coordinator
+            work as background asyncio tasks, so sustained starvation expires
+            group membership WITHOUT any single long call — cumulative delay is
+            sufficient. Do NOT respond by raising session/heartbeat/max-poll
+            timeouts: that hides the stall rather than fixing it. Find the
+            blocking work (CPU-bound serialization, synchronous IO) and move it
+            off the loop. KNOWN RESIDUAL (tracker 156): on the current build,
+            giant correlation objects still drive stalls of roughly 1.0-1.3 s
+            via _archive_slice/slice_hash, which run on the loop and are sized
+            by the whole window rather than by the object. Measured live at
+            1,171 nodes / 54,999 edges. That is BOUNDED, not benign — 1,256 ms
+            is 4.2% of the 30 s session timeout and under the 3 s heartbeat
+            interval, which is why membership survived with zero involuntary
+            rebalances. So a firing of this alert may be that known cause: check
+            corr_loop_lag_max_ms against ~1.3 s. Anything materially larger, or
+            any involuntary rebalance alongside it, is NOT tracker 156 and means
+            a new on-loop blocker. Do not silence or raise this threshold to
+            accommodate 156 — when 156 is fixed the correct result is zero.
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+      # Revoke-hook outcomes other than "ok". "skipped" means the flush missed
+      # its 5s budget so the offsets were deliberately NOT committed
+      # (replay-safe by design); "failed" means the flush or commit errored.
+      # Either, sustained, means the group is rebalancing repeatedly.
+      - alert: CorrelationRebalanceChurn
+        expr: increase(corr_consumer_revoke_commits_total{outcome=~"failed|skipped"}[30m]) > 3
+        for: 10m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation rebalance churn on {{ $labels.instance }}: {{ $value }} revoke-hook {{ $labels.outcome }} outcomes in 30m"
+          description: >-
+            Each of these is individually safe — uncommitted offsets are
+            redelivered and dedup absorbs the replay — but repetition means the
+            group is not settling. Every rebalance also moves partitions, and
+            per tracker 155 the acquiring replica starts with none of those
+            tenants' in-flight correlation state, so churn carries a silent
+            accuracy cost beyond the redelivery. Check
+            corr_loop_lag_stalls_total first: loop starvation causes churn far
+            more often than the reverse.
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+      # A replica should leave cold_window after one engine window. Staying
+      # there means it keeps re-acquiring partitions, i.e. churn seen from the
+      # RCA-quality side rather than the offset side.
+      - alert: CorrelationWindowStaysCold
+        expr: corr_consumer_state{state="cold_window"} == 1
+        for: 30m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation replica {{ $labels.instance }} has stayed in cold_window for 30m — RCA for its tenants is persistently thin"
+          description: >-
+            cold_window is a TIME-BASED PROXY: at least one owned partition was
+            acquired less than one engine window ago, so its tenants' sliding
+            window has not refilled. RCA for those tenants is DEGRADED (thin
+            evidence), not wrong. Normally this clears by itself within one
+            window, so persistence means partitions keep moving — investigate
+            rebalance churn. Note the honest limit (tracker 155): this metric
+            reports only that the window has not refilled. It cannot report the
+            deeper loss — merges and continuations whose open objects lived in
+            the previous owner's memory are gone, and elapsed time does not
+            repair them. Reaching "active" is therefore NOT evidence that no
+            state was lost.
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+      # ------------------------------------------------------------------
+      # OpenSearch RED (or unreachable/unparsable health). Vector's health
+      # poll maps green/yellow/red/unknown → 0/1/2/3 (vector.yaml
+      # opensearch_health_vm). Yellow is already alerted at warning by
+      # OpenSearchClusterNotGreen (rules.yaml); RED means a primary shard is
+      # gone and writes to it FAIL — that is a page, not a ticket.
+      # ------------------------------------------------------------------
+      - alert: OpenSearchClusterRed
+        expr: opensearch_cluster_status >= 2
+        for: 5m
+        labels: { severity: critical, layer: storage, slo: scale }
+        annotations:
+          summary: "OpenSearch cluster status is {{ $labels.status_text }} — primary shard(s) unavailable, log/event writes are failing"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-opensearch-red"
+
+      # NOTE (deliberate absence): "correlation dead-letter WRITE failures"
+      # (QUARANTINE_WRITE_FAILURES — the 238k-drop incident in the scale
+      # report) has NO Prometheus exposition today; it is only in the
+      # /healthz JSON (durability.quarantine_write_failures). Per the audit
+      # doc §9, that signal is covered by scripts/stack-watchdog.sh, not by an
+      # invented metric. corr_deadletters (engine dead-letter COUNT) is
+      # already alerted by CorrDeadLettersRising in rules.yaml.
+
+  # ============================================================================
+  # ENGINE LIVENESS — "is this engine DOING WORK, or merely running?"
+  # ============================================================================
+  #
+  # TIERS. Every rule in this group carries a `tier` label, and the tier — not
+  # the severity alone — is the routing contract:
+  #   tier: page       severity critical. Delivered to the operator's phone.
+  #                    There are deliberately only FOUR page-worthy conditions
+  #                    (owner ruling, 2026-09-02) and they are enumerated in
+  #                    docs/runbooks/engine-liveness-matrix.md:
+  #                      1. an engine consumer is not consuming
+  #                      2. ingest is silent when it should not be
+  #                      3. storage is refusing writes
+  #                      4. the alerting heartbeat itself stopped arriving
+  #   tier: heartbeat  plumbing, never routed to a human (see AlertingHeartbeat).
+  #   tier: warning    severity warning. NOT routed to the phone: it lands in
+  #                    the alert list and the runbook, and an operator reads it
+  #                    on their own schedule. Latent risk, not a live outage.
+  #                    (CorrEvidenceLaneNotGrounded predates this label and
+  #                    carries `tier: watch` for the same meaning — one of the
+  #                    two spellings should win the next time this group is
+  #                    touched; nothing routes on the label yet, so neither is
+  #                    load-bearing today.)
+  # Everything else that proves an engine is working is already covered by the
+  # ~140 warning/critical rules in rules.yaml; the matrix document maps each
+  # service to the rule that covers it rather than minting a duplicate here.
+  # ============================================================================
+  #
+  # WHY THIS GROUP EXISTS. On 2026-09-02 the correlation engine's Kafka consumer
+  # never started between 19:04 and 22:10 UTC: the subscribe call raised
+  # TopicAuthorizationFailedError and then UnknownTopicOrPartitionError on the
+  # OPTIONAL netops.security topic, so the whole subscription — all 14 topics —
+  # was abandoned. For three hours the engine correlated nothing. Every control
+  # that was supposed to catch that looked green:
+  #
+  #   * the container healthcheck polls the :8094 sidecar, which is a daemon
+  #     thread that survives a dead consumer by design (see the compose comment
+  #     on the correlation healthcheck) -> "healthy" for the whole outage;
+  #   * scripts/stack-watchdog.sh checks services running/healthy + :8000 +
+  #     api liveness -> green for the whole outage;
+  #   * CorrProbeLaneFlatlined DID fire at 19:18, but vmalert ships with
+  #     `-notifier.blackhole` by default, so it was delivered nowhere.
+  #
+  # kafka-exporter had the evidence in VictoriaMetrics the entire time and NO
+  # rule read it: kafka_consumergroup_members{consumergroup="netops-correlation"}
+  # sat at 0 and the group's lag climbed to ~23k. These two rules read exactly
+  # that evidence. They are deliberately about MEMBERSHIP, not about lag
+  # thresholds (CorrelationRcaLagBudget* above) and not about internal engine
+  # counters (corr_consumer_state above): a consumer that never joined the group
+  # exports NO corr_consumer_state series at all, which is precisely why the
+  # Phase-1 state rules could not see this outage.
+  #
+  # Both metric names were verified against the live store on 2026-09-02
+  # (VM /api/v1/query), as were up{job="correlation"} and up{job="kafka"}.
+  # ----------------------------------------------------------------------------
+  - name: engine-liveness
+    interval: 30s
+    rules:
+
+      # THE ONE THAT WOULD HAVE PAGED. Two distinct shapes of "not consuming":
+      #
+      #   1. members == 0 — the group still exists (it has committed offsets, so
+      #      kafka-exporter keeps exporting it) and nobody is in it. This is the
+      #      2026-09-02 shape: the process is up, the subscription failed. Pages
+      #      after `for: 2m`, which is well past any rebalance or restart
+      #      transient (a rolling restart re-joins in seconds).
+      #
+      #   2. the series is GONE — the group expired out of the broker
+      #      (offsets.retention) or never existed, so there is nothing to compare
+      #      to 0 and branch 1 is silent. absent_over_time gives that its own
+      #      5m window, so the effective page time on this branch is ~7m (5m of
+      #      absence + the 2m `for`). Deliberately slower: a scrape gap or an
+      #      exporter restart must not page.
+      #
+      # Branch 2 is GATED on both scrape targets being up, so it accuses the
+      # engine only when we can actually see the engine and the exporter:
+      #   * correlation target down  -> that is a container-down page
+      #     (stack-resilience rules), not this one;
+      #   * kafka-exporter down      -> KafkaLagMetricsMissing in rules.yaml
+      #     already says every bus-lag rule is blind. Firing here too would be a
+      #     second page for one fault, and a WRONG one.
+      # Branch 1 is deliberately NOT gated: if the engine container is stopped,
+      # "the engine is not consuming" is simply TRUE, and the whole lesson of
+      # this incident is that container-level signals lied. A duplicate page is
+      # cheaper than a suppressed truth.
+      - alert: CorrelationConsumerDead
+        expr: |
+          (max(kafka_consumergroup_members{consumergroup="netops-correlation"}) == 0)
+          or
+          (
+            absent_over_time(kafka_consumergroup_members{consumergroup="netops-correlation"}[5m])
+            and on() (max(up{job="correlation"}) == 1)
+            and on() (max(up{job="kafka"}) == 1)
+          )
+        for: 2m
+        labels: { severity: critical, layer: correlation, tier: page }
+        annotations:
+          summary: "Correlation engine is NOT consuming: the netops-correlation consumer group has ZERO members — RCA has stopped and the containers all read healthy"
+          description: >-
+            No process is joined to the netops-correlation consumer group, so
+            nothing is draining the bus into the correlation engine. Incidents
+            are not being detected and the UI shows an honestly empty incident
+            list that reads as "a quiet network". The container healthcheck
+            CANNOT see this — it polls a sidecar thread that outlives the
+            consumer on purpose — so treat "healthy" as no evidence here.
+            FIRST CHECK the engine's subscribe path: a broker ACL gap or a
+            missing topic makes the whole multi-topic subscription fail, taking
+            all 14 lanes down for one optional lane (the 2026-09-02 outage was
+            netops.security: TopicAuthorizationFailedError, then
+            UnknownTopicOrPartitionError). Run the ACL and topic bootstrap in
+            the runbook before restarting anything — a restart without them
+            reproduces the same failure in a fresh container.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # The joined-but-stuck shape. Membership alone is not liveness: a consumer
+      # can hold its partitions, heartbeat happily, and still drain nothing
+      # (blocked write path, wedged event loop, a poison partition). Lag GROWTH
+      # separates that from a quiet bus — producer and consumer rate both read
+      # zero in either case, but lag only climbs in this one.
+      #
+      # `members >= 1` is what makes this rule say something CorrelationConsumerDead
+      # does not: the two are mutually exclusive by construction, so an operator
+      # reading the page knows immediately which half of the fault tree to enter.
+      # This also fires FASTER and on a smaller lag than the absolute-threshold
+      # budget rules above (60k / 300k), because growth is the leading indicator.
+      - alert: CorrelationLagGrowing
+        expr: |
+          delta(sum(kafka_consumergroup_lag_sum{consumergroup="netops-correlation"})[10m:1m]) > 1000
+          and on() (sum(kafka_consumergroup_lag_sum{consumergroup="netops-correlation"}) > 1000)
+          and on() (max(kafka_consumergroup_members{consumergroup="netops-correlation"}) >= 1)
+        for: 5m
+        labels: { severity: critical, layer: correlation, tier: page }
+        annotations:
+          summary: "Correlation lag is GROWING (+{{ $value }} in 10m) while the consumer group still has members — the engine is joined but not draining"
+          description: >-
+            The consumer holds its partitions and is heartbeating, so this is
+            NOT the dead-consumer shape (CorrelationConsumerDead covers that and
+            cannot fire at the same time). The engine is falling behind and will
+            not catch up unaided. Work down in this order: corr_loop_lag_stalls_total
+            and corr_loop_lag_max_ms (event-loop starvation — see
+            CorrelationEventLoopStalling), the downstream persistence path
+            (ClickHouse / OpenSearch insert latency), per-partition lag skew (one
+            hot tenant pins one partition), then broker health. Do NOT raise
+            session/heartbeat timeouts: that converts a visible backlog into a
+            silent one.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # ------------------------------------------------------------------
+      # PAGE 1 (second lane): THE ROUTER's consumer groups.
+      #
+      # Same fault class, different engine. vector-router drains ten
+      # netops-router-* groups (applogs, cloudcosts, cloudlogs, deadletter,
+      # experience, flows, flows-rekey, security, snmptrap, syslog) out of the
+      # bus into OpenSearch and ClickHouse. On 2026-08-16 the router went auth-dead for
+      # ~80 minutes alongside correlation — a data/kafka wipe emptied the KRaft
+      # ACL store, every principal was denied, and every container stayed
+      # "healthy" with lag simply frozen. Membership is the signal that saw it.
+      #
+      # ONE rule pattern, applied per group with `by (consumergroup)`, so a new
+      # router lane is covered the day it is added and nobody has to remember to
+      # write a rule for it. The correlation lane keeps its OWN pair above
+      # because its annotations carry a different first-response.
+      # ------------------------------------------------------------------
+      - alert: RouterConsumerDead
+        expr: |
+          max by (consumergroup) (kafka_consumergroup_members{consumergroup=~"netops-router-.*"}) == 0
+        for: 2m
+        labels: { severity: critical, layer: bus, tier: page }
+        annotations:
+          summary: "Router lane {{ $labels.consumergroup }} has ZERO consumers — vector-router is not draining it; logs/flows/traps on that lane are accumulating on the bus and reaching no store"
+          description: >-
+            The group exists (it has committed offsets) and nobody is in it.
+            Nothing on this lane is reaching OpenSearch or ClickHouse, so the
+            UI's log, flow and trap views are silently incomplete for as long as
+            it lasts — the bus retains the data (bounded, see BUS_RETENTION_MS)
+            but a lane that stays dead past retention loses it for good.
+            Check broker authorization FIRST: an empty KRaft ACL store denies
+            every non-super-user principal while every healthcheck stays green.
+            The runbook has the apply-acls.sh and kafka-init bootstrap.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      - alert: RouterConsumerLagGrowing
+        expr: |
+          delta(sum by (consumergroup) (kafka_consumergroup_lag_sum{consumergroup=~"netops-router-.*"})[10m:1m]) > 1000
+          and sum by (consumergroup) (kafka_consumergroup_lag_sum{consumergroup=~"netops-router-.*"}) > 1000
+          and max by (consumergroup) (kafka_consumergroup_members{consumergroup=~"netops-router-.*"}) >= 1
+        for: 5m
+        labels: { severity: critical, layer: bus, tier: page }
+        annotations:
+          summary: "Router lane {{ $labels.consumergroup }} lag is GROWING (+{{ $value }} in 10m) with a consumer still joined — vector-router is joined but not draining this lane"
+          description: >-
+            Joined, heartbeating, and falling behind — the mirror of
+            RouterConsumerDead, and mutually exclusive with it by construction.
+            The router's downstream is the usual cause: OpenSearch rejecting or
+            back-pressuring (see OpenSearchDocumentsRejected,
+            VectorSinkBufferFilling, OpenSearchClusterRed) or the ClickHouse
+            flows sink. Check the router's own component errors
+            (VectorComponentErrors) before touching the broker.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # ------------------------------------------------------------------
+      # PAGE 2: INGEST SILENT WHEN IT SHOULD NOT BE.
+      #
+      # vector-aggregator is the single funnel every non-flow lane crosses
+      # (syslog, SNMP traps, collector metrics, probes, docker applogs) on its
+      # way to the bus. If its sinks emit nothing, nothing downstream can be
+      # wrong-but-recoverable: there is simply no data.
+      #
+      # THE EXPECTED-ACTIVITY GUARD IS THE WHOLE DESIGN PROBLEM. A lab with no
+      # devices is legitimately silent, and a rule that pages for that gets
+      # muted within a week — which is how the platform ends up blind again.
+      # This repo already has two conventions for the guard and this rule uses
+      # the stronger one: a PRESENCE clause over an independent producer
+      # (`collector_targets_reachable > 0`, the same shape as NoSamplesIngested
+      # and CollectorAllTargetsUnreachable in rules.yaml), NOT a self-baseline.
+      # The claim is therefore narrow and defensible: the api's own collectors
+      # can reach at least one device, so telemetry IS being produced, so the
+      # funnel it is produced INTO cannot legitimately be empty.
+      # On an idle lab collector_targets_reachable is 0 (verified live,
+      # 2026-09-02) and this rule is silent — by design, not by luck.
+      #
+      # NOTE the deliberate non-overlap with LogIngestStalled (rules.yaml):
+      # that one watches the FAR end of the pipe (OpenSearch 2xx indexing) and
+      # is unguarded. This one watches the aggregator's OWN output, which is a
+      # different lane and a different fault, and it is guarded.
+      # ------------------------------------------------------------------
+      - alert: IngestPipelineSilent
+        expr: |
+          sum(increase(vector_component_sent_events_total{component_kind="sink",instance=~"vector-aggregator.*"}[15m])) == 0
+          and on() (max(collector_targets_reachable) > 0)
+        for: 10m
+        labels: { severity: critical, layer: ingest, tier: page }
+        annotations:
+          summary: "Ingest funnel is SILENT: vector-aggregator emitted zero events in 15m while the collectors can still reach devices — telemetry is being produced and is not arriving"
+          description: >-
+            Every non-flow lane (syslog, SNMP traps, collector metrics, probes,
+            docker applogs) crosses vector-aggregator on its way to the bus, so
+            this is total ingest loss for those lanes, not a degradation. The
+            guard clause means this is NOT an idle lab: at least one collector
+            target is reachable, so data exists to carry. Check the aggregator's
+            container first (it may be up and wedged rather than down), then its
+            kafka sinks — a broker that refuses the aggregator's produce ACL
+            looks exactly like this and is the 2026-08-16 fault seen from the
+            producer side.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # ------------------------------------------------------------------
+      # PAGE 3: STORAGE REFUSING WRITES — the ClickHouse half.
+      #
+      # The OpenSearch half is already covered and stays where it is:
+      # OpenSearchClusterRed (above), OpenSearchFloodStageBlock and
+      # OpenSearchDocumentsRejected (rules.yaml). Nothing read the ClickHouse
+      # write path: netops_clickhouse_write_outcomes_total{outcome="rejected"}
+      # is emitted by the api and had NO rule at all. A rejected batch is not a
+      # retry — those rows are gone from the OLAP store unless replayed.
+      # ------------------------------------------------------------------
+      - alert: ClickHouseWritesRejected
+        expr: increase(netops_clickhouse_write_outcomes_total{outcome="rejected"}[15m]) > 0
+        for: 5m
+        labels: { severity: critical, layer: clickhouse, tier: page }
+        annotations:
+          summary: "ClickHouse REJECTED {{ $value }} write batch(es) in 15m — analytics rows are being refused, not retried"
+          description: >-
+            The api's ClickHouse writer recorded a rejected outcome. Unlike a
+            timeout, a rejection is terminal for that batch: those rows are
+            absent from the OLAP store until someone replays them. Usual causes
+            are a schema/type mismatch after a migration, a quota or
+            max-memory-usage refusal, or a full disk. Check
+            CHMemoryLimitExceeded / CHFailedQueriesRising and DiskHeadroomLow
+            alongside this, and see CorrSignalRowsQuarantined for the
+            correlation-engine equivalent on its own write path.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # ------------------------------------------------------------------
+      # PAGE 4: THE ALERTING CHAIN ITSELF — a dead-man's switch on delivery.
+      #
+      # THE GAP THIS CLOSES IS THE ONE THAT MADE 2026-09-02 A THREE-HOUR
+      # OUTAGE INSTEAD OF A FIVE-MINUTE ONE. CorrProbeLaneFlatlined fired
+      # correctly at 19:18 UTC. Nobody saw it, because vmalert shipped with
+      # `-notifier.blackhole` and the alerts went nowhere. Thirteen alerts were
+      # firing, some since 2026-08-27, and not one had ever been delivered.
+      #
+      # An alerting stack that cannot prove its own delivery path is not an
+      # alerting stack. AlertingHeartbeat fires ALWAYS and is routed to no
+      # human: the api's webhook receiver recognises it by name, records the
+      # receipt timestamp, and deliberately does NOT fan it out to any channel.
+      # Arrival of that timestamp is end-to-end proof of
+      #   vmalert evaluates -> notifier delivers -> api receives,
+      # which no other signal in this stack provides. Its ABSENCE is the alarm,
+      # and it is checked in two independent places:
+      #   * AlertDeliveryBroken below (in-stack, visible in ALERTS), and
+      #   * scripts/stack-watchdog.sh, which queries the gauge directly over
+      #     its own path and pages over ntfy — because an alert about broken
+      #     alert delivery obviously cannot rely on alert delivery.
+      # ------------------------------------------------------------------
+      - alert: AlertingHeartbeat
+        # Always true. `for: 0s` so it is firing within one evaluation of a
+        # vmalert start, which keeps the recovery edge sharp after a restart.
+        expr: vector(1)
+        for: 0s
+        labels: { severity: info, layer: platform, tier: heartbeat }
+        annotations:
+          summary: "vmalert is evaluating rules and its notifier is delivering them (synthetic heartbeat — not an incident, never routed to a human)"
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      - alert: AlertDeliveryBroken
+        # Gated on the receiver being CONFIGURED (enabled == 1). With no token
+        # the endpoint is not registered, delivery is off on purpose, and
+        # pretending it broke would be a lie. The gauge is 0 when a heartbeat
+        # has never been received, so `time() - 0` is enormous and the
+        # never-delivered case — the 2026-09-02 case — fires here too.
+        expr: |
+          netops_alert_webhook_enabled == 1
+          and on(instance) ((time() - netops_alert_webhook_heartbeat_timestamp_seconds) > 900)
+        for: 5m
+        labels: { severity: critical, layer: platform, tier: page }
+        annotations:
+          summary: "ALERT DELIVERY IS BROKEN: no AlertingHeartbeat has reached the api webhook for over 15m — every other alert in this stack is going nowhere"
+          description: >-
+            The webhook receiver is configured (netops_alert_webhook_enabled is
+            1) but has not been fed. Something between vmalert's rule evaluation
+            and the api's receiver is broken: vmalert down or wedged, the
+            notifier flag reset to -notifier.blackhole, a wrong or rotated
+            VMALERT_WEBHOOK_TOKEN (look for netops_alert_webhook_unauthorized_total
+            climbing), or the api refusing the POST. Treat every currently
+            "quiet" alert as unproven until this clears. NOTE the obvious
+            limitation and why it is acceptable: this alert travels the very
+            path it is reporting on, so it may not reach you either — which is
+            exactly why scripts/stack-watchdog.sh checks the same gauge over its
+            own independent ntfy path.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # ==================================================================
+      # THE ENGINE'S OWN LIVENESS GAUGES  (tracker 224)
+      #
+      # The 2026-09-02 availability fix in src/correlation/main.py partitions
+      # the subscription into REQUIRED lanes (fail-loud) and OPTIONAL
+      # CORR_EVIDENCE_TOPICS evidence lanes (dropped + re-probed, never a
+      # startup gate), makes /healthz honest, and exports corr_consumer_running,
+      # corr_consumer_starts_total, corr_consumer_start_failures_total,
+      # corr_consumer_restarts_total, corr_health_degraded and
+      # corr_evidence_topic_dropped{topic,reason}. Nothing watched any of them —
+      # the same three-hour silence, one layer up.
+      #
+      # WHY THESE LIVE HERE AND NOT IN rules.yaml (the tracker row suggested
+      # rules.yaml): both files are mounted into vmalert from the same
+      # src/config directory and both are evaluated, so vmalert sees these
+      # either way. The difference is the OTHER reader — the in-API engine reads
+      # rules.yaml only. An alert whose entire subject is "the correlation
+      # consumer is dead" must not be evaluated inside a process that the same
+      # class of fault can take down; that is the stated charter of this file.
+      # Their kafka-exporter twins (CorrelationConsumerDead / …LagGrowing) are
+      # right above them, which is where an operator will look.
+      #
+      # KEEP BOTH TWINS. They fail differently and that is the point:
+      #   * corr_consumer_running is the engine's SELF-report — precise about
+      #     the cause, and worth nothing if the process is wedged or gone.
+      #   * kafka_consumergroup_members is the BROKER's view — survives the
+      #     engine dying outright, and says nothing about why.
+      # Either alone leaves a hole the 2026-09-02 outage fits through.
+      # ==================================================================
+
+      - alert: CorrConsumerNotRunning
+        # Two branches, same reasoning as CorrelationConsumerDead.
+        #
+        # The `absent` branch carries an extra guard the kafka-exporter twin
+        # does not need: corr_consumer_running ships with THIS branch's
+        # correlation build, so on an older deployed image the series is simply
+        # missing and a bare absent() would page every minute for a version
+        # skew rather than an outage. `count_over_time(...[6h]) > 0` requires
+        # that the series HAS existed recently, so the branch means "it
+        # disappeared", never "it was never here". On a pre-upgrade image the
+        # whole rule is a silent no-op — the same convention CorrSignalBatchBacklog
+        # already uses in this file.
+        expr: |
+          (corr_consumer_running == 0)
+          or
+          (
+            absent_over_time(corr_consumer_running[5m])
+            and on() (count(count_over_time(corr_consumer_running[6h])) > 0)
+            and on() (max(up{job="correlation"}) == 1)
+          )
+        for: 2m
+        labels: { severity: critical, layer: correlation, tier: page }
+        annotations:
+          summary: "Correlation engine reports its REQUIRED subscription is NOT live (corr_consumer_running == 0) — the engine is up and consuming nothing"
+          description: >-
+            This is the engine's own account of the 2026-09-02 fault: the
+            required-lane subscription is not running. Read it WITH
+            corr_consumer_start_failures_total and the /healthz health_reasons
+            field, which name the specific topic and broker error — that
+            precision is the whole reason this gauge exists and is why it is
+            kept alongside, not instead of, the broker-side
+            CorrelationConsumerDead. Docker health stays HTTP-200-only on
+            purpose (tracker 174: a busy loop must not read as a dead service),
+            so this alert and its twin are the ONLY things that act on the
+            degraded state. Bootstrap remedies are in the runbook.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      - alert: CorrConsumerRestartLoop
+        # A supervision loop that keeps restarting is WORSE than a clean stop:
+        # each round re-reads config and re-subscribes, so the engine looks
+        # briefly alive to every point-in-time probe (including the membership
+        # gauge) while never staying up long enough to drain anything.
+        expr: increase(corr_consumer_restarts_total[10m]) >= 3
+        for: 5m
+        labels: { severity: critical, layer: correlation, tier: page }
+        annotations:
+          summary: "Correlation consumer is in a RESTART LOOP: {{ $value }} supervision rounds ended in failure in 10m on {{ $labels.instance }}"
+          description: >-
+            The supervisor is doing its job and the underlying fault is not
+            clearing. Each round re-subscribes, so point-in-time probes can
+            catch a live consumer and read healthy — do not trust a single green
+            sample while this is firing. Check
+            corr_consumer_start_failures_total and the engine log for the named
+            topic and broker error; a REQUIRED topic that is missing or
+            un-granted cannot be fixed by more restarts and needs the ACL/topic
+            bootstrap in the runbook. Restarting the container is NOT the
+            remedy — it reproduces the same failure in a fresh process.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      - alert: CorrEvidenceLaneNotGrounded
+        # WARNING, not page, deliberately. A dropped OPTIONAL evidence lane is a
+        # configuration fact, not an outage: the engine keeps correlating, it
+        # just grounds one class of evidence less richly. Paging for it is
+        # exactly the noise that gets a pager muted — and this is the lane
+        # (netops.security) whose failure used to take the WHOLE subscription
+        # down, which is now fixed. The gauge is 1 per dropped lane with bounded
+        # cardinality (one series per CORR_EVIDENCE_TOPICS entry).
+        expr: corr_evidence_topic_dropped > 0
+        for: 15m
+        labels: { severity: warning, layer: correlation, tier: watch }
+        annotations:
+          summary: "Evidence lane {{ $labels.topic }} is NOT grounded (reason: {{ $labels.reason }}) — correlation is running without it"
+          description: >-
+            An optional CORR_EVIDENCE_TOPICS lane was dropped from the
+            subscription and re-probing has not recovered it, so RCA for that
+            evidence class is thinner than configured. Correlation is otherwise
+            healthy — this is intentionally NOT a page. Remedy depends on the
+            reason label: an authorization failure needs the Kafka ACL matrix
+            applied (pipe deployment/docker/kafka/apply-acls.sh into the
+            broker); an unknown topic needs kafka-init to create it (broker
+            auto-create is OFF by design). Both are in the runbook. If the lane
+            is genuinely not wanted on this deployment, remove it from
+            CORR_EVIDENCE_TOPICS rather than leaving this standing — a
+            permanently-firing advisory is how a real one gets ignored.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # ==================================================================
+      # SNAPSHOT RESTORABILITY  (2026-09-03)
+      #
+      # WHY THESE EXIST. The netops-fs snapshot repository was silently
+      # UNRESTORABLE for seven days (2026-08-26 → 2026-09-03). A manual
+      # `rm -rf .../data/opensearch-snapshots/indices` during the 08-26 disk
+      # crunch deleted the repository's blob tree while the repository stayed
+      # registered; OpenSearch re-created the empty `indices/` directory at
+      # 2026-08-27T01:30:46Z — the instant the next scheduled snapshot started —
+      # and every shard from then on failed with
+      # `java.nio.file.NoSuchFileException: .../snapshots/indices/<id>/0/index-<gen>`
+      # out of BlobStoreRepository.buildBlobStoreIndexShardSnapshots.
+      #
+      # NOTHING alerted for a week. The SM policy kept "succeeding" into
+      # PARTIAL, `_cat/snapshots` kept listing rows, the repository kept
+      # answering, and the existing backup-freshness checks all read a fresh
+      # newest-snapshot timestamp. Every layer measured that a snapshot HAPPENED.
+      # No layer ever measured that one could be RESTORED. A backup that has
+      # never been restored is a hypothesis, not a backup.
+      #
+      # The api now runs an actual restore probe and exports the verdict:
+      #   netops_opensearch_snapshot_restorable{repo}                     0|1
+      #   netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo}
+      #                                                     unix secs, 0 = never
+      #   netops_opensearch_snapshot_probe_enabled{repo}                  0|1
+      #   netops_opensearch_snapshot_last_success_timestamp_seconds{repo}
+      #                                                     unix secs, 0 = none
+      #
+      # TIER. All three are `tier: warning`, deliberately NOT `tier: page`.
+      # The owner approved exactly FOUR page conditions (2026-09-02; enumerated
+      # in the TIERS block at the top of this group and in
+      # docs/runbooks/engine-liveness-matrix.md) and an unrestorable backup is
+      # not one of them: it is a latent recovery risk, not a live outage of
+      # ingest, storage, an engine consumer or the alerting path. Adding a
+      # fifth page here would dilute the four that were chosen — raise it with
+      # the owner rather than promoting it in a diff. The external watchdog
+      # (scripts/stack-watchdog.sh, SNAPSHOT_RESTORABLE_CHECK) carries the same
+      # signal over its own independent ntfy path, which is the layer that
+      # survives this stack being the thing that is broken.
+      # ==================================================================
+
+      - alert: OpenSearchSnapshotNotRestorable
+        # ONE expression, TWO meanings, and the annotation has to keep them
+        # apart or the operator wastes the first ten minutes on the wrong half:
+        #   * verified_timestamp > 0  -> the probe RAN and the restore FAILED.
+        #     This is the 2026-08-26 shape: real snapshots, real rows in
+        #     _cat/snapshots, and a blob tree that cannot serve any of them.
+        #   * verified_timestamp == 0 -> the probe has NEVER produced a verdict
+        #     (fresh deployment, or the probe has failed every attempt since
+        #     boot). Restorability is UNKNOWN, which this rule reports as
+        #     not-restorable ON PURPOSE: default-closed. "Unproven" read as
+        #     "fine" is precisely the seven-day silence.
+        # 15m is longer than a probe cycle plus a restart, so a rolling deploy
+        # or one transient probe failure does not raise it.
+        expr: netops_opensearch_snapshot_restorable{repo="netops-fs"} == 0
+        for: 15m
+        labels: { severity: warning, layer: storage, tier: warning }
+        annotations:
+          summary: "Snapshot repository {{ $labels.repo }} is NOT restorable — the search tier's backups cannot be restored from"
+          description: >-
+            Read this WITH
+            netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs"},
+            which separates the two very different faults this one gauge
+            covers. A NON-ZERO verified timestamp means the restore probe
+            actually ran and FAILED: snapshots are being written and none of
+            them can be restored, the 2026-08-26 shape where the repository's
+            blob tree was deleted underneath a still-registered repository and
+            every shard failed with NoSuchFileException while _cat/snapshots
+            kept listing healthy-looking rows. A ZERO verified timestamp means
+            the probe has NEVER returned a verdict, so restorability is
+            UNPROVEN rather than proven-bad — this rule reports that as
+            not-restorable by design, because treating unproven as healthy is
+            the exact defect that hid a week of unrestorable backups. Neither
+            case is fixed by taking another snapshot. Every hour this stands is
+            an hour in which a lost data/ directory means permanent loss of
+            every log, trap and flow the platform has indexed.
+          runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"
+
+      - alert: OpenSearchSnapshotRestorabilityStale
+        # The verdict is only worth its age. A probe that stopped running leaves
+        # the LAST verdict standing, so `restorable == 1` keeps reading green
+        # off a proof that may be days old — the same "it succeeded once"
+        # reasoning that made the daily PARTIAL snapshots look like backups.
+        #
+        # 36h, matching the watchdog's SNAPSHOT_MAX_AGE_H default: one daily
+        # cycle plus a full missed cycle of slack.
+        #
+        # TWO explicit non-firing conditions, both load-bearing:
+        #   * `... > 0` — a NEVER-PROBED repo has timestamp 0, and time() - 0 is
+        #     ~57 years, so without this guard this rule would fire on every
+        #     fresh deployment and duplicate OpenSearchSnapshotNotRestorable,
+        #     which owns that case.
+        #   * probe_enabled == 1 — a deliberately disabled probe is a decision,
+        #     not a fault; OpenSearchSnapshotProbeDisabled says that in the
+        #     right words. Two alerts for one operator choice is how a pager
+        #     gets muted.
+        # `on(repo)` throughout: `time() - metric` drops __name__ while
+        # `metric > 0` keeps it, so a bare `and` would never match.
+        expr: |
+          (time() - netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs"}) > 129600
+          and on(repo) (netops_opensearch_snapshot_restorable_verified_timestamp_seconds{repo="netops-fs"} > 0)
+          and on(repo) (netops_opensearch_snapshot_probe_enabled{repo="netops-fs"} == 1)
+        for: 30m
+        labels: { severity: warning, layer: storage, tier: warning }
+        annotations:
+          summary: "Restorability of snapshot repository {{ $labels.repo }} has not been re-proven in over 36h — the green verdict is stale, not current"
+          description: >-
+            The restore probe is enabled and previously returned a verdict, but
+            has not produced a fresh one for more than 36 hours, so
+            netops_opensearch_snapshot_restorable is reporting a PAST proof as
+            though it were a present one. Everything about the repository can
+            have changed since: a deleted blob tree, a second repository name
+            registered over the same location, a filesystem that filled. The
+            probe itself is the thing to look at first — it runs inside the
+            api, so an api that is up but wedged on this path leaves exactly
+            this signature. Until it clears, treat the backups as UNVERIFIED
+            rather than good; that distinction is the whole lesson of the
+            2026-08-26 incident.
+          runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"
+
+      - alert: OpenSearchSnapshotProbeDisabled
+        # A standing advisory, and it is meant to be one: the only way this
+        # fires is that somebody turned the restore probe off. 1h keeps it out
+        # of restarts and reconfigurations. If a deployment genuinely does not
+        # want the probe, that is a decision to record in the runbook, not an
+        # alert to leave permanently lit — a rule that fires forever is how the
+        # real ones get ignored.
+        expr: netops_opensearch_snapshot_probe_enabled{repo="netops-fs"} == 0
+        for: 1h
+        labels: { severity: warning, layer: storage, tier: warning }
+        annotations:
+          summary: "The restore probe for snapshot repository {{ $labels.repo }} is DISABLED — nothing is proving the backups can be restored"
+          description: >-
+            While the probe is off, netops_opensearch_snapshot_restorable is
+            frozen at whatever it last read and
+            OpenSearchSnapshotRestorabilityStale is deliberately suppressed, so
+            NO layer of this stack is testing a restore. Snapshots will keep
+            being taken and keep looking successful; that is the state the
+            platform was already in for the seven days to 2026-09-03, when the
+            repository's blob tree had been deleted and every restore would
+            have failed. Backups are unproven until this is switched back on.
+          runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"
+
+      # ==================================================================
+      # BUNDLE RESTORE DRILL  (S4, 2026-09-04)
+      #
+      # The snapshot rules above prove the SEARCH TIER's repository. They say
+      # nothing about the thing an operator actually holds after losing this
+      # host: one correlix-YYYYMMDD.tar.zst, carrying the Postgres dump, the
+      # ClickHouse export, the VictoriaMetrics snapshot and the sealed custody
+      # envelope. scripts/backup-drill.sh restores that artifact into disposable
+      # containers, compares row counts against the live stores, queries a
+      # series back out of the imported VM snapshot and verifies the decrypted
+      # custody tree against its own sha256 manifest. The api publishes the
+      # verdict:
+      #   netops_backup_drill_pass                          0|1
+      #   netops_backup_drill_last_timestamp_seconds        unix secs, 0 = never
+      #   netops_backup_drill_leg{leg}                      1 pass | 0 fail | -1 not run
+      #
+      # WHAT IS DELIBERATELY *NOT* AN ALERT HERE: "a drill has never run"
+      # (timestamp 0). The OpenSearch probe alerts on never-probed because that
+      # probe is automatic and on by default, so silence there is a fault. The
+      # bundle drill is operator-initiated by design, so a never-run rule would
+      # fire on every fresh deployment and stand lit until somebody ran one —
+      # and a rule that is always on is how the real ones get ignored. The
+      # coverage table reports never-run honestly (last_verified is null with
+      # the reason), which is the right surface for a standing configuration
+      # fact. Raise it with the owner rather than promoting it in a diff.
+      #
+      # TIER: warning, for the same reason the snapshot rules are. The owner
+      # approved exactly FOUR page conditions (2026-09-02) and an unproven
+      # backup is not one of them.
+      # ==================================================================
+
+      - alert: BackupRestoreDrillFailed
+        # The drill RAN and something did not come back. This is strictly worse
+        # news than a missing snapshot: it is a measured statement that the
+        # artifact on disk does not restore.
+        expr: |
+          netops_backup_drill_pass == 0
+          and netops_backup_drill_last_timestamp_seconds > 0
+        for: 15m
+        labels: { severity: warning, layer: storage, tier: warning }
+        annotations:
+          summary: "The last bundle restore drill FAILED — the backup artifact does not restore"
+          description: >-
+            scripts/backup-drill.sh restored the newest bundle into disposable
+            containers and at least one leg did not come back. Read
+            netops_backup_drill_leg{leg} to see which store: postgres,
+            clickhouse, victoriametrics or sealed_material. A failing
+            sealed_material leg is the most severe of the four — it means the
+            custody envelope will not decrypt or does not match its manifest, so
+            a restore of this artifact would bring back every byte of data and
+            unseal none of it. Taking another backup does not fix any of these;
+            the drill's own report (data/api/backup-drill.report.json) names the
+            assertion that failed.
+          runbook: "docs/runbooks/storage-and-volume-operations.md#bundle-restore-drill"
+
+      - alert: BackupRestoreDrillMissed
+        # 7 days. The drill is operator-initiated and costs a few minutes of
+        # scratch containers, so a week without one is a deliberate-feeling gap
+        # rather than a blip — and the `> 0` guard keeps a never-drilled
+        # deployment out of this rule entirely (see the block comment above).
+        # `on()` with no labels: `time() - metric` drops __name__ while
+        # `metric > 0` keeps it, so a bare `and` would never match.
+        expr: |
+          (time() - netops_backup_drill_last_timestamp_seconds) > 604800
+          and on() (netops_backup_drill_last_timestamp_seconds > 0)
+        for: 30m
+        labels: { severity: warning, layer: storage, tier: warning }
+        annotations:
+          summary: "No bundle restore drill has run in over 7 days — the restore proof is stale, not current"
+          description: >-
+            A restore proof is only worth its age. The last drill passed, so the
+            Data Protection page is still showing a green last_verified on the
+            Postgres, ClickHouse, VictoriaMetrics and sealed-custody rows — off a
+            proof that is now more than a week old. Everything the proof covered
+            can have changed since: the bundle's contents, the passphrase the
+            custody envelope was sealed under, the engine versions the dumps
+            replay into. Run scripts/backup-drill.sh against the newest artifact
+            to refresh it. Until then treat the artifact as UNVERIFIED rather
+            than good — that distinction is the whole lesson of 2026-08-26.
+          runbook: "docs/runbooks/storage-and-volume-operations.md#bundle-restore-drill"

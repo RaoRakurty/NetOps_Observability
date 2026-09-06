@@ -1,0 +1,542 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Correlix chart values",
+  "description": "Validated by helm on lint/template/install. Constrains the settings that are load-bearing or dangerous to get wrong; deliberately permissive elsewhere so `--set` of a new key is not blocked by the schema.",
+  "type": "object",
+  "required": [
+    "global",
+    "images",
+    "secrets",
+    "store",
+    "ingress",
+    "networkPolicy",
+    "sharedData",
+    "bootstrap",
+    "env"
+  ],
+  "definitions": {
+    "image": {
+      "type": "object",
+      "required": [
+        "repository"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string",
+          "description": "Empty, or a full sha256 digest. A truncated or malformed digest must fail here rather than at pull time.",
+          "pattern": "^$|^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "description": "BOTH requests and limits are required. A container without a request is unschedulable predictably and a container without a limit can starve every other tier on the node.",
+      "required": [
+        "requests",
+        "limits"
+      ],
+      "properties": {
+        "requests": {
+          "type": "object",
+          "required": [
+            "cpu",
+            "memory"
+          ],
+          "properties": {
+            "cpu": {
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "memory": {
+              "type": "string"
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "cpu",
+            "memory"
+          ],
+          "properties": {
+            "cpu": {
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "memory": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|K|M|G|T)?$"
+        },
+        "storageClass": {
+          "type": "string"
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        },
+        "persistence": {
+          "$ref": "#/definitions/persistence"
+        }
+      }
+    },
+    "cidrList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-fA-F:.]+/[0-9]{1,3}$"
+      }
+    }
+  },
+  "properties": {
+    "global": {
+      "type": "object",
+      "properties": {
+        "imageRegistry": {
+          "type": "string"
+        },
+        "imagePullSecrets": {
+          "type": "array"
+        },
+        "storageClass": {
+          "type": "string"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        }
+      }
+    },
+    "images": {
+      "type": "object",
+      "required": [
+        "pullPolicy",
+        "requireDigest"
+      ],
+      "properties": {
+        "pullPolicy": {
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        },
+        "requireDigest": {
+          "type": "boolean"
+        }
+      }
+    },
+    "namespace": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "podSecurityStandard": {
+          "enum": [
+            "restricted",
+            "baseline",
+            "privileged"
+          ],
+          "description": "restricted is what every workload in this chart is written for. baseline is needed only for prober (CAP_NET_RAW); privileged only for the host exporters."
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "annotations": {
+          "type": "object"
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "required": [
+        "existingSecret"
+      ],
+      "properties": {
+        "existingSecret": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of a Secret YOU create. This chart never generates credentials \u2014 a chart that mints them puts them in the release manifest, where `helm get manifest` and every backup of the release Secret leaks them."
+        },
+        "existingIntegrationSecret": {
+          "type": "string"
+        }
+      }
+    },
+    "store": {
+      "type": "object",
+      "required": [
+        "backend"
+      ],
+      "properties": {
+        "backend": {
+          "enum": [
+            "postgres",
+            "file",
+            "memory"
+          ],
+          "description": "postgres is the default for new installations (tracker 245). memory is EPHEMERAL and dev/test only. Anything else aborts the api's boot."
+        },
+        "databaseUrlFromSecret": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "pathType": {
+          "enum": [
+            "Prefix",
+            "Exact",
+            "ImplementationSpecific"
+          ]
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "secretName": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "deviceCIDRs": {
+          "$ref": "#/definitions/cidrList"
+        },
+        "apiEgressCIDRs": {
+          "$ref": "#/definitions/cidrList"
+        },
+        "dnsNamespace": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "trustDomain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caSecret": {
+          "type": "string"
+        },
+        "existingSecrets": {
+          "type": "object"
+        }
+      }
+    },
+    "certManager": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "duration": {
+          "type": "string"
+        },
+        "renewBefore": {
+          "type": "string"
+        },
+        "issuerRef": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "Issuer",
+                "ClusterIssuer"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "group": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "sharedData": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "accessModes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "ReadWriteOnce",
+              "ReadWriteMany",
+              "ReadOnlyMany",
+              "ReadWriteOncePod"
+            ]
+          }
+        },
+        "size": {
+          "type": "string"
+        },
+        "storageClass": {
+          "type": "string"
+        }
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "required": [
+        "kafkaInit",
+        "kafkaAcls",
+        "opensearchInit",
+        "opensearchSecurityInit",
+        "resources"
+      ],
+      "properties": {
+        "kafkaInit": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "kafkaAcls": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "opensearchInit": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "opensearchSecurityInit": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "watchdog": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "env": {
+      "type": "object",
+      "description": "Rendered verbatim into the api container's env. Values must be STRINGS \u2014 an unquoted YAML boolean or number renders as a Go-formatted value and silently changes meaning.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "postgres": {
+      "$ref": "#/definitions/service"
+    },
+    "redis": {
+      "$ref": "#/definitions/service"
+    },
+    "kafka": {
+      "$ref": "#/definitions/service"
+    },
+    "opensearch": {
+      "$ref": "#/definitions/service"
+    },
+    "clickhouse": {
+      "$ref": "#/definitions/service"
+    },
+    "victoria": {
+      "$ref": "#/definitions/service"
+    },
+    "vmalert": {
+      "$ref": "#/definitions/service"
+    },
+    "vmauth": {
+      "$ref": "#/definitions/service"
+    },
+    "api": {
+      "$ref": "#/definitions/service"
+    },
+    "correlation": {
+      "$ref": "#/definitions/service"
+    },
+    "frontend": {
+      "$ref": "#/definitions/service"
+    },
+    "gateway": {
+      "$ref": "#/definitions/service"
+    },
+    "vectorAggregator": {
+      "$ref": "#/definitions/service"
+    },
+    "vectorRouter": {
+      "$ref": "#/definitions/service"
+    },
+    "syslogNg": {
+      "$ref": "#/definitions/service"
+    },
+    "goflow2": {
+      "$ref": "#/definitions/service"
+    },
+    "gnmic": {
+      "$ref": "#/definitions/service"
+    },
+    "kafkaExporter": {
+      "$ref": "#/definitions/service"
+    },
+    "grafana": {
+      "$ref": "#/definitions/service"
+    },
+    "opensearchDashboards": {
+      "$ref": "#/definitions/service"
+    },
+    "gotenberg": {
+      "$ref": "#/definitions/service"
+    },
+    "prober": {
+      "$ref": "#/definitions/service"
+    },
+    "hostExporters": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "cadvisor": {
+          "$ref": "#/definitions/service"
+        },
+        "nodeExporter": {
+          "$ref": "#/definitions/service"
+        }
+      }
+    },
+    "curl": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "$ref": "#/definitions/image"
+        }
+      }
+    }
+  }
+}

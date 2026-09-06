@@ -1,0 +1,995 @@
+{
+  "_comment": "Apply these on first start with: scripts/bootstrap-opensearch.sh, or call the OS bootstrap API once the cluster is green.  |  ts is declared explicitly (2026-07-21, DEF-6): it was previously left to dynamic mapping, which inferred `date` from the first integer seen and then rejected every float epoch-seconds value, silently dropping ~10k events/day. The router normalises ts to integer epoch-millis; this mapping pins that contract.",
+  "_comment_lane_coverage": "F-06/F-15/F-53 (2026-07-21): there are SIX log lanes on the bus but only three templates existed (applogs/syslog/flows). snmptrap + cloudlogs were 100% dynamically mapped, so after the DEF-6 fix started emitting `ts` as an integer they would have inferred `long` instead of `date` \u2014 date-range queries, the Dashboards time picker and any sort on ts then silently misbehave. netops-snmptrap ALSO had no template at all, so number_of_replicas defaulted to 1 on a single-node cluster, its replica sat UNASSIGNED forever, and the cluster was permanently yellow \u2014 which destroys yellow as a usable alarm signal. Every template here therefore pins number_of_replicas and declares the shared field contract.",
+  "_comment_dynamic_false": "F-05 (2026-07-22) \u2014 THE FIELD WALL, closed for EVERY lane rather than for the one that was measured. `applogs_normalized` merges arbitrary producer JSON into the top level (vector/vector.yaml), `syslog_normalized` merges vendor-controlled FortiOS key=value pairs, and snmptrap carries free-form varbinds: three unbounded, producer-controlled generators of NEW OpenSearch fields. Measured 2026-07-21: 67 top-level fields on netops-applogs-untagged, growing, against index.mapping.total_fields.limit = 1000. That limit fails CLOSED \u2014 at 1,000 fields OpenSearch rejects EVERY REMAINING DOCUMENT for that day's index, i.e. a full-day application-log blackout for every tenant, triggered by one service shipping a new structured-log schema. `dynamic: false` makes the wall structurally unreachable: an undeclared key is kept in _source (still visible in a hit body, still exported) but never creates a mapping, so the field count is FROZEN at the declared set below. Free-text search is unaffected \u2014 the raw producer line stays in the declared `message` text field. The cost is deliberate and bounded: a field-specific query against an UNDECLARED key (e.g. `duration_ms:>500`) no longer matches new documents. Declare the field here when a lane needs it searchable \u2014 tests/test_ingest_contract.py fails the build if the pipeline stamps a field this file does not declare.",
+  "_comment_replicas": "F-07 (2026-07-22): number_of_replicas is a per-install POSTURE, not a constant. It is 0 on the single-node appliance because a replica on a one-node cluster can never be assigned \u2014 it just sits UNASSIGNED and pins the cluster yellow forever (that is F-53's root cause). It must be >= 1 on any multi-node cluster, because with 0 replicas AND no snapshot repository (F-59) a single corrupt shard is unrecoverable data loss. bootstrap-opensearch.sh substitutes OPENSEARCH_REPLICAS (default 0) into every template here, and refuses a value > 0 that the cluster has too few data nodes to assign. Do not hardcode this back to a literal.",
+  "templates": {
+    "netops-applogs": {
+      "index_patterns": [
+        "netops-applogs-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "timestamp": {
+              "type": "date"
+            },
+            "level": {
+              "type": "keyword"
+            },
+            "component": {
+              "type": "keyword"
+            },
+            "service": {
+              "type": "keyword"
+            },
+            "container_name": {
+              "type": "keyword"
+            },
+            "container_id": {
+              "type": "keyword"
+            },
+            "timestamp_raw": {
+              "type": "keyword"
+            },
+            "image": {
+              "type": "keyword"
+            },
+            "host": {
+              "type": "keyword"
+            },
+            "stream": {
+              "type": "keyword"
+            },
+            "source_type": {
+              "type": "keyword"
+            },
+            "error": {
+              "type": "text"
+            },
+            "trace_id": {
+              "type": "keyword"
+            },
+            "message": {
+              "type": "text"
+            },
+            "msg": {
+              "type": "text"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "tenant_seg": {
+              "type": "keyword"
+            },
+            "tenant_attribution": {
+              "type": "keyword"
+            },
+            "topic": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "ts_source": {
+              "type": "keyword"
+            },
+            "ts_invalid": {
+              "type": "keyword"
+            },
+            "log_class": {
+              "type": "keyword"
+            },
+            "log_index_base": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    },
+    "netops-platformlogs": {
+      "index_patterns": [
+        "netops-platformlogs-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "timestamp": {
+              "type": "date"
+            },
+            "level": {
+              "type": "keyword"
+            },
+            "component": {
+              "type": "keyword"
+            },
+            "service": {
+              "type": "keyword"
+            },
+            "container_name": {
+              "type": "keyword"
+            },
+            "container_id": {
+              "type": "keyword"
+            },
+            "timestamp_raw": {
+              "type": "keyword"
+            },
+            "image": {
+              "type": "keyword"
+            },
+            "host": {
+              "type": "keyword"
+            },
+            "stream": {
+              "type": "keyword"
+            },
+            "source_type": {
+              "type": "keyword"
+            },
+            "error": {
+              "type": "text"
+            },
+            "trace_id": {
+              "type": "keyword"
+            },
+            "message": {
+              "type": "text"
+            },
+            "msg": {
+              "type": "text"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "tenant_seg": {
+              "type": "keyword"
+            },
+            "tenant_attribution": {
+              "type": "keyword"
+            },
+            "topic": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "ts_source": {
+              "type": "keyword"
+            },
+            "ts_invalid": {
+              "type": "keyword"
+            },
+            "log_class": {
+              "type": "keyword"
+            },
+            "log_index_base": {
+              "type": "keyword"
+            }
+          }
+        }
+      },
+      "_comment": "Platform-infra self-health logs (log_class=platform), split from netops-applogs-* so they stay out of the device-monitoring GUI. Same field contract as applogs."
+    },
+    "netops-syslog": {
+      "_comment": "F-05: `fgt` holds the parsed FortiOS key=value map \u2014 VENDOR-controlled key names, i.e. the same unbounded generator as snmptrap's varbinds. Stored but not indexed, exactly like varbinds: searchable-by-document, un-mappable-by-vendor. A4 `cx_admission` is the aggregator's admission stamp and rides the syslog lane ONLY (syslog_admission_stamp feeds kafka_syslog and the control route; no other lane reads it). It MUST stay declared: under `dynamic: false` an undeclared object is kept in _source but never mapped, so `exists` / `must_not exists` on cx_admission.by matches NOTHING \u2014 and that query IS the parsercov mining contract (src/backend/parsercov/admission.go: admissionField = cx_admission.by, admissionVersionField = cx_admission.v). `by` is the gate that admitted the line (severity|marker|unscreenable); `v` is the rules_hash prefix, so a window can be split by the screen revision that judged it. Both keyword: exact-match and aggregate, never analysed.",
+      "index_patterns": [
+        "netops-syslog-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "timestamp": {
+              "type": "date"
+            },
+            "hostname": {
+              "type": "keyword"
+            },
+            "host": {
+              "type": "keyword"
+            },
+            "source_ip": {
+              "type": "keyword"
+            },
+            "appname": {
+              "type": "keyword"
+            },
+            "procid": {
+              "type": "keyword"
+            },
+            "severity": {
+              "type": "keyword"
+            },
+            "normalized_severity": {
+              "type": "keyword"
+            },
+            "facility": {
+              "type": "keyword"
+            },
+            "signal": {
+              "type": "keyword"
+            },
+            "vendor": {
+              "type": "keyword"
+            },
+            "parser_id": {
+              "type": "keyword"
+            },
+            "parser_status": {
+              "type": "keyword"
+            },
+            "event_type": {
+              "type": "keyword"
+            },
+            "cx_admission": {
+              "type": "object",
+              "dynamic": false,
+              "properties": {
+                "v": {
+                  "type": "keyword"
+                },
+                "by": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "subsystem": {
+              "type": "keyword"
+            },
+            "summary": {
+              "type": "text"
+            },
+            "app_id": {
+              "type": "keyword"
+            },
+            "app_vendor": {
+              "type": "keyword"
+            },
+            "app_src": {
+              "type": "keyword"
+            },
+            "app_dst": {
+              "type": "keyword"
+            },
+            "app_dport": {
+              "type": "keyword"
+            },
+            "app_proto": {
+              "type": "keyword"
+            },
+            "clock_skew_s": {
+              "type": "long"
+            },
+            "fgt": {
+              "type": "object",
+              "enabled": false
+            },
+            "message": {
+              "type": "text"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "tenant_seg": {
+              "type": "keyword"
+            },
+            "tenant_attribution": {
+              "type": "keyword"
+            },
+            "topic": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "ts_source": {
+              "type": "keyword"
+            },
+            "ts_invalid": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    },
+    "netops-flows": {
+      "index_patterns": [
+        "netops-flows-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "10s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "timestamp": {
+              "type": "date"
+            },
+            "sampler_address": {
+              "type": "ip"
+            },
+            "src_addr": {
+              "type": "ip"
+            },
+            "dst_addr": {
+              "type": "ip"
+            },
+            "src_port": {
+              "type": "integer"
+            },
+            "dst_port": {
+              "type": "integer"
+            },
+            "proto": {
+              "type": "integer"
+            },
+            "tcp_flags": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "long"
+            },
+            "packets": {
+              "type": "long"
+            },
+            "in_if": {
+              "type": "long"
+            },
+            "out_if": {
+              "type": "long"
+            },
+            "src_as": {
+              "type": "long"
+            },
+            "dst_as": {
+              "type": "long"
+            },
+            "sampling_rate": {
+              "type": "long"
+            },
+            "sample_rate": {
+              "type": "long"
+            },
+            "vlan_id": {
+              "type": "long"
+            },
+            "time_received_ns": {
+              "type": "long"
+            },
+            "type": {
+              "type": "keyword"
+            },
+            "flow_type": {
+              "type": "keyword"
+            },
+            "signal": {
+              "type": "keyword"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "tenant_seg": {
+              "type": "keyword"
+            },
+            "tenant_attribution": {
+              "type": "keyword"
+            },
+            "topic": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "ts_source": {
+              "type": "keyword"
+            },
+            "ts_invalid": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    },
+    "netops-snmptrap": {
+      "_comment": "F-53/F-06: this lane had NO template. Consequences fixed here: (1) number_of_replicas defaulted to 1 -> permanently UNASSIGNED replica -> permanently yellow cluster; (2) `ts` would map as long, not date; (3) `varbinds` is vendor-controlled free-form input and was fully dynamically mapped, so a trap storm from a new vendor could type-poison the index or walk it into the 1000-field wall. varbinds is stored but NOT indexed (enabled:false) - searchable-by-document, un-mappable-by-vendor.",
+      "index_patterns": [
+        "netops-snmptrap-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "timestamp": {
+              "type": "date"
+            },
+            "device": {
+              "type": "keyword"
+            },
+            "host": {
+              "type": "keyword"
+            },
+            "hostname": {
+              "type": "keyword"
+            },
+            "source_address": {
+              "type": "keyword"
+            },
+            "source_ip": {
+              "type": "keyword"
+            },
+            "trap_oid": {
+              "type": "keyword"
+            },
+            "trap_name": {
+              "type": "keyword"
+            },
+            "snmp_version": {
+              "type": "keyword"
+            },
+            "signal": {
+              "type": "keyword"
+            },
+            "severity": {
+              "type": "keyword"
+            },
+            "message": {
+              "type": "text"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "tenant_seg": {
+              "type": "keyword"
+            },
+            "tenant_attribution": {
+              "type": "keyword"
+            },
+            "topic": {
+              "type": "keyword"
+            },
+            "varbinds": {
+              "type": "object",
+              "enabled": false
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "ts_source": {
+              "type": "keyword"
+            },
+            "ts_invalid": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    },
+    "netops-cloudlogs": {
+      "_comment": "F-06/F-15: cloud log lane, previously untemplated. Same shared contract; cloud_family/cloud_provider/resource_id are the lane's routing keys.",
+      "index_patterns": [
+        "netops-cloudlogs-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "timestamp": {
+              "type": "date"
+            },
+            "cloud_family": {
+              "type": "keyword"
+            },
+            "cloud_provider": {
+              "type": "keyword"
+            },
+            "resource_id": {
+              "type": "keyword"
+            },
+            "account": {
+              "type": "keyword"
+            },
+            "region": {
+              "type": "keyword"
+            },
+            "host": {
+              "type": "keyword"
+            },
+            "app": {
+              "type": "keyword"
+            },
+            "level": {
+              "type": "keyword"
+            },
+            "severity": {
+              "type": "keyword"
+            },
+            "source_type": {
+              "type": "keyword"
+            },
+            "signal": {
+              "type": "keyword"
+            },
+            "message": {
+              "type": "text"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "tenant_seg": {
+              "type": "keyword"
+            },
+            "tenant_attribution": {
+              "type": "keyword"
+            },
+            "topic": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "ts_source": {
+              "type": "keyword"
+            },
+            "ts_invalid": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    },
+    "netops-secfindings": {
+      "_comment": "P3-L1 security findings lane (SECURITY_FINDINGS_STORE_DECISION 2026-08-28). The durable, append-only findings store: one document per (native_id, scan_id) verdict, _id = sha2(native_id|scan_id) stamped by the router's security_identity transform, so a replay UPSERTS and every scan's verdict is retained for trend/drift while \"current state\" is a query-time collapse (latest-by-ts per native_id). Facet fields (severity/status/status_id/standards/control_id/evidence_class/source/scan_id/native_id/seam_*/resource.*) are KEYWORD because the CTEM funnel, the compliance-%-by-framework and the severity breakdown are all terms aggregations; the narrative fields (title/observed/intended/detail/remediation) are TEXT because the T8 UI does full-text search over them. status_id is keyword deliberately: it is a 1-5 OCSF enum that is only ever faceted, never range-queried, and OpenSearch coerces the wire integer to its string form. The lane carries BOTH shapes on purpose: the secbus EvidenceEvent wire fields (native_id, entity_id, attrs.*, evidence_refs) that the producer emits today, and the secfindings.Finding json names (resource.*, observed/intended/status_detail/remediation) so a future direct-Finding writer cannot land unmapped. dynamic:false is the F-05 field wall \u2014 with attrs and evidence_refs being producer-shaped objects, an undeclared (or dotted, the del(.label) gotcha) key stays in _source and can never grow the mapping or reject a doc. attrs.status_detail (the verdict REASON, on the wire since 2026-09-03) is declared as a KEYWORD with an analysed `text` sub-field, not as plain text like the top-level narrative fields: it is a short, producer-authored, largely canned reason (\"OS version not present in sysDescr\") whose primary use is EXACT — facet/filter every device unassessed for the same reason, the D-06 question — which a `text` mapping cannot answer, while the `.text` sub-field still gives the findings `q` a prose match; ignore_above 1024 chars sits above secbus.StatusDetailMax (512 runes + ellipsis) so a producer reason is always indexed and only a pathological direct-writer value is skipped, and keyword keeps it consistent with every other attrs.* facet. NOTE: index templates apply only to indices created AFTER they are registered, so already-rolled netops-secfindings-* indices keep the old mapping until they roll. Retention rides the shared netops-retention ISM policy (OPENSEARCH_LOG_RETENTION_DAYS), like every other lane.",
+      "index_patterns": [
+        "netops-secfindings-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "ts_source": {
+              "type": "keyword"
+            },
+            "ts_invalid": {
+              "type": "keyword"
+            },
+            "time": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "timestamp": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "tenant_seg": {
+              "type": "keyword"
+            },
+            "tenant_attribution": {
+              "type": "keyword"
+            },
+            "topic": {
+              "type": "keyword"
+            },
+            "schema_version": {
+              "type": "keyword"
+            },
+            "cx_finding_id": {
+              "type": "keyword"
+            },
+            "cx_event_id": {
+              "type": "keyword"
+            },
+            "cx_quarantine": {
+              "type": "boolean"
+            },
+            "native_id": {
+              "type": "keyword"
+            },
+            "scan_id": {
+              "type": "keyword"
+            },
+            "scan_uid": {
+              "type": "keyword"
+            },
+            "uid": {
+              "type": "keyword"
+            },
+            "evidence_class": {
+              "type": "keyword"
+            },
+            "kind": {
+              "type": "keyword"
+            },
+            "source": {
+              "type": "keyword"
+            },
+            "provider_source": {
+              "type": "keyword"
+            },
+            "severity": {
+              "type": "keyword"
+            },
+            "status": {
+              "type": "keyword"
+            },
+            "status_id": {
+              "type": "keyword"
+            },
+            "standards": {
+              "type": "keyword"
+            },
+            "control": {
+              "type": "keyword"
+            },
+            "control_id": {
+              "type": "keyword"
+            },
+            "category": {
+              "type": "keyword"
+            },
+            "category_name": {
+              "type": "keyword"
+            },
+            "raw_rule_id": {
+              "type": "keyword"
+            },
+            "entity_id": {
+              "type": "keyword"
+            },
+            "entity_type": {
+              "type": "keyword"
+            },
+            "entity_tokens": {
+              "type": "keyword"
+            },
+            "resource": {
+              "properties": {
+                "uid": {
+                  "type": "keyword"
+                },
+                "name": {
+                  "type": "keyword"
+                },
+                "hostname": {
+                  "type": "keyword"
+                },
+                "ip": {
+                  "type": "keyword"
+                },
+                "type": {
+                  "type": "keyword"
+                },
+                "platform": {
+                  "type": "keyword"
+                },
+                "device": {
+                  "type": "keyword"
+                },
+                "host": {
+                  "type": "keyword"
+                },
+                "kind": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "seam": {
+              "properties": {
+                "seam_id": {
+                  "type": "keyword"
+                },
+                "seam_type": {
+                  "type": "keyword"
+                },
+                "internet_facing": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "seam_id": {
+              "type": "keyword"
+            },
+            "seam_type": {
+              "type": "keyword"
+            },
+            "internet_facing": {
+              "type": "boolean"
+            },
+            "title": {
+              "type": "text"
+            },
+            "control_title": {
+              "type": "text"
+            },
+            "observed": {
+              "type": "text"
+            },
+            "intended": {
+              "type": "text"
+            },
+            "detail": {
+              "type": "text"
+            },
+            "status_detail": {
+              "type": "text"
+            },
+            "remediation": {
+              "type": "text"
+            },
+            "evidence_ref": {
+              "properties": {
+                "locator": {
+                  "type": "keyword"
+                },
+                "kind": {
+                  "type": "keyword"
+                },
+                "ruleset_version": {
+                  "type": "keyword"
+                },
+                "digest": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "evidence_refs": {
+              "properties": {
+                "locator": {
+                  "type": "keyword"
+                },
+                "kind": {
+                  "type": "keyword"
+                },
+                "ruleset_version": {
+                  "type": "keyword"
+                },
+                "digest": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "attrs": {
+              "properties": {
+                "evidence_class": {
+                  "type": "keyword"
+                },
+                "provider_source": {
+                  "type": "keyword"
+                },
+                "control_id": {
+                  "type": "keyword"
+                },
+                "control_title": {
+                  "type": "keyword"
+                },
+                "category": {
+                  "type": "keyword"
+                },
+                "raw_rule_id": {
+                  "type": "keyword"
+                },
+                "scan_id": {
+                  "type": "keyword"
+                },
+                "status": {
+                  "type": "keyword"
+                },
+                "status_id": {
+                  "type": "keyword"
+                },
+                "standards": {
+                  "type": "keyword"
+                },
+                "status_detail": {
+                  "type": "keyword",
+                  "ignore_above": 1024,
+                  "fields": {
+                    "text": {
+                      "type": "text"
+                    }
+                  }
+                }
+              }
+            },
+            "lane": {
+              "type": "keyword"
+            },
+            "reason": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    },
+    "netops-deadletter": {
+      "_comment": "The dead-letter lane is deliberately flat: dropped_at/lane/reason/detail/raw only, raw being an encoded JSON STRING. A dead-letter index that can itself reject a document is worthless, so nothing here is dynamically typed. `detail` carries Vector's own error text (F-14) and `lane` the component that dropped the event; `reason` is the abort/error discriminator.",
+      "index_patterns": [
+        "netops-deadletter-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "dropped_at": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "lane": {
+              "type": "keyword"
+            },
+            "reason": {
+              "type": "keyword"
+            },
+            "detail": {
+              "type": "text"
+            },
+            "raw": {
+              "type": "text",
+              "index": false
+            }
+          }
+        }
+      }
+    },
+    "netops-quarantine": {
+      "_comment": "F-11 seal-or-quarantine: TENANT_UNATTRIBUTABLE envelopes. Metadata only is mapped; cx_quarantine_payload (the <enc:v1:quarantine:...> token over the whole original event) is DELIBERATELY UNMAPPED \u2014 dynamic:false keeps it in _source for the operator workflow while never making ciphertext searchable/aggregatable surface. cx_restored_at is the flows replay-guard claim stamp (quarantine.RestoredAtField): set by the restore API before a flows produce, and a stamped envelope is only ever tombstoned, never re-produced (the ClickHouse canonical flow store has no id dedup) \u2014 mapped as a date so operators can find lingering claimed envelopes. No tenant segment: no tenant read path names this index; the platform-only quarantine API is the sole consumer. Retention is its own ISM policy (QUARANTINE_RETENTION_DAYS), never unbounded (INV-F11-09).",
+      "index_patterns": [
+        "netops-quarantine-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "cx_quarantine": {
+              "type": "boolean"
+            },
+            "cx_event_id": {
+              "type": "keyword"
+            },
+            "received_at": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "lane": {
+              "type": "keyword"
+            },
+            "identity_sha": {
+              "type": "keyword"
+            },
+            "source_ip": {
+              "type": "keyword"
+            },
+            "reason": {
+              "type": "keyword"
+            },
+            "cx_restored_at": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            }
+          }
+        }
+      }
+    }
+  }
+}

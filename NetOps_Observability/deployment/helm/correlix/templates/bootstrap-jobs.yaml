@@ -1,0 +1,261 @@
+{{/*
+Bootstrap hooks.
+
+`helm install` succeeding is not evidence, exactly as `docker compose up`
+exiting 0 is not. These three jobs are what make a fresh install actually work,
+and every one of them is idempotent so it re-runs safely on every upgrade:
+
+  weight 0  kafka-init              pre-creates the canonical netops.* topics.
+                                    Broker auto-create is OFF: a producer to a
+                                    missing topic must fail LOUD rather than
+                                    mint a lane nobody retains or consumes.
+  weight 5  kafka-acls              the SEC-007 per-identity ACL matrix. The
+                                    KRaft ACL store IS the authorization state
+                                    and it lives in the broker's volume, so a
+                                    fresh install or a wiped volume boots an
+                                    EMPTY store — every non-superuser denied
+                                    while every probe stays green (the
+                                    2026-08-16 auth-dead incident).
+  weight 10 opensearch-init         ISM retention + snapshot repo/policy. The
+                                    #1 disk-fill protection for a long run.
+  weight 15 opensearch-security-init security-plugin users/roles/mappings.
+
+hook-delete-policy keeps a FAILED job's pod around: the reason a bootstrap
+failed is the whole diagnostic, and deleting it on failure throws it away.
+*/}}
+{{- $hookAnn := dict }}
+{{- if .Values.bootstrap.kafkaInit.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-init
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "bootstrap") | indent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.bootstrap.backoffLimit }}
+  # Bounded (CLAUDE.md §9: all IO has a timeout). apply-ism.sh waits for
+  # OpenSearch in an UNBOUNDED `until` loop, so without a deadline a store that
+  # never comes up leaves the hook Running forever and the install looks
+  # in-progress rather than broken.
+  activeDeadlineSeconds: {{ .Values.bootstrap.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "bootstrap") | indent 8 }}
+    spec:
+      restartPolicy: Never
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: kafka-init
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.kafka.image "name" "kafka-init") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          env:
+            # ALL topics must share ONE partition count: correlation instances
+            # rely on co-partitioning (partition k of every topic on instance
+            # k), which equal counts plus the range assignor guarantee.
+            - {name: BUS_PARTITIONS, value: {{ .Values.env.BUS_PARTITIONS | quote }}}
+          resources:
+{{ toYaml .Values.bootstrap.resources | indent 12 }}
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -eu
+              p="${BUS_PARTITIONS:-1}"
+              # Bounded wait for the broker: the hook can start before the
+              # StatefulSet is serving, and failing instantly would just burn
+              # a backoff slot on a race.
+              for i in $(seq 1 60); do
+                if /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1; then
+                  break
+                fi
+                [ "$i" -eq 60 ] && { echo "kafka-init: broker kafka:9092 never became reachable" >&2; exit 1; }
+                sleep 5
+              done
+              for t in netops.applogs netops.syslog netops.syslog.control \
+                       netops.flows netops.flows.raw \
+                       netops.snmptrap \
+                       netops.probes netops.metrics netops.cloud netops.app.identities.v1 \
+                       netops.controller_events netops.app.edge netops.verification \
+                       netops.cloudlogs netops.cloudcosts netops.deadletter \
+                       netops.wireless_sessions netops.wireless_events \
+                       netops.security netops.bgp netops.experience; do
+                /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+                  --create --if-not-exists --topic "$t" \
+                  --partitions "$p" --replication-factor 1 || exit 1
+                cur="$(/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+                  --describe --topic "$t" \
+                  | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p' | head -1)"
+                if [ -z "$cur" ]; then echo "kafka-init: describe $t failed" >&2; exit 1; fi
+                # Increase-only: Kafka cannot shrink a topic, and kafka-init
+                # must never appear to.
+                if [ "$cur" -lt "$p" ]; then
+                  echo "kafka-init: $t partitions $cur -> $p" >&2
+                  /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+                    --alter --topic "$t" --partitions "$p" || exit 1
+                fi
+              done
+              echo "kafka-init: 21 canonical topics present at $p partition(s)"
+{{- end }}
+{{- if .Values.bootstrap.kafkaAcls.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-acls
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "bootstrap") | indent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.bootstrap.backoffLimit }}
+  # Bounded (CLAUDE.md §9: all IO has a timeout). apply-ism.sh waits for
+  # OpenSearch in an UNBOUNDED `until` loop, so without a deadline a store that
+  # never comes up leaves the hook Running forever and the install looks
+  # in-progress rather than broken.
+  activeDeadlineSeconds: {{ .Values.bootstrap.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "bootstrap") | indent 8 }}
+    spec:
+      restartPolicy: Never
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: kafka-acls
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.kafka.image "name" "kafka-acls") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          # The tracked matrix, unmodified. It is idempotent by construction:
+          # --add of an existing ACL is a no-op, so re-running converges after
+          # any broker rebuild, identity change or volume wipe.
+          command: ["sh", "/acls/apply-acls.sh"]
+          env:
+            - {name: KAFKA_BOOTSTRAP, value: "kafka:9092"}
+          resources:
+{{ toYaml .Values.bootstrap.resources | indent 12 }}
+          volumeMounts:
+            - {name: acls, mountPath: /acls, readOnly: true}
+      volumes:
+        - {name: acls, configMap: {name: correlix-kafka-acls, defaultMode: 0555}}
+{{- end }}
+{{- if .Values.bootstrap.opensearchInit.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-init
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "bootstrap") | indent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.bootstrap.backoffLimit }}
+  # Bounded (CLAUDE.md §9: all IO has a timeout). apply-ism.sh waits for
+  # OpenSearch in an UNBOUNDED `until` loop, so without a deadline a store that
+  # never comes up leaves the hook Running forever and the install looks
+  # in-progress rather than broken.
+  activeDeadlineSeconds: {{ .Values.bootstrap.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "bootstrap") | indent 8 }}
+    spec:
+      restartPolicy: Never
+{{ include "correlix.podCommon" (dict "root" $ "uid" 65532 "gid" 65532) | indent 6 }}
+      containers:
+        - name: opensearch-init
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.curl.image "name" "opensearch-init") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          command: ["sh", "/opensearch-init/apply-ism.sh"]
+          env:
+            - {name: OPENSEARCH_URL, value: "http://opensearch:9200"}
+            - {name: OPENSEARCH_LOG_RETENTION_DAYS, value: {{ .Values.opensearch.logRetentionDays | quote }}}
+            # Quarantined (unattributable) envelopes keep their own bounded
+            # window: re-attribution may need longer than the log default, but
+            # retention is never unbounded.
+            - {name: QUARANTINE_RETENTION_DAYS, value: {{ .Values.opensearch.quarantineRetentionDays | quote }}}
+            # 0 replicas on a single node (a replica can never be assigned and
+            # pins the cluster yellow forever); >=1 on a real multi-node
+            # cluster, where 0 replicas plus no snapshots means one corrupt
+            # shard is unrecoverable.
+            - {name: OPENSEARCH_REPLICAS, value: {{ .Values.opensearch.replicaCount | quote }}}
+            - {name: OPENSEARCH_SNAPSHOT_KEEP, value: {{ .Values.opensearch.snapshotKeep | quote }}}
+          resources:
+{{ toYaml .Values.bootstrap.resources | indent 12 }}
+          volumeMounts:
+            - {name: init, mountPath: /opensearch-init, readOnly: true}
+      volumes:
+        - {name: init, configMap: {name: correlix-opensearch-init, defaultMode: 0555}}
+{{- end }}
+{{- if .Values.bootstrap.opensearchSecurityInit.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-security-init
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "bootstrap") | indent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "15"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.bootstrap.backoffLimit }}
+  # Bounded (CLAUDE.md §9: all IO has a timeout). apply-ism.sh waits for
+  # OpenSearch in an UNBOUNDED `until` loop, so without a deadline a store that
+  # never comes up leaves the hook Running forever and the install looks
+  # in-progress rather than broken.
+  activeDeadlineSeconds: {{ .Values.bootstrap.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "bootstrap") | indent 8 }}
+    spec:
+      restartPolicy: Never
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: opensearch-security-init
+          # securityadmin.sh and hash.sh live only in the OpenSearch image.
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.opensearch.image "name" "opensearch-security-init") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          command: ["/security/apply-security.sh"]
+          env:
+            - {name: OS_HOST, value: "opensearch"}
+            - {name: OS_PORT, value: "9200"}
+            - {name: SEC_CONF_SRC, value: "/security"}
+            - {name: OS_ADMIN_CA, value: "/certs/ca.crt"}
+            - {name: OS_ADMIN_CERT, value: "/certs/tls.crt"}
+            - {name: OS_ADMIN_KEY, value: "/certs/tls.key"}
+          envFrom:
+            # The six per-identity OpenSearch passwords (OS_API_PASSWORD, …).
+            - secretRef: {name: {{ include "correlix.secretName" $ }}}
+          resources:
+{{ toYaml .Values.bootstrap.resources | indent 12 }}
+          volumeMounts:
+            - {name: security, mountPath: /security, readOnly: true}
+            - {name: certs, mountPath: /certs, readOnly: true}
+      volumes:
+        # NOT staged into this chart: the security config directory carries
+        # per-identity role/mapping YAML that an operator is expected to review
+        # and adapt. Create it yourself from
+        # deployment/docker/opensearch/security/ and name it here.
+        - {name: security, configMap: {name: correlix-opensearch-security}}
+        - name: certs
+          secret:
+            secretName: {{ .Values.tls.caSecret }}
+{{- end }}

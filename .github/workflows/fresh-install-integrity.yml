@@ -17,6 +17,8 @@ on:
       - 'NetOps_Observability/src/backend/migrations/**'
       - 'NetOps_Observability/scripts/*.py'
       - 'NetOps_Observability/scripts/preflight*'
+      - 'NetOps_Observability/deployment/helm/**'
+      - 'NetOps_Observability/tests/test_helm_chart.py'
       - '.github/workflows/fresh-install-integrity.yml'
   # No paths filter on pull_request: a required check must report on EVERY PR to
   # main (a path-skipped workflow leaves the check stuck "Expected").
@@ -44,6 +46,16 @@ concurrency:
 # commit that also fixes whatever the new rules find.
 env:
   RUFF_VERSION: '0.16.0'
+  # Pinned by version AND by sha256, for the same reason RUFF_VERSION is
+  # pinned: a tool that moves under a green branch turns it red with no code
+  # change. Both checksums were verified against the publishers' own
+  # checksum files (get.helm.sh/*.sha256sum, the kubeconform release
+  # CHECKSUMS) before being written here.
+  HELM_VERSION: '3.16.4'
+  HELM_SHA256: 'fc307327959aa38ed8f9f7e66d45492bb022a66c3e5da6063958254b9767d179'
+  KUBECONFORM_VERSION: '0.6.7'
+  KUBECONFORM_SHA256: '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73'
+  PYTEST_VERSION: '9.0.3'
 
 jobs:
   scripts-lint:
@@ -213,3 +225,60 @@ jobs:
           done
           sudo test -s data/tls/ca.pem || { echo "::error::mesh CA missing"; missing=1; }
           exit "$missing"
+
+  # Layer 4 — the Kubernetes packaging (tracker 114). Same doctrine as the
+  # legs above: a chart that "looks fine" is not evidence. This renders it and
+  # validates every object against the real Kubernetes schemas, then asserts
+  # the properties a schema cannot see (digest pinning against the compose
+  # stack, resources and probes on every container, default-deny
+  # NetworkPolicy, restricted PodSecurity, no credential in the chart).
+  #
+  # It does NOT install to a cluster. RENDERED-AND-VALIDATED is the claim, and
+  # docs/audit/INVARIANTS.md says so — do not let this job's green be read as
+  # "the chart deploys".
+  helm-chart:
+    name: helm chart lint · template · kubeconform (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Downloaded and checksum-verified rather than taken from a marketplace
+      # action, so the bytes this job runs are the bytes named in `env:` above.
+      - name: install helm + kubeconform (pinned, sha256-verified)
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          curl -fsSL -o "$tmp/helm.tgz" \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  $tmp/helm.tgz" | sha256sum -c -
+          tar -xzf "$tmp/helm.tgz" -C "$tmp"
+          sudo install -m 0755 "$tmp/linux-amd64/helm" /usr/local/bin/helm
+
+          curl -fsSL -o "$tmp/kubeconform.tgz" \
+            "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  $tmp/kubeconform.tgz" | sha256sum -c -
+          tar -xzf "$tmp/kubeconform.tgz" -C "$tmp"
+          sudo install -m 0755 "$tmp/kubeconform" /usr/local/bin/kubeconform
+          rm -rf "$tmp"
+          helm version
+          kubeconform -v
+
+      - name: install pytest (pinned)
+        run: pip install --no-cache-dir "pytest==${PYTEST_VERSION}" "pyyaml==6.0.3"
+
+      # Belt and braces: the pytest suite runs `helm lint` itself, but a bare
+      # lint failure is easier to read here than inside a test report.
+      - name: helm lint (default + lab values)
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          helm lint deployment/helm/correlix
+          helm lint deployment/helm/correlix -f deployment/helm/correlix/values-lab.yaml
+
+      - name: pytest (chart gate)
+        working-directory: NetOps_Observability
+        # The suite SKIPS every tool-backed leg when the binaries are absent.
+        # -p no:randomly is not needed, but -rs is: a silent skip here would be
+        # a gate that stopped gating.
+        run: python3 -m pytest tests/test_helm_chart.py -v -rs

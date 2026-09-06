@@ -1,0 +1,380 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+Zero trust (CLAUDE.md §3): default deny both directions, then named allows.
+
+STRUCTURE, and why it is this way. The authoritative allow lives at the
+RECEIVER: there is one precise ingress policy per server component naming
+exactly the client components that legitimately talk to it and on which port.
+Egress is granted coarsely — a pod may attempt a connection to anything inside
+this namespace — because a NetworkPolicy set is a UNION of allows, so a broad
+egress rule cannot widen what a narrow ingress rule permits. An attempt from a
+component the receiver does not name is still refused, at the receiver, by its
+own policy. Off-cluster egress is NOT coarse: it is denied unless listed.
+
+A NetworkPolicy is only enforced if the CNI implements it. Calico, Cilium and
+Antrea do; flannel alone does NOT — with flannel these objects are accepted by
+the API server and silently enforce nothing. Verify before relying on them.
+*/}}
+
+# ── 1. default deny, both directions, every pod ─────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-default-deny
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# ── 2. DNS. Without this a default-deny namespace cannot resolve anything, ──
+#      including its own Services.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-allow-dns
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.dnsNamespace }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+# ── 3. In-namespace egress. Coarse ON PURPOSE (see the header): the receiver's
+#      ingress policy is the authoritative allow. Off-cluster egress is not
+#      granted here and stays denied.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-allow-intra-namespace-egress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: correlix
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: correlix
+---
+# ── 4. Storage tier ingress — one rule per store, naming its real clients ───
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-postgres-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: postgres}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "api" "correlation")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 5432}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-redis-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: redis}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "api" "prober")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 6379}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-kafka-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: kafka}}
+  policyTypes: [Ingress]
+  ingress:
+    # Producers, consumers, the lag exporter, and the bootstrap jobs. The api
+    # is here for its stack-health TCP probe of the broker, not for producing —
+    # it publishes through the aggregator's bus bridge.
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "api" "correlation" "vector-aggregator" "vector-router" "goflow2" "gnmic" "kafka-exporter" "bootstrap" "kafka")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 9092}
+        - {protocol: TCP, port: 9093}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-opensearch-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: opensearch}}
+  policyTypes: [Ingress]
+  ingress:
+    # vector-aggregator is a client too — it scrapes _cat/indices and
+    # _cluster/health to turn indexing stalls into metrics.
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "api" "correlation" "vector-router" "vector-aggregator" "opensearch-dashboards" "bootstrap")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 9200}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-clickhouse-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: clickhouse}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "api" "correlation" "vector-router" "grafana")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 8123}
+        - {protocol: TCP, port: 9000}
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/component: victoria}}
+      ports:
+        - {protocol: TCP, port: 9363}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-victoria-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: victoria}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "api" "vmalert" "vmauth" "grafana" "gnmic" "prober" "vector-aggregator" "vector-router" "watchdog")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 8428}
+---
+# ── 5. Application tier ingress ─────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-api-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: api}}
+  policyTypes: [Ingress]
+  ingress:
+    # gateway (every user request), vmalert (the alert-delivery webhook — the
+    # only end-to-end proof the delivery chain works), victoria (self-metrics
+    # scrape), vector-router (the sealing API seam).
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "gateway" "vmalert" "victoria" "vector-router")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+{{- if .Values.api.snmpTraps.enabled }}
+    # SNMP traps from the estate.
+    - from:
+      {{- range .Values.networkPolicy.deviceCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+      {{- end }}
+      ports:
+        - {protocol: UDP, port: {{ .Values.api.snmpTraps.port }}}
+{{- end }}
+{{- if .Values.api.bmp.enabled }}
+    # BMP sessions from the estate's routers.
+    - from:
+      {{- range .Values.networkPolicy.deviceCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+      {{- end }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.api.bmp.port }}}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-correlation-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: correlation}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "api" "victoria")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 8000}
+        - {protocol: TCP, port: 8094}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-frontend-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: frontend}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/component: gateway}}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-gateway-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: gateway}}
+  policyTypes: [Ingress]
+  ingress:
+    # The ingress controller. Its namespace is not known to this chart, so this
+    # accepts from ANY namespace on 8080 — narrow it with a namespaceSelector
+    # for your controller once you know where it runs.
+    - ports:
+        - {protocol: TCP, port: 8080}
+---
+# ── 6. Edge ingestion from the estate ───────────────────────────────────────
+{{- if .Values.syslogNg.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-syslog-ng-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: syslog-ng}}
+  policyTypes: [Ingress]
+  ingress:
+{{- if .Values.networkPolicy.deviceCIDRs }}
+    - from:
+      {{- range .Values.networkPolicy.deviceCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+      {{- end }}
+      ports:
+        - {protocol: UDP, port: 514}
+        - {protocol: TCP, port: 514}
+{{- else }}
+    # networkPolicy.deviceCIDRs is empty, so NOTHING off-cluster may send
+    # syslog. That is the safe default and it is also a silent black hole if
+    # you expected device logs — list your estate's ranges.
+    []
+{{- end }}
+---
+{{- end }}
+{{- if .Values.goflow2.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-goflow2-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: goflow2}}
+  policyTypes: [Ingress]
+  ingress:
+{{- if .Values.networkPolicy.deviceCIDRs }}
+    - from:
+      {{- range .Values.networkPolicy.deviceCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+      {{- end }}
+      ports:
+        - {protocol: UDP, port: 2055}
+        - {protocol: UDP, port: 4739}
+        - {protocol: UDP, port: 6343}
+{{- else }}
+    []
+{{- end }}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-vector-aggregator-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: vector-aggregator}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "syslog-ng")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 6601}
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "api" "prober")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 8688}   # SNMP traps
+        - {protocol: TCP, port: 8689}   # probe events
+        - {protocol: TCP, port: 8690}   # metrics
+        - {protocol: TCP, port: 8692}   # bus bridge
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/component: victoria}}
+      ports:
+        - {protocol: TCP, port: 9598}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-vector-router-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: vector-router}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/component: victoria}}
+      ports:
+        - {protocol: TCP, port: 9598}
+---
+# ── 7. Off-cluster egress. Denied unless listed. ────────────────────────────
+{{- if .Values.networkPolicy.apiEgressCIDRs }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-api-external-egress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: api}}
+  policyTypes: [Egress]
+  egress:
+    # The api's legitimate off-cluster reach: the LLM provider, ITSM, ntfy,
+    # RIPEstat/RDAP, device SSH. Everything else stays denied — the SSRF gate
+    # in the code and this policy are two independent layers, on purpose.
+    - to:
+      {{- range .Values.networkPolicy.apiEgressCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+      {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<!--
+  #101 workload fairness profiles — applied per query by the Go API
+  (ch_workload.go routes by log_comment attribution; the `profile` HTTP
+  parameter selects the settings profile). The default profile keeps the #100
+  containment settings (query-spill.xml: 1.5 GiB spill thresholds, 2 GiB hard
+  per-query cap) for analytics panels and ad-hoc SQL.
+
+  hot_ui: Command Center / reliability polls served from the corr_current
+  narrow projection. These are small BY DESIGN (#100: <100 MiB, <1 s budgets,
+  enforced by scripts/ch-query-budget-check.sh) — a query that needs more than
+  1 GiB here is a regression toward the 2026-07-09 incident shape and must
+  fail alone, fast, without competing with the rest of the platform for the
+  ClickHouse memory it should never have needed.
+
+  background: attributed workers (worker:* — ticketing sweeper, corr_current
+  reconciler, backfills). Allowed to read history, de-prioritized behind
+  interactive queries (priority: higher value = lower scheduling priority).
+
+  Roadmap (documented, not yet enforced — see
+  docs/design/correlation-data-contract.md §fairness): per-tenant quotas
+  (CREATE QUOTA ... KEYED BY custom setting tenant_scope), read replicas for
+  hot UI, and workload pools for large tenants at 100x scale.
+-->
+<clickhouse>
+    <profiles>
+        <hot_ui>
+            <max_memory_usage from_env="CH_HOT_UI_MEM"/>
+            <max_execution_time>10</max_execution_time>
+        </hot_ui>
+        <background>
+            <max_memory_usage from_env="CH_BG_MEM"/>
+            <max_execution_time>60</max_execution_time>
+            <max_bytes_before_external_group_by from_env="CH_SPILL_BYTES"/>
+            <max_bytes_before_external_sort from_env="CH_SPILL_BYTES"/>
+            <priority>2</priority>
+        </background>
+    </profiles>
+</clickhouse>

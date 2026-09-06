@@ -1,0 +1,61 @@
+<!--
+  Bound the ClickHouse SERVER log — the one that lives INSIDE the container
+  layer, not in a bind mount (2026-09-03 disk-pressure sweep).
+
+  MEASURED on the lab host, 2026-09-03 (host at 94% disk, OpenSearch flood
+  stage is 95%):
+
+      /var/log/clickhouse-server   1.8 GiB
+        clickhouse-server.log      924 MiB   (live)
+        clickhouse-server.err.log  109 MiB   (live)
+        clickhouse-server.log.N.gz  10 x ~90 MiB
+
+  Two things make this invisible until it hurts:
+
+    * It is NOT `docker logs`. The image's docker_related_config.xml leaves
+      <console> commented out, so the server writes to FILES and the json-file
+      driver sees only the handful of startup lines. The compose `x-logging`
+      anchor (max-size 50m) therefore does NOT bound it — the anchor caps
+      stdout, and this never goes to stdout.
+    * It is NOT in a volume. `data/clickhouse` is bind-mounted at
+      /var/lib/clickhouse; /var/log/clickhouse-server is not mounted at all,
+      so the bytes land in the container's writable layer under
+      /var/lib/docker/overlay2 and `du -sh data/` shows nothing. Only
+      `docker system df -v` / `docker ps -s` accounts for it.
+
+  Stock 24.8 defaults are <level>trace</level>, <size>1000M</size>,
+  <count>10</count> — i.e. an ~11 GiB ceiling per server, paid twice (the
+  errorlog channel uses the same size/count). Nothing in this repo reads these
+  files (verified: no reference to clickhouse-server.log in any script, test or
+  runbook); server-side facts we actually query come from the system.* tables
+  bounded by system-logs.xml.
+
+  POLICY:
+    level = information — the production level. `trace` is a debugging level
+      and is what produced ~90 MiB of gzip per few hours above. To debug a
+      server-side problem, temporarily set this back to `trace` (or `debug`)
+      and `docker compose up -d clickhouse`; put it back afterwards.
+    size  = 100M, count = 3 — a hard ceiling of roughly
+      100 MiB live + 3 compressed rotations, on each of the two channels
+      (server log + error log): ~0.3 GiB worst case instead of ~11 GiB.
+
+  errorlog is deliberately NOT silenced or shrunk further: it is the only
+  record of background-thread failures that never reach a client, and it is
+  what `docs/runbooks/storage-and-volume-operations.md` section 3 points at.
+
+  TAKES EFFECT ON CONTAINER RECREATE (`docker compose up -d clickhouse`), and
+  only bounds FUTURE writes: an already-oversized clickhouse-server.log is
+  inside the old container layer and is reclaimed when that container is
+  replaced. See docs/runbooks/storage-and-volume-operations.md section 1.1a.
+
+  Mount contract (docker-compose.yml, clickhouse service):
+    ./clickhouse/logger.xml:/etc/clickhouse-server/config.d/logger.xml:ro
+  guarded by tests/test_clickhouse_logger_bounded.py.
+-->
+<clickhouse>
+    <logger>
+        <level>information</level>
+        <size>100M</size>
+        <count>3</count>
+    </logger>
+</clickhouse>

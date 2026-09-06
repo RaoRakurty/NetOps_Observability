@@ -1,0 +1,460 @@
+{{/*
+Storage tier — StatefulSets with per-pod PVCs.
+
+All five are SINGLE-INSTANCE, matching the compose topology: OpenSearch runs
+`discovery.type: single-node`, Kafka is single-node KRaft (node id 1, its own
+controller quorum voter), ClickHouse/PostgreSQL/VictoriaMetrics are one
+process each. `replicas: 1` here is not a placeholder to be raised — raising
+it produces N independent, un-clustered instances behind one Service, which is
+worse than one. Clustering any of them is a separate design, not a values flag.
+*/}}
+{{- if .Values.postgres.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "postgres") | indent 4 }}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "postgres") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "postgres") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 70 "gid" 70) | indent 6 }}
+      containers:
+        - name: postgres
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.postgres.image "name" "postgres") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          args:
+            - postgres
+            - -c
+            - shared_buffers=128MB
+            - -c
+            - max_connections=100
+          ports:
+            - {name: postgres, containerPort: 5432}
+          env:
+            - name: POSTGRES_DB
+              value: netops
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: DB_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: DB_PASSWORD}}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # Mirrors the compose healthcheck: pg_isready, 10s/5s, 5 retries.
+          readinessProbe:
+            exec: {command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec: {command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+{{ toYaml .Values.postgres.resources | indent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if or .Values.postgres.persistence.storageClass .Values.global.storageClass }}
+        storageClassName: {{ .Values.postgres.persistence.storageClass | default .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.persistence.size }}
+{{- end }}
+{{- if .Values.redis.enabled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "redis") | indent 4 }}
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "redis") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "redis") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 999 "gid" 1000) | indent 6 }}
+      containers:
+        - name: valkey
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.redis.image "name" "redis") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          # maxmemory stays BELOW the cgroup cap so Valkey returns a clean OOM
+          # error (noeviction — this is app STATE, never silently evict)
+          # instead of the kernel killing the process.
+          command:
+            - sh
+            - -c
+            - exec valkey-server --save 60 1 --maxmemory {{ .Values.redis.maxmemory }} --requirepass "$REDIS_PASSWORD"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: REDIS_PASSWORD}}
+            - name: REDISCLI_AUTH
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: REDIS_PASSWORD}}
+          ports:
+            - {name: redis, containerPort: 6379}
+          readinessProbe:
+            exec: {command: ["valkey-cli", "ping"]}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          livenessProbe:
+            exec: {command: ["valkey-cli", "ping"]}
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+{{ toYaml .Values.redis.resources | indent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if or .Values.redis.persistence.storageClass .Values.global.storageClass }}
+        storageClassName: {{ .Values.redis.persistence.storageClass | default .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.persistence.size }}
+{{- end }}
+{{- if .Values.kafka.enabled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "kafka") | indent 4 }}
+spec:
+  serviceName: kafka
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "kafka") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "kafka") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: kafka
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.kafka.image "name" "kafka") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          env:
+            # Generated ONCE per install and stored in the Secret: the data dir
+            # is formatted with it, and a changed id makes the broker refuse
+            # its own volume on restart.
+            - name: CLUSTER_ID
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: KAFKA_CLUSTER_ID}}
+            - {name: KAFKA_NODE_ID, value: "1"}
+            - {name: KAFKA_PROCESS_ROLES, value: "broker,controller"}
+            - {name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "1@kafka:9093"}
+            - {name: KAFKA_LISTENERS, value: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"}
+            - {name: KAFKA_ADVERTISED_LISTENERS, value: "PLAINTEXT://kafka:9092"}
+            - {name: KAFKA_CONTROLLER_LISTENER_NAMES, value: "CONTROLLER"}
+            - {name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"}
+            - {name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1"}
+            - {name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1"}
+            - {name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1"}
+            - {name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS, value: "0"}
+            - {name: KAFKA_NUM_PARTITIONS, value: {{ .Values.env.BUS_PARTITIONS | quote }}}
+            # An authenticated bus with auto-create is still an injection
+            # surface. Every canonical topic is created explicitly by the
+            # kafka-init hook; a producer to a missing topic fails LOUD.
+            - {name: KAFKA_AUTO_CREATE_TOPICS_ENABLE, value: "false"}
+            - {name: KAFKA_LOG_RETENTION_MS, value: {{ .Values.kafka.retentionMs | quote }}}
+            - {name: KAFKA_LOG_RETENTION_BYTES, value: {{ .Values.kafka.retentionBytes | quote }}}
+            - {name: KAFKA_LOG_DIRS, value: "/var/lib/kafka/data"}
+            - {name: KAFKA_HEAP_OPTS, value: "-Xmx{{ .Values.kafka.heap }} -Xms{{ .Values.kafka.heapMin }}"}
+          ports:
+            - {name: kafka, containerPort: 9092}
+            - {name: controller, containerPort: 9093}
+          # Kafka opens 9092 only after KRaft init + log recovery, so a TCP
+          # accept is a real readiness signal without spawning a JVM per probe.
+          # The kafka-init hook is the FUNCTIONAL gate.
+          readinessProbe:
+            tcpSocket: {port: 9092}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+            initialDelaySeconds: 30
+          livenessProbe:
+            tcpSocket: {port: 9092}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+            initialDelaySeconds: 60
+          resources:
+{{ toYaml .Values.kafka.resources | indent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/kafka/data}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if or .Values.kafka.persistence.storageClass .Values.global.storageClass }}
+        storageClassName: {{ .Values.kafka.persistence.storageClass | default .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.kafka.persistence.size }}
+{{- end }}
+{{- if .Values.opensearch.enabled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: opensearch
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "opensearch") | indent 4 }}
+spec:
+  serviceName: opensearch
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "opensearch") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "opensearch") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: opensearch
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.opensearch.image "name" "opensearch") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          env:
+            - {name: cluster.name, value: netops-search}
+            - {name: node.name, value: opensearch}
+            - {name: discovery.type, value: single-node}
+            # NOT enabled on Kubernetes: mlock needs CAP_IPC_LOCK, which
+            # PodSecurity `restricted` forbids. Give the node swap-off instead
+            # (the standard OpenSearch prerequisite) — see DEPLOY_KUBERNETES.md.
+            - {name: bootstrap.memory_lock, value: "false"}
+            - {name: OPENSEARCH_JAVA_OPTS, value: "-Xms{{ .Values.opensearch.heap }} -Xmx{{ .Values.opensearch.heap }}"}
+            # Scaffold-grade, exactly as compose: the security plugin is OFF by
+            # default. Turn it on with tls.enabled and the security bootstrap.
+            - {name: DISABLE_SECURITY_PLUGIN, value: {{ ternary "false" "true" .Values.tls.enabled | quote }}}
+            # A snapshot repository cannot be registered at all unless the
+            # allowed path is declared here FIRST (F-59).
+            - {name: path.repo, value: /usr/share/opensearch/snapshots}
+          ports:
+            - {name: http, containerPort: 9200}
+            - {name: transport, containerPort: 9300}
+          readinessProbe:
+            httpGet: {path: /_cluster/health, port: 9200}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 10
+            initialDelaySeconds: 60
+          livenessProbe:
+            httpGet: {path: /_cluster/health, port: 9200}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
+            initialDelaySeconds: 120
+          resources:
+{{ toYaml .Values.opensearch.resources | indent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /usr/share/opensearch/data}
+            - {name: snapshots, mountPath: /usr/share/opensearch/snapshots}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if or .Values.opensearch.persistence.storageClass .Values.global.storageClass }}
+        storageClassName: {{ .Values.opensearch.persistence.storageClass | default .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.opensearch.persistence.size }}
+    # A separate claim on purpose: a snapshot living inside the thing it backs
+    # up is not a backup. Replicate it off-cluster to make it one.
+    - metadata: {name: snapshots}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if or .Values.opensearch.snapshots.storageClass .Values.global.storageClass }}
+        storageClassName: {{ .Values.opensearch.snapshots.storageClass | default .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.opensearch.snapshots.size }}
+{{- end }}
+{{- if .Values.clickhouse.enabled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "clickhouse") | indent 4 }}
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "clickhouse") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "clickhouse") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 101 "gid" 101) | indent 6 }}
+      containers:
+        - name: clickhouse
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.clickhouse.image "name" "clickhouse") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          env:
+            - {name: CLICKHOUSE_DB, value: {{ .Values.clickhouse.db | quote }}}
+            - {name: CLICKHOUSE_USER, value: {{ .Values.clickhouse.user | quote }}}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: CLICKHOUSE_PASSWORD}}
+            - {name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1"}
+            # Every internal cap sits below the container boundary so a failure
+            # is a recoverable query error, never a kernel OOM-kill.
+            - {name: CH_MEM_RATIO, value: {{ .Values.clickhouse.memRatio | quote }}}
+            - {name: CH_MAX_SERVER_MEMORY, value: {{ .Values.clickhouse.maxServerMemory | quote }}}
+            - {name: CH_MERGES_MEM, value: {{ .Values.clickhouse.mergesMem | quote }}}
+            - {name: CH_HOT_UI_MEM, value: {{ .Values.clickhouse.hotUiMem | quote }}}
+            - {name: CH_BG_MEM, value: {{ .Values.clickhouse.bgMem | quote }}}
+            - {name: CH_SPILL_BYTES, value: {{ .Values.clickhouse.spillBytes | quote }}}
+            - {name: CH_MAX_CONCURRENT_QUERIES, value: {{ .Values.clickhouse.maxConcurrentQueries | quote }}}
+          ports:
+            - {name: http, containerPort: 8123}
+            - {name: native, containerPort: 9000}
+            - {name: metrics, containerPort: 9363}
+          readinessProbe:
+            httpGet: {path: /ping, port: 8123}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 10
+            initialDelaySeconds: 30
+          livenessProbe:
+            httpGet: {path: /ping, port: 8123}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
+            initialDelaySeconds: 60
+          resources:
+{{ toYaml .Values.clickhouse.resources | indent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/clickhouse}
+            - {name: initdb, mountPath: /docker-entrypoint-initdb.d/init.sql, subPath: init.sql, readOnly: true}
+            - {name: conf, mountPath: /etc/clickhouse-server/config.d/custom-settings.xml, subPath: custom-settings.xml, readOnly: true}
+            - {name: conf, mountPath: /etc/clickhouse-server/config.d/prometheus.xml, subPath: prometheus.xml, readOnly: true}
+            - {name: conf, mountPath: /etc/clickhouse-server/config.d/memory.xml, subPath: memory.xml, readOnly: true}
+            - {name: conf, mountPath: /etc/clickhouse-server/config.d/system-logs.xml, subPath: system-logs.xml, readOnly: true}
+            - {name: conf, mountPath: /etc/clickhouse-server/config.d/logger.xml, subPath: logger.xml, readOnly: true}
+            - {name: conf, mountPath: /etc/clickhouse-server/users.d/query-spill.xml, subPath: query-spill.xml, readOnly: true}
+            - {name: conf, mountPath: /etc/clickhouse-server/users.d/workload-profiles.xml, subPath: workload-profiles.xml, readOnly: true}
+      volumes:
+        - {name: initdb, configMap: {name: correlix-clickhouse}}
+        - {name: conf, configMap: {name: correlix-clickhouse}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if or .Values.clickhouse.persistence.storageClass .Values.global.storageClass }}
+        storageClassName: {{ .Values.clickhouse.persistence.storageClass | default .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.clickhouse.persistence.size }}
+{{- end }}
+{{- if .Values.victoria.enabled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: victoria
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "victoria") | indent 4 }}
+spec:
+  serviceName: victoria
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "victoria") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "victoria") | indent 8 }}
+    spec:
+{{ include "correlix.podCommon" (dict "root" $ "uid" 1000 "gid" 1000) | indent 6 }}
+      containers:
+        - name: victoria
+          image: {{ include "correlix.image" (dict "root" $ "img" .Values.victoria.image "name" "victoria") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+{{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          args:
+            - --retentionPeriod={{ .Values.victoria.retention }}
+            - --storageDataPath=/victoria
+            - --dedup.minScrapeInterval={{ .Values.victoria.dedupMinScrapeInterval }}
+            - --memory.allowedPercent={{ .Values.victoria.memoryAllowedPercent }}
+            # VM scrapes the stack's self-metrics itself — one metrics store,
+            # one query API, and the same store the alert engine reads.
+            - --promscrape.config=/etc/victoria/config/vmscrape.yml
+            - --promscrape.suppressScrapeErrors
+            - --promscrape.configCheckInterval=60s
+          ports:
+            - {name: http, containerPort: 8428}
+          readinessProbe:
+            httpGet: {path: /health, port: 8428}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            httpGet: {path: /health, port: 8428}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+{{ toYaml .Values.victoria.resources | indent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /victoria}
+            - {name: config, mountPath: /etc/victoria/config, readOnly: true}
+      volumes:
+        - {name: config, configMap: {name: correlix-config}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if or .Values.victoria.persistence.storageClass .Values.global.storageClass }}
+        storageClassName: {{ .Values.victoria.persistence.storageClass | default .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.victoria.persistence.size }}
+{{- end }}

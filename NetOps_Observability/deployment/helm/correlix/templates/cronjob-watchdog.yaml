@@ -1,0 +1,89 @@
+{{- if .Values.watchdog.enabled }}
+{{/*
+IN-CLUSTER WATCHDOG — READ THIS BEFORE ENABLING IT.
+
+scripts/stack-watchdog.sh is the third monitoring layer and its defining
+property is that it survives the whole stack dying: it is an external cron on a
+host outside the deployment, pinging a dead-man's-switch when healthy and
+pushing a phone alert on a transition. A CronJob inside the cluster CANNOT hold
+that property — the cluster is the thing that fails — so this object is NOT a
+port of the watchdog and must not be treated as one.
+
+What it IS: the subset of the watchdog's checks that do not need to survive
+cluster death, asked from inside. Both come from the 2026-09-02 outage, where
+the correlation engine consumed nothing for three hours while every container
+read healthy:
+
+  * consumer-group membership for correlation and every netops-router-* lane
+  * the alert-delivery heartbeat
+    (netops_alert_webhook_heartbeat_timestamp_seconds), the only end-to-end
+    proof that vmalert -> api -> notify.Dispatcher works
+
+Keep the out-of-cluster cron. This is additive.
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: correlix-watchdog
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "watchdog") | indent 4 }}
+spec:
+  schedule: {{ .Values.watchdog.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+{{ include "correlix.selectorLabels" (dict "root" $ "component" "watchdog") | indent 12 }}
+        spec:
+          restartPolicy: Never
+{{ include "correlix.podCommon" (dict "root" $ "uid" 65532 "gid" 65532) | indent 10 }}
+          containers:
+            - name: watchdog
+              image: {{ include "correlix.image" (dict "root" $ "img" .Values.curl.image "name" "watchdog") }}
+              imagePullPolicy: {{ .Values.images.pullPolicy }}
+              securityContext:
+{{ include "correlix.containerSecurity" (dict "readOnlyRootFilesystem" true) | indent 16 }}
+              resources:
+{{ toYaml .Values.watchdog.resources | indent 16 }}
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  VM=http://victoria:8428
+                  fail=0
+                  # §16.1: never swallow an error. Each query's output is
+                  # printed and a missing series is a FAILURE, not a skip — a
+                  # skipped required check is an un-answered question, not a
+                  # good answer.
+                  q() {  # promql -> the first sample value, or empty
+                    curl -sS -m 15 --get "$VM/api/v1/query" --data-urlencode "query=$1" \
+                      | sed -n 's/.*"value":\[[^,]*,"\([^"]*\)".*/\1/p' | head -1
+                  }
+                  members="$(q 'sum(kafka_consumergroup_members{consumergroup="netops-correlation"})')"
+                  if [ -z "$members" ]; then
+                    echo "WATCHDOG FAIL: no kafka_consumergroup_members series for netops-correlation (is kafkaExporter enabled?)" >&2
+                    fail=1
+                  elif [ "${members%%.*}" -lt 1 ]; then
+                    echo "WATCHDOG FAIL: correlation has 0 consumer-group members — the engine is not consuming" >&2
+                    fail=1
+                  else
+                    echo "ok: correlation consumer-group members=$members"
+                  fi
+                  hb="$(q 'time() - netops_alert_webhook_heartbeat_timestamp_seconds')"
+                  if [ -z "$hb" ]; then
+                    echo "WATCHDOG FAIL: alert-delivery heartbeat series absent — alerts may be firing and reaching nobody" >&2
+                    fail=1
+                  elif [ "${hb%%.*}" -gt 900 ]; then
+                    echo "WATCHDOG FAIL: alert-delivery heartbeat is ${hb}s stale" >&2
+                    fail=1
+                  else
+                    echo "ok: alert-delivery heartbeat age=${hb}s"
+                  fi
+                  exit "$fail"
+{{- end }}
