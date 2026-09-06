@@ -1,0 +1,80 @@
+# .dockerignore — the build-context filter for every image built from THIS
+# directory. Eight compose services (`api`, `prober`, `correlation`,
+# `frontend`, `nginx`, `mock-nms`, `mock-servicenow`, `secrets-seal`) declare
+# `context: ../..` from deployment/docker/, which resolves here — so without
+# this file the context is the whole working tree, `data/` (double-digit GB of
+# live OpenSearch/ClickHouse/VictoriaMetrics state) included.
+#
+# Two things it buys, both of which the tracker row (#193) called out:
+#   1. Cost — the daemon stops receiving gigabytes it can never use, and an
+#      unrelated write under data/ stops invalidating every image's cache.
+#   2. Safety — nothing under data/ or backups/ (live state, pre-cutover
+#      snapshots), no `.env`, and no key material can reach an image, today or
+#      the day a Dockerfile gains a broader COPY.
+#
+# RULE FOR EDITING THIS FILE: never exclude a path a Dockerfile COPYs.
+# `tests/test_dockerignore_copy_sources.py` parses every
+# deployment/docker/Dockerfile* COPY line and fails if this file would ignore
+# one — run it after any change here or to a COPY line. The non-obvious ones it
+# protects: `src/frontend/dist` and `docs-portal/build` are BUILD OUTPUT that
+# the frontend image ships (both gitignored, neither dockerignorable), and
+# `NOTICE` + two files under docs/ are the licence texts the images carry.
+
+# ---- version control, CI metadata, agent scratch ---------------------------
+.git
+.gitignore
+.gitattributes
+.github
+.claude
+
+# ---- live runtime state and local artefacts (never an image input) ---------
+data
+backups
+# Release bundles built by `make bundle`. This matches the TOP-LEVEL dist/ only
+# (Docker patterns match the whole relative path) — src/frontend/dist, which the
+# frontend image ships, is a different path and stays in the context.
+dist
+compliance
+telemetry-catalog
+tests
+scripts
+docs-portal/node_modules
+docs-portal/.docusaurus
+
+# ---- secrets: generated env files and key material -------------------------
+# `.env` is generated at install and holds every stack credential.
+deployment/docker/.env
+deployment/docker/.env.*
+deployment/docker/nginx/certs
+**/*.pem
+**/*.key
+**/id_rsa*
+
+# ---- dependency trees, caches and compiled artefacts -----------------------
+# src/backend/vendor is deliberately NOT here: the Go build is offline and needs it.
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.venv
+**/venv
+**/.tox
+**/*.tsbuildinfo
+# Stray `go build -o api` output in the source tree (gitignored, 40+ MB).
+src/backend/api
+src/backend/backend
+src/backend/*.test
+src/correlation/build
+
+# ---- logs, temp files, editor / OS droppings -------------------------------
+**/*.log
+**/*.swp
+**/*~
+**/.DS_Store
+**/.idea
+**/.vscode
+tmp
+.tmp
