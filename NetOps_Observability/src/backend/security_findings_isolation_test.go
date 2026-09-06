@@ -29,6 +29,7 @@ package backend
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -105,7 +106,10 @@ func secDoc(id, tenant, severity, status, seam, device string) string {
 		`"_source":{"tenant_id":"` + tenant + `","ts":1756684800000,"severity":"` + severity + `",` +
 		`"entity_id":"` + device + `","native_id":"n-` + id + `","seam_type":"` + seam + `",` +
 		`"attrs":{"status":"` + status + `","scan_id":"scan-1","evidence_class":"posture",` +
-		`"control_id":"AC-17","standards":["CIS:1.2"]}},"sort":[1756684800000,"` + id + `"]}`
+		`"control_id":"AC-17","standards":["CIS:1.2"]}},` +
+		// One sort value per listSort key (ts, native_id, attrs.scan_id) — the
+		// shape a real hit carries, and what cursorFromSort reads.
+		`"sort":[1756684800000,"n-` + id + `","scan-1"]}`
 }
 
 // secTestServer builds the minimal server the security handlers need, with the
@@ -622,7 +626,8 @@ func TestSecurityFindingsCursorRoundTripsThroughTheAPI(t *testing.T) {
 		t.Fatal("a full page must advertise a cursor — otherwise the rest of the list is unreachable")
 	}
 	cur, ok := secapi.DecodeCursor(*page.NextCursor)
-	if !ok || cur.Collapsed || cur.Millis != 1756684800000 || cur.DocID != "a1" {
+	if !ok || cur.Collapsed || cur.Millis != 1756684800000 ||
+		cur.NativeID != "n-a1" || cur.ScanID != "scan-1" {
 		t.Fatalf("cursor decoded to %+v (ok=%v), want the last hit's sort values", cur, ok)
 	}
 
@@ -634,7 +639,7 @@ func TestSecurityFindingsCursorRoundTripsThroughTheAPI(t *testing.T) {
 		t.Fatalf("page 2 = %d (%s)", w.Code, w.Body.String())
 	}
 	last := fake.all()[len(fake.all())-1]
-	if !strings.Contains(last.Body, `"search_after":[1756684800000,"a1"]`) {
+	if !strings.Contains(last.Body, `"search_after":[1756684800000,"n-a1","scan-1"]`) {
 		t.Fatalf("page 2 did not carry the keyset: %s", last.Body)
 	}
 	if last.Index != secPatternFor("acme") {
@@ -766,7 +771,7 @@ func TestSecurityFindingsCurrentStatePagesByOffset(t *testing.T) {
 
 	// A KEYSET cursor replayed with current=true is the wrong kind: it is
 	// ignored (page 1), never turned into a nonsense position.
-	keyset := secapi.EncodeKeysetCursor(1756684800000, "a1")
+	keyset := secapi.EncodeKeysetCursor(1756684800000, "n-a1", "scan-1")
 	w = httptest.NewRecorder()
 	s.secAPI.HandleFindings(w, req(http.MethodGet,
 		"/api/security/findings?current=true&limit=1&cursor="+keyset, "", acme()))
@@ -1145,5 +1150,252 @@ func TestSecurityFindingsCurrentSupersedesOlderScans(t *testing.T) {
 	}
 	if len(page.Items) != 2 {
 		t.Fatalf("the retained verdict history was lost: %d rows, want 2 (%s)", len(page.Items), w.Body.String())
+	}
+}
+
+// ---- tracker 228: keyset paging over a total order --------------------------
+
+// secKeysetDoc is one document in the keyset stand-in's corpus.
+type secKeysetDoc struct {
+	ID       string
+	Tenant   string
+	TS       int64
+	NativeID string
+	ScanID   string
+}
+
+// secKeysetOS is a stand-in that HONOURS the paging half of the query: it sorts
+// its corpus exactly the way listSort tells OpenSearch to (ts desc, native_id
+// desc, attrs.scan_id desc), applies `search_after` as the cluster does (strict
+// tuple comparison against the sort keys, in order), and returns `size` hits
+// with the per-hit `sort` array the cursor is minted from.
+//
+// It exists because a fake that ignores the body cannot see the tracker-228
+// defect at all: with the old tie-break the sort was NOT a total order (it
+// named `cx_finding_id`, a field the router's `id_key` sink strips out of every
+// document), so real pages came back `[ts, null]`, no cursor was ever minted,
+// and the list ended at page one while `total` reported thousands more.
+type secKeysetOS struct {
+	mu     sync.Mutex
+	docs   []secKeysetDoc
+	bodies []string
+}
+
+// sortKeys is the hit's `sort` array: one value per listSort key, in order.
+func (d secKeysetDoc) sortKeys() []any { return []any{d.TS, d.NativeID, d.ScanID} }
+
+// afterCmp orders two keysets the way the cluster's descending sort does:
+// -1 when a sorts BEFORE b (i.e. a is "greater" on a desc sort), +1 after, 0
+// when the two are indistinguishable — the case that duplicates or skips rows
+// when the sort is not a total order.
+func secAfterCmp(a, b []any) int {
+	for i := range a {
+		var x, y string
+		switch v := a[i].(type) {
+		case int64:
+			x = fmt.Sprintf("%020d", v)
+		case string:
+			x = v
+		}
+		switch v := b[i].(type) {
+		case float64:
+			y = fmt.Sprintf("%020d", int64(v))
+		case int64:
+			y = fmt.Sprintf("%020d", v)
+		case string:
+			y = v
+		}
+		if x != y {
+			if x > y { // desc: the larger value comes first
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+func secStartKeysetOS(t *testing.T, fake *secKeysetOS) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			t.Errorf("read query body: %v", err)
+			http.Error(w, "read", http.StatusInternalServerError)
+			return
+		}
+		var q struct {
+			Size        int   `json:"size"`
+			SearchAfter []any `json:"search_after"`
+		}
+		if err := json.Unmarshal(raw, &q); err != nil {
+			t.Errorf("the API sent a body OpenSearch could not parse: %v", err)
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
+		}
+		index := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/_search")
+
+		fake.mu.Lock()
+		fake.bodies = append(fake.bodies, string(raw))
+		// Only the caller's own pattern sees the corpus — the at-rest half of
+		// §3a, kept honest here too.
+		var visible []secKeysetDoc
+		for _, d := range fake.docs {
+			if index == secPatternFor(d.Tenant) || index == "netops-secfindings-*" {
+				visible = append(visible, d)
+			}
+		}
+		fake.mu.Unlock()
+
+		sort.Slice(visible, func(i, j int) bool {
+			return secAfterCmp(visible[i].sortKeys(), visible[j].sortKeys()) < 0
+		})
+		total := len(visible)
+		if len(q.SearchAfter) > 0 {
+			cut := 0
+			// Keep only what sorts strictly AFTER the cursor's tuple.
+			for cut < len(visible) && secAfterCmp(visible[cut].sortKeys(), q.SearchAfter) <= 0 {
+				cut++
+			}
+			visible = visible[cut:]
+		}
+		if q.Size > 0 && len(visible) > q.Size {
+			visible = visible[:q.Size]
+		}
+
+		hits := make([]string, 0, len(visible))
+		for _, d := range visible {
+			hits = append(hits, `{"_index":"netops-secfindings-`+d.Tenant+`-2026.09.01","_id":"`+d.ID+`",`+
+				`"_source":{"tenant_id":"`+d.Tenant+`","ts":`+strconv.FormatInt(d.TS, 10)+`,`+
+				`"severity":"high","entity_id":"acme-core","native_id":"`+d.NativeID+`",`+
+				`"attrs":{"status":"Fail","scan_id":"`+d.ScanID+`","evidence_class":"posture"}},`+
+				`"sort":[`+strconv.FormatInt(d.TS, 10)+`,"`+d.NativeID+`","`+d.ScanID+`"]}`)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"took":1,"timed_out":false,"hits":{"total":{"value":` +
+			strconv.Itoa(total) + `,"relation":"eq"},"hits":[` + strings.Join(hits, ",") + `]}}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("OPENSEARCH_URL", srv.URL)
+}
+
+// TestSecurityFindingsKeysetPagesEveryFindingExactlyOnce is tracker 228's
+// regression test, and the reason the sort tie-breaks on the document's
+// documented unique key (native_id, attrs.scan_id) rather than on
+// `cx_finding_id`.
+//
+// Every document in the corpus carries the SAME timestamp — a whole scan is
+// stamped with one scan time, so equal timestamps are the NORMAL case here, not
+// a corner. With a tie-break that is not a total order, walking the list either
+// repeats rows or steps over them; with one that is, a full walk returns every
+// finding exactly once and then stops. The page size (3) deliberately does NOT
+// divide the two-verdict groups: a boundary that always fell between groups
+// would hide a tie-break that only distinguishes groups.
+func TestSecurityFindingsKeysetPagesEveryFindingExactlyOnce(t *testing.T) {
+	const sameTS int64 = 1756684800000
+	fake := &secKeysetOS{}
+	// Four verdict identities × two scan runs, EVERY document stamped with the
+	// same instant. Both halves of the tie-break are load-bearing here: without
+	// attrs.scan_id the pair sharing a native_id is indistinguishable, and the
+	// page boundary walking past it drops one of the two.
+	for _, scan := range []string{"scan-1", "scan-2"} {
+		for i := 0; i < 4; i++ {
+			fake.docs = append(fake.docs, secKeysetDoc{
+				ID:       "acme-doc-" + scan + "-" + strconv.Itoa(i),
+				Tenant:   "acme",
+				TS:       sameTS,
+				NativeID: "security|security_posture|posture|acme|AC-17|spine1|rule-" + strconv.Itoa(i),
+				ScanID:   scan,
+			})
+		}
+	}
+	// A neighbouring tenant's finding, at the same instant, must never appear.
+	fake.docs = append(fake.docs, secKeysetDoc{
+		ID: "globex-doc", Tenant: "globex", TS: sameTS,
+		NativeID: "security|security_posture|posture|globex|AC-17|edge1|rule-0", ScanID: "scan-1",
+	})
+	secStartKeysetOS(t, fake)
+	s := secTestServer(t)
+
+	seen := map[string]int{}
+	cursor := ""
+	for page := 1; ; page++ {
+		if page > 10 {
+			t.Fatal("paging did not terminate — the cursor is not advancing")
+		}
+		url := "/api/security/findings?limit=3"
+		if cursor != "" {
+			url += "&cursor=" + cursor
+		}
+		w := httptest.NewRecorder()
+		s.secAPI.HandleFindings(w, req(http.MethodGet, url, "", acme()))
+		if w.Code != http.StatusOK {
+			t.Fatalf("page %d = %d (%s)", page, w.Code, w.Body.String())
+		}
+		var body struct {
+			Items      []struct{ ID string } `json:"items"`
+			NextCursor *string               `json:"next_cursor"`
+			Total      int64                 `json:"total"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode page %d: %v", page, err)
+		}
+		if body.Total != 8 {
+			t.Fatalf("page %d reported total=%d, want the 8 verdicts acme owns", page, body.Total)
+		}
+		for _, it := range body.Items {
+			seen[it.ID]++
+		}
+		if body.NextCursor == nil {
+			break
+		}
+		cursor = *body.NextCursor
+	}
+
+	if len(seen) != 8 {
+		t.Fatalf("the walk returned %d distinct findings, want 8 — rows were SKIPPED: %v", len(seen), seen)
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("finding %s was served %d times — the sort is not a total order", id, n)
+		}
+	}
+	if _, leaked := seen["globex-doc"]; leaked {
+		t.Fatal("TENANT LEAK: another tenant's finding was paged into acme's list")
+	}
+}
+
+// TestSecurityFindingsKeysetNeverSortsOnAFieldNoDocumentCarries is the cheap,
+// permanent guard under the test above: the list sort must not name
+// `cx_finding_id`. Vector's `id_key: cx_finding_id` sink lifts that key into the
+// bulk action's `_id` and REMOVES it from the document, so a sort on it ranks
+// every document by a missing value and the keyset degenerates.
+func TestSecurityFindingsKeysetNeverSortsOnAFieldNoDocumentCarries(t *testing.T) {
+	fake := &secKeysetOS{docs: []secKeysetDoc{{
+		ID: "a1", Tenant: "acme", TS: 1756684800000,
+		NativeID: "security|security_posture|posture|acme|AC-17|spine1|rule-0", ScanID: "scan-1",
+	}}}
+	secStartKeysetOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings?limit=1", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("list = %d (%s)", w.Code, w.Body.String())
+	}
+	fake.mu.Lock()
+	body := fake.bodies[len(fake.bodies)-1]
+	fake.mu.Unlock()
+	sortIdx := strings.Index(body, `"sort":`)
+	if sortIdx < 0 {
+		t.Fatalf("the list body carries no sort at all: %s", body)
+	}
+	if strings.Contains(body[sortIdx:], "cx_finding_id") {
+		t.Fatalf("the list sorts on cx_finding_id, which no indexed document carries: %s", body[sortIdx:])
+	}
+	for _, want := range []string{`"ts"`, `"native_id"`, `"attrs.scan_id"`} {
+		if !strings.Contains(body[sortIdx:], want) {
+			t.Errorf("the list sort lost %s — the keyset is no longer a total order: %s", want, body[sortIdx:])
+		}
 	}
 }

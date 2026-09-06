@@ -276,7 +276,9 @@ func (a *API) HandleFindings(w http.ResponseWriter, r *http.Request) {
 			if f.Current {
 				pos.From = cur.Offset
 			} else {
-				pos.After = []any{cur.Millis, cur.DocID}
+				// One value per listSort key, in listSort's order —
+				// OpenSearch rejects a search_after whose length differs.
+				pos.After = []any{cur.Millis, cur.NativeID, cur.ScanID}
 			}
 		}
 	}
@@ -337,11 +339,19 @@ func (a *API) HandleFindings(w http.ResponseWriter, r *http.Request) {
 	a.d.WriteJSON(w, http.StatusOK, page)
 }
 
-// cursorFromSort renders the keyset cursor from a hit's sort values ([ts millis,
-// doc id]). It fails closed: an unexpected sort shape yields NO cursor rather
-// than a malformed one that would restart the list from the beginning.
+// cursorFromSort renders the keyset cursor from a hit's sort values — one per
+// listSort key, i.e. [ts millis, native_id, attrs.scan_id]. It fails closed: an
+// unexpected sort shape yields NO cursor rather than a malformed one that would
+// restart the list from the beginning.
+//
+// "Fails closed" was doing real damage before tracker 228, and silently: the
+// tie-break named a field NO document carries, so every hit came back
+// [ts, null], every page answered next_cursor:null, and the list ended at page
+// one while `total` reported thousands more. Nothing errored. The fix is the
+// sort (listSort), not this function — but the shape check below is why the
+// symptom was a short list rather than a 400 from OpenSearch.
 func cursorFromSort(sortVals []any) (string, bool) {
-	if len(sortVals) < 2 {
+	if len(sortVals) < 3 {
 		return "", false
 	}
 	var ms int64
@@ -357,11 +367,12 @@ func cursorFromSort(sortVals []any) (string, bool) {
 	default:
 		return "", false
 	}
-	id, ok := sortVals[1].(string)
-	if !ok || id == "" {
+	nativeID, nOK := sortVals[1].(string)
+	scanID, sOK := sortVals[2].(string)
+	if !nOK || !sOK || !isSafeSortValue(nativeID) || !isSafeSortValue(scanID) {
 		return "", false
 	}
-	return EncodeKeysetCursor(ms, id), true
+	return EncodeKeysetCursor(ms, nativeID, scanID), true
 }
 
 // ---- GET /api/security/findings/{id} ---------------------------------------

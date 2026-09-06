@@ -12,6 +12,7 @@ package secapi
 // 400, never a silently empty result set) and the limit caps.
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -66,7 +67,7 @@ func TestListBodyIsPinned(t *testing.T) {
 		`{"terms":{"attrs.standards":["CIS"]}},` +
 		`{"bool":{"minimum_should_match":1,"should":[{"terms":{"entity_id":["rtr-1"]}},{"terms":{"entity_tokens":["rtr-1"]}}]}},` +
 		`{"simple_query_string":{"default_operator":"and","fields":["attrs.control_title","attrs.control_id","attrs.raw_rule_id","entity_id","attrs.status_detail.text","title","control_title","observed","intended","detail","status_detail","remediation"],"lenient":true,"query":"telnet"}}]}},` +
-		`"size":100,"sort":[{"ts":{"order":"desc","unmapped_type":"date"}},{"cx_finding_id":{"order":"desc","unmapped_type":"keyword"}}],"track_total_hits":true}`
+		`"size":100,"sort":[{"ts":{"order":"desc","unmapped_type":"date"}},{"native_id":{"order":"desc","unmapped_type":"keyword"}},{"attrs.scan_id":{"order":"desc","unmapped_type":"keyword"}}],"track_total_hits":true}`
 	if got := mustJSON(t, ListBody(pinFullFilters(), pinTenantClause(), 100, PagePos{})); got != want {
 		t.Errorf("list body changed.\n got: %s\nwant: %s", got, want)
 	}
@@ -81,7 +82,7 @@ func TestListBodyCurrentCollapseIsPinned(t *testing.T) {
 	want := `{"_source":true,"aggs":{"current_total":{"cardinality":{"field":"native_id","precision_threshold":40000}}},` +
 		`"collapse":{"field":"native_id"},"from":50,"query":{"bool":{"filter":[` + pinnedRange + `]}},` +
 		`"size":50,` +
-		`"sort":[{"ts":{"order":"desc","unmapped_type":"date"}},{"cx_finding_id":{"order":"desc","unmapped_type":"keyword"}}]}`
+		`"sort":[{"ts":{"order":"desc","unmapped_type":"date"}},{"native_id":{"order":"desc","unmapped_type":"keyword"}},{"attrs.scan_id":{"order":"desc","unmapped_type":"keyword"}}]}`
 	got := mustJSON(t, ListBody(f, nil, 50, PagePos{From: 50}))
 	if got != want {
 		t.Errorf("current-collapse list body changed.\n got: %s\nwant: %s", got, want)
@@ -273,9 +274,13 @@ func TestIndexPatternNamesOnlyTheCallersIndices(t *testing.T) {
 // ---- cursor ----------------------------------------------------------------
 
 func TestCursorRoundTrip(t *testing.T) {
-	const id = "3f2a9c1e5b7d0a4f6e8c2b1d9a7f5e3c1b0d8a6f4e2c0b9d7a5f3e1c9b7d5a30"
-	cur, ok := DecodeCursor(EncodeKeysetCursor(1_756_000_000_123, id))
-	if !ok || cur.Collapsed || cur.Millis != 1_756_000_000_123 || cur.DocID != id {
+	// A REAL native_id, "|"-separated exactly as secbus.nativeIDOf builds it —
+	// the reason the cursor payload is JSON and not a delimiter-joined string.
+	const nativeID = "security|posture|config|acme|AC-17|spine1|telnet-enabled"
+	const scanID = "scan-2026-09-06T01:02:03Z"
+	cur, ok := DecodeCursor(EncodeKeysetCursor(1_756_000_000_123, nativeID, scanID))
+	if !ok || cur.Collapsed || cur.Millis != 1_756_000_000_123 ||
+		cur.NativeID != nativeID || cur.ScanID != scanID {
 		t.Fatalf("keyset round trip failed: %+v ok=%v", cur, ok)
 	}
 	cur, ok = DecodeCursor(EncodeOffsetCursor(400))
@@ -284,9 +289,33 @@ func TestCursorRoundTrip(t *testing.T) {
 	}
 	// The two kinds are distinguishable, which is what lets the handler ignore
 	// a cursor replayed in the wrong mode instead of paging with nonsense.
-	if k, _ := DecodeCursor(EncodeKeysetCursor(1, id)); k.Collapsed {
+	if k, _ := DecodeCursor(EncodeKeysetCursor(1, nativeID, scanID)); k.Collapsed {
 		t.Fatal("a keyset cursor decoded as collapsed")
 	}
+	// The cursor is OPAQUE: nothing but this codec may read it, and in
+	// particular it must not leak the keyset in plain sight.
+	if strings.Contains(EncodeKeysetCursor(1, nativeID, scanID), nativeID) {
+		t.Fatal("the cursor is not opaque — the keyset is readable in the token")
+	}
+}
+
+// TestLegacyTwoValueCursorIsRefused pins the tracker-228 migration rule. The
+// old "k" cursor carried TWO keyset values for the old two-key sort; replaying
+// one against the three-key listSort would make OpenSearch reject the whole
+// page ("the number of search_after values must equal the number of sort
+// fields"). A stale cursor must decode to ok=false — i.e. page 1 — which is the
+// documented answer for every cursor this API can no longer honour.
+func TestLegacyTwoValueCursorIsRefused(t *testing.T) {
+	legacy := base64.RawURLEncoding.EncodeToString([]byte("k|1756000000123|deadbeef"))
+	if cur, ok := DecodeCursor(legacy); ok {
+		t.Fatalf("a legacy two-value cursor was accepted: %+v", cur)
+	}
+}
+
+// mustB64 renders a raw cursor payload the way EncodeKeysetCursor would, so a
+// malformed-payload case is written in readable form.
+func mustB64(payload string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(payload))
 }
 
 func TestCursorRejectsGarbage(t *testing.T) {
@@ -303,6 +332,17 @@ func TestCursorRejectsGarbage(t *testing.T) {
 		"Y3wtNQ",                     // "c|-5" — negative offset
 		"Y3wxMDAwMDE",                // "c|100001" — past the result window
 		"eHwxMjN8YWJj",               // "x|123|abc" — unknown kind
+		// the keyset kind, with payloads that are not a 3-value keyset
+		mustB64(`k2|["1756000000123","n","s"]`),         // millis as a string
+		mustB64(`k2|[1756000000123,"n"]`),               // too few values
+		mustB64(`k2|[1756000000123,"n","s",1]`),         // too many values
+		mustB64(`k2|[-1,"n","s"]`),                      // negative millis
+		mustB64(`k2|[1.5,"n","s"]`),                     // fractional millis
+		mustB64(`k2|[1756000000123,"","s"]`),            // empty native id
+		mustB64(`k2|[1756000000123,"n",""]`),            // empty scan id
+		mustB64("k2|[1756000000123,\"n\u0007\",\"s\"]"), // control character
+		mustB64(`k2|not-json`),
+		mustB64(`k2|`),
 	} {
 		if _, ok := DecodeCursor(bad); ok {
 			t.Errorf("DecodeCursor(%q) accepted a malformed cursor", bad)
@@ -326,11 +366,11 @@ func TestCollapsedPagingUsesFromNotSearchAfter(t *testing.T) {
 		t.Fatalf("the collapsed page position was lost: %s", got)
 	}
 	// The uncollapsed path is the mirror image: keyset, never an offset.
-	got = mustJSON(t, ListBody(Filters{Since: pinSince, Until: pinUntil}, nil, 50, PagePos{After: []any{int64(7), "id"}}))
+	got = mustJSON(t, ListBody(Filters{Since: pinSince, Until: pinUntil}, nil, 50, PagePos{After: []any{int64(7), "n", "s"}}))
 	if strings.Contains(got, `"from"`) {
 		t.Fatalf("the uncollapsed list must page by keyset, not offset: %s", got)
 	}
-	if !strings.Contains(got, `"search_after":[7,"id"]`) {
+	if !strings.Contains(got, `"search_after":[7,"n","s"]`) {
 		t.Fatalf("keyset lost: %s", got)
 	}
 }

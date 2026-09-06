@@ -19,6 +19,7 @@ package secapi
 //	facet that disagree about which field they read is worse than either.
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -39,8 +40,10 @@ const (
 	// cx_event_id survives) and carries no `cx_finding_id` at all. A `term` on
 	// this field therefore matched NOTHING, which is why every by-id GET 404'd;
 	// GetBody now resolves by `_id` and accepts the term as the second, forward-
-	// compatible path. The name is still the right constant for the SORT
-	// tie-break and for a writer that keeps the field in the body.
+	// compatible path. It is NOT the sort tie-break (tracker 228): sorting on a
+	// field no document carries is not a total order, so listSort tie-breaks on
+	// (native_id, attrs.scan_id) — the same identity the _id is derived from.
+	// The constant remains for the forward-compatible term above.
 	FieldDocID         = "cx_finding_id"
 	FieldNativeID      = "native_id" // the producer's deterministic verdict identity
 	FieldSeverity      = "severity"
@@ -222,8 +225,8 @@ const MaxResultWindow = 10000
 // PagePos is the resolved position of one page. Exactly one half is used, and
 // WHICH one is decided by the collapse — not by preference:
 //
-//	After — the (ts desc, doc id desc) KEYSET, for the uncollapsed list. It
-//	        pages arbitrarily deep at constant cost.
+//	After — the listSort KEYSET (ts desc, native_id desc, attrs.scan_id desc),
+//	        for the uncollapsed list. It pages arbitrarily deep at constant cost.
 //	From  — a result-window OFFSET, for the CURRENT-state (collapsed) list.
 //
 // The split is forced by OpenSearch, not chosen: verified live against the
@@ -238,13 +241,46 @@ type PagePos struct {
 	From  int
 }
 
+// listSort is the ORDER every findings page is served in, and the sort the
+// keyset cursor rides on. It is a TOTAL order over documents, which is what a
+// `search_after` keyset requires: two documents that compare equal on every
+// sort key can be served twice or skipped entirely as the page boundary walks
+// past them.
+//
+// It tie-breaks on (native_id, attrs.scan_id) — the document's DOCUMENTED
+// unique key. The router computes `_id = sha2(native_id | scan_id)` and refuses
+// any record that cannot produce one ("secfindings identity incomplete", the
+// quarantine branch in vector-router/vector.yaml), so the pair is present on
+// every indexed document and unique by construction, and both halves are
+// declared `keyword` in the netops-secfindings index template.
+//
+// It used to tie-break on FieldDocID (`cx_finding_id`), which is NOT a field of
+// any indexed document: the sink is configured `id_key: cx_finding_id`, so
+// Vector lifts that key into the bulk action's `_id` and REMOVES it from the
+// body (the same mismatch that made every by-id GET 404 — D-09). The tie-break
+// therefore sorted every document on a MISSING value: the sort was not a total
+// order at all, and the `sort` array on each hit came back `[ts, null]`, which
+// cursorFromSort correctly refuses to encode. Deep `current=false` paging was
+// dead — page 1 was served with a null next_cursor while `total` reported
+// thousands more.
+func listSort() []any {
+	desc := func(field, unmapped string) map[string]any {
+		return map[string]any{field: map[string]any{"order": "desc", "unmapped_type": unmapped}}
+	}
+	return []any{
+		desc(FieldTime, "date"),
+		desc(FieldNativeID, "keyword"),
+		desc(FieldScanID, "keyword"),
+	}
+}
+
 // ListBody builds the findings page.
 //
 // CURRENT-STATE COLLAPSE (the decision record's "Doc identity" section): every
 // scan's verdict is RETAINED, so the list of "what is true now" is a QUERY-TIME
 // collapse, not a mutable upsert. `collapse: {field: native_id}` with the
-// (ts desc, doc id desc) sort returns exactly the newest verdict per FINDING
-// identity in one pass.
+// listSort (ts desc, native_id desc, scan_id desc) returns exactly the newest
+// verdict per FINDING identity in one pass.
 //
 // That only works because native_id is the identity of the FINDING (tenant,
 // class, control, device, rule) and NOT of the scan run — see
@@ -264,10 +300,7 @@ func ListBody(f Filters, tenantClause map[string]any, size int, pos PagePos) map
 		"size":    size,
 		"query":   BuildQuery(f, tenantClause),
 		"_source": true,
-		"sort": []any{
-			map[string]any{FieldTime: map[string]any{"order": "desc", "unmapped_type": "date"}},
-			map[string]any{FieldDocID: map[string]any{"order": "desc", "unmapped_type": "keyword"}},
-		},
+		"sort":    listSort(),
 	}
 	if f.Current {
 		body["collapse"] = map[string]any{"field": FieldNativeID}
@@ -490,21 +523,51 @@ func CoverageBody(f Filters, tenantClause map[string]any) map[string]any {
 type Cursor struct {
 	// Collapsed marks an offset cursor (the current-state list).
 	Collapsed bool
-	// Millis/DocID are the keyset values of an uncollapsed cursor.
-	Millis int64
-	DocID  string
+	// Millis/NativeID/ScanID are the keyset values of an uncollapsed cursor:
+	// one value per listSort key, in listSort's order.
+	Millis   int64
+	NativeID string
+	ScanID   string
 	// Offset is the result-window position of a collapsed cursor.
 	Offset int
 }
 
-// EncodeKeysetCursor renders the cursor over the (ts desc, cx_finding_id desc)
-// sort. It needs its own codec rather than reusing the events feed's: a
-// finding's document id is the sha2(native_id|scan_id) hex digest, not a UUID,
-// so decodeFeedCursor would reject every valid cursor this API produces.
-func EncodeKeysetCursor(tsMillis int64, docID string) string {
-	return base64.RawURLEncoding.EncodeToString(
-		[]byte("k|" + strconv.FormatInt(tsMillis, 10) + "|" + docID))
+// MaxCursorTokenLen bounds each keyset component on the way back IN. A cursor
+// is client-supplied even though the API minted it, so §3 applies: a native_id
+// is at most 256 bytes by construction (secbus.nativeIDOf hashes anything
+// longer) and a scan id is far shorter, so this ceiling accepts every value the
+// producer can make and refuses a padded one.
+const MaxCursorTokenLen = 256
+
+// EncodeKeysetCursor renders the cursor over the listSort keyset
+// (ts desc, native_id desc, attrs.scan_id desc). It needs its own codec rather
+// than reusing the events feed's: a finding's keyset is a (timestamp, string,
+// string) triple, not the feed's (timestamp, UUID) pair.
+//
+// The payload is a kind tag plus a JSON array, base64url'd whole. JSON rather
+// than a "|"-joined string because a native_id CONTAINS "|" (it is
+// "security|<kind>|<class>|<tenant>|…"), so a delimiter-joined cursor could not
+// be split back apart unambiguously. The token stays OPAQUE to the client
+// either way — nothing outside this file may parse it.
+func EncodeKeysetCursor(tsMillis int64, nativeID, scanID string) string {
+	payload, err := json.Marshal([]any{tsMillis, nativeID, scanID})
+	if err != nil {
+		// Unreachable: the argument is two strings and an int64, which
+		// encoding/json cannot fail on. Fail CLOSED anyway — an empty cursor
+		// ends the list, which is honest; a malformed one would silently
+		// restart it from page 1.
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(append([]byte(keysetCursorKind+"|"), payload...))
 }
+
+// keysetCursorKind tags the keyset cursor's wire form. It is "k2", not "k":
+// a "k" cursor carried TWO keyset values for a two-key sort, and replaying one
+// against the three-key listSort would make OpenSearch reject the whole page
+// ("the number of search_after values must equal the number of sort fields").
+// An unknown kind decodes to ok=false, i.e. page 1 — the documented answer for
+// a stale cursor.
+const keysetCursorKind = "k2"
 
 // EncodeOffsetCursor renders the collapsed list's opaque offset cursor.
 func EncodeOffsetCursor(offset int) string {
@@ -530,17 +593,47 @@ func DecodeCursor(s string) (Cursor, bool) {
 			return Cursor{}, false
 		}
 		return Cursor{Collapsed: true, Offset: n}, true
-	case "k":
-		msPart, id, ok := strings.Cut(rest, "|")
-		if !ok {
+	case keysetCursorKind:
+		var vals []any
+		if err := json.Unmarshal([]byte(rest), &vals); err != nil || len(vals) != 3 {
 			return Cursor{}, false
 		}
-		ms, err := strconv.ParseInt(msPart, 10, 64)
-		if err != nil || ms < 0 || !isSafeToken(id) {
+		ms, msOK := vals[0].(float64)
+		nativeID, nOK := vals[1].(string)
+		scanID, sOK := vals[2].(string)
+		if !msOK || !nOK || !sOK {
 			return Cursor{}, false
 		}
-		return Cursor{Millis: ms, DocID: id}, true
+		if ms < 0 || ms != float64(int64(ms)) {
+			return Cursor{}, false
+		}
+		if !isSafeSortValue(nativeID) || !isSafeSortValue(scanID) {
+			return Cursor{}, false
+		}
+		return Cursor{Millis: int64(ms), NativeID: nativeID, ScanID: scanID}, true
 	default:
 		return Cursor{}, false
 	}
+}
+
+// isSafeSortValue is the §3 boundary check on ONE keyset component coming back
+// in on a cursor. It is deliberately NOT isSafeToken: a native_id is a
+// "|"-joined tuple whose parts come from producer-supplied control and entity
+// ids, so the filter-token alphabet would reject legitimate keysets and strand
+// the caller on page 1 forever.
+//
+// What it enforces instead is the pair of properties a search_after value
+// actually needs: BOUNDED (MaxCursorTokenLen) and free of control characters.
+// It cannot be an injection vector in either case — the value is placed in the
+// body as a Go string that encoding/json escapes, never spliced into DSL text.
+func isSafeSortValue(s string) bool {
+	if s == "" || len(s) > MaxCursorTokenLen {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
