@@ -1192,3 +1192,109 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_wireless_mlo_links ON netops.wireless
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_wireless_client_rf ON netops.wireless_client_rf
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;
+
+-- ============================================================================
+-- DEM experience-event lane (tracker 254; design docs/design/DEM_2026-09-05.md
+-- §M.3). Producers post to the api, which publishes onto `netops.experience`;
+-- vector-router consumes that topic and splits on `record_type` into these two
+-- tables. src/backend/internal/chschema/experience_schema.go carries IDENTICAL
+-- DDL so existing installs converge on api boot — keep the two in lockstep.
+--
+-- STRICT row policies: an experience event is per-tenant data about that
+-- tenant's own users and much of it is classified `pseudonymous_user`, so an
+-- untagged row is platform-only and is never shared into every tenant's view.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS netops.experience_events
+(
+    tenant_id        LowCardinality(String) DEFAULT '',
+    event_id         String,
+    session_id       String DEFAULT '',
+    user_ref         String DEFAULT '',
+    app              LowCardinality(String) DEFAULT '',
+    environment      LowCardinality(String) DEFAULT '',
+    release          LowCardinality(String) DEFAULT '',
+    event_type       LowCardinality(String) DEFAULT '',
+    action           String DEFAULT '',
+    route            String DEFAULT '',
+    success          Bool DEFAULT false,
+    duration_ms      Nullable(Float64),
+    error            String DEFAULT '',
+    status_code      UInt16 DEFAULT 0,
+    lcp_ms           Nullable(Float64),
+    inp_ms           Nullable(Float64),
+    cls              Nullable(Float64),
+    ttfb_ms          Nullable(Float64),
+    fcp_ms           Nullable(Float64),
+    journey_id       String DEFAULT '',
+    step_id          String DEFAULT '',
+    actor_type       LowCardinality(String) DEFAULT 'HUMAN',
+    cohort_site      LowCardinality(String) DEFAULT '',
+    cohort_isp       LowCardinality(String) DEFAULT '',
+    cohort_region    LowCardinality(String) DEFAULT '',
+    cohort_device    LowCardinality(String) DEFAULT '',
+    cohort_browser   LowCardinality(String) DEFAULT '',
+    cohort_version   LowCardinality(String) DEFAULT '',
+    cohort_network   LowCardinality(String) DEFAULT '',
+    feature_flags    Map(String, String),
+    business_context Map(String, String),
+    trace_id         String DEFAULT '',
+    span_id          String DEFAULT '',
+    source           LowCardinality(String) DEFAULT 'rum',
+    producer         String DEFAULT '',
+    observation      LowCardinality(String) DEFAULT 'observed',
+    data_class       LowCardinality(String) DEFAULT 'customer_metadata',
+    schema_name      LowCardinality(String) DEFAULT '',
+    schema_version   UInt16 DEFAULT 0,
+    event_at         DateTime64(3),
+    observed_at      DateTime64(3),
+    ingest_ts        DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(ingest_ts)
+PARTITION BY (tenant_id, toYYYYMMDD(event_at))
+ORDER BY (tenant_id, app, event_at, event_id)
+TTL toDateTime(event_at) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE TABLE IF NOT EXISTS netops.business_events
+(
+    tenant_id           LowCardinality(String) DEFAULT '',
+    event_id            String,
+    business_event_type LowCardinality(String) DEFAULT '',
+    app                 LowCardinality(String) DEFAULT '',
+    journey_id          String DEFAULT '',
+    session_id          String DEFAULT '',
+    success             Bool DEFAULT false,
+    value               Nullable(Float64),
+    currency            LowCardinality(String) DEFAULT '',
+    quantity            UInt32 DEFAULT 0,
+    cohort_site         LowCardinality(String) DEFAULT '',
+    cohort_isp          LowCardinality(String) DEFAULT '',
+    cohort_region       LowCardinality(String) DEFAULT '',
+    cohort_device       LowCardinality(String) DEFAULT '',
+    cohort_browser      LowCardinality(String) DEFAULT '',
+    cohort_version      LowCardinality(String) DEFAULT '',
+    cohort_network      LowCardinality(String) DEFAULT '',
+    attributes          Map(String, String),
+    source              LowCardinality(String) DEFAULT 'manual',
+    producer            String DEFAULT '',
+    observation         LowCardinality(String) DEFAULT 'observed',
+    data_class          LowCardinality(String) DEFAULT 'customer_metadata',
+    schema_name         LowCardinality(String) DEFAULT '',
+    schema_version      UInt16 DEFAULT 0,
+    event_at            DateTime64(3),
+    observed_at         DateTime64(3),
+    ingest_ts           DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(ingest_ts)
+PARTITION BY (tenant_id, toYYYYMMDD(event_at))
+ORDER BY (tenant_id, app, event_at, event_id)
+TTL toDateTime(event_at) + INTERVAL 400 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_experience_events ON netops.experience_events
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_business_events ON netops.business_events
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;

@@ -36,6 +36,9 @@ var ErrNotFound = errors.New("experience: not found")
 // ErrFull is returned when a tenant is at its journey ceiling.
 var ErrFull = fmt.Errorf("experience: the journey catalogue is full (max %d journeys per tenant)", MaxJourneysPerTenant)
 
+// ErrPromotionsFull is returned when a tenant is at its promotion ceiling.
+var ErrPromotionsFull = fmt.Errorf("experience: the promoted-incident table is full (max %d per tenant)", MaxPromotionsPerTenant)
+
 // ChangeQuery bounds a change listing.
 type ChangeQuery struct {
 	Since time.Time
@@ -55,6 +58,18 @@ type Store interface {
 
 	ListChanges(ctx context.Context, tenant string, q ChangeQuery) ([]ChangeEvent, error)
 	RecordChange(ctx context.Context, in ChangeEvent) (ChangeEvent, error)
+
+	// Promotions are the THIRD persisted object (tracker 255): the durable link
+	// from a derived experience incident to the platform incident record it
+	// became, plus the evidence packet as it stood at that moment. It is
+	// persisted for the same reason the other two are — an operator's decision
+	// is a fact, not a derivation.
+	ListPromotions(ctx context.Context, tenant string) ([]Promotion, error)
+	GetPromotion(ctx context.Context, tenant, experienceID string) (Promotion, error)
+	// SavePromotion is idempotent on (tenant, experience_id): re-promoting the
+	// same window returns the row already stored rather than minting a second
+	// link to a second incident.
+	SavePromotion(ctx context.Context, in Promotion) (Promotion, error)
 }
 
 // EnvStoreFile is the file backend's path knob.
@@ -66,6 +81,12 @@ const EnvStoreFile = "DEM_EXPERIENCE_FILE"
 // the cause of an incident inside the lookback.
 const changeRetention = 2000
 
+// MaxPromotionsPerTenant bounds the file backend's promotion table. Promotions
+// are operator decisions, so the ceiling is generous and hitting it is a
+// REFUSAL rather than a silent eviction: dropping an operator's record of why
+// an incident was raised is not a bound, it is data loss.
+const MaxPromotionsPerTenant = 5000
+
 // FileStore is the non-Postgres backend. Path "" keeps it in memory (tests, and
 // a dev build with no persistence configured).
 type FileStore struct {
@@ -75,15 +96,18 @@ type FileStore struct {
 	// boundary, exactly as in internal/dem's catalogue.
 	journeys map[string]map[string]JourneyDefinition
 	changes  map[string][]ChangeEvent
-	loadErr  error
-	now      func() time.Time
+	// promotions is tenant → derived incident id → the durable link.
+	promotions map[string]map[string]Promotion
+	loadErr    error
+	now        func() time.Time
 }
 
 var _ Store = (*FileStore)(nil)
 
 type filePayload struct {
-	Journeys map[string][]JourneyDefinition `json:"journeys"`
-	Changes  map[string][]ChangeEvent       `json:"changes"`
+	Journeys   map[string][]JourneyDefinition `json:"journeys"`
+	Changes    map[string][]ChangeEvent       `json:"changes"`
+	Promotions map[string][]Promotion         `json:"promotions,omitempty"`
 }
 
 // NewFileStore loads the persisted state. A missing file starts empty; a
@@ -91,10 +115,11 @@ type filePayload struct {
 // store that failed to load must never look like one a tenant never wrote.
 func NewFileStore(path string) *FileStore {
 	s := &FileStore{
-		path:     path,
-		journeys: map[string]map[string]JourneyDefinition{},
-		changes:  map[string][]ChangeEvent{},
-		now:      func() time.Time { return time.Now().UTC() },
+		path:       path,
+		journeys:   map[string]map[string]JourneyDefinition{},
+		changes:    map[string][]ChangeEvent{},
+		promotions: map[string]map[string]Promotion{},
+		now:        func() time.Time { return time.Now().UTC() },
 	}
 	if path == "" {
 		return s
@@ -145,6 +170,24 @@ func NewFileStore(path string) *FileStore {
 		}
 		s.changes[t] = trimChanges(s.changes[t])
 	}
+	for rawTenant, list := range payload.Promotions {
+		t := normTenant(rawTenant)
+		if t == "" || t == "*" {
+			s.loadErr = errors.New("experience: the store file holds a non-concrete tenant bucket; it was dropped")
+			continue
+		}
+		for _, p := range list {
+			p.TenantID = t // the bucket is authoritative, never the row's own field
+			if err := p.Validate(); err != nil {
+				s.loadErr = errors.New("experience: the store file holds an invalid promotion; it was dropped")
+				continue
+			}
+			if s.promotions[t] == nil {
+				s.promotions[t] = map[string]Promotion{}
+			}
+			s.promotions[t][p.ExperienceID] = p
+		}
+	}
 	return s
 }
 
@@ -166,6 +209,17 @@ func (s *FileStore) flushLocked() error {
 	}
 	for tenant, list := range s.changes {
 		out.Changes[tenant] = list
+	}
+	if len(s.promotions) > 0 {
+		out.Promotions = map[string][]Promotion{}
+		for tenant, bucket := range s.promotions {
+			list := make([]Promotion, 0, len(bucket))
+			for _, p := range bucket {
+				list = append(list, p)
+			}
+			sortPromotions(list)
+			out.Promotions[tenant] = list
+		}
 	}
 	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
@@ -308,7 +362,72 @@ func (s *FileStore) RecordChange(_ context.Context, in ChangeEvent) (ChangeEvent
 	return in, nil
 }
 
+func (s *FileStore) ListPromotions(_ context.Context, tenant string) ([]Promotion, error) {
+	t, err := concreteTenant(tenant)
+	if err != nil {
+		return []Promotion{}, nil // default-closed: no scope, no rows
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Promotion, 0, len(s.promotions[t]))
+	for _, p := range s.promotions[t] {
+		out = append(out, p)
+	}
+	sortPromotions(out)
+	return out, nil
+}
+
+func (s *FileStore) GetPromotion(_ context.Context, tenant, experienceID string) (Promotion, error) {
+	t, err := concreteTenant(tenant)
+	if err != nil {
+		return Promotion{}, ErrNotFound
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.promotions[t][experienceID]
+	if !ok {
+		return Promotion{}, ErrNotFound
+	}
+	return p, nil
+}
+
+func (s *FileStore) SavePromotion(_ context.Context, in Promotion) (Promotion, error) {
+	if err := in.Validate(); err != nil {
+		return Promotion{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := in.TenantID
+	if prev, ok := s.promotions[t][in.ExperienceID]; ok {
+		// Idempotent: the first promotion is the one that happened. Returning
+		// the stored row is what makes a double-click cost nothing, and what
+		// keeps the frozen packet from being rewritten by a later derivation.
+		return prev, nil
+	}
+	if len(s.promotions[t]) >= MaxPromotionsPerTenant {
+		return Promotion{}, ErrPromotionsFull
+	}
+	if s.promotions[t] == nil {
+		s.promotions[t] = map[string]Promotion{}
+	}
+	s.promotions[t][in.ExperienceID] = in
+	if err := s.flushLocked(); err != nil {
+		delete(s.promotions[t], in.ExperienceID)
+		return Promotion{}, err
+	}
+	return in, nil
+}
+
 // ── shared helpers used by both backends ────────────────────────────────────
+
+func sortPromotions(list []Promotion) {
+	sort.SliceStable(list, func(i, j int) bool {
+		if !list[i].PromotedAt.Equal(list[j].PromotedAt) {
+			return list[i].PromotedAt.After(list[j].PromotedAt)
+		}
+		return list[i].ExperienceID < list[j].ExperienceID
+	})
+}
 
 func filterChanges(list []ChangeEvent, q ChangeQuery) []ChangeEvent {
 	types := map[string]bool{}

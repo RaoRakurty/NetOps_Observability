@@ -6133,6 +6133,15 @@ export const api = {
     request<DemIncidentPathResponse>(
       `/api/dem/incidents/${encodeURIComponent(id)}/path${demWindowQS(window)}`,
     ),
+  /** Promote a DERIVED experience incident into the platform incident record
+   *  (source_type "experience"), persisting its evidence packet beside it.
+   *  Idempotent: the derived id is the dedup key, so a second promotion folds
+   *  into the same incident rather than raising a twin. */
+  demPromoteIncident: (id: string, window?: DemWindow, body?: { owner?: string; note?: string }) =>
+    request<DemPromoteResponse>(
+      `/api/dem/incidents/${encodeURIComponent(id)}/promote${demWindowQS(window)}`,
+      { method: "POST", body: JSON.stringify(body ?? {}) },
+    ),
   /** Declared journeys with their measured health over the window. */
   demJourneys: (window?: DemWindow) =>
     request<DemJourneysResponse>(`/api/dem/journeys${demWindowQS(window)}`),
@@ -6868,6 +6877,45 @@ export interface DemIncidentResponse {
   incident: DemExperienceIncident;
   ai_investigator: DemAIAvailability;
   evidence_packet_available: boolean;
+  /** The durable link to the platform incident record, present only once this
+   *  incident has been promoted (tracker 255). `packet` is the evidence AS IT
+   *  STOOD at promotion — what the operator actually acted on. */
+  promotion?: DemPromotion;
+  /** Every field on which the stored packet and the LIVE derivation disagree.
+   *  Empty when they agree; never hidden when they do not. */
+  drift?: DemPromotionDrift[];
+  /** False when the deployment has no incident system of record (it is
+   *  Postgres-only), so the UI disables the action WITH a reason rather than
+   *  hiding it. */
+  can_promote: boolean;
+  promotion_note?: string;
+}
+
+/** The durable experience-incident → platform-incident link. */
+export interface DemPromotion {
+  tenant_id: string;
+  experience_id: string;
+  incident_id: string;
+  promoted_at: string;
+  promoted_by: string;
+  packet: DemExperienceIncident;
+}
+
+/** One field on which the frozen packet and the current derivation differ. */
+export interface DemPromotionDrift {
+  field: string;
+  at_promotion: string;
+  now: string;
+}
+
+/** POST /api/dem/incidents/{id}/promote. */
+export interface DemPromoteResponse {
+  incident_id: string;
+  created: boolean;
+  source_type: string;
+  promotion: DemPromotion;
+  incident: DemExperienceIncident;
+  note: string;
 }
 
 /** GET /api/dem/incidents/{id}/evidence. */

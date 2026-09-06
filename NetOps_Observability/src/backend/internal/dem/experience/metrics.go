@@ -26,6 +26,17 @@ type Counters struct {
 	IncidentsDerived atomic.Int64
 	PacketsBuilt     atomic.Int64
 	PacketsRejected  atomic.Int64
+	// The experience-event ingest lane (tracker 254). Refused and rejected are
+	// counted SEPARATELY: refused is backpressure the producer can retry
+	// through, rejected is data that will never arrive because it was
+	// malformed, and treating them as one number hides which is happening.
+	EventsIngested         atomic.Int64
+	BusinessEventsIngested atomic.Int64
+	IngestRefused          atomic.Int64
+	IngestRejected         atomic.Int64
+	// Promotion into the platform incident record (tracker 255).
+	IncidentsPromoted atomic.Int64
+	PromotionErrors   atomic.Int64
 }
 
 // NewCounters builds an empty block.
@@ -46,6 +57,12 @@ func (c *Counters) Snapshot() map[string]int64 {
 		"dem_experience_incidents_derived_total":   c.IncidentsDerived.Load(),
 		"dem_experience_ai_packets_built_total":    c.PacketsBuilt.Load(),
 		"dem_experience_ai_packets_rejected_total": c.PacketsRejected.Load(),
+		"dem_experience_events_ingested_total":     c.EventsIngested.Load(),
+		"dem_experience_business_ingested_total":   c.BusinessEventsIngested.Load(),
+		"dem_experience_ingest_refused_total":      c.IngestRefused.Load(),
+		"dem_experience_ingest_rejected_total":     c.IngestRejected.Load(),
+		"dem_experience_incidents_promoted_total":  c.IncidentsPromoted.Load(),
+		"dem_experience_promotion_errors_total":    c.PromotionErrors.Load(),
 	}
 }
 

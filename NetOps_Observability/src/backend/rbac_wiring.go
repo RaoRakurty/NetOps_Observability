@@ -28,6 +28,7 @@ const (
 	RoleReadOnly   = rbac.RoleReadOnly
 	RoleAuditor    = rbac.RoleAuditor
 	RoleAPIClient  = rbac.RoleAPIClient
+	RoleIngest     = rbac.RoleIngest
 
 	EffectAllow = rbac.EffectAllow
 	EffectDeny  = rbac.EffectDeny

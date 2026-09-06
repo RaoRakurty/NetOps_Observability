@@ -53,9 +53,18 @@ var (
 	ErrBadTransition = errors.New("invalid incident status transition")
 )
 
+// normalizeSourceType maps a detection's origin onto the closed vocabulary the
+// incident surfaces filter on. An UNKNOWN value collapses to "manual" rather
+// than being stored verbatim: a source_type nobody declared is one no filter
+// can find, and an incident nobody can find is an incident nobody responds to.
+//
+// "experience" joined the list with tracker 255 (design §M.2): a promoted DEM
+// incident is an incident like any other, and its evidence class is what lets
+// the Operations → Digital Experience lane be told apart from alerts, logs and
+// anomalies on the incident surfaces.
 func normalizeSourceType(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "alert", "log", "anomaly", "manual":
+	case "alert", "log", "anomaly", "manual", SourceExperience:
 		return strings.ToLower(strings.TrimSpace(s))
 	default:
 		return "manual"

@@ -96,6 +96,11 @@ func ConvergeStmts(extra ...[]string) []string {
 	// policies — client MAC/session data is per-tenant PII). Same converge-on-
 	// boot contract; init.sql carries identical DDL for fresh installs.
 	stmts = append(stmts, WirelessSchemaDDL()...)
+	// DEM experience-event lane (tracker 254, experience_schema.go, STRICT
+	// policies — user-behaviour data, much of it pseudonymous_user). Same
+	// converge-on-boot contract; init.sql carries identical DDL for fresh
+	// installs.
+	stmts = append(stmts, ExperienceSchemaDDL()...)
 	// Caller-supplied schema DDL (main's cloud_costs + path_baselines tables).
 	for _, e := range extra {
 		stmts = append(stmts, e...)

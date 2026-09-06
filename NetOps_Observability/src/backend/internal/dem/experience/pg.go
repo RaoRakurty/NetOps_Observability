@@ -278,3 +278,118 @@ func (s *PGStore) RecordChange(ctx context.Context, in ChangeEvent) (ChangeEvent
 	}
 	return in, nil
 }
+
+// ── promotions (tracker 255) ────────────────────────────────────────────────
+//
+// Against `dem_incident_promotions` (migration 0047, tenant_iso FORCE RLS).
+// Same discipline as the two tables above: every statement runs inside
+// WithTenant so the policy always has its GUC, and the scoped reads carry no
+// redundant `WHERE tenant_id = …` — that is RLS's job, and duplicating it would
+// let a future edit remove the real enforcement while the tests stayed green.
+
+func (s *PGStore) ListPromotions(ctx context.Context, tenant string) ([]Promotion, error) {
+	t, err := concreteTenant(tenant)
+	if err != nil {
+		return []Promotion{}, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
+	defer cancel()
+	out := []Promotion{}
+	err = s.db.WithTenant(ctx, t, false, func(tx pgx.Tx) error {
+		rows, qerr := tx.Query(ctx,
+			`SELECT data FROM dem_incident_promotions ORDER BY promoted_at DESC, experience_id
+			 LIMIT $1`, MaxPromotionsPerTenant)
+		if qerr != nil {
+			return qerr
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var raw []byte
+			if serr := rows.Scan(&raw); serr != nil {
+				return serr
+			}
+			var p Promotion
+			if jerr := json.Unmarshal(raw, &p); jerr != nil {
+				return jerr
+			}
+			out = append(out, p)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	sortPromotions(out)
+	return out, nil
+}
+
+func (s *PGStore) GetPromotion(ctx context.Context, tenant, experienceID string) (Promotion, error) {
+	t, err := concreteTenant(tenant)
+	if err != nil {
+		return Promotion{}, ErrNotFound
+	}
+	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
+	defer cancel()
+	var out Promotion
+	found := false
+	err = s.db.WithTenant(ctx, t, false, func(tx pgx.Tx) error {
+		var raw []byte
+		qerr := tx.QueryRow(ctx, `SELECT data FROM dem_incident_promotions WHERE experience_id=$1`, experienceID).Scan(&raw)
+		if errors.Is(qerr, pgx.ErrNoRows) {
+			return nil // RLS already hid another tenant's row: absent == foreign
+		}
+		if qerr != nil {
+			return qerr
+		}
+		if jerr := json.Unmarshal(raw, &out); jerr != nil {
+			return jerr
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		return Promotion{}, err
+	}
+	if !found {
+		return Promotion{}, ErrNotFound
+	}
+	return out, nil
+}
+
+func (s *PGStore) SavePromotion(ctx context.Context, in Promotion) (Promotion, error) {
+	if err := in.Validate(); err != nil {
+		return Promotion{}, err
+	}
+	data, err := json.Marshal(in)
+	if err != nil {
+		return Promotion{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
+	defer cancel()
+	var out Promotion
+	err = s.db.WithTenant(ctx, in.TenantID, false, func(tx pgx.Tx) error {
+		// ON CONFLICT DO NOTHING, then read back: the FIRST promotion is the one
+		// that happened, and the frozen packet must never be rewritten by a
+		// later derivation — that packet is the record of what the operator
+		// actually acted on.
+		if _, ierr := tx.Exec(ctx,
+			`INSERT INTO dem_incident_promotions
+			   (tenant_id, experience_id, incident_id, severity, promoted_at, promoted_by, data)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7)
+			 ON CONFLICT (tenant_id, experience_id) DO NOTHING`,
+			in.TenantID, in.ExperienceID, in.IncidentID, in.Packet.Severity,
+			in.PromotedAt, in.PromotedBy, data); ierr != nil {
+			return ierr
+		}
+		var raw []byte
+		if qerr := tx.QueryRow(ctx,
+			`SELECT data FROM dem_incident_promotions WHERE experience_id=$1`, in.ExperienceID).Scan(&raw); qerr != nil {
+			return qerr
+		}
+		return json.Unmarshal(raw, &out)
+	})
+	if err != nil {
+		return Promotion{}, err
+	}
+	return out, nil
+}

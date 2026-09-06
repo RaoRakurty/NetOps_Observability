@@ -346,22 +346,33 @@ const (
 	// ScopeIngestCloud is the dedicated service scope for the cloud-ingest
 	// poller; it is honoured only in the platform realm (cloud_ingest_service.go).
 	ScopeIngestCloud = "ingest:cloud"
+	// ScopeIngestExperience is the dedicated WRITE-ONLY scope for the DEM
+	// experience lane (tracker 254): the first-party RUM snippet and the
+	// business-event feed. Unlike ScopeIngestCloud it is honoured only for a
+	// key bound to a CONCRETE tenant — the events it admits are stamped with
+	// that tenant, so a platform-realm key would have no owner to stamp.
+	//
+	// It grants no read of any kind, ON PURPOSE. A RUM snippet is served to the
+	// public, so its credential must be assumed public: a key that could also
+	// read would hand a tenant's experience data to anyone who viewed source.
+	ScopeIngestExperience = "ingest:experience"
 )
 
 // knownScopes is the closed vocabulary (immutable lookup table, same shape as
 // validGrantTypes). Order for display comes from KnownScopes().
 var knownScopes = map[string]bool{
-	"read:metrics":    true,
-	"read:alerts":     true,
-	"read:devices":    true,
-	"read:flows":      true,
-	ScopeReadAll:      true,
-	"write:incidents": true,
-	"write:alerts":    true,
-	"write:devices":   true,
-	ScopeWriteAll:     true,
-	ScopeIngestCloud:  true,
-	ScopeAdminAll:     true,
+	"read:metrics":        true,
+	"read:alerts":         true,
+	"read:devices":        true,
+	"read:flows":          true,
+	ScopeReadAll:          true,
+	"write:incidents":     true,
+	"write:alerts":        true,
+	"write:devices":       true,
+	ScopeWriteAll:         true,
+	ScopeIngestCloud:      true,
+	ScopeIngestExperience: true,
+	ScopeAdminAll:         true,
 }
 
 // KnownScopes returns the closed scope vocabulary in display order (read →
@@ -370,7 +381,7 @@ func KnownScopes() []string {
 	return []string{
 		"read:metrics", "read:alerts", "read:devices", "read:flows", ScopeReadAll,
 		"write:incidents", "write:alerts", "write:devices", ScopeWriteAll,
-		ScopeIngestCloud, ScopeAdminAll,
+		ScopeIngestCloud, ScopeIngestExperience, ScopeAdminAll,
 	}
 }
 

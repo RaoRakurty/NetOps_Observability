@@ -93,8 +93,17 @@ echo "acls: router — consume its lanes, produce deadletter+flows, own its grou
 # already created by kafka-init in BOTH compose files and produced by the
 # backend's secbus producer under the aggregator's prefixed netops. grant;
 # only the router's READ was missing, so only the READ is added here.
+#
+# Tracker 254: netops.experience joins the router's consume set — the DEM
+# experience-event lane (kafka_experience -> clickhouse_experience_events /
+# clickhouse_business_events). The topic is created by kafka-init in BOTH
+# compose files and produced by the api's expbus producer under the
+# aggregator's prefixed netops. grant above; only the router's READ is new.
+# correlation is deliberately NOT granted Read on it: nothing in the engine
+# subscribes to experience events, and granting a topic nothing consumes would
+# imply a consumer that does not exist.
 for t in netops.applogs netops.syslog netops.flows netops.flows.raw \
-         netops.snmptrap netops.security \
+         netops.snmptrap netops.security netops.experience \
          netops.cloudlogs netops.cloudcosts netops.deadletter; do
     $ACLS --add --allow-principal "$ROUTER" \
         --operation Read --operation Describe --topic "$t" >/dev/null

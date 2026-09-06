@@ -123,6 +123,17 @@ const (
 	RoleReadOnly   = "read-only"
 	RoleAuditor    = "auditor"    // compliance: read everything incl. the audit trail, change nothing
 	RoleAPIClient  = "api-client" // least-privilege machine identity for programmatic access
+	// RoleIngest is the ZERO-permission machine identity (tracker 254): it may
+	// do only what a dedicated `ingest:*` scope explicitly admits, and it reads
+	// nothing at all through the RBAC grid.
+	//
+	// It exists because a first-party RUM key is served inside a public web
+	// page, so it must be assumed public. Before this role, an ingest-only key
+	// derived RoleReadOnly (roleFromScopes) and could therefore READ the
+	// tenant's entire operational surface — devices, flows, alerts, topology —
+	// from any browser that viewed source. A credential whose only job is to
+	// POST evidence must be able to do only that.
+	RoleIngest = "ingest"
 )
 
 // IsOrgManagerRole reports whether a role, when bound at an org scope, lets the
@@ -176,6 +187,11 @@ func builtinRoles() []Role {
 	apiClient := all(LevelRead)
 	apiClient["reports"] = LevelNone
 	apiClient["administration"] = LevelNone
+	// Ingest: NOTHING through the grid. Its authority comes entirely from the
+	// dedicated `ingest:*` scope its holder carries, checked by the one gate
+	// that honours that scope. Every other handler in the product refuses it,
+	// which is what makes such a key safe to publish.
+	ingest := all(LevelNone)
 	// Org admin: full administration, but only ever bound at an org scope — its
 	// reach is the tenants inside that org (access.go), never platform plumbing
 	// (Authorize blocks ResInfraStack for any non-platform-owner). Same grid as
@@ -194,6 +210,8 @@ func builtinRoles() []Role {
 			Description: "Read-only across all areas including the audit trail; cannot change anything.", Permissions: auditor},
 		{ID: RoleAPIClient, Name: "API Client", Builtin: true,
 			Description: "Least-privilege machine identity for programmatic API access (telemetry, alerts, topology); narrow further with API-token scopes.", Permissions: apiClient},
+		{ID: RoleIngest, Name: "Ingest", Builtin: true,
+			Description: "Machine identity that may only POST the evidence its ingest scope names, and can read nothing at all. Used by credentials that are published — the first-party RUM snippet's key lives in a public page.", Permissions: ingest},
 	}
 }
 

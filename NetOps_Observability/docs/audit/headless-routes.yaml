@@ -57,6 +57,24 @@ headless:
       requireCloudIngestService — platform owner or the cloudIngestScope service
       JWT). Deliberately cross-tenant; a tenant UI must never see this list.
 
+  - route: /api/dem/events
+    reason: >-
+      First-party RUM ingest (tracker 254, internal/dem/experience/ingest.go,
+      demIngestAuthz). The producer is a browser snippet on the CUSTOMER's own
+      site — src/frontend/public/correlix-rum.js, served as a static asset, not
+      part of the SPA — authenticating with a tenant-bound, write-only
+      `ingest:experience` API key. The Correlix SPA must never call it: it holds
+      an operator session, and a beacon posted with an operator token would be
+      attributed to the operator's browser rather than to a real user.
+
+  - route: /api/dem/business-events
+    reason: >-
+      Same lane, same producer class (tracker 254): business outcomes posted by
+      the customer's own application or build pipeline with the tenant-bound
+      `ingest:experience` key. Write-only and never read, so there is nothing
+      for a page to fetch; what the SPA renders is the STORED result, through
+      /api/dem/overview and /api/dem/incidents.
+
   - route: /api/appid/fusion/status
     reason: >-
       App-ID fusion worker ops metrics (fusion_worker.go handleFusionStatus) —

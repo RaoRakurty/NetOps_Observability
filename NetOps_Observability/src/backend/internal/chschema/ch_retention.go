@@ -74,6 +74,12 @@ type chRetentionDays struct {
 	SvcRollup    int // netops.svc_flow_rollup_1m
 	PathBaseline int // netops.path_baselines — recomputed, cheap to lose
 	Wireless     int // netops.wireless_* per-client event tier (#128) — one knob, five tables
+	// The DEM experience-event lane (tracker 254). TWO knobs, deliberately:
+	// experience events are high-volume user behaviour with a short, privacy-
+	// driven horizon, while business events are the denominator of "what did
+	// this outage cost" — a question asked months later.
+	ExperienceEvents int // netops.experience_events
+	BusinessEvents   int // netops.business_events
 }
 
 // chRetentionDefaults mirrors deployment/docker/clickhouse/init.sql. Keep the
@@ -94,6 +100,11 @@ func chRetentionDefaults() chRetentionDays {
 		SvcRollup:    90,
 		PathBaseline: 14,
 		Wireless:     30, // per-client events are PII (report B5) — short by default
+		// Experience events are pseudonymous user behaviour: short by default
+		// for the same reason the wireless tier is. Business events carry no
+		// user reference and are the year-over-year impact denominator.
+		ExperienceEvents: 30,
+		BusinessEvents:   400,
 	}
 }
 
@@ -132,6 +143,9 @@ func RetentionConfig() chRetentionDays {
 		SvcRollup:    knob("CH_SVC_ROLLUP_RETENTION_DAYS", d.SvcRollup),
 		PathBaseline: knob("CH_PATH_BASELINE_RETENTION_DAYS", d.PathBaseline),
 		Wireless:     knob("CH_WIRELESS_RETENTION_DAYS", d.Wireless),
+
+		ExperienceEvents: knob("CH_EXPERIENCE_EVENT_RETENTION_DAYS", d.ExperienceEvents),
+		BusinessEvents:   knob("CH_BUSINESS_EVENT_RETENTION_DAYS", d.BusinessEvents),
 	}
 }
 
@@ -172,6 +186,9 @@ func chRetentionTables() []chRetentionTable {
 		{"wireless_roams", "toDateTime(ts)", func(d chRetentionDays) int { return d.Wireless }},
 		{"wireless_mlo_links", "toDateTime(valid_from)", func(d chRetentionDays) int { return d.Wireless }},
 		{"wireless_client_rf", "toDateTime(ts)", func(d chRetentionDays) int { return d.Wireless }},
+		// Tracker 254 — the DEM experience-event lane (experience_schema.go).
+		{"experience_events", "toDateTime(event_at)", func(d chRetentionDays) int { return d.ExperienceEvents }},
+		{"business_events", "toDateTime(event_at)", func(d chRetentionDays) int { return d.BusinessEvents }},
 	}
 }
 

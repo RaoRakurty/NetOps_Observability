@@ -328,7 +328,7 @@ services:
         netops.controller_events netops.app.edge netops.verification
         netops.cloudlogs netops.cloudcosts netops.deadletter
         netops.wireless_sessions netops.wireless_events
-        netops.security netops.bgp; do
+        netops.security netops.bgp netops.experience; do
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
         --create --if-not-exists --topic "$$t"
         --partitions "$$p" --replication-factor 1 || exit 1;
@@ -1339,6 +1339,20 @@ services:
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.correlation
+      args:
+        # Tracker 263 moved this image to python:3.12-alpine, and its BUILD
+        # stage installs gcc/musl-dev via apk (aiokafka publishes no musllinux
+        # wheel at any version, so its C extension is compiled from the
+        # hash-locked sdist). On egress that INTERCEPTS TLS — this lab: HTTPS
+        # re-signed by the SASE gateway — that apk fetch fails certificate
+        # verification, and the Dockerfile's escape hatch would be unreachable
+        # through `docker compose build`, which is what scripts/make-installer.sh
+        # runs. Same shape, same reason and the same default (https) as the
+        # vector-router service above:
+        #   APK_REPO_SCHEME=http docker compose build correlation
+        # apk still verifies SIGNED package indexes over http, so nothing the
+        # signature guarantees is lost. The runtime stage installs no packages.
+        APK_REPO_SCHEME: ${APK_REPO_SCHEME:-https}
     # 1280m = 1.25 GiB, the tracker-165 QUALIFIED limit (2026-08-21). This is
     # only the fallback for when the planner has not written .env; the planner
     # floor in scripts/resource_planner.py is the source of truth and the two

@@ -37,6 +37,13 @@ const (
 	GateRead Gate = iota
 	// GateWrite — declaring, editing, pausing or removing a target.
 	GateWrite
+	// GateIngest — POSTING experience evidence (tracker 254: the RUM beacon and
+	// the business-event feed). It is a SEPARATE gate on purpose: the producer
+	// is a browser snippet or a build pipeline holding a per-tenant, write-only
+	// ingest credential, and giving that credential the operator's write gate
+	// would let a public page edit the target catalogue. An ingest principal
+	// may write evidence for its own tenant and read NOTHING.
+	GateIngest
 )
 
 // Principal is the resolved caller.

@@ -272,27 +272,40 @@ already documented in `DEM_DATA_MODEL_2026-09-05.md` §3, read through
 crafted expression cannot evade tenant scoping. This layer adds no series of its
 own; its only metrics are the self-observability counters in §7.
 
-**ClickHouse and Kafka were not touched.** `ExperienceEvent`,
-`ExperienceSession` and `BusinessEvent` land as contracts with validation and an
-`EventSink` seam, and nothing else. The reason is stated in the assessment §6.2
-and stands: **no producer exists.** There is no first-party RUM snippet, no
-desktop agent and no browser runner, and Phase P is explicit that infrastructure
-is added when there is a requirement, not before.
+**ClickHouse and Kafka WERE eventually touched — by tracker 254, once a producer
+existed.** In this slice `ExperienceEvent`, `ExperienceSession` and
+`BusinessEvent` landed as contracts with validation and an `EventSink` seam and
+nothing else, because Phase P is explicit that infrastructure is added when
+there is a requirement, not before. The requirement arrived with the first-party
+RUM snippet.
 
-### 5.3 Exactly what adding the `netops.experience` lane would take
+### 5.3 The `netops.experience` lane, as built (tracker 254)
 
-When a producer exists, the lane is five changes and no shape change:
+It was the five changes predicted below, and — the point of having written the
+shapes first — **not one shape changed** to get there. Full walk-through:
+[`dem-rum-snippet.md`](dem-rum-snippet.md).
 
-| # | Change | Where | Note |
+| # | Change | Where | As built |
 |---|---|---|---|
-| 1 | Declare the topic | `netops.experience` in the bus topic list and the Kafka ACL bootstrap | The Go API has no Kafka client (allowlist); it produces through `bus_producer.go`'s `produceJSON` into the Vector bus-bridge HTTP source. |
-| 2 | Route it | `vector/vector.yaml` — a source on the new topic and a `clickhouse` sink | Remember the dotted-key rule: strip any map whose keys contain dots before the sink, the way the applogs transform does `del(.label)`. |
-| 3 | Create the table **twice** | `deployment/docker/clickhouse/init.sql` (fresh installs) **and** `internal/chschema/*.go` + `ConvergeStmts()` (live upgrades) | A table added in only one of the two either breaks a fresh install or never appears on an upgraded one. |
-| 4 | Add a **STRICT row policy** | Alongside the table, matching the `tenant_scope` setting `chRows(r, sql)` sets | Experience events carry a pseudonymous user reference; a permissive policy on this table is a cross-tenant leak of user-level data, which is the most sensitive class this layer will hold. |
-| 5 | Implement `EventSink` | A new file in `internal/dem/experience` or its own adapter package | The interface already exists and returns an error rather than dropping: a dropped experience event is a user whose bad day the product never saw. |
+| 1 | Declare the topic | `netops.experience` in the bus topic list and the Kafka ACL bootstrap | Added to kafka-init in all three compose files and to `vector-router`'s consume grant in `apply-acls.sh`. correlation is deliberately NOT granted it: nothing in the engine subscribes, and granting a topic nothing consumes implies a consumer that does not exist. |
+| 2 | Route it | `vector-router/vector.yaml` — a source on the new topic and `clickhouse` sinks | `kafka_experience` → `experience_split` (a `route` on `record_type`) → two normalising remaps → two sinks. Nested `provenance`/`cohort`/`vitals` are flattened to columns; the dotted-key rule is respected by construction (no `.label`-shaped map reaches a sink). A record with no tenant or no event time is ABORTED to the dead letter. |
+| 3 | Create the table **twice** | `deployment/docker/clickhouse/init.sql` **and** `internal/chschema/experience_schema.go` + `ConvergeStmts()` | `netops.experience_events` (30 d) and `netops.business_events` (400 d) in both places, with retention knobs in `ch_retention.go` — the guard test fails the build if the two ever disagree. |
+| 4 | Add a **STRICT row policy** | Alongside each table | `StrictRowPolicyDDL` on both. An untagged row is platform-only; the api stamps `tenant_id` from the caller's credential before publishing and the router never derives or defaults it. |
+| 5 | Implement `EventSink` | `internal/dem/expbus` | Its own leaf package, so `internal/dem/experience` still never learns about Kafka and the root package holds no queueing logic. Bounded in batches AND in events, backpressure as `503 + Retry-After`, retry with full jitter, and a loud counted drop when the envelope is exhausted. |
 
-The shapes in `event.go` do not change to get there. That is the whole point of
-writing them now.
+Two things the prediction did not say, and that turned out to matter more than
+any of the five:
+
+- **The credential.** The producer is a snippet in a page served to the public,
+  so its key must be assumed public. `ingest:experience` is write-only and
+  tenant-bound, and a key whose scopes are exclusively `ingest:*` now derives
+  the zero-permission `rbac.RoleIngest` — before that, an ingest-only key
+  derived `read-only` and could have read the tenant's entire operational
+  surface from any browser that viewed source.
+- **Refusal beats repair.** `user_ref` must be pseudonymous, and the API
+  REFUSES a direct identifier with the instruction that fixes it rather than
+  hashing it quietly. Silently repairing a caller's mistake teaches the caller
+  that sending real identifiers is fine.
 
 ---
 
@@ -455,7 +468,7 @@ further than the design.
 |---|---|---|---|
 | D1 | §M.2: the DEM evidence packet is "persisted alongside" the incident (PG, RLS). | Nothing derived is persisted; incidents are computed at read time. | Assessment §6.3. Same bundle ⇒ same incident, no drift window, no background writer. |
 | D2 | §M.3: `ChangeEvent` lives in a new `internal/dem/change` package. | It lives in `internal/dem/experience/change.go`. | One bounded context. A separate package would have split the change type from the ranker that scores it. |
-| D3 | §M.3: `ExperienceEvent`/`ExperienceSession` reach ClickHouse over the `netops.experience` lane. | Contracts, validation and an `EventSink` seam only. | Assessment §6.2. No producer exists; see §5.3 for the exact cost of adding the lane. |
+| D3 | §M.3: `ExperienceEvent`/`ExperienceSession` reach ClickHouse over the `netops.experience` lane. | **BUILT (tracker 254).** Topic, router lane, two STRICT-policy ClickHouse tables, `POST /api/dem/events` + `/business-events`, and the first-party RUM snippet. | `ExperienceSession` remains a contract: the snippet emits events with a session id, and a session ROLL-UP has no producer yet. See §5.3 and `dem-rum-snippet.md`. |
 | D4 | §M.9: `FeatureDEM` semantic entitlement. | Not added. Gating stays the `FEATURE_DEM` environment flag, plus `FEATURE_COPILOT` + `FEATURE_DEM_AI_INVESTIGATOR` for the investigator. | Assessment §6.1: `internal/entitlement`'s vocabulary is owner-locked, and §M.11 lists DEM packaging as an open owner decision. **Owner decision required.** |
 | D5 | §M.4: worst-of for triage and p95-of for reporting, with the UI stating which. | A third mode, `worst_weighted`, is what the tenant score reports. `WorstWeightedMean` folds each dimension's per-subject points giving the **worst** subject `WorstShare` (0.4) of the weight, and `aggregation` reads `worst_weighted`. `AggWorstOf` and `AggP95Of` remain declared as the **per-observer** modes. | The per-observer toggle needs more than one vantage per subject, and there is one prober, so there is no second observer to take a worst or a percentile of. What the tenant score actually folds is per-*subject* points, and folding them with a plain mean is how one dead target disappears into a green tile: nine perfect subjects and one dead one is 54, not 90. The label now names the arithmetic. |
 | D6 | §M.4: a score per journey, app, site and tenant. | `ComputeScore` accepts all four `subject_kind`s; `Assemble` builds only the tenant score. | Per-journey and per-site scores need per-subject dimension inputs, which need a per-site prober. `hotspots()` reports the site and application breakdowns it can and marks ISP, device, browser, version and network as not measured. |

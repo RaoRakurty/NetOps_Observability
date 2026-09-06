@@ -139,6 +139,13 @@ var routeIsolationLedger = map[string]string{
 	"/api/dem/synthetics/coverage": "scoped",
 	"/api/dem/changes":             "scoped",
 	"/api/dem/data-health":         "scoped",
+	// The experience-event INGEST lane (tracker 254). Per-tenant data even
+	// though it is write-only: the owner is stamped from the caller's
+	// credential (demIngestAuthz refuses a credential with no concrete
+	// tenant), the wire types carry no tenant field, and the decoder refuses
+	// unknown fields — so a body cannot ask to be filed under another tenant.
+	"/api/dem/events":          "scoped",
+	"/api/dem/business-events": "scoped",
 	// Protocol diagnostics (Troubleshooting item 7, protocol_diagnostics.go):
 	// catalog is the version-pinned 15-issue ruleset, identical for every tenant
 	// (?vendor= only picks the rendered command dialect), behind

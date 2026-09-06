@@ -261,6 +261,28 @@ sources:
     group_id: "netops-router-deadletter"
     decoding: { codec: json }
 
+  # DEM experience events (tracker 254) — the first-party RUM / business-event
+  # lane. The api validates, stamps the owning tenant from the caller's
+  # credential and publishes onto netops.experience through the bus bridge; this
+  # is the ONLY consumer. Routed to ClickHouse (analytics over user behaviour;
+  # STRICT tenant row policy) — an experience beacon is not a log, so no
+  # OpenSearch index.
+  kafka_experience:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.experience"]
+    group_id: "netops-router-experience"
+    decoding: { codec: json }
+
   # Cloud cost records (Wave 5 #18) — normalized daily cloud_cost records
   # produced by the cloud poller's cost lanes (AWS Cost Explorer / Azure Cost
   # Management). Routed to ClickHouse netops.cloud_costs (analytics; tenant
@@ -917,6 +939,119 @@ transforms:
         del(.ts)
       }
 
+  # DEM experience lane (tracker 254). ONE topic carries both record shapes, so
+  # the first job is to split them; `record_type` is stamped by the api's
+  # producer and is the only routing field. A record with neither value is
+  # aborted into the dead letter rather than guessed at — an experience event
+  # written into the business table would silently corrupt the impact figure
+  # that answers "what did this outage cost".
+  #
+  # `tenant_id` is NOT derived here and is never taken from anything the browser
+  # sent: the api stamped it from the caller's credential before publishing
+  # (§3a rule 2), and a router-side default would be a way to re-introduce
+  # untagged rows into a STRICT-policy table.
+  experience_split:
+    type: route
+    inputs: [kafka_experience]
+    route:
+      events: '.record_type == "experience_event"'
+      business: '.record_type == "business_event"'
+
+  # Both branches flatten the nested API JSON into the ClickHouse column shape
+  # and convert the two timestamps to epoch-ms (log-time standard S4/R1: an
+  # integer can never be re-interpreted in the server's timezone). A record
+  # missing its tenant or its event time is ABORTED to the dead letter: an
+  # untagged row in a STRICT-policy table is invisible to every tenant, which is
+  # a silent loss, and a row with no event time cannot be correlated with the
+  # outage it belongs to.
+  experience_events_normalized:
+    type: remap
+    inputs: [experience_split.events]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true
+    source: &experience_lane |
+      .tenant_id = to_string(.tenant_id) ?? ""
+      if .tenant_id == "" || .tenant_id == "*" { abort }
+      .event_id = to_string(.id) ?? ""
+      if .event_id == "" { abort }
+      del(.id)
+      del(.record_type)
+
+      # provenance.* -> flat columns
+      .source = to_string(.provenance.source) ?? ""
+      .producer = to_string(.provenance.producer) ?? ""
+      .observation = to_string(.provenance.observation) ?? ""
+      .data_class = to_string(.provenance.data_class) ?? ""
+      .schema_name = to_string(.provenance.schema_name) ?? ""
+      .schema_version = to_int(.provenance.schema_version) ?? 0
+      ev, everr = parse_timestamp(to_string(.provenance.event_at) ?? "", format: "%+")
+      if everr != null { abort }
+      .event_at = to_unix_timestamp(ev, unit: "milliseconds")
+      ob, oberr = parse_timestamp(to_string(.provenance.observed_at) ?? "", format: "%+")
+      if oberr == null {
+        .observed_at = to_unix_timestamp(ob, unit: "milliseconds")
+      } else {
+        .observed_at = .event_at
+      }
+      del(.provenance)
+
+      # cohort.* -> flat columns. An absent dimension stays "" rather than
+      # becoming "unknown": two cohorts differing only in a dimension nobody
+      # recorded are ONE cohort, not two.
+      .cohort_site = to_string(.cohort.site) ?? ""
+      .cohort_isp = to_string(.cohort.isp) ?? ""
+      .cohort_region = to_string(.cohort.region) ?? ""
+      .cohort_device = to_string(.cohort.device_type) ?? ""
+      .cohort_browser = to_string(.cohort.browser) ?? ""
+      .cohort_version = to_string(.cohort.app_version) ?? ""
+      .cohort_network = to_string(.cohort.network_type) ?? ""
+      del(.cohort)
+
+  experience_events_flat:
+    type: remap
+    inputs: [experience_events_normalized]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true
+    source: |
+      .event_type = to_string(.type) ?? ""
+      del(.type)
+      # vitals.* -> flat columns. Absent stays ABSENT (null), never 0: a 0 CLS
+      # is excellent and a 0 LCP is impossible, so a shared zero would be read
+      # two different wrong ways.
+      .lcp_ms = to_float(.vitals.lcp_ms) ?? null
+      .inp_ms = to_float(.vitals.inp_ms) ?? null
+      .cls = to_float(.vitals.cls) ?? null
+      .ttfb_ms = to_float(.vitals.ttfb_ms) ?? null
+      .fcp_ms = to_float(.vitals.fcp_ms) ?? null
+      del(.vitals)
+      .duration_ms = to_float(.duration_ms) ?? null
+      .status_code = to_int(.status_code) ?? 0
+      .success = to_bool(.success) ?? false
+      # The agent context is a Phase N reservation with no column yet; drop it
+      # rather than let skip_unknown_fields silently swallow a nested object.
+      del(.agent)
+
+  experience_business_flat:
+    type: remap
+    inputs: [experience_split.business]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true
+    source: *experience_lane
+
+  experience_business_typed:
+    type: remap
+    inputs: [experience_business_flat]
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: true
+    source: |
+      .value = to_float(.value) ?? null
+      .quantity = to_int(.quantity) ?? 0
+      .success = to_bool(.success) ?? false
+
   # Dead-letter encoder — the last stop before an event would be discarded.
   # Every field is flattened into ONE json string so a poisoned document can
   # never conflict with the dead-letter index's own mapping (a dead-letter that
@@ -949,7 +1084,9 @@ transforms:
   # be added with a wrong-but-plausible constant label.
   deadletter_encoded:
     type: remap
-    inputs: [cloudcosts_normalized.dropped]
+    inputs: [cloudcosts_normalized.dropped, experience_events_normalized.dropped,
+             experience_events_flat.dropped, experience_business_flat.dropped,
+             experience_business_typed.dropped]
     source: |
       lane = to_string(.metadata.dropped.component_id) ?? ""
       if lane == "" { lane = "unknown" }
@@ -1563,6 +1700,43 @@ sinks:
     endpoint: "${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}"  # SEC-009: TLS deployments point this at :8443
     database: netops
     table: cloud_costs
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    skip_unknown_fields: true
+    healthcheck: { enabled: true }
+
+  # DEM experience-event lane (tracker 254) → ClickHouse. Two sinks over one
+  # topic because the two record shapes have different columns, different
+  # volumes and different retention horizons (30 d vs 400 d): merging them into
+  # one table would force the business-impact denominator to expire with the
+  # beacons.
+  #
+  # `acknowledgements` is global on this tier, so offsets on netops.experience
+  # commit only after ClickHouse acks — a ClickHouse outage back-pressures into
+  # the retained topic instead of discarding a user's bad minute. The api's own
+  # producer is bounded and returns 503 when its queue is full, so the
+  # back-pressure reaches the browser as a retry rather than as silent loss.
+  clickhouse_experience_events:
+    type: clickhouse
+    inputs: [experience_events_flat]
+    endpoint: "${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}"  # SEC-009: TLS deployments point this at :8443
+    database: netops
+    table: experience_events
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    skip_unknown_fields: true
+    healthcheck: { enabled: true }
+
+  clickhouse_business_events:
+    type: clickhouse
+    inputs: [experience_business_typed]
+    endpoint: "${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}"  # SEC-009: TLS deployments point this at :8443
+    database: netops
+    table: business_events
     auth:
       strategy: basic
       user: "${CLICKHOUSE_USER}"

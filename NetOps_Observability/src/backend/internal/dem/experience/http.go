@@ -82,6 +82,17 @@ type Deps struct {
 	// not wired, and the incident detector keeps refusing to raise a
 	// high-severity incident on an ungraded check.
 	Runs RunSource
+	// Events is the bounded, backpressure-aware writer the ingest routes hand
+	// validated beacons to (tracker 254). nil is legal and HONEST: the two
+	// POST routes then answer 503 saying the lane is not wired on this
+	// deployment, rather than 202 for events with nowhere to go.
+	Events EventSink
+	// Promoter turns a derived experience incident into the platform incident
+	// record (tracker 255). nil is legal and HONEST: the incident system of
+	// record is Postgres-only, so on a file deployment the promote route
+	// answers 409 with that reason rather than claiming to have raised
+	// something.
+	Promoter IncidentPromoter
 	// Policy is the versioned score policy. Required.
 	Policy ScorePolicy
 	// Enabled reports whether experience collection is on.
@@ -321,6 +332,14 @@ type IncidentSummary struct {
 	Severity string `json:"severity"`
 	Status   string `json:"status"`
 
+	// IncidentID / Promoted carry the durable linkage onto the LIST row
+	// (tracker 255), not only onto the item. Without it the Incidents screen
+	// would show a row and give an operator no way to tell whether it has a
+	// record, an owner and a lifecycle — which is exactly the question the
+	// screen exists to answer.
+	IncidentID string `json:"incident_id,omitempty"`
+	Promoted   bool   `json:"promoted"`
+
 	App     string `json:"app,omitempty"`
 	Journey string `json:"journey,omitempty"`
 
@@ -357,6 +376,7 @@ type IncidentSummary struct {
 func Summarize(inc ExperienceIncident, now time.Time) IncidentSummary {
 	s := IncidentSummary{
 		ID: inc.ID, Title: inc.Title, Severity: inc.Severity, Status: inc.Status,
+		IncidentID: inc.IncidentID, Promoted: inc.Promoted,
 		DetectedAt: inc.DetectedAt, FirstImpactAt: inc.FirstImpactAt,
 		Confidence: inc.Confidence, VerdictTier: inc.VerdictTier,
 		Owner: inc.Owner, Seam: inc.Seam,
@@ -616,6 +636,15 @@ func (a *API) HandleIncidents(w http.ResponseWriter, r *http.Request) {
 			errors.New("severity must be one of info, low, medium, high, critical"))
 		return
 	}
+	// The durable linkage is stamped onto the freshly derived list, so the
+	// Incidents screen and the platform incident record can never disagree
+	// about whether an incident was ever raised (tracker 255).
+	promos, prerr := a.promotionsFor(r, tenant)
+	if prerr != nil {
+		a.deps.WriteError(w, http.StatusInternalServerError, prerr)
+		return
+	}
+	ApplyPromotions(asm.Incidents, promos)
 	now := a.deps.Now().UTC()
 	all := make([]IncidentSummary, 0, len(asm.Incidents))
 	for _, inc := range asm.Incidents {
@@ -652,15 +681,21 @@ type IncidentResponse struct {
 	// from this incident at all (it cannot when every item is above the class
 	// that may leave the platform).
 	EvidencePacketAvailable bool `json:"evidence_packet_available"`
+
+	// Promotion is the durable link to the platform incident record, present
+	// only when this incident was promoted (tracker 255). Drift is every field
+	// on which the packet stored at promotion and the CURRENT derivation
+	// disagree — empty when they agree, never hidden when they do not.
+	Promotion     *Promotion       `json:"promotion,omitempty"`
+	Drift         []PromotionDrift `json:"drift,omitempty"`
+	CanPromote    bool             `json:"can_promote"`
+	PromotionNote string           `json:"promotion_note,omitempty"`
 }
 
 // HandleIncidentItem serves the item route and its three sub-resources.
 func (a *API) HandleIncidentItem(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		http.NotFound(w, r)
-		return
-	}
-	if !a.methodIs(w, r, http.MethodGet) {
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, IncidentItemPath)
@@ -673,6 +708,18 @@ func (a *API) HandleIncidentItem(w http.ResponseWriter, r *http.Request) {
 	}
 	switch sub {
 	case "", "evidence", "timeline", "path":
+		if !a.methodIs(w, r, http.MethodGet) {
+			return
+		}
+	case PromoteSuffix:
+		// The ONE write on this route tree (tracker 255). It is a POST because
+		// it raises something a human will be paged about, and it is gated
+		// separately inside handlePromote.
+		if !a.methodIs(w, r, http.MethodPost) {
+			return
+		}
+		a.handlePromote(w, r, id)
+		return
 	default:
 		http.NotFound(w, r)
 		return
@@ -701,6 +748,21 @@ func (a *API) HandleIncidentItem(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r) // a foreign or resolved id is indistinguishable from absent
 		return
 	}
+	// Promotion state and DRIFT (tracker 255). The stored packet is what the
+	// operator acted on; the derivation above is what the evidence says now.
+	// Where they differ the difference is REPORTED — showing one number and
+	// letting the reader assume it is the only one is how a stored conclusion
+	// and its evidence quietly part company.
+	var promo *Promotion
+	var drift []PromotionDrift
+	if p, gerr := a.deps.Store.GetPromotion(r.Context(), tenant, id); gerr == nil {
+		found.IncidentID, found.Promoted = p.IncidentID, true
+		promo = &p
+		drift = DriftSince(p.Packet, *found)
+	} else if !errors.Is(gerr, ErrNotFound) {
+		a.deps.WriteError(w, http.StatusInternalServerError, gerr)
+		return
+	}
 	switch sub {
 	case "evidence":
 		a.deps.WriteJSON(w, http.StatusOK, map[string]any{
@@ -727,15 +789,43 @@ func (a *API) HandleIncidentItem(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteJSON(w, http.StatusOK, body)
 	default:
 		packet := BuildPacket(*found, asm.DataHealth.Sources)
-		a.deps.WriteJSON(w, http.StatusOK, IncidentResponse{
+		resp := IncidentResponse{
 			Window: asm.Window, Incident: *found,
 			AIInvestigator:          a.aiAvailability(),
 			EvidencePacketAvailable: len(packet.EvidenceIDs) > 0,
-		})
+			Promotion:               promo,
+			Drift:                   drift,
+			CanPromote:              a.deps.Promoter != nil,
+		}
+		if promo == nil && a.deps.Promoter == nil {
+			resp.PromotionNote = "This deployment has no incident system of record (it is available on the Postgres backend), so this incident cannot be promoted. It is still derived from real evidence — it simply has no durable record to live in."
+		} else if promo == nil {
+			resp.PromotionNote = "Derived from this window's evidence and not promoted. It has no durable record, no owner and no lifecycle until it is."
+		} else if len(drift) > 0 {
+			resp.PromotionNote = "The evidence has MOVED since this was promoted. `drift` lists every field where the stored packet and the live derivation disagree; neither is silently preferred."
+		} else {
+			resp.PromotionNote = "Promoted, and the live evidence still says what it said at promotion."
+		}
+		a.deps.WriteJSON(w, http.StatusOK, resp)
 	}
 }
 
 func validIncidentID(id string) bool { return validPrefixedID(id, "exp-", 20) }
+
+// promotionsFor reads one tenant's promotions keyed by derived incident id.
+// The store's read is tenant-keyed and refuses "" / "*", so a scopeless caller
+// gets nothing rather than the fleet's (§3a rule 4).
+func (a *API) promotionsFor(r *http.Request, tenant string) (map[string]Promotion, error) {
+	list, err := a.deps.Store.ListPromotions(r.Context(), tenant)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]Promotion, len(list))
+	for _, p := range list {
+		out[p.ExperienceID] = p
+	}
+	return out, nil
+}
 
 // ── journeys ────────────────────────────────────────────────────────────────
 
@@ -1216,6 +1306,18 @@ func (a *API) methodIs(w http.ResponseWriter, r *http.Request, method string) bo
 // a typo'd budget must fail loudly, not be silently dropped.
 func (a *API) decode(w http.ResponseWriter, r *http.Request, into any, what string) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	return a.decodeBounded(w, r, into, what)
+}
+
+// decodeBounded decodes a body whose cap the CALLER has already applied. It
+// exists so the ingest routes can use their own (larger) bound without either
+// route silently inheriting the other's — a shared cap here would mean raising
+// it for beacons also raised it for every operator write.
+//
+// DisallowUnknownFields is the load-bearing half: it is what makes a
+// `tenant_id` in a request body a visible 400 rather than an ignored attempt to
+// own another tenant's data (§3a rule 2).
+func (a *API) decodeBounded(w http.ResponseWriter, r *http.Request, into any, what string) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {

@@ -24,14 +24,32 @@ The catalogue routes beneath this layer (`/api/dem/targets*` and
 | `GET` | `/api/dem/incidents/{id}/evidence` | `infrastructure:read` |
 | `GET` | `/api/dem/incidents/{id}/timeline` | `infrastructure:read` |
 | `GET` | `/api/dem/incidents/{id}/path` | `infrastructure:read` |
+| `POST` | `/api/dem/incidents/{id}/promote` | `infrastructure:write` |
 | `GET` / `POST` | `/api/dem/journeys` | `infrastructure:read` / `infrastructure:write` |
 | `GET` / `PUT` / `DELETE` | `/api/dem/journeys/{id}` | read / write / write |
 | `GET` | `/api/dem/synthetics/coverage` | `infrastructure:read` |
 | `GET` / `POST` | `/api/dem/changes` | `infrastructure:read` / `infrastructure:write` |
 | `GET` | `/api/dem/data-health` | `infrastructure:read` |
+| `POST` | `/api/dem/events` | `ingest:experience` (tenant-bound API key) **or** `infrastructure:write` |
+| `POST` | `/api/dem/business-events` | `ingest:experience` (tenant-bound API key) **or** `infrastructure:write` |
 
 Why `infrastructure` and not a platform gate is answered in
 [`dem-privacy.md`](dem-privacy.md) §6.1.
+
+The two INGEST routes are gated differently on purpose (tracker 254). Their
+producer is a first-party RUM snippet served to the public, so its credential
+must be assumed public. `ingest:experience` is therefore a dedicated,
+**write-only**, **tenant-bound** API-key scope: it admits those two POSTs and
+nothing else, it is honoured only for a key bound to a CONCRETE tenant (a
+platform-realm key has no owner to stamp and is refused), and it grants no read
+of any kind — a key that could also read would hand a tenant's experience data
+to anyone who viewed source. An operator with `infrastructure:write` may also
+post, so a human can seed or test the lane without minting a service credential.
+
+> **Known gap (2026-09-06).** The scope exists in the API's closed vocabulary
+> and `POST /api/apikeys` will mint it; the admin UI's scope picker
+> (`src/frontend/src/tabs/admin.tsx`) does not yet offer it as a chip, so the
+> key must be minted through the API for now.
 
 ---
 
@@ -322,6 +340,57 @@ never copies it. The ordered spine is served by the service path graph API,
 which stays the single source of hop order, and whose renderer contract forbids
 the UI from re-laying it out. See
 [`service-path-graph-contract.md`](service-path-graph-contract.md) §7.
+
+### 7.5 `POST …/promote` — the derived incident becomes a real one
+
+`infrastructure:write`. Optional body: `{"owner": "…", "note": "…"}`.
+
+```jsonc
+{
+  "incident_id": "3fa2c1d0e9b8a7f6",
+  "created": true,
+  "source_type": "experience",
+  "promotion": { "experience_id": "exp-…", "promoted_at": "…", "promoted_by": "…",
+                 "packet": { /* the ExperienceIncident AS IT STOOD */ } },
+  "incident":  { /* the same packet, with incident_id and promoted: true */ },
+  "note": "Raised as a platform incident with the experience evidence class. …"
+}
+```
+
+Experience incidents are **derived at read time** (§M.2) and that is not
+changing: there is then no window in which a stored conclusion contradicts the
+evidence beneath it. But a derived object cannot be assigned, acknowledged,
+ticketed or resolved, and it disappears when its window rolls past. Promotion is
+the deliberate act of saying *this one is real*.
+
+What it does (tracker 255):
+
+- creates — or folds into — an `internal/incident.Incident` with
+  `source_type: "experience"`, which is the evidence class the incident
+  surfaces render and filter on;
+- persists the DEM evidence packet **beside** it (`dem_incident_promotions`,
+  FORCE-RLS, migration 0047), frozen at the moment of the decision, because
+  that packet is what the operator actually acted on;
+- leaves the LIFECYCLE — status, assignment, ticketing, resolution — entirely to
+  the incident record. Two owners for one lifecycle is how drift starts.
+
+**Idempotent.** The derived incident id is both `source_id` and `dedup_key`, so a
+second promotion of the same window returns `201`→`200` with `created: false`,
+folds into the same incident (escalating its severity if the evidence is now
+worse) and does **not** rewrite the frozen packet.
+
+**Keeping the two from disagreeing** is solved by making disagreement visible
+rather than by picking a winner. `GET /api/dem/incidents/{id}` returns
+`promotion` (the frozen packet) and `drift` — every field on which the packet
+and the live derivation differ (severity, verdict tier, leading hypothesis,
+status, a confidence move over 0.05, recovery). `promotion_note` says which of
+the four states applies: not promoted, promoted and still in agreement, promoted
+and the evidence has moved, or promotion unavailable on this deployment.
+
+**Honest degradation.** The incident system of record is Postgres-only. On the
+file backend the route answers **409** naming that reason; it never answers 202
+for an incident nobody raised. A foreign or expired derived id answers **404**,
+never 403 — a 403 would confirm the id exists under somebody else's scope.
 
 ---
 
@@ -633,8 +702,6 @@ oversight.
 | `GET /api/dem/sessions` | `ExperienceSession` is a **contract only**. Nothing produces a session: there is no first-party RUM snippet, no desktop agent and no browser runner. A route returning an empty list would be indistinguishable from a route returning "no sessions were bad", which is the opposite claim. (Assessment §6.2.) |
 | `GET /api/dem/sessions/{id}` | Same. There is nothing to fetch by id. |
 | `GET /api/dem/journeys/{id}/observations` | `JourneyObservation` is a contract only. A per-traversal record needs either per-run synthetic records (`SyntheticRun`, which nothing writes) or first-party RUM. `ComputeJourneyHealth` gives real, honest journey health today from the bound targets' measured windows; a traversal list would have to be fabricated. (Assessment §3 G6.) |
-| `POST /api/dem/events` | The RUM ingest lane. Wiring it end to end needs a Kafka topic, a Vector route, a ClickHouse table in **two** places and a row policy — and no producer exists. Phase P is explicit that infrastructure is added when there is a requirement, not before. The shapes, their validation, the pseudonymous-user discipline and the `EventSink` seam ship now so the lane can be added without changing them. (Assessment §6.2; the exact cost is in [`dem-architecture.md`](dem-architecture.md) §5.3.) |
-| `POST /api/dem/business-events` | Same lane, same reason. `BusinessEvent` is validated and ready; nothing emits one. |
 | `POST /api/dem/synthetic-runs` | Still not built, and now for a better reason: per-run records EXIST (tracker 253) but they arrive from the prober over the internal key-value channel, which no external caller can reach. An HTTP ingest route would let an authenticated tenant manufacture the reliability grade that gates incident severity — the grade must be a measurement, never a claim. |
 | `POST /api/dem/ai/investigate` | The owner's own instruction is that this route is added **only after the evidence contract exists**. It now does, and `BuildPacket` / `ValidateInvestigation` are the two halves of the contract on either side of the provider call — but the provider call itself lives in `ai/*` and was not built in this slice. (Assessment §3 G7.) |
 | `GET /api/dem/synthetics` (the bare list) | The catalogue already serves it as `GET /api/dem/targets`. A second list route over the same rows would be two names for one thing, and the coverage model — not a list of tests — is what Phase H actually asks for. |

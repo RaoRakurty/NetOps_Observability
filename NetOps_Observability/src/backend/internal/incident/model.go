@@ -19,6 +19,13 @@ import (
 // The store is Postgres+RLS only (the SaaS backend); on the file/dev backend the
 // repo is nil and the handlers answer 409 (mirrors the report pipeline).
 
+// SourceExperience is the evidence class of an incident promoted from the
+// Digital Experience domain (internal/dem/experience, design §M.2). It sits
+// beside the historical alert | log | anomaly | manual values in
+// normalizeSourceType's closed vocabulary; the promoting code stamps it so the
+// incident surfaces can render and filter the DEM lane.
+const SourceExperience = "experience"
+
 // Incident severity ladder (low→high) and status set.
 var Severities = []string{"info", "low", "medium", "high", "critical"}
 

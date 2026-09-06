@@ -60,6 +60,7 @@ import (
 	// DATA-PROTECTION-BEGIN
 	"netops/backend/internal/dataprotect"
 	"netops/backend/internal/dem"
+	"netops/backend/internal/dem/expbus"
 	"netops/backend/internal/dem/experience"
 	// DATA-PROTECTION-END
 	"netops/backend/internal/devmon"
@@ -236,6 +237,11 @@ type server struct {
 	experienceStore      experience.Store
 	experienceAPI        *experience.API
 	demExperienceMetrics *experience.Counters
+	// experienceEvents is the bounded producer behind POST /api/dem/events and
+	// /business-events (tracker 254). nil when it could not be built, and the
+	// routes then answer 503 with the reason rather than 202 for events with
+	// no lane behind them.
+	experienceEvents *expbus.Queue
 	// DEM-END
 	// Routing-protocol diagnostics (Troubleshooting item 7). Catalog + analyzer
 	// are pure/immutable and always built; the collector is wired to the live
@@ -1288,6 +1294,11 @@ func newServer() *server {
 	}
 	srv.demExperienceMetrics = experience.NewCounters()
 	srv.experienceStore = newExperienceStore()
+	if q, err := newExperienceEventLane(); err != nil {
+		logError("dem", "the experience event lane could not be built — POST /api/dem/events and /api/dem/business-events will answer 503 and no first-party RUM or business evidence can be collected", errf(err))
+	} else {
+		srv.experienceEvents = q
+	}
 	if api, err := srv.buildExperienceAPI(srv.experienceStore, srv.demTargets); err != nil {
 		logError("dem", "the Digital Experience causality routes could not be wired — they will answer 404, and a 404 on the experience screen is indistinguishable from 'nothing is wrong'", errf(err))
 	} else {
@@ -2391,6 +2402,15 @@ func Run() {
 	if srv.demRunIntake != nil {
 		workers.start("dem-run-intake", func() { srv.demRunIntake.Run(ctx) })
 	}
+	// The experience-event lane's drain (tracker 254). It is the queue's ONLY
+	// consumer; without it every ingest request would fill the queue and then
+	// answer 503 forever, which is at least honest but is not the feature.
+	// Started unconditionally with the routes — the lane carries first-party
+	// RUM, which has no FEATURE_DEM dependency of its own (a tenant may collect
+	// experience evidence before it declares a single synthetic target).
+	if srv.experienceEvents != nil {
+		workers.start("dem-experience-lane", func() { srv.experienceEvents.Run(ctx) })
+	}
 	// DEM-END
 	// SNAPSHOT-RESTORABILITY-END
 	// BMP-BEGIN — BGP Monitoring Protocol receiver (internal/bmp): a TCP
@@ -2852,6 +2872,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/dem/synthetics/coverage", s.handleDEMCoverage)
 	mux.HandleFunc("/api/dem/changes", s.handleDEMChanges)
 	mux.HandleFunc("/api/dem/data-health", s.handleDEMDataHealth)
+	// The experience-event INGEST lane (tracker 254). Write-only, and gated by
+	// demIngestAuthz rather than the operator write gate: the producer is a
+	// first-party RUM snippet whose credential must be assumed public.
+	mux.HandleFunc("/api/dem/events", s.handleDEMEvents)
+	mux.HandleFunc("/api/dem/business-events", s.handleDEMBusinessEvents)
 	// DEM-END
 	// BGP-WATCH-END
 	// Routing-protocol diagnostics (Troubleshooting item 7).

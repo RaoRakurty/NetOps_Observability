@@ -76,16 +76,35 @@ func refreshTokenTTL() time.Duration {
 // scope list. Keys are read-only by default; a write: scope grants operator-
 // level write on the product modules, and admin:* grants super-admin. This keeps
 // a key from ever exceeding what its scopes describe (see docs/API_ACCESS.md).
+//
+// EXCEPTION, tracker 254: a key whose scopes are EXCLUSIVELY `ingest:*` service
+// scopes gets rbac.RoleIngest — a zero-permission grid. Such a key's authority
+// comes entirely from the one gate that honours its ingest scope; everything
+// else in the product refuses it.
+//
+// The defect this closes: the first-party RUM snippet's key is served inside a
+// public web page, so it must be assumed public. Deriving RoleReadOnly for it
+// made every read surface in the product — devices, flows, alerts, topology —
+// readable by anyone who viewed source on the customer's own site. "Read-only"
+// is not a small amount of authority when the credential is printed on a
+// billboard.
 func roleFromScopes(scopes []string) string {
 	role := RoleReadOnly
+	ingestOnly := len(scopes) > 0
 	for _, s := range scopes {
 		s = strings.ToLower(strings.TrimSpace(s))
+		if !strings.HasPrefix(s, "ingest:") {
+			ingestOnly = false
+		}
 		switch {
 		case s == "admin:*":
 			return RoleSuperAdmin
 		case strings.HasPrefix(s, "write:"):
 			role = RoleOperator
 		}
+	}
+	if ingestOnly {
+		return RoleIngest
 	}
 	return role
 }

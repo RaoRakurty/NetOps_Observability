@@ -19,9 +19,13 @@ package experience
 // incident record is a separate, deliberate act.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -861,4 +865,175 @@ func orUnnamed(s string) string {
 func hypothesisID(tenant, subject, key string) string {
 	h := sha256.Sum256([]byte(strings.ToLower(tenant) + "|" + strings.ToLower(subject) + "|" + key))
 	return "hyp-" + hex.EncodeToString(h[:8])
+}
+
+// ── promotion into the platform incident record (tracker 255) ───────────────
+//
+// An ExperienceIncident is DERIVED at read time: it is recomputed from the
+// window's evidence on every request, so there is never a stored conclusion
+// that contradicts the facts beneath it. That is the right default and it is
+// not changing.
+//
+// But a derived object cannot be assigned, acknowledged, ticketed or resolved,
+// and it disappears the moment its window rolls past. PROMOTION is the deliberate
+// act of saying "this one is real": the platform's incident record
+// (internal/incident.Incident, source_type "experience") is created or folded
+// into, and the DEM evidence packet is persisted BESIDE it — the incident
+// system holds the lifecycle, this package holds the evidence, and neither
+// duplicates the other.
+//
+// KEEPING THE TWO FROM DISAGREEING is the hard half, and it is solved by making
+// disagreement VISIBLE rather than by picking a winner. The stored packet is a
+// snapshot of what the evidence said at promotion time; the derived incident is
+// what it says now. [PromotionDrift] reports every field where they differ, so
+// a reader is told "the severity was high when this was promoted and the
+// evidence now supports medium" instead of being shown one number and left to
+// assume it is the only one.
+
+// PromotionSource is the incident record's source_type for a promoted
+// experience incident (design §M.2). It is the value the incident surfaces
+// filter on to show the DEM evidence class.
+const PromotionSource = "experience"
+
+// Promotion is the durable link between a derived ExperienceIncident and the
+// platform incident record it became, plus the evidence packet as it stood when
+// an operator decided it was real.
+type Promotion struct {
+	TenantID string `json:"tenant_id"`
+	// ExperienceID is the DERIVED incident's deterministic id. It is the join
+	// key and the dedup key, so promoting the same window twice folds into one
+	// platform incident rather than creating a second.
+	ExperienceID string `json:"experience_id"`
+	// IncidentID is the platform incident's id. Never empty in a stored row: a
+	// promotion that could not name its incident is not a promotion.
+	IncidentID string `json:"incident_id"`
+
+	PromotedAt time.Time `json:"promoted_at"`
+	PromotedBy string    `json:"promoted_by"`
+
+	// Packet is the evidence AS IT STOOD at promotion. Frozen on purpose: it is
+	// what the operator acted on, and rewriting it on every later read would
+	// erase the record of why the incident was raised.
+	Packet ExperienceIncident `json:"packet"`
+}
+
+// Validate refuses a promotion that cannot state what it links.
+func (p *Promotion) Validate() error {
+	p.TenantID = normTenant(p.TenantID)
+	if p.TenantID == "" || p.TenantID == "*" {
+		return errors.New("promotion: a concrete tenant is required")
+	}
+	p.ExperienceID = clip(strings.TrimSpace(p.ExperienceID), MaxIDBytes)
+	if p.ExperienceID == "" {
+		return errors.New("promotion: the derived incident id is required")
+	}
+	p.IncidentID = clip(strings.TrimSpace(p.IncidentID), MaxIDBytes)
+	if p.IncidentID == "" {
+		return errors.New("promotion: the platform incident id is required (a promotion that cannot name its incident is not a promotion)")
+	}
+	p.PromotedBy = clip(strings.TrimSpace(p.PromotedBy), MaxIDBytes)
+	if p.PromotedAt.IsZero() {
+		return errors.New("promotion: promoted_at is required")
+	}
+	p.PromotedAt = p.PromotedAt.UTC()
+	if p.Packet.TenantID != "" && normTenant(p.Packet.TenantID) != p.TenantID {
+		return errors.New("promotion: the packet belongs to another tenant")
+	}
+	return nil
+}
+
+// PromotionInput is what the promoter needs to create or fold into the platform
+// incident record. It is a VALUE, not the incident package's type: this package
+// must not learn the incident system's shape (§2 no cross-domain calls), and
+// the integrator adapts one to the other in a few lines.
+type PromotionInput struct {
+	TenantID string
+	// SourceID / DedupKey are both the derived incident's id. Same value, two
+	// jobs: the source id records what this incident came FROM, the dedup key
+	// makes a second promotion of the same window fold into the first.
+	SourceID string
+	DedupKey string
+
+	Title       string
+	Description string
+	Severity    string
+	Owner       string
+	Actor       string
+}
+
+// IncidentPromoter is the platform incident record's seam.
+//
+// nil is a legal wiring and is HONEST: the incident system of record is
+// Postgres-only (the file backend has no incident store at all), so on a file
+// deployment the promote route answers 409 with that reason rather than
+// pretending to have raised something.
+type IncidentPromoter interface {
+	// Promote creates the incident or folds the detection into the active one
+	// sharing the dedup key. `created` reports which happened — an operator who
+	// promotes the same window twice is told it was already raised, not shown a
+	// second incident.
+	Promote(ctx context.Context, in PromotionInput) (incidentID string, created bool, err error)
+}
+
+// PromotionDrift is one field on which the frozen packet and the current
+// derivation disagree.
+type PromotionDrift struct {
+	Field     string `json:"field"`
+	AtPromote string `json:"at_promotion"`
+	Now       string `json:"now"`
+}
+
+// DriftSince compares a promoted packet with the CURRENT derivation of the same
+// incident. PURE.
+//
+// It reports only the fields an operator would act on differently: severity
+// (does this still deserve the response it got), the leading hypothesis and its
+// verdict tier (is it still the same cause), and recovery. Confidence is
+// reported when it moved by more than a rounding amount — a hypothesis that
+// slid from 0.81 to 0.42 is a different claim even under the same tier.
+func DriftSince(promoted, current ExperienceIncident) []PromotionDrift {
+	out := []PromotionDrift{}
+	add := func(field, was, now string) {
+		if was != now {
+			out = append(out, PromotionDrift{Field: field, AtPromote: was, Now: now})
+		}
+	}
+	add("severity", promoted.Severity, current.Severity)
+	add("verdict_tier", promoted.VerdictTier, current.VerdictTier)
+	add("leading_hypothesis_id", promoted.LeadingHypothesisID, current.LeadingHypothesisID)
+	add("status", promoted.Status, current.Status)
+	if math.Abs(promoted.Confidence-current.Confidence) > 0.05 {
+		add("confidence", formatConfidence(promoted.Confidence), formatConfidence(current.Confidence))
+	}
+	wasRecovered, isRecovered := promoted.RecoveredAt != nil, current.RecoveredAt != nil
+	if wasRecovered != isRecovered {
+		add("recovered", boolWord(wasRecovered), boolWord(isRecovered))
+	}
+	return out
+}
+
+func formatConfidence(c float64) string {
+	return strconv.FormatFloat(round2(c), 'f', -1, 64)
+}
+
+func boolWord(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+// ApplyPromotions stamps the durable linkage onto a freshly derived list, so
+// the two surfaces cannot disagree about whether an incident was ever raised.
+// PURE.
+func ApplyPromotions(incidents []ExperienceIncident, byID map[string]Promotion) []ExperienceIncident {
+	for i := range incidents {
+		p, ok := byID[incidents[i].ID]
+		if !ok {
+			continue
+		}
+		incidents[i].IncidentID = p.IncidentID
+		incidents[i].Promoted = true
+	}
+	return incidents
 }

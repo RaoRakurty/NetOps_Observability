@@ -443,10 +443,10 @@ groups:
       # ------------------------------------------------------------------
       # PAGE 1 (second lane): THE ROUTER's consumer groups.
       #
-      # Same fault class, different engine. vector-router drains nine
+      # Same fault class, different engine. vector-router drains ten
       # netops-router-* groups (applogs, cloudcosts, cloudlogs, deadletter,
-      # flows, flows-rekey, security, snmptrap, syslog) out of the bus into
-      # OpenSearch and ClickHouse. On 2026-08-16 the router went auth-dead for
+      # experience, flows, flows-rekey, security, snmptrap, syslog) out of the
+      # bus into OpenSearch and ClickHouse. On 2026-08-16 the router went auth-dead for
       # ~80 minutes alongside correlation — a data/kafka wipe emptied the KRaft
       # ACL store, every principal was denied, and every container stayed
       # "healthy" with lag simply frozen. Membership is the signal that saw it.

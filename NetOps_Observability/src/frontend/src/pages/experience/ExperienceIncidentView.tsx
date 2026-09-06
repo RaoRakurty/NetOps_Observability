@@ -58,6 +58,12 @@ export default function ExperienceIncidentView({ id, window: win, onBack }: {
     () => api.demIncidentTimeline(id, win), [id, win]);
   const path = useDemRead<DemIncidentPathResponse>(() => api.demIncidentPath(id, win), [id, win]);
   const [filter, setFilter] = useState<EvidenceFilter>("all");
+  // Promotion (tracker 255): the one WRITE on this screen. A derived incident
+  // has no owner and no lifecycle until an operator says it is real; the button
+  // is the act, and the reload is what makes the linkage appear where the
+  // header already reports it.
+  const [promoting, setPromoting] = useState(false);
+  const [promoteError, setPromoteError] = useState("");
 
   if (packet.status === "loading") return <Loading what="the incident" />;
   if (packet.status === "error" || !packet.data) {
@@ -83,13 +89,35 @@ export default function ExperienceIncidentView({ id, window: win, onBack }: {
 
       {/* ── HEADER ── */}
       <Panel title={inc.title} label="Incident header"
-        actions={<SeverityChip severity={inc.severity} />}>
+        actions={
+          <>
+            {!inc.promoted && packet.data.can_promote && (
+              <button type="button" className="btn" disabled={promoting}
+                title="Raise this as a platform incident with the experience evidence class"
+                onClick={() => {
+                  setPromoting(true);
+                  setPromoteError("");
+                  api.demPromoteIncident(id, win)
+                    .then(() => packet.reload())
+                    .catch((e: unknown) => setPromoteError(e instanceof Error ? e.message : String(e)))
+                    .finally(() => setPromoting(false));
+                }}>
+                {promoting ? "Promoting…" : "Promote"}
+              </button>
+            )}
+            <SeverityChip severity={inc.severity} />
+          </>
+        }>
         <div className="dx-cards">
           <div className="dx-card" role="group" aria-label="Status">
             <span className="dx-card-label">Status</span>
             <span className="dx-card-value" style={{ fontSize: "var(--fs-md)" }}>{inc.status}</span>
             <span className="dx-cap">
-              {inc.promoted ? `Promoted incident ${inc.incident_id}` : "Not promoted to a durable incident record"}
+              {promoteError
+                ? promoteError
+                : inc.promoted
+                  ? `Promoted incident ${inc.incident_id}`
+                  : "Not promoted to a durable incident record"}
             </span>
           </div>
           <div className="dx-card" role="group" aria-label="Started">

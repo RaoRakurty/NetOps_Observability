@@ -67,14 +67,14 @@ worst kind of documentation.
 
 | Contract | What exists | What does not | Consequence today |
 |---|---|---|---|
-| `ExperienceEvent` | Shape, validation, pseudonymous-user discipline, actor types including `AI_AGENT`, `WebVitals`, `AgentContext`, external-schema fields | No route, no topic, no table, **no producer** | The `error_free_interaction` and `user_friction` score dimensions report `not_configured`. Affected users and sessions report as not measured on every incident. |
-| `ExperienceSession` | Shape, validation, `ReplayRef` as a separate pointer field, health states with `unknown` as the default | Same | No session surface exists, and the owner's `/sessions` routes were not built. |
-| `BusinessEvent` | Shape, validation, extensible `business_event_type` | Same | Business impact is computed from a journey's **declared** value per success, never from observed transactions. |
+| `ExperienceEvent` | **The whole lane, tracker 254**: shape, validation, pseudonymous-user discipline, `POST /api/dem/events`, the `netops.experience` topic, the vector-router lane, `netops.experience_events` (STRICT policy, 30 d) and the first-party RUM snippet | A tenant must install the snippet and mint an `ingest:experience` key; nothing is collected until it does | The `error_free_interaction` and `user_friction` dimensions report `not_configured` **until a tenant installs the snippet** — which is a deployment state, no longer a missing capability. |
+| `ExperienceSession` | Shape, validation, `ReplayRef` as a separate pointer field, health states with `unknown` as the default | No producer: the snippet emits EVENTS carrying a session id; nothing rolls them up into a session record | No session surface exists, and the owner's `/sessions` routes were not built. |
+| `BusinessEvent` | Shape, validation, extensible `business_event_type`, `POST /api/dem/business-events` and `netops.business_events` (STRICT policy, 400 d) — tracker 254 | A producer in the tenant's own application or pipeline | Business impact is still computed from a journey's **declared** value per success until a tenant posts observed transactions. |
 | `JourneyObservation` | Shape, validation, immutability rules, cohort and correlation handles | Nothing writes one | Journey health is computed from the bound targets' measured windows. There is no per-traversal view, no abandonment rate and no step-conversion funnel. |
-| `SyntheticRun` | Shape, validation, `definition_version` pinning, reliability inputs | Nothing writes one | **Every check's reliability reads `unknown`.** `Assemble` passes an empty `Bundle.Reliability`, so `severityFor` finds no grade and treats the check as trustworthy: the flaky-check severity cap is wired and tested but cannot fire in production. That is tracker **253** and it is the right default — inventing a grade for a check nobody has measured would be worse than having none. |
+| `SyntheticRun` | Shape, validation, `definition_version` pinning, reliability inputs, **and the records themselves (tracker 253)**: the prober publishes one immutable `WireRun` per check on the work-queue channel, the api holds a bounded ring per definition and `GradeReliability` folds it | A run history for kinds with no runner (BROWSER, JOURNEY) — those are still contract-only | The flaky-check severity cap now FIRES: `Assemble` passes real grades and `severityFor` caps an untrustworthy check. A check with fewer than 10 runs still reads `unknown`, and the coverage surface says which of the three reasons applies. |
 | `EventSink` | The interface | No implementation | The ingest lane has somewhere to attach without changing any shape. |
 | AI investigator | Packet builder, output schema, whitelist validator, downgrade rule, feature flag | No provider call, no route | `ai_investigator.available` is false unless both flags are on, and even then no route accepts a question. |
-| `ExperienceIncident.IncidentID` / `Promoted` | Modelled | No promotion path | An experience incident never becomes a platform incident. |
+| `ExperienceIncident.IncidentID` / `Promoted` | **Wired, tracker 255**: `POST /api/dem/incidents/{id}/promote`, `dem_incident_promotions` (FORCE-RLS, migration 0047), and the linkage stamped onto both the list and the item | An automatic trigger. Promotion is an OPERATOR action; a bounded sweeper can be added on top of the same contract | An experience incident becomes a platform incident with `source_type: "experience"` when an operator says it is real — and the frozen packet is compared with the live derivation on every read (`drift`). |
 
 ---
 
@@ -120,27 +120,36 @@ Two follow-ups this leaves, neither of which is a code change alone:
 that a second anchor class exists, but the class is thin until an exporter that
 reports control bits — and ideally timings — is pointed at the estate.
 
-### 3.2 The `netops.experience` lane and the RUM snippet
+### 3.2 The `netops.experience` lane and the RUM snippet — BUILT (tracker 254)
 
 The first-party browser RUM snippet is Tier 4 of the source ladder and the
 producer that makes `real_user` — the only other anchor-capable class DEM
 declares — real.
 
-Sequence, and it matters:
+The sequence was followed as written, and steps 1–4 are done
+([`dem-rum-snippet.md`](dem-rum-snippet.md) is the walk-through):
 
-1. Build the lane first (topic, Vector route, ClickHouse table in **both**
-   `deployment/docker/clickhouse/init.sql` and `internal/chschema` +
-   `ConvergeStmts()`, a **strict** row policy). The exact cost is
-   [`dem-architecture.md`](dem-architecture.md) §5.3.
-2. Implement `EventSink` against it.
-3. Add `POST /api/dem/events` and `POST /api/dem/business-events`, bounded and
-   authenticated.
-4. Ship the snippet.
-5. Add `real_user` to `ModalityClass` in `src/correlation/signals.py` **in the
-   same change**, or the Go and Python graders will disagree about what
-   "independent" means.
+1. ✅ The lane (topic, vector-router lane, `netops.experience_events` and
+   `netops.business_events` in **both** `deployment/docker/clickhouse/init.sql`
+   and `internal/chschema/experience_schema.go` + `ConvergeStmts()`, **strict**
+   row policies on both). [`dem-architecture.md`](dem-architecture.md) §5.3
+   records what it actually cost.
+2. ✅ `EventSink` implemented in `internal/dem/expbus`: bounded queue,
+   `503 + Retry-After` backpressure, retry with full jitter, loud counted drop.
+3. ✅ `POST /api/dem/events` and `POST /api/dem/business-events`, bounded and
+   authenticated by a tenant-bound, write-only `ingest:experience` API key.
+4. ✅ `src/frontend/public/correlix-rum.js`.
+
+Steps 5 and 6 remain:
+5. Add `real_user` to `ModalityClass` in `src/correlation/signals.py`, or the
+   Go and Python graders will disagree about what "independent" means. It was
+   NOT done in tracker 254: the correlation engine does not consume
+   `netops.experience` (the router does), so nothing in Python reads a
+   `real_user` signal yet and adding the class before a consumer exists would
+   be a vocabulary entry with no producer — exactly what this table is for.
 6. Only then add `GET /api/dem/sessions` and `…/{id}`, because only then is
-   there something to list.
+   there something to list. `ExperienceSession` still has no producer: the
+   snippet emits events with a session id, not session records.
 
 Retention on the new table must be set **per data class**, not inherited from
 `customer_metadata` (§5).
@@ -164,27 +173,38 @@ publishes aggregate series. Making it real means:
 5. `GET /api/dem/journeys/{id}/observations` becomes possible, because a run is
    half of a traversal.
 
-### 3.4 Incident promotion into `internal/incident`
+### 3.4 Incident promotion into `internal/incident` — BUILT (tracker 255)
 
-`ExperienceIncident.IncidentID` and `Promoted` are modelled and unwired.
 `internal/incident` is the platform's Postgres+RLS system of record and
-`Repo.Ingest` dedups by key, but **nothing promotes a correlation object into it
-today** — the only caller is the alert engine's `ingestAlertIncident`. So this
-slice is not "wire DEM to incidents"; it is "build the promotion path, and DEM
-is its first user".
+`Repo.Ingest` dedups by key, but until tracker 255 **nothing promoted a
+correlation object into it** — the only caller was the alert engine's
+`ingestAlertIncident`. DEM is now the promotion path's first user; the same
+seam (`experience.IncidentPromoter`, adapted in one function by the integrator)
+is what a correlation-object promotion would reuse.
 
-Design questions to answer first, none of which are settled:
+The three questions, and the answers that shipped:
 
-- **What triggers promotion?** Automatic on `CONFIRMED`, automatic on a
-  severity threshold, or an operator action. Automatic promotion on a derived
-  object means the platform incident store gains a row whose evidence can change
-  underneath it, which is exactly the drift the derive-at-read decision avoids.
-- **What is the dedup key?** `IncidentID` is deterministic per
-  `(tenant, kind, subject, window_start)`, so a degradation spanning two windows
-  produces two ids. Promotion needs a stable key across windows, which the
-  derived id is not.
-- **What happens on recovery?** The platform incident has a lifecycle; the DEM
-  packet does not.
+- **What triggers promotion?** An **operator action**
+  (`POST /api/dem/incidents/{id}/promote`, `infrastructure:write`, audited with
+  the actor). Automatic promotion was rejected for the reason stated here
+  originally — and for a second one found while building it: the derived list is
+  deliberately generous (one incident per failing journey AND per failing app,
+  every window), so a sweeper over it is an incident storm with a human on the
+  other end. A bounded sweeper can be layered on the same contract later.
+- **What is the dedup key?** The derived id, which is deterministic per
+  `(tenant, kind, subject, window_start)`. It is therefore stable WITHIN a
+  window and not across them, and that is accepted rather than papered over: a
+  degradation spanning two windows can be promoted twice and produces two
+  incidents. A cross-window identity is a real open question and it belongs to
+  the correlation object, not to DEM.
+- **What happens on recovery?** The incident record owns the lifecycle and DEM
+  does not duplicate it. What DEM adds is `drift`: the packet frozen at
+  promotion is compared with the live derivation on every read, so "this was
+  high when it was raised and the evidence now supports medium" — recovery
+  included — is a reported fact rather than a silent divergence.
+
+Still open: an automatic or sweeper-driven trigger, and a cross-window incident
+identity.
 
 ### 3.5 The AI investigator's provider call
 

@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/apikey"
 	"netops/backend/internal/dem"
+	"netops/backend/internal/dem/expbus"
 	"netops/backend/internal/dem/experience"
+	"netops/backend/internal/incident"
 	"netops/backend/internal/platformdb"
 )
 
@@ -115,6 +118,8 @@ func (s *server) demAuthz(w http.ResponseWriter, r *http.Request, gate dem.Gate)
 		level = LevelRead
 	case dem.GateWrite:
 		level = LevelWrite
+	case dem.GateIngest:
+		return s.demIngestAuthz(w, r)
 	default:
 		// The module declares exactly two gates. An unknown gate is a wiring
 		// bug, and the safe answer to a gate we cannot map is refusal.
@@ -129,6 +134,39 @@ func (s *server) demAuthz(w http.ResponseWriter, r *http.Request, gate dem.Gate)
 	if tenant == TenantGlobal {
 		// The platform tenant is not a customer: treat it as scopeless so the
 		// module's own refusal fires rather than reading a shared bucket.
+		tenant = ""
+	}
+	return dem.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+}
+
+// demIngestAuthz gates the experience-event ingest routes (tracker 254).
+//
+// It is DELIBERATELY not the write gate. The producer is a first-party RUM
+// snippet served to the public or a build pipeline, so its credential must be
+// assumed public: the dedicated `ingest:experience` API-key scope grants
+// write-only access to those two routes and nothing else, and it is honoured
+// ONLY for a key bound to a CONCRETE tenant — the events are stamped with that
+// tenant, so a platform-realm key would have no owner to stamp and is refused.
+//
+// An operator with infrastructure:write may also post (the fallback below), so
+// a human can seed or test the lane without minting a service credential. That
+// path is the ordinary tenant-scoped one; nothing about it widens reach.
+func (s *server) demIngestAuthz(w http.ResponseWriter, r *http.Request) (dem.Principal, bool) {
+	if claims, ok := userFrom(r.Context()); ok && claims.HasScope(apikey.ScopeIngestExperience) {
+		tenant, cross := principalTenant(claims)
+		if !cross && tenant != "" && tenant != TenantGlobal {
+			return dem.Principal{Tenant: tenant, Cross: false, Subject: claims.Sub}, true
+		}
+		// A scoped key with no concrete tenant falls THROUGH to the operator
+		// gate rather than being allowed: an ingest credential that could not
+		// name an owner would produce rows no tenant can ever see.
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+	if !ok {
+		return dem.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	if tenant == TenantGlobal {
 		tenant = ""
 	}
 	return dem.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
@@ -584,6 +622,74 @@ func (s *server) handleDEMChanges(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleDEMDataHealth(w http.ResponseWriter, r *http.Request) {
 	s.experienceAPI.HandleDataHealth(w, r)
+}
+
+func (s *server) handleDEMEvents(w http.ResponseWriter, r *http.Request) {
+	s.experienceAPI.HandleEvents(w, r)
+}
+
+func (s *server) handleDEMBusinessEvents(w http.ResponseWriter, r *http.Request) {
+	s.experienceAPI.HandleBusinessEvents(w, r)
+}
+
+// experiencePromoter adapts the platform incident repository onto the
+// experience module's IncidentPromoter seam (tracker 255).
+//
+// The adaptation is the WHOLE point of the seam: internal/dem/experience must
+// not learn the incident system's shape (§2 forbids direct cross-domain calls),
+// and this is the one place that knows both. It also stamps the source type,
+// which is what makes a promoted experience incident render with the DEM
+// evidence class on the incident surfaces (design §M.2).
+//
+// A nil repo (file backend) returns a nil seam, which the module renders as an
+// explicit 409 rather than as a silently-missing feature.
+func (s *server) experiencePromoter() experience.IncidentPromoter {
+	if s.incidents == nil {
+		return nil
+	}
+	return experiencePromoterFunc(func(ctx context.Context, in experience.PromotionInput) (string, bool, error) {
+		inc, created, err := s.incidents.Ingest(ctx, incident.Input{
+			TenantID: in.TenantID,
+			Title:    in.Title, Description: in.Description,
+			Severity: in.Severity,
+			// The evidence class. `experience` is the design-of-record value
+			// (§M.2) and internal/incident's normalizer admits it, so the
+			// incident surfaces can filter the DEM lane apart from alerts,
+			// logs and anomalies.
+			SourceType: experience.PromotionSource,
+			SourceID:   in.SourceID, DedupKey: in.DedupKey,
+			Owner: in.Owner, Actor: in.Actor,
+		})
+		if err != nil {
+			return "", false, err
+		}
+		return inc.ID, created, nil
+	})
+}
+
+// experiencePromoterFunc adapts a bare function to the seam.
+type experiencePromoterFunc func(context.Context, experience.PromotionInput) (string, bool, error)
+
+func (f experiencePromoterFunc) Promote(ctx context.Context, in experience.PromotionInput) (string, bool, error) {
+	return f(ctx, in)
+}
+
+// newExperienceEventLane builds the bounded bus producer behind the two ingest
+// routes. Construction failure is LOUD and leaves the sink nil, which the
+// routes render as an explicit 503 — an ingest route that accepted events with
+// no lane behind it would be the "healthy process, dead data path" failure this
+// stack has now met twice.
+func newExperienceEventLane() (*expbus.Queue, error) {
+	return expbus.New(
+		expbus.PublisherFunc(func(ctx context.Context, topic string, recs []expbus.Record) (int, error) {
+			out := make([]proxyRecord, 0, len(recs))
+			for _, rec := range recs {
+				out = append(out, proxyRecord{Key: rec.Key, Value: rec.Value})
+			}
+			return produceJSON(ctx, topic, out)
+		}),
+		func(m string, f map[string]any) { logWarn("dem", m, f) },
+	)
 }
 
 // DEM-EXPERIENCE-END

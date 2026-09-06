@@ -27,9 +27,12 @@ func TestOpenAPIDocumentsEveryExperienceRoute(t *testing.T) {
 		CoveragePath:                       {"get"},
 		ChangesPath:                        {"get", "post"},
 		DataHealthPath:                     {"get"},
+		EventsPath:                         {"post"},
+		BusinessEventPath:                  {"post"},
 		"/api/dem/incidents/{id}/evidence": {"get"},
 		"/api/dem/incidents/{id}/timeline": {"get"},
 		"/api/dem/incidents/{id}/path":     {"get"},
+		"/api/dem/incidents/{id}/promote":  {"post"},
 	}
 	for path, methods := range want {
 		entry, has := paths[path].(map[string]any)
@@ -56,14 +59,16 @@ func TestOpenAPIDocumentsEveryExperienceRoute(t *testing.T) {
 
 func TestRouteConstantsMatchTheDocumentedPaths(t *testing.T) {
 	pairs := map[string]string{
-		OverviewPath:     "/api/dem/overview",
-		IncidentsPath:    "/api/dem/incidents",
-		IncidentItemPath: "/api/dem/incidents/",
-		JourneysPath:     "/api/dem/journeys",
-		JourneyItemPath:  "/api/dem/journeys/",
-		CoveragePath:     "/api/dem/synthetics/coverage",
-		ChangesPath:      "/api/dem/changes",
-		DataHealthPath:   "/api/dem/data-health",
+		OverviewPath:      "/api/dem/overview",
+		IncidentsPath:     "/api/dem/incidents",
+		IncidentItemPath:  "/api/dem/incidents/",
+		JourneysPath:      "/api/dem/journeys",
+		JourneyItemPath:   "/api/dem/journeys/",
+		CoveragePath:      "/api/dem/synthetics/coverage",
+		ChangesPath:       "/api/dem/changes",
+		DataHealthPath:    "/api/dem/data-health",
+		EventsPath:        "/api/dem/events",
+		BusinessEventPath: "/api/dem/business-events",
 	}
 	for got, want := range pairs {
 		if got != want {
