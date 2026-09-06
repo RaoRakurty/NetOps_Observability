@@ -1,0 +1,720 @@
+# gnmic-correlation.yaml — the ENABLE_GNMI_CORRELATION overlay.
+#
+# gnmic takes exactly ONE --config (pkg flag `--config string`, not a list) and
+# YAML has no include, so an "overlay" here is a FULL config: this file is
+# gnmic.yaml verbatim plus (a) the `correlation` kafka output and (b) the
+# `corr-rca-shape` processor it runs. Nothing else may differ —
+# tests/test_gnmi_correlation_lane.py parses both files and fails on any other
+# delta, which is what keeps the copy from rotting.
+#
+# Selected at deploy time by the compose command:
+#   GNMIC_CONFIG_FILE=gnmic-correlation.yaml   (default: gnmic.yaml)
+# See deployment/docker/docker-compose.yml (gnmic) and docs/INGESTION.md.
+#
+# gnmic — gNMI dial-in telemetry collector (sidecar).
+#
+# Subscribes to the clos-multivendor fabric over gNMI and remote-writes the
+# samples to VictoriaMetrics, so gNMI telemetry lands alongside the SNMP
+# metrics and is queryable through the same /api/metrics path.
+#
+# Per-vendor paths: Arista cEOS serves OpenConfig; Nokia SR Linux serves its
+# native model (its gNMI root has `interface`/`platform`, not `interfaces`).
+# Device gNMI passwords come from the environment (.env), never hard-coded here.
+
+username: admin
+encoding: json_ietf
+skip-verify: true
+log: true
+targets:
+  # ---- Nokia SR Linux (TLS, self-signed -> skip-verify) ----
+  172.40.40.11:57400:
+    name: spine1
+    password: ${SRL_GNMI_PASS}
+    # Item 4: BGP/protocol subscriptions widened to network-instance[name=*] so
+    # per-VRF / routing-instance / VPRN state flows (the widening lives in the
+    # srl-bgp path definitions below; this target just lists subscription names).
+    subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis, srl-isis-db, srl-isis-timers]
+  172.40.40.12:57400:
+    name: spine2
+    password: ${SRL_GNMI_PASS}
+    subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis, srl-isis-db, srl-isis-timers]
+
+  # ---- Arista cEOS (plaintext gNMI :6030) ----
+  172.40.40.21:6030:
+    name: leaf1
+    password: ${EOS_GNMI_PASS}
+    insecure: true
+    subscriptions: [oc-interfaces, oc-cpu, oc-bgp]
+  172.40.40.22:6030:
+    name: leaf2
+    password: ${EOS_GNMI_PASS}
+    insecure: true
+    subscriptions: [oc-interfaces, oc-cpu, oc-bgp]
+  172.40.40.23:6030:
+    name: leaf3
+    password: ${EOS_GNMI_PASS}
+    insecure: true
+    subscriptions: [oc-interfaces, oc-cpu, oc-bgp]
+  172.40.40.24:6030:
+    name: leaf4
+    password: ${EOS_GNMI_PASS}
+    insecure: true
+    subscriptions: [oc-interfaces, oc-cpu, oc-bgp]
+  172.40.40.32:6030:
+    name: wan-r2
+    password: ${EOS_GNMI_PASS}
+    insecure: true
+    subscriptions: [oc-interfaces, oc-cpu, oc-bgp]
+
+subscriptions:
+  # OpenConfig interface counters + oper/admin status (Arista).
+  oc-interfaces:
+    paths:
+      - "/interfaces/interface/state/counters"
+      - "/interfaces/interface/state/oper-status"
+      - "/interfaces/interface/state/admin-status"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 30s
+
+  # Arista OpenConfig CPU utilization — the gNMI counterpart of the SNMP
+  # hrProcessorLoad table, added with tracker 230 so that flipping
+  # device_cpu_percent to gNMI ownership costs an Arista device nothing.
+  # VERIFIED LIVE against lab leaf1 (cEOS) on 2026-09-05 with a gNMI Get AND a
+  # streaming subscribe, not transcribed from a datasheet: cEOS answers with one
+  # component per core (CPU0, CPU1, ...) carrying instant/avg/min/max. We take
+  # `instant` ONLY — it is the same "load right now" sample hrProcessorLoad
+  # reports, and subscribing to the leaf keeps avg/min/max out of the canonical
+  # namespace entirely rather than relying on drop-unmapped to catch them.
+  # The per-core component key becomes the `index` label (canon-tags), which is
+  # exactly how the SNMP lane labels the hrProcessorLoad rows.
+  oc-cpu:
+    paths:
+      - "/components/component[name=*]/cpu/utilization/state/instant"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 30s
+
+  # Nokia SR Linux native interface statistics.
+  srl-interfaces:
+    paths:
+      - "/interface[name=*]/statistics"
+      - "/interface[name=*]/oper-state"
+      - "/interface[name=*]/admin-state"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 30s
+
+  # BGP neighbor session-state — CONTROL PLANE, gNMI-owned (its own subscription).
+  # Canonical lane applies canon-override-ts so cEOS's stale established-session
+  # timestamps don't get rejected by VictoriaMetrics (see outputs + issue file).
+  oc-bgp:
+    paths:
+      - "/network-instances/network-instance[name=*]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/session-state"
+      # Flap counter (established-transitions) + per-AFI prefixes received —
+      # both gNMI-owned (BGP4-MIB is v4-only / barely on cEOS). Same cEOS
+      # stale-ts class as session-state; canon-override-ts handles it.
+      - "/network-instances/network-instance[name=*]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/established-transitions"
+      - "/network-instances/network-instance[name=*]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received"
+    mode: stream
+    # on-change: emit the instant a session flaps. sample@30s ALIASED short flaps —
+    # a leaf-spine bounce tore down + reformed a session inside one sample window,
+    # invisibly. heartbeat refreshes stable state so VictoriaMetrics never marks it
+    # stale (canon-override-ts keeps heartbeat timestamps fresh for cEOS).
+    stream-mode: on-change
+    heartbeat-interval: 30s
+  srl-bgp:
+    paths:
+      - "/network-instance[name=*]/protocols/bgp/neighbor[peer-address=*]/session-state"
+      # Flap counter, the SRL native counterpart of the OpenConfig
+      # established-transitions above. VERIFIED LIVE on lab spine1 (SR Linux) by
+      # a gNMI Get on 2026-09-05, not from a datasheet — SRL puts the leaf
+      # directly under the neighbor list (no /state/ container). Added with
+      # tracker 230: device_bgp_fsm_transitions is gNMI-owned, so without this
+      # path an SR Linux device labelled `gnmi: "true"` would lose the SNMP
+      # bgpPeerFsmEstablishedTransitions series and gain nothing.
+      - "/network-instance[name=*]/protocols/bgp/neighbor[peer-address=*]/established-transitions"
+    mode: stream
+    stream-mode: on-change
+    heartbeat-interval: 30s
+
+  # IS-IS adjacency state — the fabric IGP. Leaf<->spine DOES run IS-IS (L2 P2P);
+  # we collect adjacency state from the SRL spine side, which sees every fabric
+  # adjacency (4 per spine, one per leaf). Adjacency flaps are root-cause events,
+  # so on-change (not sample): a leaf-spine bounce flapped all adjacencies inside
+  # one 30s window and the sampler missed it entirely (proven 2026-06-13 — the
+  # SRL "last transition" timestamps showed the flap the metric never recorded).
+  srl-isis:
+    paths:
+      - "/network-instance[name=*]/protocols/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/state"
+    mode: stream
+    stream-mode: on-change
+    heartbeat-interval: 30s
+
+  # IS-IS DEPTH — LSP-database size, SPF-run counter and area membership
+  # (frontend-wave #11 "IS-IS advanced"). All three are Nokia SR Linux NATIVE
+  # nodes VERIFIED against lab spine1 (srl_nokia-isis, SRL 24.10) on 2026-09-02
+  # by a gNMI Get of /network-instance[name=default]/protocols/isis/instance[*] —
+  # the paths below are transcribed from that reply, not from a datasheet:
+  #   level[level-number=*]/statistics/total-lsps  -> 6   (LSPs in the L2 database)
+  #   level[level-number=*]/statistics/spf-runs    -> 10  (monotonic SPF counter)
+  #   oper-area-id                                 -> ["49.0001"] (leaf-list)
+  # SAMPLE, not on-change: none of the three is a flap signal — a database size
+  # and a run counter are levels an operator reads, and on-change on a counter
+  # that ticks per SPF would be a write amplifier for no diagnostic gain.
+  srl-isis-db:
+    paths:
+      - "/network-instance[name=*]/protocols/isis/instance[name=*]/level[level-number=*]/statistics/total-lsps"
+      - "/network-instance[name=*]/protocols/isis/instance[name=*]/level[level-number=*]/statistics/spf-runs"
+      - "/network-instance[name=*]/protocols/isis/instance[name=*]/oper-area-id"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 60s
+
+  # IS-IS per-adjacency hold timer. VERIFIED on spine1: the SRL node is
+  # `adjacency[neighbor-system-id=*]/remaining-holdtime` and it is a COUNTDOWN
+  # (seconds left before the adjacency expires if no IIH arrives), reset by every
+  # hello — NOT the configured hold interval. Sampling it therefore yields a
+  # sawtooth; what it is evidence FOR is the floor: a value that trends toward 0,
+  # or a series that goes stale, means hellos stopped arriving. The canonical
+  # name keeps the `_seconds` unit suffix and every consumer is told the
+  # countdown semantics (igpmon's timers block, the ledger, the UI label).
+  srl-isis-timers:
+    paths:
+      - "/network-instance[name=*]/protocols/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/remaining-holdtime"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 30s
+
+  # Nokia SR Linux control-plane health: CPU, memory, temperature.
+  srl-cpu:
+    paths:
+      - "/platform/control[slot=A]/cpu[index=all]/total"
+      - "/platform/control[slot=A]/memory"
+      - "/platform/control[slot=A]/temperature"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 30s
+
+# gNMI is the OWNER of BGP state — but PER DEVICE, not globally. The SNMP profile
+# still defines BGP with `owner: gnmi`; the SNMP collector WITHHOLDS it only on devices
+# tagged gNMI-capable (label gnmi: "true"), and stays the universal floor for agentless
+# gear that has no gNMI (so an SNMP-only BGP router is still covered). cEOS DOES answer
+# bgpPeerTable, so without this gate the two transports double-emitted every fabric peer
+# ({index} vs {peer}). This canonical lane mirrors the gate from the gNMI side via the
+# ownership-gate below. OSPF stays SNMP-owned (gNMI carries IS-IS, not OSPF, here).
+#
+# THIS FILE IS THE DEFAULT (VictoriaMetrics only — gnmic is not a bus producer).
+# The opt-in correlation lane lives in gnmic-correlation.yaml, which is this
+# file plus one `correlation` kafka output and one `corr-rca-shape` processor,
+# selected by GNMIC_CONFIG_FILE in docker-compose.yml. Edit BOTH together:
+# tests/test_gnmi_correlation_lane.py fails if anything else differs between them.
+outputs:
+  # Raw lane — gNMI paths verbatim under the gnmi_ prefix. Debug surface,
+  # gNMI-liveness source for the backend health monitor, and the comparison
+  # lane for parity checks before an ownership flip. Never queried by panels.
+  victoria:
+    type: prometheus_write
+    url: ${VICTORIA_WRITE_URL}  # compose supplies the plaintext default; TLS deployments point it at vmauth (SEC-010)
+    metric-prefix: gnmi
+    interval: 15s
+
+  # Canonical lane — THE normalization layer (single-contract principle:
+  # whatever the transport, SNMP and gNMI must emit the same output).
+  # Pipeline: rename mapped paths to canonical device_* names → status enums
+  # to IF-MIB numerics → vendor/transport tags → identity tags renamed to the
+  # canonical label set → OWNERSHIP GATE → fail-closed cleanup.
+  #
+  # Ownership rule (collision safety): a (device, family) pair is served by
+  # exactly ONE transport, and the decision is made PER DEVICE on the SNMP side
+  # — `SNMPMetric.Owner` + the device's `gnmi: "true"` label
+  # (src/backend/collectors/profiles.go `ownedElsewhere`). gnmic's ownership
+  # gate is the mirror of that table, and the two must agree family-for-family:
+  # a family the gate deletes must be SNMP-owned, a family it does not delete
+  # must be `Owner: "gnmi"` everywhere the SNMP profiles define it. Enforced by
+  # tests/test_gnmi_ownership_contract.py, not by convention.
+  #
+  # Every canonical family gnmic maps is now gNMI-owned (tracker 230), so the
+  # gate deletes nothing. What that costs the SNMP lane is bounded and
+  # deliberate: gNMI's interface coverage is a strict SUBSET of SNMP's, so the
+  # families gNMI does NOT map — device_if_speed, device_if_last_change,
+  # device_if_fcs_errors, device_sensor_value, device_sysuptime — keep NO Owner
+  # and are still polled over SNMP on the very same device. Ownership is per
+  # (device, FAMILY); a dual-transport device legitimately draws interface
+  # counters from gNMI and interface speed from SNMP.
+  #
+  # THE OPERATOR CONTRACT: labelling a device `gnmi: "true"` asserts that its
+  # gnmic subscriptions cover the gNMI-owned families, because the SNMP poller
+  # will stop emitting them for that device. Coverage shipped here:
+  #   interfaces  — Arista oc-interfaces + Nokia srl-interfaces  (both vendors)
+  #   BGP         — oc-bgp + srl-bgp                             (both vendors)
+  #   CPU         — Arista oc-cpu + Nokia srl-cpu                (both vendors)
+  #   memory/temp — srl-cpu                                      (Nokia only;
+  #                 no SNMP profile defines either for a vendor gnmic covers,
+  #                 so there is nothing to collide with)
+  victoria-canonical:
+    type: prometheus_write
+    url: ${VICTORIA_WRITE_URL}  # compose supplies the plaintext default; TLS deployments point it at vmauth (SEC-010)
+    interval: 15s
+    event-processors:
+      - canon-override-ts
+      - canon-names
+      - canon-status-enums
+      - canon-bgp-enums
+      - canon-isis-enums
+      - canon-isis-area-info
+      - canon-convert
+      - vendor-nokia
+      - vendor-arista
+      - transport-tag
+      - canon-tags
+      - canon-isis-level-tag
+      - ownership-gate
+      - drop-unmapped
+      - drop-internal-tags
+
+  # ---------------------------------------------------------------------------
+  # Correlation lane — RCA EVIDENCE (feature-flagged: ENABLE_GNMI_CORRELATION).
+  #
+  # THIS BLOCK IS THE ONLY DIFFERENCE between gnmic.yaml and this file. The
+  # default deployment loads gnmic.yaml and never produces to the bus; the
+  # compose command selects THIS file only when the operator opts in
+  # (GNMIC_CONFIG_FILE=gnmic-correlation.yaml). tests/test_gnmi_correlation_lane.py
+  # asserts the delta mechanically, so the two files cannot drift.
+  #
+  # WHY kafka AND NOT http: gnmic 0.46.0 has NO http output. Its registered
+  # output types are file/influxdb/kafka/nats/otlp/prometheus/prometheus_write/
+  # tcp/udp/gnmi/jetstream/snmp/asciigraph (pkg/outputs/output.go OutputTypes;
+  # `type: http` fails with `unknown output type: "http"`). The only HTTP egress
+  # gnmic can do at all is the event-trigger processor's `http` ACTION — which is
+  # a rate-limited alerting hook: it keeps an in-memory occurrence slice per
+  # window and DROPS every event past max-occurrences (pkg/formatters/
+  # event_trigger evalOccurrencesWithinWindow). A metric lane that silently
+  # discards evidence is not acceptable (§9/§10), so the Vector :8690 HTTP lane
+  # the Go SNMP collector uses is unreachable from gnmic and this output produces
+  # to the same Kafka topic Vector's kafka_metrics sink writes: netops.metrics.
+  #
+  # KNOWN GAPS (why the flag is default-OFF and NOT live-attested — see
+  # docs/TEST_REPORT_metric-trap-lane.md):
+  #   * Vector's metrics_normalized stamps `.__key` = tenant so a tenant always
+  #     hashes to the same partition (murmur2). gnmic cannot know tenants, so it
+  #     keys per device. Harmless at BUS_PARTITIONS=1 (the default), NOT safe
+  #     above it until a re-key hop exists (the netops.flows.raw pattern).
+  #     Tenancy itself is unaffected: the engine resolves the tenant from the
+  #     registry when the event carries no claim (verified_tenant, "no claim →
+  #     the registry decides"), which is exactly what Vector's stamp does.
+  #   * compose.tls.yml removes PLAINTEXT:9092 and enforces ACLs; gnmic has no
+  #     SVID and no ACL grant, so this lane is unsupported under the mTLS
+  #     profile until both land (kafka/apply-acls.sh + the SVID mint).
+  correlation:
+    type: kafka
+    # Env-injected by compose (never a literal): brokers + topic.
+    address: ${GNMI_CORRELATION_BROKERS}
+    topic: ${GNMI_CORRELATION_TOPIC}
+    format: event
+    # One Kafka message per metric sample — the correlation consumer reads one
+    # JSON object per message. corr-rca-shape has already exploded multi-value
+    # events into one value each, so this yields exactly one MetricEvent.
+    split-events: true
+    # THE RESHAPE. Rendered by outputs.ExecTemplate over the marshalled event
+    # (text/template, Option("missingkey=zero"), gnmic's fromJSON = json.Marshal
+    # → every interpolated string is JSON-escaped, so a hostile ifName/peer from
+    # a device cannot break out of the JSON). Field order mirrors the Go
+    # MetricEvent struct (collectors/metric_events.go) so the two producers put
+    # the same bytes on the same topic. `value` is unquoted on purpose: it comes
+    # from corr-rca-shape, which admits it only after `type == "number"`.
+    msg-template: '{"observer_type":"device","modality_class":"device_telemetry","collection_path":"gnmi_subscribe","device":{{ index .tags "device" | fromJSON }}{{ with index .tags "vendor" }},"vendor":{{ . | fromJSON }}{{ end }}{{ with index .tags "ifName" }},"if_name":{{ . | fromJSON }}{{ end }}{{ with index .tags "peer" }},"peer":{{ . | fromJSON }}{{ end }}{{ with index .tags "neighbor" }},"neighbor":{{ . | fromJSON }}{{ end }},"signal_family":{{ index .tags "signal_family" | fromJSON }},"metric":{{ index .tags "metric" | fromJSON }},"value":{{ index .tags "mvalue" }},"unit":{{ index .tags "unit" | fromJSON }},"ts":{{ index .tags "ts" | fromJSON }}}'
+    # Partition key = ${source}_${subscription-name}: a device's series stay
+    # ordered on one partition. See the tenant-key gap above.
+    insert-key: true
+    # §9 bounded queue + backpressure: a fixed producer channel, a single
+    # worker, bounded retries, and a recovery wait instead of a hot reconnect
+    # loop. When the buffer is full gnmic blocks the output, it does not grow.
+    num-workers: 1
+    buffer-size: 1000
+    max-retry: 3
+    required-acks: wait-for-all
+    timeout: 5s
+    recovery-wait-time: 10s
+    compression-codec: snappy
+    # Same canonical chain as victoria-canonical (incl. the OWNERSHIP GATE, so a
+    # (device, family) pair is still served by exactly one transport on the bus),
+    # then the RCA shaper.
+    event-processors:
+      - canon-override-ts
+      - canon-names
+      - canon-status-enums
+      - canon-bgp-enums
+      - canon-isis-enums
+      - canon-isis-area-info
+      - canon-convert
+      - vendor-nokia
+      - vendor-arista
+      - transport-tag
+      - canon-tags
+      - canon-isis-level-tag
+      - ownership-gate
+      - drop-unmapped
+      - drop-internal-tags
+      - corr-rca-shape
+
+processors:
+  # [0] Override sample timestamp with collection time. cEOS stamps a STABLE
+  # established BGP session's sampled response with the session's last-transition
+  # time (hours old on a steady fabric) instead of the sample time; VictoriaMetrics
+  # silently rejects those as stale, so cEOS leaf BGP vanished while spine/wan-r2
+  # (fresh timestamps) landed. For sampled STATE we want "is it established NOW",
+  # so collection-time is correct; true event-time lives in the event plane, not
+  # here. Applies to ALL canonical series (harmless for already-fresh ones).
+  # (Root cause: ceos-bgp-gnmi-issue.md.)
+  canon-override-ts:
+    event-override-ts:
+      precision: ns
+
+  # [1] Path → canonical name. Full mapping table for both vendors; anchored
+  # regexes, replace rewrites the entire value name. Unmapped paths keep their
+  # raw shape and are removed by drop-unmapped (fail-closed: a new subscription
+  # can never leak into the canonical namespace unmapped).
+  canon-names:
+    event-strings:
+      value-names: [".*"]
+      transforms:
+        # --- Arista / OpenConfig: /interfaces/interface/state/... ---
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-octets$", new: "device_if_in_octets"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-octets$", new: "device_if_out_octets"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-errors$", new: "device_if_in_errors"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-errors$", new: "device_if_out_errors"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-discards$", new: "device_if_in_discards"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-discards$", new: "device_if_out_discards"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-unicast-pkts$", new: "device_if_in_ucast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-multicast-pkts$", new: "device_if_in_mcast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-broadcast-pkts$", new: "device_if_in_bcast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-unicast-pkts$", new: "device_if_out_ucast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-multicast-pkts$", new: "device_if_out_mcast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-broadcast-pkts$", new: "device_if_out_bcast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/oper-status$", new: "device_if_oper_status"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/admin-status$", new: "device_if_admin_status"}
+        # --- Nokia SR Linux native: /interface[name=*]/statistics/... ---
+        - replace: {apply-on: name, old: ".*interface/statistics/in-octets$", new: "device_if_in_octets"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-octets$", new: "device_if_out_octets"}
+        - replace: {apply-on: name, old: ".*interface/statistics/in-error-packets$", new: "device_if_in_errors"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-error-packets$", new: "device_if_out_errors"}
+        - replace: {apply-on: name, old: ".*interface/statistics/in-discarded-packets$", new: "device_if_in_discards"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-discarded-packets$", new: "device_if_out_discards"}
+        - replace: {apply-on: name, old: ".*interface/statistics/in-unicast-packets$", new: "device_if_in_ucast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/statistics/in-multicast-packets$", new: "device_if_in_mcast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/statistics/in-broadcast-packets$", new: "device_if_in_bcast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-unicast-packets$", new: "device_if_out_ucast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-multicast-packets$", new: "device_if_out_mcast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-broadcast-packets$", new: "device_if_out_bcast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/oper-state$", new: "device_if_oper_status"}
+        - replace: {apply-on: name, old: ".*interface/admin-state$", new: "device_if_admin_status"}
+        # --- Arista control plane (OpenConfig) ---
+        # Anchored on the OpenConfig suffix; the SRL rule below anchors on
+        # `cpu/total/instant`, so the two can never cross-match.
+        - replace: {apply-on: name, old: ".*cpu/utilization/state/instant$", new: "device_cpu_percent"}
+        # --- Nokia SR Linux control plane ---
+        - replace: {apply-on: name, old: ".*cpu/total/instant$", new: "device_cpu_percent"}
+        - replace: {apply-on: name, old: ".*memory/utilization$", new: "device_mem_percent"}
+        - replace: {apply-on: name, old: ".*temperature/instant$", new: "device_temp_celsius"}
+        # --- BGP neighbor session-state (control plane, both vendors) ---
+        # cEOS OpenConfig ends .../neighbors/neighbor/state/session-state;
+        # SRL native ends .../neighbor/session-state (no /state/). Anchored so
+        # the two never cross-match.
+        - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/state/session-state$", new: "device_bgp_peer_state"}
+        - replace: {apply-on: name, old: ".*bgp/neighbor/session-state$", new: "device_bgp_peer_state"}
+        # BGP flap counter + per-AFI prefixes received (cEOS OpenConfig). Anchored
+        # so established-transitions never cross-matches session-state above.
+        - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/state/established-transitions$", new: "device_bgp_fsm_transitions"}
+        # SRL native spelling: the leaf hangs straight off the neighbor list, so
+        # it ends `bgp/neighbor/established-transitions` — anchored, and the
+        # OpenConfig name above ends `neighbor/state/established-transitions`,
+        # so neither pattern can match the other vendor's value name.
+        - replace: {apply-on: name, old: ".*bgp/neighbor/established-transitions$", new: "device_bgp_fsm_transitions"}
+        - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received$", new: "device_bgp_pfx_in"}
+        # --- IS-IS adjacency state (IGP, SRL native) ---
+        - replace: {apply-on: name, old: ".*isis/instance/interface/adjacency/state$", new: "device_isis_adj_state"}
+        # --- IS-IS depth (SRL native): LSP database size, SPF runs, area, hold ---
+        # Anchored on the SRL native suffixes captured from spine1. `total-lsps`
+        # is the DATABASE SIZE per level, which is exactly the LSDB count the
+        # igpmon LSDB block probes for (device_isis_lsp_count) — the day this
+        # subscription is deployed that block lights up with no code change.
+        - replace: {apply-on: name, old: ".*isis/instance/level/statistics/total-lsps$", new: "device_isis_lsp_count"}
+        - replace: {apply-on: name, old: ".*isis/instance/level/statistics/spf-runs$", new: "device_isis_spf_runs_total"}
+        # oper-area-id is a leaf-LIST: gnmic flattens it to `oper-area-id.<idx>`,
+        # one value per configured area address. The index is not identity, so
+        # every element maps to the same canonical family and the area itself
+        # becomes a LABEL (canon-isis-area-info below).
+        - replace: {apply-on: name, old: ".*isis/instance/oper-area-id\\.[0-9]+$", new: "device_isis_area"}
+        - replace: {apply-on: name, old: ".*isis/instance/interface/adjacency/remaining-holdtime$", new: "device_isis_adj_hold_seconds"}
+
+  # [2] Status enums → IF-MIB numerics (ifOperStatus/ifAdminStatus values;
+  # OpenConfig enums are modeled on the same list). Anchored — no substring
+  # hazards (LOWER_LAYER_DOWN vs DOWN). Lowercase set = Nokia SRL.
+  canon-status-enums:
+    event-strings:
+      value-names: ["^device_if_oper_status$", "^device_if_admin_status$"]
+      transforms:
+        - replace: {apply-on: value, old: "^UP$", new: "1"}
+        - replace: {apply-on: value, old: "^DOWN$", new: "2"}
+        - replace: {apply-on: value, old: "^TESTING$", new: "3"}
+        - replace: {apply-on: value, old: "^UNKNOWN$", new: "4"}
+        - replace: {apply-on: value, old: "^DORMANT$", new: "5"}
+        - replace: {apply-on: value, old: "^NOT_PRESENT$", new: "6"}
+        - replace: {apply-on: value, old: "^LOWER_LAYER_DOWN$", new: "7"}
+        - replace: {apply-on: value, old: "^up$", new: "1"}
+        - replace: {apply-on: value, old: "^down$", new: "2"}
+        - replace: {apply-on: value, old: "^testing$", new: "3"}
+        # Nokia SR Linux admin-state spells the enable/disable enum out; map it
+        # onto ifAdminStatus up(1)/down(2) so admin status is numeric like oper.
+        - replace: {apply-on: value, old: "^enable$", new: "1"}
+        - replace: {apply-on: value, old: "^disable$", new: "2"}
+
+  # [2b] BGP session-state enum → BGP4-MIB bgpPeerState numerics so the canonical
+  # value matches the SNMP contract (alert template reads device_bgp_peer_state
+  # < 6, i.e. anything below established). OpenConfig (cEOS, UPPERCASE) and SRL
+  # native (lowercase) share the same six-state list; anchored.
+  canon-bgp-enums:
+    event-strings:
+      value-names: ["^device_bgp_peer_state$"]
+      transforms:
+        - replace: {apply-on: value, old: "^IDLE$", new: "1"}
+        - replace: {apply-on: value, old: "^CONNECT$", new: "2"}
+        - replace: {apply-on: value, old: "^ACTIVE$", new: "3"}
+        - replace: {apply-on: value, old: "^OPENSENT$", new: "4"}
+        - replace: {apply-on: value, old: "^OPENCONFIRM$", new: "5"}
+        - replace: {apply-on: value, old: "^ESTABLISHED$", new: "6"}
+        - replace: {apply-on: value, old: "^idle$", new: "1"}
+        - replace: {apply-on: value, old: "^connect$", new: "2"}
+        - replace: {apply-on: value, old: "^active$", new: "3"}
+        - replace: {apply-on: value, old: "^opensent$", new: "4"}
+        - replace: {apply-on: value, old: "^openconfirm$", new: "5"}
+        - replace: {apply-on: value, old: "^established$", new: "6"}
+
+  # [2c] IS-IS adjacency-state enum → ISIS-MIB isisISAdjState numerics
+  # (down1/init2/up3/failed4). SRL emits lowercase up/down.
+  canon-isis-enums:
+    event-strings:
+      value-names: ["^device_isis_adj_state$"]
+      transforms:
+        - replace: {apply-on: value, old: "^down$", new: "1"}
+        - replace: {apply-on: value, old: "^init.*$", new: "2"}
+        - replace: {apply-on: value, old: "^up$", new: "3"}
+        - replace: {apply-on: value, old: "^failed$", new: "4"}
+
+  # [2d] IS-IS area membership → an INFO series. The area address lives in the
+  # VALUE ("49.0001"), which is not a number and therefore cannot be a Prometheus
+  # sample; the identity has to move into a LABEL and the sample becomes the
+  # constant 1 (the standard `*_info` shape). None of gnmic's declarative
+  # processors can move a value into a tag PER EVENT — event-value-tag keys on
+  # the timestamp and would stamp `area` onto every other series sampled in the
+  # same instant — so this is the one place the chain runs a script. It is
+  # guarded on the canonical name, touches nothing else, and is a no-op for every
+  # other event in the stream.
+  #
+  # Verified end-to-end against lab spine1 on 2026-09-02: raw
+  # `oper-area-id.0 = "49.0001"` → `device_isis_area{area="49.0001",device="spine1",
+  # vrf="default"} 1`.
+  canon-isis-area-info:
+    event-starlark:
+      source: |
+        def apply(*events):
+            for e in events:
+                v = e.values.get("device_isis_area")
+                if v != None:
+                    e.tags["area"] = str(v)
+                    e.values["device_isis_area"] = 1
+            return events
+
+  # [3] Canonical values are integers (matches the SNMP emitter's valueInt).
+  canon-convert:
+    event-convert:
+      value-names: ["^device_.*$"]
+      type: int
+
+  # [4] Vendor label, keyed on which subscription produced the event.
+  vendor-nokia:
+    event-add-tag:
+      tags: ["^srl-(interfaces|cpu|bgp|isis|isis-db|isis-timers)$"]
+      add: {vendor: nokia}
+  vendor-arista:
+    event-add-tag:
+      tags: ["^oc-(interfaces|cpu|bgp)$"]
+      add: {vendor: arista}
+
+  # [5] Transport label — series provenance for watchdog freshness checks and
+  # correlation observer independence. SNMP series carry no transport label
+  # (legacy default) until the first overlapping ownership flip.
+  transport-tag:
+    event-add-tag:
+      value-names: ["."]
+      add: {transport: gnmi}
+
+  # [6] Identity tags → canonical label names (device, ifName, peer, vrf). BGP
+  # adds peer (cEOS neighbor_neighbor-address / SRL neighbor_peer-address) and
+  # vrf (network-instance_name) — also strips the hyphenated raw names, which are
+  # invalid Prometheus labels.
+  canon-tags:
+    event-strings:
+      tag-names: ["^interface_name$", "^interface_interface-name$", "^source$", "^neighbor_neighbor-address$", "^neighbor_peer-address$", "^network-instance_name$", "^adjacency_neighbor-system-id$", "^adjacency_adjacency-level$", "^afi-safi_afi-safi-name$", "^level_level-number$", "^component_name$"]
+      transforms:
+        - replace: {apply-on: name, old: "^interface_name$", new: "ifName"}
+        - replace: {apply-on: name, old: "^interface_interface-name$", new: "ifName"}
+        - replace: {apply-on: name, old: "^source$", new: "device"}
+        - replace: {apply-on: name, old: "^neighbor_neighbor-address$", new: "peer"}
+        - replace: {apply-on: name, old: "^neighbor_peer-address$", new: "peer"}
+        - replace: {apply-on: name, old: "^network-instance_name$", new: "vrf"}
+        # BGP per-AFI prefix counts carry the OpenConfig combined afi-safi key
+        # (IPV4_UNICAST/IPV6_UNICAST/L2VPN_EVPN) — hyphenated raw name is an
+        # invalid Prom label; rename to the canonical afi_safi.
+        - replace: {apply-on: name, old: "^afi-safi_afi-safi-name$", new: "afi_safi"}
+        # IS-IS adjacency identity
+        - replace: {apply-on: name, old: "^adjacency_neighbor-system-id$", new: "isis_neighbor"}
+        - replace: {apply-on: name, old: "^adjacency_adjacency-level$", new: "isis_level"}
+        # The level-scoped IS-IS series (LSDB size, SPF runs) are keyed by the
+        # SRL path key `level-number`, whose value is the bare digit 1/2 while
+        # the adjacency series already speaks L1/L2. Renaming alone would put two
+        # vocabularies under one label name and silently break the join, so the
+        # rename is paired with the value normalization in canon-isis-level-tag.
+        - replace: {apply-on: name, old: "^level_level-number$", new: "isis_level"}
+        # Arista reports CPU utilization per CORE, one OpenConfig component
+        # each (CPU0, CPU1, ...). The SNMP lane labels the hrProcessorLoad rows
+        # `index`, so the component key becomes `index` and the two transports
+        # produce the same series shape. Nokia subscribes cpu[index=all] — one
+        # aggregate series, no per-core key — and its cpu_index path key is
+        # dropped as internal plumbing (drop-internal-tags), which is why the
+        # SRL series carries no index and must not be given a synthetic one.
+        - replace: {apply-on: name, old: "^component_name$", new: "index"}
+
+  # [6b] IS-IS level VOCABULARY. canon-tags renames two different raw keys onto
+  # `isis_level`: the adjacency's `adjacency-level` (already L1/L2) and the
+  # level list-key `level-number` (a bare 1/2). One label name must carry ONE
+  # vocabulary or device_isis_lsp_count{isis_level="2"} will never join
+  # device_isis_adj_state{isis_level="L2"}. Anchored, so the already-correct
+  # L1/L2 values are untouched. Verified live on spine1: level-number 2 → "L2".
+  canon-isis-level-tag:
+    event-strings:
+      tag-names: ["^isis_level$"]
+      transforms:
+        - replace: {apply-on: value, old: "^1$", new: "L1"}
+        - replace: {apply-on: value, old: "^2$", new: "L2"}
+
+  # [7] OWNERSHIP GATE — families listed here are mapped and ready but still
+  # SNMP-owned; deleting them prevents double-producing the same canonical
+  # series from two transports. Flip = remove from this list + mark the family
+  # `Owner: "gnmi"` in the SNMP profile (src/backend/collectors/profiles.go) in
+  # the SAME change, so the two sides can never both yield (a gNMI-only device
+  # getting the family from nobody) or both emit.
+  #
+  # The list is EMPTY: every canonical family gnmic maps is now gNMI-owned, and
+  # every SNMP definition of one carries `Owner: "gnmi"`. That symmetry is not a
+  # convention, it is enforced — tests/test_gnmi_ownership_contract.py fails the
+  # build the moment one side moves without the other. The processor stays in
+  # the chain (rather than being deleted) because it is the ONLY place a family
+  # can be handed back to SNMP, and a future hand-back must be a one-line edit
+  # here plus the matching Owner removal, not a re-derivation of the mechanism.
+  #
+  # 2026-09-05 (tracker 230): device_if_* / device_cpu_percent /
+  # device_temp_celsius were deleted here UNCONDITIONALLY while the SNMP side
+  # yielded only on devices tagged gNMI-capable — so an SR Linux spine, which
+  # answers no SNMP at all, got interfaces, CPU and temperature from NOBODY.
+  # Both halves moved together: the patterns came out here and the same families
+  # gained `Owner: "gnmi"` in profiles.go.
+  ownership-gate:
+    event-delete:
+      value-names: []
+
+  # [8] Fail-closed: canonical names contain no '/' or '-'; anything still
+  # path-shaped was never mapped and must not reach the canonical namespace.
+  drop-unmapped:
+    event-delete:
+      value-names: ["/", "-"]
+
+  # [9] Internal plumbing tags stay out of the canonical label set. gnmic names
+  # the subscription tag with a hyphen (subscription-name); control_slot/cpu_index
+  # are SR-Linux path keys; protocol_identifier/protocol_name are the BGP
+  # OpenConfig protocol-list keys (always BGP here) — none have an SNMP-contract
+  # equivalent, so drop them. Canonical label set = {device, vendor, ifName,
+  # transport} for interfaces/resources, + {peer, vrf} for BGP.
+  drop-internal-tags:
+    event-delete:
+      tag-names: ["^subscription[-_]name$", "^control_slot$", "^cpu_index$", "^protocol_identifier$", "^protocol_name$", "^instance_name$"]
+
+  # [10] RCA SHAPER — the correlation lane's admission + reshape stage (only the
+  # `correlation` output runs it; the two VictoriaMetrics lanes never do).
+  #
+  # THE TABLE BELOW IS A MIRROR of rcaMetricFamilies in
+  # src/backend/collectors/metric_events.go (name -> {family, unit}).
+  # tests/test_gnmi_correlation_lane.py parses BOTH and fails on any difference,
+  # so the SNMP producer and the gNMI producer admit exactly the same RCA
+  # families onto netops.metrics. Do not widen it here alone.
+  #
+  # It does four things, in order:
+  #   1. EXPLODES one gnmic event carrying N values into N single-value events,
+  #      so `split-events` yields one MetricEvent per Kafka message.
+  #   2. ALLOWLISTS: a metric absent from the table is dropped (fail-closed —
+  #      device_bgp_pfx_in is mapped canonically for VictoriaMetrics but is NOT
+  #      an RCA family, so it stops here; so do the four IS-IS DEPTH families
+  #      (LSP count, SPF runs, area, adjacency hold), which are monitoring
+  #      series. device_isis_adj_state WAS held back here too and was admitted
+  #      by tracker 222 — the `igp` family — together with its Go counterpart.
+  #   3. VALIDATES (zero trust, §3): the value must be a number, the device tag
+  #      must be present, an `interface` sample must carry ifName, a `bgp` sample
+  #      must carry peer and an `igp` sample must carry a neighbour — the
+  #      identities handle_metric needs to ground a signal (metric_identity in
+  #      src/correlation/main.py). Evidence that cannot be grounded is refused
+  #      HERE, not counted as a drop on the bus. The IGP neighbour tag is
+  #      protocol-dependent on the wire (IS-IS carries `isis_neighbor`, the SNMP
+  #      OSPF lane carries `neighbor`), so the shaper normalises both onto the
+  #      single `neighbor` wire field the Go producer marshals.
+  #   4. Stamps the wire fields the msg-template renders: metric, mvalue,
+  #      signal_family, unit, and ts as RFC3339Nano (the Go collector's
+  #      time.RFC3339Nano). Tags are strings, which is why the numeric value
+  #      travels as `mvalue` and is emitted unquoted by the template.
+  corr-rca-shape:
+    event-jq:
+      expression: |
+        {
+          "device_if_oper_status":      {"f":"interface","u":"state"},
+          "device_if_admin_status":     {"f":"interface","u":"state"},
+          "device_if_in_octets":        {"f":"interface","u":"bytes"},
+          "device_if_out_octets":       {"f":"interface","u":"bytes"},
+          "device_if_in_errors":        {"f":"interface","u":"errors"},
+          "device_if_out_errors":       {"f":"interface","u":"errors"},
+          "device_if_in_discards":      {"f":"interface","u":"discards"},
+          "device_if_out_discards":     {"f":"interface","u":"discards"},
+          "device_if_fcs_errors":       {"f":"interface","u":"fcs_errors"},
+          "device_if_speed":            {"f":"interface","u":"mbps"},
+          "device_bgp_peer_state":      {"f":"bgp","u":"state"},
+          "device_bgp_fsm_transitions": {"f":"bgp","u":"transitions"},
+          "device_ospf_nbr_state":      {"f":"igp","u":"state"},
+          "device_isis_adj_state":      {"f":"igp","u":"state"},
+          "device_cpu_percent":         {"f":"device_resource","u":"percent"},
+          "device_mem_percent":         {"f":"device_resource","u":"percent"},
+          "device_temp_celsius":        {"f":"device_resource","u":"celsius"}
+        } as $rca
+        | [ .[]
+            | . as $e
+            | (($e.values // {}) | to_entries[])
+            | . as $v
+            | select($rca[$v.key] != null)
+            | select(($v.value | type) == "number")
+            | select((($e.tags.device // "") | length) > 0)
+            | select($rca[$v.key].f != "interface" or ((($e.tags.ifName // "") | length) > 0))
+            | select($rca[$v.key].f != "bgp" or ((($e.tags.peer // "") | length) > 0))
+            | ((($e.tags.isis_neighbor // $e.tags.neighbor) // "")) as $nbr
+            | select($rca[$v.key].f != "igp" or (($nbr | length) > 0))
+            | { name: $e.name,
+                timestamp: $e.timestamp,
+                tags: (($e.tags // {})
+                  + (if $rca[$v.key].f == "igp" then {"neighbor": $nbr} else {} end)
+                  + {
+                  "metric": $v.key,
+                  "mvalue": ($v.value | tostring),
+                  "signal_family": $rca[$v.key].f,
+                  "unit": $rca[$v.key].u,
+                  "ts": ((($e.timestamp / 1000000000) | floor | strftime("%Y-%m-%dT%H:%M:%S"))
+                         + "." + (("000000000" + (($e.timestamp % 1000000000) | tostring)) | .[-9:])
+                         + "Z")
+                }),
+                values: { ($v.key): $v.value } } ]
