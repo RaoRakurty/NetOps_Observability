@@ -143,9 +143,31 @@ export type SessionIndex = {
 
 export type SessionModuleFile = { module: string; file: string; bytes: number };
 
+/**
+ * `manifest.json` as the run wrote it: who ran it, with which tool and flags,
+ * and which redaction was applied. It is the provenance of a file an operator
+ * may hand to somebody else, so it is typed rather than an opaque blob.
+ */
+export type SessionManifest = {
+  verb: string;
+  marker?: string;
+  kind?: DebugKind;
+  device?: string;
+  tenant?: string;
+  started: string;
+  finished?: string;
+  actor?: string;
+  api_base?: string;
+  flags?: Record<string, string>;
+  redaction: string;
+  tool: string;
+  modules?: string[];
+  warnings?: string[];
+};
+
 export type SessionDetail = {
   session: SessionSummary;
-  manifest?: Record<string, unknown>;
+  manifest?: SessionManifest;
   timeline?: { marker: string; kind: DebugKind; device?: string; tenant?: string; started: string; entries: DebugStageEntry[] };
   summary_text?: string;
   modules: SessionModuleFile[];

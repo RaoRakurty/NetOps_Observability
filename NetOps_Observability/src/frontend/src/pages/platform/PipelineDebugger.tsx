@@ -55,7 +55,9 @@ import {
   maskNeedle,
   parseMarkerCommand,
   secondsUntil,
+  sessionProvenance,
   sessionTally,
+  sessionWarnings,
   stageLabel,
   stateLabel,
   stateTone,
@@ -728,6 +730,17 @@ export default function PipelineDebugger() {
                 );
               }}
             />
+            <dl className="pdbg-prov">
+              {sessionProvenance(openSession).map((row) => (
+                <div key={row.label} className="pdbg-prov-row">
+                  <dt>{row.label}</dt>
+                  <dd>{row.value}</dd>
+                </div>
+              ))}
+            </dl>
+            {sessionWarnings(openSession).map((w) => (
+              <Honest key={w} tone="warn" headline={w} />
+            ))}
             {openSession.summary_text && <pre className="pdbg-pre">{openSession.summary_text}</pre>}
           </>
         )}

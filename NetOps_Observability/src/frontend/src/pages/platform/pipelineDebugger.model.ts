@@ -11,7 +11,7 @@
 // seen, not observable (with the reason), and still waiting — and the third and
 // fourth are the ones that keep an operator from chasing a hop that was fine.
 
-import type { DebugKind, DebugStageEntry, DebugVerdict, SessionSummary } from "../../services/api.debug";
+import type { DebugKind, DebugStageEntry, DebugVerdict, SessionDetail, SessionSummary } from "../../services/api.debug";
 
 /** The pipeline, in order. The value is also the module log file's base name. */
 export const STAGE_ORDER = [
@@ -220,6 +220,60 @@ export function maskNeedle(needle?: string): string {
 /** The verdict tally, as one sentence. */
 export function sessionTally(s: SessionSummary): string {
   return `${s.seen} seen · ${s.not_seen} not seen · ${s.not_observable} not observable`;
+}
+
+// ── who made this file, and what was taken out of it ────────────────────────
+//
+// A saved run is an artifact that leaves the building: it is downloaded and
+// handed to somebody who was not there. Reading the hops without reading the
+// manifest tells an operator what the run FOUND and nothing about whether it
+// can be trusted or shared — which tool wrote it, against which api, who ran
+// it, and which redaction was applied to every line in it. The api has always
+// returned `manifest`; showing it is what makes the download an accountable
+// artifact instead of an anonymous one.
+
+export type ProvenanceRow = { label: string; value: string };
+
+/**
+ * The manifest as an operator reads it.
+ *
+ * An ABSENT manifest is a fact, not an empty list: a session directory whose
+ * manifest could not be read is a partial session, and the api says so in
+ * `session.incomplete` / `reason`. Returning [] there would render a run of
+ * unknown provenance identically to one with none — the exact confusion this
+ * screen's four-state rule exists to prevent.
+ */
+export function sessionProvenance(detail: SessionDetail): ProvenanceRow[] {
+  const man = detail.manifest;
+  if (!man) {
+    return [{ label: "Provenance", value: detail.session.incomplete || detail.reason || "Not recorded in this run." }];
+  }
+  const rows: ProvenanceRow[] = [
+    { label: "Ran by", value: man.actor?.trim() || "Not recorded" },
+    { label: "Written by", value: man.tool?.trim() || "Not recorded" },
+    { label: "Redaction", value: man.redaction?.trim() || "None recorded" },
+  ];
+  if (man.api_base) rows.push({ label: "Against", value: man.api_base });
+  if (man.finished) rows.push({ label: "Finished", value: formatWhen(man.finished) });
+  const flags = Object.entries(man.flags ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}=${v}`);
+  if (flags.length) rows.push({ label: "Flags", value: flags.join(" ") });
+  return rows;
+}
+
+/**
+ * Everything that degraded the run without failing it — the manifest's own
+ * warnings plus a manifest that could not be read at all. A partial session
+ * that reads as a whole one is the silent-failure shape this screen refuses.
+ */
+export function sessionWarnings(detail: SessionDetail): string[] {
+  const out: string[] = [];
+  if (detail.session.incomplete) out.push(detail.session.incomplete);
+  for (const w of detail.manifest?.warnings ?? detail.session.warnings ?? []) {
+    if (w.trim() && !out.includes(w)) out.push(w);
+  }
+  return out;
 }
 
 // ── the command line that does the same thing ───────────────────────────────

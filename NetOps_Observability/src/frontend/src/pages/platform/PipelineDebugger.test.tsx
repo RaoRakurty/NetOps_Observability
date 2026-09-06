@@ -297,6 +297,47 @@ describe("saved runs", () => {
     expect(await screen.findByText(/SHA-256 abcdef0123456789/)).toBeTruthy();
   });
 
+  it("states who wrote the run, with what, and what was redacted out of it", async () => {
+    mockDebug.sessions.mockResolvedValue({ root: "/data/debug", sessions: [summary] });
+    mockDebug.session.mockResolvedValue({
+      session: summary,
+      modules: [{ module: "kafka", file: "kafka.log", bytes: 512 }],
+      manifest: {
+        verb: "trace",
+        started: STARTED,
+        finished: "2026-09-05T10:00:31.000Z",
+        actor: "platform-owner",
+        tool: "correlix-debug 1.4.0",
+        api_base: "http://api:8080",
+        redaction: "secrets, communities and keys removed",
+        flags: { kind: "syslog", ttl: "30s" },
+        warnings: ["the routing lane was not watched: no live subscription"],
+      },
+    });
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: /^Open$/ }));
+    expect(await screen.findByText("platform-owner")).toBeTruthy();
+    expect(screen.getByText("correlix-debug 1.4.0")).toBeTruthy();
+    expect(screen.getByText(/secrets, communities and keys removed/)).toBeTruthy();
+    expect(screen.getByText("kind=syslog ttl=30s")).toBeTruthy();
+    // A warning is stated, not folded into the tally.
+    expect(screen.getByText(/no live subscription/)).toBeTruthy();
+  });
+
+  it("a run whose manifest could not be read says so, never renders as clean", async () => {
+    const partial = { ...summary, incomplete: "manifest.json could not be read: unexpected EOF" };
+    mockDebug.sessions.mockResolvedValue({ root: "/data/debug", sessions: [partial] });
+    mockDebug.session.mockResolvedValue({
+      session: partial,
+      modules: [],
+      reason: "manifest.json could not be read: unexpected EOF",
+    });
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: /^Open$/ }));
+    // Once as the provenance value, once as the warning — never absent.
+    expect((await screen.findAllByText(/manifest.json could not be read/)).length).toBeGreaterThan(0);
+  });
+
   it("says nothing has been saved rather than showing an empty list", async () => {
     mockDebug.sessions.mockResolvedValue({ root: "/data/debug", sessions: [], reason: "no run has been saved yet" });
     setup();
