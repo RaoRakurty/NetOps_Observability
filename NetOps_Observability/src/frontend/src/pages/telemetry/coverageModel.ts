@@ -3,7 +3,7 @@
 //
 // Everything the page renders about parser health is derived HERE, so the
 // honesty rules are unit-testable without a DOM:
-//   · a null promotion_rate is "no admitted lines yet" — never 0%.
+//   · a null promotion_rate is "No lines yet" — never 0%.
 //   · the four fidelity values map to four distinct, tier-ordered badges; an
 //     unknown value degrades to a neutral badge instead of being hidden.
 //   · a 403 on the platform-admin stats endpoint is a legitimate ANSWER
@@ -36,12 +36,12 @@ export type PromotionDisplay = { value: string; caption: string; unknown: boolea
 export function promotionDisplay(stats: Pick<ParserStats, "promotion_rate" | "window_lines">): PromotionDisplay {
   const lines = Number.isFinite(stats.window_lines) ? stats.window_lines : 0;
   if (stats.promotion_rate === null || stats.promotion_rate === undefined) {
-    return { value: "—", caption: "no admitted lines yet", unknown: true };
+    return { value: "—", caption: "No lines yet", unknown: true };
   }
   const pct = Math.max(0, Math.min(1, stats.promotion_rate)) * 100;
   return {
     value: `${pct.toFixed(1)}%`,
-    caption: `over the last ${lines.toLocaleString("en-US")} admitted line${lines === 1 ? "" : "s"}`,
+    caption: `${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}`,
     unknown: false,
   };
 }

@@ -5,6 +5,7 @@ import {
   tierLabel, tierTone, confidenceLabel, kindLabel,
 } from "./labels";
 import { derivePathModel, type PathModel, type PathSegmentView, type PathBoundary } from "./pathModel";
+import AskIris from "../AskIris";
 
 // RcaPathCausality — THE single RCA case path view (owner P1 2026-07-19: the
 // former "Path causality" + "Network path & causal topology" renders are merged
@@ -28,6 +29,15 @@ import { derivePathModel, type PathModel, type PathSegmentView, type PathBoundar
 //
 // Customer-facing labels only (no schema kinds / backend names). Renders inside
 // the RcaWorkspace light report surface; tokens carry dark-safe fallbacks.
+//
+// UI-WORDS SWEEP 5 (tracker 270). The honesty states did NOT soften — ambiguous
+// hops still say the hops are ambiguous, a missing typed path still says it is
+// missing, and an off-path change still says it is not the cause. Only the word
+// count moved: what ECMP/failover MEANS for a segment sequence, and why severity
+// is not causality, are ai/skills/explain/path.ambiguous-hops.md and
+// path.ruled-out-off-path.md behind the (i). "Lifted by on-path evidence" and
+// "the full typed path is not available" are STATED FACTS (.rpc-*-fact) — a
+// provenance stamp and a data-availability state are not lessons.
 
 type DeviceMark = "cause" | "downstream" | undefined;
 
@@ -281,7 +291,7 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
             <span className="rpc-lift" title="On-path evidence lifted the verdict above the symptom-only baseline">
               <span className={`rpc-pill ${tierTone(model.baseline)} ghost`}>{tierLabel(model.baseline)}</span>
               <span className="rpc-lift-arrow" aria-hidden="true">↑</span>
-              <span className="rpc-lift-note">lifted by on-path evidence</span>
+              <span className="rpc-lift-fact">lifted by on-path evidence</span>
             </span>
           )}
         </div>
@@ -387,25 +397,31 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
           </div>
           {model.ambiguous && (
             <div className="rpc-path-note">
-              This path has ambiguous hops (ECMP / failover) — the segment sequence is the stable essence; exact hops vary per flow.
+              Ambiguous hops (ECMP or failover): exact hops vary per flow.
+              <AskIris topic="path.ambiguous-hops" label="Ambiguous hops" />
             </div>
           )}
           {model.notes.map((n, i) => <div key={i} className="rpc-path-note">{n}</div>)}
         </div>
       ) : (
-        <div className="rpc-path-note">
-          The named cause is placed, but the full typed path is not available for this incident.
+        <div className="rpc-path-fact">
+          Cause placed. The full typed path is not available.
         </div>
       )}
 
       {/* off-path faults the engine ruled out — severity is not causality */}
       {model.discounted.length > 0 && (
         <div className="rpc-discounted">
-          <span className="rpc-discounted-label">Ruled out (off-path):</span>{" "}
-          {model.discounted.map((d, i) => (
-            <span key={i} className="rpc-discounted-item" title={d.reason}>{roleLabel(d.kind)}{i < model.discounted.length - 1 ? " · " : ""}</span>
-          ))}
-          <div className="rpc-discounted-note">These changed in the same window but are not on the affected source→destination path, so they are not the cause.</div>
+          <h4 className="rpc-discounted-h">Ruled out</h4>
+          <div className="rpc-discounted-items">
+            {model.discounted.map((d, i) => (
+              <span key={i} className="rpc-discounted-item" title={d.reason}>{roleLabel(d.kind)}{i < model.discounted.length - 1 ? " · " : ""}</span>
+            ))}
+          </div>
+          <div className="rpc-discounted-note">
+            Off-path: changed in the same window, but not the cause.
+            <AskIris topic="path.ruled-out-off-path" label="Ruled out" />
+          </div>
         </div>
       )}
     </div>
@@ -416,7 +432,7 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
 // light document surface) with dark-safe fallbacks. The break is the ONLY loud
 // element; healthy hops are quiet nodes; unknown spans are dotted absence.
 const RPC_CSS = `
-.rpc { font-size: 13px; color: var(--rw-text, var(--fg, #172033)); }
+.rpc { font-size: 14px; color: var(--rw-text, var(--fg, #172033)); }
 .rpc-empty { display: flex; gap: 8px; align-items: baseline; color: var(--rw-muted, var(--muted, #6a7384));
   border: 1px dashed var(--rw-line, var(--border, #dce3ee)); border-radius: 10px; padding: 12px 14px; font-size: 13px; }
 .rpc-empty-mark { color: var(--rw-muted2, #8a94a6); font-weight: 700; }
@@ -429,7 +445,7 @@ const RPC_CSS = `
 .rpc-verdict { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rpc-lift { display: inline-flex; align-items: center; gap: 6px; }
 .rpc-lift-arrow { color: var(--rw-green, #0f9f4f); font-weight: 800; }
-.rpc-lift-note { font-size: 11.5px; color: var(--rw-muted, #6a7384); }
+.rpc-lift-fact { font-size: 12.5px; color: var(--rw-muted, #6a7384); }
 .rpc-claim { font-size: 15px; line-height: 1.45; color: var(--rw-text, var(--fg, #172033)); }
 .rpc-claim b { color: var(--rw-text, var(--fg, #172033)); }
 .rpc-claim-seg { font-weight: 800; }
@@ -439,7 +455,7 @@ const RPC_CSS = `
 .rpc-owner-name { font-weight: 800; }
 
 .rpc-pill { display: inline-flex; align-items: center; border-radius: 7px; padding: 2px 9px;
-  font-size: 11.5px; font-weight: 800; letter-spacing: .02em; border: 1px solid transparent; text-transform: uppercase; }
+  font-size: 12.5px; font-weight: 800; letter-spacing: .02em; border: 1px solid transparent; }
 .rpc-pill.red { background: var(--rw-red2, #fff0ee); color: var(--rw-red, #dc2626); border-color: #ffd0cc; }
 .rpc-pill.orange { background: var(--rw-orange2, #fff4e8); color: var(--rw-orange, #d66a00); border-color: #ffd3a9; }
 .rpc-pill.blue { background: var(--rw-blue2, #eef4ff); color: var(--rw-blue, #2563eb); border-color: #c9dbff; }
@@ -455,16 +471,16 @@ const RPC_CSS = `
 
 /* a classified segment: a quiet cap (identity only) over a row of small nodes */
 .rpc-seg { display: flex; flex-direction: column; gap: 4px; }
-.rpc-seg-cap { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--rw-muted, #6a7384); }
+.rpc-seg-cap { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--rw-muted, #6a7384); }
 .rpc-seg-tick { width: 14px; height: 3px; border-radius: 2px; background: var(--seg-color, #8a94a6); }
-.rpc-seg-name { font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.rpc-seg-name { font-weight: 800; letter-spacing: .02em; }
 .rpc-seg-provider { font-weight: 700; border: 1px solid var(--rw-line, #dce3ee); border-radius: 5px; padding: 0 4px; }
 .rpc-seg-flag { font-weight: 700; border: 1px solid var(--rw-line, #dce3ee); border-radius: 5px; padding: 0 4px; }
-.rpc-seg-health { font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.rpc-seg-health { font-weight: 800; letter-spacing: .02em; }
 .rpc-seg-health.down { color: var(--rw-red, #dc2626); }
 .rpc-seg-health.degraded { color: var(--rw-orange, #d66a00); }
 .rpc-seg-devs { display: flex; align-items: stretch; gap: 6px; }
-.rpc-seg-empty { font-size: 11px; color: var(--rw-muted2, #8a94a6); font-style: italic; align-self: center; }
+.rpc-seg-empty { font-size: 12.5px; color: var(--rw-muted2, #8a94a6); font-style: italic; align-self: center; }
 
 /* device node — small, quiet; the cause is the only loud one */
 .rpc-dev { display: flex; align-items: center; gap: 7px; text-decoration: none; color: inherit;
@@ -476,15 +492,15 @@ a.rpc-dev:focus-visible { outline: 2px solid var(--rw-blue, #2563eb); outline-of
 .rpc-dev.cause { border: 2px solid var(--rw-red, #dc2626); background: var(--rw-red2, #fff0ee);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--rw-red, #dc2626) 18%, transparent); }
 .rpc-dev.downstream { opacity: .8; }
-.rpc-dev-abbr { flex: none; min-width: 26px; text-align: center; font-size: 9.5px; font-weight: 800;
+.rpc-dev-abbr { flex: none; min-width: 30px; text-align: center; font-size: 12.5px; font-weight: 800;
   letter-spacing: .03em; color: var(--rw-muted, #6a7384); background: var(--rw-soft, #edf2f8);
   border-radius: 5px; padding: 3px 4px; }
-.rpc-dev.cause .rpc-dev-abbr { color: #fff; background: var(--rw-red, #dc2626); font-size: 12px; }
+.rpc-dev.cause .rpc-dev-abbr { color: #fff; background: var(--rw-red, #dc2626); font-size: 12.5px; }
 .rpc-dev-body { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
-.rpc-dev-role { font-weight: 700; font-size: 11.5px; }
-.rpc-dev-name { font-size: 10.5px; color: var(--rw-muted, #6a7384); font-family: var(--rw-mono, ui-monospace, monospace);
+.rpc-dev-role { font-weight: 700; font-size: 13px; }
+.rpc-dev-name { font-size: 12.5px; color: var(--rw-muted, #6a7384); font-family: var(--rw-mono, ui-monospace, monospace);
   overflow: hidden; text-overflow: ellipsis; max-width: 140px; white-space: nowrap; }
-.rpc-dev-tag { align-self: flex-start; margin-top: 2px; font-size: 9.5px; font-weight: 800; border-radius: 5px; padding: 1px 5px; }
+.rpc-dev-tag { align-self: flex-start; margin-top: 2px; font-size: 12.5px; font-weight: 800; border-radius: 5px; padding: 1px 5px; }
 .rpc-dev-tag.cause { color: #fff; background: var(--rw-red, #dc2626); }
 .rpc-dev-tag.down { color: var(--rw-muted, #6a7384); border: 1px solid var(--rw-line, #dce3ee); }
 
@@ -494,20 +510,20 @@ a.rpc-dev:focus-visible { outline: 2px solid var(--rw-blue, #2563eb); outline-of
   justify-content: flex-end; gap: 3px; padding: 0 4px; position: relative; }
 .rpc-boundary-rule { width: 2px; flex: 1; min-height: 30px; border-radius: 1px;
   background: var(--rw-line, var(--border, #dce3ee)); }
-.rpc-boundary-label { font-size: 9px; font-weight: 700; letter-spacing: .03em; white-space: nowrap;
-  color: var(--rw-muted2, #8a94a6); text-transform: uppercase; }
+.rpc-boundary-label { font-size: 12.5px; font-weight: 700; letter-spacing: .02em; white-space: nowrap;
+  color: var(--rw-muted2, #8a94a6); }
 .rpc-boundary.suspected .rpc-boundary-rule { background: var(--rw-red, #dc2626); width: 3px; }
 .rpc-boundary.suspected .rpc-boundary-label { color: var(--rw-red, #dc2626); }
 .rpc-boundary-x { color: #fff; background: var(--rw-red, #dc2626); border-radius: 50%;
   width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 800;
+  font-size: 12.5px; font-weight: 800;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--rw-red, #dc2626) 18%, transparent); }
 
 /* an INFERRED segment — topologically required, zero responding hops. Dotted
    identity, never dressed as measured. */
 .rpc-seg.inferred .rpc-seg-tick { background: transparent; border-bottom: 3px dotted var(--seg-color, #8a94a6); height: 0; }
 .rpc-seg.inferred .rpc-seg-name { color: var(--rw-muted2, #8a94a6); }
-.rpc-seg-inferred-body { font-size: 11px; color: var(--rw-muted2, #8a94a6); font-style: italic;
+.rpc-seg-inferred-body { font-size: 12.5px; color: var(--rw-muted2, #8a94a6); font-style: italic;
   align-self: center; padding: 4px 8px; border: 1px dotted var(--rw-muted2, #8a94a6);
   border-radius: 8px; cursor: help; white-space: nowrap; }
 
@@ -516,11 +532,12 @@ a.rpc-dev:focus-visible { outline: 2px solid var(--rw-blue, #2563eb); outline-of
   gap: 1px; align-self: center; padding: 4px 10px; border-bottom: 2px dotted var(--rw-muted2, #8a94a6);
   color: var(--rw-muted2, #8a94a6); cursor: help; }
 .rpc-gap-dots { font-weight: 800; letter-spacing: 3px; line-height: 1; }
-.rpc-gap-count { font-size: 10px; white-space: nowrap; }
+.rpc-gap-count { font-size: 12.5px; white-space: nowrap; }
 
-.rpc-path-note { margin-top: 9px; font-size: 11.5px; color: var(--rw-muted, #6a7384); }
-.rpc-discounted { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rw-line, var(--border, #dce3ee)); font-size: 12px; }
-.rpc-discounted-label { font-weight: 700; color: var(--rw-blue, #2563eb); }
+.rpc-path-note, .rpc-path-fact { margin-top: 9px; font-size: 12.5px; color: var(--rw-muted, #6a7384); }
+.rpc-discounted { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rw-line, var(--border, #dce3ee)); font-size: 13px; }
+.rpc-discounted-h { margin: 0 0 4px; font-size: 13px; font-weight: 700; color: var(--rw-blue, #2563eb); }
+.rpc-discounted-items { color: var(--rw-muted, #6a7384); }
 .rpc-discounted-item { color: var(--rw-muted, #6a7384); }
-.rpc-discounted-note { font-size: 11px; color: var(--rw-muted2, #8a94a6); margin-top: 3px; }
+.rpc-discounted-note { font-size: 12.5px; color: var(--rw-muted2, #8a94a6); margin-top: 3px; }
 `;

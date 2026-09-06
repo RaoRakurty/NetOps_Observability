@@ -124,12 +124,12 @@ export default function Tunnels() {
         <div className={`stat ${up ? "s-good" : "s-muted"}`}>
           <span className="stat-label">Tunnels up</span>
           <span className="stat-value">{up}</span>
-          <span className="stat-sub">of {rows.length}</span>
+          <span className="stat-foot">of {rows.length}</span>
         </div>
         <div className={`stat ${down ? "s-bad" : "s-muted"}`}>
           <span className="stat-label">Tunnels down</span>
           <span className="stat-value">{down}</span>
-          <span className="stat-sub">{rows.length ? `${down} impaired` : "none reported"}</span>
+          <span className="stat-foot">{rows.length ? `${down} impaired` : "none reported"}</span>
         </div>
         <div className={`stat ${rows.length ? (avgLat < 150 ? "s-good" : "s-warn") : "s-muted"}`}>
           <span className="stat-label">Avg latency</span>
@@ -137,7 +137,7 @@ export default function Tunnels() {
             {rows.length ? avgLat.toFixed(0) : "—"}
             {rows.length ? <span style={{ fontSize: 20, color: "var(--muted)" }}> ms</span> : null}
           </span>
-          <span className="stat-sub">across tunnels</span>
+          <span className="stat-foot">across tunnels</span>
         </div>
         <div className={`stat ${rows.length ? (avgLoss < 1 ? "s-good" : "s-warn") : "s-muted"}`}>
           <span className="stat-label">Avg loss</span>
@@ -145,7 +145,7 @@ export default function Tunnels() {
             {rows.length ? avgLoss.toFixed(2) : "—"}
             {rows.length ? <span style={{ fontSize: 20, color: "var(--muted)" }}> %</span> : null}
           </span>
-          <span className="stat-sub">packet loss</span>
+          <span className="stat-foot">packet loss</span>
         </div>
       </div>
 

@@ -246,6 +246,13 @@ describe("ready — the rows an operator came for", () => {
     await waitFor(() => expect(stateOf("routing")).toBe("ready"));
     expect(card("routing")).toHaveTextContent("192.0.2.9");
     expect(card("routing")).toHaveTextContent("not in the established state");
+    // words (sweep 5, tracker 270). The protocol state is a STATED FACT the
+    // device reported, not an explanation of what "established" means — so the
+    // trailing cell carries `fact-line`, and the one real note per card
+    // ("Proximity in time, never a causal claim.") keeps `mini-meta`.
+    expect(card("routing").querySelector("li .fact-line")?.textContent)
+      .toBe("not in the established state");
+    expect(card("routing").querySelector("li .tsl-note")).toBeNull();
   });
 
   it("path says whether the destination was reached and whether the path moved", async () => {

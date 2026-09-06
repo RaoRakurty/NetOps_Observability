@@ -66,6 +66,12 @@ describe("TenantGate", () => {
     await waitFor(() => expect(screen.getByRole("region", { name: /select a tenant/i })).toBeTruthy());
     // The whole point: the merged data is NOT rendered.
     expect(screen.queryByText("TENANT DATA")).toBeNull();
+    // ui-words sweep 5 (tracker 270): the gate states the claim in one line and
+    // the paragraph that argued it lives in explain/tenant.one-at-a-time.md —
+    // so the short claim AND the (i) that carries the rest must both be here.
+    expect(screen.getByRole("heading", { name: "Choose a tenant" })).toBeTruthy();
+    expect(screen.getByText(/Merged tenants are unreadable\. Pick one and the app follows it\./)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about Choose a tenant" })).toBeTruthy();
     // Both tenants are offered, grouped under their orgs.
     expect(screen.getByText("Walmart Retail")).toBeTruthy();
     expect(screen.getByText("Target Corp")).toBeTruthy();

@@ -5,6 +5,7 @@ import type { RcaCase, KV, CaseEvent } from "./rcaCase";
 import { bandLabel, bandTone, appIdSourceLabel } from "./labels";
 import FidelityBadge from "../FidelityBadge";
 import RcaCaseHeader, { Pill } from "./RcaCaseHeader";
+import AskIris from "../AskIris";
 import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
 
 // RcaWorkspace — the production RCA detail view, organized after the reference
@@ -402,8 +403,14 @@ export default function RcaWorkspace({
             ))}
           </section>
 
-          {/* confidence ladder */}
-          <h3 className="rw-section-title">Confidence ladder</h3>
+          {/* confidence ladder. UI-words sweep 5 (tracker 270): each step's
+              caption is a three-word locator ("Localized to wan-r2",
+              "Independent evidence aligned"); what makes a step Probable rather
+              than Confirmed is ai/skills/explain/rca.confidence-ladder.md. */}
+          <h3 className="rw-section-title">
+            Confidence ladder
+            <AskIris topic="rca.confidence-ladder" label="Confidence ladder" />
+          </h3>
           <section className="rw-panel">
             <div className="rw-ladder-row">
               {data.ladder.map((s, i) => <div key={i} className={`rw-ladder-step ${s.state}`}>{s.label}</div>)}
@@ -449,7 +456,10 @@ export default function RcaWorkspace({
               muted — the ladder never claims without evidence */}
           {data.cascade && data.cascade.length > 0 && (
             <>
-              <h3 className="rw-section-title">How the failure propagated</h3>
+              <h3 className="rw-section-title">
+                How it propagated
+                <AskIris topic="rca.failure-propagation" label="How it propagated" />
+              </h3>
               <section className="rw-panel">
                 <div className="rw-cascade">
                   {data.cascade.map((s, i) => (
@@ -472,7 +482,7 @@ export default function RcaWorkspace({
                   ))}
                 </div>
                 <div className="rw-tdetail">
-                  <b>Reading this ladder:</b> a failure at the highlighted origin propagates downward — each witnessed stage carries the evidence that saw it; a dimmed stage is part of the known propagation path but has no evidence in this window and is not claimed.
+                  A dimmed stage has no evidence in this window and is not claimed.
                 </div>
               </section>
             </>

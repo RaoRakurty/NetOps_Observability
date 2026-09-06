@@ -15,6 +15,14 @@
 // SECURITY (§3 / §15). Every value below — device ids, event kinds, path
 // destinations, flow addresses — is remote-authored text rendered as an escaped
 // React text node. There is no innerHTML and no dangerouslySetInnerHTML here.
+//
+// WORDS (sweep 5, tracker 270). The trailing cell of a lane row is a STATED FACT
+// the server returned — an oper-status, a timestamp, "path changed", a byte
+// count — not an explanation of the protocol behind it. It wore `tsl-note` only
+// because that is the app's small-print convention; it is `fact-line` now (same
+// ink, same 12.5 px) so the note budget counts notes and not facts. The one real
+// note per card ("Proximity in time, never a causal claim.") keeps `mini-meta`.
+// What an established adjacency IS stays off the row — Iris answers that.
 
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type FeedItem, type PathHealthItem, type ProbePath, type PromInstantSeries } from "../../services/api";
@@ -149,7 +157,7 @@ export function DemLane({ scope, report }: { scope: LaneScope; report?: LaneStat
             <span className={`tsl-dot ${p.health_state}`} aria-hidden="true" />
             <span className="tsl-k">{p.agent} → {p.dst}</span>
             <span className="tsl-v">{p.health_state} · confidence {p.confidence}</span>
-            <span className="tsl-note">{p.reason}</span>
+            <span className="fact-line">{p.reason}</span>
           </li>
         ))}
       </ul>
@@ -182,7 +190,7 @@ export function ChangedLane({ scope, report }: { scope: LaneScope; report?: Lane
             <span className={`tsl-dot ${isConfigChangeKind(it.kind) ? "change" : "state"}`} aria-hidden="true" />
             <span className="tsl-k">{changeLabel(it.kind)}</span>
             <span className="tsl-v">{it.entity_id}</span>
-            <span className="tsl-note">{it.ts}</span>
+            <span className="fact-line">{it.ts}</span>
           </li>
         ))}
       </ul>
@@ -238,7 +246,7 @@ export function HealthLane({ scope, report, protocolSlot }: {
               <span className="tsl-dot bad" aria-hidden="true" />
               <span className="tsl-k">{s.metric.device ?? "unknown device"}</span>
               <span className="tsl-v">{s.metric.ifName ?? s.metric.interface ?? s.metric.index ?? "interface"}</span>
-              <span className="tsl-note">operationally down</span>
+              <span className="fact-line">operationally down</span>
             </li>
           ))}
         </ul>
@@ -265,7 +273,7 @@ export function PathLane({ scope, report }: { scope: LaneScope; report?: LaneSta
             <span className={`tsl-dot ${p.reached ? "good" : "bad"}`} aria-hidden="true" />
             <span className="tsl-k">{p.dst}</span>
             <span className="tsl-v">{p.hops?.length ?? 0} hops · {p.reached ? "reached" : "did not reach"}</span>
-            <span className="tsl-note">{p.changed ? "path changed" : "path stable"}</span>
+            <span className="fact-line">{p.changed ? "path changed" : "path stable"}</span>
           </li>
         ))}
       </ul>
@@ -301,7 +309,7 @@ export function RoutingLane({ scope, report }: { scope: LaneScope; report?: Lane
             <span className="tsl-dot bad" aria-hidden="true" />
             <span className="tsl-k">{s.metric.device ?? "unknown device"}</span>
             <span className="tsl-v">{s.metric.peer ?? s.metric.neighbor ?? s.metric.isis_neighbor ?? "neighbor"}</span>
-            <span className="tsl-note">not in the established state</span>
+            <span className="fact-line">not in the established state</span>
           </li>
         ))}
       </ul>
@@ -335,7 +343,7 @@ export function FlowsLane({ scope, report }: { scope: LaneScope; report?: LaneSt
             <span className="tsl-dot state" aria-hidden="true" />
             <span className="tsl-k">{String(r.src_addr ?? r.src ?? "—")}</span>
             <span className="tsl-v">→ {String(r.dst_addr ?? r.dst ?? "—")}</span>
-            <span className="tsl-note">{String(r.bytes ?? r.total_bytes ?? "")}</span>
+            <span className="fact-line">{String(r.bytes ?? r.total_bytes ?? "")}</span>
           </li>
         ))}
       </ul>
@@ -367,7 +375,7 @@ export function EventsLane({ scope, report }: { scope: LaneScope; report?: LaneS
             <span className={`tsl-dot ${it.severity === "critical" ? "bad" : "state"}`} aria-hidden="true" />
             <span className="tsl-k">{it.title || it.kind}</span>
             <span className="tsl-v">{it.entity_id}</span>
-            <span className="tsl-note">{it.ts}</span>
+            <span className="fact-line">{it.ts}</span>
           </li>
         ))}
       </ul>

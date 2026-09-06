@@ -66,6 +66,19 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { cmd: "/help", title: "Help", desc: "What Iris AI can do", module: "Help", kind: "send", text: "What can you do?" },
 ];
 
+// Provider tiles — the vendor name and the model family each one runs. Stated
+// facts about the provider, kept out of the JSX so one list is the authority.
+const PROVIDER_VENDOR: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Google",
+};
+const PROVIDER_MODEL: Record<string, string> = {
+  anthropic: "Claude",
+  openai: "GPT",
+  gemini: "Gemini",
+};
+
 // A short module badge per backend intent, for the "/" menu rows.
 const INTENT_BADGE: Record<string, string> = {
   current_state: "Live", incident_list: "Incidents", problem_explanation: "RCA",
@@ -449,15 +462,15 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
 
       {showSettings && cfg && (
         <div className="op-settings">
-          <p style={{ color: "var(--muted)", fontSize: 12, margin: "0 0 10px" }}>
+          <p style={{ color: "var(--muted)", fontSize: 12.5, margin: "0 0 10px" }}>
             Runs on Claude by default. The API key is encrypted at rest and never shown again.
           </p>
           <label className="op-field">
             <span>
               {cfg.provider === "openai" ? "OpenAI" : cfg.provider === "gemini" ? "Gemini" : "Anthropic"} API key{" "}
               {cfg.key_present
-                ? <span className="badge good" style={{ fontSize: 10 }}>{cfg.key_source === "env" ? "via environment" : "configured"}</span>
-                : <span className="badge warn" style={{ fontSize: 10 }}>not set</span>}
+                ? <span className="badge good" style={{ fontSize: 12.5 }}>{cfg.key_source === "env" ? "via environment" : "configured"}</span>
+                : <span className="badge warn" style={{ fontSize: 12.5 }}>not set</span>}
             </span>
             <input
               type="password"
@@ -468,7 +481,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               disabled={cfg.key_source === "env"}
             />
             {cfg.key_source === "env" && (
-              <span style={{ color: "var(--muted)", fontSize: 11 }}>Set by your deployment configuration; clear it there to manage the key here.</span>
+              <span style={{ color: "var(--muted)", fontSize: 12.5 }}>Set by your deployment configuration; clear it there to manage the key here.</span>
             )}
           </label>
           <div className="op-field">
@@ -478,8 +491,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
                 <button type="button" key={pv}
                   className={`op-tile${cfg.provider === pv ? " on" : ""}`}
                   onClick={() => { const s = cfg.model_suggestions?.[pv] ?? []; setCfg({ ...cfg, provider: pv, model: s[0] ?? cfg.model }); }}>
-                  <span className="op-tile-name">{pv === "anthropic" ? "Anthropic" : pv === "openai" ? "OpenAI" : pv === "gemini" ? "Google" : pv}</span>
-                  <span className="op-tile-sub">{pv === "anthropic" ? "Claude" : pv === "openai" ? "GPT" : pv === "gemini" ? "Gemini" : ""}</span>
+                  <span className="op-tile-name">{PROVIDER_VENDOR[pv] ?? pv}</span>
+                  <span className="op-tile-sub">{PROVIDER_MODEL[pv] ?? ""}</span>
                 </button>
               ))}
             </div>
@@ -505,17 +518,17 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               the assistant, and which may run AI Investigations (tool lookups). */}
           {tenantRows && tenantRows.length > 0 && (
             <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>Workspace access</div>
-              <p style={{ color: "var(--muted)", fontSize: 11, margin: "0 0 8px" }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 2 }}>Workspace access</div>
+              <p style={{ color: "var(--muted)", fontSize: 12.5, margin: "0 0 8px" }}>
                 Assistant answers are always scoped to each workspace&apos;s own data. Investigations
                 let the AI run governed, read-only lookups before answering.
               </p>
               {tenantRows.map((row) => (
-                <div key={row.tenant_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", fontSize: 12 }}>
+                <div key={row.tenant_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", fontSize: 12.5 }}>
                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.tenant_id}>
                     {row.name || row.tenant_id}
-                    {row.key_present && <span className="badge good" style={{ fontSize: 9, marginLeft: 6 }}>own key</span>}
-                    {row.no_platform_key && !row.key_present && <span className="badge warn" style={{ fontSize: 9, marginLeft: 6 }}>own key required</span>}
+                    {row.key_present && <span className="badge good" style={{ fontSize: 12.5, marginLeft: 6 }}>own key</span>}
+                    {row.no_platform_key && !row.key_present && <span className="badge warn" style={{ fontSize: 12.5, marginLeft: 6 }}>own key required</span>}
                   </span>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}>
                     <input type="checkbox" checked={row.assistant_enabled}
@@ -529,16 +542,16 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
                   <input type="number" min={0} max={8} value={row.max_calls || ""}
                     title="Lookups per question (blank = platform default)"
                     placeholder="4" disabled={!row.investigations_enabled}
-                    style={{ width: 44, fontSize: 11 }}
+                    style={{ width: 44, fontSize: 12.5 }}
                     onChange={(e) => setAccess(row, { max_calls: Math.max(0, Math.min(8, Number(e.target.value) || 0)) })} />
                   <input type="number" min={0} step={50000} value={row.daily_tokens || ""}
                     title="AI tokens per day (blank = platform default)"
                     placeholder="250000" disabled={!row.assistant_enabled}
-                    style={{ width: 84, fontSize: 11 }}
+                    style={{ width: 84, fontSize: 12.5 }}
                     onChange={(e) => setAccess(row, { daily_tokens: Math.max(0, Number(e.target.value) || 0) })} />
                 </div>
               ))}
-              <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+              <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 4 }}>
                 Guardrails per workspace: lookups per question · AI tokens per day. Blank = platform defaults.
               </div>
             </div>
@@ -551,7 +564,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
           platform AI service when it's available. */}
       {showSettings && !cfg && tcfg && (
         <div className="op-settings">
-          <p style={{ color: "var(--muted)", fontSize: 12, margin: "0 0 10px" }}>
+          <p style={{ color: "var(--muted)", fontSize: 12.5, margin: "0 0 10px" }}>
             {tcfg.assistant_enabled
               ? "Your workspace's AI settings. A key you add is encrypted at rest, never shown again, and only ever used for your workspace."
               : "The assistant is currently disabled for this workspace — contact your administrator."}
@@ -560,8 +573,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
             <span>
               {tcfg.provider === "openai" ? "OpenAI" : tcfg.provider === "gemini" ? "Gemini" : "Anthropic"} API key{" "}
               {tcfg.key_present
-                ? <span className="badge good" style={{ fontSize: 10 }}>configured</span>
-                : <span className="badge warn" style={{ fontSize: 10 }}>not set</span>}
+                ? <span className="badge good" style={{ fontSize: 12.5 }}>configured</span>
+                : <span className="badge warn" style={{ fontSize: 12.5 }}>not set</span>}
             </span>
             <input
               type="password"
@@ -578,8 +591,8 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
                 <button type="button" key={pv}
                   className={`op-tile${tcfg.provider === pv || (!tcfg.provider && pv === "anthropic") ? " on" : ""}`}
                   onClick={() => { const s = tcfg.model_suggestions?.[pv] ?? []; setTcfg({ ...tcfg, provider: pv, model: s[0] ?? "" }); }}>
-                  <span className="op-tile-name">{pv === "anthropic" ? "Anthropic" : pv === "openai" ? "OpenAI" : "Google"}</span>
-                  <span className="op-tile-sub">{pv === "anthropic" ? "Claude" : pv === "openai" ? "GPT" : "Gemini"}</span>
+                  <span className="op-tile-name">{PROVIDER_VENDOR[pv] ?? pv}</span>
+                  <span className="op-tile-sub">{PROVIDER_MODEL[pv] ?? ""}</span>
                 </button>
               ))}
             </div>
@@ -591,7 +604,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               placeholder="model id (blank = provider default)" />
           </div>
           {tcfg.platform_key_available && (
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--muted)", margin: "2px 0 8px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--muted)", margin: "2px 0 8px" }}>
               <input type="checkbox" checked={!tcfg.no_platform_key}
                 onChange={(e) => setTcfg({ ...tcfg, no_platform_key: !e.target.checked })} />
               Use the platform AI service when no key is set
@@ -617,12 +630,12 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
       {fallbackNote && (
         <div style={{
           display: "flex", alignItems: "center", gap: 8, padding: "5px 12px",
-          fontSize: 11, color: "var(--muted)", background: "var(--panel-2, rgba(255,180,60,0.06))",
+          fontSize: 12.5, color: "var(--muted)", background: "var(--panel-2, rgba(255,180,60,0.06))",
           borderBottom: "1px solid var(--line)",
         }}>
           <span className="op-dot warn" />
           <span style={{ flex: 1 }}>AI narration is temporarily unavailable — answers come straight from the correlation engine, fully cited.</span>
-          <button className="op-hd-btn" style={{ width: 18, height: 18, fontSize: 11 }} title="Dismiss"
+          <button className="op-hd-btn" style={{ width: 18, height: 18, fontSize: 12.5 }} title="Dismiss"
             onClick={() => setFallbackNote(false)}>×</button>
         </div>
       )}
@@ -633,7 +646,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
           <div className="op-welcome">
             <div className="op-welcome-icon"><Icon name="copilot" size={26} /></div>
             <div className="op-welcome-title">How can I help?</div>
-            <div className="op-welcome-sub">Ask about your network, troubleshoot an issue, or get setup help.</div>
+            <div className="op-welcome-sub">Ask about your network, an incident, or setup.</div>
             {/* Grounded NOC summary — works without a provider key (evidence-only
                 fallback), so it's always offered as the first action. */}
             <div className="op-chips">
@@ -911,7 +924,10 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
         </div>
       )}
       {cs?.watch_note && (
-        <div className="op-section"><div className="op-sec-h">Undetermined watch items</div><div className="op-sec-note">{cs.watch_note}</div></div>
+        <div className="op-section">
+          <div className="op-sec-h">Undetermined watch items</div>
+          <div className="op-sec-note">{cs.watch_note}</div>
+        </div>
       )}
       {cs?.impacted_entities && cs.impacted_entities.length > 0 && (
         <div className="op-kv"><span className="op-kv-k">Most impacted</span> {cs.impacted_entities.slice(0, 8).join(", ")}</div>

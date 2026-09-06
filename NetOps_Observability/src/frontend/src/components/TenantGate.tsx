@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ScopeDetail, getActiveScope, setActiveScope } from "../services/api";
 import Icon from "./Icon";
+import AskIris from "./AskIris";
 
 // TenantGate — the per-tenant entry gate for the platform (cross-tenant) admin.
 //
@@ -155,11 +156,10 @@ export default function TenantGate({ sectionId, sectionLabel, children }: Props)
         <div className="tg-lock" aria-hidden="true">
           <Icon name="lock" size={20} />
         </div>
-        <h2 className="tg-title">Choose a tenant to open {sectionLabel}</h2>
+        <h2 className="tg-title">Choose a tenant</h2>
         <p className="tg-sub">
-          You have platform-wide access, so this page could show every tenant at once — but merged
-          telemetry is unreadable and easy to misread. Pick one tenant and the whole app follows it
-          until you switch.
+          Merged tenants are unreadable. Pick one and the app follows it.
+          <AskIris topic="tenant.one-at-a-time" label="Choose a tenant" />
         </p>
 
         {recent.length > 0 && !q && (

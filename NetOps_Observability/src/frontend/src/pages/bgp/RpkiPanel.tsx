@@ -16,7 +16,8 @@ import { useEffect, useState } from "react";
 import { api, type BgpRpkiResp, type BgpRpkiState } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { rpkiStateTone, rpkiSummary } from "./bgpDepth.model";
-import { Details, Section, ShowAll, useCap } from "./Section";
+import { Section, ShowAll, useCap } from "./Section";
+import AskIris from "../../components/AskIris";
 
 /** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
 const FIRST_ROWS = 8;
@@ -46,11 +47,11 @@ export function RpkiPanel({ resource }: { resource?: string }) {
     <Section
       id="rpki"
       title="Prefix origin problems"
-      sub="RPKI — is the AS announcing each prefix authorised to announce it?"
+      sub="RPKI — is the announcing AS authorised?"
       updatedAt={at}
     >
       {busy && <div className="empty">Checking who is authorised…</div>}
-      {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
+      {err && <p className="fact-line fact-bad" role="alert">{err}</p>}
 
       {data && summary && (
         <>
@@ -63,7 +64,7 @@ export function RpkiPanel({ resource }: { resource?: string }) {
           </div>
 
           {data.truncated && (
-            <p className="mini-meta" style={{ color: "var(--warn)" }}>
+            <p className="fact-line fact-warn">
               Only the first {data.max_prefixes} watched prefixes were checked — the sweep is bounded.
             </p>
           )}
@@ -71,7 +72,7 @@ export function RpkiPanel({ resource }: { resource?: string }) {
           {data.results.length === 0 && (
             <div className="empty">
               {data.from_watchlist
-                ? "No prefixes are watched yet. Watch one and its origin state shows up here."
+                ? "No prefixes watched yet. Watch one to see its origin state."
                 : "Nothing to check."}
             </div>
           )}
@@ -84,15 +85,15 @@ export function RpkiPanel({ resource }: { resource?: string }) {
                   <div key={r.prefix} className="bgp-row">
                     <span className="mono" style={{ minWidth: 160 }}>{r.prefix}</span>
                     <Chip label={t.label} tone={t.tone} title={t.detail} />
-                    {r.origin && <span className="mini-meta">announced by {r.origin}</span>}
+                    {r.origin && <span className="fact-line">announced by {r.origin}</span>}
                     {r.roas?.length ? (
-                      <span className="mini-meta" title={r.roas.map((a) => `${a.prefix} → AS${a.origin} (maxLen ${a.max_length}, ${a.validity})`).join(" · ")}>
+                      <span className="fact-line" title={r.roas.map((a) => `${a.prefix} → AS${a.origin} (maxLen ${a.max_length}, ${a.validity})`).join(" · ")}>
                         {r.roas.length} authorisation{r.roas.length === 1 ? "" : "s"} published
                       </span>
                     ) : null}
-                    {r.validator && <span className="mini-meta">checked by {r.validator}</span>}
-                    {r.error && <span className="mini-meta" style={{ color: "var(--warn)" }}>{r.error}</span>}
-                    <span className="mini-meta" style={{ marginLeft: "auto" }} title="When this answer was fetched">
+                    {r.validator && <span className="fact-line">checked by {r.validator}</span>}
+                    {r.error && <span className="fact-line fact-warn">{r.error}</span>}
+                    <span className="fact-line" style={{ marginLeft: "auto" }} title="When this answer was fetched">
                       {r.fetched_at ? new Date(r.fetched_at).toLocaleTimeString() : ""}
                     </span>
                   </div>
@@ -101,13 +102,10 @@ export function RpkiPanel({ resource }: { resource?: string }) {
               <ShowAll cap={cap} noun="prefixes" />
             </div>
           )}
-          <Details summary="How this was checked">
-            <p className="mini-meta" style={{ marginBottom: 0 }}>
-              Each prefix is checked against the route origin authorisations (ROAs) published in RPKI, read through
-              RIPE NCC&apos;s Routinator view. A prefix we could not check is one whose validator was unreachable —
-              that is not a verdict, and is never counted as authorised.
-            </p>
-          </Details>
+          <p className="mini-meta" style={{ marginBottom: 0 }}>
+            A prefix we could not check is never counted as authorised.
+            <AskIris topic="rpki.origin-check" label="How this was checked" />
+          </p>
         </>
       )}
     </Section>

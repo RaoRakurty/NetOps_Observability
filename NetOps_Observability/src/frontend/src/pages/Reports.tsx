@@ -394,8 +394,8 @@ export default function Reports() {
           </label>
 
           <div className="form-field">
-            <label className="form-label" htmlFor="rpt-note">Note <span className="form-hint">(optional)</span></label>
-            <textarea id="rpt-note" className="form-input" placeholder="Prepended to the top of the report"
+            <label className="form-label" htmlFor="rpt-desc">Note <span className="form-hint">(optional)</span></label>
+            <textarea id="rpt-desc" className="form-input" placeholder="Prepended to the top of the report"
               value={draft.description ?? ""} rows={2}
               onChange={(e) => setDraft({ ...draft, description: e.target.value })}
               style={{ height: "auto", padding: "8px 12px", resize: "vertical" }} />
@@ -475,10 +475,10 @@ export default function Reports() {
                     <td>{o.name}</td>
                     <td>{kindLabel(body.kind)}</td>
                     <td>{enabled ? nlSchedule(body) : "Paused"}</td>
-                    <td className="mini-meta">{(body.formats ?? ["html"]).join(", ")}</td>
+                    <td className="fact-line">{(body.formats ?? ["html"]).join(", ")}</td>
                     <td>{run.status ? <span className={`badge sev-${statusSev(run.status)}`}>{run.status}</span> : "—"}</td>
-                    <td className="mini-meta">{fmt(run.last_run)}</td>
-                    <td className="mini-meta">{enabled ? fmt(run.next_run) : "—"}</td>
+                    <td className="fact-line">{fmt(run.last_run)}</td>
+                    <td className="fact-line">{enabled ? fmt(run.next_run) : "—"}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       <button className="dash-btn" onClick={() => setHistory(o)} title="Execution history">History</button>{" "}
                       <button className="dash-btn" onClick={() => sendNow(o)} title="Deliver now">Send now</button>{" "}
@@ -751,7 +751,7 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
         {!execs ? (
           <div className="empty">Loading…</div>
         ) : execs.length === 0 ? (
-          <div className="empty">No runs yet. Use “Send now”, or wait for the schedule.</div>
+          <div className="empty">No runs yet — use Send now.</div>
         ) : (
           <table style={{ marginTop: 10 }}>
             <thead>
@@ -766,10 +766,10 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
                   <Fragment key={e.id}>
                     <tr style={{ cursor: "pointer" }} onClick={() => expand(e.id)}>
                       <td><Icon name="chevron" size={13} className="row-chevron" style={open === e.id ? { transform: "rotate(90deg)" } : undefined} /></td>
-                      <td className="mini-meta">{fmt(e.fire_time)}</td>
+                      <td className="fact-line">{fmt(e.fire_time)}</td>
                       <td><span className={`badge sev-${statusSev(e.status)}`}>{e.status}</span></td>
-                      <td className="mini-meta">{dur(e.started_at, e.completed_at)}</td>
-                      <td className="mini-meta">{total ? `${okN}/${total} ok` : "—"}</td>
+                      <td className="fact-line">{dur(e.started_at, e.completed_at)}</td>
+                      <td className="fact-line">{total ? `${okN}/${total} ok` : "—"}</td>
                       <td onClick={(ev) => ev.stopPropagation()}>
                         {(e.artifacts ?? []).map((a) => (
                           <button key={a.format} className="dash-btn" style={{ marginRight: 4 }}
@@ -785,8 +785,8 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
                           {e.error && <p style={{ color: "var(--bad)", margin: "6px 0" }}>{e.error}</p>}
                           <div style={{ display: "flex", gap: 24, flexWrap: "wrap", padding: "8px 4px" }}>
                             <div style={{ minWidth: 240 }}>
-                              <div className="mini-meta" style={{ fontWeight: 700, marginBottom: 4 }}>Phase timeline</div>
-                              {(d?.events ?? []).length === 0 ? <span className="mini-meta">—</span> : (
+                              <div className="fact-line" style={{ fontWeight: 700, marginBottom: 4 }}>Phase timeline</div>
+                              {(d?.events ?? []).length === 0 ? <span className="fact-line">—</span> : (
                                 <table className="mini-table">
                                   <tbody>
                                     {d!.events!.map((ev, i) => {
@@ -794,8 +794,8 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
                                       return (
                                         <tr key={i}>
                                           <td style={{ textTransform: "capitalize" }}>{ev.phase}</td>
-                                          <td className="mini-meta">{fmtTime(ev.at)}</td>
-                                          <td className="mini-meta">{prev ? `+${dur(prev, ev.at)}` : ""}</td>
+                                          <td className="fact-line">{fmtTime(ev.at)}</td>
+                                          <td className="fact-line">{prev ? `+${dur(prev, ev.at)}` : ""}</td>
                                         </tr>
                                       );
                                     })}
@@ -804,16 +804,16 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
                               )}
                             </div>
                             <div style={{ minWidth: 280 }}>
-                              <div className="mini-meta" style={{ fontWeight: 700, marginBottom: 4 }}>Delivery</div>
-                              {(e.delivery_status ?? []).length === 0 ? <span className="mini-meta">—</span> : (
+                              <div className="fact-line" style={{ fontWeight: 700, marginBottom: 4 }}>Delivery</div>
+                              {(e.delivery_status ?? []).length === 0 ? <span className="fact-line">—</span> : (
                                 <table className="mini-table">
                                   <tbody>
                                     {e.delivery_status!.map((ds, i) => (
                                       <tr key={i}>
                                         <td>{ds.recipient}</td>
-                                        <td className="mini-meta">{ds.channel}</td>
+                                        <td className="fact-line">{ds.channel}</td>
                                         <td><span className={`badge sev-${ds.ok ? "ok" : "critical"}`}>{ds.ok ? "ok" : "fail"}</span></td>
-                                        <td className="mini-meta">{ds.error ?? ""}</td>
+                                        <td className="fact-line">{ds.error ?? ""}</td>
                                       </tr>
                                     ))}
                                   </tbody>

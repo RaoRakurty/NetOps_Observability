@@ -90,8 +90,12 @@ describe("RcaPathCausality", () => {
     expect(screen.getByText(/lifted by on-path evidence/i)).toBeTruthy();
     // explained-away downstream victim is secondary, not blamed.
     expect(screen.getByText("Downstream")).toBeTruthy();
-    // discounted off-path fault is listed as ruled-out.
-    expect(screen.getByText(/Ruled out \(off-path\)/i)).toBeTruthy();
+    // discounted off-path fault is listed as ruled-out. ui-words sweep 5
+    // (tracker 270): the heading is "Ruled out", the claim under it is short,
+    // and "severity is not causality" is explain/path.ruled-out-off-path.md.
+    expect(screen.getByRole("heading", { name: "Ruled out" })).toBeTruthy();
+    expect(screen.getByText(/Off-path: changed in the same window, but not the cause\./)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about Ruled out" })).toBeTruthy();
   });
 
   it("healthy hops are minimal — no state chips, no confidence footers (owner 2026-07-18)", () => {
@@ -202,6 +206,11 @@ describe("RcaPathCausality", () => {
     };
     render(<RcaPathCausality data={ecmp} />);
     expect(screen.getAllByText("ECMP").length).toBeGreaterThan(0);
+    // The honesty state did not soften: the hops are still called ambiguous and
+    // still said to vary per flow. What "the segment sequence is the stable
+    // essence" means is explain/path.ambiguous-hops.md, behind the (i).
+    expect(screen.getByText(/Ambiguous hops \(ECMP or failover\): exact hops vary per flow\./)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about Ambiguous hops" })).toBeTruthy();
   });
 
   it("renders an honest empty note when no path was attributed", () => {

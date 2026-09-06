@@ -208,6 +208,13 @@ export default function CloudLogs() {
   // (DataTable's own filter). We pass it to DataTable only for non-log lanes.
   const tableFilter = lane.source === "log" ? "" : text;
 
+  // UI-words sweep 5 (tracker 270): the row count is a STATED FACT, and a heading
+  // is budgeted at four words — so it is built here and the <h2> renders the lane
+  // name plus this one token.
+  const countLabel = total !== null && total > rows.length
+    ? `(${rows.length}/${total})`
+    : `(${rows.length})`;
+
   const openDetail = (r: CloudRow) => {
     setDetail(r);
     if (ws.enabled) {
@@ -324,10 +331,7 @@ export default function CloudLogs() {
 
       <div className="card">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-          <h2 style={{ margin: 0 }}>
-            {lane.label} ({rows.length}
-            {total !== null && total > rows.length ? ` / ${total} matched` : ""})
-          </h2>
+          <h2 style={{ margin: 0 }}>{lane.label} {countLabel}</h2>
         </div>
         <DataTable<CloudRow>
           rows={rows}

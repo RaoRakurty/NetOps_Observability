@@ -30,6 +30,7 @@ import {
   filterFieldPhrase,
   windowScopeCaveat,
   windowScopeNote,
+  windowScopeFields,
   drillNote,
 } from "./flowsAppViews";
 
@@ -49,10 +50,14 @@ describe("the unknown bucket is first class", () => {
     expect(isUnknownApp("payroll")).toBe(false);
   });
 
-  it("labels it as a bucket and keeps a sentence saying what it means", () => {
+  it("labels it as a bucket and keeps a line saying what it means", () => {
     expect(appLabel("unknown")).toBe("Unknown");
     expect(appLabel("  payroll ")).toBe("payroll");
-    expect(UNKNOWN_MEANING).toMatch(/uncatalogued or internal/i);
+    // UI-words sweep 5 (tracker 270): the claim stays, the lesson moved into
+    // ai/skills/explain/flows.unknown-app.md behind the (i). "uncatalogued or
+    // internal" is still on screen — as the sub-label under the Unknown row
+    // (pinned in Flows.appViews.test.tsx).
+    expect(UNKNOWN_MEANING).toMatch(/no naming source claimed/i);
     expect(UNKNOWN_MEANING).toMatch(/not missing/i);
     expect(UNKNOWN_APP).toBe("unknown");
   });
@@ -237,11 +242,20 @@ describe("the window-only caveat", () => {
     expect(windowScopeCaveat([], "Applications")).toBeNull();
   });
 
-  it("names the set fields and says they do not narrow the numbers", () => {
+  it("names the subject and says the filters do not narrow the numbers", () => {
     const s = windowScopeCaveat(["src", "dst"], "Applications") as string;
     expect(s).toContain("Applications");
-    expect(s).toContain("source and destination");
     expect(s).toMatch(/do not narrow/i);
+  });
+
+  // UI-words sweep 5 (tracker 270): the note is one short claim, so WHICH
+  // fields are being ignored moved into the tooltip beside it. The fact did not
+  // leave the screen — it stopped being a second sentence in the note.
+  it("names the ignored fields in the tooltip beside the caveat", () => {
+    expect(windowScopeFields(["src", "dst"])).toContain("source and destination");
+    expect(windowScopeFields(["src", "dst"])).toMatch(/not narrowed by/i);
+    expect(windowScopeFields(["src", "dst"])).toMatch(/direction toggle/i);
+    expect(windowScopeFields([])).toBe("");
   });
 
   it("translates every wire field name into the operator's word", () => {

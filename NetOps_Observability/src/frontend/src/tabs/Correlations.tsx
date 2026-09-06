@@ -69,7 +69,7 @@ function qualityOf(o: CorrObject): Qual {
 const QUAL_TONE: Record<Qual, string> = { strong: "#E11D48", candidate: "#D97706", weak: "#8A93A6" };
 function pill(text: string, tone: string, filled = false): React.ReactNode {
   return <span style={{
-    fontSize: 10.5, fontWeight: 700, letterSpacing: 0.3, padding: "1px 6px", borderRadius: 4,
+    fontSize: 12.5, fontWeight: 700, letterSpacing: 0.3, padding: "1px 6px", borderRadius: 4,
     whiteSpace: "nowrap",
     color: filled ? "#ffffff" : tone, background: filled ? tone : tone + "1c",
     border: `1px solid ${tone}55`,
@@ -246,7 +246,7 @@ export default function Correlations() {
         ? <span style={{ color: "var(--muted)" }}>Not yet determined</span>
         : <span>{signatureName(o.top_hypothesis)}</span> },
     { key: "owner", header: "Owner", width: 96, sortable: true, text: (o) => o.owner ?? "",
-      render: (o) => o.owner ? <span style={{ fontSize: 12 }}>{ownerLabel(o.owner)}</span> : "—" },
+      render: (o) => o.owner ? <span style={{ fontSize: 12.5 }}>{ownerLabel(o.owner)}</span> : "—" },
     // UX-1: which external destinations this incident was filed/paged to.
     { key: "notified", header: "Notified via", width: 118, sortable: true,
       sortValue: (o) => (notified[o.correlation_id] ?? [])
@@ -439,14 +439,14 @@ export default function Correlations() {
     <div className="dm-board cc-board">
       <NocHeader
         title="RCA Candidates"
-        subtitle="Evidence-linked correlation groups. A root cause is confirmed only when two independent sources agree — weaker candidates say exactly what's missing."
+        topic="rca.candidates"
         chips={<><Chip label={`${trueTotal ?? visible.length} candidates · 24h`} /><LiveChip detail="correlation engine" /></>}
       >
         <NocKpis cols={4}>
-          <NocKpi n={trueTotal ?? visible.length} label="Candidates" interp="in the last 24h" />
-          <NocKpi n={rConfirmed} label="Confirmed" interp="two independent sources agree" tone={rConfirmed ? "var(--crit)" : "var(--ok)"} />
-          <NocKpi n={rSuspected} label="Suspected" interp="impact not confirmed" tone={rSuspected ? "var(--warn)" : undefined} />
-          <NocKpi n={rUndet} label="Not confirmed" interp="gathering evidence" />
+          <NocKpi n={trueTotal ?? visible.length} label="Candidates" topic="rca.candidates" />
+          <NocKpi n={rConfirmed} label="Confirmed" topic="kpi.confirmed-rca" tone={rConfirmed ? "var(--crit)" : "var(--ok)"} />
+          <NocKpi n={rSuspected} label="Suspected" topic="kpi.suspected-rca" tone={rSuspected ? "var(--warn)" : undefined} />
+          <NocKpi n={rUndet} label="Not confirmed" topic="rca.not-confirmed" />
         </NocKpis>
       </NocHeader>
       {deepErr && (
@@ -488,7 +488,7 @@ export default function Correlations() {
               active={promotedOnly} onClick={() => setPromotedOnly((v) => !v)}
               title="Promoted real outages — those whose RCA document is in the RCA Reports library" />
             {summary && (
-              <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>
+              <span style={{ fontSize: 12.5, color: "var(--muted)", marginLeft: 4 }}>
                 {summary.open} open · {summary.closed} resolved
                 {/* #111 don't-hide: engine merge tombstones are excluded from the
                     headline counts but disclosed, muted, never silently dropped. */}
@@ -640,13 +640,13 @@ function SignatureGaps() {
                   }}>{c.count}</span>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{c.label}</div>
-                    <div style={{ fontSize: 12, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div style={{ fontSize: 12.5, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {c.top_gaps.length > 0
                         ? <>Missing: {c.top_gaps.map((g) => g.clause).join(" · ")}</>
                         : "no evidence-gap detail recorded"}
                     </div>
                   </div>
-                  <span style={{ fontSize: 11, color: "var(--fg-subtle, var(--muted))", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}
+                  <span style={{ fontSize: 12.5, color: "var(--fg-subtle, var(--muted))", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}
                     title={c.last_seen ? fmtDateTime(c.last_seen) : ""}>
                     {Number.isFinite(c.avg_signals) ? `${c.avg_signals.toFixed(1)} obs/incident` : ""}
                   </span>
@@ -800,7 +800,7 @@ export function CorrelationDetail({ id }: { id: string }) {
   // Deterministic-replay control — a platform/debug tool, surfaced only in Debug View.
   const replayPanel = (
     <div>
-      <h3 style={{ margin: "0 0 10px", fontSize: 12, letterSpacing: ".04em", textTransform: "uppercase", color: "var(--muted)" }}>
+      <h3 style={{ margin: "0 0 10px", fontSize: 12.5, letterSpacing: ".04em", textTransform: "uppercase", color: "var(--muted)" }}>
         Determinism replay
       </h3>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -816,7 +816,7 @@ export function CorrelationDetail({ id }: { id: string }) {
         )}
       </div>
       {replay && !replay.clean && (
-        <div style={{ marginTop: 8, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted)" }}>
+        <div style={{ marginTop: 8, fontFamily: "var(--font-mono)", fontSize: 12.5, color: "var(--muted)" }}>
           {replay.differences.map((d) => <div key={d}>· {d}</div>)}
           {!replay.engine_pin_match && (
             <div style={{ marginTop: 4 }}>Engine pin mismatch: built by an older engine — expected evolution, not corruption.</div>

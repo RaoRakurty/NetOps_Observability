@@ -24,12 +24,14 @@ import {
   drillNote,
   windowScopeCaveat,
   windowScopeNote,
+  windowScopeFields,
 } from "./flowsAppViews";
 import { useAppNames, ResolvedApp } from "../services/appNames";
 import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric, hexToRgba } from "../theme/charts";
 import { cssVar } from "../theme/tokens";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
+import AskIris from "../components/AskIris";
 import { EmptyHint, MetricStat, escapeHtml } from "../components/board/panels";
 import { StatStrip, Stat } from "../components/ui";
 
@@ -134,7 +136,7 @@ function AppNameChip({ app }: { app?: ResolvedApp }) {
   if (!app) return null;
   return (
     <span
-      style={{ display: "block", fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.2 }}
+      style={{ display: "block", fontSize: 12.5, color: "var(--fg-subtle)", lineHeight: 1.2 }}
       title={`identified by ${app.source}`}
     >
       {app.app}
@@ -344,7 +346,7 @@ function FlowsSection({ q }: { q: FlowQuery }) {
         </div>
       </div>
       <div className="panel">
-        <div className="panel-tools"><h3>NetFlow volume (bytes · packets)</h3></div>
+        <div className="panel-tools"><h3>Traffic volume</h3></div>
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
         ) : ts.length === 0 ? (
@@ -397,7 +399,7 @@ function FlowsSection({ q }: { q: FlowQuery }) {
 export function ConversationsSection({ q }: { q: FlowQuery }) {
   const [rows, setRows] = useState<TalkerRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
-  const mono: React.CSSProperties = { fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 12 };
+  const mono: React.CSSProperties = { fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 12.5 };
 
   useEffect(() => {
     let alive = true;
@@ -439,7 +441,7 @@ export function ConversationsSection({ q }: { q: FlowQuery }) {
   return (
     <>
       <div className="panel">
-        <div className="panel-tools"><h3>Top conversations (Initiator → Responder)</h3></div>
+        <div className="panel-tools"><h3>Top conversations</h3></div>
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
         ) : rows.length === 0 ? (
@@ -532,7 +534,7 @@ export function ApplicationsSection({
           <span title={isUnknownApp(r.app) ? UNKNOWN_MEANING : undefined}>
             {appLabel(r.app)}
             {isUnknownApp(r.app) && (
-              <span style={{ display: "block", fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.2 }}>
+              <span style={{ display: "block", fontSize: 12.5, color: "var(--fg-subtle)", lineHeight: 1.2 }}>
                 uncatalogued or internal
               </span>
             )}
@@ -584,8 +586,8 @@ export function ApplicationsSection({
         <Stat label="Flow records" value={resp ? fmtNum(totals.flows) : "—"} />
       </StatStrip>
       <div className="panel" style={{ minWidth: 0 }}>
-        <div className="panel-tools"><h3>Applications by volume (source → destination)</h3></div>
-        <p className="mini-meta" style={{ margin: "0 2px 8px" }}>{caveat}</p>
+        <div className="panel-tools"><h3>Applications by volume</h3></div>
+        <p className="mini-meta" style={{ margin: "0 2px 8px" }} title={windowScopeFields(filterKeys)}>{caveat}</p>
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
         ) : rows.length === 0 ? (
@@ -609,14 +611,22 @@ export function ApplicationsSection({
             initialSort={{ key: "bytes", dir: "desc" }}
           />
         )}
-        <p className="mini-meta" style={{ margin: "8px 2px 0" }}>{coverageSentence(resp?.coverage)}</p>
+        <p className="fact-line" style={{ margin: "8px 2px 0" }}>
+          {coverageSentence(resp?.coverage)}
+          <AskIris topic="flows.app-coverage" label="Coverage" />
+        </p>
         {totals.unknownRows > 0 && (
-          <p className="mini-meta" style={{ margin: "4px 2px 0" }}>{UNKNOWN_MEANING}</p>
+          <p className="fact-line" style={{ margin: "4px 2px 0" }}>
+            {UNKNOWN_MEANING}
+            <AskIris topic="flows.unknown-app" label="Unknown" />
+          </p>
         )}
         {rows.some((r) => sourceSide(r.src_app).kind === "unresolved") && (
-          <p className="mini-meta" style={{ margin: "4px 2px 0" }}>{UNRESOLVED_SOURCE_MEANING}</p>
+          <p className="fact-line" style={{ margin: "4px 2px 0" }}>
+            {UNRESOLVED_SOURCE_MEANING}
+            <AskIris topic="flows.unresolved-source" label="Source not resolved" />
+          </p>
         )}
-        <p className="mini-meta" style={{ margin: "4px 2px 0" }}>{drillNote("one application")}</p>
       </div>
     </>
   );
@@ -685,7 +695,7 @@ export function ServicesSection({
           <span title={r.attributed ? undefined : UNMEASURED_MEANING}>
             {r.name}
             {!r.attributed && (
-              <span style={{ display: "block", fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.2 }}>
+              <span style={{ display: "block", fontSize: 12.5, color: "var(--fg-subtle)", lineHeight: 1.2 }}>
                 no selector yet
               </span>
             )}
@@ -749,8 +759,8 @@ export function ServicesSection({
         <Stat label="Measured volume" value={rows ? fmtBytes(measuredBytes) : "—"} />
       </StatStrip>
       <div className="panel" style={{ minWidth: 0 }}>
-        <div className="panel-tools"><h3>Services by measured volume</h3></div>
-        <p className="mini-meta" style={{ margin: "0 2px 8px" }}>{caveat}</p>
+        <div className="panel-tools"><h3>Services by volume</h3></div>
+        <p className="mini-meta" style={{ margin: "0 2px 8px" }} title={windowScopeFields(filterKeys)}>{caveat}</p>
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
         ) : ordered.length === 0 ? (
@@ -774,9 +784,11 @@ export function ServicesSection({
           />
         )}
         {grouped.unmeasured.length > 0 && (
-          <p className="mini-meta" style={{ margin: "8px 2px 0" }}>{UNMEASURED_MEANING}</p>
+          <p className="fact-line" style={{ margin: "8px 2px 0" }}>
+            {UNMEASURED_MEANING}
+            <AskIris topic="flows.unmeasured-service" label="Not measured" />
+          </p>
         )}
-        <p className="mini-meta" style={{ margin: "4px 2px 0" }}>{drillNote("one service")}</p>
       </div>
     </>
   );

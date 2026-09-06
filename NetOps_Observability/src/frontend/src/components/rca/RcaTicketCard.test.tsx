@@ -35,7 +35,7 @@ describe("RcaTicketCard", () => {
     const { default: Card } = await import("./RcaTicketCard");
     render(<Card correlationId="x" />);
     expect(await screen.findByText("No ticket")).toBeTruthy();
-    expect(screen.getByText(/No external ticket has been opened/)).toBeTruthy();
+    expect(screen.getByText(/No external ticket opened for this RCA yet\./)).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Create ticket" })).toBeTruthy();
   });
 

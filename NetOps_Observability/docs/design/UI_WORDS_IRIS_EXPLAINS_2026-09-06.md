@@ -201,3 +201,67 @@ remediation) are new names for ink that already existed — a STATED FACT is not
 an explanatory note, and the word budget counts notes. The wireless-execute
 consequence keeps every word for the sweep-3 reason: a consequence you must
 read before typing a confirmation is part of the action.
+
+## Vendor observation — what sweep 5 matched (2026-09-06)
+
+Sweep 5 = everything the debt list still held: the BGP surfaces (watchlist,
+prefixes, peers, RPKI, ASPA, bogons, geofeed, live feed, AS-path map, alert
+policy), the RCA workspace and its causality path, the account and tenant gates,
+Reports, the reliability scorecard, the legacy collection-pipeline board, the
+TAC escalation panel and the investigation lanes, the `tabs/` surfaces (flows,
+log search, correlations, collectors, SNMP credentials, source of truth,
+transport security, tunnels, access explorer and the Iris drawer), device
+inventory and geomap, device monitoring, NMS integrations, telemetry coverage,
+the app-observability pages and the two shared panel libraries. Same four
+consoles, same reading.
+
+- **Datadog** — a screen is a number and a control; what the number MEANS sits
+  behind an `(i)`. Matched: the reliability scorecard gave up nine metric
+  definitions (MTTI, MTTI p90, MTTC, recovery, closure, MTBF, repeat rate, the
+  time-loss driver) and the readiness-score recipe, and reads −47 % of its prose;
+  the BGP watchlist's three `Details` disclosures (how the to-do list is built,
+  the RDAP provenance paragraph, "what this screen does not show") are three
+  authored files.
+- **Kentik** — a caveat is stated once per view, never per row. Matched: Flows'
+  applications panel carried five small-print paragraphs and its services panel
+  three; both are now one note plus one `(i)` per honest blank ("Unknown",
+  "Source not resolved", "Not measured"), and the drill caveat moved from a
+  repeated paragraph into the per-row tooltip.
+- **ThousandEyes** — protocol vocabulary lives in the tooltip, not the page.
+  Matched: ROA, RPKI, Routinator, ASPA's IETF-draft status, BMP versus
+  collector provenance, RFC 9092 geofeeds, STAMP/RFC 8762, IF-MIB, TUNNEL-MIB,
+  WGS 84, SNMPv3 USM, "masked templates" and "admitted lines" all left the
+  screen. The honesty states did NOT soften: "Near-live, not live", "an absent
+  feed, not a healthy fleet", "A dash is not a zero", "never counted as
+  authorised", "not the cause", "the full typed path is not available", "No case
+  connector here" and "Not measured" keep their claim word for word in
+  substance.
+- **Meraki** — sentence case, plain outcomes, small print that is still
+  readable. Matched: the Iris drawer, the scorecard, the connector wizard,
+  service map, NMS, the tenant gate, discovery, IGP, the report wizard and the
+  demo boards stopped SHOUTING (26 rules) and nothing on a swept surface renders
+  below 12.5 px (85 rules were 9–12 px); card headings are one or two words
+  ("Traffic volume", "Top conversations", "Built bundles", "Set up inventory").
+- **All four** — none explains a protocol, a metric or a verdict on the page.
+  62 more authored files carry it instead, and the debt list is down to a single
+  file.
+
+`.fact-line` (with `.fact-warn` / `.fact-bad` / `.fact-strong`) is the sweep-5
+name for ink that already existed, the same move `.adm-line`, `.lic-line`,
+`.wan-line` and `.proto-key` made in sweeps 3 and 4: a STATED FACT — a count, a
+state, a unit, a timestamp, a provenance stamp — is not an explanatory note, and
+the word budget counts notes. Nothing that teaches may be written into one.
+
+Untouched on purpose, for the sweep-3 reason: the RIPE NCC RIS attribution (a
+licence condition of the data, not a caveat), the two-factor recovery
+consequence, "stored encrypted, never shown again", the platform-operator and
+break-glass warnings, the tenant-isolation facts on telemetry coverage and
+transport security, and every "not measured" the scorecard prints instead of a
+fabricated MTTR.
+
+## Sweep 6 — what is left
+
+`pages/iris/Knowledge.tsx` (9 breaches) is the only file still on
+`wordBudget.allow.json`. It was being rewritten in a concurrent change while
+sweep 5 ran, so sweeping it here would have clobbered that work. Everything
+else on the debt list is gone.

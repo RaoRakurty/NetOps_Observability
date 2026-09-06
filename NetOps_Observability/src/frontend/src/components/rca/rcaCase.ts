@@ -414,8 +414,8 @@ export const EXAMPLE_CASE: RcaCase = {
   ],
   ladder: [
     { state: "done", label: "✓ Detected", caption: "BGP event detected" },
-    { state: "done", label: "✓ Suspected", caption: "Localized to wan-r2 adjacency" },
-    { state: "done", label: "✓ Probable", caption: "Independent network evidence aligned" },
+    { state: "done", label: "✓ Suspected", caption: "Localized to wan-r2" },
+    { state: "done", label: "✓ Probable", caption: "Independent evidence aligned" },
     { state: "active", label: "✓ Confirmed", caption: "Application impact confirmed" },
   ],
   timelineTicks: ["+0s", "+10s", "+20s", "+30s", "+40s", "+50s"],
@@ -906,8 +906,8 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   const reached = confirmed ? 4 : suspected ? 2 : 1;
   const ladder: LadderStep[] = [
     { state: "done", label: "✓ Detected", caption: "Anomaly detected" },
-    { state: reached >= 2 ? (confirmed ? "done" : "active") : "next", label: (reached >= 2 ? "✓ " : "") + "Suspected", caption: device ? `Localized to ${device}` : "Localized to a device area" },
-    { state: confirmed ? "done" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Probable", caption: "Independent network evidence aligned" },
+    { state: reached >= 2 ? (confirmed ? "done" : "active") : "next", label: (reached >= 2 ? "✓ " : "") + "Suspected", caption: device ? `Localized to ${device}` : "Localized to area" },
+    { state: confirmed ? "done" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Probable", caption: "Independent evidence aligned" },
     { state: confirmed ? "active" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Confirmed", caption: confirmed ? "Customer impact confirmed" : "Independent evidence missing" },
   ];
 

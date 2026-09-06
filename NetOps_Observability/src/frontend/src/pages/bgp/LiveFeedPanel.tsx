@@ -12,7 +12,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type BgpFeedResp, type BgpFeedUpdate } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { feedCounts, mergeFeed } from "./bgpDepth.model";
-import { Details, Section, ShowAll, SubBlock, useCap } from "./Section";
+import { Section, ShowAll, SubBlock, useCap } from "./Section";
+import AskIris from "../../components/AskIris";
 
 const POLL_MS = 20_000;
 const CLIENT_BUFFER = 500;
@@ -65,7 +66,7 @@ export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
 
   const body = (
     <>
-      {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
+      {err && <p className="fact-line fact-bad" role="alert">{err}</p>}
 
       {status && !status.enabled && (
         <div className="empty" style={{ textAlign: "left" }}>
@@ -91,13 +92,13 @@ export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
           </div>
 
           {status.resources?.length ? (
-            <p className="mini-meta">Following {status.resources.length} watched resource{status.resources.length === 1 ? "" : "s"}: <span className="mono">{status.resources.join(" · ")}</span></p>
+            <p className="fact-line">Following {status.resources.length} watched resource{status.resources.length === 1 ? "" : "s"}: <span className="mono">{status.resources.join(" · ")}</span></p>
           ) : (
             <div className="empty">{status.note || "Add prefixes or ASNs to this tenant's watchlist — the feed follows the watchlist."}</div>
           )}
 
           {gap && (
-            <p className="mini-meta" style={{ color: "var(--warn)" }}>
+            <p className="fact-line fact-warn">
               Some updates rolled out of the buffer before this page read them — the list below is not continuous.
             </p>
           )}
@@ -132,14 +133,10 @@ export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
           )}
           <ShowAll cap={cap} noun="updates" />
 
-          <Details summary="How fresh this is">
-            <p className="mini-meta" style={{ marginBottom: 0 }}>
-              <strong>Near-live, not live.</strong> RIS Live is WebSocket-only and no WebSocket client is on this
-              platform&apos;s dependency allowlist, so updates arrive from a bounded read of RIPEstat every
-              ~{status.interval ?? "60s"} (jittered). A dedicated BMP receiver — the on-device, truly live path — is a
-              separate item.
-            </p>
-          </Details>
+          <p className="mini-meta" style={{ marginBottom: 0 }}>
+            <strong>Near-live, not live.</strong> Read every ~{status.interval ?? "60s"}, jittered.
+            <AskIris topic="bgp.near-live-feed" label="How fresh this is" />
+          </p>
         </>
       )}
     </>
@@ -151,7 +148,7 @@ export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
       <Section
         id="updates-feed"
         title="Latest route changes"
-        sub="Near-live — one read interval behind, and the panel says so"
+        sub="Near-live — one read interval behind"
         updatedAt={at}
       >
         {body}

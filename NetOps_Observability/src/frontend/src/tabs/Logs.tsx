@@ -355,7 +355,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       // payoff of the fusion engine: app traffic named, not a raw 5-tuple.
       key: "app", header: "Application", width: 150, sortable: true, text: (l) => l.app,
       render: (l) => l.app
-        ? <span title={l.app} style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 12, fontWeight: 600, color: "var(--accent, #2563eb)" }}>{l.app.replace(/_/g, " · ")}</span>
+        ? <span title={l.app} style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 12.5, fontWeight: 600, color: "var(--accent, #2563eb)" }}>{l.app.replace(/_/g, " · ")}</span>
         : <span style={{ color: "var(--muted, #8a94a6)" }}>—</span>,
     },
     {
@@ -435,15 +435,18 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
 
       <div className="card">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-          <h2 style={{ margin: 0 }}>
-            {total !== null && total > lines.length
-              ? `Results — showing ${lines.length.toLocaleString()} of ${total.toLocaleString()} matched`
-              : `Results (${lines.length.toLocaleString()}${total !== null ? " — all matches" : ""})`}
-          </h2>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+            <h2 style={{ margin: 0 }}>Results</h2>
+            <span className="fact-line">
+              {total !== null && total > lines.length
+                ? `${lines.length.toLocaleString()} of ${total.toLocaleString()} matched`
+                : `${lines.length.toLocaleString()}${total !== null ? " · all matches" : ""}`}
+            </span>
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {selected.size > 0 && (
               <>
-                <span style={{ color: "var(--muted)", fontSize: 12 }}>{selected.size} selected →</span>
+                <span style={{ color: "var(--muted)", fontSize: 12.5 }}>{selected.size} selected →</span>
                 {EXPORT_FORMATS.map((f) => (
                   <button key={f.id} type="button" className="chip" disabled={exporting} onClick={() => exportSelected(f.id)} title={`Export ${selected.size} selected rows as ${f.label}`}>
                     {f.label}
@@ -455,7 +458,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
             )}
             {lines.length > 0 && (
               <>
-                <span style={{ color: "var(--muted)", fontSize: 12 }}>
+                <span style={{ color: "var(--muted)", fontSize: 12.5 }}>
                   Export all{total !== null ? ` (${total})` : ""}:
                 </span>
                 {EXPORT_FORMATS.map((f) => (
@@ -476,7 +479,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
           </p>
         )}
         {exportMsg && (
-          <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 6 }}>
+          <p style={{ color: "var(--muted)", fontSize: 12.5, marginTop: 6 }}>
             {exporting ? "⏳ " : ""}
             {exportMsg}
           </p>
@@ -510,7 +513,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
           </div>
         )}
         {total !== null && total > lines.length && !canLoadMore && lines.length > 0 && (
-          <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 8, textAlign: "center" }}>
+          <p style={{ color: "var(--muted)", fontSize: 12.5, marginTop: 8, textAlign: "center" }}>
             Interactive paging ends at {(10000).toLocaleString()} rows — use “Export all” above to get the
             full {total.toLocaleString()}-row result set.
           </p>
@@ -530,10 +533,10 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
 // pretty-printed (the value of having OpenSearch behind the search box).
 export function LogLineDetailBody({ line: l }: { line: { ts: string; source: string; level: string; message: string; index: string; raw: Record<string, any> } }) {
   const lbl = (s: string) => (
-    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>{s}</div>
+    <div style={{ fontSize: 12.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>{s}</div>
   );
   const row = (k: string, v: React.ReactNode) => (
-    <div style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}>
+    <div style={{ display: "flex", gap: 8, fontSize: 12.5, padding: "2px 0" }}>
       <span style={{ color: "var(--muted)", minWidth: 72 }}>{k}</span>
       <span style={{ wordBreak: "break-word" }}>{v}</span>
     </div>

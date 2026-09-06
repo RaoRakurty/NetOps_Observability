@@ -22,7 +22,8 @@ import "@xyflow/react/dist/style.css";
 import { api, type BgpAsPathGraph, type BgpGraphNode } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { NODE_H, NODE_W, edgeWidth, layoutAsPathGraph, nodeLabel, nodeSubLabel, pathLengthHint } from "./bgpDepth.model";
-import { Details, Section, SubBlock } from "./Section";
+import { Section, SubBlock } from "./Section";
+import AskIris from "../../components/AskIris";
 
 // ── node renderer ───────────────────────────────────────────────────────────
 
@@ -126,7 +127,7 @@ export function AsPathGraphPanel({ prefix, bare = false }: { prefix?: string; ba
     <>
       {!prefix && <div className="empty">Pick a prefix to see how the internet reaches it.</div>}
       {busy && <div className="empty">Drawing the path map…</div>}
-      {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
+      {err && <p className="fact-line fact-bad" role="alert">{err}</p>}
 
       {g && g.error && !g.nodes.length && (
         <div className="empty" style={{ textAlign: "left" }}>
@@ -170,21 +171,16 @@ export function AsPathGraphPanel({ prefix, bare = false }: { prefix?: string; ba
           </div>
 
           {(g?.edges_capped || g?.nodes_capped) && (
-            <p className="mini-meta" style={{ color: "var(--warn)" }}>
+            <p className="fact-line fact-warn">
               This graph is capped at {g?.max_edges} adjacencies{g?.nodes_capped ? " and its node budget" : ""} — the
-              strongest adjacencies are kept, so the trunk of the path is complete but the long tail of
-              single-peer edges is not drawn.
+              strongest are kept, the long tail is not drawn.
             </p>
           )}
-          <Details summary="How to read this map">
-            <p className="mini-meta" style={{ marginBottom: 0 }}>
-              Left to right: the network next to a route collector → the carriers in between →{" "}
-              <span style={{ color: "var(--accent)" }}>the origin</span> that announces this prefix. Line thickness is
-              how many observed paths cross that link — an observation count, not capacity. Your own watched networks
-              are outlined in <span style={{ color: "var(--ok)" }}>green</span>, and each one carries its registry
-              holder.
-            </p>
-          </Details>
+          <p className="mini-meta">
+            Left to right: collector, carriers, then{" "}
+            <span style={{ color: "var(--accent)" }}>the origin</span>.
+            <AskIris topic="bgp.path-map" label="How to read this map" />
+          </p>
         </>
       )}
     </>
@@ -196,7 +192,7 @@ export function AsPathGraphPanel({ prefix, bare = false }: { prefix?: string; ba
       <Section
         id="aspath-graph"
         title="Path map"
-        sub="AS paths from public route collectors to the origin"
+        sub="AS paths from public route collectors"
         updatedAt={at}
       >
         {body}

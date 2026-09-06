@@ -3,6 +3,7 @@ import { api } from "../services/api";
 import { operatorError } from "../lib/errors";
 import { encodeQR, qrPathData } from "../lib/qr";
 import Icon from "./Icon";
+import AskIris from "./AskIris";
 
 // TwoFactorCard — self-service two-factor enrolment, reachable from either
 // account menu. It follows ChangePasswordCard's shape (same modal body, same
@@ -22,6 +23,15 @@ import Icon from "./Icon";
 // SECRET HANDLING. The enrolment secret is rendered only during the enrolment
 // step, never logged, never placed in a URL, and dropped from component state
 // the moment activation succeeds.
+//
+// UI-WORDS SWEEP 5 (tracker 270). What a one-time code IS, what "managed by your
+// identity provider" means and the full recovery story are TEACHING: they live in
+// ai/skills/explain/auth.two-factor.md, auth.provider-managed-mfa.md and
+// auth.no-recovery-codes.md, behind the (i). What stays on the card is the
+// account's STATE (.fact-line — a state is not a lesson) and the ONE warning an
+// operator must read before enrolling: there are no recovery codes, and losing
+// the device costs an administrator reset. That consequence was shortened in
+// words, never in claim.
 
 type Status = { enabled: boolean; pending: boolean; local: boolean };
 
@@ -45,10 +55,7 @@ function EnrolmentQR({ uri }: { uri: string }) {
 
   if (!drawn) {
     return (
-      <p className="pw-sub">
-        This enrolment could not be drawn as a code — add the account to your authenticator with the
-        setup key below instead.
-      </p>
+      <p className="fact-line fact-warn">No code drawn. Use the setup key below.</p>
     );
   }
 
@@ -172,10 +179,10 @@ export default function TwoFactorCard({ onDone }: { onDone?: () => void } = {}) 
     <div className="pw-head">
       <span className="pw-head-icon"><Icon name="shield" size={18} /></span>
       <div>
-        <h2>Two-factor authentication</h2>
-        <p className="pw-sub">
-          A one-time code from an authenticator app, asked for after your password at sign-in.
-        </p>
+        <h2>
+          Two-factor authentication
+          <AskIris topic="auth.two-factor" label="Two-factor authentication" />
+        </h2>
       </div>
     </div>
   );
@@ -194,8 +201,8 @@ export default function TwoFactorCard({ onDone }: { onDone?: () => void } = {}) 
   // recovery codes to write down, so the sentence names the only real path.
   const recoveryNote = (
     <p className="pw-sub">
-      This platform issues no recovery codes. If the device holding your codes is lost, an
-      administrator resets two-factor for your account.
+      No recovery codes: an administrator resets two-factor if the device is lost.
+      <AskIris topic="auth.no-recovery-codes" label="No recovery codes" />
     </p>
   );
 
@@ -203,7 +210,7 @@ export default function TwoFactorCard({ onDone }: { onDone?: () => void } = {}) 
     return (
       <div className="card pw-card" aria-busy="true">
         {head}
-        <p className="pw-sub">Reading this account's two-factor state…</p>
+        <p className="fact-line">Reading two-factor state…</p>
       </div>
     );
   }
@@ -227,9 +234,9 @@ export default function TwoFactorCard({ onDone }: { onDone?: () => void } = {}) 
     return (
       <div className="card pw-card">
         {head}
-        <p className="pw-sub">
-          Two-factor authentication for this account is managed by your identity provider. It is
-          turned on and off where you sign in, not here.
+        <p className="fact-line">
+          Managed by your identity provider, not here.
+          <AskIris topic="auth.provider-managed-mfa" label="Managed by your identity provider" />
         </p>
         <div className="pw-actions">{closeButton}</div>
       </div>
@@ -245,9 +252,7 @@ export default function TwoFactorCard({ onDone }: { onDone?: () => void } = {}) 
         <form onSubmit={activate} className="pw-form">
           {enrolment ? (
             <>
-              <p className="pw-sub">
-                Add this account to your authenticator app, then enter the six-digit code it shows.
-              </p>
+              <p className="fact-line">Add this account to your authenticator app, then enter its code.</p>
               <EnrolmentQR uri={enrolment.uri} />
               <div className="pw-field">
                 <span className="pw-label" id="tfa-key-label">Setup key</span>
@@ -262,10 +267,7 @@ export default function TwoFactorCard({ onDone }: { onDone?: () => void } = {}) 
               </div>
             </>
           ) : (
-            <p className="pw-sub">
-              Enrolment for this account was started and not finished. Enter the six-digit code from
-              the authenticator you added, or start over for a new code to add.
-            </p>
+            <p className="fact-line">Enrolment was started and not finished. Enter the code, or start over.</p>
           )}
 
           <div className="pw-field">
@@ -305,16 +307,13 @@ export default function TwoFactorCard({ onDone }: { onDone?: () => void } = {}) 
     return (
       <div className="card pw-card">
         {head}
-        <p className="pw-sub">
-          <Icon name="check" size={14} /> Two-factor authentication is on for this account. Sign-in
-          asks for a code from your authenticator app.
+        <p className="fact-line">
+          <Icon name="check" size={14} /> Two-factor authentication is on. Sign-in asks for a code.
         </p>
         {recoveryNote}
         {turningOff ? (
           <form onSubmit={disable} className="pw-form">
-            <p className="pw-sub">
-              Turning it off needs a current code from your authenticator app.
-            </p>
+            <p className="fact-line">Turning it off needs a current code.</p>
             <div className="pw-field">
               <label className="pw-label" htmlFor="tfa-disable-code">Six-digit code</label>
               <div className="pw-input-wrap">
@@ -356,9 +355,7 @@ export default function TwoFactorCard({ onDone }: { onDone?: () => void } = {}) 
   return (
     <div className="card pw-card">
       {head}
-      <p className="pw-sub">
-        Two-factor authentication is off for this account. Sign-in asks for your password only.
-      </p>
+      <p className="fact-line">Two-factor authentication is off. Sign-in asks for your password only.</p>
       {recoveryNote}
       <div className="pw-actions">
         <button type="button" className="btn-accent" onClick={() => { void startSetup(); }} disabled={busy}>

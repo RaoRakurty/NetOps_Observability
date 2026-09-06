@@ -102,12 +102,15 @@ describe("Applications section", () => {
     // and the screen says what the bucket is, rather than leaving it bare
     expect(screen.getByText(/Traffic whose far end no naming source claimed/i)).toBeInTheDocument();
     expect(table.getByText("uncatalogued or internal")).toBeInTheDocument();
+    // UI-words sweep 5 (tracker 270): the rest of the lesson is behind the (i)
+    expect(screen.getByRole("button", { name: "Ask Iris about Unknown" })).toBeTruthy();
   });
 
   it("calls a legacy blank source NOT RESOLVED, never an unknown app", async () => {
     render(<ApplicationsSection q={q} filterKeys={[]} onDrill={noop} />);
     await waitFor(() => expect(screen.getByText("Source not resolved")).toBeInTheDocument());
     expect(screen.getByText(/only its far end is named/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask Iris about Source not resolved" })).toBeTruthy();
   });
 
   it("renders the coverage statement rather than hiding it", async () => {
@@ -115,14 +118,18 @@ describe("Applications section", () => {
     await waitFor(() => expect(screen.getByText(/busiest 200 source-to-destination pairs/i)).toBeInTheDocument());
     expect(screen.getByText(/not every flow/i)).toBeInTheDocument();
     expect(screen.getByText(/1,240 catalogued address ranges/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask Iris about Coverage" })).toBeTruthy();
   });
 
   it("says the filters do not narrow it when the filter bar is active", async () => {
     render(<ApplicationsSection q={q} filterKeys={["src", "device"]} onDrill={noop} />);
     await waitFor(() => expect(flowsApps).toHaveBeenCalled());
-    const caveat = screen.getByText(/source and device filter above/i);
+    const caveat = screen.getByText(/the filters above do not narrow these numbers/i);
     expect(caveat).toBeInTheDocument();
-    expect(caveat.textContent).toMatch(/do not narrow the numbers below/i);
+    // UI-words sweep 5 (tracker 270): the note is one short claim; WHICH fields
+    // are ignored is the tooltip on the same element, not a second sentence.
+    expect(caveat.getAttribute("title")).toMatch(/source and device/i);
+    expect(caveat.getAttribute("title")).toMatch(/direction toggle/i);
   });
 
   it("states the window-only scope even with no filters set", async () => {
@@ -164,7 +171,7 @@ describe("Services section", () => {
     // the server's own reason is shown, verbatim in substance
     expect(screen.getByText(/service catalog requires the PostgreSQL/i)).toBeInTheDocument();
     // and no table pretending the catalog is empty
-    expect(screen.queryByText("Services by measured volume")).not.toBeInTheDocument();
+    expect(screen.queryByText("Services by volume")).not.toBeInTheDocument();
   });
 
   it("renders an unattributed service as UNMEASURED, never as zero traffic", async () => {
@@ -181,6 +188,7 @@ describe("Services section", () => {
     expect(table.queryByText("0.0%")).not.toBeInTheDocument();
     expect(screen.getByText("no selector yet")).toBeInTheDocument();
     expect(screen.getByText(/No selector matches this service yet/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask Iris about Not measured" })).toBeTruthy();
   });
 
   it("keeps the measured service above the unmeasured group", async () => {
@@ -193,7 +201,9 @@ describe("Services section", () => {
   it("says the filters do not narrow it when the filter bar is active", async () => {
     render(<ServicesSection q={q} filterKeys={["dst"]} onDrill={noop} />);
     await waitFor(() => expect(flowsServices).toHaveBeenCalled());
-    expect(screen.getByText(/Services are rolled up for the whole time window/i)).toBeInTheDocument();
+    const caveat = screen.getByText(/Services: the filters above do not narrow these numbers/i);
+    expect(caveat).toBeInTheDocument();
+    expect(caveat.getAttribute("title")).toMatch(/destination/i);
   });
 
   it("owns a non-501 failure with its own operator sentence", async () => {
@@ -220,7 +230,7 @@ describe("the drill from an app/service row", () => {
     fireEvent.click(drills[0]);
 
     await waitFor(() =>
-      expect(screen.getByText("Top conversations (Initiator → Responder)")).toBeInTheDocument(),
+      expect(screen.getByText("Top conversations")).toBeInTheDocument(),
     );
     // the same window travelled with the switch
     await waitFor(() => expect(topTalkers).toHaveBeenCalled());
@@ -237,7 +247,7 @@ describe("the drill from an app/service row", () => {
     fireEvent.click(within(table).getAllByRole("button", { name: "Conversations for this window" })[0]);
 
     await waitFor(() =>
-      expect(screen.getByText("Top conversations (Initiator → Responder)")).toBeInTheDocument(),
+      expect(screen.getByText("Top conversations")).toBeInTheDocument(),
     );
   });
 });

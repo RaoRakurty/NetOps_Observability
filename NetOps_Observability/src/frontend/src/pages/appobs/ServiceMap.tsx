@@ -255,7 +255,7 @@ export default function ServiceMap({ ctl }: { ctl: CloudScopeControl }) {
   return (
     <div className="ao-stack">
       {/* mandatory honesty caption — meta verbatim, never re-counted client-side */}
-      <div className="ao-svcmap-cap" role="note" aria-label="Service map data provenance">
+      <div className="ao-svcmap-cap" role="note" aria-label="Service map provenance">
         <Chip label="observed traffic" tone="var(--good)" />
         <span>{l.window}</span>
         <span>·</span>

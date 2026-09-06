@@ -5,6 +5,12 @@
 // action to the outbox (ticketing never blocks correlation — the worker drains
 // it). Self-contained slot like RcaTimeImpact: fetches its own data, renders an
 // honest empty state, never invents a ticket that isn't there.
+//
+// UI-words sweep 5 (tracker 270): the ONE explanatory note on this card is the
+// empty state. Everything else it prints — the last-sync timestamp, the "queued"
+// acknowledgement and the action-history rows — is a STATED FACT the server or
+// the operator's own click produced, so it wears `.fact-line`, not `.rw-note`.
+// The word budget counts notes, and a timestamp is not a lesson.
 
 import { fmtDateTime } from "../../lib/time";
 import { useCallback, useEffect, useState } from "react";
@@ -62,8 +68,8 @@ export default function RcaTicketCard({ correlationId }: { correlationId: string
     }
   };
 
-  if (err) return <div className="rw-panel"><h3>External ticket</h3><div className="rw-note" role="status">Ticket status unavailable.</div></div>;
-  if (!data) return <div className="rw-panel"><h3>External ticket</h3><div className="rw-note" role="status">Loading ticket status…</div></div>;
+  if (err) return <div className="rw-panel"><h3>External ticket</h3><div className="fact-line" role="status">Ticket status unavailable.</div></div>;
+  if (!data) return <div className="rw-panel"><h3>External ticket</h3><div className="fact-line" role="status">Loading ticket status…</div></div>;
 
   const st: TicketStatus = data.status ?? { state: "not_created" };
   const created = st.state && st.state !== "not_created";
@@ -83,7 +89,7 @@ export default function RcaTicketCard({ correlationId }: { correlationId: string
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span className={`rw-pill ${ticketStateTone(st.state)}`}>{ticketStateLabel(st.state)}</span>
           </div>
-          <div className="rw-note">No external ticket has been opened for this RCA object yet.</div>
+          <div className="rw-note">No external ticket opened for this RCA yet.</div>
         </>
       ) : (
         <div style={{ display: "grid", gap: 8 }}>
@@ -95,8 +101,8 @@ export default function RcaTicketCard({ correlationId }: { correlationId: string
                   ? <a className="rw-value mono" href={d.url} target="_blank" rel="noreferrer" aria-label={`${d.ticket_number}, opens in new tab`} style={{ color: "var(--rw-blue)" }}>{d.ticket_number} <span aria-hidden="true">↗</span></a>
                   : <span className="rw-value mono">{d.ticket_number}</span>
               )}
-              {d.system && <span className="rw-note" style={{ margin: 0 }}>in {SYSTEM_LABEL[d.system] ?? d.system}</span>}
-              <span className="rw-note" style={{ margin: 0, marginLeft: "auto" }} title="last synced">{fmtWhen(d.last_synced_at)}</span>
+              {d.system && <span className="fact-line" style={{ margin: 0 }}>in {SYSTEM_LABEL[d.system] ?? d.system}</span>}
+              <span className="fact-line" style={{ margin: 0, marginLeft: "auto" }} title="last synced">{fmtWhen(d.last_synced_at)}</span>
             </div>
           ))}
         </div>
@@ -114,10 +120,10 @@ export default function RcaTicketCard({ correlationId }: { correlationId: string
               {busy ? "Queuing…" : created ? "Retry create" : "Create ticket"}
             </button>
           )}
-          {queued && <span className="rw-note" role="status" aria-live="polite" style={{ margin: 0 }}>{queued}</span>}
+          {queued && <span className="fact-line" role="status" aria-live="polite" style={{ margin: 0 }}>{queued}</span>}
         </div>
       )}
-      {!canWrite && queued && <div className="rw-note" role="status" aria-live="polite">{queued}</div>}
+      {!canWrite && queued && <div className="fact-line" role="status" aria-live="polite">{queued}</div>}
 
       {/* Action history — the compliance trail (most recent first). */}
       {audit.length > 0 && (
@@ -125,7 +131,7 @@ export default function RcaTicketCard({ correlationId }: { correlationId: string
           <div className="rw-key" style={{ marginBottom: 6 }}>History</div>
           <div style={{ display: "grid", gap: 4 }}>
             {audit.slice().reverse().slice(0, 6).map((a, i) => (
-              <div key={i} className="rw-note" style={{ margin: 0, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <div key={i} className="fact-line" style={{ margin: 0, display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <span style={{ fontFamily: "var(--rw-mono)" }}>{fmtWhen(a.at)}</span>
                 <span><b>{ticketActionLabel(a.action)}</b></span>
                 <span style={{ color: a.result === "ok" ? "var(--rw-green)" : a.result === "dead_letter" ? "var(--rw-red)" : "var(--rw-muted)" }}>

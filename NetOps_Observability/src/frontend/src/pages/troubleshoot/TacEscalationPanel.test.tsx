@@ -293,6 +293,9 @@ describe("classify", () => {
     expect(screen.getByText("nothing scored")).toBeInTheDocument();
     expect(screen.getByText(NOTHING_SCORED_NOTE)).toBeInTheDocument();
     expect(screen.getByText("No evidence row scored this class.")).toBeInTheDocument();
+    // The blanks and the list labels are STATED FACTS, not explanatory notes
+    // (sweep 5, tracker 270) — they carry `fact-line`, and the guard counts notes.
+    expect(screen.getByText("No evidence row scored this class.").className).toContain("fact-line");
   });
 });
 
@@ -445,6 +448,8 @@ describe("plan preview", () => {
     expect(screen.getByTestId("tac-no-plan"))
       .toHaveTextContent("There is no authored command set for Nokia SR Linux.");
     expect(screen.getByTestId("tac-paste")).toHaveTextContent(PASTE_INVITE);
+    // words (sweep 5, tracker 270): a card heading is three words at most.
+    expect(screen.getByRole("heading", { name: "Paste missing output" })).toBeInTheDocument();
   });
 
   it("renders the plan failure as an operator sentence", async () => {
@@ -607,6 +612,14 @@ describe("bundle", () => {
     expect(screen.getByText(/4.0 KB · full profile/)).toBeInTheDocument();
   });
 
+  // words (sweep 5, tracker 270). The section is named in two words; the list
+  // under it still carries every fact it did.
+  it("names the built-bundle list in three words or fewer", async () => {
+    await show(captured());
+    expect(screen.getByRole("heading", { name: "Built bundles" })).toBeInTheDocument();
+    expect(screen.queryByText("Bundles built for this incident")).toBeNull();
+  });
+
   it("says what did not happen when the download is refused", async () => {
     await show(captured());
     mocks.tacDownloadBundle.mockRejectedValue(new Error("409 Conflict: {\"error\":\"collect the evidence first\"}"));
@@ -664,6 +677,9 @@ describe("open the case", () => {
     expect((screen.getByLabelText("Case text") as HTMLTextAreaElement).value)
       .toBe("Problem statement for the vendor portal.");
     expect(screen.getByLabelText("Case text")).toHaveAttribute("readonly");
+    // words (sweep 5, tracker 270): the review heading keeps the connector and
+    // the "a person sends this" claim inside three words.
+    expect(screen.getByRole("heading", { name: /ServiceNow — review before sending/ })).toBeInTheDocument();
   });
 
   it("submits only on a person's press, with the edited fields", async () => {
@@ -699,9 +715,14 @@ describe("open the case", () => {
       .toHaveTextContent("Collect the evidence before opening a case.");
   });
 
+  // The honesty state keeps its CLAIM after the words sweep (tracker 270): no
+  // connector here, and the operator opens the case themselves. Only the word
+  // count moved — what a case connector IS is behind the (i).
   it("does not offer a connector that this deployment does not carry", async () => {
     await show(stateResponse({ state: stateWith(), connectors: [] }));
-    expect(screen.getByText(/No case connector is offered on this deployment/)).toBeInTheDocument();
+    expect(screen.getByText(/No case connector here/)).toBeInTheDocument();
+    expect(screen.getByText(/download the bundle and open the case/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask Iris about No case connector" })).toBeInTheDocument();
   });
 });
 

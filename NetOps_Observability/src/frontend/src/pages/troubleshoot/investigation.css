@@ -141,7 +141,6 @@
 .tsl-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tsl-k { font-weight: 650; }
 .tsl-v { color: var(--fg); }
-.tsl-note { color: var(--muted); font-size: 12.5px; }
 .tsl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); align-self: center; }
 .tsl-dot.good, .tsl-dot.healthy { background: var(--good, #22c55e); }
 .tsl-dot.bad, .tsl-dot.severe { background: var(--bad, #ef4444); }
@@ -189,7 +188,7 @@
 .tac-step { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
 .tac-step-h { margin: 0; font-size: 16px; font-weight: 650; }
 .tac-section { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-.tac-section-h { margin: 6px 0 0; font-size: 12.5px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.tac-section-h { margin: 6px 0 0; font-size: 12.5px; font-weight: 650; color: var(--muted); text-transform: none; letter-spacing: 0; }
 .tac-note { margin: 0; font-size: 13px; line-height: 1.5; }
 .tac-bad { margin: 0; color: var(--bad, #ef4444); font-size: 13px; line-height: 1.5; }
 .tac-id, .tac-cmd { font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; }
@@ -231,7 +230,7 @@
 .tac-plan-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .tac-plan-table th {
   text-align: left; font-size: 12.5px; font-weight: 650; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .04em;
+  text-transform: none; letter-spacing: 0;
   padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
 }
 .tac-plan-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: baseline; }
@@ -328,7 +327,8 @@
 .tac-review-cmd { flex: 1 1 320px; min-width: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; }
 .tac-review-actions { display: inline-flex; gap: 4px; flex: 0 0 auto; }
 .tac-verdict { flex: 1 1 100%; }
-.tac-family { background: var(--danger, #ef4444); color: #fff; text-transform: uppercase; letter-spacing: .04em; }
+.tac-family { background: var(--danger, #ef4444); color: #fff; text-transform: none; letter-spacing: 0; }
+.tac-family::first-letter { text-transform: uppercase; }
 .tac-tpl-row { align-items: flex-end; gap: 12px; }
 .tac-tpl-save { margin-top: 10px; }
 .tac-tpl-save > summary { cursor: pointer; font-weight: 600; }

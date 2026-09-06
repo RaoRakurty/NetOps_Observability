@@ -10,7 +10,8 @@ import {
   api, type ReliabilityRollupResp, type ChronicOffender, type OwnerDomainStat, type ReliabilityQuery,
   type IncidentTimeMetricRow,
 } from "../services/api";
-import { Segmented, InfoTip } from "../components/ui";
+import { Segmented } from "../components/ui";
+import AskIris from "../components/AskIris";
 import RcaFeedbackTile from "../components/rca/RcaFeedbackTile";
 import { chartBase, axisStyle, paletteColor } from "../theme/charts";
 import { operatorError } from "../lib/errors";
@@ -42,17 +43,37 @@ const plural = (n: number, word: string): string => `${n.toLocaleString()} ${wor
 type CardTone = "hero" | "amber" | "good" | "muted" | "";
 // A card with an explicit unavailable state: the value reads a reason ("Not measured")
 // and the subtext explains WHY ("Recovery evidence not connected") in a muted style.
-function Card({ label, sub, value, tone = "", tip, unavailable, unavailableSub }: {
-  label: string; sub: string; value: ReactNode; tone?: CardTone; tip: string;
+//
+// WORDS (sweep 5, tracker 270). The card used to carry a 30-to-45-word tooltip
+// DEFINING its metric — what MTTI is, why P90 exposes the pain a median hides,
+// when a recovery time is engine-inferred rather than measured. A card states a
+// number; it does not teach one. Every definition is an authored file under
+// ai/skills/explain/ now, reached from the `(i)` that sits where the tip did.
+function Card({ label, sub, value, tone = "", topic, unavailable, unavailableSub }: {
+  label: string; sub: string; value: ReactNode; tone?: CardTone;
+  /** Authored explain topic for this metric's definition. */
+  topic: string;
   unavailable?: string; unavailableSub?: string;
 }) {
   const muted = !!unavailable;
   return (
     <div className={`rsc-card rsc-card-${muted ? "muted" : tone}`}>
-      <div className="rsc-card-label">{label}<InfoTip label="i">{tip}</InfoTip></div>
+      <div className="rsc-card-label">{label}<AskIris topic={topic} label={label} /></div>
       <div className="rsc-card-val">{muted ? <span className="rsc-card-na">{unavailable}</span> : value}</div>
       <div className="rsc-card-sub">{muted ? (unavailableSub ?? sub) : sub}</div>
     </div>
+  );
+}
+
+// The action an empty state used to spell out in prose ("Expand to 90d, or
+// include more incidents"). An empty state gets a short claim plus ONE control;
+// on the 90-day window there is nothing left to widen to, so it renders nothing.
+function WidenWindow({ since, onWiden }: { since: string; onWiden: (s: string) => void }) {
+  if (since === "7776000") return null;
+  return (
+    <button type="button" className="btn sm" style={{ marginLeft: 10 }} onClick={() => onWiden("7776000")}>
+      Expand to 90d
+    </button>
   );
 }
 
@@ -134,7 +155,7 @@ export default function ReliabilityScorecard() {
   const recoveryMissing = coverage.recovery !== "connected";
   const ticketingMissing = coverage.ticketing !== "connected";
 
-  // Lifecycle Time Breakdown (p50/p90 by phase). Detect is per-incident only; the fleet
+  // Lifecycle time breakdown (p50/p90 by phase). Detect is per-incident only; the fleet
   // breakdown starts at Correlate. Missing phases render as gaps (not zero bars).
   const breakdownOption = useMemo(() => {
     const phases = [["ttc", "Correlate"], ["tti", "Isolate"], ["ttr_recovery", "Recover"], ["ttr_resolution", "Resolve"]];
@@ -193,17 +214,15 @@ export default function ReliabilityScorecard() {
           <div className="rsc-title-row">
             <h1 className="rsc-title">NOC Recovery Scorecard</h1>
             {readiness && (
-              <span className={`rsc-readiness rsc-rd-${readiness.state.replace(/\s/g, "").toLowerCase()}`}
-                title={`Recovery Readiness ${readiness.score}/100 — a deterministic score from repeat rate, evidence coverage, long-tail isolation, and chronic offenders.`}>
+              <span className={`rsc-readiness rsc-rd-${readiness.state.replace(/\s/g, "").toLowerCase()}`}>
                 <span className="rsc-rd-state">Recovery Readiness: {readiness.state}</span>
                 <span className="rsc-rd-score">{readiness.score}/100</span>
                 <span className="rsc-rd-drag">Primary drag: {readiness.drag}</span>
+                <AskIris topic="rsc.recovery-readiness" label="Recovery Readiness" />
               </span>
             )}
           </div>
-          <p className="rsc-sub">Where incident time is spent — detection, correlation, isolation, recovery, and repeat failures.
-            <InfoTip label="MTTI"> MTTI (Mean/Median Time To Isolate) is Correlix's hero metric: time from incident detection to an evidence-backed root domain, seam, and owner. Not a universal standard — it's what shrinks the NOC investigation window. </InfoTip>
-          </p>
+          <p className="rsc-sub">Where incident time is spent.</p>
         </div>
         <div className="rsc-filters">
           <Segmented value={since} onChange={setSince} options={WINDOWS} ariaLabel="Window" />
@@ -240,20 +259,20 @@ export default function ReliabilityScorecard() {
 
           {/* Stat cards — hero on MTTI / P90 / delay / repeat; muted on unavailable. */}
           <div className="rsc-cards">
-            <Card label="Customer-impacting incidents" sub="in selected window" value={r.incident_count.toLocaleString()} tip="Customer-impacting incidents in the selected window. Internal/platform self-monitoring is excluded unless explicitly included." />
-            <Card label="Median root-domain isolation time" sub="MTTI p50" tone="hero" value={fmtDur(m("tti")?.p50_ms)} unavailable={has("tti") ? undefined : "Insufficient evidence"} unavailableSub="Not enough isolated incidents" tip="Median Time To Isolate — time from detection to evidence-backed root-domain/seam/owner isolation. P50 = median (normal case)." />
-            <Card label="P90 root-domain isolation time" sub="MTTI p90" tone="hero" value={fmtDur(m("tti")?.p90_ms)} unavailable={has("tti") ? undefined : "Insufficient evidence"} unavailableSub="Not enough isolated incidents" tip="P90 = long-tail isolation; 90% of incidents were isolated faster than this. Exposes the NOC pain that medians hide." />
-            <Card label="Median correlation time" sub="MTTC p50" value={fmtDur(m("ttc")?.p50_ms)} unavailable={has("ttc") ? undefined : "Insufficient evidence"} tip="Median Time To Correlate — time to group related signals into one incident. In the current engine correlation and isolation are grounded together, so MTTC tracks closely with isolation." />
-            <Card label="Median recovery time" sub="Recovery p50" value={fmtDur(m("ttr_recovery")?.p50_ms)} unavailable={recoveryMissing ? "Not measured" : undefined} unavailableSub="Recovery evidence not connected" tip="Median time until service health recovered. Where no ITSM recovery signal is linked, recovery is engine-inferred — the incident window closed with no further symptoms — and is shown as an approximation, not a measurement. Unavailable only when the window carries neither." />
-            <Card label="Median ticket closure time" sub="Resolution p50" value={fmtDur(m("ttr_resolution")?.p50_ms)} unavailable={ticketingMissing ? "Not available" : undefined} unavailableSub="ITSM workflow required" tip="Median time until ticket/workflow closure. Requires ServiceNow, Jira, PagerDuty, or operator workflow timestamps." />
-            <Card label="Repeat failure interval" sub="MTBF" value={fmtDur(r.mtbf_ms)} unavailable={r.mtbf_ms > 0 ? undefined : "No repeats yet"} tip="Mean Time Between Failures — average time between repeat incidents for the same object or domain." />
-            <Card label="Repeat-affected incidents" sub="Repeat rate" tone={r.repeat_incident_rate > 0.3 ? "amber" : "hero"} value={`${Math.round(r.repeat_incident_rate * 100)}%`} tip="Percentage of incidents associated with an object, path, device, or domain that has failed more than once in this window." />
-            <Card label="Top time-loss driver" sub="lifecycle phase" tone="amber" value={delayLabel(r.top_time_loss_phase)} tip="The lifecycle phase causing the most accumulated operational delay across the window." />
+            <Card label="Customer-impacting incidents" sub="in selected window" value={r.incident_count.toLocaleString()} topic="rsc.customer-impacting" />
+            <Card label="Median root-domain isolation time" sub="MTTI p50" tone="hero" value={fmtDur(m("tti")?.p50_ms)} unavailable={has("tti") ? undefined : "Insufficient evidence"} unavailableSub="Not enough isolated incidents" topic="rsc.mtti" />
+            <Card label="P90 root-domain isolation time" sub="MTTI p90" tone="hero" value={fmtDur(m("tti")?.p90_ms)} unavailable={has("tti") ? undefined : "Insufficient evidence"} unavailableSub="Not enough isolated incidents" topic="rsc.mtti-p90" />
+            <Card label="Median correlation time" sub="MTTC p50" value={fmtDur(m("ttc")?.p50_ms)} unavailable={has("ttc") ? undefined : "Insufficient evidence"} topic="rsc.mttc" />
+            <Card label="Median recovery time" sub="Recovery p50" value={fmtDur(m("ttr_recovery")?.p50_ms)} unavailable={recoveryMissing ? "Not measured" : undefined} unavailableSub="Recovery evidence not connected" topic="rsc.recovery-time" />
+            <Card label="Median ticket closure time" sub="Resolution p50" value={fmtDur(m("ttr_resolution")?.p50_ms)} unavailable={ticketingMissing ? "Not available" : undefined} unavailableSub="ITSM workflow required" topic="rsc.closure-time" />
+            <Card label="Repeat failure interval" sub="MTBF" value={fmtDur(r.mtbf_ms)} unavailable={r.mtbf_ms > 0 ? undefined : "No repeats yet"} topic="rsc.mtbf" />
+            <Card label="Repeat-affected incidents" sub="Repeat rate" tone={r.repeat_incident_rate > 0.3 ? "amber" : "hero"} value={`${Math.round(r.repeat_incident_rate * 100)}%`} topic="rsc.repeat-rate" />
+            <Card label="Top time-loss driver" sub="lifecycle phase" tone="amber" value={delayLabel(r.top_time_loss_phase)} topic="rsc.time-loss-driver" />
           </div>
 
-          {/* Owner Domain Breakdown — where the pain lands. */}
+          {/* Owner domains — where the pain lands. */}
           <div className="rsc-panel">
-            <div className="rsc-panel-title">Owner Domain Breakdown — where the pain lands</div>
+            <h2 className="rsc-panel-title">Owner domains</h2>
             <table className="rsc-table">
               <thead><tr><th>Owner domain</th><th className="num">Incidents</th><th className="num">MTTI p90</th><th className="num">Recovery p90</th><th className="num">Repeat</th><th>Top time-loss driver</th></tr></thead>
               <tbody>
@@ -269,24 +288,24 @@ export default function ReliabilityScorecard() {
                 ))}
               </tbody>
             </table>
-            {owner === "isp" && <div className="rsc-hint">Provider-owned incidents are useful for carrier escalation and SLA / vendor review.</div>}
+            {owner === "isp" && <div className="rsc-hint">Use for carrier escalation and SLA review.</div>}
           </div>
 
           <div className="rsc-grid">
             <div className="rsc-panel rsc-chart">
-              <div className="rsc-panel-title">Lifecycle Time Breakdown — where incident time is spent (p50 vs p90)</div>
+              <h2 className="rsc-panel-title">Lifecycle time breakdown</h2>
               {has("tti") || has("ttc")
                 ? <>
                     <ReactECharts option={breakdownOption} style={{ height: 240 }} notMerge lazyUpdate />
                     {(recoveryMissing || ticketingMissing) && (
-                      <div className="rsc-chart-note">Recovery and ticket-closure timing are unavailable until recovery / ITSM evidence is connected.</div>
+                      <div className="rsc-chart-note">Recovery and closure timing await ITSM evidence.</div>
                     )}
                   </>
-                : <div className="rsc-empty">Not enough isolated incidents in this window. Expand to 90d, or include more incidents.</div>}
+                : <div className="rsc-empty">Not enough isolated incidents yet.<WidenWindow since={since} onWiden={setSince} /></div>}
             </div>
 
             <div className="rsc-panel">
-              <div className="rsc-panel-title">Recurring Failure Sources — what keeps coming back</div>
+              <h2 className="rsc-panel-title">Recurring failure sources</h2>
               {offenders.length === 0 ? (
                 <div className="rsc-empty">No recurring objects in this window.</div>
               ) : (
@@ -314,7 +333,7 @@ export default function ReliabilityScorecard() {
 
           {/* MTTI trend — clearer, with an honest empty state. */}
           <div className="rsc-panel rsc-chart">
-            <div className="rsc-panel-title">Isolation trend — MTTI p50 / p90 over time</div>
+            <h2 className="rsc-panel-title">Isolation trend</h2>
             {(trend?.x.length ?? 0) > 1 ? (
               <ReactECharts style={{ height: 200 }} notMerge lazyUpdate option={{
                 grid: { left: 8, right: 12, top: 28, bottom: 22, containLabel: true },
@@ -327,15 +346,16 @@ export default function ReliabilityScorecard() {
                   { name: "MTTI p90", type: "line", smooth: true, data: trend!.tti90, itemStyle: { color: "#a99bff" }, lineStyle: { width: 1, type: "dashed" } },
                 ],
               }} />
-            ) : <div className="rsc-empty">Not enough historical buckets to show a trend. Expand to 90d or ingest more incidents.</div>}
+            ) : <div className="rsc-empty">Not enough history for a trend.<WidenWindow since={since} onWiden={setSince} /></div>}
           </div>
 
-          {/* Honest, enterprise-worded footnote (info, not a warning). */}
+          {/* What this window covers — a STATED SCOPE (what was counted, and the
+              scan cap when one applied). What the two clocks MEAN left the page:
+              ai/skills/explain/rsc.investigation-clock.md answers it. */}
           <div className="rsc-note">
             Showing {includeInternal ? "all events including internal/platform self-monitoring" : "customer-impacting incidents only"}.
-            {!includeInternal && " Internal/platform events can be included explicitly."}
-            {data!.capped && ` Large windows use the most recent ${data!.scan_cap.toLocaleString()} incidents.`}
-            {" "}This dashboard separates the investigation clock from the repair clock: how fast incidents were detected, correlated, and isolated — then where recovery or resolution is waiting on owner action, provider repair, or workflow evidence.
+            {data!.capped && ` Most recent ${data!.scan_cap.toLocaleString()} incidents.`}
+            <AskIris topic="rsc.investigation-clock" label="Investigation and repair clocks" />
           </div>
         </>
       )}
@@ -345,13 +365,13 @@ export default function ReliabilityScorecard() {
           rollup block: it owns its own read, so neither panel can blank the other.
           An unmeasured bucket is a gap with a stated reason, never a zero. */}
       <div className="rsc-panel rsc-chart">
-        <div className="rsc-panel-title">Detection and repair trend — MTTD and MTTR over time (median)</div>
+        <h2 className="rsc-panel-title">Detection and repair trend</h2>
         {snapErr ? (
           <div className="rsc-empty">{snapErr}</div>
         ) : snapshots === null ? (
           <div className="rsc-empty">Loading recorded phase timings…</div>
         ) : phaseTrend.incidentCount === 0 ? (
-          <div className="rsc-empty">Nothing recorded in this window yet — phase timings appear once incidents are analyzed.</div>
+          <div className="rsc-empty">Nothing recorded in this window yet.<AskIris topic="rsc.phase-timings" label="Phase timings" /></div>
         ) : !phaseTrendMeasured ? (
           <div className="rsc-empty">
             Not measured in this window: none of the {plural(phaseTrend.incidentCount, "incident")} completed

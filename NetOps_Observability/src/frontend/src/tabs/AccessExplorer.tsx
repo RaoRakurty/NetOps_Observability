@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api, AccessExplanation } from "../services/api";
 import { StatStrip, Stat, Skeleton } from "../components/ui";
 import Icon from "../components/Icon";
+import AskIris from "../components/AskIris";
 
 // AccessExplorer — the L3 "Explain" view. Type a person (or service/agent) and
 // see exactly what they can reach and WHY: every tenant they can act in, traced
@@ -28,7 +29,10 @@ export default function AccessExplorer() {
     <>
       <div className="admin-head">
         <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>Access Explorer</h2>
-        <p className="admin-sub">See what a person or service can reach — and the exact grant that lets them. Answers "why does this account have this access?"</p>
+        <p className="admin-sub">
+          What this account reaches, and the grant behind it.
+          <AskIris topic="access.explorer" label="Access Explorer" />
+        </p>
       </div>
 
       <div className="card">
@@ -46,7 +50,7 @@ export default function AccessExplorer() {
             {busy ? "Resolving…" : "Explain access"}
           </button>
         </div>
-        {err && <p style={{ color: "var(--bad)", fontSize: 12 }}>{err}</p>}
+        {err && <p style={{ color: "var(--bad)", fontSize: 12.5 }}>{err}</p>}
       </div>
 
       {exp && (
@@ -81,7 +85,7 @@ export default function AccessExplorer() {
                   {reaches.map((r) => (
                     <tr key={r.tenant_id}>
                       <td style={{ fontWeight: 600 }}>{r.tenant_name}</td>
-                      <td style={{ color: "var(--muted)", fontSize: 12 }}>{r.org_name}</td>
+                      <td style={{ color: "var(--muted)", fontSize: 12.5 }}>{r.org_name}</td>
                       <td>
                         {r.granted_by.map((g, i) => (
                           <span key={i} className="badge" style={{ marginRight: 6, color: g.effect === "deny" ? "var(--bad)" : undefined }}
@@ -99,7 +103,10 @@ export default function AccessExplorer() {
           </div>
 
           <div className="card" style={{ paddingTop: 8 }}>
-            <div className="admin-card-head"><h2>All bindings</h2></div>
+            <div className="admin-card-head">
+              <h2>All bindings</h2>
+              <AskIris topic="access.bindings" label="All bindings" />
+            </div>
             {bindings.length === 0 ? (
               <div className="empty">No bindings.</div>
             ) : (
@@ -117,10 +124,10 @@ export default function AccessExplorer() {
                   {bindings.map((b) => (
                     <tr key={b.id}>
                       <td><span className="badge">{b.role_id}</span></td>
-                      <td style={{ color: "var(--muted)", fontSize: 12 }}>{b.scope_id}</td>
+                      <td style={{ color: "var(--muted)", fontSize: 12.5 }}>{b.scope_id}</td>
                       <td>{b.effect === "deny" ? <span style={{ color: "var(--bad)" }}>Deny</span> : "Allow"}</td>
-                      <td style={{ color: "var(--muted)", fontSize: 12 }}>{b.granted_by || "—"}</td>
-                      <td style={{ color: "var(--muted)", fontSize: 12 }}>
+                      <td style={{ color: "var(--muted)", fontSize: 12.5 }}>{b.granted_by || "—"}</td>
+                      <td style={{ color: "var(--muted)", fontSize: 12.5 }}>
                         {b.expires_at ? <span><Icon name="alerts" size={11} /> expires {fmtDateTime(b.expires_at)}</span> : (b.reason || "—")}
                       </td>
                     </tr>

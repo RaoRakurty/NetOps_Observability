@@ -253,7 +253,7 @@ export function DiscoveryCard() {
             autoComplete="new-password"
           />
           <span className="disc-note">
-            Tried per address in order until one answers. Stored encrypted, never shown again.
+            Tried in order until one answers. Stored encrypted, never shown again.
           </span>
         </label>
       </div>
@@ -348,12 +348,12 @@ export default function Collectors() {
         <div className="stat s-accent">
           <span className="stat-label">Collectors</span>
           <span className="stat-value">{items.length}</span>
-          <span className="stat-sub">registered</span>
+          <span className="stat-foot">registered</span>
         </div>
         <div className={`stat ${enabled.length ? "s-good" : "s-muted"}`}>
           <span className="stat-label">Enabled</span>
           <span className="stat-value">{enabled.length}</span>
-          <span className="stat-sub">of {items.length}</span>
+          <span className="stat-foot">of {items.length}</span>
         </div>
         <div
           className={`stat ${
@@ -366,7 +366,7 @@ export default function Collectors() {
         >
           <span className="stat-label">Healthy</span>
           <span className="stat-value">{healthy}</span>
-          <span className="stat-sub">of {enabled.length} enabled</span>
+          <span className="stat-foot">of {enabled.length} enabled</span>
         </div>
         <div className={`stat ${reachAccent}`}>
           <span className="stat-label">Targets reachable</span>
@@ -376,7 +376,7 @@ export default function Collectors() {
               /{totalTargets}
             </span>
           </span>
-          <span className="stat-sub">across all collectors</span>
+          <span className="stat-foot">across all collectors</span>
         </div>
       </div>
 

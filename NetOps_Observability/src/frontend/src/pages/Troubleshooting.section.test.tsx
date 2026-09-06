@@ -171,7 +171,11 @@ describe("the section switch", () => {
     await show("#/investigate/troubleshooting");
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Collection pipeline" })); });
     expect(screen.getByText("Monitored devices")).toBeInTheDocument();
-    expect(screen.getByText(/legacy collection-pipeline board/i)).toBeInTheDocument();
+    // The board still says what it is (sweep 5, tracker 270) — only the words
+    // that TAUGHT why it exists moved behind the (i).
+    expect(screen.getByText(/Legacy board/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask Iris about Collection pipeline board" })).toBeInTheDocument();
+    expect(screen.queryByText(/answers one question/i)).toBeNull();
     expect(screen.queryByRole("heading", { name: "What's wrong?" })).toBeNull();
   });
 

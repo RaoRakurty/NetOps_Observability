@@ -190,10 +190,16 @@ export function scanWordBudget(source: string): Breach[] {
 // 312 breaches), and sweep 3 (Administration · Licence · Registries · Cloud
 // ingest · Platform tools) removed 6 more, and sweep 4 (Topology · WAN · Wireless
 // · Device detail · Routing protocols · Path trace · New monitor) removed 8 more,
-// leaving 48 files and 202 breaches. The number is that file's breach count, so the whole
-// backlog is visible in one diff and each sweep is a deletion from this list.
-// Sweep order and the "done" definition are in the design doc; a swept file
-// loses its line here.
+// leaving 48 files and 202 breaches. Sweep 5 removed the other 47 — BGP, the RCA
+// workspace, the account and tenant gates, Reports, the reliability scorecard,
+// the legacy troubleshooting board, TAC, the tabs (flows, log search,
+// correlations, collectors, credentials, the Iris drawer), device inventory,
+// telemetry coverage and the app-observability pages — so ONE file is left:
+// pages/iris/Knowledge.tsx, which was being rewritten in another change while
+// sweep 5 ran and is the next (and last) sweep. The number is that file's breach
+// count, so the whole backlog is visible in one diff and each sweep is a
+// deletion from this list. Sweep order and the "done" definition are in the
+// design doc; a swept file loses its line here.
 export const ALLOW: Readonly<Record<string, number>> = Object.freeze(
   JSON.parse(readFileSync(join(SRC, "wordBudget.allow.json"), "utf-8")) as Record<string, number>,
 );
@@ -264,9 +270,11 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
 
   // Sweeps 1 (Dashboard/Command Center · Operations · Alerts), 2 (Security ·
   // Data Protection), 3 (Administration · Licence · Registries · Cloud ingest ·
-  // Platform tools) and 4 (Topology · WAN · Wireless) are DONE, so these files
-  // must never reappear in the debt list — the allowlist may not grow a new entry
-  // for one, and its breach count must stay zero.
+  // Platform tools), 4 (Topology · WAN · Wireless) and 5 (BGP · RCA workspace ·
+  // Reports · reliability scorecard · troubleshooting · TAC · the tabs · device
+  // inventory · telemetry) are DONE, so these files must never reappear in the
+  // debt list — the allowlist may not grow a new entry for one, and its breach
+  // count must stay zero.
   it.each([
     "components/noc.tsx",
     "pages/CommandCenter.tsx",
@@ -343,6 +351,61 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     "pages/BgpOspf.tsx",
     "pages/NetworkPath.tsx",
     "pages/NewMonitor.tsx",
+    // sweep 5 — everything that was left: the BGP surfaces, the RCA workspace and
+    // the account/tenant gates, Reports, the reliability scorecard, the legacy
+    // troubleshooting board and the TAC/investigation panels, the tabs (flows,
+    // log search, correlations, collectors, SNMP credentials, source of truth,
+    // transport security, tunnels, access explorer, the Iris drawer), device
+    // inventory and geomap, device monitoring, NMS integrations, telemetry
+    // coverage, the app-observability pages and the shared panel libraries.
+    "pages/BgpOps.tsx",
+    "pages/bgp/AlertPolicyPanel.tsx",
+    "pages/bgp/AsPathGraphPanel.tsx",
+    "pages/bgp/AspaCard.tsx",
+    "pages/bgp/BogonsPanel.tsx",
+    "pages/bgp/GeofeedPanel.tsx",
+    "pages/bgp/LiveFeedPanel.tsx",
+    "pages/bgp/PeersPanel.tsx",
+    "pages/bgp/PrefixesPanel.tsx",
+    "pages/bgp/RpkiPanel.tsx",
+    "components/TenantGate.tsx",
+    "components/TwoFactorCard.tsx",
+    "components/rca/RcaAskAi.tsx",
+    "components/rca/RcaPathCausality.tsx",
+    "components/rca/RcaTicketCard.tsx",
+    "components/rca/RcaWorkspace.tsx",
+    "components/rca/rcaCase.ts",
+    "pages/Reports.tsx",
+    "pages/ReliabilityScorecard.tsx",
+    "pages/Troubleshooting.tsx",
+    "pages/troubleshoot/TacEscalationPanel.tsx",
+    "pages/troubleshoot/InvestigationLanes.tsx",
+    "tabs/AccessExplorer.tsx",
+    "tabs/Collectors.tsx",
+    "tabs/Correlations.tsx",
+    "tabs/Flows.tsx",
+    "tabs/flowsAppViews.ts",
+    "tabs/Logs.tsx",
+    "tabs/Opsis.tsx",
+    "tabs/SnmpCredentials.tsx",
+    "tabs/SourceOfTruth.tsx",
+    "tabs/TransportSecurity.tsx",
+    "tabs/Tunnels.tsx",
+    "pages/CloudLogs.tsx",
+    "pages/DemoShowcase.tsx",
+    "pages/DeviceGeomap.tsx",
+    "pages/DeviceMonitoring.tsx",
+    "pages/NmsIntegrations.tsx",
+    "pages/appobs/AppDetail.tsx",
+    "pages/appobs/ConnectorWizard.tsx",
+    "pages/appobs/ServiceMap.tsx",
+    "pages/config/DeviceConfigPanel.tsx",
+    "pages/demoPanels.tsx",
+    "pages/device/VrfInterfaces.tsx",
+    "pages/igp/IgpAdjacencies.tsx",
+    "pages/panels.tsx",
+    "pages/telemetry/TelemetryCoverage.tsx",
+    "pages/telemetry/coverageModel.ts",
   ])("%s stays swept", (label) => {
     expect(ALLOW[label], `${label} is in a completed sweep and may not carry budget debt`).toBeUndefined();
     expect(counted.get(label)?.map((b) => fmtBreach(label, b)) ?? [], `${label} regressed`).toEqual([]);

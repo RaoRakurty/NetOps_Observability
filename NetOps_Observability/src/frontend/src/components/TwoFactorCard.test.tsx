@@ -10,10 +10,15 @@
 //      gone from the DOM the moment activation succeeds.
 //   3. THE QR IS DRAWN, NOT INJECTED. Real <svg>/<path> elements, and the source
 //      may not contain dangerouslySetInnerHTML at all (CLAUDE.md §15, LLM02).
-//   4. THE COPY IS HONEST. A federated account gets an explanation and no
-//      controls; a status read that fails gets an operator sentence, not the
-//      thrown envelope; and the card states that there are NO recovery codes,
-//      because the platform issues none.
+//   4. THE COPY IS HONEST. A federated account is told its provider owns the
+//      factor and gets no controls; a status read that fails gets an operator
+//      sentence, not the thrown envelope; and the card states that there are NO
+//      recovery codes, because the platform issues none.
+//   5. THE UI-WORDS SWEEP DID NOT COST A CLAIM (tracker 270). The teaching moved
+//      to ai/skills/explain/auth.two-factor.md, auth.no-recovery-codes.md and
+//      auth.provider-managed-mfa.md behind the (i), so every assertion below
+//      pins the SHORT claim AND the "Ask Iris about …" button that carries the
+//      rest. A state that quietly lost its (i) is a promise withdrawn.
 //
 // The route each control uses is asserted twice over: the card calls the typed
 // helper, and the helper is checked against the path it posts to in
@@ -60,7 +65,7 @@ afterEach(cleanup);
 async function open() {
   const view = render(<TwoFactorCard />);
   await waitFor(() => expect(mockApi.mfaStatus).toHaveBeenCalled());
-  await waitFor(() => expect(screen.queryByText(/Reading this account/i)).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/Reading two-factor state/i)).toBeNull());
   return view;
 }
 
@@ -76,7 +81,9 @@ describe("TwoFactorCard — honest states", () => {
   it("reads the status once on open and says the factor is off", async () => {
     await open();
     expect(mockApi.mfaStatus).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/two-factor authentication is off for this account/i)).toBeTruthy();
+    expect(screen.getByText(/two-factor authentication is off\. Sign-in asks for your password only\./i)).toBeTruthy();
+    // The definition of a one-time code left the card; the (i) must carry it.
+    expect(screen.getByRole("button", { name: "Ask Iris about Two-factor authentication" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Set up" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /turn off/i })).toBeNull();
   });
@@ -84,7 +91,8 @@ describe("TwoFactorCard — honest states", () => {
   it("a federated account is told its provider owns the factor, and gets no controls", async () => {
     mockApi.mfaStatus.mockResolvedValue(status({ local: false }));
     const { container } = await open();
-    expect(screen.getByText(/managed by your identity provider/i)).toBeTruthy();
+    expect(screen.getByText(/managed by your identity provider, not here/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about Managed by your identity provider" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Set up" })).toBeNull();
     expect(screen.queryByRole("button", { name: /turn off/i })).toBeNull();
     expect(container.querySelector("input")).toBeNull();
@@ -119,7 +127,7 @@ describe("TwoFactorCard — honest states", () => {
   it("an account with the factor on says so and asks for a code before removing it", async () => {
     mockApi.mfaStatus.mockResolvedValue(status({ enabled: true }));
     await open();
-    expect(screen.getByText(/two-factor authentication is on for this account/i)).toBeTruthy();
+    expect(screen.getByText(/two-factor authentication is on\. Sign-in asks for a code\./i)).toBeTruthy();
     expect(screen.queryByLabelText(/six-digit code/i)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
     expect(screen.getByLabelText(/six-digit code/i)).toBeTruthy();
@@ -128,8 +136,12 @@ describe("TwoFactorCard — honest states", () => {
 
   it("states that there are no recovery codes and names the real recovery path", async () => {
     await open();
-    const note = screen.getByText(/issues no recovery codes/i);
+    // Shortened by the ui-words sweep, but the CONSEQUENCE is intact: no codes
+    // exist, and losing the device costs an administrator reset.
+    const note = screen.getByText(/no recovery codes/i);
     expect(note.textContent).toMatch(/an administrator resets two-factor/i);
+    expect(note.textContent).toMatch(/if the device is lost/i);
+    expect(screen.getByRole("button", { name: "Ask Iris about No recovery codes" })).toBeTruthy();
   });
 });
 
@@ -159,7 +171,7 @@ describe("TwoFactorCard — each control calls its own route", () => {
 
     await waitFor(() => expect(mockApi.mfaActivate).toHaveBeenCalledWith("123456"));
     await waitFor(() => expect(mockApi.mfaStatus).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText(/two-factor authentication is on for this account/i)).toBeTruthy();
+    expect(await screen.findByText(/two-factor authentication is on\./i)).toBeTruthy();
   });
 
   it("Turn off posts the current code, then re-reads the status", async () => {
@@ -172,7 +184,7 @@ describe("TwoFactorCard — each control calls its own route", () => {
 
     await waitFor(() => expect(mockApi.mfaDisable).toHaveBeenCalledWith("654321"));
     await waitFor(() => expect(mockApi.mfaStatus).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText(/two-factor authentication is off for this account/i)).toBeTruthy();
+    expect(await screen.findByText(/two-factor authentication is off\./i)).toBeTruthy();
   });
 
   it("submits only a complete six-digit code", async () => {
@@ -226,7 +238,7 @@ describe("TwoFactorCard — the secret is transient and the code is drawn, not i
     mockApi.mfaStatus.mockResolvedValue(status({ enabled: true }));
     fireEvent.click(screen.getByRole("button", { name: /turn on two-factor/i }));
 
-    await screen.findByText(/two-factor authentication is on for this account/i);
+    await screen.findByText(/two-factor authentication is on\./i);
     expect(container.textContent).not.toContain(SECRET);
     expect(container.innerHTML).not.toContain(SECRET);
     expect(container.querySelector("svg")).toBeNull();

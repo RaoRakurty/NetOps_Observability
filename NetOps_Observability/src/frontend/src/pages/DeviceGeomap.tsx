@@ -8,6 +8,7 @@ import { StatStrip, Stat, Segmented } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import { operatorError } from "../lib/errors";
+import AskIris from "../components/AskIris";
 // Device Geomap (Infrastructure → Maps) — the fleet plotted by site. Placement
 // is INTENT data: sites and their latitude/longitude live in the Source of
 // Truth (Automation → Source of Truth), never GeoIP — RFC 1918 management
@@ -194,9 +195,8 @@ function LocationsEditor({ onChanged }: { onChanged: () => void }) {
     <div className="card">
       <h3 style={{ marginTop: 0 }}>Device locations</h3>
       <p className="mini-meta">
-        Devices placed by the Source of Truth inherit their site's coordinates (set them on the site under
-        Automation → Source of Truth). For everything else, type a site label + decimal latitude/longitude —
-        devices sharing a label fold into one map bubble. Unplaced devices are listed first.
+        Devices inherit their site's coordinates; unplaced devices come first.
+        <AskIris topic="geomap.device-placement" label="Device locations" />
       </p>
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
       <table className="loc-editor">
@@ -214,7 +214,7 @@ function LocationsEditor({ onChanged }: { onChanged: () => void }) {
                     : <span style={{ color: "var(--warn)" }}>not set</span>}
                 </td>
                 {sot ? (
-                  <td colSpan={3} className="mini-meta">coordinates come from the site in the Source of Truth</td>
+                  <td colSpan={3} className="fact-line">Coordinates come from the site.</td>
                 ) : (
                   <>
                     <td><input value={d.site} placeholder="e.g. Dallas-Branch" onChange={(e) => edit(r, { site: e.target.value })} /></td>
@@ -235,7 +235,7 @@ function LocationsEditor({ onChanged }: { onChanged: () => void }) {
               </tr>
             );
           })}
-          {rows.length === 0 && !err && <tr><td colSpan={6} className="mini-meta">No devices visible.</td></tr>}
+          {rows.length === 0 && !err && <tr><td colSpan={6} className="fact-line">No devices visible.</td></tr>}
         </tbody>
       </table>
     </div>
@@ -316,21 +316,18 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
 
   return (
     <div className="card">
-      <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 8 }}>
-        Sites
-        <span className="badge" style={{ fontSize: 10 }}>Source of truth</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <h3 style={{ margin: 0 }}>Sites</h3>
+        <span className="badge" style={{ fontSize: 12.5 }}>Source of truth</span>
         {editable && (
           <button className="dash-btn" style={{ marginLeft: "auto" }} onClick={() => setShowImport((v) => !v)}>
             {showImport ? "Close import" : "Import…"}
           </button>
         )}
-      </h3>
+      </div>
       <p className="mini-meta">
-        Declare a site with decimal latitude/longitude (WGS 84). Assign a device to it from
-        Infrastructure → Devices (the <code>Site</code> column), or give it a <code>site</code> label matching the
-        site's slug (shown below), and it folds into that site's map bubble, inheriting these coordinates. Leave
-        coordinates blank to register a site that isn't yet on the map. Bulk-seed from an existing
-        system with <b>Import</b> — it adds intent only; live discovery stays authoritative.
+        Give a site coordinates, then place devices on it.
+        <AskIris topic="geomap.sites" label="Sites" />
       </p>
       {editable && showImport && <ImportPanel onDone={() => { load(); onChanged(); }} />}
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
@@ -378,7 +375,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
           {editable && (
             <tr>
               <td><input value={add.name} placeholder="e.g. Dallas Branch" onChange={(e) => setAdd({ ...add, name: e.target.value })} /></td>
-              <td className="mini-meta">{add.name.trim() ? "auto" : ""}</td>
+              <td className="fact-line">{add.name.trim() ? "auto" : ""}</td>
               <td><input value={add.status} placeholder="active" onChange={(e) => setAdd({ ...add, status: e.target.value })} /></td>
               <td><input value={add.owner} placeholder="NetEng NOC" onChange={(e) => setAdd({ ...add, owner: e.target.value })} /></td>
               <td><input value={add.lat} placeholder="32.78" inputMode="decimal" onChange={(e) => setAdd({ ...add, lat: e.target.value })} /></td>
@@ -388,7 +385,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
               </td>
             </tr>
           )}
-          {sites.length === 0 && !editable && <tr><td colSpan={7} className="mini-meta">The external Source of Truth lists no sites.</td></tr>}
+          {sites.length === 0 && !editable && <tr><td colSpan={7} className="fact-line">The external Source of Truth lists no sites.</td></tr>}
         </tbody>
       </table>
     </div>
@@ -445,7 +442,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
     <div className="card" style={{ background: "var(--surface-2, #f6f8fc)", marginBottom: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <strong style={{ fontSize: 13 }}>Import from a file</strong>
-        <span className="mini-meta">one-way seed · discovery stays authoritative</span>
+        <span className="fact-line">one-way seed · discovery stays authoritative</span>
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", margin: "10px 0" }}>
         <select className="form-input" value={kind} onChange={(e) => { setKind(e.target.value as typeof kind); setPlan(null); }} style={{ height: 30 }}>
@@ -471,7 +468,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
       <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
         <button className="dash-btn" disabled={busy} onClick={() => run(true)}>Preview</button>
         <button className="dash-btn accent" disabled={busy || !plan} onClick={() => run(false)} title={plan ? "" : "Preview first"}>Apply</button>
-        {plan && <span className="mini-meta">{plan.dry_run ? "Preview (nothing written yet)" : "Applied"}</span>}
+        {plan && <span className="fact-line">{plan.dry_run ? "Preview (nothing written yet)" : "Applied"}</span>}
       </div>
       {err && <p style={{ color: "var(--bad)", marginBottom: 0 }}>{err}</p>}
       {plan && (
@@ -480,7 +477,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
             {Object.entries(plan.summary).filter(([, n]) => n > 0).map(([a, n]) => (
               <span key={a} className="badge" style={{ fontSize: 11, color: ACTION_TONE[a] ?? "var(--fg)" }}>{a}: {n}</span>
             ))}
-            {Object.values(plan.summary).every((n) => n === 0) && <span className="mini-meta">No rows.</span>}
+            {Object.values(plan.summary).every((n) => n === 0) && <span className="fact-line">No rows.</span>}
           </div>
           {plan.rows.length > 0 && (
             <div style={{ maxHeight: 200, overflow: "auto", border: "1px solid var(--panel-border, #e2e6ee)", borderRadius: 6 }}>

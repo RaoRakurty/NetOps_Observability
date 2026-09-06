@@ -656,7 +656,7 @@ function WanInterfaces() {
           ? <span className="badge warn" title="The last poll failed">● NO DATA</span>
           : <span className="badge good" title="Refreshed every 10 seconds">● LIVE · 10s</span>}
         {!degraded && (
-          <span className="mini-meta">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)} · peak util {worst.toFixed(1)}%{down > 0 ? ` · ${down} down` : ""}</span>
+          <span className="fact-line">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)} · peak util {worst.toFixed(1)}%{down > 0 ? ` · ${down} down` : ""}</span>
         )}
         <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
           <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyPattern()}
@@ -691,7 +691,7 @@ function WanInterfaces() {
                 <tr key={r.k}>
                   <td><span className="dot" aria-hidden="true" style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: r.up ? "var(--good)" : "var(--bad)", marginRight: 6 }} />
                     <span className="sr-only">{r.up ? "up" : "down"} </span>
-                    <span className="mono">{r.device}</span> <span className="mini-meta">{r.ifx}</span></td>
+                    <span className="mono">{r.device}</span> <span className="fact-line">{r.ifx}</span></td>
                   <td style={{ textAlign: "right" }} className="mono">↓ {fmtBps(r.inb)}</td>
                   <td style={{ textAlign: "right" }} className="mono">↑ {fmtBps(r.outb)}</td>
                   <td style={{ width: 110 }}>
@@ -700,8 +700,8 @@ function WanInterfaces() {
                         background: r.util >= 90 ? "var(--bad)" : r.util >= 70 ? "var(--warn)" : "var(--accent)" }} />
                     </div>
                   </td>
-                  <td style={{ textAlign: "right", width: 70 }} className={r.util >= 90 ? "mono" : "mini-meta mono"}>{r.util.toFixed(1)}%</td>
-                  <td style={{ textAlign: "right", width: 80 }} className="mini-meta mono" title="errors+discards per second">{r.errs > 0.005 ? `${r.errs.toFixed(2)}/s` : "—"}</td>
+                  <td style={{ textAlign: "right", width: 70 }} className={r.util >= 90 ? "mono" : "fact-line mono"}>{r.util.toFixed(1)}%</td>
+                  <td style={{ textAlign: "right", width: 80 }} className="fact-line mono" title="errors and discards per second">{r.errs > 0.005 ? `${r.errs.toFixed(2)}/s` : "—"}</td>
                 </tr>
               ))}
             </tbody>

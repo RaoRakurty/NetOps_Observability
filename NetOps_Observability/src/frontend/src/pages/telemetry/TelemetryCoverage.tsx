@@ -32,6 +32,7 @@ import { Segmented, Stat, StatStrip } from "../../components/ui";
 import { useWorkspace } from "../../context/workspace";
 import { fmtDateTime } from "../../lib/time";
 import { operatorError } from "../../lib/errors";
+import AskIris from "../../components/AskIris";
 import {
   CATALOG_DOCS_URL,
   fidelityRank,
@@ -155,11 +156,13 @@ function ParserStatsSection({ stats, err, loaded }: { stats: ParserStats | null;
   if (err && isForbidden(err)) {
     return (
       <div className="card">
-        <h3 style={{ margin: "0 0 var(--sp-2)" }}>Parser coverage — platform-admin only</h3>
+        <h3 style={{ margin: "0 0 var(--sp-2)" }}>Parser coverage</h3>
         <p className="admin-sub" style={{ margin: 0 }}>
-          Parser revision, rule inventory and promotion rate are platform-global plumbing shared by every
-          tenant, so they are visible to platform administrators only. Your own unrecognized message shapes
-          are below and need no platform access.
+          Platform-wide, not per tenant — platform administrators only.
+          <AskIris topic="telemetry.parser-coverage-scope" label="Parser coverage" />
+        </p>
+        <p className="fact-line" style={{ margin: "var(--sp-2) 0 0" }}>
+          Your own unrecognized message shapes are below and need no platform access.
         </p>
       </div>
     );
@@ -185,7 +188,7 @@ function ParserStatsSection({ stats, err, loaded }: { stats: ParserStats | null;
       <div className="card" style={{ display: "flex", alignItems: "baseline", gap: "var(--sp-4)", flexWrap: "wrap" }}>
         <div>
           <div className="ds-stat-num mono" style={{ fontSize: 34 }}>{promo.value}</div>
-          <div className="admin-sub" style={{ margin: "4px 0 0" }}>{promo.caption}</div>
+          <div className="fact-line" style={{ margin: "4px 0 0" }}>{promo.caption}</div>
         </div>
         <h3 style={{ margin: 0 }}>Semantic promotion rate</h3>
       </div>
@@ -201,7 +204,7 @@ function ParserStatsSection({ stats, err, loaded }: { stats: ParserStats | null;
       </StatStrip>
 
       <div className="ds-toolbar">
-        <label className="mini-meta" htmlFor="tc-rule-filter">Filter rules</label>
+        <label className="fact-line" htmlFor="tc-rule-filter">Filter rules</label>
         <input
           id="tc-rule-filter"
           className="input"
@@ -210,7 +213,7 @@ function ParserStatsSection({ stats, err, loaded }: { stats: ParserStats | null;
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
-        <span className="mini-meta" role="status" aria-live="polite">{summary.total} rules registered</span>
+        <span className="fact-line" role="status" aria-live="polite">{summary.total} rules registered</span>
       </div>
 
       <div className="card" style={{ paddingTop: 8 }}>
@@ -334,8 +337,11 @@ export default function TelemetryCoverage() {
 
       <h3 style={{ margin: "var(--sp-4) 0 var(--sp-2)" }}>Unrecognized message shapes</h3>
       <p className="admin-sub" style={{ marginTop: 0 }}>
-        Lines admitted from your devices that no parser rule claimed, grouped into masked templates over the
-        last {DAYS} days. Drafting a catalog row proposes a rule — it never applies one.
+        Messages your devices sent that no rule understands.
+        <AskIris topic="telemetry.unrecognized-shapes" label="Unrecognized message shapes" />
+      </p>
+      <p className="fact-line" style={{ margin: "var(--sp-1) 0 var(--sp-2)" }}>
+        Drafting a catalog row proposes a rule — it never applies one.
       </p>
 
       <div className="ds-toolbar">
@@ -349,8 +355,8 @@ export default function TelemetryCoverage() {
             { value: "trap", label: "Trap" },
           ]}
         />
-        <span className="mini-meta" role="status" aria-live="polite">{unrecognizedNote(page)}</span>
-        {page && <span className="mini-meta">generated {fmtDateTime(page.generated_at)}</span>}
+        <span className="fact-line" role="status" aria-live="polite">{unrecognizedNote(page)}</span>
+        {page && <span className="fact-line">generated {fmtDateTime(page.generated_at)}</span>}
       </div>
 
       <ErrLine msg={pageErr} />

@@ -92,6 +92,14 @@ describe("NOC Recovery Scorecard", () => {
     expect(screen.getByText(/\/100/)).toBeTruthy();
   });
 
+  it("an empty trend offers the action instead of spelling it out", async () => {
+    hoisted.timeMetrics.mockResolvedValue({ snapshots: [] });
+    render(<ReliabilityScorecard />);
+    expect(await screen.findByText("Nothing recorded in this window yet.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about Phase timings" })).toBeTruthy();
+    expect(screen.queryByText(/phase timings appear once incidents are analyzed/)).toBeNull();
+  });
+
   it("shows the evidence-coverage strip with recovery/ITSM Missing", async () => {
     render(<ReliabilityScorecard />);
     expect(await screen.findByText("Evidence coverage")).toBeTruthy();
@@ -113,7 +121,7 @@ describe("NOC Recovery Scorecard", () => {
 
   it("never shows 0 ms for a no-sample percentile (Cloud MTTI p90 → No valid sample)", async () => {
     render(<ReliabilityScorecard />);
-    await screen.findByText(/Owner Domain Breakdown/);
+    await screen.findByText("Owner domains");
     expect(screen.getByText("No valid sample")).toBeTruthy();
     expect(screen.queryByText("0 ms")).toBeNull();
   });
@@ -127,6 +135,55 @@ describe("NOC Recovery Scorecard", () => {
   it("summary explains recovery/ITSM not measured (no measured-MTTR claim)", async () => {
     render(<ReliabilityScorecard />);
     expect(await screen.findByText(/not yet measured because recovery\/ITSM evidence is not connected/)).toBeTruthy();
+  });
+
+  // ── words (sweep 5, tracker 270) ──────────────────────────────────────────
+  // Every metric definition that used to sit in a card tooltip is an authored
+  // file behind the (i). The card still names its number; the (i) still names
+  // the metric, so the assertion is on BOTH — a card that quietly lost its
+  // explanation affordance is as broken as one that kept the paragraph.
+  it("a card states its number and hands the definition to Iris", async () => {
+    render(<ReliabilityScorecard />);
+    expect(await screen.findByText("Median root-domain isolation time")).toBeTruthy();
+    for (const label of [
+      "Customer-impacting incidents",
+      "Median root-domain isolation time",
+      "P90 root-domain isolation time",
+      "Median correlation time",
+      "Median recovery time",
+      "Median ticket closure time",
+      "Repeat failure interval",
+      "Repeat-affected incidents",
+      "Top time-loss driver",
+    ]) {
+      expect(screen.getByRole("button", { name: `Ask Iris about ${label}` })).toBeTruthy();
+    }
+    // …and the definitions themselves are gone from the screen.
+    expect(screen.queryByText(/Mean Time Between Failures/)).toBeNull();
+    expect(screen.queryByText(/long-tail isolation/)).toBeNull();
+  });
+
+  it("the header states the page and asks Iris for the readiness recipe", async () => {
+    render(<ReliabilityScorecard />);
+    expect(await screen.findByText("Where incident time is spent.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about Recovery Readiness" })).toBeTruthy();
+    expect(screen.queryByText(/deterministic score from repeat rate/)).toBeNull();
+  });
+
+  it("panel titles are short headings, not sentences", async () => {
+    render(<ReliabilityScorecard />);
+    expect(await screen.findByRole("heading", { name: "Owner domains" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Lifecycle time breakdown" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Recurring failure sources" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Isolation trend" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Detection and repair trend" })).toBeTruthy();
+  });
+
+  it("the window footnote states scope only — the two clocks are Iris's to explain", async () => {
+    render(<ReliabilityScorecard />);
+    expect(await screen.findByText(/customer-impacting incidents only/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask Iris about Investigation and repair clocks" })).toBeTruthy();
+    expect(screen.queryByText(/separates the investigation clock from the repair clock/)).toBeNull();
   });
 });
 

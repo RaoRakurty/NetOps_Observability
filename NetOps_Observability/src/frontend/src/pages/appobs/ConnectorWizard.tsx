@@ -254,6 +254,12 @@ export default function ConnectorWizard({ onClose, onCreated, resume }: {
   const authValid = !!method && authFieldsComplete(provider!, method, authValues) &&
     (!methodHoldsSecret(method) || secretValue.trim() !== "" || (secretStored && !replaceSecret));
 
+  // UI-words sweep 5 (tracker 270): a heading is budgeted at four words, so the
+  // three-way title is resolved here rather than inline in the <h2>.
+  const headTitle = resume
+    ? `Finish setting up ${resume.display_name || (provider ? providerLabel(provider) : "this connection")}`
+    : provider ? `Connect ${providerLabel(provider)}` : "Connect a cloud account";
+
   return (
     <div className="ev-detail-scrim" onClick={onClose}>
       <aside
@@ -268,11 +274,7 @@ export default function ConnectorWizard({ onClose, onCreated, resume }: {
         <header className="ccw-head">
           <div>
             <div className="ccw-eyebrow">{resume ? "Resume cloud onboarding" : "Cloud onboarding"}</div>
-            <h2 className="ccw-title" id="ccw-title">
-              {resume
-                ? `Finish setting up ${resume.display_name || (provider ? providerLabel(provider) : "this connection")}`
-                : provider ? `Connect ${providerLabel(provider)}` : "Connect a cloud account"}
-            </h2>
+            <h2 className="ccw-title" id="ccw-title">{headTitle}</h2>
           </div>
           <button className="ao-x" onClick={onClose} aria-label="Close wizard">×</button>
         </header>

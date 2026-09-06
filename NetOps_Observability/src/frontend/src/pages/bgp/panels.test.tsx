@@ -133,7 +133,14 @@ describe("GeofeedPanel", () => {
       rows_scanned: 0, rows_kept: 0, rows_dropped: 0, truncated: false, fetched_at: "",
     });
     render(<GeofeedPanel resource="203.0.113.0/24" />);
-    await waitFor(() => expect(screen.getByText(/publishes no locations for it/)).toBeInTheDocument());
+    // Sweep 5 (tracker 270): the "how a holder publishes one" recipe is
+    // ai/skills/explain/bgp.geofeed-publish.md behind the `(i)`; the FACT and the
+    // honesty claim ("anything else is a third-party guess") stay on screen.
+    await waitFor(() => expect(screen.getByText(/publishes no locations/)).toBeInTheDocument());
+    expect(screen.getByText(/third-party guess/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Ask Iris about How a holder publishes them" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -181,9 +188,15 @@ describe("LiveFeedPanel", () => {
     expect(screen.getByText("1 withdrawn")).toBeInTheDocument();
     expect(screen.getByText("2/2000 held")).toBeInTheDocument();
     expect(screen.getByText("7018 → 3333")).toBeInTheDocument();
-    // The panel must not call itself "live".
+    // The panel must not call itself "live". Sweep 5 (tracker 270) moved the
+    // WHY (RIS Live is WebSocket-only, the ring, the BMP receiver being a
+    // separate item) into ai/skills/explain/bgp.near-live-feed.md; the honesty
+    // claim and the read interval stay on the screen.
     expect(screen.getByText(/Near-live, not live/)).toBeInTheDocument();
-    expect(screen.getByText(/BMP receiver.*separate item|separate item/)).toBeInTheDocument();
+    expect(screen.getByText(/Read every ~/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Ask Iris about How fresh this is" }),
+    ).toBeInTheDocument();
   });
 
   it("warns when the ring overwrote entries this page never read", async () => {

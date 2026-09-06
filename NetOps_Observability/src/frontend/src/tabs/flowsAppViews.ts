@@ -34,11 +34,13 @@ function txt(v: unknown): string {
 export const UNKNOWN_APP = "unknown";
 
 /**
- * What the unknown row MEANS, in one sentence. Rendered next to the bucket so
- * an operator reads it as a measurement, not as a hole in the data.
+ * What the unknown row MEANS, in one line. Rendered next to the bucket so an
+ * operator reads it as a measurement, not as a hole in the data. UI-words sweep
+ * 5 (tracker 270): the rest of the lesson is ai/skills/explain/flows.unknown-app.md,
+ * reached from the `(i)` beside this line.
  */
 export const UNKNOWN_MEANING =
-  "Traffic whose far end no naming source claimed — uncatalogued or internal. It is measured like every other row here, not missing.";
+  "Traffic whose far end no naming source claimed — measured, not missing.";
 
 /** True for the unknown bucket, including a row that arrived with no name. */
 export function isUnknownApp(app: string | undefined): boolean {
@@ -67,7 +69,7 @@ export function sourceSide(srcApp: string | undefined): SourceSide {
 
 /** Why a row shows no source, in the operator's words. */
 export const UNRESOLVED_SOURCE_MEANING =
-  "This row was rolled up before the source side was recorded, so only its far end is named.";
+  "Rolled up before the source side was recorded, so only its far end is named.";
 
 // ── attribution tier ────────────────────────────────────────────────────────
 //
@@ -197,7 +199,7 @@ export function serviceShare(row: FlowServiceRow, measuredBytes: number): number
 export const UNMEASURED_LABEL = "Not measured";
 
 export const UNMEASURED_MEANING =
-  "No selector matches this service yet, so its traffic has never been counted. Define one to turn this row into a measurement.";
+  "No selector matches this service yet, so its traffic has never been counted.";
 
 // ── honesty statements ──────────────────────────────────────────────────────
 
@@ -224,15 +226,15 @@ export function windowPhrase(seconds: number | undefined): string {
  */
 export function coverageSentence(coverage: FlowAppsResp["coverage"] | undefined | null): string {
   if (!coverage || !(num(coverage.top_pairs) > 0)) {
-    return "How much of this window was named is not reported here, so read these rows as a sample rather than the whole window.";
+    return "Coverage was not reported, so read these rows as a sample.";
   }
   const pairs = num(coverage.top_pairs).toLocaleString();
   const win = windowPhrase(num(coverage.window_seconds));
   const cat = num(coverage.catalog_prefixes);
   const catPart = cat > 0
-    ? ` ${cat.toLocaleString()} catalogued address ranges were available to name them.`
-    : " No catalogued address ranges were available, so names come only from live signals.";
-  return `Names come from the busiest ${pairs} source-to-destination pairs in ${win} — the heaviest traffic, not every flow.${catPart}`;
+    ? ` ${cat.toLocaleString()} catalogued address ranges were available.`
+    : " No catalogued address ranges were available.";
+  return `Named from the busiest ${pairs} source-to-destination pairs in ${win} — not every flow.${catPart}`;
 }
 
 // ── the window-only caveat ──────────────────────────────────────────────────
@@ -262,12 +264,17 @@ export function filterFieldPhrase(keys: readonly string[]): string {
  */
 export function windowScopeCaveat(keys: readonly string[], subject: string): string | null {
   if (keys.length === 0) return null;
-  return `${subject} are rolled up for the whole time window: the ${filterFieldPhrase(keys)} filter above, and the direction choice, do not narrow the numbers below. Read them as the window's totals.`;
+  return `${subject}: the filters above do not narrow these numbers.`;
 }
 
 /** The same fact, stated once with no filters set — always shown. */
 export function windowScopeNote(subject: string): string {
-  return `${subject} answer over the selected time window only. The filter fields and direction toggle above shape the other sections, not this one.`;
+  return `${subject} answer over the selected time window only.`;
+}
+
+/** The tooltip beside the caveat: exactly which set fields are being ignored. */
+export function windowScopeFields(keys: readonly string[]): string {
+  return keys.length === 0 ? "" : `Not narrowed by: ${filterFieldPhrase(keys)}, or by the direction toggle.`;
 }
 
 // ── the drill ───────────────────────────────────────────────────────────────
@@ -276,7 +283,7 @@ export function windowScopeNote(subject: string): string {
 // Conversations. The honest drill says exactly that instead of inventing one.
 
 export function drillNote(label: string): string {
-  return `Conversations lists the address-level talkers for this same window. It is not narrowed to ${label} — no address list exists behind this row.`;
+  return `Conversations lists the address-level talkers for this window — not narrowed to ${label}.`;
 }
 
 /** The action's own words — it changes section, it does not filter. */

@@ -45,6 +45,17 @@
 //     the left column) because the verdicts above it are that policy's output —
 //     the 2026-09-05 reason for pairing them is preserved by the grid.
 //
+// UI-WORDS SWEEP 5 (tracker 270, 2026-09-06). The owner asked again, wider:
+// "remove the jargon and lots of words across the site … instead train the Iris
+// AI to answer those questions." So the three `Details` disclosures this page
+// carried (how the to-do list is built · where the RDAP record comes from ·
+// what the screen deliberately does not show) are authored files under
+// ai/skills/explain/, reached from the `(i)` that now sits where the paragraph
+// was. Nothing lost a CLAIM — only word count moved. Small print that states a
+// FACT (a timestamp, a server-returned summary, a failed read, a contact role,
+// the RIPE licence line) is `.fact-line`, not `.mini-meta`: a stated fact is not
+// an explanatory note, and the word-budget guard counts notes.
+//
 // WHAT DID NOT CHANGE: every section still renders on load (no tabs — a tab is
 // a question the operator has to answer before they can see the evidence), long
 // lists are still capped with an explicit "show all" (which is what keeps this
@@ -59,8 +70,9 @@ import {
 } from "../services/api";
 import { NocHeader, Chip } from "../components/noc";
 import Icon from "../components/Icon";
+import AskIris from "../components/AskIris";
 import { operatorError } from "../lib/errors";
-import { Details, Kpi, Kpis, Section, SubBlock } from "./bgp/Section";
+import { Kpi, Kpis, Section, SubBlock } from "./bgp/Section";
 import { incidentTone } from "./bgp/bgpAlerts.model";
 // Each panel owns its own fetch and its own failure, so a dead geofeed or an
 // unreachable validator never blanks the page. Lazy so the React Flow graph and
@@ -526,7 +538,7 @@ export default function BgpOps() {
         </form>
         <div className="bgp-chips" aria-label="Watched resources">
           {watch.length === 0 && (
-            <span className="mini-meta">Nothing is watched yet — check a prefix and watch it to pin it here.</span>
+            <span className="fact-line">Nothing is watched yet. Check a prefix, then Watch it.</span>
           )}
           {watch.map((w) => {
             const t = incidents[w.resource] ? incidentTone(incidents[w.resource].class) : null;
@@ -551,19 +563,22 @@ export default function BgpOps() {
           sub="The one-line answer for the prefix or AS selected above"
           updatedAt={statusAt}
           actions={status && (
-            watched ? (
-              <button className="btn-ghost" style={{ fontSize: 13 }}
-                onClick={() => api.bgpWatchDelete(status.resource).then(loadWatch)
-                  .catch((e: Error) => setErr(`Watchlist update failed: ${e.message || "error"}`))}>
-                <Icon name="check" size={13} /> Watching — remove
-              </button>
-            ) : (
-              <button className="btn-ghost" style={{ fontSize: 13 }}
-                onClick={() => api.bgpWatchAdd(status.resource).then(loadWatch)
-                  .catch((e: Error) => setErr(`Watchlist update failed: ${e.message || "error"}`))}>
-                <Icon name="alerts" size={13} /> Watch this {status.kind === "asn" ? "ASN" : "prefix"}
-              </button>
-            )
+            <>
+              {watched ? (
+                <button className="btn-ghost" style={{ fontSize: 13 }}
+                  onClick={() => api.bgpWatchDelete(status.resource).then(loadWatch)
+                    .catch((e: Error) => setErr(`Watchlist update failed: ${e.message || "error"}`))}>
+                  <Icon name="check" size={13} /> Watching — remove
+                </button>
+              ) : (
+                <button className="btn-ghost" style={{ fontSize: 13 }}
+                  onClick={() => api.bgpWatchAdd(status.resource).then(loadWatch)
+                    .catch((e: Error) => setErr(`Watchlist update failed: ${e.message || "error"}`))}>
+                  <Icon name="alerts" size={13} /> Watch this {status.kind === "asn" ? "ASN" : "prefix"}
+                </button>
+              )}
+              <AskIris topic="bgp.watchlist-checks" label="Watching a prefix" />
+            </>
           )}
         >
           {!status && !busy && (
@@ -580,7 +595,7 @@ export default function BgpOps() {
                 <span className="device-name">{status.resource}</span>
                 {activeTone && <Chip label={activeTone.label} tone={activeTone.tone} title={activeTone.detail} />}
                 {activeIncident && (
-                  <span className="mini-meta" title="When this state started">
+                  <span className="fact-line" title="When this state started">
                     since {new Date(activeIncident.since).toLocaleString()}
                   </span>
                 )}
@@ -590,17 +605,20 @@ export default function BgpOps() {
                     title={`The AS announcing it. Last seen ${rs.last_seen.time ?? ""}`} />
                 )}
                 {vis !== null && (
-                  <Chip
-                    label={`Seen by ${(vis * 100).toFixed(0)}% of collectors`}
-                    tone={vis > 0.9 ? "var(--ok)" : vis > 0.5 ? "var(--warn)" : "var(--crit)"}
-                    title="Share of public RIPE RIS full-feed collectors currently seeing this resource."
-                  />
+                  <>
+                    <Chip
+                      label={`Seen by ${(vis * 100).toFixed(0)}% of collectors`}
+                      tone={vis > 0.9 ? "var(--ok)" : vis > 0.5 ? "var(--warn)" : "var(--crit)"}
+                      title="Share of public RIPE RIS full-feed collectors currently seeing this resource."
+                    />
+                    <AskIris topic="bgp.visibility" label="Seen by collectors" />
+                  </>
                 )}
                 {status.kind === "prefix" && <Chip label={rpki.label} tone={rpki.tone} title={rpki.detail} />}
               </div>
-              {activeIncident?.summary && <p className="mini-meta" style={{ margin: "6px 0 0" }}>{activeIncident.summary}</p>}
+              {activeIncident?.summary && <p className="fact-line" style={{ margin: "6px 0 0" }}>{activeIncident.summary}</p>}
               {(status.routing_status_error || status.rpki_error) && (
-                <p className="mini-meta" style={{ color: "var(--warn)", margin: "6px 0 0" }}>
+                <p className="fact-line fact-warn" style={{ margin: "6px 0 0" }}>
                   {status.routing_status_error && <>Routing status unavailable: {status.routing_status_error}. </>}
                   {status.rpki_error && <>Origin check unavailable: {status.rpki_error}.</>}
                 </p>
@@ -619,23 +637,23 @@ export default function BgpOps() {
           <Kpi
             n={watch.length}
             label="Prefixes watched"
-            interp={alertStatus?.enabled ? "Re-checked automatically" : "Automatic checks are off"}
+            interp={alertStatus?.enabled ? "Re-checked automatically" : "Automatic checks off"}
             tone={watch.length === 0 ? "var(--muted)" : undefined}
-            title="How many prefixes or ASNs this tenant has on its watchlist."
+            title="Prefixes or ASNs on this tenant's watchlist. Only these are checked between visits."
           />
           <Kpi
             n={openIncidents}
             label="Needing attention"
-            interp={openIncidents === 0 ? "Nothing flagged" : "Listed in “Prefixes you’re watching”"}
+            interp={openIncidents === 0 ? "Nothing flagged" : "See the watchlist"}
             tone={openIncidents > 0 ? "var(--crit)" : "var(--ok)"}
             title="Watched resources whose latest check found something other than healthy."
           />
           <Kpi
             n={vis === null ? "—" : `${(vis * 100).toFixed(0)}%`}
             label="Reaching the internet"
-            interp={vis === null ? "Not measured for this resource" : "Public collectors seeing it"}
+            interp={vis === null ? "Not measured" : "Collectors seeing it"}
             tone={vis === null ? "var(--muted)" : vis > 0.9 ? "var(--ok)" : vis > 0.5 ? "var(--warn)" : "var(--crit)"}
-            title="Share of public route collectors currently seeing the selected resource."
+            title="Share of public route collectors currently seeing this resource. A dash is not a zero."
           />
           <Kpi
             n={totals.learned + totals.withdrawn}
@@ -650,8 +668,9 @@ export default function BgpOps() {
         <Section
           id="next-steps"
           title="What to do next"
-          sub="Actions for what this screen is showing right now"
+          sub="Actions for what is on screen now"
           updatedAt={statusAt}
+          actions={<AskIris topic="bgp.next-steps" label="What to do next" />}
         >
           <ul className="bgp-todo">
             {todo.map((s) => (
@@ -663,13 +682,6 @@ export default function BgpOps() {
               </li>
             ))}
           </ul>
-          <Details summary="How this list is built">
-            <p className="mini-meta" style={{ marginBottom: 0 }}>
-              Every line comes from a measurement shown elsewhere on this page — the health bar above, the watchlist
-              check, and the announcement/withdrawal window. It never adds a finding a panel below is not also showing,
-              and it never stays empty: when nothing was checked it says so rather than reading as “all clear”.
-            </p>
-          </Details>
         </Section>
 
         {/* 3. sessions down or flapping (own routers) */}
@@ -681,26 +693,25 @@ export default function BgpOps() {
         <Section
           id="updates"
           title="Route changes"
-          sub="Routes learned, routes withdrawn, and anything announced from an unexpected AS"
+          sub="Learned, withdrawn, and unexpected origins"
           updatedAt={updatesAt}
+          actions={<AskIris topic="bgp.suspicious-announcements" label="Suspicious" />}
           wide
         >
           <Kpis cols={3}>
             <Kpi n={totals.learned} label="Routes learned"
-              interp="Announcements in this window"
+              interp="In this window"
               title="Announcements seen for this resource over the fetched window." />
             <Kpi n={totals.withdrawn} label="Routes withdrawn"
-              interp={totals.withdrawn > 0 ? "A burst across many peers means an outage or a flap" : "None in this window"}
+              interp={totals.withdrawn > 0 ? "In this window" : "None"}
               tone={totals.withdrawn > 0 ? "var(--crit)" : undefined}
               title="Withdrawals seen for this resource over the fetched window." />
             <Kpi
               n={totals.suspicious === null ? "—" : totals.suspicious}
               label="Suspicious"
-              interp={totals.suspicious === null
-                ? "Cannot tell — no origin to compare against"
-                : "Announced from an AS other than the current origin"}
+              interp={totals.suspicious === null ? "Cannot tell" : "From another AS"}
               tone={totals.suspicious === null ? "var(--muted)" : totals.suspicious > 0 ? "var(--crit)" : "var(--ok)"}
-              title="Announcements whose AS path ends on a different AS than the one this resource is currently seen with. A dash means we had nothing to compare against — it is not a zero."
+              title="Announcements whose AS path ends on a different AS than the current origin. A dash is not a zero."
             />
           </Kpis>
 
@@ -725,7 +736,10 @@ export default function BgpOps() {
             <p className="mini-meta bgp-legend">
               <span><span style={{ color: "var(--accent)" }}>■</span> learned</span>
               <span><span style={{ color: "var(--crit)" }}>■</span> withdrawn</span>
-              <span>A burst of withdrawals across many collectors is the signature of an outage or a flap.</span>
+              <span>
+                A burst of withdrawals means an outage or a flap.
+                <AskIris topic="bgp.withdrawal-burst" label="Routes withdrawn" />
+              </span>
             </p>
           </SubBlock>
 
@@ -752,7 +766,7 @@ export default function BgpOps() {
               <div className="empty">Collector paths are per PREFIX. Look up one of this AS&apos;s prefixes to see them.</div>
             )}
             {status?.paths_error && (
-              <p className="mini-meta" style={{ color: "var(--warn)" }}>Path data unavailable: {status.paths_error}</p>
+              <p className="fact-line fact-warn">Path data unavailable: {status.paths_error}</p>
             )}
             {status?.kind === "prefix" && !status.paths_error && pathGroups.length === 0 && (
               <div className="empty">No paths observed.</div>
@@ -761,7 +775,10 @@ export default function BgpOps() {
               <div className="bgp-scroll">
                 <table className="tbl bgp-tbl" style={{ width: "100%" }}>
                   <thead>
-                    <tr><th className="num">Collectors</th><th>Path to you (last hop is the origin)</th></tr>
+                    <tr>
+                      <th className="num">Collectors</th>
+                      <th>Path to you<AskIris topic="bgp.collector-paths" label="Path to you" /></th>
+                    </tr>
                   </thead>
                   <tbody>
                     {pathGroups.map((g) => (
@@ -820,6 +837,7 @@ export default function BgpOps() {
           title="Who owns this address space"
           sub="Registry holder and contacts, from RDAP"
           updatedAt={whoisAt}
+          actions={<AskIris topic="bgp.rdap-record" label="Who owns this address space" />}
         >
           {!status && <div className="empty">No resource is selected.</div>}
           {status && whois == null && <div className="empty">Asking the registry…</div>}
@@ -834,17 +852,11 @@ export default function BgpOps() {
                 <ul className="bgp-contacts">
                   {contacts.map((c, i) => (
                     <li key={i}>
-                      {c.name} {c.roles.length > 0 && <span className="mini-meta">({c.roles.join(", ")})</span>}
+                      {c.name} {c.roles.length > 0 && <span className="fact-line">({c.roles.join(", ")})</span>}
                     </li>
                   ))}
                 </ul>
               )}
-              <Details summary="Where this came from">
-                <p className="mini-meta" style={{ marginBottom: 0 }}>
-                  Authoritative registry data via RDAP — the regional registry&apos;s own record for this address space,
-                  not a third-party guess.
-                </p>
-              </Details>
             </>
           )}
         </Section>
@@ -864,16 +876,13 @@ export default function BgpOps() {
           honest alternative to an empty panel that reads as a clean result — it
           is demoted behind a disclosure, not removed. */}
       <div className="bgp-footer">
-        <Details summary="What this screen does not show">
-          <p className="mini-meta">
-            Not on this screen, because the data does not exist here yet: IRR route-object consistency (no IRR mirror is
-            built), on-demand looking-glass verification, and third-party corroboration feeds. They are absent rather
-            than empty — see the BGP capability tracker.
-          </p>
-        </Details>
+        <p className="fact-line">
+          Absent here, not empty: IRR route-object consistency, looking-glass verification, third-party corroboration.
+          <AskIris topic="bgp.not-shown" label="What this screen does not show" />
+        </p>
         {/* RIPE attribution: a LICENSE CONDITION of the RIS/RIPEstat data, not
-            decoration, so it stays in plain sight rather than behind a click. */}
-        <p className="mini-meta">
+            decoration, so it stays in plain sight and keeps every word. */}
+        <p className="fact-line">
           Routing data from <a href="https://www.ripe.net/analyse/internet-measurements/routing-information-service-ris/" target="_blank" rel="noreferrer">RIPE NCC RIS / RIPEstat</a>.
         </p>
       </div>

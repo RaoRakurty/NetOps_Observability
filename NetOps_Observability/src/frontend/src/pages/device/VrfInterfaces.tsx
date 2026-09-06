@@ -71,7 +71,7 @@ function InterfaceRow({ iface }: { iface: VrfInterface }) {
     <tr>
       <td style={mono}>
         {iface.ifname}
-        {iface.ifalias ? <span className="mini-meta" style={{ marginLeft: 8 }}>{iface.ifalias}</span> : null}
+        {iface.ifalias ? <span className="fact-line" style={{ marginLeft: 8 }}>{iface.ifalias}</span> : null}
       </td>
       <td style={td}><StateDot tone={tone} />{iface.oper}</td>
       <td style={td}>{iface.admin}</td>
@@ -174,7 +174,7 @@ export default function VrfInterfaces({ device }: { device: Device }) {
     <div style={{ maxWidth: 1200 }} data-testid="vrf-interfaces">
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 16 }}>{title}</h2>
-        <span className="mini-meta" style={{ fontFamily: "var(--font-mono)" }}>{PANEL_SOURCE}</span>
+        <span className="fact-line" style={{ fontFamily: "var(--font-mono)" }}>{PANEL_SOURCE}</span>
         <div role="group" aria-label="Rate window" style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
           {WINDOWS.map((w) => (
             <button
@@ -200,12 +200,12 @@ export default function VrfInterfaces({ device }: { device: Device }) {
           style={{ marginBottom: 12, padding: "10px 12px", fontSize: 12.5 }}
         >
           <div>{coverageHeadline(data.coverage, data.dialect)}</div>
-          <ul className="mini-meta" style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+          <ul className="fact-line" style={{ margin: "6px 0 0", paddingLeft: 18 }}>
             {data.coverage.notes.map((n, i) => <li key={i}>{n}</li>)}
           </ul>
-          {footnote && <div className="mini-meta" style={{ marginTop: 6 }}>{footnote}</div>}
+          {footnote && <div className="fact-line" style={{ marginTop: 6 }}>{footnote}</div>}
           {data.routing_instances.length > 0 && (
-            <div className="mini-meta" style={{ marginTop: 6 }}>
+            <div className="fact-line" style={{ marginTop: 6 }}>
               {data.dialect.term_plural} this device reports on its BGP control plane:{" "}
               <span style={{ fontFamily: "var(--font-mono)" }}>
                 {data.routing_instances.map((ri) => ri.name).join(", ")}

@@ -94,12 +94,12 @@ export function ConfigDiffView({ diff, title }: { diff: ConfigDiffResult; title:
       </div>
       {diff.truncated && (
         <p className="mini-meta cfg-note" role="status">
-          This diff was truncated by the server — it shows the beginning of the change only.
+          Truncated by the server — only the start of the change.
           Open the full versions to read the rest.
         </p>
       )}
       {lines.length === 0 ? (
-        <p className="mini-meta cfg-note">The two versions are identical — the server returned an empty diff.</p>
+        <p className="fact-line" style={{ margin: 0 }}>The two versions are identical — the server returned an empty diff.</p>
       ) : (
         <pre className="ccw-pre cfg-diff" aria-label={title}>
           {lines.map((l, i) => (

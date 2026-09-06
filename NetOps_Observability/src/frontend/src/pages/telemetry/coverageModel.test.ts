@@ -1,5 +1,5 @@
 // coverageModel.test.ts — the honesty rules of the Telemetry coverage adapters.
-// The wording assertions are deliberate: "no admitted lines yet" and "0.0%" are
+// The wording assertions are deliberate: "No lines yet" and "0.0%" are
 // different facts, and a 403 on the platform stats endpoint is an ANSWER.
 
 import { describe, it, expect } from "vitest";
@@ -29,15 +29,15 @@ describe("promotionDisplay", () => {
   it("renders a rate as one-decimal percent with the admitted-lines caption", () => {
     expect(promotionDisplay(parserStatsFixture)).toEqual({
       value: "81.3%",
-      caption: "over the last 240,000 admitted lines",
+      caption: "240,000 lines",
       unknown: false,
     });
   });
 
-  it("says 'no admitted lines yet' for a null rate — never 0%", () => {
+  it("says 'No lines yet' for a null rate — never 0%", () => {
     const d = promotionDisplay(parserStatsNoLinesFixture);
     expect(d.value).toBe("—");
-    expect(d.caption).toBe("no admitted lines yet");
+    expect(d.caption).toBe("No lines yet");
     expect(d.unknown).toBe(true);
     expect(d.value).not.toBe("0.0%");
   });
@@ -45,12 +45,12 @@ describe("promotionDisplay", () => {
   it("distinguishes a genuine zero rate from no data", () => {
     const zero = promotionDisplay({ promotion_rate: 0, window_lines: 1200 });
     expect(zero.value).toBe("0.0%");
-    expect(zero.caption).toBe("over the last 1,200 admitted lines");
+    expect(zero.caption).toBe("1,200 lines");
     expect(zero.unknown).toBe(false);
   });
 
   it("singularizes the caption for a one-line window and clamps out-of-range rates", () => {
-    expect(promotionDisplay({ promotion_rate: 1, window_lines: 1 }).caption).toBe("over the last 1 admitted line");
+    expect(promotionDisplay({ promotion_rate: 1, window_lines: 1 }).caption).toBe("1 line");
     expect(promotionDisplay({ promotion_rate: 1.4, window_lines: 10 }).value).toBe("100.0%");
     expect(promotionDisplay({ promotion_rate: -0.2, window_lines: 10 }).value).toBe("0.0%");
   });

@@ -29,7 +29,8 @@ import {
   mergePeerRows, peerRowsFromMetrics, peerRowsFromSessions, peersState,
   transitSet, type PeerRow,
 } from "./bgpAlerts.model";
-import { Details, Section, ShowAll, SubBlock, useCap } from "./Section";
+import { Section, ShowAll, SubBlock, useCap } from "./Section";
+import AskIris from "../../components/AskIris";
 
 /** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
 const FIRST_PEERS = 12;
@@ -91,7 +92,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
     <Section
       id="peers"
       title="Sessions down or flapping"
-      sub="BGP neighbours on your own routers, and who carries your traffic"
+      sub="BGP neighbours on your routers, and your carriers"
       updatedAt={at}
     >
       <SubBlock title="Neighbour sessions">
@@ -100,25 +101,23 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
 
         {!busy && state === "bmp_off" && (
           <div className="empty">
-            Nothing is reporting neighbour state: the BMP receiver is off (<span className="mono">FEATURE_BMP</span>)
-            and no router is sending its BGP peer counter. This is an absent feed, not a healthy fleet — point a
-            router&apos;s BMP export at the platform, or enable the BGP peer OID in the device profile.
+            Nothing is reporting neighbour state: the BMP receiver is off (<span className="mono">FEATURE_BMP</span>).
+            An absent feed, not a healthy fleet.
+            <AskIris topic="bgp.bmp-not-reporting" label="Nothing is reporting neighbour state" />
           </div>
         )}
         {!busy && state === "no_exporter" && (
           <div className="empty">
-            No router is sending neighbour state to this platform yet. Nothing is being measured here — this is an
-            empty feed, not a converged network.
+            No router is sending neighbour state yet. An empty feed, not a converged network.
           </div>
         )}
         {!busy && state === "no_peers" && (
           <div className="empty">
-            {sessions?.sessions.length} router session(s) are open, but none of them has reported a neighbour coming up
-            or going down yet. The state is left unreported rather than assumed.
+            {sessions?.sessions.length} router session(s) are open; none has reported a neighbour yet.
           </div>
         )}
         {!busy && state === "error" && (
-          <p className="mini-meta" role="alert" style={{ color: "var(--bad)" }}>
+          <p className="fact-line fact-bad" role="alert">
             Neighbour state could not be read: {err}
           </p>
         )}
@@ -129,7 +128,8 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
               <thead>
                 <tr>
                   <th>Router</th><th>Neighbour</th><th>Their AS</th><th>State</th>
-                  <th>Reported by</th><th className="num">Learned</th><th className="num">Withdrawn</th><th>Last change</th>
+                  <th>Reported by<AskIris topic="bgp.peer-sources" label="Reported by" /></th>
+                  <th className="num">Learned</th><th className="num">Withdrawn</th><th>Last change</th>
                 </tr>
               </thead>
               <tbody>
@@ -140,7 +140,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
                     <td className="mono">{r.peerAs ? `AS${r.peerAs}` : "—"}</td>
                     <td>{stateChip(r)}</td>
                     <td>
-                      <span className="mini-meta" title={r.source === "bmp"
+                      <span className="fact-line" title={r.source === "bmp"
                         ? "Reported by the router's own BMP export (Adj-RIB-In)."
                         : "Sampled from the router's own BGP peer-state counter — only 'established' counts as up."}>
                         {r.source === "bmp" ? "BMP" : "device metric"}
@@ -148,7 +148,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
                     </td>
                     <td className="mono num">{r.announced ?? "—"}</td>
                     <td className="mono num">{r.withdrawn ?? "—"}</td>
-                    <td className="mini-meta">{r.changedAt ? new Date(r.changedAt).toLocaleString() : "—"}</td>
+                    <td className="fact-line">{r.changedAt ? new Date(r.changedAt).toLocaleString() : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -158,7 +158,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
         <ShowAll cap={peerCap} noun="peers" />
 
         {sessions?.coverage?.notes?.length ? (
-          <ul className="mini-meta" style={{ marginBottom: 0, paddingLeft: 18 }}>
+          <ul className="fact-line" style={{ marginBottom: 0, paddingLeft: 18 }}>
             {sessions.coverage.notes.map((n, i) => <li key={i}>{n}</li>)}
           </ul>
         ) : null}
@@ -167,8 +167,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
       <SubBlock title="Who carries your traffic">
         {withTransit.length === 0 ? (
           <div className="empty">
-            No paths have been observed for the watched prefixes yet, so we cannot say who is carrying them. With no
-            measurement there is nothing to show, and nothing is assumed.
+            No paths observed yet, so we cannot say who carries them. Nothing is assumed.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -201,21 +200,9 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
           </div>
         )}
         <p className="mini-meta">
-          The highlighted AS is your direct upstream. A carrier that changed without a maintenance window is what the
-          watchlist flags as unexpected transit.
+          The highlighted AS is your direct upstream.
+          <AskIris topic="bgp.transit-observed" label="Who carries your traffic" />
         </p>
-        <Details summary="Where these rows come from">
-          <p className="mini-meta">
-            Two witnesses, never conflated. A row reported by BMP comes from one of your own routers pushing its
-            Adj-RIB-In to the platform, and it is the only source carrying the reason for a change and the counters; a
-            row reported by a device metric is an SNMP or gNMI sample of the same session seen from outside. Where both
-            describe the same router and neighbour, the router&apos;s own report wins.
-          </p>
-          <p className="mini-meta" style={{ marginBottom: 0 }}>
-            Who carries your traffic is derived from the AS paths the watchlist evaluator measured — it is an
-            observation, never an assumption about your contracts.
-          </p>
-        </Details>
       </SubBlock>
     </Section>
   );

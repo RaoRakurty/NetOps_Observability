@@ -90,6 +90,12 @@
 .rca-ws .rw-statusline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .rca-ws .rw-note { color: var(--rw-muted); font-size: 13px; margin-top: 10px; }
 .rca-ws .rw-note b { color: var(--rw-text); font-family: var(--rw-mono); font-weight: 700; }
+/* sweep 5 (tracker 270): a STATED FACT on the RCA document surface — a
+   timestamp, a queued-action acknowledgement, an audit row. Same ink as
+   `.rw-note`, which it was renamed out of so the word-budget guard stops
+   reading a server-returned value as an explanatory note. */
+.rca-ws .fact-line { color: var(--rw-muted); font-size: 13px; margin-top: 10px; }
+.rca-ws .fact-line b { color: var(--rw-text); font-family: var(--rw-mono); font-weight: 700; }
 /* Right-side summary (owner P1 2026-07-19): ONE shared two-column grid for the
    whole aside — every row was previously its own grid, so the label column
    width varied per row and values started at different x positions (the

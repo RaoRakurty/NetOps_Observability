@@ -23,11 +23,20 @@
 // prefix ("193.0.0.1/21" → "193.0.0.0/21") and sorts the keys. The panel
 // therefore re-renders from the RESPONSE, not from what was typed — otherwise
 // the screen would show an intent the platform is not holding.
+//
+// UI-WORDS SWEEP 5 (tracker 270). That paragraph used to be printed on the
+// screen behind a "What happens when you save" disclosure; it is now
+// ai/skills/explain/policy.bgp-canonical.md, reached from the `(i)` beside the
+// save button, and what each of the four rule fields means is
+// bgp.alert-rules.md behind the `(i)` in the section header. The field labels,
+// the empty-set consequences, the validation errors and "Last set by …" are
+// STATED FACTS, so they wear `.fact-line` rather than `.mini-meta`.
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type BgpAlertConfigResp, type BgpAlertStatus } from "../../services/api";
 import { operatorError } from "../../lib/errors";
-import { Details, Section } from "./Section";
+import { Section } from "./Section";
+import AskIris from "../../components/AskIris";
 import {
   EMPTY_POLICY_CONFIG,
   emptySetConsequence,
@@ -46,7 +55,7 @@ const EMPTY_FORM: PolicyForm = { def: { ...EMPTY_POLICY_CONFIG }, prefixes: [] }
 
 function FieldError({ msg }: { msg?: string }) {
   if (!msg) return null;
-  return <span role="alert" className="mini-meta" style={{ color: "var(--crit)" }}>{msg}</span>;
+  return <span role="alert" className="fact-line fact-bad">{msg}</span>;
 }
 
 /** One policy block — the tenant default, or one prefix override. */
@@ -65,7 +74,7 @@ function ConfigFields({ id, cfg, errs, keyPrefix, disabled, onChange }: {
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <label style={{ display: "grid", gap: 3 }}>
-        <span className="mini-meta">Which AS should announce it</span>
+        <span className="fact-line">Which AS should announce it</span>
         <input
           className="ccw-input mono"
           type="text"
@@ -75,12 +84,12 @@ function ConfigFields({ id, cfg, errs, keyPrefix, disabled, onChange }: {
           aria-label={`${id} expected origin AS`}
           onChange={set("expectedOrigins")}
         />
-        {originNote && <span className="mini-meta" style={{ color: "var(--warn)" }}>{originNote}</span>}
+        {originNote && <span className="fact-line fact-warn">{originNote}</span>}
         <FieldError msg={errs[`${keyPrefix}expected_origins`]} />
       </label>
 
       <label style={{ display: "grid", gap: 3 }}>
-        <span className="mini-meta">Which carriers are allowed</span>
+        <span className="fact-line">Which carriers are allowed</span>
         <input
           className="ccw-input mono"
           type="text"
@@ -90,13 +99,13 @@ function ConfigFields({ id, cfg, errs, keyPrefix, disabled, onChange }: {
           aria-label={`${id} upstream AS`}
           onChange={set("upstreams")}
         />
-        {upstreamNote && <span className="mini-meta" style={{ color: "var(--warn)" }}>{upstreamNote}</span>}
+        {upstreamNote && <span className="fact-line fact-warn">{upstreamNote}</span>}
         <FieldError msg={errs[`${keyPrefix}upstreams`]} />
       </label>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <label style={{ display: "grid", gap: 3 }}>
-          <span className="mini-meta">Least acceptable reach</span>
+          <span className="fact-line">Least acceptable reach</span>
           <input
             className="ccw-input mono"
             type="text"
@@ -110,7 +119,7 @@ function ConfigFields({ id, cfg, errs, keyPrefix, disabled, onChange }: {
           <FieldError msg={errs[`${keyPrefix}min_visibility`]} />
         </label>
         <label style={{ display: "grid", gap: 3 }}>
-          <span className="mini-meta">Collectors that must agree</span>
+          <span className="fact-line">Collectors that must agree</span>
           <input
             className="ccw-input mono"
             type="text"
@@ -202,16 +211,17 @@ export function AlertPolicyPanel({ status }: { status?: BgpAlertStatus }) {
     <Section
       id="alert-policy"
       title="Alert rules"
-      sub="What counts as a problem — the rules behind every result above"
+      sub="What counts as a problem here"
       updatedAt={readAt}
-      note={<span className="mini-meta">your own rules</span>}
+      note={<span className="fact-line">your own rules</span>}
+      actions={<AskIris topic="bgp.alert-rules" label="Alert rules" />}
     >
       <p className="mini-meta" style={{ marginTop: 0 }}>
         {policyEvaluationNote(status)}
       </p>
 
-      {err && <p role="alert" className="mini-meta" style={{ color: "var(--crit)" }}>{err}</p>}
-      {saved && <p role="status" className="mini-meta" style={{ color: "var(--ok)" }}>Saved.</p>}
+      {err && <p role="alert" className="fact-line fact-bad">{err}</p>}
+      {saved && <p role="status" className="fact-line" style={{ color: "var(--ok)" }}>Saved.</p>}
 
       <ConfigFields
         id="Default"
@@ -224,7 +234,7 @@ export function AlertPolicyPanel({ status }: { status?: BgpAlertStatus }) {
 
       <div style={{ marginTop: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span className="mini-meta">
+          <span className="fact-line">
             Rules for one prefix — {form.prefixes.length} of {limits.maxPrefixes}
           </span>
           <button className="btn-ghost" style={{ fontSize: 13 }} disabled={busy} onClick={addPrefix}>
@@ -235,8 +245,7 @@ export function AlertPolicyPanel({ status }: { status?: BgpAlertStatus }) {
 
         {form.prefixes.length === 0 && (
           <div className="empty">
-            Every watched prefix is judged by the settings above. Add one here when a single prefix has its own origin,
-            its own carriers or its own thresholds.
+            Every watched prefix uses the settings above. Add one to override them.
           </div>
         )}
 
@@ -286,22 +295,15 @@ export function AlertPolicyPanel({ status }: { status?: BgpAlertStatus }) {
         <button className="btn-primary" disabled={busy || !dirty} onClick={() => void save()}>
           Save rules
         </button>
-        {dirty && !busy && <span className="mini-meta">Unsaved changes.</span>}
+        {dirty && !busy && <span className="fact-line">Unsaved changes.</span>}
+        <AskIris topic="policy.bgp-canonical" label="Save rules" />
         {resp?.updated_by && (
-          <span className="mini-meta" style={{ marginLeft: "auto" }}>
+          <span className="fact-line" style={{ marginLeft: "auto" }}>
             Last set by {resp.updated_by}
             {resp.updated_at ? ` on ${new Date(resp.updated_at).toLocaleString()}` : ""}
           </span>
         )}
       </div>
-
-      <Details summary="What happens when you save">
-        <p className="mini-meta" style={{ marginBottom: 0 }}>
-          Saving tidies what you typed into one canonical form — duplicates dropped, AS numbers sorted, every prefix
-          rewritten to its network address — and this panel then re-renders from what is actually stored, never from
-          what was typed. So what you see here is always the rule the checks are using.
-        </p>
-      </Details>
     </Section>
   );
 }

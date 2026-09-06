@@ -9,14 +9,18 @@ import { useCallback, useEffect, useState } from "react";
 import { api, PostureRow } from "../services/api";
 import { fmtDate, fmtDateTime } from "../lib/time";
 import { StatStrip, Stat } from "../components/ui";
+import AskIris from "../components/AskIris";
 
 // ---- shared chrome (admin.tsx keeps these private; replicated, not imported) --
 
-function AdminHead({ title, sub }: { title: string; sub: string }) {
+function AdminHead({ title, sub, topic }: { title: string; sub: string; topic?: string }) {
   return (
     <div className="admin-head">
       <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>{title}</h2>
-      <p className="admin-sub">{sub}</p>
+      <p className="admin-sub">
+        {sub}
+        {topic && <AskIris topic={topic} label={title} />}
+      </p>
     </div>
   );
 }
@@ -135,7 +139,7 @@ export function TransportSecurity() {
   if (!data) {
     return (
       <>
-        <AdminHead title="Transport Security" sub="Read-only TLS posture of every internal transport path: declared vs target tier, live probe results, drift and accepted exceptions." />
+        <AdminHead title="Transport Security" sub="Read-only TLS posture of every internal transport path." topic="tls.transport-posture" />
         <ErrLine msg={err} />
         {!err && <div className="empty">Loading transport posture…</div>}
       </>
@@ -146,7 +150,7 @@ export function TransportSecurity() {
     const lanes = data.device_lanes ?? [];
     return (
       <>
-        <AdminHead title="Transport Security" sub="Read-only TLS posture of the transport lanes carrying your devices' telemetry." />
+        <AdminHead title="Transport Security" sub="Read-only TLS posture of your devices' telemetry lanes." topic="tls.transport-posture" />
         <ErrLine msg={err} />
         <div className="card" style={{ paddingTop: 8 }}>
           <h3 style={{ margin: "0 0 var(--sp-2)" }}>Your fleet: {data.device_count ?? 0} devices</h3>
@@ -166,7 +170,7 @@ export function TransportSecurity() {
   const v = data.validator;
   return (
     <>
-      <AdminHead title="Transport Security" sub="Read-only TLS posture of every internal transport path: declared vs target tier, live probe results, drift and accepted exceptions." />
+      <AdminHead title="Transport Security" sub="Read-only TLS posture of every internal transport path." topic="tls.transport-posture" />
       <ErrLine msg={err} />
       <StatStrip>
         <Stat label="Paths" value={rows.length} />
@@ -176,7 +180,7 @@ export function TransportSecurity() {
         <Stat label="Warnings" value={v?.warn ?? "—"} tone={v && v.warn > 0 ? "warn" : ""} />
       </StatStrip>
       <div className="ds-toolbar">
-        <span className="mini-meta">Generated {fmtDateTime(data.generated)}{v ? ` · profile ${v.profile}` : ""}</span>
+        <span className="fact-line">Generated {fmtDateTime(data.generated)}{v ? ` · profile ${v.profile}` : ""}</span>
         <button className="btn" disabled={exporting} onClick={() => { void doExport(); }}>
           {exporting ? "Exporting…" : "Export report (HTML)"}
         </button>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import ReactECharts from "../components/EChart";
 import { api } from "../services/api";
 import { usePolled, latestFromProm, nowWindow, seriesLabel } from "./panels";
@@ -50,12 +50,23 @@ const axis = {
   axisLabel: { color: INK_DIM, fontSize: 10 },
 };
 
+// UI-words sweep 5 (tracker 270): the loading / failed / empty lines below are
+// STATED FACTS about the feed, not explanations, so they stop wearing the
+// `demo-note` note class the word-budget guard reads (src/wordBudget.test.ts).
+// The demo board is dark and owns its own ink token, so the two presentational
+// values `.demo-note` carried travel inline rather than in a new global rule —
+// at 12.5px, the sweep's typography floor (they rendered at 11px).
+const DEMO_STATE: CSSProperties = {
+  padding: "22px 8px", textAlign: "center", color: "var(--d-dim)", fontSize: 12.5,
+};
+const DEMO_STATE_BAD: CSSProperties = { ...DEMO_STATE, color: "#fca5a5" };
+
 /** Fixed-height chart shell with an honest empty/failed state. */
 function Chart({ height, option, err, empty }: {
   height: number; option: Record<string, unknown>; err?: unknown; empty?: boolean;
 }) {
-  if (err) return <div className="demo-note demo-note-bad">feed unavailable</div>;
-  if (empty) return <div className="demo-note">waiting for data…</div>;
+  if (err) return <div className="fact-line" style={DEMO_STATE_BAD}>Feed unavailable.</div>;
+  if (empty) return <div className="fact-line" style={DEMO_STATE}>Waiting for data…</div>;
   return <ReactECharts notMerge style={{ height }} option={option} />;
 }
 
@@ -463,9 +474,9 @@ export function EventTicker({ height = 226 }: { height?: number }) {
   }, []);
 
   const tone = (s: string) => (s === "crit" ? "#f43f5e" : s === "high" ? "#d97706" : s === "warn" ? "#a855f7" : "#0284c7");
-  if (err && !items) return <div className="demo-note demo-note-bad">feed unavailable</div>;
-  if (!items) return <div className="demo-note">waiting for events…</div>;
-  if (items.length === 0) return <div className="demo-note">no events in the window</div>;
+  if (err && !items) return <div className="fact-line" style={DEMO_STATE_BAD}>Feed unavailable.</div>;
+  if (!items) return <div className="fact-line" style={DEMO_STATE}>Waiting for events…</div>;
+  if (items.length === 0) return <div className="fact-line" style={DEMO_STATE}>No events in the window.</div>;
   return (
     <div className="demo-ticker" style={{ height }} ref={ref}>
       <div className="demo-ticker-track">

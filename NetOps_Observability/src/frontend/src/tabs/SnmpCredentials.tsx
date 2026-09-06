@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { api, SNMPCredential, SNMPOptions } from "../services/api";
+import AskIris from "../components/AskIris";
 
 const BLANK: SNMPCredential = {
   name: "", version: "v2c", port: 161, timeout_ms: 2000, retries: 1,
@@ -50,9 +51,8 @@ export default function SnmpCredentials() {
       <div className="admin-head">
         <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>SNMP Credentials</h2>
         <p className="admin-sub">
-          Community strings (v1/v2c) and SNMPv3 USM profiles. Assign a profile to a device via its
-          <code> credential_ref</code>; the collector uses it instead of the global default. Different device
-          groups can use different communities.
+          Credentials the collector polls devices with.
+          <AskIris topic="snmp.credentials" label="SNMP Credentials" />
         </p>
       </div>
 
@@ -86,7 +86,14 @@ export default function SnmpCredentials() {
                 </td>
               </tr>
             ))}
-            {creds.length === 0 && <tr><td colSpan={8} className="panel-empty">No SNMP profiles yet — devices fall back to the global SNMP_COMMUNITY.</td></tr>}
+            {creds.length === 0 && (
+              <tr>
+                <td colSpan={8} className="panel-empty">
+                  No profiles — devices use the global community.
+                  <AskIris topic="snmp.credentials" label="No profiles" />
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

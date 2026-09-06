@@ -107,7 +107,7 @@ function CoverageStrip({ coverage, notes }: { coverage?: IgpAdjacenciesResponse[
 
 function Timeline({ ticks }: { ticks: ReturnType<typeof timelineTicks> }) {
   if (ticks.length === 0) {
-    return <span className="mini-meta">no change in window</span>;
+    return <span className="fact-line">No change in window.</span>;
   }
   return (
     <span className="igp-timeline" aria-label={`${ticks.length} adjacency changes, oldest first`}>
@@ -147,7 +147,7 @@ function DepthCount({ title, view }: { title: string; view: DepthView }) {
       <span className="mini-meta igp-depth-title">{title}</span>
       <span className="igp-depth-value mono">{view.value}</span>
       {view.scopes.length > 0 && (
-        <ul className="mini-meta igp-depth-scopes" aria-label={`${title} by ${view.scopeLabel}`}>
+        <ul className="fact-line igp-depth-scopes" aria-label={`${title} by ${view.scopeLabel}`}>
           {view.scopes.map((sc) => (
             <li key={sc.scope}>
               <span className="mono">{sc.scope}</span>: <span className="mono">{sc.count}</span>
@@ -351,7 +351,7 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
           ariaLabel={`${PROTO_LABEL[proto]} time window`}
         />
         <label className="igp-device-pick">
-          <span className="mini-meta">Device</span>
+          <span className="fact-line">Device</span>
           <select value={device} onChange={(e) => setDevice(e.target.value)} aria-label="Device">
             <option value="">All devices</option>
             {devices.map((d) => (
@@ -485,7 +485,7 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
             </table>
           </div>
           {sum.data?.truncated && (
-            <p className="mini-meta">
+            <p className="fact-line">
               This roll-up is partial — see the notes below for what it covers.
             </p>
           )}

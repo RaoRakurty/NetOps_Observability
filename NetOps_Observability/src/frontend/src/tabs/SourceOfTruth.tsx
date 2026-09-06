@@ -23,7 +23,7 @@ function sotStatus(c: NetboxConfig | null): Status {
   return { label: "Not set up", tone: "" };
 }
 
-const labelStyle = { display: "block", fontSize: 12, color: "var(--muted)", margin: "10px 0 4px" } as const;
+const labelStyle = { display: "block", fontSize: 12.5, color: "var(--muted)", margin: "10px 0 4px" } as const;
 
 // DirectionPicker controls how devices flow between the platform and the
 // inventory. Default "none" keeps automatic sync OFF until an operator opts in,
@@ -47,7 +47,7 @@ function DirectionPicker({ value, onChange }: { value: Direction; onChange: (v: 
           <button
             key={d.v}
             className={`btn${d.v === value ? " accent" : ""}`}
-            style={{ fontSize: 12 }}
+            style={{ fontSize: 12.5 }}
             onClick={() => onChange(d.v)}
             type="button"
             aria-pressed={d.v === value}
@@ -56,7 +56,7 @@ function DirectionPicker({ value, onChange }: { value: Direction; onChange: (v: 
           </button>
         ))}
       </div>
-      <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>{cur.help}</p>
+      <p style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 6 }}>{cur.help}</p>
     </div>
   );
 }
@@ -245,7 +245,7 @@ export default function SourceOfTruth() {
             value={tokenV}
             onChange={(e) => setTokenV(e.target.value)}
           />
-          <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>Encrypted at rest by the secret-custody Vault; never shown again.</p>
+          <p style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 6 }}>Encrypted at rest by the secret-custody Vault; never shown again.</p>
         </div>
       ),
     },
@@ -323,13 +323,13 @@ export default function SourceOfTruth() {
           )}
         </div>
         {poll && (
-          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+          <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 8 }}>
             Last sync: {poll.last_poll ? fmtDateTime(poll.last_poll) : "—"} · {poll.devices ?? 0} device(s)
             {poll.last_error ? <span style={{ color: "var(--bad)" }}> · error: {poll.last_error}</span> : null}
           </div>
         )}
         {syncStat?.enabled && (
-          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+          <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 4 }}>
             Last push: {syncStat.last_run ? fmtDateTime(syncStat.last_run) : "not run yet"}
             {syncStat.last_run ? <> · {syncStat.created} added · {syncStat.present} already present</> : null}
             {syncStat.last_error ? <span style={{ color: "var(--bad)" }}> · error: {syncStat.last_error}</span> : null}
@@ -390,7 +390,7 @@ export default function SourceOfTruth() {
           style={{ position: "fixed", inset: 0, background: "rgba(10,10,20,.45)", display: "grid", placeItems: "center", zIndex: 50, padding: 16 }}
         >
           <div onClick={(e) => e.stopPropagation()} className="card" style={{ maxWidth: 560, width: "100%" }}>
-            <h3 style={{ marginTop: 0 }}>Set up the Source of Truth</h3>
+            <h3 style={{ marginTop: 0 }}>Set up inventory</h3>
             <Wizard key={mode} steps={steps} onFinish={save} onCancel={() => setWizard(false)} finishLabel="Save" />
           </div>
         </div>

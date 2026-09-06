@@ -22,6 +22,7 @@ import { api, type BgpBogonsResp } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { groupSightings } from "./bgpAlerts.model";
 import { Details, Section, ShowAll, SubBlock, useCap } from "./Section";
+import AskIris from "../../components/AskIris";
 
 /** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
 const FIRST_SIGHTINGS = 8;
@@ -35,7 +36,7 @@ function BogonGroup({ g }: { g: ReturnType<typeof groupSightings>[number] }) {
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <span className="mono" style={{ fontWeight: 600 }}>{g.block}</span>
         <Chip label={`${g.rows.length} prefix${g.rows.length === 1 ? "" : "es"}`} tone="var(--crit)" />
-        <span className="mini-meta">{g.why}</span>
+        <span className="fact-line">{g.why}</span>
       </div>
       <div className="bgp-scroll">
         <table className="tbl bgp-tbl" style={{ width: "100%" }}>
@@ -46,11 +47,11 @@ function BogonGroup({ g }: { g: ReturnType<typeof groupSightings>[number] }) {
             {cap.rows.map((r) => (
               <tr key={`${r.prefix}|${r.source}|${r.peer ?? ""}`}>
                 <td className="mono">{r.prefix}</td>
-                <td className="mini-meta">{r.source}</td>
+                <td className="fact-line">{r.source}</td>
                 <td className="mono">{r.peer || "—"}</td>
                 <td className="mono">{r.origin ? `AS${r.origin}` : "—"}</td>
-                <td className="mini-meta">{new Date(r.first_seen).toLocaleString()}</td>
-                <td className="mini-meta">{new Date(r.last_seen).toLocaleString()}</td>
+                <td className="fact-line">{new Date(r.first_seen).toLocaleString()}</td>
+                <td className="fact-line">{new Date(r.last_seen).toLocaleString()}</td>
                 <td className="mono num">{r.count}</td>
               </tr>
             ))}
@@ -84,12 +85,12 @@ export function BogonsPanel() {
     <Section
       id="bogons"
       title="Addresses that should never be routed"
-      sub="Bogons — reserved, private and undelegated space, and any of it seen on your network"
+      sub="Bogons — reserved space seen on your network"
       updatedAt={at}
     >
       <SubBlock title="Blocklist in use">
         {busy && <div className="empty">Reading the blocklist…</div>}
-        {err && <p className="mini-meta" role="alert" style={{ color: "var(--bad)" }}>{err}</p>}
+        {err && <p className="fact-line fact-bad" role="alert">{err}</p>}
         {data && (
           <>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
@@ -106,18 +107,18 @@ export function BogonsPanel() {
               )}
             </div>
             {data.feed.enabled && data.feed.error && (
-              <p className="mini-meta" style={{ color: "var(--warn)" }}>
+              <p className="fact-line fact-warn">
                 The full-bogons feed did not refresh: {data.feed.error}. The embedded set is still in force — nothing
                 has been un-flagged.
               </p>
             )}
             <Details summary="What is on this list">
-              <p className="mini-meta">{data.set.note}</p>
+              <p className="fact-line">{data.set.note}</p>
               {!data.feed.enabled && data.feed.note && (
-                <p className="mini-meta" style={{ color: "var(--muted)" }}>{data.feed.note}</p>
+                <p className="fact-line">{data.feed.note}</p>
               )}
               {data.feed.enabled && data.feed.fetched_at && !data.feed.error && (
-                <p className="mini-meta" style={{ marginBottom: 0 }}>
+                <p className="fact-line" style={{ marginBottom: 0 }}>
                   Feed last fetched {new Date(data.feed.fetched_at).toLocaleString()}.
                 </p>
               )}
@@ -127,7 +128,7 @@ export function BogonsPanel() {
       </SubBlock>
 
       <SubBlock title="Seen on your network">
-        {data && data.note && <p className="mini-meta" style={{ color: "var(--warn)" }}>{data.note}</p>}
+        {data && data.note && <p className="fact-line fact-warn">{data.note}</p>}
         {data && groups.length === 0 && (
           <div className="empty">
             {data.note
@@ -137,8 +138,8 @@ export function BogonsPanel() {
         )}
         {groups.map((g) => <BogonGroup key={g.block} g={g} />)}
         <p className="mini-meta" style={{ marginBottom: 0 }}>
-          Anything listed here is either a leak into your network or a misconfigured neighbour — it is never normal.
-          These rows come from your OWN routers and update feed only.
+          A leak or a misconfigured neighbour, never normal.
+          <AskIris topic="bgp.bogon-sighting" label="Seen on your network" />
         </p>
       </SubBlock>
     </Section>

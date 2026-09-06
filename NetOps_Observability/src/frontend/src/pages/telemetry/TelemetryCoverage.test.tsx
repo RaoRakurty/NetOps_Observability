@@ -67,7 +67,7 @@ describe("header stats", () => {
 
     expect(screen.getByText("Semantic promotion rate")).toBeInTheDocument();
     expect(screen.getByText("81.3%")).toBeInTheDocument();
-    expect(screen.getByText("over the last 240,000 admitted lines")).toBeInTheDocument();
+    expect(screen.getByText("240,000 lines")).toBeInTheDocument();
 
     expect(screen.getByText("Prefilter passed")).toBeInTheDocument();
     expect(screen.getByText("Prefilter rejected")).toBeInTheDocument();
@@ -79,10 +79,10 @@ describe("header stats", () => {
     expect(ruleRowsOf(container).length).toBe(5);
   });
 
-  it("words a null promotion rate as 'no admitted lines yet' rather than 0%", async () => {
+  it("words a null promotion rate as 'No lines yet' rather than 0%", async () => {
     parserStats.mockResolvedValue(parserStatsNoLinesFixture);
     const { container } = render(<TelemetryCoverage />);
-    expect(await screen.findByText("no admitted lines yet")).toBeInTheDocument();
+    expect(await screen.findByText("No lines yet")).toBeInTheDocument();
     expect(container.querySelector(".ds-stat-num")?.textContent).toBe("—");
     expect(screen.queryByText("0.0%")).toBeNull();
   });
@@ -237,8 +237,10 @@ describe("permission states (§3a)", () => {
     parserStats.mockRejectedValue(forbidden());
     const { container } = render(<TelemetryCoverage />);
 
-    expect(await screen.findByText("Parser coverage — platform-admin only")).toBeInTheDocument();
-    expect(screen.getByText(/visible to platform administrators only/)).toBeInTheDocument();
+    expect(await screen.findByText("Parser coverage")).toBeInTheDocument();
+    expect(await screen.findByText("Platform-wide, not per tenant — platform administrators only.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask Iris about Parser coverage" })).toBeTruthy();
+    expect(screen.getByText(/need no platform access/)).toBeInTheDocument();
     // Not an error, and none of the platform-global numbers leaked.
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText("Semantic promotion rate")).toBeNull();
@@ -252,7 +254,7 @@ describe("permission states (§3a)", () => {
     render(<TelemetryCoverage />);
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Parser stats unavailable.");
-    expect(screen.queryByText("Parser coverage — platform-admin only")).toBeNull();
+    expect(screen.queryByText("Platform-wide, not per tenant — platform administrators only.")).toBeNull();
   });
 });
 

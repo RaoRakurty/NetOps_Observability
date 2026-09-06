@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../services/api";
 import { Group, Panel, MetricLine, MetricTop, MetricStat, fmtNum } from "../components/board/panels";
 import { StatStrip, Stat, StatTone } from "../components/ui";
+import AskIris from "../components/AskIris";
 import InvestigationPage from "./troubleshoot/InvestigationPage";
 import { parseInvestigationHash, type TroubleshootSection } from "./troubleshoot/investigationModel";
 
@@ -121,9 +122,13 @@ export default function Troubleshooting({ rangeMinutes = 60 }: { rangeMinutes?: 
         <InvestigationPage rangeMinutes={m} initialSymptom={initial.symptom} initialCaseId={initial.caseId} />
       ) : (
       <>
-      <p className="mini-meta" style={{ margin: 0 }}>
-        This is the legacy collection-pipeline board. It answers one question — is the PIPELINE or the DEVICE at
-        fault — and stays reachable for one release; day-to-day troubleshooting now starts on Investigation.
+      {/* WORDS (sweep 5, tracker 270). What this board IS stays on screen — it is a
+          fact about the product, and an operator who lands here from an old link
+          must read it. WHY it still exists and which question it answers is
+          ai/skills/explain/pipeline.legacy-board.md, behind the (i). */}
+      <p className="fact-line" style={{ margin: 0 }}>
+        Legacy board. Investigation is the day-to-day surface.
+        <AskIris topic="pipeline.legacy-board" label="Collection pipeline board" />
       </p>
 
       <Group title="Fleet counts" hue="#3B82F6">
@@ -133,8 +138,12 @@ export default function Troubleshooting({ rangeMinutes = 60 }: { rangeMinutes?: 
           <CountStat label="Flows indexed (1h)" loader={flowsTotal} tone={(n) => (n > 0 ? "good" : "warn")} />
           <CountStat label="SNMP traps (1h)" loader={trapsTotal} />
         </StatStrip>
+        {/* The ONE explanatory note this board keeps: the reading that makes the
+            four counts worth putting side by side. The causes behind it (creds,
+            ACL, device down) are ai/skills/explain/pipeline.reachable-zero.md. */}
         <p className="mini-meta" style={{ margin: 0 }}>
-          When monitored &gt; 0 but reachable = 0, the collector is healthy and the devices are unreachable (creds / ACL / device down) — not a pipeline failure.
+          Reachable 0 with monitored above 0 points at the devices.
+          <AskIris topic="pipeline.reachable-zero" label="Reachable versus monitored" />
         </p>
       </Group>
 
@@ -153,8 +162,9 @@ export default function Troubleshooting({ rangeMinutes = 60 }: { rangeMinutes?: 
 
       <Group title="NetFlow pipeline" hue="#8B5CF6">
         <FlowSources />
-        <p className="mini-meta" style={{ margin: 0 }}>
-          Flow records are aggregated exporter-side; a difference between exported and indexed counts is expected. Full per-dimension analysis lives in the Flows dashboard.
+        <p className="fact-line" style={{ margin: 0 }}>
+          Per-dimension flow analysis lives in the Flows dashboard.
+          <AskIris topic="pipeline.flow-aggregation" label="Exported versus indexed flows" />
         </p>
       </Group>
 
@@ -163,7 +173,7 @@ export default function Troubleshooting({ rangeMinutes = 60 }: { rangeMinutes?: 
           <StatStrip>
             <CountStat label="Traps stored" loader={trapsTotal} />
           </StatStrip>
-          <p className="mini-meta" style={{ margin: 0 }}>Browse individual traps in Logs → Log Explorer (SNMP traps signal).</p>
+          <p className="fact-line" style={{ margin: 0 }}>Individual traps: Logs → Log Explorer, SNMP traps signal.</p>
         </Panel>
       </Group>
       </>

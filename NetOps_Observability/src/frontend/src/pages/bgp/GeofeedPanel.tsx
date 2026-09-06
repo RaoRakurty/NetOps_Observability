@@ -13,7 +13,8 @@ import { useEffect, useState } from "react";
 import { api, type BgpGeofeedResp } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { geofeedCountries } from "./bgpDepth.model";
-import { Details, Section, ShowAll, useCap } from "./Section";
+import { Section, ShowAll, useCap } from "./Section";
+import AskIris from "../../components/AskIris";
 
 /** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
 const FIRST_ROWS = 8;
@@ -42,29 +43,23 @@ export function GeofeedPanel({ resource }: { resource?: string }) {
     <Section
       id="geofeed"
       title="Where this address space is used"
-      sub="Geofeed (RFC 8805) — locations the address-space holder publishes about it"
+      sub="Geofeed — locations the holder publishes"
       updatedAt={at}
       wide
     >
-      {!resource && <div className="empty">Pick a prefix or AS to see the locations its holder publishes.</div>}
+      {!resource && <div className="empty">Pick a prefix or AS to see published locations.</div>}
       {busy && <div className="empty">Looking for published locations…</div>}
-      {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
+      {err && <p className="fact-line fact-bad" role="alert">{err}</p>}
 
       {data && data.error && (
-        <p className="mini-meta" style={{ color: "var(--warn)" }}>{data.error}</p>
+        <p className="fact-line fact-warn">{data.error}</p>
       )}
 
       {data && !data.published && !data.error && (
         <div className="empty" style={{ textAlign: "left" }}>
-          The holder of {data.resource} publishes no locations for it, so anything claiming to know where this address
-          space is used is a third-party guess.
-          <Details summary="How a holder publishes them">
-            <p className="mini-meta" style={{ margin: 0 }}>
-              A holder advertises a geofeed with a <span className="mono">geofeed:</span> attribute (or a{" "}
-              <span className="mono">Geofeed &lt;url&gt;</span> remark) on their inet(6)num registry object.
-            </p>
-            {data.note && <p className="mini-meta" style={{ margin: "6px 0 0" }}>{data.note}</p>}
-          </Details>
+          The holder of {data.resource} publishes no locations. Anything else is a third-party guess.
+          <AskIris topic="bgp.geofeed-publish" label="How a holder publishes them" />
+          {data.note && <p className="fact-line" style={{ margin: "6px 0 0" }}>{data.note}</p>}
         </div>
       )}
 
@@ -80,7 +75,7 @@ export function GeofeedPanel({ resource }: { resource?: string }) {
             {countries.slice(0, 6).map((c) => <Chip key={c.country} label={`${c.country} ${c.rows}`} />)}
           </div>
           {data.truncated && (
-            <p className="mini-meta" style={{ color: "var(--warn)" }}>
+            <p className="fact-line fact-warn">
               The published list is larger than this view shows — rows are capped.
             </p>
           )}
@@ -103,19 +98,17 @@ export function GeofeedPanel({ resource }: { resource?: string }) {
             </table>
           </div>
           <ShowAll cap={cap} noun="rows" />
-          <Details summary="Where this came from">
-            {data.source_url && (
-              <p className="mini-meta">
-                Published by the holder at{" "}
-                <a href={data.source_url} target="_blank" rel="noreferrer" className="mono">{data.source_url}</a>
-              </p>
-            )}
-            <p className="mini-meta" style={{ marginBottom: 0 }}>
-              Only rows about address space inside {data.resource} are kept, so a published list cannot make claims
-              about somebody else&apos;s prefixes through this view. Malformed rows are dropped, never repaired.
-              {data.note ? ` ${data.note}` : ""}
+          {data.source_url && (
+            <p className="fact-line">
+              Published by the holder at{" "}
+              <a href={data.source_url} target="_blank" rel="noreferrer" className="mono">{data.source_url}</a>
             </p>
-          </Details>
+          )}
+          <p className="mini-meta" style={{ marginBottom: 0 }}>
+            Only rows inside {data.resource} are kept. Malformed rows are dropped.
+            <AskIris topic="bgp.geofeed-scope" label="Where this came from" />
+            {data.note ? ` ${data.note}` : ""}
+          </p>
         </>
       )}
     </Section>

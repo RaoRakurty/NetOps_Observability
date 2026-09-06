@@ -11,7 +11,8 @@
 import { useEffect, useState } from "react";
 import { api, type BgpAspaResp } from "../../services/api";
 import { Chip } from "../../components/noc";
-import { Details, Section } from "./Section";
+import { Section } from "./Section";
+import AskIris from "../../components/AskIris";
 
 export function AspaCard({ asn }: { asn?: string }) {
   const [data, setData] = useState<BgpAspaResp | null>(null);
@@ -33,22 +34,22 @@ export function AspaCard({ asn }: { asn?: string }) {
     <Section
       id="aspa"
       title="Approved upstream providers"
-      sub="ASPA — the carriers the AS holder has authorised to carry their routes"
+      sub="ASPA — carriers the AS holder authorised"
       updatedAt={at}
     >
-      {!asn && <div className="empty">Pick an AS (or a prefix whose origin we can work out) to see who its holder has approved.</div>}
-      {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
+      {!asn && <div className="empty">Pick an AS or prefix to see its approved carriers.</div>}
+      {err && <p className="fact-line fact-bad" role="alert">{err}</p>}
 
       {data && !data.status.configured && (
         <div className="empty bgp-honest">
           <Chip label="No source configured" tone="var(--muted)" title="ASPA — no data source is configured for it." />
           <p style={{ margin: "6px 0 0" }}>{data.status.reason}</p>
-          {data.status.how_to && <p className="mini-meta" style={{ margin: 0 }}>{data.status.how_to}</p>}
+          {data.status.how_to && <p className="fact-line" style={{ margin: 0 }}>{data.status.how_to}</p>}
         </div>
       )}
 
       {data?.status.configured && data.error && (
-        <p className="mini-meta" style={{ color: "var(--warn)" }}>
+        <p className="fact-line fact-warn">
           {data.status.host ? `${data.status.host}: ` : ""}{data.error}
         </p>
       )}
@@ -76,12 +77,12 @@ export function AspaCard({ asn }: { asn?: string }) {
               ))}
             </div>
           )}
-          {data.aspa.truncated && <p className="mini-meta" style={{ color: "var(--warn)" }}>The provider list is cut short.</p>}
-          <Details summary="Where this came from">
-            <p className="mini-meta" style={{ marginBottom: 0 }}>
-              Source: {data.aspa.source}. ASPA is still an IETF draft in deployment terms — read it, do not alert on it.
-            </p>
-          </Details>
+          {data.aspa.truncated && <p className="fact-line fact-warn">The provider list is cut short.</p>}
+          <p className="fact-line">Source: {data.aspa.source}</p>
+          <p className="mini-meta">
+            Read it, do not alert on it.
+            <AskIris topic="aspa.draft-status" label="Approved upstream providers" />
+          </p>
         </>
       )}
     </Section>

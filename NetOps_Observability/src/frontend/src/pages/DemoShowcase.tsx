@@ -6,6 +6,7 @@ import {
   RacingBars, StreamGraph, EventTicker, BigStat,
 } from "./demoPanels";
 import { api } from "../services/api";
+import AskIris from "../components/AskIris";
 
 // DemoShowcase — the marketing board.
 //
@@ -79,10 +80,11 @@ export default function DemoShowcase() {
             <span className="demo2-pulse" /> Correlix · live network intelligence
           </div>
           <h1 className="demo2-title">
-            Every packet, path and platform<span className="demo2-title-accent">.</span>
+            Every packet and path<span className="demo2-title-accent">.</span>
           </h1>
           <p className="demo2-sub">
-            SNMP telemetry · NetFlow · synthetic probes · correlated root cause — one screen, streaming from the running stack.
+            Live from the running stack.
+            <AskIris topic="demo.showcase" label="Every packet and path" />
           </p>
         </div>
         <div className="demo2-hero-stats">
@@ -172,8 +174,8 @@ export default function DemoShowcase() {
       <section className="demo2-row demo2-row-4">
         <div className="demo2-card demo2-span-8">
           <div className="demo2-card-h">
-            <h3>NetFlow · traffic by protocol</h3>
-            <span>stacked stream, last hour</span>
+            <h3>Traffic by protocol</h3>
+            <span>NetFlow · last hour</span>
           </div>
           <StreamGraph />
         </div>

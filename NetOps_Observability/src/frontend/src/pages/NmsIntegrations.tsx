@@ -10,6 +10,7 @@ import {
 import Wizard, { WizardStep } from "../components/Wizard";
 import { Modal, Skeleton, Stat, StatStrip } from "../components/ui";
 import { NmsDashArt, NmsMark } from "../components/NmsControllerArt";
+import AskIris from "../components/AskIris";
 
 // NMS Integrations (#95) — the vendor-controller gallery + guided setup +
 // integration manager. Controller INTELLIGENCE ingestion: each connected
@@ -640,7 +641,11 @@ function ManageModal({ integration, health, onClose, onChanged, onDeleted }: {
 
         <div className="nms-panes">
           <div>
-            <h4>Controller state <span className="nms-field-h">(what the controller believes right now)</span></h4>
+            <h4>Controller state</h4>
+            <div className="fact-line">
+              What the controller believes now.
+              <AskIris topic="nms.controller-state" label="Controller state" />
+            </div>
             {states === undefined ? (
               <Skeleton w="100%" h={60} />
             ) : states.length === 0 ? (

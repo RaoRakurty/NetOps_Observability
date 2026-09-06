@@ -1,11 +1,18 @@
 import { useState } from "react";
 import { api, AiAnswer } from "../../services/api";
 import Icon from "../Icon";
+import AskIris from "../AskIris";
 
 // RcaAskAi — the Iris AI "Ask AI" card on the RCA Inspector. One click asks
 // the orchestrator to explain THIS correlation; the backend retrieves the
 // tenant-scoped evidence, grounds the model, and returns a cited answer. All
 // model text renders as escaped React text (never HTML) — OWASP LLM05.
+//
+// UI-words sweep 5 (tracker 270): the paragraph that described WHAT the answer
+// contains (grounded, evidence-cited, root cause, missing evidence, next action)
+// is ai/skills/explain/iris.explain-correlation.md, behind the (i). The provider
+// stamp, the cited-evidence label and the model's own disclaimers are STATED
+// FACTS (.fact-line), not explanations — a provenance stamp is not a lesson.
 export default function RcaAskAi({ correlationId }: { correlationId: string }) {
   const [ans, setAns] = useState<AiAnswer | null>(null);
   const [busy, setBusy] = useState(false);
@@ -42,8 +49,8 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
 
       {!ans && !busy && !err && (
         <p className="mini-meta" style={{ marginTop: 8, marginBottom: 0 }}>
-          Ask Iris AI for a grounded, evidence-cited explanation of this correlation — root cause, supporting
-          evidence, what's missing, and a recommended next action.
+          Iris explains this correlation from its own evidence.
+          <AskIris topic="iris.explain-correlation" label="Explain this problem" />
         </p>
       )}
 
@@ -70,7 +77,7 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
           {/* Cited evidence — clickable back into the source views (anti-black-box). */}
           {ans.citations?.length > 0 && (
             <div style={{ marginTop: 4 }}>
-              <div className="mini-meta" style={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 5 }}>
+              <div className="fact-line fact-strong" style={{ marginBottom: 5 }}>
                 Evidence
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -85,14 +92,14 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
           )}
 
           {ans.disclaimers?.length > 0 && (
-            <ul className="mini-meta" style={{ margin: "10px 0 0", paddingLeft: 16 }}>
+            <ul className="fact-line" style={{ margin: "10px 0 0", paddingLeft: 16 }}>
               {ans.disclaimers.map((d, i) => <li key={i}>{d}</li>)}
             </ul>
           )}
 
           {ans.provider && (
-            <p className="mini-meta" style={{ margin: "8px 0 0", opacity: 0.7 }}>
-              Grounded answer · {ans.provider === "none" ? "evidence-only (no provider)" : ans.provider} · cite the linked evidence to verify.
+            <p className="fact-line" style={{ margin: "8px 0 0", opacity: 0.7 }}>
+              Grounded · {ans.provider === "none" ? "evidence only, no provider" : ans.provider}
             </p>
           )}
         </div>

@@ -465,7 +465,7 @@ function RcaPanel({ app, evidence }: { app: App; evidence: EvidenceRow[] }) {
         <EvBlock title="Grounded findings" rows={grounded.slice(0, 12)} mark="✓" tone="var(--ok)" />
         <EvBlock title="Missing evidence (the engine's own gaps)" rows={missing} mark="–" tone="var(--fg-subtle)" />
         {!grounded.length && !missing.length && (
-          <div className="ao-muted ao-chain-empty">No cloud signals are attached to this RCA object yet.</div>
+          <div className="ao-muted ao-chain-empty">No cloud signals attached yet.</div>
         )}
       </div>
     </div>

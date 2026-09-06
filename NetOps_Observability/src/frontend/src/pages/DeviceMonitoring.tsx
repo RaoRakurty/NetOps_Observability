@@ -9,6 +9,7 @@ import {
 } from "../components/board/panels";
 import { latSev, lossSev, coerce as coerceTunnel, fmtTunnelUptime } from "../tabs/Tunnels";
 import { GeomapSection } from "./DeviceGeomap";
+import AskIris from "../components/AskIris";
 
 // Device Monitoring — the network-device-fleet cockpit (the fleet master
 // board). Collapsible, tinted section groups built on the
@@ -234,7 +235,7 @@ function TunnelOverlay() {
   const endpoint = (device: string, addr: string) => (
     <span title={`${device || "—"}${addr ? ` · ${addr}` : ""}`}>
       {device || "—"}
-      {addr && <span className="mini-meta" style={{ marginLeft: 6, fontFamily: "var(--font-mono, monospace)" }}>{addr}</span>}
+      {addr && <span className="fact-line" style={{ marginLeft: 6, fontFamily: "var(--font-mono, monospace)" }}>{addr}</span>}
     </span>
   );
 
@@ -351,8 +352,8 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
 
       <Group title="Traffic insights (NetFlow)" hue="#8B5CF6">
         <FlowInsights since={m * 60} />
-        <p className="mini-meta" style={{ margin: 0 }}>
-          Fleet traffic from flow records. Full filtering and per-dimension breakdowns are in the <a href="#/explore/flows" style={{ color: "var(--accent)", fontWeight: 600 }}>Flows</a> dashboard.
+        <p className="fact-line" style={{ margin: 0 }}>
+          Fleet traffic from flow records. Full breakdowns: <a href="#/explore/flows" style={{ color: "var(--accent)", fontWeight: 600 }}>Flows</a>.
         </p>
       </Group>
 
@@ -372,22 +373,23 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
           <MetricLine title="Path loss by target (%)" query="(probe_loss_pct or synthetic_icmp_loss_pct)" minutes={m} fmtY={(n) => `${n.toFixed(1)}%`} labelKeys={["dst"]} dataKind="synthetics" />
         </div>
         <p className="mini-meta" style={{ margin: 0 }}>
-          Service checks (HTTP / ICMP / TCP) from the synthetics runner; path SLA from the STAMP sender (RFC 8762).
-          Hop-by-hop paths live in <a href="#/investigate/flowtrace" style={{ color: "var(--accent)", fontWeight: 600 }}>Flow Trace</a>.
+          Checks and path SLA come from the probe runners.
+          <AskIris topic="monitoring.probe-sources" label="Network Path &amp; synthetics" />
+          {" "}Hop-by-hop paths: <a href="#/investigate/flowtrace" style={{ color: "var(--accent)", fontWeight: 600 }}>Flow Trace</a>.
         </p>
       </Group>
 
       <Group title="VPN & overlay tunnels" hue="#A855F7">
         <TunnelOverlay />
-        <p className="mini-meta" style={{ margin: 0 }}>
-          Tunnel interfaces (IPsec / GRE / VTI) discovered via standard IF-MIB &amp; TUNNEL-MIB SNMP walks.
-          Latency / loss / QoE populate when an SD-WAN controller or active-probe source reports them.
+        <p className="fact-line" style={{ margin: 0 }}>
+          Discovered by SNMP. Latency and loss need a controller feed.
+          <AskIris topic="tunnels.discovery" label="VPN &amp; overlay tunnels" />
         </p>
       </Group>
 
       <Group title="Geographic map" hue="#0EA5E9" defaultOpen={false}>
         <GeomapSection />
-        <p className="mini-meta" style={{ margin: 0 }}>
+        <p className="fact-line" style={{ margin: 0 }}>
           Sites and coordinates come from the Source of Truth (intent data, not GeoIP). Full map at{" "}
           <a href="#/infrastructure/sites/map" style={{ color: "var(--accent)", fontWeight: 600 }}>Device Geomap</a>.
         </p>

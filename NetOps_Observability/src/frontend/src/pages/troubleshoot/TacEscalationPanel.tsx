@@ -117,6 +117,7 @@ import {
   verdictLine,
   verifiedLabel,
 } from "./tacModel";
+import AskIris from "../../components/AskIris";
 
 /** The editable half of the case form — everything the vendor wants from a human. */
 type CaseFields = {
@@ -509,7 +510,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
 
           {classification.why.length > 0 ? (
             <>
-              <p className="mini-meta">The evidence that scored this class:</p>
+              <p className="fact-line">The evidence that scored this class:</p>
               <ul className="tac-why">
                 {classification.why.map((r) => (
                   <li key={`${r.kind}-${r.ref}`}>{reasonLine(r)}</li>
@@ -517,12 +518,12 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
               </ul>
             </>
           ) : (
-            <p className="mini-meta tac-note">No evidence row scored this class.</p>
+            <p className="fact-line">No evidence row scored this class.</p>
           )}
 
           {classification.alternatives.length > 0 && (
             <>
-              <p className="mini-meta">Other classes that scored:</p>
+              <p className="fact-line">Other classes that scored:</p>
               <ul className="tac-alts">
                 {classification.alternatives.map((a) => (
                   <li key={a.class_id}>
@@ -562,12 +563,10 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
                     ))}
                   </select>
                 </label>
-                <span className="mini-meta">Override it if you know the issue better than the evidence does.</span>
+                <span className="mini-meta">Override the class if you know better.</span>
               </div>
             ) : (
-              <p className="mini-meta tac-note">
-                The full class list arrives with a classification — classify again to change the class.
-              </p>
+              <p className="fact-line">The class list arrives with a classification.</p>
             )}
             <button type="button" className="btn" onClick={() => { void runClassify(); }} disabled={classifying}>
               {classifying ? "Classifying…" : "Classify again"}
@@ -938,7 +937,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
           {/* the paste fallback lives HERE and only here */}
           {pasteSteps.length > 0 && (
             <div className="tac-paste" data-testid="tac-paste">
-              <h4 className="tac-section-h">Paste output Correlix does not have</h4>
+              <h4 className="tac-section-h">Paste missing output</h4>
               <p className="mini-meta tac-note">{PASTE_INVITE}</p>
               {pasteSteps.slice(0, ROW_RENDER_CAP).map((s) => (
                 <label className="tac-paste-item" key={`p-${s.intent}`}>
@@ -998,7 +997,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
               {bundleNote && <p className="mini-meta tac-note" role="status">{bundleNote}</p>}
             </>
           )}
-          <h4 className="tac-section-h">Bundles built for this incident</h4>
+          <h4 className="tac-section-h">Built bundles</h4>
           {bundles.length === 0 ? (
             <p className="mini-meta tac-note">{NO_BUNDLE_YET}</p>
           ) : (
@@ -1021,7 +1020,8 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
           <p className="mini-meta tac-note">{CASE_HUMAN_APPROVED}</p>
           {(info.connectors ?? []).length === 0 ? (
             <p className="mini-meta tac-note">
-              No case connector is offered on this deployment — download the bundle and open the case yourself.
+              No case connector here — download the bundle and open the case.
+              <AskIris topic="tac.case-connector" label="No case connector" />
             </p>
           ) : (
             <ul className="tac-connectors">
@@ -1051,7 +1051,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
 
           {caseForm && caseConnector && (
             <div className="tac-case" data-testid="tac-case-form">
-              <h4 className="tac-section-h">{caseConnector.display} — review before it is sent</h4>
+              <h4 className="tac-section-h">{caseConnector.display} — review before sending</h4>
               <p className="mini-meta tac-note">
                 {caseForm.bundle_name} · {humanBytes(caseForm.bundle_bytes)} · {caseForm.profile} profile
                 {caseConnector.configured ? "" : ` · ${CONNECTOR_NOT_CONFIGURED}`}

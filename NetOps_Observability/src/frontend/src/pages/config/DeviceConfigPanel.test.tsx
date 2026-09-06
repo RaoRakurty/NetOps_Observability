@@ -231,7 +231,7 @@ describe("viewing a version and a diff — untrusted device text is escaped", ()
     });
     render(<DeviceConfigPanel device={DEVICE} />);
     fireEvent.click(await screen.findByRole("button", { name: /Compare version .* with the golden baseline/ }));
-    expect(await screen.findByText(/This diff was truncated by the server/)).toBeTruthy();
+    expect(await screen.findByText(/Truncated by the server/)).toBeTruthy();
   });
 });
 

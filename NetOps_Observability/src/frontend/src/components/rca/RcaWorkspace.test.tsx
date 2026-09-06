@@ -68,7 +68,12 @@ describe("RcaWorkspace — operator view renders every widget from the data", ()
     data.ladder.forEach((s) => {
       expect(screen.getByText(s.label)).toBeInTheDocument();
       expect(screen.getByText(s.caption)).toBeInTheDocument();
+      // ui-words sweep 5 (tracker 270): a ladder caption is a locator, never a
+      // sentence — the budget is three words and what a step MEANS is
+      // explain/rca.confidence-ladder.md behind the (i) on the section heading.
+      expect(s.caption.trim().split(/\s+/).length).toBeLessThanOrEqual(3);
     });
+    expect(screen.getByRole("button", { name: "Ask Iris about Confidence ladder" })).toBeInTheDocument();
   });
 
   it("renders every timeline lane (including empty ones)", () => {

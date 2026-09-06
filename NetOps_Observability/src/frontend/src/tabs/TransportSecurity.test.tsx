@@ -117,6 +117,18 @@ describe("TransportSecurity — platform scope", () => {
     expect(screen.getByText("Warnings")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Export report (HTML)" })).toBeInTheDocument();
   });
+
+  // UI-words sweep 5 (tracker 270): the head states the claim in one line and
+  // what a declared/target tier IS lives in ai/skills/explain/tls.transport-posture.md
+  // behind the (i). The provenance stamp beside Export is a STATED FACT
+  // (.fact-line), not an explanatory note.
+  it("states the posture in one line, with the explanation behind the (i)", async () => {
+    render(<TransportSecurity />);
+    await screen.findByText("api→postgres");
+    expect(screen.getByText("Read-only TLS posture of every internal transport path.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask Iris about Transport Security" })).toBeTruthy();
+    expect(screen.getByText(/profile strict/i)).toBeInTheDocument();
+  });
 });
 
 describe("TransportSecurity — tenant scope", () => {

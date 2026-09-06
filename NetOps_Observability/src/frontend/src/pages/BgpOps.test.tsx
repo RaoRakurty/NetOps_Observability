@@ -362,14 +362,20 @@ describe("one-page layout", () => {
 
   it("names what is deliberately absent instead of showing an empty box", async () => {
     render(<BgpOps />);
-    // Demoted behind a disclosure on 2026-09-06, NOT deleted: it is still in the
-    // DOM, still readable, and the RIPE attribution beside it stays in plain
-    // sight because it is a licence condition rather than a caveat.
+    // Sweep 5 (tracker 270): the paragraph that explained WHY each gap exists is
+    // ai/skills/explain/bgp.not-shown.md now, reached from the `(i)`. The CLAIM
+    // did not soften — the three absent evidence sources are still named on the
+    // screen, and "absent, not empty" is still said out loud, because an empty
+    // panel that reads clean is the failure this line exists to prevent.
     const footer = await screen.findByText(/IRR route-object consistency/);
-    expect(footer.textContent).toContain("no IRR mirror is");
+    expect(footer.textContent).toContain("Absent here, not empty");
     expect(footer.textContent).toContain("looking-glass");
     expect(footer.textContent).toContain("third-party corroboration");
-    expect(footer.closest("details")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Ask Iris about What this screen does not show" }),
+    ).toBeTruthy();
+    // The RIPE attribution is a LICENCE CONDITION, so it keeps every word and
+    // stays in plain sight rather than behind a disclosure.
     expect(screen.getByText(/RIPE NCC RIS \/ RIPEstat/).closest("details")).toBeNull();
   });
 
