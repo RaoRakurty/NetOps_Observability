@@ -69,6 +69,22 @@ var aiDocsIndex = ai.LoadDocsIndex(
 // with no way to find out why.
 var aiSkills = loadAISkills()
 
+// aiExplanations is the authored UI-EXPLANATION corpus (ai/skills/explain/*.md,
+// the 2026-09-06 "fewer words, Iris explains" programme). Same stance as
+// aiSkills: embedded, immutable, tenant-free content, loaded once and shared
+// read-only — and a load failure is content drift, logged loudly, leaving the
+// layer nil rather than degrading an answer silently.
+var aiExplanations = loadAIExplanations()
+
+func loadAIExplanations() *ai.ExplainSet {
+	set, err := ai.LoadExplanations()
+	if err != nil {
+		log.Printf("FATAL-GRADE CONFIG ERROR: iris UI explanations failed to load — the (i) affordance will report no authored explanation: %v", err)
+		return nil
+	}
+	return set
+}
+
 func loadAISkills() *ai.SkillSet {
 	set, err := ai.LoadSkills()
 	if err != nil {
@@ -170,6 +186,7 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		ProductKB: aiProductKB,                                          // Correlix product knowledge (concepts + how-tos)
 		Docs:      aiDocsIndex,                                          // docs-portal retriever (real page citations)
 		Skills:    aiSkills,                                             // troubleshooting methods (nil = layer disabled)
+		Explain:   aiExplanations,                                       // authored UI explanations (the AskIris (i))
 
 		Troubleshoot: deps,                  // tenant-scoped Phase-A reads
 		ToolAudit:    s.aiToolAudit(claims), // one audit line per gather step (arg NAMES only)

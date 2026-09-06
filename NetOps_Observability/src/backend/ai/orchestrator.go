@@ -32,6 +32,11 @@ type Orchestrator struct {
 	// its classic classify→mode path exactly as before, so the feature can be
 	// left unwired on a deployment without changing any existing answer.
 	Skills *SkillSet
+	// Explain is the authored UI-explanation corpus (skills/explain/*.md, the
+	// 2026-09-06 "fewer words, Iris explains" programme). nil = the layer is
+	// DISABLED and Ask keeps its classic path byte-for-byte; a named topic with
+	// no file is refused honestly rather than improvised (explain.go).
+	Explain *ExplainSet
 	// Troubleshoot are the injected, tenant-scoped reads behind the Phase-A
 	// read-only tools (device resolution, protocol diagnostics, security
 	// findings, topology context, case timeline). Every field is optional; a nil
@@ -329,6 +334,15 @@ func Classify(question string, uiContext map[string]string) Plan {
 // Ask is the entry point: classify → govern (availability + permissions) →
 // dispatch by answer mode → ground → return a typed Answer.
 func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
+	// An EXPLAIN ask is a lookup, not a classification: the `(i)` next to a
+	// number on a screen already named the term it wants defined, and the answer
+	// is server-authored prose returned verbatim (explain.go). It runs first so a
+	// definition can never be re-derived as an investigation, and it reads no
+	// tenant data, so there is nothing to govern below.
+	if ans, handled := o.answerExplain(question, uiContext); handled {
+		return ans, nil
+	}
+
 	plan := Classify(question, uiContext)
 
 	// Governance: every module route passes the Policy Engine (availability +

@@ -4479,6 +4479,22 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
 :root[data-theme="graphite"] .fp .fp-kpi { background: rgba(0,0,0,.24); border-color: var(--border); box-shadow: inset 0 1px 2px rgba(0,0,0,.4); }
 
 /* ════════════════════════════════════════════════════════════════════════════
+   ASK IRIS — the 16px (i) that replaced an on-screen explanation.
+   docs/design/UI_WORDS_IRIS_EXPLAINS_2026-09-06.md. Deliberately quiet: it sits
+   beside a label at the same optical weight as punctuation and only gains colour
+   on hover/focus, so a screen full of them still reads as numbers, not as help.
+   ════════════════════════════════════════════════════════════════════════════ */
+.ask-iris {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0; margin-left: 4px;
+  vertical-align: -4px;
+  border: 0; border-radius: 50%; background: none; cursor: pointer;
+  color: var(--fg-subtle); opacity: 0.7; transition: color .12s, opacity .12s, background .12s;
+}
+.ask-iris:hover, .ask-iris:focus-visible { color: var(--accent); opacity: 1; background: var(--accent-soft); }
+.ask-iris:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ════════════════════════════════════════════════════════════════════════════
    COMMAND CENTER — Action Queue (correlation-first NOC control plane). Premium
    dark/glass via the app theme tokens (frontpage-consistent), identity faces.
    ════════════════════════════════════════════════════════════════════════════ */
