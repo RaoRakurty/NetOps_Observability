@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Cloud service dependency graph — Wave 3 #9 ("Service dependency map from
 flow telemetry").
 

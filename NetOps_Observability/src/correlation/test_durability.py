@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Write/consume durability (F-38, F-40, F-42, F-39, F-44, F-43, F-45).
 
 One defect repeated: a write or an event fails and the failure is discarded, so

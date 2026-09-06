@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The parser CORPUS is exported, not just its counters.
 
 `corr_parser_rule_hits_total` says how often a rule fired; nothing said what the

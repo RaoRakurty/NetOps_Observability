@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 165 phase 3 — which clock decides what Correlix may correlate?
 
 Three different clocks are in play and they were never reconciled:

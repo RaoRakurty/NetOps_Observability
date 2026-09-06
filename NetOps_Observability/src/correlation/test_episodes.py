@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Build ② contract tests — canonical Signal (stage [1]) + episode model
 (stage [2]). These encode docs/design/correlation-engine.md §2.1/§4.1 and the
 owner's pre-freeze amendments; a behavior change here is a design change."""

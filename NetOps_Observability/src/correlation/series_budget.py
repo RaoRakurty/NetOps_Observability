@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Memory-budget-derived cap for the bounded per-series stores.
 
 Two structures are LRU-bounded by the same cap and can BOTH be at cap with

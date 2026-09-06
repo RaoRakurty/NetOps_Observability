@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P3 change A — the HEARTBEAT TOUCH: corr_current freshness without a version.
 
 WHAT IS UNDER TEST

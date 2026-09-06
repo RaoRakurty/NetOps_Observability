@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Service Path Graph contract (v1) — the ranked, explicit, tenant-scoped
 relationship model that REPLACES token-overlap edge admission.
 

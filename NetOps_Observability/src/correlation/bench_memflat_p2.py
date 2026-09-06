@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P2 `memflat` attribution — where does RSS go AFTER input stops? OFFLINE.
 
 THE QUESTION

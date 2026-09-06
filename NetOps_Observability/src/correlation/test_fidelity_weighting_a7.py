@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """A7 — fidelity tiers weigh evidence (flag ``CORR_FIDELITY_WEIGHTING``, OFF).
 
 THE RULE, in one sentence: a signal whose parser fidelity is ``doc_claimed``

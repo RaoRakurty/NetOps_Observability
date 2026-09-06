@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Time normalization + clock-skew detection for the correlation engine.
 
 Implements the platform log-time standard (docs/design/log-time-standard.md):

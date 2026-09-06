@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Signal producers — bus events → canonical Signals (#67 build ⑦).
 
 Pure event→Signal construction for the two evidence lanes the demo build adds

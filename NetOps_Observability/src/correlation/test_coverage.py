@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#80 §5 self-coverage CI gate, hardened per the #98 postmortem: the synthetic
 app-experience gap hid for weeks because the flat KNOWN_PENDING bag treated
 "we don't collect this" and "we collect this but never map it" as the same

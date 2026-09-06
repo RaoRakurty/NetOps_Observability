@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Deterministic engine core — pipeline stages [3]–[7] of Correlation Engine v2
 (#67 build ⑥). One pure function: a window of canonical Signals × the signature
 catalog × the seam inventory → correlation-object snapshots.

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Contract tests for path_attribution (path-causality RCA P2: on-path attribution).
 
 Correctness lives here (blueprint P2 + research Area 3). Each test holds the attributor to

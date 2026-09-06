@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Active Verification lane (RCA spec item 8) — producer, verdict-gate and
 scoring semantics.
 

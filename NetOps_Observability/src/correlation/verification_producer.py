@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """verification_producer.py — Active Verification evidence lane (RCA spec item 8).
 
 Turns one normalized check result from the Go verify engine (arriving on the

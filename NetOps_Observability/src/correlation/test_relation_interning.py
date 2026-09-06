@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 156 — interned Relations/Groundings must be value-identical, bounded.
 
 Memory forensics on a 1k run (2026-08-20) attributed 157.8 MB across 2,593,452

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 166 — the snapshot/drain epoch.
 
 Bounded cohorts limited pair EMISSION but not the per-transaction FIXED cost:

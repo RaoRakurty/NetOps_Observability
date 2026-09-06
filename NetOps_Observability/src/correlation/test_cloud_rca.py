@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Golden cloud-RCA fixtures — #81 P3G Phase 1b.
 
 Proves the EXISTING engine forms grounded cloud correlation objects from cloud

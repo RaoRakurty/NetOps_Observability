@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Bounded per-application passive-flow attribution (#98 Phase 4).
 
 Production flow anomalies ground on the exporting interface (`<sampler>:if<N>`)

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Onboarding-episode failure classes (#128 Phase 4, report §16/§23) — the
 classes the spec demands, not just examples:
 

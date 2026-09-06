@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#101 release-gate storm SLO tests — the shippable-lane contract.
 
 A NEW signal lane may not ship unless this suite (plus the Go bounded-IO

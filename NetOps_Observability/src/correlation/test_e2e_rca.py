@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """End-to-end RCA flow tests — the COMPLETE internal pipeline as one path.
 
 The per-stage units are covered exhaustively elsewhere (test_signals/episodes/

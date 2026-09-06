@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """T5 counter-verification runner (tracker #120): execute the acceptance-drill
 counter matrix against the LIVE stack.
 

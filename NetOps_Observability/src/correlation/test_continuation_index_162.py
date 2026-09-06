@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 162 — the continuation candidate index must change NOTHING.
 
 The index docstring carries the superset proof; this file pins it empirically:

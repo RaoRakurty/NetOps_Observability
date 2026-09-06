@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Path-causality P1 discovery WIRING — main.discovery_paths_for fusing the flow /
 cloud-inventory / DNS feeds into the live attribution pass (the plumbing slice the P2
 integration left as a follow-up).

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P3 change B — the syslog ingest PRE-FILTER must never reject a promotable line.
 
 `producers.syslog_promotable` decides "cannot promote" from the raw line before

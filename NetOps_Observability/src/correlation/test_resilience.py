@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Load / resilience bounds (gap-report #10, §9 'all queues bounded'). The engine's
 working memory must stay bounded and correct under a signal flood and at-least-once
 Kafka redelivery — no unbounded growth, no silently-dropped fresh signals."""

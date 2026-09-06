@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Replay-contract tests (#67 build ⑥): the golden-incident fixture must
 round-trip bit-clean — engine → persisted rows → rehydrate → re-run → no
 drift — and a tampered store or changed pins must be REPORTED, not absorbed.

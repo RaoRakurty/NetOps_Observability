@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 166 — the scheduler must bound new work per transaction.
 
 The defect: the engine loop is single-flight (`cycle(); sleep(interval)`), so

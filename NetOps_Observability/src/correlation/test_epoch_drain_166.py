@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 166 — the drain epoch, at the SCHEDULER level.
 
 test_snapshot_epoch_166.py pins the pure engine's prep reuse. This file pins the

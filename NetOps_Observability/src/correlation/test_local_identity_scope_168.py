@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 168 — a device-local name must never be a global correlation subject.
 
 THE DEFECT, reproduced before the fix: an interface name is unique only WITHIN

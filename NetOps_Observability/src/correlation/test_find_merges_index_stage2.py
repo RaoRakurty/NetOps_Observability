@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Stage-2 Lever 2 — the `find_merges` survivor index must change NOTHING.
 
 Lever 2 replaces `find_merges`'s O(survivors × stale) cross-product with the

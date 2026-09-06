@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Sanity tests for the correlation engine's anomaly scorer.
 
 Doesn't spin up Kafka — exercises the pure logic directly. Run with:

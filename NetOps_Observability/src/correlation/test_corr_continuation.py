@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#111 engine churn root cause — an ongoing condition must EXTEND its open
 correlation object (identity adoption + version bumps), never create-then-merge
 a new object each sweep. Pre-fix, every sweep after the incident's earliest

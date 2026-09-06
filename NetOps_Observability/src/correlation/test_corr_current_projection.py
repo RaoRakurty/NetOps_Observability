@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#101 corr_current projection reliability — the hot-read source of truth
 must count its own lost dual-writes (metric + structured log) and tag
 intentional chaos fixtures, without ever blocking the history (truth) write.

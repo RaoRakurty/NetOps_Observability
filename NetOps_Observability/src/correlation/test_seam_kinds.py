@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Seam signal kinds (#105 P0) — contract tests.
 
 Every seam kind the pollers emit must round-trip through the ingestion lane

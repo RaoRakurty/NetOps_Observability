@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 195 — the persist side must BOUND `corr_objects.hypotheses`.
 
 THE DEFECT. There was no write-side bound at all. Against a 29 KiB mean the

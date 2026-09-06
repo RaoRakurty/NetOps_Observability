@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Consumer-supervisor resilience (§10) — run with: python3 -m pytest test_consumer_supervisor.py
 
 Pins the 2026-07-14 live incident: the supervisor logged "restarting in 1s"

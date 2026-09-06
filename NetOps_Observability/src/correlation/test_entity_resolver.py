@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """EntityResolver (C7.1) — the IP/ifIndex → correlation-entity bridge.
 
 Properties under test: every lookup resolves real data; an unresolved OR ambiguous

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#100 lane-readiness harness — broken-source soak for signal lanes.
 
 THE READINESS RULE (docs/incidents/correlix-clickhouse-bounded-io.md): every

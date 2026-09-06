@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Commit 3 — SNMP trap → control_plane normalization tests.
 
 Proves the trap guardrail the architecture requires (Layer 1G + Layer 4D):

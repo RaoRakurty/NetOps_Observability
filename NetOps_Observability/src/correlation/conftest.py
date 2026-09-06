@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Shared test fixtures for the correlation suite.
 
 The consume-loop ClickHouse writes are BATCHED (main.SIGNAL_BATCH, perf defect

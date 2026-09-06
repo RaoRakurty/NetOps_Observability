@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Diagnostics must be inert when disabled, and honest about gaps when enabled.
 
 Two properties matter equally:

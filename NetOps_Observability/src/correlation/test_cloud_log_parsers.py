@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tests for the cloud log parsers — #81 P3B.
 
 Proves AWS ALB access logs + VPC flow logs parse into the canonical netops.cloud

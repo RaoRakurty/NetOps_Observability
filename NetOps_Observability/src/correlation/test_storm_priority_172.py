@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 172 — ingest-priority scheduling (the S1 storm fix).
 
 THE MEASURED DEFECT (S1 design storm, run 082220005r1a, 2026-08-22): engine

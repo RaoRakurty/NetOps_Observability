@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """test_kafka_security.py — SEC-006.2 regression guards for the consumer's
 bus TLS seam. The property under test: plaintext baseline unchanged when
 unconfigured, full config yields SSL + the SVID, and a PARTIAL config is a

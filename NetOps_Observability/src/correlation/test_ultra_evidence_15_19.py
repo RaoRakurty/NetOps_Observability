@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Ultra-review findings 15, 16, 17, 19 (main.py) and 18 (engine.py).
 
 Every test here pins one CONFIRMED defect's fix, written so that reverting the

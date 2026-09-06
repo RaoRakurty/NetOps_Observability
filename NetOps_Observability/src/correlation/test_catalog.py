@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Build ④ contract tests — catalog spec validation + version hash + scorer
 semantics. The per-signature scenario fixtures live in fixtures/ and run via
 test_fixtures.py; this file pins the machinery itself."""

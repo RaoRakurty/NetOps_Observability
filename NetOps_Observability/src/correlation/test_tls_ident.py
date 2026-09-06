@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """test_tls_ident.py — regression guards for APP-001 workload identity.
 
 The correlation API is cross-tenant capable, so the thing these tests defend

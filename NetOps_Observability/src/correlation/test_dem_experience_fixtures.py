@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Digital Experience Monitoring — integration fixtures for the owner's Phase O
 acceptance scenarios B, E, F and H.
 

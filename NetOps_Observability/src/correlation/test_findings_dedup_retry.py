@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """netops.findings joins the tracker-166 delivery contract (storm-s03, 2026-08-29).
 
 THE DEFECT. At 22:17:43 UTC on replica-3 of storm-s03 a single findings insert

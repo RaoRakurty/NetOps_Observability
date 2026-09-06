@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 165 phase 6 — RCA ground-truth A/B under two retention regimes.
 
 The same deterministic story is pushed through two windows:

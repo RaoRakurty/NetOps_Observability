@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Explicit storm mode — the design's REQUIRED test plan (design
 docs/design/CORRELATION_STORM_MODE_DESIGN_2026-08-28.md §"Test plan").
 

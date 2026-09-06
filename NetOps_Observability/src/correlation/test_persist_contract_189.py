@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 189 — every correlation-written table under ONE delivery contract.
 
 THE DEFECT (audit after the tracker-160 fix, first live evidence 2026-08-31).

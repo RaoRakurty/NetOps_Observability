@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Signature confirmability audit (#98 Phase 3) — for every enabled signature,
 compute the MAXIMUM verdict it can realistically reach with the producers that
 exist today, and why.

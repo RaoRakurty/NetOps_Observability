@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Opt-in memory + stall forensics for correlation. Dormant unless enabled.
 
 WHY THIS EXISTS. Correlation sits at ~99.7% of its cgroup cap during a 1k drain

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Routing (BGP-LS / IGP SPF) direction source (C7.5) — the precedence-3 source of
 the directed-topology oracle (directed-topology-rca.md).
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Integration tests for the Python ClickHouse writer against a REAL server.
 
 Phase 6 — the Python side of what the Go chhttp integration test already does.

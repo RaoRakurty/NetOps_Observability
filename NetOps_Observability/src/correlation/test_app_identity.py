@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tests for the application-identity signal contract — #81 Fusion Layer P5a.
 
 Proves fused application identity emits canonical Signals into the SAME spine

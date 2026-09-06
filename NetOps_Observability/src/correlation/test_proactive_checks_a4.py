@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """A4 — the proactive heartbeat plane (`proactive.py`).
 
 The gap this closes, stated once: THE ENGINE FLAGGED TRANSITIONS AND NOT

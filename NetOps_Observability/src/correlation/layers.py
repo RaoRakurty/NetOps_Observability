@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Causal/OSI layer taxonomy (G4 / C4).
 
 Every signal kind maps to a CAUSAL LAYER — the practitioner's bottom-up stack

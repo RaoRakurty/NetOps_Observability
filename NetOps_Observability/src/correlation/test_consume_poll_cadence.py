@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P1 max-poll rebalance thrash — run: python3 -m pytest test_consume_poll_cadence.py
 
 Pins the 2026-08-16 G2 mini-ladder failure: under a 24k-event backlog the

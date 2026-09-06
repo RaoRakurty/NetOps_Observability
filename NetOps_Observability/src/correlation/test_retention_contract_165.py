@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 165 — retention is a contract, and its breach is reportable.
 
 `corr_window_overflow_dropped_total` said evidence was shed. It could not say

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Failure-signature catalog — hypothesis templates as DATA (#67 §4.5).
 
 The catalog is the engine's rule base: declarative predicates authored by

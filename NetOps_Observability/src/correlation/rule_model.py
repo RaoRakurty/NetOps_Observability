@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The executable form of a telemetry-catalog parser rule (A3).
 
 WHAT THIS IS. `telemetry-catalog/events.yaml` is the SINGLE SOURCE OF TRUTH for

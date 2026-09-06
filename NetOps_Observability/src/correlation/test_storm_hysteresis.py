@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Storm-mode hysteresis (gate spec §7a, 2026-08-22).
 
 ISA-18.2/EEMUA-191 define floods with an entry/exit BAND (>10/10min in,

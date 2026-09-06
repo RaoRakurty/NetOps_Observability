@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """GA-gate G1 — failure accounting made structurally visible (scale-test P0s).
 
 The 2026-08 scale test exposed a defect CLASS, not just defects: failures that

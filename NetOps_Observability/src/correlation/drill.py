@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Signature live-fire drill — prove every ENABLED signature triggers on the
 DEPLOYED engine.
 

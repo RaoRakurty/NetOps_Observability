@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Canonical global-tenant spelling (#113 slice 3 / #111 step 3).
 
 The platform-global tenant had TWO spellings — "" (engine convention) and

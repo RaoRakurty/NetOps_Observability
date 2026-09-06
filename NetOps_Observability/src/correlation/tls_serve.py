@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tls_serve.py — mTLS entrypoint for the correlation service (APP-001).
 
 The base compose CMD stays `uvicorn main:app --port 8000` (the documented

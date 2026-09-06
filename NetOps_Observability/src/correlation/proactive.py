@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Proactive checks — the A4 heartbeat plane (Project 4 C, IRIS model §3.4).
 
 NetClaw flags a handful of conditions *without being asked*: an OSPF adjacency

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """No SYNCHRONOUS stretch of the lifecycle/reconcile path may own the loop.
 
 LIVE EVIDENCE — run storm-s03 (t-storm-2.5k, replica-3, image at HEAD with the

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Episode detection — pipeline stage [2] of Correlation Engine v2 (#67).
 
 Replaces "every z-crossing is a finding" with bounded **anomaly episodes**

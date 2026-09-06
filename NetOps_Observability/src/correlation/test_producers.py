@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Producers (#67 build ⑦): probe events and syslog control-plane events →
 canonical Signals. Pins the wire contract with the Go collectors and the
 provenance rules the verdict gate depends on (active_probe/vantage_agent vs

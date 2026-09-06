@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Cloud log parsers — #81 P3B (cloud_flow / cloud_lb_access).
 
 Pure, deterministic parsers that turn raw cloud log records into the canonical

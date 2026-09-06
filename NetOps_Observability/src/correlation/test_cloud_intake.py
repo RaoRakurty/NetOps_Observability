@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Cloud lane runtime intake tests — #81 P3G/P3B (handle_cloud + the cloud-log tailer).
 
 Drives main.handle_cloud + main._scan_cloud_logs without a live ClickHouse (a fake

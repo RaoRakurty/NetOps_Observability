@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """DirectedTopology oracle (C7) + its integration as causal-direction vote #2."""
 from datetime import datetime, timedelta, timezone
 

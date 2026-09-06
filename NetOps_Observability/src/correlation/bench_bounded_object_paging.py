@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Standalone micro-benchmark for the P0 boundedness pass (ENGINE_DECISION_2026-08-28
 #1/#2). NO live stack, NO Docker, NO ClickHouse — pure CPU timing of the child-row
 emit path (edges + typed edges + evidence, plus the JSONEachRow insert bodies).

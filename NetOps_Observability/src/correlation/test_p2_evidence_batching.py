@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P2 step 4c/4d — CROSS-VERSION EVIDENCE BATCHING and the DECISION-write offload.
 
 Measured briefs:

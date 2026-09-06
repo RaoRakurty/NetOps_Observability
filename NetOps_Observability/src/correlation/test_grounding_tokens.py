@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#99 R2 — grounding-token guard: tenant-/org-wide values can never enter
 entity_tokens (the engine's co-location keys). Model-level, so the cross-app
 over-grounding bug class (tracker #99) is unwritable by ANY producer."""

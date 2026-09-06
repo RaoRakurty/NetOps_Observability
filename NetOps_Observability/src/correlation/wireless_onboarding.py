@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Applicability-aware client-onboarding episodes (#128 Phase 4, design
 docs/Wireslessdesign.md §16) + the wireless client-identity ladder (§9.3).
 

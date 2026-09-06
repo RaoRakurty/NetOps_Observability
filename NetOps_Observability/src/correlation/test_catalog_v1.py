@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """v1 NOC-catalog contract tests (owner failure-signature spec, 2026-07-02).
 
 Pins the rules the spec makes non-negotiable: the seam/scope taxonomy is a

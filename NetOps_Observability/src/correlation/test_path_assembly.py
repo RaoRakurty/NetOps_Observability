@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Contract tests for path_assembly (path-causality RCA P1: discovery / assembly).
 
 Holds the assembler to the blueprint's P1 requirements + the honesty rules:

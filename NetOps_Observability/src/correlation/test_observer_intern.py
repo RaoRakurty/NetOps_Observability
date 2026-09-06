@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 156 — interned Observers must be value-identical and bounded.
 
 A syslog line rebuilt a per-DEVICE Observer on every event: thousands of

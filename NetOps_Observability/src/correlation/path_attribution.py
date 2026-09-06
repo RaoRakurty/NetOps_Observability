@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """path_attribution — path-causality RCA P2: on-path RCA attribution.
 
 The blueprint's single highest-value change (docs/design/research/path-causality-rca-research.md

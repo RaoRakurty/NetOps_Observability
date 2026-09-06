@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 192 — the un-instrumented loop block on the cleanup / re-key path.
 
 WHAT HAPPENED. `storm-s05` recorded a **9,134.9 ms** process-lifetime

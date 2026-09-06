@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """End-to-end path-causality RCA in the engine (design §2.4; blueprint P2 wiring).
 
 These tests exercise the ADDITIVE P2 enrichment through the REAL engine core

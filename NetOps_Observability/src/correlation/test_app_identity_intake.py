@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """App-identity lane runtime intake tests — #81 Fusion Layer P5b (handle_app_identity).
 
 Drives main.handle_app_identity without a live ClickHouse (a fake CH captures

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Consume-loop ClickHouse batching (perf defect #2 — main.CHBatcher).
 
 The per-event single-row corr_signals inserts (wait_end_of_query=1, one HTTP

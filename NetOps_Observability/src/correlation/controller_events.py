@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """controller_events.py — NMS controller-event producer (P4).
 
 Turns a normalized ControllerEvent (from the Go connector framework, arriving on

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 165 — the engine's temporal reach is DERIVED, not declared.
 
 `window_s = 900.0` was never an RCA contract: the engine core never reads it

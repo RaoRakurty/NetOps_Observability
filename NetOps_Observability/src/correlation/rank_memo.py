@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Level-1 cross-epoch rank memo — P2 delivery step 2.
 
 Spec: `docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md` §3 (and §9 item 2);

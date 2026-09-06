@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 156 — the memoisation and the shared window index must change nothing.
 
 The fix removed work, not behaviour:

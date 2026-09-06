@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """End-to-end Correlation Engine validation harness (live stack).
 
 Proves the engine is WORKING, not just running, across the full pipeline:

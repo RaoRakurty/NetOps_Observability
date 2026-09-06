@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Correlation service — the impure shell around the pure engine core.
 
 FastAPI + aiokafka. engine.py owns determinism (pure ``run_window``, replayable

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """W1b — parser PROVENANCE and coverage observability.
 
 Until now a Signal recorded WHAT was classified and never WHICH RULE did it, or

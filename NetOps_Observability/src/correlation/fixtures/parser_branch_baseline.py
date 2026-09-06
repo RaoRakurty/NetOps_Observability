@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """FROZEN pre-A3 branch code — the BENCHMARK BASELINE. Not production code.
 
 This is `producers.syslog_control_signal` / `trap_control_signal` /

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 171 (residual) — maintenance starvation must be MEASURED, not argued.
 
 `CORR_ENGINE_EPOCH_BUDGET_S` ends a drain sweep BETWEEN cohorts, never inside

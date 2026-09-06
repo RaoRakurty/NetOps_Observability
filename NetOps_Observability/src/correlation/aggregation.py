@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P3 Aggregation Plane — step 1: the pure, deterministic state machine.
 
 Authority: `docs/design/AGGREGATION_PLANE_P3_2026-08-29.md` §3/§5/§7 and the

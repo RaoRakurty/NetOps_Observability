@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Hypothesis scoring — pipeline stage [6]+[7] of Correlation Engine v2.
 
 Evaluates the signature catalog over an evidence set (the signals attached to

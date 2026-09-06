@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Active-path-trace direction source (C7.4) — the precedence-1 directed-topology
 source (measured forwarding path; hop order = direction).
 

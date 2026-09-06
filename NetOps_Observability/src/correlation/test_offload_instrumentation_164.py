@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 164 — the BOUNDED offload plane, and the accounting that justified it.
 
 `_offload` used to submit to asyncio's DEFAULT executor. Its worker count was

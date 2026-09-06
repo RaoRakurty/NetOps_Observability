@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P2 memflat remediation — the RankMemo BYTE bound and the ephemeral-clause leak.
 
 Source of truth for both defects: `docs/scale/P2_MEMFLAT_ATTRIBUTION_2026-08-29.md`

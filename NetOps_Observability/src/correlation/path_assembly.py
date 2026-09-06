@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """path_assembly — path-causality RCA P1: discover & assemble the typed causal path.
 
 The design doc's stage 3 (docs/design/path-causality-rca.md §2.3, §4): given the four

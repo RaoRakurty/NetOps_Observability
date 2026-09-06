@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """S4 (log-time standard) — ClickHouse inserts carry epoch-ms integers.
 
 DateTime64(3) interprets an inserted INTEGER as a scaled Unix timestamp in

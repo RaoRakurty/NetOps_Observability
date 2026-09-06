@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 166 — bounded cohorts must change WHEN work happens, never WHAT.
 
 The defect is a positive feedback loop: a slow engine transaction lets more

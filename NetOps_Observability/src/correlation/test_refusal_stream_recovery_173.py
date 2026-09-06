@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 173 — the post-storm refusal-stream deadlock is BROKEN by 172.
 
 THE OBSERVED INCIDENT (S1 run 082220005r1a end-state): cleanup deleted every

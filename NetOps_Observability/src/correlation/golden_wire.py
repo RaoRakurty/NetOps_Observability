@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Golden-wire replay (#98 Phase 3) — raw collector-shaped events through the
 REAL pipeline: wire JSON → production normalizers → engine → verdict.
 

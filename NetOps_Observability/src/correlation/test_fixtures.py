@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Per-signature replay fixtures — the CI gate on the catalog (research C7).
 
 Every signature ships with scenario fixtures under fixtures/: at least one

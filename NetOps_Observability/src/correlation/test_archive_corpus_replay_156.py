@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 156 v2 — the corpus falsification gate.
 
 THE CLAIM THIS FILE EXISTS TO FALSIFY (and, failing that, to pin): a

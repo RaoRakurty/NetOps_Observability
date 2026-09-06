@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Pipeline debugger — the correlation container's bounded debug endpoints.
 
 docs/design/PIPELINE_DEBUGGER_2026-09-04.md §2 (stage 3, the bus) and §4 (the

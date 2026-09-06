@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#99 R3 — golden-wire coverage for every remaining consumer lane.
 
 One raw wire-shaped event per lane, replayed through the PRODUCTION

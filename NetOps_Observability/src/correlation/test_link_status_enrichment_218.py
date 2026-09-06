@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 218 — a linkDown must say WHETHER SOMEONE SHUT THE PORT.
 
 THE DEFECT. `trap.link.state_change` typed every linkDown/linkUp into one

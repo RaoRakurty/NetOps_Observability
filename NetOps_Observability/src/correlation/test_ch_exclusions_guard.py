@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Guard for the Phase 6 ClickHouse test exclusions (tracker #127).
 
 The Phase 6 integration tests (test_clickhouse_integration.py, and chhttp's Go

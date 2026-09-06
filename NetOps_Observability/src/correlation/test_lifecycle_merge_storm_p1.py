@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The lifecycle MERGE pass may never own the event-loop thread.
 
 LIVE EVIDENCE — run storm-s02, 2026-08-29 20:01:09→20:01:44Z, replica-4, image

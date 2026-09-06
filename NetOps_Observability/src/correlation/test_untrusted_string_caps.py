@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Bounds on untrusted intake strings — audit PIPE-MED-11 / FUNC-MED-8.
 
 The intake validated the SHAPE of a record but never its SIZE. Device-,

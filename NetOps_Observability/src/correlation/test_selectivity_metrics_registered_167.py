@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 167 — the selectivity counters must actually reach the exposition.
 
 `scoring.py` shipped `corr_template_scored_total` / `corr_template_candidates_total`

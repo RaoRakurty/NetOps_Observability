@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Syslog burst detection — long-form severity parity (perf/correctness
 defect #5, main.SEVERITY_WEIGHT).
 

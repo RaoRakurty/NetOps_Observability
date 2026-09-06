@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 165 phases 6-8 — shared identity strings must change nothing but memory.
 
 `buffer_signal` now replaces `entity_id` and `entity_tokens` with canonical

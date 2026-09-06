@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 166 phase 2 — measure the re-derivation before optimising it.
 
 The incremental design turns on one number: what fraction of the candidate

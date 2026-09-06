@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#99 R5 — cross-language ProbeEvent wire contract (Python side).
 
 One checked-in artifact (src/contracts/probe_event_wire.json) that the Go

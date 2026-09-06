@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 196 — the tenant-idle backstop must be able to PROVE levelness.
 
 THE DEFECT. `_consumer_caught_up` returned False whenever ANY assigned

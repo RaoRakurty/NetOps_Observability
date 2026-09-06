@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """tls_ident.py — mTLS peer identity for the correlation service (APP-001).
 
 The correlation API is cross-tenant capable (reads run at

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Series-cap memory-bound regression tests.
 
 Verified defect (2026-08-14): CORR_MAX_SERIES defaulted to a flat 200 000 for

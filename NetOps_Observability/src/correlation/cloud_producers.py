@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Cloud App Observability signal producers — #81 P3G Phase 1.
 
 Cloud App Observability is an EVIDENCE PRODUCER for the existing correlation

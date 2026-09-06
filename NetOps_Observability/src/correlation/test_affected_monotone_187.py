@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 187 — an object's FINAL `affected` may not shrink below its own
 version history.
 

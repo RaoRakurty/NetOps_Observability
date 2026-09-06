@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Machine-calibrated fixture sizing for the WALL-CLOCK mutant gates.
 
 WHY THIS EXISTS (two hosted-runner failures, 2026-09-03)

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """A9 — a trap and a syslog line for ONE symptom must be one symptom.
 
 The tracker-184 exercise, applied to SNMP traps. Before A9 the trap lane typed

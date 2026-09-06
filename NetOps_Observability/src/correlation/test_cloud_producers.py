@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tests for the cloud signal contract — #81 P3G Phase 1.
 
 Proves Cloud App Observability emits canonical Signals into the SAME spine

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#81 — RCA signature for hybrid private-connectivity outage (Direct Connect / IPSec).
 
 Proves the engine LABELS a DX/IPSec-tunnel-down incident as

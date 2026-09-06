@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 184 — syslog parser coverage of the enterprise-outage symptoms.
 
 WHAT WAS MEASURED (2026-08-29, against `producers.syslog_control_signal`):

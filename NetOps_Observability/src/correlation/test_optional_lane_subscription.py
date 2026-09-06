@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Optional evidence lanes must never gate the REQUIRED subscription.
 
 THE MEASURED OUTAGE (2026-09-02, and the same shape on 2026-08-16). The engine

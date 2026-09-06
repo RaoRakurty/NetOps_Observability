@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 167 — the provably-inapplicable fast path must be invisible.
 
 WHAT CHANGED. `rank()` used to call `score_template` for all 100 catalog

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 155 — an incident must keep its IDENTITY across a partition handoff.
 
 WHAT WAS MEASURED (run ownership-155a-08302235, 2026-08-30; arms: restart,

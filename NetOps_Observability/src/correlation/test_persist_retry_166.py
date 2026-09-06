@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 166 secondary defect — one slow ClickHouse insert must not discard a
 whole cohort.
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """External SaaS / application-experience correlation — synthetic DEM lane.
 
 Proves the "Microsoft Teams is impacted" path end-to-end, WITHOUT turning

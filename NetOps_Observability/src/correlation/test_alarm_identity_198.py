@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 198 — a generic alarm's `signal_id` must identify the EVENT.
 
 `signal_id = uuid5(NS, "{source}|{native_id}|{ts_ms}")`, and the two generic

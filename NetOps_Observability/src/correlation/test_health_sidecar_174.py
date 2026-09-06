@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 174 — health/metrics must survive a saturated event loop.
 
 THE MEASURED DEFECT (S1 run 082220005r1a): /healthz + /metrics are served by

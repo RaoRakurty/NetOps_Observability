@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#98 Phase 4 — bounded per-application passive-flow attribution.
 
 The contract under test: a flow anomaly gains app grounding ONLY when a real

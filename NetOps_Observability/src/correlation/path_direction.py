@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Active-path-trace direction source (C7.4) — the precedence-1 (highest) source of
 the directed-topology oracle (directed-topology-rca.md).
 

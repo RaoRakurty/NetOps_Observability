@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The event-time contract (F-34) — run with: python3 -m pytest test_event_time_contract.py
 
 `parse_event_ts` is the single door every lane's event time comes through

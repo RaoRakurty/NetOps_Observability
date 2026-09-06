@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Engine-core tests (#67 build ⑥) — the properties the replay contract and
 the owner's grounding constraint stand on:
 

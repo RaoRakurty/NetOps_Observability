@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """observer_kind classification hint (evidence-accounting Phase B).
 
 The stamp is ADDITIVE and backward-compatible; the Go per-tenant registry is

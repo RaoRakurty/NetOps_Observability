@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Replay-driven calibration harness (C9 / design §P4) tests.
 
 Proves the loop the design names: replay LABELED incidents through the pure engine under

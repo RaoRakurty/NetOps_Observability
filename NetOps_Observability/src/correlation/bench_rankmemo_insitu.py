@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """In-situ A/B: the same drain sweep with the memo in compact vs object form."""
 from __future__ import annotations
 

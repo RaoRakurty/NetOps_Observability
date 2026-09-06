@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P2 delivery step 4a — the LIFECYCLE COHORT WINDOW.
 
 Spec: `docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md` §4 (the hoist this

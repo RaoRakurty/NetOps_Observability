@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Component-sized archive slices (tracker 156 v2 — main._archive_slice).
 
 History, because both steps matter: every persisted version ORIGINALLY archived

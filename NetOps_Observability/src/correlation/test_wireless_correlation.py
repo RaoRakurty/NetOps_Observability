@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Wireless correlation integration (#128 Phase 3) — the report's engine-side
 claims, tested against the REAL engine (never mocks of it):
 

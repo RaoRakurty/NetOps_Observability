@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 156 — the port-event pre-filter must never reject a real port event.
 
 `port_event_signal` used to run all of `_PORT_EVENT_RULES` on every syslog line:

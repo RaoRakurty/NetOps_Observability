@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 165 phases 3-5 — attacking the retention clock.
 
 Stream-time retention removed one defect (wall-clock delay destroying

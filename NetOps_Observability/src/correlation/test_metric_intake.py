@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Commit 2 — correlation metric-lane intake tests.
 
 Proves the netops.metrics → device_telemetry contract the platform architecture

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Offline reproduction of the storm-s02 lifecycle-merge loop stall.
 
     python3 bench_lifecycle_merge_storm.py                # the fix

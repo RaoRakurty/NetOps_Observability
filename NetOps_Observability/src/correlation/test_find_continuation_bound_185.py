@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 185 residual — `reconcile.find_continuation` must not hold the loop.
 
 WHAT HAPPENED. Storm run `storm-s04-08300637` took a 29,974 ms event-loop stall

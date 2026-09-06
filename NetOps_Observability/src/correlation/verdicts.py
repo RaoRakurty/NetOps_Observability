@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Evidence independence + modality coverage → verdict tier.
 
 Pipeline stage [7] machinery of Correlation Engine v2 (#67 §4.5, owner

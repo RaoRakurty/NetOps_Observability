@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The BGP routing-observatory evidence lane, grounded by the SAME generic
 intake the security lane uses — and by exactly one more row of data.
 

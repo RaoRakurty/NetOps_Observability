@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """2026-08-29 — OBSERVABILITY MAY NEVER REJECT A CORRELATION WINDOW.
 
 THE DEFECT THIS FILE KILLS (run p2-s012-08290116, reproduced with a traceback).

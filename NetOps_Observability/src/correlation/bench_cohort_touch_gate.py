@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Standalone micro-benchmark for P1 — the cohort-touch gate + digest memoization
 (docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md §7). Evidence, not a gate.
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 157 — a signature may not rank in a topology that cannot host it.
 
 THE DEFECT, AS MEASURED. `Clause` is (kind, entity_type, min_deviation) shaped,

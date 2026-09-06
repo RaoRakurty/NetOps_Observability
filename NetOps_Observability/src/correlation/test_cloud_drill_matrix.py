@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """The T5 drill matrix (#120) must not drift from the code it describes.
 
 Hermetic: every kind the matrix names must be a real CLOUD_KINDS lane kind,

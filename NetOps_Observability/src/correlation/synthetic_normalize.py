@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Synthetic probe → semantic application-experience normalization.
 
 The EXTERNAL Digital-Experience lane — deliberately NOT APM (no traces, spans,

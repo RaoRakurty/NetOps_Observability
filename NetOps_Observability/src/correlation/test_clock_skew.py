@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Clock-skew flagging (log-time standard S5 / rule R5).
 
 A device whose syslog origin time disagrees with the pipeline receive clock —

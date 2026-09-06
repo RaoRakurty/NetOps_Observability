@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 166A/166B/166C — the scheduler's new state must CONVERGE.
 
 Bounded CPU is not enough. The carried-edge cache and the processed frontier

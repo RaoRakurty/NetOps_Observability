@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 156 — window eviction must not recompute signal ids.
 
 `_prune_buffer` and the maxlen-eviction branch of `buffer_signal` both did

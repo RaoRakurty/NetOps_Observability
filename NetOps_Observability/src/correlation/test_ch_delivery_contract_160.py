@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 160 — the ClickHouse delivery contract.
 
 BEFORE: a positively-rejected batch was counted, quarantined, and _insert_batch

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 154 — grounded-seam evidence in ranking and object folding.
 
 Measured by the digital twin's ground truth (run 081700325h7x, DX-flap story):

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 165 Part B — the profiler must not become the thing it measures.
 
 Earlier profiling work in this programme produced a run that had to be thrown

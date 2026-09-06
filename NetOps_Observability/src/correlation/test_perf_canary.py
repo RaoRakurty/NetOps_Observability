@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Wall-clock perf canary (perf-nightly rung — NOT a benchmark).
 
 Everything else in the perf family (test_engine_complexity, test_rolling_stats,

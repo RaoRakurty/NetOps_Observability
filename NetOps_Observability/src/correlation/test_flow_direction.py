@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """NetFlow direction source (C7.3) — the precedence-2 directed-topology source.
 
 Properties: dominant flow → a directed verdict, balanced → AMBIGUOUS (never an

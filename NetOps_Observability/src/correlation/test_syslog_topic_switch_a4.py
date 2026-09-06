@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """A4 — the pre-screened syslog lane is a per-deployment SWITCH, default OFF.
 
 `CORR_SYSLOG_TOPIC` may point the syslog lane at the vector-PRE-SCREENED

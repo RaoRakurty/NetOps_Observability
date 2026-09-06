@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Confirmability audit gates (#98 Phase 3). The audit itself lives in
 confirmability.py; these tests make its honesty CI-enforced:
 

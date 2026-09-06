@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """EntityResolver — the IP / ifIndex → correlation-entity bridge (C7.1).
 
 The directed-topology direction sources (C7.3 NetFlow, C7.4 traceroute, C7.5

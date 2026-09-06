@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Reconciliation-loop yield budget — the storm-collapse resilience fix.
 
 Root cause (production loop-lag watchdog, worst stall 130,561 ms): the

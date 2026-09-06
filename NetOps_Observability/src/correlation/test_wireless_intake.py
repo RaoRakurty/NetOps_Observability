@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Wireless intake lane (#128 Phase 4) — the netops.wireless_sessions /
 netops.wireless_events contract through the REAL handlers with a fake CH
 (the test_metric_intake pattern):

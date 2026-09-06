@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Build ③ contract tests — evidence independence + modality coverage →
 verdict tier (#67 §4.5 + research C4). The independence model (transport vs
 measurement authority) is specified HERE as executable cases; a behavior

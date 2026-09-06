@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P3 step 3 — the flag-OFF vs flag-ON EQUIVALENCE harness, and its bench mode.
 
 Authority: `docs/design/AGGREGATION_PLANE_P3_2026-08-29.md` §5 and §7 step 3;

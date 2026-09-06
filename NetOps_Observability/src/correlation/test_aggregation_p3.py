@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P3 Aggregation Plane — steps 1 and 2.
 
 Design: `docs/design/AGGREGATION_PLANE_P3_2026-08-29.md` §3/§5/§7; owner memo

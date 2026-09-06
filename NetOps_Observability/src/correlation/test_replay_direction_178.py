@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 178 — the drift report must compare edge DIRECTION.
 
 Before this, `replay._diff` diffed edges by identity only

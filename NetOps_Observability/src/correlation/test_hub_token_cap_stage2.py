@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Rank-7 shared-token HUB CAP — Stage-2 Lever 1 quality regression (#168).
 
 The correlation engine used to mesh a shared-token group ALL-PAIRS: a token

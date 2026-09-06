@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """build_edges complexity regression (perf defect #1) — deterministic
 OPERATION-COUNT assertions, never wall-clock.
 

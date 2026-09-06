@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tracker 163 — OPEN_OBJECTS count cap with DEFINED behaviour at the bound.
 
 Every other major structure is bounded by count or LRU; OPEN_OBJECTS was

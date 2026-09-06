@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Service Path Graph — the explicit, ranked, tenant-scoped relationship model
 (docs/design/service-path-graph-contract.md v1.0, contract_version = 1).
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#98 Phase 5 — LB / proxy / ingress telemetry contract.
 
 The contract: vendor-neutral app-edge events normalize into the CANONICAL

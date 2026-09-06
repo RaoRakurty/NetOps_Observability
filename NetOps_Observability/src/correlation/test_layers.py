@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Causal/OSI layer taxonomy (C4) + its use as the finer direction prior."""
 import json
 from datetime import datetime, timedelta, timezone

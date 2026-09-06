@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """A9b — `device_config_change`: the symptom the trap audit found INVISIBLE.
 
 A9 closed with a recorded finding: config-change notifications hint `notice` in

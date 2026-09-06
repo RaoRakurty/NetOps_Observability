@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P3 step 3 — representation + equivalence (design §5, memo §24/§25).
 
 Two halves, and the second is worthless without the first:

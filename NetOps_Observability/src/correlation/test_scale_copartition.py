@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Scale P0 — tenant-keyed co-partitioning (run: python3 -m pytest test_scale_copartition.py).
 
 The horizontal-scale contract has three legs, each pinned here:

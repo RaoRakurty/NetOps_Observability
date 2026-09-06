@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Catalog self-coverage reports (#80 §5) — the engine's report about its own
 rule-base, so coverage growth is MEASURED, not guessed.
 

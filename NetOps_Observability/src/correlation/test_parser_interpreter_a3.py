@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """A3 — the catalog becomes the executor.
 
 W1b made every fact ABOUT a parser branch a row of a table while the branch

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """DirectedTopology — the source-agnostic causal-direction oracle (C7).
 
 Causal direction (§4.3) claims A→B only on a 2-of-3 vote: onset order, **topology

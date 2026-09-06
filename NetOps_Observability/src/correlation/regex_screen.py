@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Derive a SOUND literal screen from a regular expression.
 
 WHY THIS EXISTS (P3 change B, docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29

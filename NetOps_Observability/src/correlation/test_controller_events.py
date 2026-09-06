@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Tests for the NMS controller-event producer (P4)."""
 from datetime import datetime, timezone
 

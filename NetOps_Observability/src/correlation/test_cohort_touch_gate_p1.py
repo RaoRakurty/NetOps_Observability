@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P1 — cohort-touch gate, digest memoization, epoch-cadence lifecycle.
 
 Spec: docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md (T1-T10 below are its §6).

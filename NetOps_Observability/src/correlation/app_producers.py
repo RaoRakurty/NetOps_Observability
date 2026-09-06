@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Application-identity signal producer — #81 Fusion Layer Phase 5 (P5a).
 
 App identity is the answer to *"WHICH application is this traffic?"*, produced by

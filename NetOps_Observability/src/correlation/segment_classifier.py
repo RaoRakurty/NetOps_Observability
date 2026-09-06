@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """segment_classifier — address-space segment/device classifier (path-causality RCA P0).
 
 The missing keystone from docs/design/research/path-causality-rca-research.md (Area 2):

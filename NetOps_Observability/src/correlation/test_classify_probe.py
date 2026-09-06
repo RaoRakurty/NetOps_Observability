@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """classify_probe: target/observer/trust → (scope, authority).
 
 Pins the customer-path probe model: a probe to a platform SERVICE stays internal

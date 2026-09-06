@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """#101 per-tenant write-amplification visibility — bounded cardinality.
 
 The contract: one tenant's storm must be attributable (who, which kind, which

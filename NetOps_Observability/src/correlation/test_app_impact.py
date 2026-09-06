@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """App-impact engine integration — #81 Fusion Layer P5c (golden properties).
 
 Proves fused application identity behaves as ENRICHMENT, not a fault (AD-5):

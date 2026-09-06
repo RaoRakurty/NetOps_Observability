@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """T5 counter-verification matrix (tracker #120, #105 prep).
 
 The `docs/design/cloud-provider-parity.md` acceptance suite says a provider is

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """T2b — the correlation engine grounds security evidence with ZERO
 security-specific code.
 

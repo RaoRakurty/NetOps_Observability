@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """P0 boundedness pass — paged child-row emission (ENGINE_DECISION_2026-08-28 #1/#2).
 
 The residual hot-shard stall was serializing a whole storm object's child rows

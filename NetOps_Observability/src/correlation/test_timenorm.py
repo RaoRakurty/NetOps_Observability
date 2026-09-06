@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Regression tests for time normalization + skew detection.
 
 Fixture logs per family, per docs/design/log-time-standard.md. Run with:

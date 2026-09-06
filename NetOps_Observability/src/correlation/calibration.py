@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Replay-driven calibration harness (C9 / design P4).
 
 The engine's constants (`EngineConfig`: tau, thresholds, weights) ship as deterministic

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Event-loop blocking bounds — run: python3 -m pytest test_loop_blocking.py
 
 Pins the 2026-08-17 P1 regression measured at 1000-device scale. LIVE EVIDENCE

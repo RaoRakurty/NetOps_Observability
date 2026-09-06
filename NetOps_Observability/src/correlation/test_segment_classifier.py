@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Contract tests for segment_classifier (path-causality RCA P0).
 
 One test per pattern (research Area 2 signal list), plus the two honesty invariants:

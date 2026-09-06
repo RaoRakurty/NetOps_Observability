@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """TENANT-HIGH-3/4 — a claimed tenant must be VERIFIED before it is persisted.
 
 THE DEFECT: tenant identity was ASSERTED by the sender and never checked.

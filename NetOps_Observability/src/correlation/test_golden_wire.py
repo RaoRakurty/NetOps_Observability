@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Golden-wire tests (#98 Phase 3) — raw collector-shaped events through the
 real pipeline. See golden_wire.py for the honesty contract; the tests here
 assert what production ACTUALLY does today, including the gaps (interface-only

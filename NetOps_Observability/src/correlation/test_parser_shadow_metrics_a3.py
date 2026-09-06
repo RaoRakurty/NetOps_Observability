@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """A3/A8 — shadow-rule hits are EXPOSED, not just counted.
 
 A shadow rule is evaluated by the parser and deliberately emits nothing. That

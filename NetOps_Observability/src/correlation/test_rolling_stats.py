@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """O(1) rolling mean/std (perf defect #4 — main.Series + episodes._SeriesState).
 
 mean()/std() used to walk the full 200-sample deque on EVERY call (~6 full

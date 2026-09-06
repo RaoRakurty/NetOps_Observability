@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Canonical Signal — pipeline stage [1] of Correlation Engine v2 (#67).
 
 Every record the engine consumes becomes exactly one Signal in the frozen

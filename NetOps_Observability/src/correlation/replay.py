@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Replay runner — #67 build ⑥. Re-runs the deterministic engine core over a
 stored object's archived evidence window and reports drift against the stored
 snapshot.
