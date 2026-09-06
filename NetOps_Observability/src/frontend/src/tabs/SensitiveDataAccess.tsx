@@ -3,6 +3,7 @@ import { fmtDateTime } from "../lib/time";
 import { api, AuditEvent } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { Chip } from "../components/noc";
+import AskIris from "../components/AskIris";
 import { operatorError } from "../lib/errors";
 // Sensitive Data Access — who revealed protected data, when, and why.
 //
@@ -45,6 +46,71 @@ const OUTCOME_LABEL: Record<string, string> = {
   key_unavailable: "Key retired",
   denied_cross_tenant: "Refused — other tenant",
 };
+
+// Rotating the sealing key is a one-way, tenant-wide act: everything sealed from
+// here on names a new key version. So the control is deliberately two-step — the
+// first click only ARMS it — and it reports back the version it landed on rather
+// than a green tick, because "it worked" is not the fact an operator needs. The
+// endpoint's own honesty note travels with the result: the router still holds the
+// previous key until it reloads its config. Values sealed under earlier versions
+// stay readable; retiring one is a separate, deliberate act.
+function SealingKeyCard() {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState<number | null>(null);
+  const [note, setNote] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+
+  const rotate = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.sealRotate();
+      setVersion(r.key_version ?? null);
+      setNote(r.note ?? "");
+      setArmed(false);
+    } catch (e) {
+      setError(operatorError(e, "Could not rotate the sealing key."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="ccw-panel">
+      <div className="ccw-panel-h">
+        Sealing key
+        <AskIris topic="seal.key-rotation" label="Sealing key" />
+      </div>
+      {!armed ? (
+        <div>
+          <button type="button" className="btn" onClick={() => setArmed(true)} disabled={busy}>
+            Rotate
+          </button>
+        </div>
+      ) : (
+        <div className="ccw-copyline">
+          <button type="button" className="btn btn-accent" onClick={() => void rotate()} disabled={busy}>
+            {busy ? "Rotating…" : "Confirm rotate"}
+          </button>
+          <button type="button" className="btn" onClick={() => setArmed(false)} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {version !== null && (
+        <p className="ccw-hint">
+          Now on <strong>v{version}</strong>. {note}
+        </p>
+      )}
+      {error && (
+        <div className="ccw-error" role="alert">
+          {error}
+        </div>
+      )}
+    </section>
+  );
+}
 
 export default function SensitiveDataAccess() {
   const [rows, setRows] = useState<Row[] | null>(null);
@@ -115,6 +181,8 @@ export default function SensitiveDataAccess() {
           values are never recorded here, only the fact of the access.
         </p>
       </header>
+
+      <SealingKeyCard />
 
       {error && (
         <div className="ccw-error" role="alert">
