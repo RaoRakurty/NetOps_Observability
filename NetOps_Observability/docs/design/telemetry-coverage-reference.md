@@ -252,11 +252,16 @@ The two that most often get asked for:
   in a second notation would split one moving MAC into two correlation objects —
   strictly worse than the generic alarm, which already carries the decoded
   vlan/mac in `fields` + `message_key`.
-- **`linkDown` + `ifAdminStatus`/`ifOperStatus` enrichment** — audited, deferred.
-  It would let the engine tell an administratively-shut port from a fault, but it
-  changes the attrs and state of an already-shipping rule, re-identifying every
-  link trap already stored. That is the same class of change as the declared
-  `bgp_adjacency_change` divergence and needs its own corpus re-bake.
+- **`linkDown` + `ifAdminStatus`/`ifOperStatus` enrichment** — audited, deferred,
+  then **SHIPPED** at `parser_rev 2026-09-06-218` (tracker 218). The deferral's
+  claim was that it "re-identifies every link trap already stored"; it does not.
+  A signal's identity is a uuid5 over `source`, `native_id` and the event
+  millisecond, and the enrichment leaves `state` — the only attr `native_id`
+  reads — decided by the trap OID alone. The two keys are `omit_empty`: they
+  exist only on the events that actually carried the varbind, and no event in the
+  golden corpus carries one, so the frozen parity baseline stayed green with no
+  new skips. See the matrix's "…and one the audit got wrong" and
+  `src/correlation/test_link_status_enrichment_218.py`.
 
 ---
 

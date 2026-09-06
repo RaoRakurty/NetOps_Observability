@@ -1207,8 +1207,8 @@ class _Emission:
     __slots__ = (
         "attr_plan", "content_tag", "entity_id", "entity_id_else",
         "entity_type", "entity_type_else", "entity_when", "fidelity", "generic",
-        "kind", "metric", "modality", "native_id", "rule_id", "severity",
-        "source", "tokens", "tokens_fallback", "tokens_only",
+        "kind", "metric", "modality", "native_id", "omit_empty", "rule_id",
+        "severity", "source", "tokens", "tokens_fallback", "tokens_only",
     )
 
     def __init__(self, rule: Rule, emit: Emit) -> None:
@@ -1224,6 +1224,7 @@ class _Emission:
         self.content_tag = emit.content_tag
         self.severity = emit.severity
         self.attr_plan = emit.attr_plan
+        self.omit_empty = emit.omit_empty
         self.kind = emit.kind
         self.metric = emit.metric_name
         self.modality = _MODALITIES[emit.modality]
@@ -1267,6 +1268,15 @@ def _build_signal(
             continue
         v = cached.get(name, MISS)
         attrs[key] = ctx.var(name) if v is MISS else v
+    if em.omit_empty:
+        # tracker 218: an OPTIONAL varbind that the trap did not carry is a key
+        # that must not exist, not a key with an empty value — and dropping it
+        # is what makes an enrichment additive: an event that never carried the
+        # varbind keeps the attrs dict it always had, so its native_id and
+        # signal_id are unchanged. One truthiness test for the whole table.
+        for key in em.omit_empty:
+            if not attrs[key]:
+                del attrs[key]
     # The four provenance keys, written straight in. They used to be a dict
     # built by `_prov` and merged; the merge and the allocation were pure tax
     # (tracker 234). `_count_emission` keeps the accounting identical.

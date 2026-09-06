@@ -478,7 +478,12 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     as. It only reads signals the parser ALREADY produced."""
     import parser_rules
     from producers import RULES
-    assert parser_rules.PARSER_REV == "2026-09-02-a9b", (
+    # The rev this file pins is "the parser as the A4 plane found it, plus every
+    # deliberate parser change since" — it is re-pinned only by the change that
+    # moves it, never by an A4 edit. 2026-09-06-218: the linkDown/linkUp
+    # ifAdminStatus/ifOperStatus enrichment (tracker 218), which adds no syslog
+    # grammar and cannot reclassify a V1 noise line.
+    assert parser_rules.PARSER_REV == "2026-09-06-218", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

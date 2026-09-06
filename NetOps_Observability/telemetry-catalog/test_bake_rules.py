@@ -190,6 +190,36 @@ def test_an_extraction_may_not_shadow_a_lane_var(loaded):
         B.validate_row(row, data["families"], set())
 
 
+def test_omit_empty_may_only_name_an_attr_the_row_emits(loaded):
+    """`emit.omit_empty` (tracker 218) is how an OPTIONAL field says "the device
+    did not send this" by being ABSENT rather than empty. A row that lists a key
+    it never builds is claiming a conditional field nothing produces — a claim
+    that could never fire, and therefore never be noticed."""
+    data, rows = loaded
+    row = _row(rows, "trap.link.state_change")
+    row["emit"]["omit_empty"] = ["admin_status", "not_a_field_this_rule_emits"]
+    with pytest.raises(B.BakeError, match="not_a_field_this_rule_emits"):
+        B.validate_row(row, data["families"], set())
+
+
+def test_omit_empty_must_be_a_list(loaded):
+    """A bare string would iterate CHARACTERS and silently name no attr at
+    all — the shape that makes a guard inert instead of loud."""
+    data, rows = loaded
+    row = _row(rows, "trap.link.state_change")
+    row["emit"]["omit_empty"] = "admin_status"
+    with pytest.raises(B.BakeError, match="omit_empty"):
+        B.validate_row(row, data["families"], set())
+
+
+def test_the_two_link_rows_are_the_only_ones_that_drop_an_attr(rows):
+    """A narrow, deliberate exception stays narrow. If `omit_empty` spreads, an
+    absent key stops meaning "the device did not report it"."""
+    declaring = {r["rule_id"] for r in rows if (r.get("emit") or {}).get("omit_empty")}
+    assert declaring == {"trap.link.state_change",
+                         "trap.link.state_change.event_type"}
+
+
 def test_a_pattern_src_must_be_a_live_node_of_its_own_guard(loaded):
     """The ingest screen screens this rule BY `pattern_src`. If it is not
     actually a gate of the rule, the screen advertises coverage for a gate that

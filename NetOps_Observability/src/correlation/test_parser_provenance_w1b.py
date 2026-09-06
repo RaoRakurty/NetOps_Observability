@@ -426,7 +426,17 @@ RULES_HASH_A9 = "5ebe16c3b9b6f06fe5db50954b4d2fd7071d7f89d0660b36e7e9b1e1d659021
 #: recorded output). The syslog half ships `shadow: true` — it is counted and
 #: emits nothing — so the SYSLOG lane's emission is byte-identical to A9's.
 RULES_HASH_A9B = "a0be9de50a0657bc8a8a029305b23909cf5a09d72179f294b96cec889426eade"
-RULES_HASH_A3 = RULES_HASH_A9B
+#:
+#: 218 (the linkDown/linkUp status enrichment A9 deferred) is the FIRST re-pin
+#: that changes an EXISTING rule's grammar rather than adding rows: both link
+#: rules now extract `ifAdminStatus`/`ifOperStatus` and emit them as
+#: `omit_empty` attrs. It is still additive on the wire — no corpus event
+#: carries either varbind, so every recorded output below replays byte-for-byte,
+#: and `state`/`entity`/`severity`/`native_id` (therefore `signal_id`) are
+#: untouched by construction. `test_link_status_enrichment_218.py` is the proof
+#: of both halves.
+RULES_HASH_218 = "34cce98ee1a4ee8fb1d6d990930400506f993e61be19b4e30a23c886419a2039"
+RULES_HASH_A3 = RULES_HASH_218
 
 
 def _guard_patterns(node) -> list[str]:

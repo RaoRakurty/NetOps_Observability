@@ -954,6 +954,7 @@ def test_the_emission_plan_is_what_the_catalog_row_says():
             assert em.entity_type_else is P._ENTITY_TYPES[
                 emit.entity_type_else or emit.entity_type]
             assert em.attr_plan is emit.attr_plan
+            assert em.omit_empty == emit.omit_empty
             assert em.tokens_only == emit.tokens_only
             assert em.tokens_fallback == emit.tokens_fallback
             assert em.content_tag == emit.content_tag

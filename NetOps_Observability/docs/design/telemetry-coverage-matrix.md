@@ -3,7 +3,7 @@
 
 # Telemetry Coverage Matrix — what Correlix recognizes
 
-Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-09-02-a9b`**, plus the metric-episode lane reconstructed from
+Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-09-06-218`**, plus the metric-episode lane reconstructed from
 `src/backend/collectors/metric_events.go` (`rcaMetricFamilies`) and
 `src/correlation/main.py` (`metric_identity`). Nothing here is written by
 hand: `coverage_matrix.py --check` fails CI if this file and the catalog
@@ -134,7 +134,15 @@ Every symptom below has a real trap. Each is left as a generic
 | transceiver / DOM / FEC / PCS (12 port kinds) | ENTITY-SENSOR-MIB entSensorThresholdNotification, ARISTA-ENTITY-SENSOR-MIB aristaEntSensorAlarm | no | A sensor-threshold trap says *a sensor crossed a threshold*; it does not say pre-FEC BER, lane bias, deskew or LOS. Mapping one onto a specific optics kind would be a guess presented as evidence. They stay generic alarms and the DOM metric lane carries the real signal. |
 | hardware / environment (fan, PSU, FRU, over-temperature) | CISCO-ENTITY-FRU-CONTROL-MIB cefc* · CISCO-ENVMON-MIB ciscoEnvMon* · ENTITY-STATE-MIB entStateOperDisabled · JUNIPER-MIB jnxFanFailure / jnxPowerSupplyFailure · TIMETRA-CHASSIS-MIB tmnxEq* | yes — index-verified | There is no syslog-typed kind for environmental health to pair with, so promoting these would mean inventing kinds. They belong as generic `device_alarm`s — and since **A9b they actually ARE ones**: every one of these notifications carried NO severity hint, defaulted to `notice` and therefore sat below `ALARM_SEVERITY_FLOOR`, so a failed power supply or an over-temperature chassis reached the engine as nothing at all. `gen_index.py SEVERITY_HINT` now seeds the FAULTS at `warning` and their recovery twins (`jnxFanOK`, `cefcFRUInserted`, `entStateOperEnabled`) at `info` — the same split `linkDown`/`linkUp` has always had. Typing them further would still be a guess: a sensor trap says a threshold moved, not which optic or which lane. |
 | authenticationFailure | SNMPv2-MIB authenticationFailure (1.3.6.1.6.3.1.1.5.5) | yes — index-verified | A security-lane symptom with no network-fault counterpart; it is hinted `warning`, so it already becomes a `device_alarm` and is searchable. Routing it further is the security programme's call (network-first scope decision), not the parser's. |
-| link_state_change · ifAdminStatus/ifOperStatus enrichment | IF-MIB linkDown/linkUp varbinds | yes — already classified | AUDITED AND DEFERRED. Reading `ifAdminStatus` would let the engine tell an administratively-shut port from a fault, and `ifOperStatus` would distinguish `lowerLayerDown`. Both change the ATTRS and the state of an already-shipping rule, which re-identifies every link trap already stored and breaks the frozen parity baseline — the same class of change as the declared `bgp_adjacency_change` divergence. It needs its own corpus re-bake, not a side effect of this audit. |
+
+### …and one the audit got wrong
+
+A deferral is a claim about the code, and a claim can be checked. This one was,
+and it did not hold.
+
+| Symptom | What A9 said | What happened |
+|---|---|---|
+| link_state_change · ifAdminStatus/ifOperStatus enrichment | A9 deferred it: reading `ifAdminStatus` would tell an administratively-shut port from a fault and `ifOperStatus` would distinguish `lowerLayerDown`, but doing so "changes the ATTRS and the state of an already-shipping rule, which re-identifies every link trap already stored and breaks the frozen parity baseline". | SHIPPED at `parser_rev 2026-09-06-218` (tracker 218). The objection did not survive being checked against the code. A signal's identity is a uuid5 over `source`, `native_id` and the event millisecond, so attrs reach it only through `native_id` — which for this rule is the device, the literal `trap_link`, the interface, the state and the timestamp — and the enrichment never touches `state`, which is still decided by the trap OID alone. The parity objection held only for an UNCONDITIONAL attr: the two keys are declared `omit_empty`, so they exist only on the events that actually carry the varbind, and **no event in the 1,151-entry golden corpus carries either one** — every recorded output replays byte-for-byte and no baseline skip was added. `src/correlation/test_link_status_enrichment_218.py` proves the discrimination, the identical `signal_id` with and without the varbinds, the absent-vs-empty distinction, and both enum ladders against the vendored IF-MIB index in both directions. |
 
 ## A9b — the finding A9 recorded, and closed
 

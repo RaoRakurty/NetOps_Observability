@@ -167,17 +167,34 @@ KEEP_AS_ALARM: tuple[tuple[str, str, str, str], ...] = (
          "searchable. Routing it further is the security programme's call "
          "(network-first scope decision), not the parser's."),
     ),
+)
+
+#: A9 verdict that a LATER change overturned. Kept as data — deleting the row
+#: would erase the audit's reasoning along with its mistake, and the reason a
+#: deferral was wrong is worth more to the next audit than the deferral was.
+REOPENED: tuple[tuple[str, str, str], ...] = (
     (
         "link_state_change · ifAdminStatus/ifOperStatus enrichment",
-        "IF-MIB linkDown/linkUp varbinds",
-        "yes — already classified",
-        ("AUDITED AND DEFERRED. Reading `ifAdminStatus` would let the engine "
-         "tell an administratively-shut port from a fault, and `ifOperStatus` "
-         "would distinguish `lowerLayerDown`. Both change the ATTRS and the "
-         "state of an already-shipping rule, which re-identifies every link "
-         "trap already stored and breaks the frozen parity baseline — the same "
-         "class of change as the declared `bgp_adjacency_change` divergence. "
-         "It needs its own corpus re-bake, not a side effect of this audit."),
+        ("A9 deferred it: reading `ifAdminStatus` would tell an "
+         "administratively-shut port from a fault and `ifOperStatus` would "
+         "distinguish `lowerLayerDown`, but doing so \"changes the ATTRS and "
+         "the state of an already-shipping rule, which re-identifies every "
+         "link trap already stored and breaks the frozen parity baseline\"."),
+        ("SHIPPED at `parser_rev 2026-09-06-218` (tracker 218). The objection "
+         "did not survive being checked against the code. A signal's identity "
+         "is a uuid5 over `source`, `native_id` and the event millisecond, so "
+         "attrs reach it only through `native_id` — which for this rule is the "
+         "device, the literal `trap_link`, the interface, the state and the "
+         "timestamp — and the enrichment never touches `state`, which is still "
+         "decided by the trap OID alone. The parity objection held only for an "
+         "UNCONDITIONAL attr: the two keys are declared `omit_empty`, so they "
+         "exist only on the events that actually carry the varbind, and **no "
+         "event in the 1,151-entry golden corpus carries either one** — every "
+         "recorded output replays byte-for-byte and no baseline skip was "
+         "added. `src/correlation/test_link_status_enrichment_218.py` proves "
+         "the discrimination, the identical `signal_id` with and without the "
+         "varbinds, the absent-vs-empty distinction, and both enum ladders "
+         "against the vendored IF-MIB index in both directions."),
     ),
 )
 
@@ -374,6 +391,17 @@ def render(data: dict, rows: list[dict], families: dict, parser_rev: str) -> str
     w("|---|---|---|---|")
     for symptom, traps, indexed, why in KEEP_AS_ALARM:
         w(f"| {symptom} | {traps} | {indexed} | {why} |")
+    w("")
+    w("### …and one the audit got wrong")
+    w("")
+    w("A deferral is a claim about the code, and a claim can be checked. This "
+      "one was,")
+    w("and it did not hold.")
+    w("")
+    w("| Symptom | What A9 said | What happened |")
+    w("|---|---|---|")
+    for symptom, said, happened in REOPENED:
+        w(f"| {symptom} | {said} | {happened} |")
     w("")
     w("## A9b — the finding A9 recorded, and closed")
     w("")

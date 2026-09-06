@@ -61,7 +61,7 @@ ROW_KEYS = frozenset({
 ROW_REQUIRED = ("rule_id", "lane", "source", "kind", "entity_type", "guard", "emit")
 EMIT_KEYS = frozenset({
     "kind", "metric", "modality", "entity", "severity", "native_id",
-    "content_tag", "tokens", "tokens_fallback", "attrs",
+    "content_tag", "tokens", "tokens_fallback", "attrs", "omit_empty",
 })
 ENTITY_KEYS = frozenset({"type", "id", "when", "else"})
 #: `_frag` holds the YAML anchors the rows share (they expand at load, so the
@@ -197,6 +197,17 @@ def validate_row(row: dict, families: dict, seen: set[str]) -> None:
             raise BakeError(f"{where}: emit.entity has `when` but no `else`")
     if emit.get("severity") is None and row.get("severity") is None:
         raise BakeError(f"{where}: declares neither emit.severity nor severity")
+    # tracker 218: `omit_empty` drops an attr the event did not carry. It may
+    # only name a key the rule actually emits — otherwise the row is claiming a
+    # conditional field that nothing builds, and the claim would never fire.
+    omit = emit.get("omit_empty") or ()
+    if not isinstance(omit, list | tuple):
+        raise BakeError(f"{where}: emit.omit_empty must be a list of attr keys")
+    stray_attrs = sorted(set(map(str, omit)) - set(emit.get("attrs") or {}))
+    if stray_attrs:
+        raise BakeError(
+            f"{where}: emit.omit_empty names {stray_attrs}, which the rule does "
+            "not emit")
     if row["lane"] in RUNTIME_LANES:
         for k in ("metric", "modality", "native_id"):
             if not emit.get(k):

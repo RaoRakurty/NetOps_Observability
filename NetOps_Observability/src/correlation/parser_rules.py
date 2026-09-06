@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, rules_hash
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-09-02-a9b'
+PARSER_REV = '2026-09-06-218'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -875,7 +875,21 @@ _ROWS: tuple[dict[str, Any], ...] = (
                                    {'vb': ['1.3.6.1.2.1.2.2.1.2']},
                                    {'vb': ['1.3.6.1.2.1.2.2.1.1']},
                                    {'vbname': ['ifname', 'ifdescr', 'interfacename', 'intfname']},
-                                   {'const': 'unknown'}]}},
+                                   {'const': 'unknown'}]},
+                 'admin_raw': {'alt': [{'vb': ['1.3.6.1.2.1.2.2.1.7']}, {'vbname': ['ifadminstatus']}], 'lower': True},
+                 'oper_raw': {'alt': [{'vb': ['1.3.6.1.2.1.2.2.1.8']}, {'vbname': ['ifoperstatus']}], 'lower': True},
+                 'admin_status': {'case': [{'when': {'re': ['$admin_raw', '\\b(?:testing|3)\\b']}, 'value': 'testing'},
+                                           {'when': {'re': ['$admin_raw', '\\b(?:down|2)\\b']}, 'value': 'down'},
+                                           {'when': {'re': ['$admin_raw', '\\b(?:up|1)\\b']}, 'value': 'up'},
+                                           {'when': {'truthy': '$admin_raw'}, 'value': 'unknown'}]},
+                 'oper_status': {'case': [{'when': {'re': ['$oper_raw', '\\b(?:lowerlayerdown|7)\\b']}, 'value': 'lowerlayerdown'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:notpresent|6)\\b']}, 'value': 'notpresent'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:dormant|5)\\b']}, 'value': 'dormant'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:unknown|4)\\b']}, 'value': 'unknown'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:testing|3)\\b']}, 'value': 'testing'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:down|2)\\b']}, 'value': 'down'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:up|1)\\b']}, 'value': 'up'},
+                                          {'when': {'truthy': '$oper_raw'}, 'value': 'unknown'}]}},
      'emit': {'kind': 'link_state_change',
               'metric': 'link_state',
               'modality': 'control_plane',
@@ -883,7 +897,13 @@ _ROWS: tuple[dict[str, Any], ...] = (
               'severity': {'by_state': {'down': 'high'}, 'default': 'warn'},
               'native_id': '{device}|trap_link|{iface}|{state}|{ts_ms}',
               'tokens': [{'t': '{device}'}],
-              'attrs': {'interface': {'var': 'iface'}, 'state': {'var': 'state'}, 'trap_oid': {'var': 'oid'}, 'authenticated': {'var': 'authed'}}},
+              'attrs': {'interface': {'var': 'iface'},
+                        'state': {'var': 'state'},
+                        'trap_oid': {'var': 'oid'},
+                        'authenticated': {'var': 'authed'},
+                        'admin_status': {'var': 'admin_status'},
+                        'oper_status': {'var': 'oper_status'}},
+              'omit_empty': ['admin_status', 'oper_status']},
      'markers': [],
      'generic': False,
      'shadow': False},
@@ -975,7 +995,21 @@ _ROWS: tuple[dict[str, Any], ...] = (
                                    {'vb': ['1.3.6.1.2.1.2.2.1.2']},
                                    {'vb': ['1.3.6.1.2.1.2.2.1.1']},
                                    {'vbname': ['ifname', 'ifdescr', 'interfacename', 'intfname']},
-                                   {'const': 'unknown'}]}},
+                                   {'const': 'unknown'}]},
+                 'admin_raw': {'alt': [{'vb': ['1.3.6.1.2.1.2.2.1.7']}, {'vbname': ['ifadminstatus']}], 'lower': True},
+                 'oper_raw': {'alt': [{'vb': ['1.3.6.1.2.1.2.2.1.8']}, {'vbname': ['ifoperstatus']}], 'lower': True},
+                 'admin_status': {'case': [{'when': {'re': ['$admin_raw', '\\b(?:testing|3)\\b']}, 'value': 'testing'},
+                                           {'when': {'re': ['$admin_raw', '\\b(?:down|2)\\b']}, 'value': 'down'},
+                                           {'when': {'re': ['$admin_raw', '\\b(?:up|1)\\b']}, 'value': 'up'},
+                                           {'when': {'truthy': '$admin_raw'}, 'value': 'unknown'}]},
+                 'oper_status': {'case': [{'when': {'re': ['$oper_raw', '\\b(?:lowerlayerdown|7)\\b']}, 'value': 'lowerlayerdown'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:notpresent|6)\\b']}, 'value': 'notpresent'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:dormant|5)\\b']}, 'value': 'dormant'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:unknown|4)\\b']}, 'value': 'unknown'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:testing|3)\\b']}, 'value': 'testing'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:down|2)\\b']}, 'value': 'down'},
+                                          {'when': {'re': ['$oper_raw', '\\b(?:up|1)\\b']}, 'value': 'up'},
+                                          {'when': {'truthy': '$oper_raw'}, 'value': 'unknown'}]}},
      'emit': {'kind': 'link_state_change',
               'metric': 'link_state',
               'modality': 'control_plane',
@@ -987,7 +1021,10 @@ _ROWS: tuple[dict[str, Any], ...] = (
                         'state': {'var': 'state'},
                         'trap_oid': {'var': 'oid'},
                         'event_type': {'var': 'etype'},
-                        'authenticated': {'var': 'authed'}}},
+                        'authenticated': {'var': 'authed'},
+                        'admin_status': {'var': 'admin_status'},
+                        'oper_status': {'var': 'oper_status'}},
+              'omit_empty': ['admin_status', 'oper_status']},
      'markers': [],
      'generic': False,
      'shadow': False},
@@ -1244,5 +1281,5 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = 'a0be9de50a0657bc8a8a029305b23909cf5a09d72179f294b96cec889426eade'
+BAKED_RULES_HASH = '34cce98ee1a4ee8fb1d6d990930400506f993e61be19b4e30a23c886419a2039'
 RULES_HASH: str = rules_hash(RULES)

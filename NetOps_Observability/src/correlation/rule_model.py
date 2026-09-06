@@ -893,6 +893,20 @@ class Emit:
     #: closure call per plain `{var: x}` entry — which is most of them. Order is
     #: preserved: `attr_plan` is the declared order with a var name or None.
     attr_plan: tuple[tuple[str, str | None, Extractor], ...] = ()
+    #: Attr keys that are DROPPED when they extract to nothing (tracker 218).
+    #:
+    #: An optional varbind is not a field with an empty value — it is a field the
+    #: device did not send, and the two must not read alike downstream. Emitting
+    #: `admin_status: ''` would claim the agent reported an empty admin status;
+    #: omitting the key says, honestly, that the trap carried no ifAdminStatus.
+    #:
+    #: It is also what keeps such an enrichment ADDITIVE: a rule that already
+    #: ships gains the key only on the events that actually carry the varbind, so
+    #: every event already classified keeps a byte-identical attrs dict — and
+    #: therefore a byte-identical `native_id` and `signal_id`. Empty for every
+    #: rule that declares none, which is the whole table but the two link rules,
+    #: so the emitter's post-pass is one truthiness test on a slot.
+    omit_empty: tuple[str, ...] = ()
 
 
 _SEV_BY_NAME = {s.value: s for s in Severity}
@@ -954,6 +968,13 @@ def _compile_emit(spec: Any, fallback_sev: Severity | None) -> Emit:
     native_render, _ = compile_template(str(spec.get("native_id", "")))
     attrs = tuple((str(k), compile_extract(v))
                   for k, v in spec.get("attrs", {}).items())
+    omit_empty = tuple(str(k) for k in spec.get("omit_empty", ()))
+    declared = {k for k, _fn in attrs}
+    for k in omit_empty:
+        if k not in declared:
+            raise RuleError(
+                f"emit.omit_empty names {k!r}, which the rule does not emit — "
+                "a key that is never built cannot be conditionally dropped")
     id_render, _ = compile_template(str(ent["id"]))
     return Emit(
         kind=str(spec["kind"]),
@@ -977,6 +998,7 @@ def _compile_emit(spec: Any, fallback_sev: Severity | None) -> Emit:
             (k, (raw["var"] if isinstance(raw, dict) and set(raw) == {"var"}
                  else None), fn)
             for (k, fn), raw in zip(attrs, spec.get("attrs", {}).values())),
+        omit_empty=omit_empty,
     )
 
 

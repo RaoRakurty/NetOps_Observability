@@ -32,6 +32,20 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-09-06-218 — the linkDown/linkUp STATUS ENRICHMENT the A9 audit deferred
+# (tracker 218). Both link rules now read the two varbinds RFC 2863 puts in the
+# notification itself — `ifAdminStatus` and `ifOperStatus` — so an
+# administratively-shut port is distinguishable from a fault, and a
+# `lowerLayerDown` from a local failure. The A9 deferral rested on one claim:
+# that this would "re-identify every link trap already stored". It does not, and
+# the change is shaped so that it cannot: `state`, `entity`, `severity` and
+# `native_id` are untouched, the two keys are `omit_empty` (present only when the
+# device actually sent the varbind), and no event in the 1,151-entry golden
+# corpus carries either varbind — so every stored/replayed link trap keeps a
+# byte-identical attrs dict, native_id and signal_id. `rules_hash` moves because
+# the TABLE moved; the parity run against the frozen pre-A3 branch code stays
+# green with no new baseline skips.
+#
 # 2026-09-02-a9b — the A9 FOLLOW-UP: `device_config_change`, the symptom the
 # audit found invisible. Two rules (`syslog.config.change`, `trap.config.change`)
 # for one symptom on two observers, and the MIB severity seed that lets the trap
@@ -56,7 +70,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-09-02-a9b"
+parser_rev: "2026-09-06-218"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -209,6 +223,59 @@ _frag:
       - {vb: ['1.3.6.1.2.1.2.2.1.1']}        # ifIndex
       - {vbname: [ifname, ifdescr, interfacename, intfname]}
       - {const: unknown}
+
+  # ── tracker 218: the link trap's two STATUS varbinds ───────────────────────
+  #
+  # RFC 2863 defines the notification as
+  #     linkDown NOTIFICATION-TYPE OBJECTS { ifIndex, ifAdminStatus, ifOperStatus }
+  # (vendored verbatim at src/backend/collectors/mibs/vendored/IF-MIB), and the
+  # DESCRIPTION says the ifOperStatus value is included precisely to say which
+  # state the link fell FROM. Without them a linkDown is one undifferentiated
+  # event: an operator shutting a port and a fibre cut look identical.
+  #
+  # They are OPTIONAL on the wire in practice (an agent may send ifIndex alone,
+  # and the vendor `.event_type` twin may carry no IF-MIB varbind at all), so the
+  # emit block lists them under `omit_empty`: present ⇒ the key is emitted,
+  # absent ⇒ the key does not exist. That is what makes this enrichment purely
+  # ADDITIVE — see the rule below.
+  #
+  # DECODING. Agents render an INTEGER enum three ways: the bare int (`2`), the
+  # label (`down`), or `down(2)`. The ladders here are the enums of the VENDORED
+  # IF-MIB, lower-cased, and nothing else — `test_link_status_enrichment_218.py`
+  # checks them BOTH WAYS against `collectors/mibs/index/oididx.json`, so a label
+  # written from memory cannot ship. `unknown` doubles as the "the varbind was
+  # there and did not decode" sentinel; for ifOperStatus that is also enum 4,
+  # which means the same thing ("status cannot be determined").
+  trap_admin_raw: &trap_admin_raw
+    alt:
+      - {vb: ['1.3.6.1.2.1.2.2.1.7']}        # ifAdminStatus
+      - {vbname: [ifadminstatus]}
+    lower: true
+  trap_oper_raw: &trap_oper_raw
+    alt:
+      - {vb: ['1.3.6.1.2.1.2.2.1.8']}        # ifOperStatus
+      - {vbname: [ifoperstatus]}
+    lower: true
+  # ifAdminStatus: up(1), down(2), testing(3).
+  trap_admin_status: &trap_admin_status
+    case:
+      - {when: {re: ['$admin_raw', '\b(?:testing|3)\b']}, value: testing}
+      - {when: {re: ['$admin_raw', '\b(?:down|2)\b']}, value: down}
+      - {when: {re: ['$admin_raw', '\b(?:up|1)\b']}, value: up}
+      - {when: {truthy: '$admin_raw'}, value: unknown}
+  # ifOperStatus: up(1), down(2), testing(3), unknown(4), dormant(5),
+  # notPresent(6), lowerLayerDown(7). Longest labels first: the ladder is walked
+  # in order and `lowerlayerdown` must not be read as `down`.
+  trap_oper_status: &trap_oper_status
+    case:
+      - {when: {re: ['$oper_raw', '\b(?:lowerlayerdown|7)\b']}, value: lowerlayerdown}
+      - {when: {re: ['$oper_raw', '\b(?:notpresent|6)\b']}, value: notpresent}
+      - {when: {re: ['$oper_raw', '\b(?:dormant|5)\b']}, value: dormant}
+      - {when: {re: ['$oper_raw', '\b(?:unknown|4)\b']}, value: unknown}
+      - {when: {re: ['$oper_raw', '\b(?:testing|3)\b']}, value: testing}
+      - {when: {re: ['$oper_raw', '\b(?:down|2)\b']}, value: down}
+      - {when: {re: ['$oper_raw', '\b(?:up|1)\b']}, value: up}
+      - {when: {truthy: '$oper_raw'}, value: unknown}
 
 # ══ THE RULE TABLE ═══════════════════════════════════════════════════════════
 # Declared in CLASSIFICATION ORDER within each lane, because ORDER IS BEHAVIOUR:
@@ -1251,6 +1318,10 @@ rules:
             value: down
           - {when: {always: true}, value: up}
       iface: *trap_iface
+      admin_raw: *trap_admin_raw
+      oper_raw: *trap_oper_raw
+      admin_status: *trap_admin_status
+      oper_status: *trap_oper_status
     emit:
       kind: link_state_change
       metric: link_state
@@ -1264,6 +1335,16 @@ rules:
         state: {var: state}
         trap_oid: {var: oid}
         authenticated: {var: authed}
+        admin_status: {var: admin_status}
+        oper_status: {var: oper_status}
+      # tracker 218. NOTHING that identifies the signal moves: `state` is still
+      # down/up from the trap OID alone, so `native_id`, `entity` and therefore
+      # `signal_id` are byte-identical to what this rule has always emitted —
+      # a stored link trap is NOT re-identified, which was the one objection the
+      # A9 audit deferred this enrichment on. The two keys appear only on the
+      # events that actually carry the varbinds; every event already stored
+      # carried none, so its attrs dict is unchanged too.
+      omit_empty: [admin_status, oper_status]
 
   - rule_id: trap.device.restart
     lane: trap
@@ -1404,6 +1485,10 @@ rules:
           - {when: {contains: [etype, down]}, value: down}
           - {when: {always: true}, value: up}
       iface: *trap_iface
+      admin_raw: *trap_admin_raw
+      oper_raw: *trap_oper_raw
+      admin_status: *trap_admin_status
+      oper_status: *trap_oper_status
     emit:
       kind: link_state_change
       metric: link_state
@@ -1418,6 +1503,12 @@ rules:
         trap_oid: {var: oid}
         event_type: {var: etype}
         authenticated: {var: authed}
+        admin_status: {var: admin_status}
+        oper_status: {var: oper_status}
+      # Same enrichment on the MIB-decoded twin: a vendor trap that decodes to a
+      # link transition still carries the IF-MIB varbinds, and the two rules must
+      # produce ONE vocabulary (they already share kind/entity/state/native_id).
+      omit_empty: [admin_status, oper_status]
 
   - rule_id: trap.device.restart.event_type
     lane: trap
