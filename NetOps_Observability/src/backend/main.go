@@ -2072,7 +2072,23 @@ func initStoreBackend() error {
 		})
 		return nil
 	case "postgres", "postgresql", "pg":
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// This bound is a BACKSTOP for a wedged boot, not the schedule.
+		//
+		// It used to be a flat 30 s covering connect + migrate + the legacy blob
+		// import + EVERY file-state collection of the one-time cutover. On the
+		// lab's real cutover (2026-09-06 15:54 UTC) that made a legitimately
+		// large /data/audit.json (5,000 rows) miss the deadline after six small
+		// collections had already spent the budget: the boot failed closed
+		// (correct), the container restarted, and only the SECOND boot — whose
+		// first six collections were already marked done — fit. A customer with
+		// a big audit trail would see that as a boot loop that clears by luck.
+		//
+		// The real bounds now sit where the work is: connect/ping/RLS-assert at
+		// 10 s and migrations at 5 min inside NewDB, and every imported
+		// collection under its own work-proportional budget (platformdb's
+		// importBudget, logged with the row count). This one only has to be
+		// larger than the sum of them for a healthy install.
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
 		if err := platformdb.UsePostgres(ctx, os.Getenv("DATABASE_URL")); err != nil {
 			return err

@@ -328,7 +328,10 @@ docker compose logs api | grep -F '"msg":"state backend selected"'
 # → backend=postgres, persistent=true
 
 docker compose logs api | grep -F 'imported file-backend collection'
-# → one line per collection, each with its row count
+# → one line per collection, each with its row count, the BUDGET it was given
+#   and what it actually took, e.g.
+#   {"msg":"imported file-backend collection","key":"/data/audit.json",
+#    "rows":5000,"budget":"59s","took":"537ms"}
 
 docker compose logs api | grep -F 'imported file-backend app-state into Postgres'
 docker compose logs api | grep -F 'imported file-backend domain collections into Postgres'
@@ -341,6 +344,53 @@ docker compose logs api | grep -Ei 'file-state import|import .*: ' | grep -i err
 A collection whose target already had rows logs
 `skipped file-backend collection (target already populated)` instead — that is
 the correct answer on a re-run, not a failure.
+
+#### How long the import is allowed to take (and what the lab actually did)
+
+**Observed, 2026-09-06 15:54 UTC — the real lab cutover.** The api's FIRST boot
+on `STORE_BACKEND=postgres` logged
+
+```
+store backend: file-state import: import /data/audit.json: context deadline exceeded
+```
+
+after importing six small collections. It failed **closed**, which is correct —
+a half-imported control plane that boots looks exactly like a complete one — the
+container restarted, and the second boot (with those six already marked done)
+imported `/data/audit.json` (5,000 rows) plus the rest in ~10 s and came up
+healthy. Nothing was wrong with the audit trail: the bound was wrong. One flat
+30 s context covered connect + migrate + *every* collection, so a collection's
+budget was whatever the ones before it left over — a boot that succeeds or loops
+depending on host load and ordering.
+
+**Now:** each collection gets its own deadline, derived from its own size, and
+the api writes that budget into the boot log next to the row count:
+
+```
+budget = min(10m, 30s + 5ms × records + 2s × ceil(bytes / 1 MiB))
+```
+
+`30s` is the fixed per-collection cost (marker lookup, the populated-target
+count under RLS, the transaction, the verification count); the per-record and
+per-MiB terms are deliberately ~50× the measured cost, because the budget exists
+to catch a **wedge**, not to police throughput; `10m` is the absolute ceiling so
+a corrupt length can never become an unbounded boot. The rows themselves now go
+in as batched multi-row `INSERT`s inside the one per-collection transaction
+instead of one round trip per row (measured on the lab's Postgres, 5,000 audit
+rows: **1.22 s row-by-row → 238 ms batched**, whole-phase `importFileState`
+537 ms against a 59 s budget).
+
+Worked example — the collection that broke: `/data/audit.json`, 5,000 records,
+1.1 MiB → `30s + 25s + 4s = 59s`.
+
+Nothing about the semantics changed: the import is still one-time (the marker
+gate), still fails the boot naming the collection, and still verifies its row
+count before recording itself done. If a collection ever DOES exhaust its budget,
+the boot fails with that collection's name — treat it as a wedge (locks, a
+saturated database) and look at `pg_stat_activity`, not as a limit to raise.
+
+The two outer bounds are backstops, not the schedule: connect/ping/RLS-assert
+10 s, migrations 5 min, the whole postgres backend selection 20 min.
 
 ### 5. Functional checks (in this order)
 

@@ -46,6 +46,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -194,55 +195,79 @@ func (p *PGStore) importCollections(ctx context.Context, dir string, cols []Coll
 		if len(raw) == 0 {
 			continue // absent or empty file → nothing to import
 		}
-		done, err := p.importDone(ctx, c.Name)
-		if err != nil {
-			return fmt.Errorf("import %s: %w", c.Name, err)
-		}
-		if done {
-			continue // one-time means one-time
-		}
-		have, err := c.Count(ctx)
-		if err != nil {
-			return fmt.Errorf("import %s: count target: %w", c.Name, err)
-		}
-		if have > 0 {
-			// Live rows with no marker: record done-without-importing so a
-			// later deliberate emptying can never re-trigger the import.
-			if err := p.markImported(ctx, c.Name, "skipped-populated"); err != nil {
+		// One collection, one work-proportional deadline (rows_import_budget.go).
+		// A domain file's ROW count is not derivable from its shape (one JSON
+		// object can be five rows), so the record count that sizes the budget is
+		// the file's own shape — the same honest approximation the boot log's
+		// "records" field carries.
+		start := time.Now()
+		var (
+			skipped bool
+			got     int
+		)
+		budget, err := importWithBudget(ctx, len(raw), blobRecordCount(raw), func(ctx context.Context) error {
+			done, err := p.importDone(ctx, c.Name)
+			if err != nil {
 				return fmt.Errorf("import %s: %w", c.Name, err)
 			}
-			logInfo("db", "skipped file-backend collection (target already populated)",
-				map[string]any{"collection": c.Name, "rows": have})
+			if done {
+				skipped = true // one-time means one-time
+				return nil
+			}
+			have, err := c.Count(ctx)
+			if err != nil {
+				return fmt.Errorf("import %s: count target: %w", c.Name, err)
+			}
+			if have > 0 {
+				// Live rows with no marker: record done-without-importing so a
+				// later deliberate emptying can never re-trigger the import.
+				if err := p.markImported(ctx, c.Name, "skipped-populated"); err != nil {
+					return fmt.Errorf("import %s: %w", c.Name, err)
+				}
+				logInfo("db", "skipped file-backend collection (target already populated)",
+					map[string]any{"collection": c.Name, "rows": have})
+				skipped = true
+				return nil
+			}
+			wrote, err := c.Import(ctx, raw)
+			if err != nil {
+				return fmt.Errorf("import %s: %w", c.Name, err)
+			}
+			// VERIFY, then mark. Counting the target after the write is the only
+			// check that catches an importer whose INSERT silently landed fewer
+			// rows than it parsed (an ON CONFLICT collapse, an RLS refusal that
+			// affected zero rows). Marking a wrong import "done" would freeze the
+			// loss in place, so the marker is written only once the count agrees.
+			//
+			// The marker is NOT in the importer's transaction (it belongs to the
+			// owning package, which owns its own transaction). A crash in the gap
+			// leaves rows imported and unmarked, and the next boot then reads the
+			// target as POPULATED and records skipped-populated — the same
+			// end state, reached honestly. The gap can duplicate nothing.
+			got, err = c.Count(ctx)
+			if err != nil {
+				return fmt.Errorf("import %s: verify: %w", c.Name, err)
+			}
+			if got != wrote {
+				return fmt.Errorf("import %s: wrote %d rows but the target holds %d — refusing to record the import as done", c.Name, wrote, got)
+			}
+			if err := p.markImported(ctx, c.Name, "rows"); err != nil {
+				return fmt.Errorf("import %s: %w", c.Name, err)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if skipped {
 			continue
-		}
-		wrote, err := c.Import(ctx, raw)
-		if err != nil {
-			return fmt.Errorf("import %s: %w", c.Name, err)
-		}
-		// VERIFY, then mark. Counting the target after the write is the only
-		// check that catches an importer whose INSERT silently landed fewer
-		// rows than it parsed (an ON CONFLICT collapse, an RLS refusal that
-		// affected zero rows). Marking a wrong import "done" would freeze the
-		// loss in place, so the marker is written only once the count agrees.
-		//
-		// The marker is NOT in the importer's transaction (it belongs to the
-		// owning package, which owns its own transaction). A crash in the gap
-		// leaves rows imported and unmarked, and the next boot then reads the
-		// target as POPULATED and records skipped-populated — the same
-		// end state, reached honestly. The gap can duplicate nothing.
-		got, err := c.Count(ctx)
-		if err != nil {
-			return fmt.Errorf("import %s: verify: %w", c.Name, err)
-		}
-		if got != wrote {
-			return fmt.Errorf("import %s: wrote %d rows but the target holds %d — refusing to record the import as done", c.Name, wrote, got)
-		}
-		if err := p.markImported(ctx, c.Name, "rows"); err != nil {
-			return fmt.Errorf("import %s: %w", c.Name, err)
 		}
 		imported++
 		logInfo("db", "imported file-backend collection",
-			map[string]any{"collection": c.Name, "file": c.File, "rows": got})
+			map[string]any{
+				"collection": c.Name, "file": c.File, "rows": got,
+				"budget": budget.String(), "took": time.Since(start).Round(time.Millisecond).String(),
+			})
 	}
 	if imported > 0 {
 		logInfo("db", "imported file-backend domain collections into Postgres",

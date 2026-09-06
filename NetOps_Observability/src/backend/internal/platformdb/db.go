@@ -172,7 +172,14 @@ func NewDB(ctx context.Context, dsn string) (*DB, error) {
 		pool.Close()
 		return nil, err
 	}
-	if err := db.Migrate(ctx); err != nil {
+	// Migrations get their OWN bound, generous but finite: they are the second
+	// distinct piece of work in a boot that also imports an install's whole
+	// durable state, and lumping the two under one flat caller-supplied deadline
+	// is exactly what made a large file-state import a boot loop on 2026-09-06
+	// (see rows_import_budget.go). It still cannot outlive the caller's context.
+	mctx, mcancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer mcancel()
+	if err := db.Migrate(mctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}

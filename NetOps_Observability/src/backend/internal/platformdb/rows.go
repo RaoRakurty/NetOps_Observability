@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -287,46 +288,78 @@ func (p *PGStore) importFileState(ctx context.Context, dir string) error {
 		if len(data) == 0 && len(records) == 0 {
 			continue // nothing on disk for this collection
 		}
-		done, err := p.importDone(ctx, key)
-		if err != nil {
-			return err
+		// The whole collection is ONE unit of work under ONE work-proportional
+		// deadline (rows_import_budget.go): the legacy blob plus every record
+		// in the per-record subtree, because they commit in one transaction.
+		// A flat boot-wide bound is what made a legitimately large
+		// /data/audit.json a boot loop on 2026-09-06.
+		size := len(data)
+		for _, rec := range records {
+			size += len(rec)
 		}
-		if done {
-			continue // decision already recorded — one-time means one-time
-		}
-		empty, err := p.targetEmpty(ctx, key)
-		if err != nil {
-			return err
-		}
-		if !empty {
-			// Live rows with no marker (pre-marker install, or writes that beat
-			// the import): record done-without-importing so a later deliberate
-			// emptying can never re-trigger the import. Never clobber.
-			if err := p.markImported(ctx, key, "skipped-populated"); err != nil {
+		want := blobRecordCount(data)
+		start := time.Now()
+		var (
+			skipped bool
+			got     int
+		)
+		budget, err := importWithBudget(ctx, size, want+len(records), func(ctx context.Context) error {
+			done, err := p.importDone(ctx, key)
+			if err != nil {
 				return err
 			}
-			logInfo("db", "skipped file-backend collection (target already populated)",
-				map[string]any{"key": key})
+			if done {
+				skipped = true // decision already recorded — one-time means one-time
+				return nil
+			}
+			empty, err := p.targetEmpty(ctx, key)
+			if err != nil {
+				return err
+			}
+			if !empty {
+				// Live rows with no marker (pre-marker install, or writes that
+				// beat the import): record done-without-importing so a later
+				// deliberate emptying can never re-trigger the import. Never
+				// clobber.
+				if err := p.markImported(ctx, key, "skipped-populated"); err != nil {
+					return err
+				}
+				logInfo("db", "skipped file-backend collection (target already populated)",
+					map[string]any{"key": key})
+				skipped = true
+				return nil
+			}
+			if err := p.importKey(ctx, key, data, records); err != nil {
+				return fmt.Errorf("import %s: %w", key, err)
+			}
+			// Per-collection verification: count what actually landed and
+			// compare it with what the file held. A silently short import (an
+			// explode that dropped elements, an insert that collapsed on
+			// conflict) would otherwise be recorded as done and frozen in place.
+			got, err = p.storedRowCount(ctx, key)
+			if err != nil {
+				return fmt.Errorf("import %s: verify: %w", key, err)
+			}
+			if got != want {
+				return fmt.Errorf("import %s: the file holds %d records but the target holds %d after the import", key, want, got)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if skipped {
 			continue
 		}
-		if err := p.importKey(ctx, key, data, records); err != nil {
-			return fmt.Errorf("import %s: %w", key, err)
-		}
-		// Per-collection verification: count what actually landed and compare
-		// it with what the file held. A silently short import (an explode that
-		// dropped elements, an insert that collapsed on conflict) would
-		// otherwise be recorded as done and frozen in place.
-		want := blobRecordCount(data)
-		got, err := p.storedRowCount(ctx, key)
-		if err != nil {
-			return fmt.Errorf("import %s: verify: %w", key, err)
-		}
-		if got != want {
-			return fmt.Errorf("import %s: the file holds %d records but the target holds %d after the import", key, want, got)
-		}
 		imported++
+		// The BUDGET rides the log line next to the row count: an operator
+		// reading a boot must be able to see what the import was allowed and
+		// what it actually took, without reading this file.
 		logInfo("db", "imported file-backend collection",
-			map[string]any{"key": key, "rows": got, "records": len(records)})
+			map[string]any{
+				"key": key, "rows": got, "records": len(records),
+				"budget": budget.String(), "took": time.Since(start).Round(time.Millisecond).String(),
+			})
 	}
 	if imported > 0 {
 		logInfo("db", "imported file-backend app-state into Postgres", map[string]any{"collections": imported})
@@ -433,12 +466,7 @@ func replaceRowsTx(ctx context.Context, tx pgx.Tx, spec rowSpec, rows []rowValue
 	if _, err := tx.Exec(ctx, "DELETE FROM "+spec.table); err != nil {
 		return err
 	}
-	for _, r := range rows {
-		if err := insertRow(ctx, tx, spec, r); err != nil {
-			return err
-		}
-	}
-	return nil
+	return insertRowsTx(ctx, tx, spec, rows)
 }
 
 func (p *PGStore) loadBlob(ctx context.Context, key string) ([]byte, error) {
@@ -518,29 +546,115 @@ func explode(spec rowSpec, blob []byte) ([]rowValue, error) {
 	return out, nil
 }
 
-// insertRow writes one exploded element, matching each table's column shape.
-func insertRow(ctx context.Context, tx pgx.Tx, spec rowSpec, r rowValue) error {
+// rowColumns is each table's column shape and the matching per-row argument
+// extractor, in ONE place so the column list and the values can never drift
+// apart (they used to be a single hand-written INSERT per shape).
+func rowColumns(spec rowSpec) ([]string, func(rowValue) []any) {
 	switch {
 	case spec.selfTenant: // tenants — tenant_id is generated from id
-		_, err := tx.Exec(ctx, "INSERT INTO "+spec.table+" (id, data) VALUES ($1, $2)", r.id, []byte(r.data))
-		return err
-	case spec.tsField != "": // audit_events (id, tenant_id, ts, data)
-		ts := time.Now().UTC()
-		if r.ts != nil {
-			ts = *r.ts
+		return []string{"id", "data"}, func(r rowValue) []any {
+			return []any{r.id, []byte(r.data)}
 		}
-		_, err := tx.Exec(ctx, "INSERT INTO "+spec.table+" (id, tenant_id, ts, data) VALUES ($1, $2, $3, $4)", r.id, r.tenant, ts, []byte(r.data))
-		return err
+	case spec.tsField != "": // audit_events (id, tenant_id, ts, data)
+		return []string{"id", "tenant_id", "ts", "data"}, func(r rowValue) []any {
+			ts := time.Now().UTC()
+			if r.ts != nil {
+				ts = *r.ts
+			}
+			return []any{r.id, r.tenant, ts, []byte(r.data)}
+		}
 	case spec.typeField != "": // saved_objects (id, tenant_id, type, data)
-		_, err := tx.Exec(ctx, "INSERT INTO "+spec.table+" (id, tenant_id, type, data) VALUES ($1, $2, $3, $4)", r.id, r.tenant, r.typ, []byte(r.data))
-		return err
-	case spec.tenantField != "": // users, api_keys, snmp_credentials (id, tenant_id, data)
-		_, err := tx.Exec(ctx, "INSERT INTO "+spec.table+" (id, tenant_id, data) VALUES ($1, $2, $3)", r.id, r.tenant, []byte(r.data))
-		return err
+		return []string{"id", "tenant_id", "type", "data"}, func(r rowValue) []any {
+			return []any{r.id, r.tenant, r.typ, []byte(r.data)}
+		}
+	case spec.tenantField != "": // users, api_keys, snmp_credentials
+		return []string{"id", "tenant_id", "data"}, func(r rowValue) []any {
+			return []any{r.id, r.tenant, []byte(r.data)}
+		}
 	default: // roles, snmp_profiles (id, data)
-		_, err := tx.Exec(ctx, "INSERT INTO "+spec.table+" (id, data) VALUES ($1, $2)", r.id, []byte(r.data))
-		return err
+		return []string{"id", "data"}, func(r rowValue) []any {
+			return []any{r.id, []byte(r.data)}
+		}
 	}
+}
+
+// pgMaxBindParams is PostgreSQL's hard limit on bind parameters in one extended
+// -protocol message (65535). The batch size is derived from it, never guessed.
+const pgMaxBindParams = 65535
+
+// importInsertBatchRows is how many rows one multi-row INSERT carries: as many
+// as fit under the bind-parameter limit, capped so a single statement stays a
+// modest, restartable unit of work (and its parse cost stays amortized).
+func importInsertBatchRows(cols int) int {
+	if cols <= 0 {
+		return 1
+	}
+	return min(500, max(1, pgMaxBindParams/cols))
+}
+
+// buildInsertSQL renders a multi-row INSERT for n rows. `table` and `cols` come
+// only from the hardcoded rowSpecs registry (never from user input), and every
+// VALUE is a bind parameter, so there is nothing here to inject into.
+func buildInsertSQL(table string, cols []string, n int) string {
+	var b strings.Builder
+	b.Grow(64 + len(table) + n*len(cols)*6)
+	b.WriteString("INSERT INTO ")
+	b.WriteString(table)
+	b.WriteString(" (")
+	for i, c := range cols {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(c)
+	}
+	b.WriteString(") VALUES ")
+	p := 1
+	for r := 0; r < n; r++ {
+		if r > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteByte('(')
+		for c := range cols {
+			if c > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteByte('$')
+			b.WriteString(strconv.Itoa(p))
+			p++
+		}
+		b.WriteByte(')')
+	}
+	return b.String()
+}
+
+// insertRowsTx writes the exploded elements in MULTI-ROW batches inside the
+// caller's transaction.
+//
+// It used to be one Exec per row. That is one network round trip and one server
+// -side parse/plan per row, which on the lab's 4-core host is what made a
+// 5,000-row /data/audit.json miss the (then flat) import deadline and fail the
+// boot on 2026-09-06. Batching collapses 5,000 round trips into ten, and the
+// semantics are unchanged: same transaction, same order, and a constraint
+// violation still aborts the whole import rather than landing a subset.
+func insertRowsTx(ctx context.Context, tx pgx.Tx, spec rowSpec, rows []rowValue) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	cols, args := rowColumns(spec)
+	per := importInsertBatchRows(len(cols))
+	for start := 0; start < len(rows); start += per {
+		chunk := rows[start:min(start+per, len(rows))]
+		vals := make([]any, 0, len(chunk)*len(cols))
+		for _, r := range chunk {
+			vals = append(vals, args(r)...)
+		}
+		if _, err := tx.Exec(ctx, buildInsertSQL(spec.table, cols, len(chunk)), vals...); err != nil {
+			// Name the batch: on a 5,000-row import "duplicate key" alone does
+			// not tell an operator where in the file to look.
+			return fmt.Errorf("insert rows %d-%d of %d into %s: %w", start+1, start+len(chunk), len(rows), spec.table, err)
+		}
+	}
+	return nil
 }
 
 // assemble concatenates row JSON back into a single array blob. Empty → "[]" so
