@@ -33,6 +33,25 @@ type Device struct {
 	// could not (gNMI, SSH) — which is the point: the row carries the version
 	// however it was learned.
 	OSVersion string `json:"os_version,omitempty"`
+	// OSVersionSource is HOW OSVersion was learned — "snmp" (the sysDescr),
+	// "gnmi" (the platform's software-version leaf), "ssh" (a read-only
+	// `show version` through the gateway) or "manual" (an operator, an
+	// inventory file or an importer). It is the provenance half of the
+	// OS-VERSION SOURCE LADDER (internal/osprobe): a version with no stated
+	// source is a number nobody can audit, and the ladder's overwrite rule is
+	// expressed in terms of this field (a probe never displaces an operator's
+	// value; only the SAME source refreshes its own reading).
+	//
+	// An EMPTY value on a row that carries a version means the provenance
+	// predates this field — it is treated as "manual", never as "probed".
+	OSVersionSource string `json:"os_version_source,omitempty"`
+	// OSVersionAt is when OSVersion was last learned. It is stamped by whoever
+	// wrote the version, so a stale reading is visible as stale rather than
+	// looking as fresh as the row it sits in.
+	// omitzero (not omitempty, which never omits a struct): a device with no
+	// probed version must not serve a 0001-01-01 timestamp that reads as a
+	// reading taken two thousand years ago.
+	OSVersionAt time.Time `json:"os_version_at,omitzero"`
 	// Type — router|switch|firewall|load-balancer|ap|wlc|cloud-gw|generic.
 	// SNMP-inferred from vendor/model/sysDescr (InferDeviceType), operator-overridable
 	// via labels["device_type"]. Populated on-read by the devices API.

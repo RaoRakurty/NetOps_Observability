@@ -18,6 +18,7 @@ import (
 
 	"netops/backend/collectors"
 	"netops/backend/internal/devmon"
+	"netops/backend/internal/osprobe"
 	"netops/backend/models"
 )
 
@@ -74,6 +75,18 @@ type DiscoveryAggregator struct {
 	// no explanation anywhere, is the failure mode this map exists to prevent.
 	withheld map[string]string
 	// MONITORING-END
+
+	// osLadder is the injected OS-VERSION SOURCE LADDER (internal/osprobe).
+	// Nil = no transport was wired and the enrichment tick skips the pass
+	// entirely, which is what every test and every build without the wiring
+	// gets. See os_version.go.
+	osLadder *osprobe.Ladder
+	// osProbeAt is when each device was last PROBED (whatever the outcome),
+	// keyed by device id — the cool-down that stops an unanswerable fleet from
+	// turning the two-minute enrichment tick into a permanent dial storm. It
+	// lives beside the cache rather than on the row because it is scheduling
+	// state, not something an operator should read off a device.
+	osProbeAt map[string]time.Time
 }
 
 type sourceStats struct {
@@ -90,6 +103,8 @@ func NewDiscoveryAggregator() *DiscoveryAggregator {
 		detected: make(map[string]string),
 		monitor:  make(map[string]devmon.Record),
 		withheld: make(map[string]string),
+
+		osProbeAt: make(map[string]time.Time),
 	}
 }
 
@@ -113,6 +128,15 @@ func (a *DiscoveryAggregator) Start(ctx context.Context) {
 	if os.Getenv("ENABLE_VENDOR_DETECTION") == "true" {
 		go a.vendorLoop(ctx)
 	}
+	// The OS-VERSION SOURCE LADDER runs on its own tick rather than inside
+	// vendorLoop, because the two are gated on different things: vendor
+	// detection is an SNMP scan an operator turns off, while the ladder is
+	// gated by its OWN transports (a rung with nothing wired reports itself
+	// unavailable and costs a counter increment). Folding it into vendorLoop
+	// would have made "vendor detection off" silently mean "no device ever
+	// learns its software version", which is exactly the kind of hidden
+	// coupling that leaves a fleet unassessed with no visible reason.
+	go a.osVersionLoop(ctx)
 }
 
 // vendorLoop periodically fills in the vendor of any inventory device that
@@ -573,7 +597,10 @@ func mergeDevices(x, y models.Device) models.Device {
 		base.OS = other.OS
 	}
 	if base.OSVersion == "" {
-		base.OSVersion = other.OSVersion
+		// The version and its PROVENANCE move together or not at all: a merge
+		// that took one and left the other would produce a row claiming a
+		// version was learned by a source that never read it.
+		base.OSVersion, base.OSVersionSource, base.OSVersionAt = other.OSVersion, other.OSVersionSource, other.OSVersionAt
 	}
 	if base.Address == "" {
 		base.Address = other.Address
@@ -757,6 +784,32 @@ func (a *DiscoveryAggregator) upsertLocked(d models.Device) error {
 	// enforcement — a caller that sends `"monitored": true` is ignored, and no
 	// stale copy can outlive the decision it was derived from.
 	d.Monitored, d.MonitorReason, d.MonitorMethods = false, "", nil
+	// OS-VERSION PROVENANCE is server state too, and for the same reason. A
+	// caller MAY set a version — that is the documented manual path, and it is
+	// how a device nothing can probe becomes assessable — but it may not claim
+	// the version was learned by a probe: a body carrying
+	// `"os_version_source": "ssh"` would both fake an audit trail and change
+	// which rung of the ladder is allowed to refresh the row (internal/osprobe's
+	// overwrite rule is expressed in terms of this field). The rule, enforced
+	// here at the storage layer rather than in a handler so no future caller can
+	// bypass it:
+	//
+	//   - the version is UNCHANGED from what the row already holds → keep the
+	//     provenance the row already had, so a client that round-trips the
+	//     device object cannot relabel a probed version as hand-written;
+	//   - the version CHANGED and is non-empty → it came from this request, so
+	//     it is `manual`, stamped now;
+	//   - the version is empty → there is no provenance to state.
+	switch existing := a.cache[d.ID]; {
+	case strings.TrimSpace(d.OSVersion) == "":
+		d.OSVersionSource, d.OSVersionAt = "", time.Time{}
+	case d.OSVersion == existing.OSVersion:
+		d.OSVersionSource, d.OSVersionAt = existing.OSVersionSource, existing.OSVersionAt
+	default:
+		// osprobe's own constant, not a second spelling of it: the overwrite
+		// rule keys on this exact value to recognise an operator's version.
+		d.OSVersionSource, d.OSVersionAt = string(osprobe.MethodManual), time.Now().UTC()
+	}
 	// MONITORING-BEGIN — the ceiling, asked when this write turns a device that
 	// is NOT monitored into one that is: a create of a declared device, or an
 	// address arriving on a record that had none. Re-writing a device that is

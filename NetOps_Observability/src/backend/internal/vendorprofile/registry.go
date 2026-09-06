@@ -4,8 +4,16 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
+
+// osProbeRoundTripToken is the synthetic version the loader renders through a
+// platform's version_render to prove the vendor's own os_version_pattern reads
+// it back unchanged. Digits and dots only, so it is inside every vendor
+// pattern's version character class and the check tests the PHRASING, not the
+// character class.
+const osProbeRoundTripToken = "9.9.9"
 
 // Registry is the immutable, in-memory index over the loaded profiles. It is
 // built once by Load and never mutated afterwards, so it is safe to share across
@@ -268,6 +276,29 @@ func build(docs []vendorDoc) (*Registry, error) {
 			p.Detection.SysDescrContains = append([]string(nil), doc.Detection.SysDescrContains...)
 			p.Detection.SysDescrRank = doc.Detection.SysDescrRank
 			p.Detection.OSVersionPattern = doc.Detection.OSVersionPattern
+			// OS-VERSION LADDER ROUND TRIP. A probe writes its reading onto the
+			// device row, and collectors.ResolveDeviceOS reads that row back
+			// through THIS vendor's os_version_pattern. A rendering the vendor
+			// pattern cannot re-parse would store a version the platform is
+			// unable to see — the device would sit UNASSESSED with the answer
+			// already in the row. Prove it here, at load, on a synthetic token:
+			// rendering must produce a string the vendor pattern captures the
+			// SAME token back out of.
+			if p.OSVersionProbe.Declared() {
+				if osp.versionRe == nil {
+					return nil, fmt.Errorf("vendorprofile: %s declares os_version_probe but vendor %q has no os_version_pattern to read it back with", p.ID, doc.Vendor)
+				}
+				rendered := p.OSVersionProbe.Render(osProbeRoundTripToken)
+				m := osp.versionRe.FindStringSubmatch(rendered)
+				if m == nil || strings.TrimRight(m[1], ".,;:-") != osProbeRoundTripToken {
+					got := "no match"
+					if m != nil {
+						got = strconv.Quote(m[1])
+					}
+					return nil, fmt.Errorf("vendorprofile: %s os_version_probe.version_render %q renders %q, which vendor %q's os_version_pattern reads back as %s, not %q",
+						p.ID, p.OSVersionProbe.VersionRender, rendered, doc.Vendor, got, osProbeRoundTripToken)
+				}
+			}
 			if _, dup := r.profiles[p.ID]; dup {
 				return nil, fmt.Errorf("vendorprofile: duplicate profile id %q", p.ID)
 			}
@@ -415,6 +446,7 @@ func (p Profile) clone() Profile {
 			}
 		}
 	}
+	out.OSVersionProbe.GNMIPaths = cp(p.OSVersionProbe.GNMIPaths)
 	out.Advisory.ProductIDs = cp(p.Advisory.ProductIDs)
 	out.Threat.LogRuleIDs = cp(p.Threat.LogRuleIDs)
 	out.Threat.MnemonicPrefixes = cp(p.Threat.MnemonicPrefixes)
@@ -731,6 +763,50 @@ func (r *Registry) CaptureFor(id string) (Capture, error) {
 		return Capture{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	return p.Capture, nil
+}
+
+// ─── os-version source ladder ────────────────────────────────────────────────
+
+// OSVersionProbeForDevice resolves the OS-VERSION PROBE data for a device from
+// what an inventory row actually carries: its detected vendor and its free-form
+// OS/platform label ("SR Linux", "Cisco IOS-XE 17.9", a whole sysDescr).
+//
+// Resolution is vendor-BOUNDED on purpose. The sysDescr route is tried first
+// (ResolveOS names the product, which names the platform) because it is the
+// authoritative one; the ranked platform-text table is the backstop, and its
+// answer is ACCEPTED ONLY when the profile it lands on belongs to the vendor
+// SNMP already detected. Without that check the label "Nokia SR Linux" on a row
+// whose vendor is something else would silently hand a device another vendor's
+// gNMI paths and CLI command — the ladder would then run one vendor's command
+// at another vendor's device, which is precisely the "never guess at a live
+// device" rule this registry exists to keep.
+//
+// ok=false is the honest "no established non-SNMP version source for this
+// device": an unknown vendor, an unrecognized label, or a profile that declares
+// no probe. The caller reports the device unassessed; it never guesses a path.
+func (r *Registry) OSVersionProbeForDevice(vendor, osText string) (Profile, OSVersionProbe, bool) {
+	v := strings.ToLower(strings.TrimSpace(vendor))
+	if v == "" || strings.TrimSpace(osText) == "" {
+		return Profile{}, OSVersionProbe{}, false
+	}
+	p, ok := r.ProfileForOS(v, osText)
+	if !ok {
+		p, ok = r.ProfileForPlatformText(osText)
+		if !ok || p.Vendor != v {
+			return Profile{}, OSVersionProbe{}, false
+		}
+	}
+	if !p.OSVersionProbe.Declared() {
+		return Profile{}, OSVersionProbe{}, false
+	}
+	return p, p.OSVersionProbe.clone(), true
+}
+
+// clone copies the slice the caller could otherwise retain into the registry.
+func (o OSVersionProbe) clone() OSVersionProbe {
+	out := o
+	out.GNMIPaths = cp(o.GNMIPaths)
+	return out
 }
 
 // ─── cli dialect ─────────────────────────────────────────────────────────────

@@ -133,6 +133,16 @@
     },
     {
       "platform": "srlinux",
+      "os_version_probe": {
+        "gnmi_paths": [
+          "/platform/control[slot=A]/software-version",
+          "/system/information/version"
+        ],
+        "gnmi_version_pattern": "(?i)^\\s*v?([0-9][0-9A-Za-z.]*)",
+        "cli_version_pattern": "(?im)^\\s*Software Version\\s*:\\s*v?([0-9][0-9A-Za-z.]*)",
+        "version_render": "SRLinux-v{version}",
+        "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). This is the platform tracker 231 was opened for: the reference lab's two spines are MANUAL rows carrying os=\"SR Linux\" and no version, SR Linux in containerlab runs no SNMP agent unless one is configured (an snmpget from the collector host times out), so the sysDescr rung can never answer for them and they were UNASSESSED for advisories permanently. gNMI paths: /platform/control[slot=A]/software-version is the leaf SR Linux serves the software version on; /system/information/version is the fallback for a chassis whose control slot is lettered differently. LIVE EVIDENCE for the value SHAPE, not for these two paths: a read-only gNMI Get of /system/information on lab spine1 172.40.40.11 and spine2 172.40.40.12 (2026-09-03) returned SRLinux-v26.3.2-426-g2b38957bbca, and gnmi_version_pattern captures 26.3.2 out of that form (the class stops at the first hyphen, so a build suffix is never carried into a CVE range comparison). The paths themselves are doc_claimed against documentation.nokia.com/srlinux 26-3 and were NOT re-read from a device by the change that authored this block. cli_version_pattern reads the `Software Version     : v26.3.2` line of `show version`, which is the profile's own capture.show_version_cmd; SR Linux prints the version WITHOUT the SRLinux-v prefix there, which is exactly why version_render exists \u2014 the row's os_version leaf is read back through the VENDOR os_version_pattern, which is anchored on SRLinux-v, so a bare 26.3.2 would have been stored unreadable. sros is deliberately NOT authored here: no SR OS device exists to validate against, and TiMOS renders the image letter (TiMOS-B-/TiMOS-C-) inside the phrase the vendor pattern is anchored on, which version_render cannot reproduce faithfully from a version alone."
+      },
       "display_name": "Nokia SR Linux",
       "device_class": [
         "switch",

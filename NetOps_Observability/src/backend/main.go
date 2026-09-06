@@ -2204,6 +2204,9 @@ func Run() {
 	// method can join the drain without main having to reach into it.
 	// Subsystems NOT in the group are listed by cancelOnlyWorkers().
 	workers := srv.workers
+	// OS-VERSION SOURCE LADDER — wired here, before the discovery loops start,
+	// so the first enrichment tick already has its rungs (see vulns_http.go).
+	srv.buildOSVersionLadder()
 	srv.discovery.Start(ctx)
 	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
@@ -4095,6 +4098,13 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 		s.packetCapture.Metrics().Write(w)
 	}
 	// PACKET-CAPTURE-END
+	// OS-VERSION LADDER — how many version probes ran, by rung and outcome. It
+	// is the only place an operator can see that (say) every gnmi rung is
+	// reporting itself unavailable, which is the difference between "these
+	// devices have no version source" and "we never wired one".
+	if s.discovery != nil {
+		s.discovery.WriteOSVersionMetrics(w)
+	}
 	// LICENCE-BEGIN — emitted on every deployment including Community, so
 	// "no licence" is a VALUE (the 36500-day sentinel) and never a gap in the
 	// series. A vanished series must mean a scrape failure, not a state change.

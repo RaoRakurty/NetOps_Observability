@@ -199,6 +199,15 @@
     },
     {
       "platform": "ios_xe",
+      "os_version_probe": {
+        "gnmi_paths": [
+          "/system/state/software-version"
+        ],
+        "gnmi_version_pattern": "(?i)^\\s*v?([0-9][0-9A-Za-z.()]*)",
+        "cli_version_pattern": "(?im)^Cisco IOS[ -]XE Software, Version ([0-9][0-9A-Za-z.()]*)",
+        "version_render": "Version {version}",
+        "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). doc_claimed, matching this profile's fidelity: no IOS-XE device exists in the reference lab, so neither the OpenConfig path nor the `show version` line was read off hardware by the change that authored this block. cli_version_pattern reads the `Cisco IOS XE Software, Version 17.09.04a` banner line of the profile's own capture.show_version_cmd (the second `Cisco IOS Software [Cupertino], ... Version 17.9.4a` line is the packaged IOS version and is deliberately NOT what is captured). version_render restores the `Version ` phrasing the vendor os_version_pattern is anchored on, so the value written to the row parses back to the same version. ios, ios_xr and asa are NOT authored: their show-version banners differ line by line and claiming a pattern we have not seen output for would be a false claim, not coverage."
+      },
       "display_name": "Cisco IOS-XE",
       "device_class": [
         "router",
@@ -314,6 +323,15 @@
     },
     {
       "platform": "nx-os",
+      "os_version_probe": {
+        "gnmi_paths": [
+          "/system/state/software-version"
+        ],
+        "gnmi_version_pattern": "(?i)^\\s*v?([0-9][0-9A-Za-z.()]*)",
+        "cli_version_pattern": "(?im)^\\s*NXOS:\\s+version\\s+([0-9][0-9A-Za-z.()]*)",
+        "version_render": "Version {version}",
+        "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). doc_claimed, matching this profile's fidelity. cli_version_pattern reads the `  NXOS: version 10.3(4a)` line of the Software block of `show version`; the sibling `BIOS: version 05.47` line is a DIFFERENT version and is excluded by anchoring on the NXOS: label rather than on the word version. The parenthesised maintenance suffix is inside the captured class because the vendor os_version_pattern accepts it and the advisory feed's CPE versions carry it."
+      },
       "display_name": "Cisco NX-OS",
       "device_class": [
         "switch"

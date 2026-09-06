@@ -81,6 +81,15 @@
   "profiles": [
     {
       "platform": "junos",
+      "os_version_probe": {
+        "gnmi_paths": [
+          "/system/state/software-version"
+        ],
+        "gnmi_version_pattern": "(?i)^\\s*v?([0-9][0-9A-Za-z.-]*)",
+        "cli_version_pattern": "(?im)^Junos:\\s+([0-9][0-9A-Za-z.-]*)",
+        "version_render": "JUNOS {version}",
+        "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). doc_claimed, matching this profile's fidelity: no Junos device exists in the reference lab. cli_version_pattern reads the `Junos: 21.4R3-S5.4` line of `show version`. The hyphen IS inside the captured class here, unlike the Arista and SR Linux patterns, because a Junos service-release version genuinely contains one (21.4R3-S5.4) \u2014 dropping it would report a device on a different software than it runs. version_render restores the JUNOS phrasing the vendor os_version_pattern is anchored on."
+      },
       "display_name": "Juniper Junos",
       "device_class": [
         "router",

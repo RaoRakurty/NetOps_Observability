@@ -5,12 +5,19 @@ package backend
 // handler only (§2: the entrypoint package keeps wiring and HTTP).
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/configstore"
+	"netops/backend/internal/osprobe"
+	"netops/backend/internal/vendorprofile"
 	"netops/backend/internal/vuln"
 
 	"netops/backend/internal/httppage"
@@ -157,4 +164,97 @@ func (s *server) handleVulns(w http.ResponseWriter, r *http.Request) {
 			"unassessed_partial": !httppage.Complete(page, len(unassessed), totalUnassessed),
 		},
 	})
+}
+
+// ─── OS-VERSION SOURCE LADDER (internal/osprobe) ─────────────────────────────
+//
+// This is the INPUT side of everything above. `/api/vulns` can only assess a
+// device it has a version for, and until now the only version source was the
+// SNMP sysDescr — so a device that answers no SNMP was reported UNASSESSED
+// forever however reachable it was by other means (the reference lab's two SR
+// Linux spines, which run no SNMP agent, are the worked example). The ladder
+// asks every transport the platform ALREADY has credentials for, in a fixed
+// order, and stamps the row with which one answered.
+//
+// The wiring lives beside the reader it serves, and it is deliberately thin:
+// every rung is an adapter over a transport that already exists elsewhere in
+// this binary, and a rung whose transport is not configured reports itself
+// UNAVAILABLE rather than being silently absent.
+
+// osProbeSysDescr adapts the SNMP identity read to the ladder's top rung. The
+// community is read at PROBE time, not captured at boot, so an operator who
+// changes it does not have to restart the process for the rung to follow.
+func osProbeSysDescr(ctx context.Context, addr string) (string, string) {
+	community := os.Getenv("SNMP_COMMUNITY")
+	if community == "" {
+		community = "public"
+	}
+	return collectors.DetectVendor(ctx, addr, community)
+}
+
+// osProbeSSHRunner adapts the config-capture SSH gateway — the SAME vendored
+// client, the SAME pinned-host-key custody and the SAME least-privilege
+// read-only account the config backup uses — to the ladder's CLI rung.
+//
+// It deliberately does NOT get its own credential path: a second read-only
+// device account would be a second thing to rotate and a second thing to audit,
+// and this rung runs strictly less than config capture already does (one
+// `show version` instead of a whole running-config).
+type osProbeSSHRunner struct {
+	gw *configstore.SSHGateway
+}
+
+// Run implements osprobe.CommandRunner.
+func (r osProbeSSHRunner) Run(ctx context.Context, t osprobe.Target, command string) (string, error) {
+	if r.gw == nil {
+		return "", osprobe.ErrNotConfigured
+	}
+	// An unset capture account is NOT a probe failure: the deployment simply has
+	// no CLI rung. Reporting it as an error would put every device in the fleet
+	// on the error counter and in the log once per cool-down, which is the noise
+	// that makes a real failure invisible.
+	if strings.TrimSpace(os.Getenv(configstore.EnvSSHUser)) == "" {
+		return "", fmt.Errorf("%w: no config-capture SSH account configured", osprobe.ErrNotConfigured)
+	}
+	return r.gw.Run(ctx, configstore.Device{
+		ID: t.DeviceID, Name: t.Name, Address: t.Address,
+		Vendor: t.Vendor, OS: t.OSText, TenantID: t.TenantID,
+		Port: envInt(configstore.EnvSSHPort, 22),
+	}, command, osProbeMaxCommandBytes)
+}
+
+// osProbeMaxCommandBytes bounds ONE `show version` (§9). A version banner is
+// kilobytes at most; this is headroom, not a target.
+const osProbeMaxCommandBytes = 64 << 10
+
+// buildOSVersionLadder constructs the ladder and hands it to discovery, which
+// runs it on its own enrichment tick. A construction failure disables the
+// FEATURE, not the process — the ladder is additive — but it is logged rather
+// than swallowed, so an operator is never left wondering why no device ever
+// learns a version (§10).
+func (s *server) buildOSVersionLadder() {
+	if s.discovery == nil {
+		return
+	}
+	reg := vendorprofile.Default()
+	ladder, err := osprobe.NewLadder(
+		func(msg string, fields map[string]any) { logWarn("osprobe", msg, fields) },
+		osprobe.NewSNMPSource(osProbeSysDescr),
+		// The gNMI rung is DECLARED with no client. Correlix speaks gNMI through
+		// the gnmic sidecar, which SUBSCRIBES and remote-writes samples to
+		// VictoriaMetrics; it is not a Get client, and a Get client is gRPC +
+		// protobuf, which the dependency rule (§6) does not admit today. Wiring
+		// the rung anyway is the honest state: it reports itself UNAVAILABLE on
+		// the metric for every device, so an operator can SEE that the ladder
+		// has a rung nobody has connected, instead of the rung being invisible.
+		// The profile data (paths + extraction patterns) is authored and tested,
+		// so connecting a client is the only thing left.
+		osprobe.NewGNMISource(nil, reg),
+		osprobe.NewSSHSource(osProbeSSHRunner{gw: s.configGateway()}, reg),
+	)
+	if err != nil {
+		logWarn("osprobe", "os-version ladder not wired", map[string]any{"error": err.Error()})
+		return
+	}
+	s.discovery.SetOSVersionLadder(ladder)
 }

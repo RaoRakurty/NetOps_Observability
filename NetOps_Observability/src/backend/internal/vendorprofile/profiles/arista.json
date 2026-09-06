@@ -71,6 +71,16 @@
   "profiles": [
     {
       "platform": "eos",
+      "os_version_probe": {
+        "gnmi_paths": [
+          "/system/state/software-version",
+          "/components/component[name=Chassis]/state/software-version"
+        ],
+        "gnmi_version_pattern": "(?i)^\\s*v?([0-9][0-9A-Za-z.]*)",
+        "cli_version_pattern": "(?im)^Software image version:\\s+([0-9][0-9A-Za-z.]*)",
+        "version_render": "version {version}",
+        "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). The lab's cEOS leaves stream OpenConfig over gNMI, which is why the OpenConfig system path leads and the component path is the fallback for a chassis that publishes the version per-component. doc_claimed all the same: the change that authored this block did not Get either path or run `show version` on a leaf, and says so rather than inheriting this profile's live_validated fidelity, which was earned by its telemetry paths, not by these. cli_version_pattern reads the `Software image version: 4.32.0F` line and deliberately not `Internal build version: 4.32.0F-36993274.4320F`, which is a build id; the captured class therefore excludes the hyphen so a build suffix can never reach a CVE range comparison."
+      },
       "display_name": "Arista EOS",
       "device_class": [
         "switch",

@@ -299,6 +299,86 @@ func validateProfile(name string, p Profile) error {
 	if len(p.Advisory.ProductIDs) > 0 && p.Advisory.Provider == "" {
 		return fmt.Errorf("vendorprofile: %s: advisory.product_ids set with no provider", where)
 	}
+	if err := validateOSVersionProbe(where, p); err != nil {
+		return err
+	}
+	return nil
+}
+
+// gnmiPathRE is the shape ONE gNMI path may take: an absolute, slash-separated
+// path whose elements may carry a `[key=value]` predicate. Deliberately narrow —
+// no whitespace, no quoting, and none of the metacharacters a command grammar
+// would have to worry about, because a path authored here is handed straight to
+// a transport.
+var gnmiPathRE = regexp.MustCompile(`^(/[A-Za-z0-9_.:*-]+(\[[A-Za-z0-9_.:*=-]+\])*)+$`)
+
+// validateOSVersionProbe enforces the OS-version source ladder's profile
+// contract (see the OSVersionProbe type doc for WHY each rule exists).
+//
+// The rules are all "a declared source must be COMPLETE and REACHABLE":
+// a path set with no pattern to read its value, a CLI pattern with no command
+// to produce the text it reads, or any source with no canonical rendering are
+// each a half-declared probe — and a half-declared probe is worse than none,
+// because the ladder would run a transport at a live device and then be unable
+// to use what it got. The ROUND TRIP (rendering must be re-parsable by the
+// vendor's own os_version_pattern) is checked in registry.build, which is where
+// the vendor-level pattern is in scope.
+func validateOSVersionProbe(where string, p Profile) error {
+	o := p.OSVersionProbe
+	declared := len(o.GNMIPaths) > 0 || o.GNMIVersionPattern != "" || o.CLIVersionPattern != ""
+	if !declared {
+		if o.VersionRender != "" {
+			return fmt.Errorf("vendorprofile: %s: os_version_probe.version_render set with no version source", where)
+		}
+		return nil
+	}
+	if o.VersionRender == "" {
+		return fmt.Errorf("vendorprofile: %s: os_version_probe.version_render is required when a version source is declared", where)
+	}
+	if strings.Count(o.VersionRender, OSVersionProbeVersionToken) != 1 {
+		return fmt.Errorf("vendorprofile: %s: os_version_probe.version_render %q must contain exactly one %s",
+			where, o.VersionRender, OSVersionProbeVersionToken)
+	}
+	// A rendering is written onto a device row and read back by the OS parser;
+	// it is never a command, so it carries no CLI/shell metacharacter and no
+	// control character.
+	for _, bad := range configCaptureForbiddenBytes {
+		if strings.Contains(o.VersionRender, bad) {
+			return fmt.Errorf("vendorprofile: %s: os_version_probe.version_render contains %q", where, bad)
+		}
+	}
+	if (len(o.GNMIPaths) > 0) != (o.GNMIVersionPattern != "") {
+		return fmt.Errorf("vendorprofile: %s: os_version_probe gnmi_paths and gnmi_version_pattern must be set together", where)
+	}
+	seen := map[string]bool{}
+	for _, path := range o.GNMIPaths {
+		if !gnmiPathRE.MatchString(path) {
+			return fmt.Errorf("vendorprofile: %s: os_version_probe gnmi path %q is not an absolute gNMI path", where, path)
+		}
+		if seen[path] {
+			return fmt.Errorf("vendorprofile: %s: os_version_probe gnmi path %q declared twice", where, path)
+		}
+		seen[path] = true
+	}
+	if o.CLIVersionPattern != "" && strings.TrimSpace(p.Capture.ShowVersionCmd) == "" {
+		return fmt.Errorf("vendorprofile: %s: os_version_probe.cli_version_pattern declared with no capture.show_version_cmd to read", where)
+	}
+	for _, pat := range []struct{ field, expr string }{
+		{"gnmi_version_pattern", o.GNMIVersionPattern},
+		{"cli_version_pattern", o.CLIVersionPattern},
+	} {
+		field, expr := pat.field, pat.expr
+		if expr == "" {
+			continue
+		}
+		re, err := regexp.Compile(expr)
+		if err != nil {
+			return fmt.Errorf("vendorprofile: %s: os_version_probe.%s: %w", where, field, err)
+		}
+		if re.NumSubexp() < 1 {
+			return fmt.Errorf("vendorprofile: %s: os_version_probe.%s has no capture group — there is nothing to read out of it", where, field)
+		}
+	}
 	return nil
 }
 

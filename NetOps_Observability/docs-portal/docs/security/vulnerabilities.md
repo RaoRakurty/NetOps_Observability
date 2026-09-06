@@ -91,18 +91,64 @@ known-exploited, and when the file was last updated.
 **Assessed** turning amber below **Devices** is the number to read first. It
 means part of the fleet was not matched at all.
 
-After you upgrade a device, its findings disappear on the next SNMP read of its
-OS version. There is no manual acknowledgement step.
+After you upgrade a device, its findings disappear on the next read of its OS
+version. There is no manual acknowledgement step.
+
+## Where the OS version comes from — the source ladder
+
+Matching a device against the feed needs its **software version**. Correlix
+learns that from the first of three sources that answers, and records **which
+one did** on the device row (`os_version_source`, shown beside `os_version`):
+
+| Order | Source | What it reads | Needs |
+|---|---|---|---|
+| 1 | `snmp` | the device's `sysDescr` | SNMP reachability + community |
+| 2 | `gnmi` | the platform's software-version leaf (SR Linux `/platform/control[slot=A]/software-version`, OpenConfig `/system/state/software-version`) | a gNMI Get client |
+| 3 | `ssh` | the platform's own `show version`, through the read-only config-capture SSH account | `CONFIG_BACKUP_SSH_USER` + password or key |
+
+`manual` is the fourth value and is not a probe: it is a version an operator, an
+inventory file (`os_version:`) or an importer wrote.
+
+Rules the ladder holds to, and they are worth knowing before you read a row:
+
+- **It only reads.** No configuration is written, nothing is prompted for, and
+  the only command it can run over SSH is the `show version` its vendor profile
+  declares — there is no free-form command path.
+- **A device with no reachable source is left honestly unassessed.** An empty
+  answer is never turned into a version, and it can never blank a version that
+  was already learned.
+- **A value you wrote is never overwritten by a probe.** A row carrying a
+  `manual` version is not even dialled.
+- **Only the source that owns a row refreshes it.** A version first learned over
+  SSH keeps being refreshed over SSH; a later SNMP reading does not replace it.
+  If you want a different source to take over, clear `os_version` on the device
+  and the ladder starts again from the top.
+- **Each device is probed at most once per 30 minutes** while it has no version,
+  and once per 6 hours once it has one.
+
+The per-platform paths, commands and version patterns are profile **data**
+(`os_version_probe` in `internal/vendorprofile/profiles/<vendor>.json`), not
+code — adding a platform is authoring one block. Today the ladder is authored
+for Nokia SR Linux, Cisco IOS-XE, Cisco NX-OS, Arista EOS and Juniper Junos; any
+other platform has only the SNMP rung, which is what it always had.
+
+`netops_device_osversion_probe_total{method,outcome}` counts every probe.
+`outcome="unavailable"` means the rung could not run at all (no client wired, no
+credential, no authored platform) — which is the difference between "these
+devices have no version source" and "we never connected one". **The gNMI rung
+ships unwired**: Correlix speaks gNMI through the `gnmic` sidecar, which
+subscribes and remote-writes samples, and is not a Get client — so that rung
+reports `unavailable` until a Get client is connected.
 
 ## Coverage gaps
 
 When some devices could not be matched, a **Coverage gaps** group appears with
 a **Devices that can't be assessed** table naming the reason for each:
 
-| Reason | What to fix |
-|---|---|
-| `vendor unknown (SNMP unreachable or unrecognized sysObjectID)` | Reachability, or the SNMP credentials assigned to the device |
-| `OS version not present in sysDescr` | The device answered, but its system description carries no parseable version |
+| Reason | What it means | What to fix |
+|---|---|---|
+| `vendor unknown (SNMP unreachable or unrecognized sysObjectID)` | The device was never identified, so no vendor pattern and no profile apply | Reachability, or the SNMP credentials assigned to the device |
+| `OS version not present in sysDescr or os_version` | The vendor is known, but **every** rung of the source ladder above came back without a version | Check `netops_device_osversion_probe_total` for that method's outcome: `unavailable` means the transport is not wired or the platform has no authored probe; `error` means it was tried and failed; `no_version` means the device answered with something unparseable. As a last resort, set the version by hand — `os_version:` in the static inventory, or the device API — and it will be honoured as `manual`. |
 
 Devices listed there are invisible to CVE matching. Absence of findings on an
 unassessed device means unknown, not safe.

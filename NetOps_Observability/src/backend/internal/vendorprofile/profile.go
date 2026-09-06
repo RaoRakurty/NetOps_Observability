@@ -35,6 +35,8 @@
 // cycle and no hidden coupling.
 package vendorprofile
 
+import "strings"
+
 // SchemaVersion is the profile-document schema this loader understands. A
 // document declaring anything else is rejected (no silent forward/backward
 // compatibility guessing).
@@ -267,6 +269,83 @@ var CapturePcapPlaceholders = []string{"iface", "file", "count", "secs", "filter
 // command set at all. False is the honest "not established here" — the caller
 // refuses the capture rather than guessing.
 func (c Capture) HasPcapCommands() bool { return len(c.PcapStartCmd) > 0 }
+
+// ─── OS-version source ladder ────────────────────────────────────────────────
+
+// OSVersionProbeVersionToken is the ONE placeholder a version_render template
+// may contain. It is exported because it is a CONTRACT between this registry
+// and internal/osprobe: the registry validates that a template uses nothing
+// else, and the ladder supplies exactly this name.
+const OSVersionProbeVersionToken = "{version}"
+
+// OSVersionProbe is a platform's contribution to the OS-VERSION SOURCE LADDER
+// (internal/osprobe): WHERE a running device's software version can be read
+// from over a transport that is not SNMP, and HOW to turn what that transport
+// answers into the canonical string this vendor's own os_version_pattern parses.
+//
+// WHY IT IS DATA. The version a device reports over gNMI or over its CLI is not
+// the sysDescr text: SR Linux answers `show version` with `Software Version :
+// v26.3.2` and its gNMI software-version leaf with `v26.3.2-426-g2b38957bbca`,
+// while the vendor's os_version_pattern is anchored on `SRLinux-v`. A per-vendor
+// regexp written next to the collector would be exactly the second vocabulary
+// this package exists to abolish (see vocabulary_guard_test.go), so the pattern
+// and the canonical rendering are authored HERE, per platform.
+//
+// WHY THE RENDER STEP EXISTS, and why it is required rather than optional. The
+// row's os_version leaf is read back by collectors.ResolveDeviceOS through the
+// VENDOR os_version_pattern — the same parser a sysDescr goes through — so a
+// probe that wrote a bare "26.3.2" would store a string its own platform cannot
+// parse, and the device would stay UNASSESSED with a version sitting right
+// there in the row. VersionRender is the platform's statement of the canonical
+// form, and the loader PROVES the round trip: rendering a probe token must
+// produce a string the vendor pattern captures that same token back out of. A
+// platform therefore cannot declare a probe that writes an unreadable value.
+//
+// An EMPTY block is the honest "no non-SNMP version source is established for
+// this platform": the ladder skips the gNMI and CLI rungs for it rather than
+// guessing a path or a command at a live device.
+type OSVersionProbe struct {
+	// GNMIPaths are the gNMI paths, in preference order, whose leaf carries this
+	// platform's software version (SR Linux
+	// `/platform/control[slot=A]/software-version`, OpenConfig
+	// `/system/state/software-version`). The ladder tries them in order and
+	// stops at the first that answers.
+	GNMIPaths []string `json:"gnmi_paths,omitempty"`
+	// GNMIVersionPattern extracts the version out of the leaf VALUE, capture
+	// group 1. Required when GNMIPaths is set.
+	GNMIVersionPattern string `json:"gnmi_version_pattern,omitempty"`
+	// CLIVersionPattern extracts the version out of the output of the profile's
+	// OWN capture.show_version_cmd, capture group 1. Declaring it requires that
+	// command: the ladder never invents a command at a device.
+	CLIVersionPattern string `json:"cli_version_pattern,omitempty"`
+	// VersionRender is the canonical form the extracted version is written to
+	// the device row in — one OSVersionProbeVersionToken placeholder inside the
+	// vendor's own version phrasing ("SRLinux-v{version}", "Version {version}").
+	// Required whenever any pattern above is declared.
+	VersionRender string `json:"version_render,omitempty"`
+	// Notes records the evidence behind the paths, the patterns and the
+	// rendering — the same fidelity discipline the rest of a profile carries.
+	Notes string `json:"notes,omitempty"`
+}
+
+// HasGNMI reports whether this platform declares a gNMI version source.
+func (o OSVersionProbe) HasGNMI() bool { return len(o.GNMIPaths) > 0 && o.GNMIVersionPattern != "" }
+
+// HasCLI reports whether this platform declares a CLI version source.
+func (o OSVersionProbe) HasCLI() bool { return o.CLIVersionPattern != "" }
+
+// Declared reports whether the block says anything at all.
+func (o OSVersionProbe) Declared() bool { return o.HasGNMI() || o.HasCLI() }
+
+// Render turns an extracted version into the canonical string the vendor's
+// os_version_pattern parses. An empty version renders to "" — a probe that read
+// nothing must never produce a value that LOOKS like a reading.
+func (o OSVersionProbe) Render(version string) string {
+	if version == "" || o.VersionRender == "" {
+		return ""
+	}
+	return strings.ReplaceAll(o.VersionRender, OSVersionProbeVersionToken, version)
+}
 
 // AdvisoryBinding selects the VendorAdvisoryProvider for this platform and names
 // the product ids an advisory query carries.
@@ -523,6 +602,11 @@ type Profile struct {
 	// established.
 	CLI    CLIBinding    `json:"cli,omitempty"`
 	Threat ThreatBinding `json:"threat"`
+	// OSVersionProbe is where this platform's software version can be READ from
+	// over a transport SNMP could not reach, and how the reading is rendered
+	// into the canonical string the vendor's os_version_pattern parses. Empty =
+	// no non-SNMP version source is established here (see the type doc).
+	OSVersionProbe OSVersionProbe `json:"os_version_probe,omitempty"`
 }
 
 // VendorRecord is the vendor-level view: identity, detection, dialect and the
