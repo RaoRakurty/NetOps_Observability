@@ -19,7 +19,8 @@ profile: cisco/nx-os
 display: Cisco NX-OS
 version: correlix-tac-plan-cisco-nxos-2026-09-05
 
-# The dialect's default citation set. A doc_claimed binding inherits it.
+# The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding
+# cites its own page(s) below; this list never rides on a plan step.
 sources:
   - title: Cisco Nexus 9000 Series NX-OS Command References
     url: https://www.cisco.com/c/en/us/support/switches/nexus-9000-series-switches/products-command-reference-list.html
@@ -27,46 +28,6 @@ sources:
   - title: Cisco Nexus 9000 Series NX-OS Troubleshooting Guide
     url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/troubleshooting/guide/b_Cisco_Nexus_9000_Series_NX-OS_Troubleshooting_Guide.html
     retrieved: 2026-09-05
-  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
-  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
-  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
-  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
-  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
-  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
-  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
-  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
-  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
-  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
-  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
-  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
-  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
-  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
-  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
-  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
-  - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
-  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
-  - title: 'Cisco Nexus 7000 Series NX-OS CLI Management Best Practices Guide — Collecting Data for the Cisco TAC'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/sw/best_practices/cli_mgmt_guide/cli_mgmt_bp/tac_data.html
-  - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
-    url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
   - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
     url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
   - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Before Contacting Technical Support'
@@ -97,6 +58,9 @@ bindings:
   system.version:
     command: show version
     verified: doc_claimed
+    sources:
+      - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
   system.inventory:
     command: show inventory
     verified: doc_claimed
@@ -112,6 +76,9 @@ bindings:
   system.resources:
     command: show system resources
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   hardware.environment:
     command: show environment
     verified: doc_claimed
@@ -127,15 +94,27 @@ bindings:
   interface.status:
     command: show interface status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html
   interface.detail:
     command: 'show interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
   interface.counters:
     command: show interface counters
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   interface.errors:
     command: show interface counters errors
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   optics.detail:
     command: show interface transceiver details
     verified: doc_claimed
@@ -181,6 +160,9 @@ bindings:
   ospf.neighbors:
     command: show ip ospf neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html
   ospf.neighbors.detail:
     command: show ip ospf neighbor detail
     verified: doc_claimed
@@ -277,381 +259,750 @@ bindings:
   stp.state.overall:
     command: show spanning-tree
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   stp.config:
     command: show running-config spanning-tree
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   stp.mode.summary:
     command: show spanning-tree summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   qos.queuing.interface:
     command: show queuing interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   hardware.module.compat:
     command: show module
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   stp.vlan.state:
     command: 'show spanning-tree vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   interface.capabilities:
     command: show interface capabilities
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html
   stp.tcn.totals:
     command: show spanning-tree summary totals
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   stp.tcn.detail:
     command: 'show spanning-tree vlan {vlan} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   stp.detail:
     command: show spanning-tree detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   stp.port.detail:
     command: 'show spanning-tree interface {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   l2.mac.dynamic:
     command: 'show mac address-table dynamic vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   l2.mac.aging:
     command: show mac address-table aging-time
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   stp.blocked.ports:
     command: show spanning-tree blockedports
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   stp.extensions.summary:
     command: show spanning-tree summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01011.html
   stp.inconsistent.ports:
     command: show spanning-tree inconsistentports
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01011.html
   stp.config.all:
     command: show running-config spanning-tree all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01011.html
   stp.mst.port.detail:
     command: 'show spanning-tree mst interface {if} detail'
     verified: doc_claimed
   interface.errdisabled:
     command: show interface status err-disabled
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_01011.html
   interface.errvlans:
     command: show interface status err-vlans
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html
   interface.errors.nonzero:
     command: show interface counters errors non-zero
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217554-understand-cyclic-redundancy-check-crc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217554-understand-cyclic-redundancy-check-crc.html
   interface.asic.mapping:
     command: show interface hardware-mappings
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217554-understand-cyclic-redundancy-check-crc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217554-understand-cyclic-redundancy-check-crc.html
   optics.dom.readings:
     command: 'show interface {if} transceiver details'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217554-understand-cyclic-redundancy-check-crc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217554-understand-cyclic-redundancy-check-crc.html
   qos.policy.counters:
     command: show policy-map interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html
   qos.policy.brief:
     command: show policy-map interface brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html
   interface.counters.detailed:
     command: 'show interface {if} counters detailed'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html
   interface.debounce:
     command: show interface debounce
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
   optics.inventory:
     command: show interface transceiver
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
   hardware.inventory:
     command: show inventory
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
   logging.level.l2fm:
     command: show logging level l2fm
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html
   interface.ifindex.map:
     command: show interface snmp-ifindex
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html
   ospf.neighbors.allvrf:
     command: show ip ospf neighbor vrf all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html
   ospf.interface.detail:
     command: 'show ip ospf interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html
   ospf.process:
     command: 'show ip ospf {vrf-scope}'
     verified: doc_claimed
   ospf.config:
     command: show running-config ospf
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html
   ospf.traffic.counters:
     command: show ip ospf traffic
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html
   ospf.statistics:
     command: show ip ospf statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html
   interface.vrf:
     command: 'show vrf interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html
   logging.tail:
     command: show logging last 200
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
   interface.flap.errdisable:
     command: show errdisable flap
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
   bgp.sessions:
     command: show bgp sessions
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.summary.all:
     command: show bgp all summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.neighbors:
     command: show bgp ipv4 unicast neighbors
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.neighbors.detail:
     command: 'show bgp neighbors {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.process:
     command: show bgp process
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.config:
     command: show running-config bgp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.statistics:
     command: show bgp statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.neighbors.flapstats:
     command: show bgp neighbors flap-statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.convergence:
     command: show bgp convergence detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.table.ipv4:
     command: show bgp ipv4 unicast
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html
   bgp.neighbors.advertised:
     command: 'show bgp ipv4 unicast neighbors {peer} advertised-routes'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html
   bgp.prefix.detail:
     command: 'show bgp ipv4 unicast {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html
   bgp.ribfailure:
     command: show ip bgp rib-failure
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html
   bgp.neighbors.paths:
     command: show bgp neighbors paths
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html
   bgp.evpn.table:
     command: show bgp l2vpn evpn
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.vpnv4.table:
     command: show bgp vpnv4 unicast
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.vpnv4.allvrf:
     command: show ip bgp vpnv4 vrf all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.summary.vrf:
     command: 'show bgp all summary {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.vrf.table:
     command: 'show bgp {vrf-scope} ipv4 unicast'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   bgp.config.all:
     command: show running-config bgp all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   fib.inconsistency:
     command: 'show forwarding ipv4 unicast inconsistency {vrf-scope} module all'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html
   fib.cc.unicast:
     command: show consistency-checker forwarding unicast
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html
   fib.cc.singleroute:
     command: show consistency-checker forwarding single-route
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html
   fib.distribution.state:
     command: show forwarding distribution fib-state
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html
   system.clock:
     command: show clock
     verified: doc_claimed
+    sources:
+      - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
   system.resetreason:
     command: show system reset-reason
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html
   logging.nvram:
     command: show log nvram
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html
   config.running.diff:
     command: show running-config diff
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html
   config.rollback.log:
     command: show rollback log exec
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html
   config.rollback.status:
     command: show rollback status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html
   vpc.status.summary:
     command: show vpc
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vpc.status.brief:
     command: show vpc brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vpc.role.current:
     command: show vpc role
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vpc.keepalive.status:
     command: show vpc peer-keepalive
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   portchannel.bundle.state:
     command: show port-channel summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vpc.role.sticky:
     command: 'show system internal vpcm info global | include ignore-case sticky'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vpc.consistency.global:
     command: show vpc consistency-parameters global
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vpc.keepalive.counters:
     command: show vpc statistics peer-keepalive
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   ip.interface.brief:
     command: show ip int bri vrf all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vpc.consistency.all:
     command: show vpc consistency-parameters
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vpc.consistency.vlans:
     command: show vpc consistency-parameters vlans
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vpc.config:
     command: show running-config vpc
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vlan.list:
     command: show vlan brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   vlan.summary:
     command: show vlan summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   trunk.allowed.vlans:
     command: show interface trunk
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   lacp.interface.state:
     command: 'show lacp interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html
   lacp.neighbor:
     command: show lacp neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html
   lacp.pdu.counters:
     command: show lacp counters
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/118851-technote-lacp-00.html
   stormcontrol.counters:
     command: show interface counters storm-control
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   cpu.history:
     command: show processes cpu history
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01000.html
   trunk.state.allowed:
     command: show interface trunk
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html
   switchport.mode:
     command: show interface switchport
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html
   vlan.detail:
     command: 'show vlan id {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html
   vlan.config:
     command: 'show running-config vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/layer-2-switching/configuration/guide/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x/b-cisco-nexus-9000-nx-os-layer-2-switching-configuration-guide-93x_chapter_0101.html
   neighbor.discovery:
     command: show cdp neighbors
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217554-understand-cyclic-redundancy-check-crc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217554-understand-cyclic-redundancy-check-crc.html
   buffer.pktstats:
     command: show hardware internal buffer info pkt-stats
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html
   buffer.pktstats.peak:
     command: show hardware internal buffer info pkt-stats peak
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/217340-understand-the-tahusd-buffer-threshold-e.html
   ethpm.event.history:
     command: 'show system internal ethpm event-history interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
   pie.linkflap.rca:
     command: 'show pie interface {if} link-flap-rca'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
   pie.linkdown.rca:
     command: 'show pie interface {if} link-down-rca'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
   udld.state:
     command: show udld
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
   pie.optics.health:
     command: 'show pie interface {if} transceiver-insights'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
   mac.move.notification:
     command: show mac address-table notification mac-move
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html
   mac.table.vlan:
     command: 'show mac address-table vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html
   mac.loopdetect.state:
     command: show mac address-table loop-detect
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html
   mac.table.count:
     command: show mac address-table count
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/213906-nexus-9000-mac-move-troubleshooting-and.html
   vxlan.nve.peers:
     command: show nve peers
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html
   vxlan.nve.interface:
     command: show nve interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html
   vxlan.global.params:
     command: show nve vxlan-params
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html
   underlay.interfaces:
     command: 'show ip interface brief | exclude down'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html
   underlay.bgp.advertised:
     command: 'show ip bgp {prefix} {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html
   evpn.vtep.route:
     command: 'show bgp l2vpn evpn {prefix} {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html
   vxlan.vni.state:
     command: show nve vni
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
   vxlan.vni.counters:
     command: show nve vni counters
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
   vxlan.summary:
     command: show vxlan
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
   mac.table.vlan.local:
     command: 'show mac address-table vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
   evpn.l2route.mac:
     command: 'show l2route evpn mac evi {vni}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
   evpn.l2route.macip:
     command: 'show l2route evpn mac-ip evi {vni}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
   evpn.bgp.byvni:
     command: 'show bgp l2vpn evpn vni-id {vni}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
   evpn.bgp.sessions:
     command: show bgp l2vpn evpn summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
   evpn.bgp.advertised:
     command: 'show bgp l2vpn evpn neighbors {peer} advertised-routes'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/200952-Configuration-and-Verification-VXLAN-wit.html
   feature.enabled:
     command: show feature
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_ospfv2.html
   copp.stats:
     command: show policy-map interface control-plane
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
   obfl.errorstats:
     command: show logging onboard error-stats
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-routing-10-6-2-f.html
   eigrp.neighbors.detail:
     command: 'show ip eigrp neighbors {if} detail'
     verified: doc_claimed
   eigrp.neighbors.allvrf:
     command: show ip eigrp neighbor vrf all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m-n9k-configuring-eigrp-93x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m-n9k-configuring-eigrp-93x.html
   eigrp.interfaces.detail:
     command: 'show ip eigrp interfaces {if} detail'
     verified: doc_claimed
@@ -667,360 +1018,720 @@ bindings:
   eigrp.config.all:
     command: show running-config eigrp all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m-n9k-configuring-eigrp-93x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m-n9k-configuring-eigrp-93x.html
   rib.routes:
     command: show ip route
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m-n9k-configuring-eigrp-93x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m-n9k-configuring-eigrp-93x.html
   rib.route.peer:
     command: 'show ip route {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   rib.route.lookup:
     command: 'show ip route {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/213952-configure-bgp-to-advertise-a-default-rou.html
   rib.summary.allvrf:
     command: show ip route vrf all summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   vrf.list:
     command: show vrf
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   vrf.interfaces:
     command: show vrf interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_010.html
   rib.adjacency.detail:
     command: 'show ip adjacency {prefix} detail {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html
   rib.clients:
     command: show routing unicast clients
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html
   hw.capacity.forwarding:
     command: show hardware capacity forwarding
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_managing_the_unicast_rib_and_fib.html
   pim.neighbors:
     command: show ip pim neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   pim.interface:
     command: 'show ip pim interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   pim.interface.brief:
     command: show ip pim interface brief vrf all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   pim.rp:
     command: show ip pim rp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   pim.rp.hash:
     command: show ip pim rp-hash
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   pim.grouprange:
     command: 'show ip pim group-range {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   mroute.detail:
     command: show ip mroute detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   mroute.summary:
     command: show ip mroute summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   pim.route:
     command: show ip pim route
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   pim.statistics:
     command: show ip pim statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   rpf.unicast.lookup:
     command: 'show ip route {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-pim-and-pimm6.html
   igmpsnoop.vlan:
     command: 'show ip igmp snooping vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html
   igmpsnoop.groups.detail:
     command: 'show ip igmp snooping groups vlan {vlan} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html
   igmpsnoop.querier:
     command: 'show ip igmp snooping querier vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html
   igmpsnoop.mrouterports:
     command: 'show ip igmp snooping mroute vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html
   igmpsnoop.tracking:
     command: 'show ip igmp snooping explicit-tracking vlan {vlan} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html
   igmpsnoop.statistics:
     command: show ip igmp snooping statistics vlan
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html
   igmp.groups:
     command: show ip igmp groups
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html
   igmp.interface:
     command: show ip igmp interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/multicast/cisco-nexus-9000-series-nx-os-multicast-routing-configuration-guide-106x/m-configuring-igmp-snooping.html
   hsrp.brief:
     command: show hsrp brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html
   hsrp.summary:
     command: show hsrp summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html
   hsrp.delay:
     command: 'show hsrp delay interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html
   hsrp.bfd:
     command: 'show hsrp bfd-sessions interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html
   hsrp.config:
     command: show running-config hsrp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html
   hsrp.vmac.location:
     command: 'show mac address-table vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_hsrp.html
   vrrp.statistics:
     command: show vrrp statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html
   vrrpv3.detail:
     command: show vrrpv3 detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html
   vrrpv3.statistics:
     command: show vrrpv3 statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html
   fhrp.state:
     command: 'show fhrp {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html
   vrrp.config:
     command: show running-config vrrp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/unicast-routing-configuration/cisco-nexus-9000-series-nx-os-unicast-routing-configuration-guide/m_configuring_vrrp.html
   copp.status:
     command: show copp status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html
   copp.classmaps:
     command: show class-map type control-plane
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html
   copp.profile.reference:
     command: show copp profile strict
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html
   copp.profile.diff:
     command: show copp diff profile strict
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html
   ratelimiter.stats:
     command: show hardware rate-limiter
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html
   ratelimiter.acllog:
     command: show hardware rate-limiter access-list-log
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html
   copp.config:
     command: show running-config copp all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html
   copp.cc:
     command: show consistency-checker copp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-copp.html
   cpu.processes:
     command: show processes cpu
     verified: doc_claimed
+    sources:
+      - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
   processes.list:
     command: show processes
     verified: doc_claimed
+    sources:
+      - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
   memory.processes:
     command: show processes memory
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html
   memory.processes.sorted:
     command: show processes memory sort
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html
   memory.kernel:
     command: show system internal kernel meminfo
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html
   memory.shared:
     command: show processes memory shared detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html
   rib.memory.estimate:
     command: show routing ip unicast memory estimate
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_01010.html
   cores.list:
     command: show cores
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html
   cores.config:
     command: show system cores
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html
   process.log:
     command: show processes log
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html
   process.log.details:
     command: show processes log details
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html
   module.exceptionlog:
     command: show module internal exceptionlog
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_011.html
   env.all:
     command: show environment
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html
   env.power.detail:
     command: show environment power detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html
   env.fan.detail:
     command: show environment fan detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html
   module.status:
     command: show module
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html
   diag.result.all:
     command: show diagnostic result mod all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html
   diag.events.error:
     command: show diagnostic events error
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html
   hw.capacity.power:
     command: show hardware capacity power
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html
   hw.inventory:
     command: show inventory
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html
   hw.sprom:
     command: show sprom
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_0101.html
   acl.tcam.utilization:
     command: show hardware access-list resource utilization
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html
   acl.tcam.regions:
     command: show hardware access-list tcam region
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html
   acl.tcam.internal:
     command: show system internal access-list resource utilization
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html
   acl.tcam.pooling:
     command: show hardware access-list resource pooling
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html
   acl.config:
     command: show running-config aclmgr
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-ip-acls.html
   ntp.peer.status:
     command: show ntp peer-status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
   ntp.peers:
     command: show ntp peers
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
   ntp.peer.statistics:
     command: 'show ntp statistics peer ipaddr {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
   ntp.auth.status:
     command: show ntp authentication-status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
   ntp.trusted.keys:
     command: show ntp trusted-keys
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
   ntp.source:
     command: show ntp source
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
   ntp.source.interface:
     command: show ntp source-interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
   ntp.access.groups:
     command: show ntp access-groups
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
   ntp.logging.status:
     command: show ntp logging-status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
   ntp.config:
     command: show running-config ntp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/config-guides/sys-mgmt/cisco-nexus-9000-series-nx-os-system-management-configuration-guide-release-106x/m-configuring-ntp-10x.html
   snmp.status:
     command: show snmp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
   snmp.communities:
     command: show snmp community
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
   snmp.users:
     command: show snmp user
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
   snmp.groups:
     command: show snmp group
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
   snmp.receivers:
     command: show snmp host
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
   snmp.sessions:
     command: show snmp session
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
   snmp.traps:
     command: show snmp trap
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
   snmp.source.interface:
     command: show snmp source-interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
   snmp.config:
     command: show running-config snmp all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/221754-exclude-oid-in-nexus-5k-7k-and-9k-in-snm.html
   aaa.tacacs.servers:
     command: show tacacs-server
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html
   aaa.tacacs.groups:
     command: show tacacs-server groups
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html
   aaa.tacacs.directed:
     command: show tacacs-server directed-request
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html
   aaa.tacacs.status:
     command: show tacacs+ status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html
   aaa.authentication:
     command: show aaa authentication
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html
   aaa.authorization:
     command: show aaa authorization all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html
   aaa.accounting:
     command: show aaa accounting
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html
   aaa.config:
     command: show running-config tacacs all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-tacacs.html
   dhcp.relay.state:
     command: show ip dhcp relay
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html
   dhcp.relay.addresses:
     command: show ip dhcp relay address
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html
   dhcp.relay.interface:
     command: 'show ip dhcp relay interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html
   dhcp.relay.trusted:
     command: show ip dhcp relay information trusted-sources
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html
   dhcp.snooping.state:
     command: show ip dhcp snooping
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html
   dhcp.snooping.bindings:
     command: show ip dhcp snooping binding
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html
   dhcp.option82:
     command: 'show ip dhcp option82 info interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html
   dhcp.global.statistics:
     command: show ip dhcp global statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html
   dhcp.config:
     command: show running-config dhcp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus9000/106x/configuration/security/cisco-nexus-9000-series-nx-os-security-configuration-guide-release-106x/m-configuring-dhcp.html
   license.installed:
     command: show license
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html
   license.hostid:
     command: show license host-id
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html
   license.usage:
     command: show license usage
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html
   license.config:
     command: 'show running-config | include license'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html
   audit.accounting:
     command: show accounting log
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html
   audit.users:
     command: show user-account
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/7-x/command_references/show_commands/b_N9K_Show_Commands_703i7x/b_N9K_Show_Commands_703i7x_chapter_01.html
   underlay.route.remote_vtep:
     command: 'show ip route {prefix} {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html
   vpc.keepalive.reachability:
     command: 'ping {peer} vrf management'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/217989-troubleshoot-vpc-inconsistency-issues-on.html
   underlay.reachability:
     command: 'ping {prefix} source-interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/220694-test-fabric-connectivity-between-virtual.html
   license.cssm.reachability:
     command: ping smartreceiver.cisco.com vrf management
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_0100.html

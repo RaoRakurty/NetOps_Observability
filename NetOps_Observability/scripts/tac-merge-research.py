@@ -483,6 +483,15 @@ def load_plan(slug: str):
     doc.setdefault("bindings", {})
     doc.setdefault("baseline", [])
     doc.setdefault("sources", [])
+    # A citation is identified by the PAGE IT POINTS AT. Earlier merges appended
+    # the research file's whole citation set on every run without comparing, so
+    # nokia-srlinux carried the same 61 pages six times over (366 entries) and
+    # every binding inherited all of them. Fold them on the way in, so a re-merge
+    # writes the deduped set and the escalation preview stops rendering the pool.
+    doc["sources"] = dedupe_sources(doc["sources"])
+    for binding in doc["bindings"].values():
+        if isinstance(binding, dict) and binding.get("sources"):
+            binding["sources"] = dedupe_sources(binding["sources"])[:MAX_BINDING_SOURCES]
     return doc
 
 
@@ -578,7 +587,8 @@ def render_plan(doc: dict) -> str:
     out.append("version: " + emit_scalar(doc.get("version", "")))
     if doc.get("sources"):
         out.append("")
-        out.append("# The dialect's default citation set. A doc_claimed binding inherits it.")
+        out.append("# The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding")
+        out.append("# cites its own page(s) below; this list never rides on a plan step.")
         out.append("sources:")
         for src in doc["sources"]:
             out.append("  - title: " + emit_scalar(src["title"]))
@@ -1142,6 +1152,17 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
         rep.plan_created = True
     plan = plans[dialect]
     file_sources = normalise_sources(doc.get("sources"), name)
+    # The research files cite an issue with a bare url; the file's own `sources:`
+    # block is where those urls have TITLES. A citation whose title is its url is
+    # a link with nothing to read, so give it the file's title when there is one.
+    title_by_url = {src["url"]: src["title"] for src in file_sources if src["title"] != src["url"]}
+
+    def titled(sources: list[dict]) -> list[dict]:
+        out = []
+        for src in sources:
+            known = title_by_url.get(src["url"])
+            out.append(dict(src, title=known) if known and src["title"] == src["url"] else src)
+        return out
 
     intent_areas = _load_intent_areas()
     intents_by_id = {i["id"]: i for i in classes_doc["intents"]}
@@ -1192,13 +1213,22 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
                 rep.scoped_bindings.append(intent_id)
             return
         if existing.get("command") == cmd:
+            # Same command, already merged. A citation is the one thing that may
+            # still be filled in: it adds provenance and changes nothing that
+            # runs, so it is not the silent overwrite rule 4 forbids.
+            if sources and not existing.get("sources"):
+                existing["sources"] = dedupe_sources(sources)[:MAX_BINDING_SOURCES]
             return
         rep.bindings_conflicted += 1
         rep.refuse("intent already bound to a different command on this dialect; the existing "
                    "binding is kept", "{} ({!r} vs {!r})".format(intent_id, existing.get("command"), cmd))
 
-    def handle_commands(entries, cls, what_prefix):
-        """Fold one issue's (or the baseline's) command list into the data."""
+    def handle_commands(entries, cls, what_prefix, default_sources=()):
+        """Fold one issue's (or the baseline's) command list into the data.
+
+        `default_sources` are the pages the ISSUE (or the baseline block) was
+        read from. A command with no citation of its own inherits THOSE — the
+        pages that actually establish it — never the file-wide bibliography."""
         bound_intents = []
         for entry in entries or []:
             if isinstance(entry, str):
@@ -1240,7 +1270,15 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
                 continue
             if not ensure_intent(intent_id, what):
                 continue
-            srcs = normalise_sources(entry.get("sources"), what) or []
+            own = dedupe_sources(titled(normalise_sources(entry.get("sources"), what)))
+            if own:
+                srcs = own[:MAX_BINDING_SOURCES]
+            else:
+                # INHERITED, so ONE page. The issue's citation set belongs to the
+                # issue; handing all of it to every command the issue names
+                # recreates the pool a step down. One page answers "where did
+                # this command come from"; the rest is the pack's bibliography.
+                srcs = titled(dedupe_sources(default_sources))[:1]
             bind(intent_id, cmd, verdict, detail, srcs, what)
             bound_intents.append(intent_id)
             if cls is not None and intent_id in plan["bindings"] and intent_id not in cls["intents"]:
@@ -1254,7 +1292,12 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
             only_fields(baseline, BASELINE_FIELDS, f"{name} tac_baseline")
         except Refusal as err:
             rep.refuse("unknown field in tac_baseline", str(err))
-        bound = handle_commands(baseline.get("commands"), None, "baseline")
+        try:
+            baseline_sources = normalise_sources(baseline.get("sources"), f"{name} tac_baseline")
+        except Refusal as err:
+            rep.refuse("unusable `sources` in tac_baseline", str(err))
+            baseline_sources = []
+        bound = handle_commands(baseline.get("commands"), None, "baseline", baseline_sources)
         for intent_id in bound:
             record = plan["bindings"].get(intent_id) or {}
             if record.get("consent") == "true":
@@ -1321,7 +1364,7 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
             if pattern not in bucket and len(bucket) < 40:
                 bucket.append(pattern)
 
-        handle_commands(issue.get("commands"), cls, what)
+        handle_commands(issue.get("commands"), cls, what, issue_sources)
 
         for src in issue_sources:
             add_source(cls["sources"], src)
@@ -1352,6 +1395,25 @@ def add_source(bucket: list, src: dict, cap: int = 12) -> None:
         return
     bucket.append({"title": src.get("title") or url, "url": url,
                    "retrieved": src.get("retrieved", "")})
+
+
+# A binding cites the pages that bind THAT intent, and at most this many. The
+# dialect-wide pool is the file's bibliography, not a per-command citation: an
+# escalation preview that repeated it under every step rendered 8,418 links.
+MAX_BINDING_SOURCES = 2
+
+
+def dedupe_sources(sources) -> list[dict]:
+    """The same list, one entry per url, first occurrence kept."""
+    out: list[dict] = []
+    for src in sources or []:
+        if not isinstance(src, dict):
+            continue
+        url = str(src.get("url", "")).strip()
+        if not url or any(have.get("url") == url for have in out):
+            continue
+        out.append(src)
+    return out
 
 
 def normalise_sources(raw, what: str) -> list[dict]:

@@ -19,7 +19,8 @@ profile: cisco/ios_xe
 display: Cisco IOS-XE
 version: correlix-tac-plan-cisco-iosxe-2026-09-05
 
-# The dialect's default citation set. A doc_claimed binding inherits it.
+# The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding
+# cites its own page(s) below; this list never rides on a plan step.
 sources:
   - title: Cisco IOS XE Command References
     url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-xe-17/products-command-reference-list.html
@@ -30,46 +31,6 @@ sources:
   - title: BGP Case Studies and Troubleshooting
     url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/26634-bgp-toc.html
     retrieved: 2026-09-05
-  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
-    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
-  - title: Cisco IOS XE Software Forensic Data Collection Procedures
-    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
-  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
-    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
-  - title: Troubleshoot High CPU on ASR1000 Series Router
-    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
-  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
-    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
-  - title: Cisco IOS XE Software Forensic Data Collection Procedures
-    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
-  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
-    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
-  - title: Troubleshoot High CPU on ASR1000 Series Router
-    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
-  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
-    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
-  - title: Cisco IOS XE Software Forensic Data Collection Procedures
-    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
-  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
-    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
-  - title: Troubleshoot High CPU on ASR1000 Series Router
-    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
-  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
-    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
-  - title: Cisco IOS XE Software Forensic Data Collection Procedures
-    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
-  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
-    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
-  - title: Troubleshoot High CPU on ASR1000 Series Router
-    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
-  - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
-    url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
-  - title: Cisco IOS XE Software Forensic Data Collection Procedures
-    url: https://sec.cloudapps.cisco.com/security/center/resources/forensic_guides/iosxe_forensic_guide.html
-  - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
-    url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
-  - title: Troubleshoot High CPU on ASR1000 Series Router
-    url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
   - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
     url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
   - title: Cisco IOS XE Software Forensic Data Collection Procedures
@@ -130,6 +91,9 @@ bindings:
   interface.detail:
     command: 'show interfaces {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   interface.counters:
     command: show interfaces counters
     verified: doc_claimed
@@ -163,6 +127,9 @@ bindings:
   fib.prefix:
     command: 'show ip cef {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
   arp.table:
     command: show ip arp
     verified: doc_claimed
@@ -184,6 +151,9 @@ bindings:
   ospf.neighbors.detail:
     command: show ip ospf neighbor detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html
   ospf.database:
     command: show ip ospf database
     verified: doc_claimed
@@ -253,6 +223,9 @@ bindings:
   logging.recent:
     command: show logging
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html
   logging.ospf:
     command: 'show logging | include OSPF'
     verified: doc_claimed
@@ -265,114 +238,222 @@ bindings:
   config.running:
     command: show running-config
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html
   tech.support:
     command: show tech-support
     verified: doc_claimed
   ospf.neighbors.list:
     command: show ip ospf neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   interface.state:
     command: show interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.interface.params:
     command: 'show ip ospf interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.process.summary:
     command: show ip ospf
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   l2.neighbor.identity:
     command: 'show cdp neighbor {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   config.compare:
     command: show running-config
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.neighbors.state:
     command: show ip ospf neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html
   ospf.interface.mtu:
     command: 'show ip ospf interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html
   interface.mtu:
     command: show interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html
   ospf.routerid.check:
     command: show ip ospf
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html
   ospf.retransmit.list:
     command: show ip ospf retransmission-list
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html
   ospf.interface.timers:
     command: 'show ip ospf interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html
   ospf.interface.all:
     command: show ip ospf interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   interface.addressing:
     command: show ip interface brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.database.summary:
     command: show ip ospf database
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html
   ospf.database.type4:
     command: show ip ospf database asbr-summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html
   ospf.process.areas:
     command: show ip ospf
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html
   ospf.process.routerid:
     command: show ip ospf
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html
   ospf.spf.statistics:
     command: show ip ospf statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html
   isis.neighbors.detail:
     command: show isis neighbors detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   isis.hello.counters:
     command: 'show clns traffic interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   bgp.peers.state:
     command: show ip bgp summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/13752-24.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/13752-24.html
   bgp.neighbors.detail:
     command: 'show ip bgp neighbors {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/13752-24.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/13752-24.html
   bgp.policy.outbound:
     command: 'show ip bgp neighbors {peer} advertised-routes'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html
   bgp.table.full:
     command: show ip bgp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html
   bgp.vpnv4.labels:
     command: show ip bgp vpnv4 all tags
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
   mpls.interface.enabled:
     command: show mpls interfaces
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
   interface.counters.errors:
     command: show interfaces counters errors
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   interface.phy.portinfo:
     command: 'show controllers ethernet-controller {if} port-info'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   optics.dom.levels:
     command: 'show interfaces {if} transceiver detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   interface.counters.traffic:
     command: show interfaces counters
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   interface.counters.perport:
     command: 'show interfaces {if} counters'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   qos.policy.counters:
     command: 'show policy-map interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   qos.policy.config:
     command: show policy-map
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   qos.classmap.config:
     command: show class-map
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   qos.techsupport.bundle:
     command: show tech-support qos
     verified: doc_claimed
@@ -380,249 +461,495 @@ bindings:
     consent_note: >-
       The vendor's full support bundle: output can be tens of megabytes and take
       minutes on a loaded box.
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   interface.status.errdisable:
     command: show interfaces status err-disabled
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html
   interface.flap.history:
     command: 'show platform pm interface-flaps {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html
   interface.link.status:
     command: 'show controllers ethernet-controller {if} link status detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html
   optics.compatibility.list:
     command: show interfaces transceiver supported-list
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html
   optics.idprom.raw:
     command: 'show idprom interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html
   optics.idprom.pid:
     command: 'show idprom interface {if} | include PID'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html
   optics.idprom.type:
     command: 'show idprom interface {if} | include Transceiver Type'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html
   interface.capabilities.speed:
     command: 'show interfaces {if} capabilities | include Speed'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html
   optics.idprom.connector:
     command: 'show idprom interface {if} | include Connector type'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9200-switch-stack/222738-troubleshoot-fiber-links-on-catalyst-900.html
   stp.port.detail:
     command: 'show spanning-tree interface {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   stp.detail.all:
     command: show spanning-tree detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   stp.summary:
     command: show spanning-tree summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   stp.active.ports:
     command: show spanning-tree active
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   stp.port.portfast:
     command: 'show spanning-tree interface {if} portfast'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   stp.vlan.detail:
     command: 'show spanning-tree vlan {vlan} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   stp.summary.loopguard:
     command: show spanning-tree summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   interface.capabilities.trunk:
     command: 'show interfaces {if} capabilities'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   config.interface.channelgroup:
     command: 'show run interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-series-switches/220367-troubleshoot-etherchannels-on-catalyst-9.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-series-switches/220367-troubleshoot-etherchannels-on-catalyst-9.html
   interface.l3.state:
     command: show ip interface brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
   stp.vlan.state:
     command: 'show spanning-tree vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
   config.interface.hsrp:
     command: 'show run interface vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
   platform.resources.memory:
     command: show platform resources
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-17/225227-troubleshoot-memory-issues-in-ios-xe.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-17/225227-troubleshoot-memory-issues-in-ios-xe.html
   hardware.module.status:
     command: show module
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html
   system.clock:
     command: show clock
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html
   config.running.aaa:
     command: show running-config
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html
   interface.source.candidates:
     command: show ip interface brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html
   config.archive.versions:
     command: show archive
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html
   config.lock.state:
     command: show configuration lock
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html
   config.startup:
     command: show configuration
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html
   config.interface.scoped:
     command: 'show run interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html
   rib.lookup:
     command: show ip route
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html
   cpu.trend:
     command: show process cpu history
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html
   ospfv3.neighbors.detail:
     command: show ospfv3 neighbor detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html'
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html
   ospfv3.interface.params:
     command: show ospfv3 interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html'
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html
   ospfv3.database:
     command: show ospfv3 database
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html'
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html
   ospfv3.events.neighbor:
     command: show ospfv3 events neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html'
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html
   ospfv3.spf.statistics:
     command: show ospfv3 statistic detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html'
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html
   ospfv3.traffic.counters:
     command: show ospfv3 traffic
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html'
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html
   ospfv3.retransmit.list:
     command: show ospfv3 retransmission-list
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html'
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html
   eigrp.neighbors.list:
     command: show ip eigrp neighbors
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   eigrp.neighbors.detail:
     command: show ip eigrp neighbors detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   eigrp.interfaces.enabled:
     command: show ip eigrp interfaces
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   eigrp.traffic.counters:
     command: show ip eigrp traffic
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   eigrp.eventlog:
     command: show ip eigrp events
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   eigrp.topology.active:
     command: show ip eigrp topology active
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/13676-18.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/13676-18.html
   eigrp.topology.full:
     command: show ip eigrp topology
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   clns.neighbors.detail:
     command: show clns neighbors detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   dataplane.qfp.load:
     command: show platform hardware qfp active datapath utilization
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   vrf.rib.lookup:
     command: 'show ip route {vrf-scope} {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
   ldp.discovery.hellos:
     command: show mpls ldp discovery
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
   ldp.session.state:
     command: show mpls ldp neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
   cef.enabled:
     command: show ip cef summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
   pim.neighbors.list:
     command: show ip pim neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
   pim.interface.detail:
     command: 'show ip pim interface {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
   ip.protocol.counters:
     command: show ip traffic
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
   mroute.summary:
     command: show ip mroute summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
   igmpsnoop.querier:
     command: show ip igmp snooping querier
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html
   igmpsnoop.groups:
     command: show ip igmp snooping group
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html
   cable.tdr:
     command: 'show cable-diagnostics tdr interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   errdisable.detect.config:
     command: show errdisable detect
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html
   errdisable.recovery.config:
     command: show errdisable recovery
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html
   errdisable.flap.thresholds:
     command: show errdisable flap-values
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9500-series-switches/218397-troubleshoot-port-flaps-on-catalyst-9000.html
   trunk.perport.state:
     command: 'show interfaces {if} trunk'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   vlan.database.summary:
     command: show vlan brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   vlan.database.detail:
     command: show vlan summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   vtp.status.revision:
     command: show vtp status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   vtp.counters:
     command: show vtp counters
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   lacp.system.id:
     command: show lacp sys-id
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-series-switches/220367-troubleshoot-etherchannels-on-catalyst-9.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-series-switches/220367-troubleshoot-etherchannels-on-catalyst-9.html
   fhrp.hsrp.state:
     command: show standby
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/10583-62.html
   cpu.platform.linux:
     command: show processes cpu platform sorted
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html
   punt.cause.summary:
     command: show platform software fed switch active punt cause summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html
   punt.queue.stats:
     command: show platform software fed switch active punt cpuq all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html
   copp.policer.drops:
     command: show platform hardware fed switch active qos queue stats internal cpu policer
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html
   copp.policy.counters:
     command: show policy-map control-plane
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html
   copp.policy.definition:
     command: show platform software qos copp policy-info
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html
   copp.class.definition:
     command: show platform software qos copp class-info
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html
   punt.queue.detail:
     command: show platform software fed switch active punt cpuq all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html
   acl.config.all:
     command: show access-lists
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html
   memory.process.top:
     command: show processes memory platform sorted
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-17/225227-troubleshoot-memory-issues-in-ios-xe.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-17/225227-troubleshoot-memory-issues-in-ios-xe.html
   memory.accounting:
     command: show processes memory platform accounting
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-17/225227-troubleshoot-memory-issues-in-ios-xe.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-17/225227-troubleshoot-memory-issues-in-ios-xe.html
   obfl.status:
     command: show logging onboard RP active status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/220656-troubleshoot-unexpected-reloads-on-catal.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/220656-troubleshoot-unexpected-reloads-on-catal.html
   techsupport.bundle:
     command: show tech-support
     verified: doc_claimed
@@ -630,51 +957,99 @@ bindings:
     consent_note: >-
       The vendor's full support bundle: output can be tens of megabytes and take
       minutes on a loaded box.
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/220656-troubleshoot-unexpected-reloads-on-catal.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/220656-troubleshoot-unexpected-reloads-on-catal.html
   environment.all:
     command: show environment all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html
   environment.temperature:
     command: show env temperature status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html
   environment.power:
     command: show env power
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html
   poe.status:
     command: show power inline
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html
   obfl.environment:
     command: show logging onboard RP active environment
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html
   obfl.temperature:
     command: show logging onboard RP active temperature
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html
   obfl.voltage:
     command: show logging onboard RP active voltage
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html
   environment.alarms:
     command: show environment alarms
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-14/command_reference/b_1714_9500_cr/interface_and_hardware_commands.html
   ntp.sync.state:
     command: show ntp status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html
   ntp.peers.summary:
     command: show ntp association
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html
   ntp.peers.detail:
     command: show ntp association detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html
   acl.config.udp123:
     command: show access-lists
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html
   snmp.mibcache.config:
     command: 'show running-config all | include snmp mib flash cache'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/simple-network-management-protocol-snmp/217632-troubleshoot-snmp-basic-functionality.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/simple-network-management-protocol-snmp/217632-troubleshoot-snmp-basic-functionality.html
   cpu.process:
     command: show process cpu
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/simple-network-management-protocol-snmp/217632-troubleshoot-snmp-basic-functionality.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/simple-network-management-protocol-snmp/217632-troubleshoot-snmp-basic-functionality.html
   acl.config.tcp49:
     command: show access-lists
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html
   aaa.techsupport.bundle:
     command: show tech-support aaa
     verified: doc_claimed
@@ -682,279 +1057,558 @@ bindings:
     consent_note: >-
       The vendor's full support bundle: output can be tens of megabytes and take
       minutes on a loaded box.
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html
   dhcp.helper.address:
     command: 'show ip interface vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   vlan.database.active:
     command: show vlan brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   trunk.vlan.path:
     command: show interfaces trunk
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   license.status.trust:
     command: show license status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html
   license.all:
     command: show license all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html
   license.techsupport:
     command: show license tech support
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html
   license.message.history:
     command: show license history message
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html
   license.eventlog:
     command: show license eventlog 1
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html
   license.udi:
     command: show license udi
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html
   license.authorization:
     command: show license authorization
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst_9000/b_smart-licensing-using-policy-cat9k-switches/cat9k-troubleshooting-smart-licensing-using-policy.html
   boot.variable:
     command: show boot
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9500/software/release/17-9/configuration_guide/sys_mgmt/b_179_sys_mgmt_9500_cg/configuration_replace_and_configuration_rollback.html
   config.acl_nat_check:
     command: show running-config
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html
   ospf.neighbors.detail.per_interface:
     command: 'show ip ospf neighbor {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html
   ospf.retransmit.list.per_interface:
     command: 'show ip ospf retransmission-list {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html
   interface.errors_and_drops:
     command: show interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/119433-technote-ospf-00.html
   ospf.interface.hello_dead_area:
     command: 'show ip ospf interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.area.type_and_flags:
     command: show ip ospf
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.neighbors.dr_role:
     command: show ip ospf neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   config.area_stub_nssa:
     command: show running-config
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.database.type_check:
     command: show ip ospf database
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.database.router_lsa:
     command: 'show ip ospf database router {rid}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html
   ospf.database.network_lsa:
     command: 'show ip ospf database network adv-router {rid}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html
   ospf.database.external_lsa:
     command: 'show ip ospf database external adv-router {rid}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html
   ospf.abr_asbr.reachability:
     command: show ip ospf border-routers
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/118880-technote-ospf-00.html
   cpu.top_processes:
     command: show processes cpu sorted
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/23862-duplicate-router-id-ospf.html
   ospfv3.abr_asbr:
     command: show ospfv3 border-routers
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html'
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html
   ospfv3.virtual_links:
     command: show ospfv3 virtual-links
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html'
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/iproute_ospf/configuration/xe-16/iro-xe-16-book/ip6-route-ospfv3-xe.html
   routing.protocol.as_and_kvalues:
     command: show ip protocols
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   config.eigrp_block:
     command: 'show running-config | begin router eigrp'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   interface.mtu_and_errors:
     command: 'show interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   interface.resets_and_errors:
     command: 'show interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   eigrp.topology.all_paths:
     command: show ip eigrp topology all-links
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   eigrp.topology.zero_successors:
     command: show ip eigrp topology zero-successors
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   routing.filters_and_distance:
     command: show ip protocols
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   config.distribute_lists:
     command: 'show running-config | begin router eigrp'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/118974-technote-eigrp-00.html
   isis.interface.mtu_circuit_type:
     command: 'show clns interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   interface.errors_and_optics:
     command: 'show interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   bgp.peers.state.all_af:
     command: show ip bgp all summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/13752-24.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/13752-24.html
   rib.peer_reachability:
     command: 'show ip route {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/13752-24.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/13752-24.html
   bgp.neighbors.reset_reason:
     command: 'show ip bgp neighbors {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   interface.errors_and_flaps:
     command: show interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   memory.top_consumers:
     command: show processes memory sorted
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   bgp.policy.inbound_prefilter:
     command: 'show ip bgp neighbors {peer} received-routes'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html
   bgp.policy.inbound_postfilter:
     command: 'show ip bgp neighbors {peer} routes'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html
   bgp.prefix.path_attributes:
     command: 'show ip bgp {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html
   bgp.rib.install_failures:
     command: show ip bgp rib-failure
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html
   rib.installed_path:
     command: 'show ip route {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/220604-understand-basic-bgp-troubleshoot.html
   vrf.rd_and_route_targets:
     command: 'show ip vrf detail {vrf-name}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
   vrf.interface_membership:
     command: show ip vrf interfaces
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
   bgp.vpnv4.prefix_in_vrf:
     command: 'show ip bgp vpnv4 {vrf-scope} {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
   bgp.vpnv4.table_all:
     command: show ip bgp vpnv4 all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
   vrf.cef.label_stack:
     command: 'show ip cef {vrf-scope} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
   ldp.router_id_and_timers:
     command: show mpls ldp parameters
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
   ldp.label_bindings:
     command: show mpls ldp bindings
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
   ldp.igp_sync_state:
     command: show mpls ldp igp sync
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
   rib.ldp_id_reachability:
     command: 'show ip route {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
   pim.interface.mode_and_count:
     command: show ip pim interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
   pim.neighbors.per_interface:
     command: 'show ip pim neighbor {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
   pim.rp.group_mappings:
     command: show ip pim rp mapping
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
   mroute.active_sources:
     command: show ip mroute active
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
   interface.buffer_pressure:
     command: 'show buffers input-interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-multicast/16450-mcastguide0.html
   igmpsnoop.mrouter_ports:
     command: show ip igmp snooping mrouter
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html
   igmpsnoop.vlan_state:
     command: 'show ip igmp snooping vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html
   igmp.router_membership:
     command: show ip igmp groups
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html
   igmp.interface.version_querier:
     command: show ip igmp interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/222250-troubleshoot-igmp-snooping-on-cisco-swit.html
   interface.status.speed_duplex:
     command: 'show interfaces {if} status'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   l2.neighbor.duplex_check:
     command: 'show cdp neighbors {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   interface.counters.output_drops:
     command: 'show interfaces {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/12027-53.html
   stp.vlan.topology_changes:
     command: 'show spanning-tree vlan {vlan} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   stp.vlan.root_id:
     command: 'show spanning-tree vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   l2.mac.aging_time:
     command: 'show mac address-table aging-time vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   stp.port.bpdu_counts:
     command: 'show spanning-tree interface {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html'
+        url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/28943-170.html
   trunk.status.allowed_vlans:
     command: show interfaces trunk
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   switchport.mode.native_vlan:
     command: 'show interface {if} switchport'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   l2.neighbor.native_vlan:
     command: 'show cdp neighbors {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   punt.rate.per_interface:
     command: show platform software fed switch active punt rates interfaces
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html
   punt.cpu_interface.stats:
     command: show platform software fed switch active cpu-interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html
   copp.policer.queue_drops:
     command: show platform hardware fed switch active qos queue stats internal cpu policer
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221841-troubleshoot-control-plane-operations-on.html
   snmp.oid.last_polled:
     command: show snmp stats oid
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/simple-network-management-protocol-snmp/217632-troubleshoot-snmp-basic-functionality.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/simple-network-management-protocol-snmp/217632-troubleshoot-snmp-basic-functionality.html
   aaa.tacacs.server_stats:
     command: show tacacs
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html
   dhcp.relay.helper_config:
     command: 'show running-config interface vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   l2.mac.client_port:
     command: 'show mac address interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   copp.broadcast_queue.drops:
     command: show platform hardware fed switch active qos queue stats internal cpu policer
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html'
+        url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-9300-switch/221717-troubleshoot-dhcp-on-catalyst-9000-switc.html
   reachability.unicast:
     command: 'ping {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   reachability.multicast.allspf:
     command: ping 224.0.0.5
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   reachability.path:
     command: 'traceroute {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   pathmtu.probe:
     command: 'ping {peer} size 1500 df-bit'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13684-12.html
   vrf.reachability:
     command: 'ping {vrf-scope} {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
   vrf.path:
     command: 'traceroute {vrf-scope} {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/13734-mpls-vpn-tsh.html
   path.label_stack:
     command: 'traceroute {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html'
+        url: https://www.cisco.com/c/en/us/support/docs/multiprotocol-label-switching-mpls/mpls/12492-mpls-tsh.html
   reachability.ntp_server:
     command: 'ping {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/network-time-protocol-ntp/116161-trouble-ntp-00.html
   reachability.aaa_server:
     command: 'ping {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/lan/catalyst9200/software/release/17-12/configuration_guide/sec/b_1712_sec_9200_cg/configuring_tacacs_.html

@@ -19,7 +19,8 @@ profile: arista/eos
 display: Arista EOS
 version: correlix-tac-plan-arista-eos-2026-09-05
 
-# The dialect's default citation set. A doc_claimed binding inherits it.
+# The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding
+# cites its own page(s) below; this list never rides on a plan step.
 sources:
   - title: 'Arista EOS User Manual — Command Reference'
     url: https://www.arista.com/en/um-eos
@@ -55,158 +56,6 @@ sources:
     url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
   - title: 'EOS User Manual — VRRP and VARP'
     url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
-  - title: 'EOS 4.36.2F User Manual (index)'
-    url: https://www.arista.com/en/um-eos
-  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
-    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
-  - title: 'EOS User Manual — Open Shortest Path First Version 2'
-    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
-  - title: 'EOS User Manual — Open Shortest Path First Version 3'
-    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
-  - title: 'EOS User Manual — IS-IS'
-    url: https://www.arista.com/en/um-eos/eos-is-is
-  - title: 'EOS User Manual — ACLs and Route Maps'
-    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
-  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
-    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
-  - title: 'EOS User Manual — Port Channels and LACP'
-    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
-  - title: 'EOS User Manual — Spanning Tree Protocol'
-    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
-  - title: 'EOS User Manual — Virtual LANs (VLANs)'
-    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
-  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
-    url: https://www.arista.com/en/um-eos/eos-data-transfer
-  - title: 'EOS User Manual — VXLAN Configuration'
-    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
-  - title: 'EOS User Manual — Configuring EVPN'
-    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
-  - title: 'EOS User Manual — EVPN and VCS Commands'
-    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
-  - title: 'EOS User Manual — VRRP and VARP'
-    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
-  - title: 'EOS 4.36.2F User Manual (index)'
-    url: https://www.arista.com/en/um-eos
-  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
-    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
-  - title: 'EOS User Manual — Open Shortest Path First Version 2'
-    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
-  - title: 'EOS User Manual — Open Shortest Path First Version 3'
-    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
-  - title: 'EOS User Manual — IS-IS'
-    url: https://www.arista.com/en/um-eos/eos-is-is
-  - title: 'EOS User Manual — ACLs and Route Maps'
-    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
-  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
-    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
-  - title: 'EOS User Manual — Port Channels and LACP'
-    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
-  - title: 'EOS User Manual — Spanning Tree Protocol'
-    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
-  - title: 'EOS User Manual — Virtual LANs (VLANs)'
-    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
-  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
-    url: https://www.arista.com/en/um-eos/eos-data-transfer
-  - title: 'EOS User Manual — VXLAN Configuration'
-    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
-  - title: 'EOS User Manual — Configuring EVPN'
-    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
-  - title: 'EOS User Manual — EVPN and VCS Commands'
-    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
-  - title: 'EOS User Manual — VRRP and VARP'
-    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
-  - title: 'EOS 4.36.2F User Manual (index)'
-    url: https://www.arista.com/en/um-eos
-  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
-    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
-  - title: 'EOS User Manual — Open Shortest Path First Version 2'
-    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
-  - title: 'EOS User Manual — Open Shortest Path First Version 3'
-    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
-  - title: 'EOS User Manual — IS-IS'
-    url: https://www.arista.com/en/um-eos/eos-is-is
-  - title: 'EOS User Manual — ACLs and Route Maps'
-    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
-  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
-    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
-  - title: 'EOS User Manual — Port Channels and LACP'
-    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
-  - title: 'EOS User Manual — Spanning Tree Protocol'
-    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
-  - title: 'EOS User Manual — Virtual LANs (VLANs)'
-    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
-  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
-    url: https://www.arista.com/en/um-eos/eos-data-transfer
-  - title: 'EOS User Manual — VXLAN Configuration'
-    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
-  - title: 'EOS User Manual — Configuring EVPN'
-    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
-  - title: 'EOS User Manual — EVPN and VCS Commands'
-    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
-  - title: 'EOS User Manual — VRRP and VARP'
-    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
-  - title: 'EOS 4.36.2F User Manual (index)'
-    url: https://www.arista.com/en/um-eos
-  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
-    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
-  - title: 'EOS User Manual — Open Shortest Path First Version 2'
-    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
-  - title: 'EOS User Manual — Open Shortest Path First Version 3'
-    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
-  - title: 'EOS User Manual — IS-IS'
-    url: https://www.arista.com/en/um-eos/eos-is-is
-  - title: 'EOS User Manual — ACLs and Route Maps'
-    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
-  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
-    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
-  - title: 'EOS User Manual — Port Channels and LACP'
-    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
-  - title: 'EOS User Manual — Spanning Tree Protocol'
-    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
-  - title: 'EOS User Manual — Virtual LANs (VLANs)'
-    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
-  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
-    url: https://www.arista.com/en/um-eos/eos-data-transfer
-  - title: 'EOS User Manual — VXLAN Configuration'
-    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
-  - title: 'EOS User Manual — Configuring EVPN'
-    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
-  - title: 'EOS User Manual — EVPN and VCS Commands'
-    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
-  - title: 'EOS User Manual — VRRP and VARP'
-    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
-  - title: 'EOS 4.36.2F User Manual (index)'
-    url: https://www.arista.com/en/um-eos
-  - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
-    url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
-  - title: 'EOS User Manual — Open Shortest Path First Version 2'
-    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
-  - title: 'EOS User Manual — Open Shortest Path First Version 3'
-    url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-3
-  - title: 'EOS User Manual — IS-IS'
-    url: https://www.arista.com/en/um-eos/eos-is-is
-  - title: 'EOS User Manual — ACLs and Route Maps'
-    url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
-  - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
-    url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
-  - title: 'EOS User Manual — Port Channels and LACP'
-    url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
-  - title: 'EOS User Manual — Spanning Tree Protocol'
-    url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
-  - title: 'EOS User Manual — Virtual LANs (VLANs)'
-    url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
-  - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
-    url: https://www.arista.com/en/um-eos/eos-data-transfer
-  - title: 'EOS User Manual — VXLAN Configuration'
-    url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
-  - title: 'EOS User Manual — Configuring EVPN'
-    url: https://www.arista.com/en/um-eos/eos-configuring-evpn
-  - title: 'EOS User Manual — EVPN and VCS Commands'
-    url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
-  - title: 'EOS User Manual — VRRP and VARP'
-    url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
-  - title: 'EOS 4.36.2F User Manual (index)'
-    url: https://www.arista.com/en/um-eos
 
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
@@ -263,6 +112,9 @@ bindings:
   interface.status:
     command: show interfaces status
     verified: capture
+    sources:
+      - title: 'https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf'
+        url: https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf
   interface.detail:
     command: 'show interfaces {if}'
     verified: capture
@@ -290,6 +142,9 @@ bindings:
   route.prefix:
     command: 'show ip route {prefix}'
     verified: capture
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   fib.prefix:
     command: 'show ip route {prefix} detail'
     verified: doc_claimed
@@ -308,9 +163,15 @@ bindings:
   ospf.interfaces:
     command: show ip ospf interface
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   ospf.neighbors:
     command: show ip ospf neighbor
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   ospf.neighbors.detail:
     command: show ip ospf neighbor detail
     verified: doc_claimed
@@ -326,9 +187,15 @@ bindings:
   isis.interfaces:
     command: show isis interface
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — IS-IS'
+        url: https://www.arista.com/en/um-eos/eos-is-is
   isis.adjacency:
     command: show isis neighbors
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — IS-IS'
+        url: https://www.arista.com/en/um-eos/eos-is-is
   isis.adjacency.detail:
     command: show isis neighbors detail
     verified: doc_claimed
@@ -341,6 +208,9 @@ bindings:
   bgp.summary:
     command: show ip bgp summary
     verified: capture
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   bgp.neighbor.detail:
     command: 'show ip bgp neighbors {peer}'
     verified: capture
@@ -368,6 +238,9 @@ bindings:
   mlag.interfaces:
     command: show mlag interfaces
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+        url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
   qos.interface:
     command: 'show policy-map interface {if}'
     verified: doc_claimed
@@ -377,6 +250,9 @@ bindings:
   logging.recent:
     command: show logging
     verified: capture
+    sources:
+      - title: 'https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf'
+        url: https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf
   logging.ospf:
     command: 'show logging | include OSPF'
     verified: doc_claimed
@@ -389,156 +265,303 @@ bindings:
   config.running:
     command: show running-config
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf'
+        url: https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf
   tech.support:
     command: show tech-support
     verified: doc_claimed
   bgp.peergroup:
     command: show ip bgp peer-group
     verified: capture
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   bgp.peerfilter:
     command: show peer-filter
     verified: capture
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   bgp.route.prefix:
     command: 'show ip bgp {prefix}'
     verified: capture
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   bgp.vrf.routes:
     command: 'show ip bgp {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   bgp.labeled.unicast:
     command: show bgp labeled-unicast tunnel
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   mpls.forwarding:
     command: show mpls lfib route
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   isis.sr.tunnel:
     command: show isis segment-routing tunnel
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   ospf.neighbor.detail:
     command: 'show ip ospf neighbor {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   ospf.neighbor.changes:
     command: 'show ip ospf neighbor {if} adjacency-changes'
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   ospf.neighbors.summary:
     command: show ip ospf neighbor summary
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   ospf.interfaces.brief:
     command: show ip ospf interface brief
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   ospf.process:
     command: show ip ospf
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   ospf.database.summary:
     command: 'show ip ospf {vrf-scope} {area} database database-summary'
     verified: doc_claimed
   route.protocol.ospf:
     command: show ip route ospf
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   ospf.spf.log:
     command: show ip ospf spf-log
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   isis.sr.adjsids:
     command: show isis segment-routing adjacency-segments
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — IS-IS'
+        url: https://www.arista.com/en/um-eos/eos-is-is
   isis.sr.prefixsids:
     command: show isis segment-routing prefix-segments
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — IS-IS'
+        url: https://www.arista.com/en/um-eos/eos-is-is
   isis.tilfa.path:
     command: show isis ti-lfa path
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — IS-IS'
+        url: https://www.arista.com/en/um-eos/eos-is-is
   isis.tilfa.tunnel:
     command: show isis ti-lfa tunnel
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — IS-IS'
+        url: https://www.arista.com/en/um-eos/eos-is-is
   isis.convergence.delay:
     command: show isis local-convergence-delay
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — IS-IS'
+        url: https://www.arista.com/en/um-eos/eos-is-is
   mlag.status:
     command: show mlag
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+        url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
   mlag.config.sanity:
     command: show mlag config-sanity
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+        url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
   mlag.interfaces.detail:
     command: show mlag interfaces detail
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+        url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
   mlag.interfaces.states:
     command: show mlag interfaces states
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+        url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
   mlag.interfaces.members:
     command: show mlag interfaces members
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+        url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
   stp.instance.detail:
     command: show spanning-tree instance detail
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+        url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
   mlag.subinterfaces:
     command: show mlag subinterfaces
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+        url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
   stp.root:
     command: show spanning-tree root
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Spanning Tree Protocol'
+        url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
   stp.counters:
     command: show spanning-tree counters
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Spanning Tree Protocol'
+        url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
   stp.topology.status:
     command: show spanning-tree topology status
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Spanning Tree Protocol'
+        url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
   stp.summary:
     command: show spanning-tree
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Spanning Tree Protocol'
+        url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
   stp.instance:
     command: show spanning-tree instance
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Spanning Tree Protocol'
+        url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
   stp.interface:
     command: show spanning-tree interface
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Spanning Tree Protocol'
+        url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
   stp.blockedports:
     command: show spanning-tree blockedports
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Spanning Tree Protocol'
+        url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
   stp.mst.interface:
     command: show spanning-tree mst interface
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Spanning Tree Protocol'
+        url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
   stp.loopprotection:
     command: show loop-protection
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Spanning Tree Protocol'
+        url: https://www.arista.com/en/um-eos/eos-spanning-tree-protocol
   interface.switchport:
     command: show interfaces switchport
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Virtual LANs (VLANs)'
+        url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
   interface.vlans:
     command: 'show interfaces {if} vlans'
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Virtual LANs (VLANs)'
+        url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
   interface.status.one:
     command: 'show interfaces {if} status'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-ethernet-ports'
+        url: https://www.arista.com/en/um-eos/eos-ethernet-ports
   hardware.drop.counters:
     command: show hardware counter drop
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-ethernet-ports'
+        url: https://www.arista.com/en/um-eos/eos-ethernet-ports
   interface.phy.detail:
     command: 'show interfaces {if} phy detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-ethernet-ports'
+        url: https://www.arista.com/en/um-eos/eos-ethernet-ports
   interface.interactions:
     command: 'show interfaces et1,2 interactions'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-ethernet-ports'
+        url: https://www.arista.com/en/um-eos/eos-ethernet-ports
   platform.fap.mapping:
     command: show platform fap mapping interface Ethernet 1
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-ethernet-ports'
+        url: https://www.arista.com/en/um-eos/eos-ethernet-ports
   platform.bios:
     command: show platform bios
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-managing-eos-extensions'
+        url: https://www.arista.com/en/um-eos/eos-managing-eos-extensions
   platform.bios.history:
     command: show platform bios history
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-managing-eos-extensions'
+        url: https://www.arista.com/en/um-eos/eos-managing-eos-extensions
   qos.interfaces:
     command: show qos interfaces
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-quality-of-service'
+        url: https://www.arista.com/en/um-eos/eos-quality-of-service
   qos.trust:
     command: show qos interfaces trust
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-quality-of-service'
+        url: https://www.arista.com/en/um-eos/eos-quality-of-service
   qos.maps:
     command: show qos maps
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-quality-of-service'
+        url: https://www.arista.com/en/um-eos/eos-quality-of-service
   qos.policy.interface.counters:
     command: 'show policy-map interface {if} input counters'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-quality-of-service'
+        url: https://www.arista.com/en/um-eos/eos-quality-of-service
   techsupport.bundle:
     command: show tech-support
     verified: doc_claimed
@@ -546,327 +569,654 @@ bindings:
     consent_note: >-
       The vendor's full support bundle: output can be tens of megabytes and take
       minutes on a loaded box.
+    sources:
+      - title: 'https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf'
+        url: https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf
   version.info:
     command: show version
     verified: capture
+    sources:
+      - title: 'https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf'
+        url: https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf
   environment.all:
     command: show system environment all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf'
+        url: https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf
   agent.logs.crash:
     command: show agent logs crash
     verified: capture
+    sources:
+      - title: 'https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf'
+        url: https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf
   policy.routemap:
     command: show route-map
     verified: capture
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   tunnel.rib:
     command: show tunnel rib brief
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Border Gateway Protocol (BGP)'
+        url: https://www.arista.com/en/um-eos/eos-border-gateway-protocol-bgp
   evpn.sanity:
     command: show bgp evpn sanity detail
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — EVPN and VCS Commands'
+        url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
   evpn.routes:
     command: show bgp evpn
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — EVPN and VCS Commands'
+        url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
   evpn.routes.type2:
     command: show bgp evpn route-type mac-ip
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — EVPN and VCS Commands'
+        url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
   evpn.instance:
     command: show bgp evpn instance
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — EVPN and VCS Commands'
+        url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
   ospfv3.spf.log:
     command: show ipv6 ospf spf-log
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   ospfv3.lsa.log:
     command: show ipv6 ospf lsa-log
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   ospfv3.neighbors:
     command: show ipv6 ospf neighbor
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Open Shortest Path First Version 2'
+        url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
   tunnel.fib:
     command: show tunnel fib
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — IS-IS'
+        url: https://www.arista.com/en/um-eos/eos-is-is
   portchannel.summary:
     command: show port-channel
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Multi-Chassis Link Aggregation (MLAG)'
+        url: https://www.arista.com/en/um-eos/eos-multi-chassis-link-aggregation
   lacp.interfaces:
     command: show lacp interface
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Port Channels and LACP'
+        url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
   lacp.internal:
     command: show lacp internal
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Port Channels and LACP'
+        url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
   lacp.peer:
     command: show lacp peer
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Port Channels and LACP'
+        url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
   lacp.counters:
     command: show lacp counters
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Port Channels and LACP'
+        url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
   lacp.aggregates:
     command: show lacp aggregates
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Port Channels and LACP'
+        url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
   lacp.sysid:
     command: show lacp sys-id
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Port Channels and LACP'
+        url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
   portchannel.dense:
     command: show port-channel dense
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Port Channels and LACP'
+        url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
   portchannel.limits:
     command: show port-channel limits
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Port Channels and LACP'
+        url: https://www.arista.com/en/um-eos/eos-port-channels-and-lacp
   vlan.trunk:
     command: show interfaces trunk
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Virtual LANs (VLANs)'
+        url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
   vlan.list:
     command: show vlan
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Virtual LANs (VLANs)'
+        url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
   vlan.count:
     command: show vlan brief count
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Virtual LANs (VLANs)'
+        url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
   vlan.trunkgroup:
     command: show vlan trunk group
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Virtual LANs (VLANs)'
+        url: https://www.arista.com/en/um-eos/eos-virtual-lans-vlans
   mac.table:
     command: show mac address-table
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
+        url: https://www.arista.com/en/um-eos/eos-data-transfer
   mac.table.static:
     command: show mac address-table static
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
+        url: https://www.arista.com/en/um-eos/eos-data-transfer
   portsecurity.status:
     command: show port-security
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
+        url: https://www.arista.com/en/um-eos/eos-data-transfer
   portsecurity.macs:
     command: show port-security mac-address
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Data Transfer (MAC address table, port security)'
+        url: https://www.arista.com/en/um-eos/eos-data-transfer
   vxlan.vtep:
     command: show vxlan vtep
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VXLAN Configuration'
+        url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
   vxlan.interface:
     command: show interface vxlan 1
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VXLAN Configuration'
+        url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
   vxlan.address.table:
     command: show vxlan address-table
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VXLAN Configuration'
+        url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
   vxlan.vni:
     command: show vxlan vni
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VXLAN Configuration'
+        url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
   vxlan.flood.list:
     command: show vxlan flood vtep
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VXLAN Configuration'
+        url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
   vxlan.counters:
     command: show vxlan counters software
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VXLAN Configuration'
+        url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
   vxlan.arp:
     command: show arp interface VXLAN 1
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VXLAN Configuration'
+        url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
   vxlan.learnrestrict:
     command: show vxlan learn-restrict vtep
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VXLAN Configuration'
+        url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
   vxlan.l2rib:
     command: show l2Rib input vxlan-dynamic
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VXLAN Configuration'
+        url: https://www.arista.com/en/um-eos/eos-vxlan-configuration
   evpn.routes.type4:
     command: show bgp evpn route-type ethernet-segment esi
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — EVPN and VCS Commands'
+        url: https://www.arista.com/en/um-eos/eos-evpn-and-vcs-commands
   evpn.routes.type5:
     command: show bgp evpn route-type ip-prefix
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — Configuring EVPN'
+        url: https://www.arista.com/en/um-eos/eos-configuring-evpn
   vrrp.brief:
     command: 'show vrrp interface vlan {vlan} brief'
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VRRP and VARP'
+        url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
   vrrp.status:
     command: show vrrp
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VRRP and VARP'
+        url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
   vrrp.interface:
     command: 'show vrrp interface vlan {vlan}'
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VRRP and VARP'
+        url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
   vrrp.interface.all:
     command: 'show vrrp interface vlan {vlan} all'
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VRRP and VARP'
+        url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
   varp.status:
     command: show ip virtual-router
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VRRP and VARP'
+        url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
   varp.status.v6:
     command: show ipv6 virtual-router
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — VRRP and VARP'
+        url: https://www.arista.com/en/um-eos/eos-vrrp-and-varp
   transceiver.dom:
     command: show interfaces transceiver dom
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-transceiver-performance-monitoring'
+        url: https://www.arista.com/en/um-eos/eos-transceiver-performance-monitoring
   transceiver.dom.thresholds:
     command: show interfaces transceiver dom thresholds
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-transceiver-performance-monitoring'
+        url: https://www.arista.com/en/um-eos/eos-transceiver-performance-monitoring
   transceiver.perfmon:
     command: show interfaces transceiver performance-monitoring
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-transceiver-performance-monitoring'
+        url: https://www.arista.com/en/um-eos/eos-transceiver-performance-monitoring
   transceiver.perfmon.thresholds:
     command: show interfaces transceiver performance-monitoring thresholds
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-transceiver-performance-monitoring'
+        url: https://www.arista.com/en/um-eos/eos-transceiver-performance-monitoring
   environment.power:
     command: show environment power
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-configuring-and-viewing-environment-settings'
+        url: https://www.arista.com/en/um-eos/eos-configuring-and-viewing-environment-settings
   environment.temperature:
     command: show environment temperature
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-configuring-and-viewing-environment-settings'
+        url: https://www.arista.com/en/um-eos/eos-configuring-and-viewing-environment-settings
   environment.cooling:
     command: show system environment cooling
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-configuring-and-viewing-environment-settings'
+        url: https://www.arista.com/en/um-eos/eos-configuring-and-viewing-environment-settings
   eventmonitor.route:
     command: show event-monitor route
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-event-monitor'
+        url: https://www.arista.com/en/um-eos/eos-event-monitor
   eventmonitor.arp:
     command: show event-monitor arp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-event-monitor'
+        url: https://www.arista.com/en/um-eos/eos-event-monitor
   eventmonitor.mac:
     command: show event-monitor mac
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-event-monitor'
+        url: https://www.arista.com/en/um-eos/eos-event-monitor
   eventmonitor.neighbor:
     command: show event-monitor neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-event-monitor'
+        url: https://www.arista.com/en/um-eos/eos-event-monitor
   eventmonitor.stp:
     command: show event-monitor stpunstable
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-event-monitor'
+        url: https://www.arista.com/en/um-eos/eos-event-monitor
   eventmonitor.sqlite:
     command: show event-monitor sqlite
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-event-monitor'
+        url: https://www.arista.com/en/um-eos/eos-event-monitor
   extensions.list:
     command: show extensions
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-managing-eos-extensions'
+        url: https://www.arista.com/en/um-eos/eos-managing-eos-extensions
   extensions.boot:
     command: show boot-extensions
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-managing-eos-extensions'
+        url: https://www.arista.com/en/um-eos/eos-managing-eos-extensions
   boot.config:
     command: show boot-config
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-managing-eos-extensions'
+        url: https://www.arista.com/en/um-eos/eos-managing-eos-extensions
   reload.cause:
     command: show reload cause
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-managing-eos-extensions'
+        url: https://www.arista.com/en/um-eos/eos-managing-eos-extensions
   reload.status:
     command: show reload
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-managing-eos-extensions'
+        url: https://www.arista.com/en/um-eos/eos-managing-eos-extensions
   redundancy.status:
     command: show redundancy status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-managing-eos-extensions'
+        url: https://www.arista.com/en/um-eos/eos-managing-eos-extensions
   redundancy.filerepl:
     command: show redundancy file-replication
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-managing-eos-extensions'
+        url: https://www.arista.com/en/um-eos/eos-managing-eos-extensions
   acl.list:
     command: show ip access-lists
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — ACLs and Route Maps'
+        url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
   acl.summary:
     command: show ip access-lists summary
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — ACLs and Route Maps'
+        url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
   acl.list.v6:
     command: show ipv6 access-lists
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — ACLs and Route Maps'
+        url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
   acl.list.mac:
     command: show mac access-lists
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — ACLs and Route Maps'
+        url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
   acl.all:
     command: show access-lists
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — ACLs and Route Maps'
+        url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
   copp.counters:
     command: 'show policy-map interface {if} input counters'
     verified: doc_claimed
+    sources:
+      - title: 'EOS User Manual — ACLs and Route Maps'
+        url: https://www.arista.com/en/um-eos/eos-acls-and-route-maps
   ntp.status:
     command: show ntp status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-system-clock-and-time-protocols'
+        url: https://www.arista.com/en/um-eos/eos-system-clock-and-time-protocols
   ntp.associations:
     command: show ntp associations
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-system-clock-and-time-protocols'
+        url: https://www.arista.com/en/um-eos/eos-system-clock-and-time-protocols
   clock.now:
     command: show clock
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-system-clock-and-time-protocols'
+        url: https://www.arista.com/en/um-eos/eos-system-clock-and-time-protocols
   snmp.status:
     command: show snmp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.community:
     command: show snmp community
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.user:
     command: show snmp user
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.group:
     command: show snmp group
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.view:
     command: show snmp view
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.engineid:
     command: show snmp engineID
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.notification:
     command: show snmp notification
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.notification.host:
     command: show snmp notification host
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.localif:
     command: show snmp local-interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.mib:
     command: show snmp mib
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.acl.detail:
     command: show snmp ipv4 access-list detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   snmp.acl.summary:
     command: show snmp ipv4 access-list summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-snmp'
+        url: https://www.arista.com/en/um-eos/eos-snmp
   aaa.tacacs:
     command: show tacacs
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-user-security'
+        url: https://www.arista.com/en/um-eos/eos-user-security
   aaa.radius:
     command: show radius
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-user-security'
+        url: https://www.arista.com/en/um-eos/eos-user-security
   aaa.radius.monitor:
     command: show monitor server radius
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-user-security'
+        url: https://www.arista.com/en/um-eos/eos-user-security
   aaa.radius.monitor.detail:
     command: show monitor server radius detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-user-security'
+        url: https://www.arista.com/en/um-eos/eos-user-security
   aaa.roles:
     command: show users roles
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-user-security'
+        url: https://www.arista.com/en/um-eos/eos-user-security
   aaa.accounts:
     command: show users accounts
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-user-security'
+        url: https://www.arista.com/en/um-eos/eos-user-security
   aaa.users.detail:
     command: show users detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-user-security'
+        url: https://www.arista.com/en/um-eos/eos-user-security
   multicast.pim.neighbors:
     command: show ip pim neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.pim.interfaces:
     command: show ip pim interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.pim.sanity:
     command: show ip pim config-sanity
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.pim.rp:
     command: show ip pim rp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.pim.bsr:
     command: show ip pim bsr
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.pim.joins:
     command: show ip pim upstream joins
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.pim.counters:
     command: show ip pim protocol counters
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.igmp.groups:
     command: show ip igmp groups
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.igmp.interfaces:
     command: show ip igmp interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.igmp.stats:
     command: show ip igmp statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.igmpsnooping:
     command: show ip igmp snooping
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.igmpsnooping.mrouter:
     command: show ip igmp snooping mrouter
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast
   multicast.igmpsnooping.groups:
     command: show ip igmp snooping groups
     verified: doc_claimed
+    sources:
+      - title: 'https://www.arista.com/en/um-eos/eos-protocol-independent-multicast'
+        url: https://www.arista.com/en/um-eos/eos-protocol-independent-multicast

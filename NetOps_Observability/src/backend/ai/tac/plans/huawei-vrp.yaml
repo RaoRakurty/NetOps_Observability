@@ -19,161 +19,12 @@ profile: huawei/vrp
 display: Huawei VRP
 version: correlix-tac-plan-huawei-vrp-2026-09-05
 
-# The dialect's default citation set. A doc_claimed binding inherits it.
+# The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding
+# cites its own page(s) below; this list never rides on a plan step.
 sources:
   - title: Huawei VRP Command Reference
     url: https://support.huawei.com/enterprise/en/index.html
     retrieved: 2026-09-05
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
-  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
-  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
-  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
-  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
-  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
-  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
-  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
-  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
-  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
-  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
-  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
-  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
-  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
-  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
-  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
-  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/794e659e/collecting-diagnostic-information-logs-kpis-and-pads-files-in-one-click-mode-versions-earlier-than-v800r025c00
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Commonly Used Commands for Maintenance'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5df02e82/commonly-used-commands-for-maintenance
-  - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
-  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — display Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/4f578bc5/display-commands
-  - title: 'CloudEngine 16800/9800/8800/6800 Troubleshooting Guide (V300) — Common Information Collection and Fault Diagnostic Commands'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/a159eae9/common-information-collection-and-fault-diagnostic-commands
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
-  - title: 'CloudEngine Troubleshooting Guide (V300) — Troubleshooting Guidelines for Interfaces / optical module topics'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/abff05f2/troubleshooting-guidelines-for-interfaces
-  - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails
-  - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
-  - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
-    url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
   - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
     url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Diagnostic Information, Logs, KPIs, and PADS Files in One-Click Mode'
@@ -270,288 +121,567 @@ bindings:
   logging.recent:
     command: display logbuffer
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   config.running:
     command: display current-configuration
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   tech.support:
     command: display diagnostic-information
     verified: doc_claimed
   platform.version:
     command: display version
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.boot-config:
     command: display startup
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.patch:
     command: display patch-information
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.clock:
     command: display clock
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.environment:
     command: display health
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.environment.detail:
     command: display health verbose
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.inventory:
     command: display device
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.inventory.subcards:
     command: display device pic-status
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.inventory.serial:
     command: display device elabel
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.board-reset-history:
     command: display board-reset all
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.board-reset-history.cards:
     command: display board-reset card all
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.redundancy:
     command: display switchover state
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   system.cpu:
     command: display cpu-usage
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   system.memory:
     command: display memory-usage
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   interface.summary:
     command: display interface brief main
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   interface.detail:
     command: display interface
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   logging.traps:
     command: display trapbuffer
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   config.startup:
     command: display saved-configuration
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   config.restore-result:
     command: display configuration recover-result
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   config.commit.diff:
     command: display configuration commit changes
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   config.commit.history:
     command: display configuration commit list
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.license:
     command: display license
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   bgp.summary:
     command: display bgp peer
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   bgp.troubleshooting:
     command: display bgp troubleshooting
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   bgp.neighbor.log:
     command: 'display bgp peer {peer} log-info'
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   bgp.summary.ipv6:
     command: display bgp ipv6 peer
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   bgp.summary.vpnv4:
     command: display bgp vpnv4 all peer
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   bgp.summary.vpnv6:
     command: display bgp vpnv6 all peer
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   bgp.summary.evpn:
     command: display bgp evpn peer
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   route.prefix.detail:
     command: 'display ip routing-table {peer} verbose'
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   config.protocol.bgp:
     command: display current-configuration configuration bgp
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   route.prefix:
     command: 'display ip routing-table {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/94161d4d/case-study-bgp-peer-relationship-goes-down-after-route-recursion'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/94161d4d/case-study-bgp-peer-relationship-goes-down-after-route-recursion
   bgp.route.vpnv4:
     command: 'display bgp vpnv4 all routing-table {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised
   bgp.neighbor.received:
     command: 'display bgp vpnv4 all routing-table peer {peer} received-routes'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised
   bgp.neighbor.advertised:
     command: 'display bgp vpnv4 all routing-table peer {peer} advertised-routes'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised
   config.route-policy:
     command: display current-configuration configuration route-policy
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised
   config.protocol.bgp.peer:
     command: 'display current-configuration configuration bgp | include peer {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/419852c8/case-study-bgp-public-network-traffic-is-interrupted'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/419852c8/case-study-bgp-public-network-traffic-is-interrupted
   ospf.neighbors:
     command: display ospf peer
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
   ospf.neighbors.last-down:
     command: display ospf peer last-nbr-down
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
   ospf.troubleshooting:
     command: display ospf troubleshooting
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
   ospf.interfaces:
     command: display ospf interface
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
   ospf.summary:
     command: display ospf brief
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
   ospf.errors:
     command: display ospf error
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
   ospf.statistics:
     command: display ospf cumulative
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
   config.protocol.ospf:
     command: display current-configuration configuration ospf
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An OSPF Neighbor Relationship Is Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/fd16e5b0/case-study-an-ospf-neighbor-relationship-is-down
   ospf.database:
     command: display ospf lsdb
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8d7c113f/case-study-an-ospf-neighbor-relationship-cannot-reach-the-full-state'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8d7c113f/case-study-an-ospf-neighbor-relationship-cannot-reach-the-full-state
   ospf.routes:
     command: display ospf routing
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Reference: Maintenance Items and Operations'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5117dc64/reference-maintenance-items-and-operations
   platform.router-id:
     command: display router id
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/e36010e8/case-study-ospf-routing-loops-caused-by-router-id-conflicts'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/e36010e8/case-study-ospf-routing-loops-caused-by-router-id-conflicts
   ospf.neighbors.v3:
     command: display ospfv3 peer
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3abb5715/case-study-an-ospfv3-neighbor-relationship-is-down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3abb5715/case-study-an-ospfv3-neighbor-relationship-is-down
   ospf.neighbors.v3.last-down:
     command: display ospfv3 peer last-nbr-down
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3abb5715/case-study-an-ospfv3-neighbor-relationship-is-down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3abb5715/case-study-an-ospfv3-neighbor-relationship-is-down
   ospf.troubleshooting.v3:
     command: display ospfv3 troubleshooting
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3abb5715/case-study-an-ospfv3-neighbor-relationship-is-down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3abb5715/case-study-an-ospfv3-neighbor-relationship-is-down
   ospf.interfaces.v3:
     command: display ospfv3 interface
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3abb5715/case-study-an-ospfv3-neighbor-relationship-is-down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3abb5715/case-study-an-ospfv3-neighbor-relationship-is-down
   isis.adjacency:
     command: display isis peer
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
   isis.adjacency.detail:
     command: display isis peer verbose
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
   isis.adjacency.last-change:
     command: display isis last-peer-change
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
   isis.troubleshooting:
     command: display isis troubleshooting
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
   isis.summary:
     command: display isis brief
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
   isis.defaults:
     command: display default-parameter isis
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
   config.protocol.isis:
     command: display current-configuration configuration isis
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
   isis.routes:
     command: display isis route
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/6af66187/case-study-a-device-fails-to-learn-is-is-routes'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/6af66187/case-study-a-device-fails-to-learn-is-is-routes
   isis.database:
     command: display isis lsdb
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/6af66187/case-study-a-device-fails-to-learn-is-is-routes'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/6af66187/case-study-a-device-fails-to-learn-is-is-routes
   isis.database.detail:
     command: display isis lsdb verbose
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/6af66187/case-study-a-device-fails-to-learn-is-is-routes'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/6af66187/case-study-a-device-fails-to-learn-is-is-routes
   isis.database.local:
     command: display isis lsdb verbose local
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/6af66187/case-study-a-device-fails-to-learn-is-is-routes'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/6af66187/case-study-a-device-fails-to-learn-is-is-routes
   mpls.lsp:
     command: display mpls lsp
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/4ea6050/case-study-is-is-route-flapping-occurs'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/4ea6050/case-study-is-is-route-flapping-occurs
   interface.summary.main:
     command: display interface brief main
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/e1bbef8/case-study-crc-error-packets-are-generated-on-an-interface-due-to-a-network-cable-fault'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/e1bbef8/case-study-crc-error-packets-are-generated-on-an-interface-due-to-a-network-cable-fault
   platform.power:
     command: display power
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/9cdcba9c/case-study-interface-board-registration-failure'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/9cdcba9c/case-study-interface-board-registration-failure
   platform.temperature:
     command: display temperature
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   platform.voltage:
     command: display voltage
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   config.cpu-defend:
     command: display current-configuration configuration cpu-defend-policy
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   mpls.te.tunnels:
     command: display mpls te tunnel-interface
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1ac1d82e/case-study-an-sr-mpls-te-tunnel-goes-down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1ac1d82e/case-study-an-sr-mpls-te-tunnel-goes-down
   mpls.te.path:
     command: display mpls te tunnel path
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1ac1d82e/case-study-an-sr-mpls-te-tunnel-goes-down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1ac1d82e/case-study-an-sr-mpls-te-tunnel-goes-down
   mpls.bfd.session:
     command: display mpls bfd session
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1ac1d82e/case-study-an-sr-mpls-te-tunnel-goes-down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1ac1d82e/case-study-an-sr-mpls-te-tunnel-goes-down
   arp.network:
     command: 'display arp network {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/1fc2211e/case-study-evpn-routes-cannot-be-learned'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/1fc2211e/case-study-evpn-routes-cannot-be-learned
   route.prefix.ipv6:
     command: 'display ipv6 routing-table {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/c4666fc4/case-study-evpn-l3vpn-over-srv6-be-traffic-fails-to-be-forwarded'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/c4666fc4/case-study-evpn-l3vpn-over-srv6-be-traffic-fails-to-be-forwarded
   interface.error-down:
     command: display error-down recovery
     verified: doc_claimed
+    sources:
+      - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
   mlag.dfs-group:
     command: display dfs-group
     verified: doc_claimed
+    sources:
+      - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
   mlag.consistency.global:
     command: display dfs-group consistency-check global
     verified: doc_claimed
+    sources:
+      - title: 'CloudEngine Troubleshooting Guide (V300) — Traffic Forwarding on an M-LAG Interface Is Abnormal'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/16a959e0/traffic-forwarding-on-an-m-lag-interface-is-abnormal
   mlag.consistency:
     command: display dfs-group consistency-check
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/ba6bccca/some-interfaces-on-a-device-in-an-m-lag-are-down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/ba6bccca/some-interfaces-on-a-device-in-an-m-lag-are-down
   config.protocol.bfd:
     command: display current-configuration configuration bfd
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/c6cd9790/a-bfd-session-cannot-go-up'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/c6cd9790/a-bfd-session-cannot-go-up
   stp.brief:
     command: display stp brief
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs
   stp.region:
     command: display stp region-configuration
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs
   stp.abnormal-interfaces:
     command: display stp abnormal-interface
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs
   stp.tc.statistics:
     command: display stp tc-bpdu statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs
   stp.topology-change:
     command: display stp topology-change
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs
   arp.table:
     command: display arp
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer
   config.cpu-defend.grep:
     command: 'display current-configuration | include cpu-defend'
     verified: doc_claimed
   arp.history:
     command: display arp history
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer
   arp.conflicts:
     command: display arp ip-conflict track
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer
   alarms.hardware:
     command: display alarm hardware
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   alarms.hardware.history:
     command: display alarm hardware history all
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   alarms.active:
     command: display alarm active
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   alarms.history:
     command: display alarm history
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   filesystem.list:
     command: dir
     verified: doc_claimed
@@ -569,90 +699,177 @@ bindings:
       Huawei warns that this markedly raises CPU and degrades device
       performance, and that its output contains personal data (MAC addresses)
       that must be deleted after use.
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   acl.all:
     command: display acl all
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   cpp.statistics:
     command: display cpu-defend statistics all
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/67b5e314/case-study-an-eth-trunk-interface-in-lacp-mode-frequently-alternates-between-up-and-down-states'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/67b5e314/case-study-an-eth-trunk-interface-in-lacp-mode-frequently-alternates-between-up-and-down-states
   cpp.rate:
     command: display cpu-defend rate all
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   cpp.car:
     command: display cpu-defend car
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   cpp.auto-port-defend:
     command: display cpu-defend auto-port-defend statistics
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   cpp.auto-source-trace:
     command: display auto-source-trace record
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: A BGP Peer Relationship Fails to Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/31f2a647/case-study-a-bgp-peer-relationship-fails-to-be-established
   cpp.ma-defend.statistics:
     command: display cpu-defend ma-defend statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/36510dea/case-study-management-plane-protection-malfunctions'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/36510dea/case-study-management-plane-protection-malfunctions
   cpp.ma-defend.policy.global:
     command: display ma-defend global-policy
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/36510dea/case-study-management-plane-protection-malfunctions'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/36510dea/case-study-management-plane-protection-malfunctions
   ldp.session:
     command: display mpls ldp session
     verified: doc_claimed
+    sources:
+      - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
   ldp.peer:
     command: display mpls ldp peer
     verified: doc_claimed
+    sources:
+      - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
   ldp.interface:
     command: display mpls ldp interface
     verified: doc_claimed
+    sources:
+      - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
   ldp.session.down-events:
     command: display mpls ldp event session-down
     verified: doc_claimed
+    sources:
+      - title: 'NE20E-S2 Troubleshooting — Case Study: An LDP Session Goes Down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100083044/d206ed3f/case-study-an-ldp-session-goes-down
   sr.prefix.forwarding:
     command: display segment-routing prefix mpls forwarding
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/7c599393/case-study-an-sr-mpls-be-lsp-goes-down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/7c599393/case-study-an-sr-mpls-be-lsp-goes-down
   sr.adjacency.forwarding:
     command: display segment-routing adjacency mpls forwarding
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1ac1d82e/case-study-an-sr-mpls-te-tunnel-goes-down'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1ac1d82e/case-study-an-sr-mpls-te-tunnel-goes-down
   vxlan.troubleshooting:
     command: display vxlan troubleshooting
     verified: doc_claimed
+    sources:
+      - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
   vxlan.tunnels:
     command: display vxlan tunnel
     verified: doc_claimed
+    sources:
+      - title: 'CloudEngine Troubleshooting Guide (V300) — Case Study: A VXLAN Tunnel Fails'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/55fed8b8/case-study-a-vxlan-tunnel-fails
   evpn.mac-table:
     command: display mac-address
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/f02b7267/case-study-a-mac-address-flapping-alarm-is-generated-on-a-device-and-vm-services-cannot-be-accessed'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/f02b7267/case-study-a-mac-address-flapping-alarm-is-generated-on-a-device-and-vm-services-cannot-be-accessed
   evpn.mac-table.flapping:
     command: display mac-address flapping
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/f02b7267/case-study-a-mac-address-flapping-alarm-is-generated-on-a-device-and-vm-services-cannot-be-accessed'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/f02b7267/case-study-a-mac-address-flapping-alarm-is-generated-on-a-device-and-vm-services-cannot-be-accessed
   evpn.mac-table.flapping.aged:
     command: display mac-address flapping aged-table
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/f02b7267/case-study-a-mac-address-flapping-alarm-is-generated-on-a-device-and-vm-services-cannot-be-accessed'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/f02b7267/case-study-a-mac-address-flapping-alarm-is-generated-on-a-device-and-vm-services-cannot-be-accessed
   evpn.routes.prefix:
     command: 'display bgp evpn all routing-table prefix-route {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/c4666fc4/case-study-evpn-l3vpn-over-srv6-be-traffic-fails-to-be-forwarded'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/c4666fc4/case-study-evpn-l3vpn-over-srv6-be-traffic-fails-to-be-forwarded
   stack.troubleshooting:
     command: display stack troubleshooting
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure
   stack.troubleshooting.css:
     command: display css troubleshooting
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure
   stack.config:
     command: display stack configuration
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure
   stack.config.css:
     command: display css configuration
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure
   stack.port.last-down:
     command: display stack-port link-state last-down-reason
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100458710/817e67bb/common-troubleshooting-roadmap-for-a-stack-setup-failure
   bfd.sessions:
     command: display bfd session all
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/c6cd9790/a-bfd-session-cannot-go-up'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/c6cd9790/a-bfd-session-cannot-go-up
   bfd.statistics:
     command: display bfd statistics session all
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/c6cd9790/a-bfd-session-cannot-go-up'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/c6cd9790/a-bfd-session-cannot-go-up
   bfd.troubleshooting:
     command: display bfd troubleshooting
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/c6cd9790/a-bfd-session-cannot-go-up'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/c6cd9790/a-bfd-session-cannot-go-up
   icmp.statistics:
     command: display icmp statistics
     verified: doc_claimed
@@ -662,72 +879,144 @@ bindings:
   nd.history:
     command: display ipv6 neighbors history
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer
   ntp.status:
     command: display ntp-service status
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5ac6d103/case-study-the-clock-is-not-synchronized'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5ac6d103/case-study-the-clock-is-not-synchronized
   ntp.sessions:
     command: display ntp-service sessions
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5ac6d103/case-study-the-clock-is-not-synchronized'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5ac6d103/case-study-the-clock-is-not-synchronized
   snmp.version:
     command: display snmp-agent sys-info version
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/b62ef2c2/case-study-snmp-connection-fails-to-be-established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/b62ef2c2/case-study-snmp-connection-fails-to-be-established
   snmp.community:
     command: display snmp-agent community
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/b62ef2c2/case-study-snmp-connection-fails-to-be-established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/b62ef2c2/case-study-snmp-connection-fails-to-be-established
   snmp.usm-user:
     command: display snmp-agent usm-user
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/b62ef2c2/case-study-snmp-connection-fails-to-be-established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/b62ef2c2/case-study-snmp-connection-fails-to-be-established
   aaa.hwtacacs.status:
     command: display hwtacacs current-status
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/79b22ef0/case-study-a-user-fails-to-be-authenticated-by-the-hwtacacs-server'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/79b22ef0/case-study-a-user-fails-to-be-authenticated-by-the-hwtacacs-server
   aaa.authentication-scheme:
     command: display authentication-scheme
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/79b22ef0/case-study-a-user-fails-to-be-authenticated-by-the-hwtacacs-server'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/79b22ef0/case-study-a-user-fails-to-be-authenticated-by-the-hwtacacs-server
   aaa.config:
     command: display aaa configuration
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/79b22ef0/case-study-a-user-fails-to-be-authenticated-by-the-hwtacacs-server'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/79b22ef0/case-study-a-user-fails-to-be-authenticated-by-the-hwtacacs-server
   aaa.online-fail-record:
     command: display aaa online-fail-record all
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/79b22ef0/case-study-a-user-fails-to-be-authenticated-by-the-hwtacacs-server'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/79b22ef0/case-study-a-user-fails-to-be-authenticated-by-the-hwtacacs-server
   alarms.statistics:
     command: display alarm statistics
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   alarms.detail:
     command: display alarm information
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8, 8000E F8 Troubleshooting Guide — Collecting Fault Information Using Query Commands'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
   bgp.route.vrf:
     command: 'display bgp vpnv4 {vrf-scope} routing-table {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised
   route.prefix.vrf.detail:
     command: 'display ip routing-table {vrf-scope} {prefix} verbose'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised
   config.vrf:
     command: 'display current-configuration configuration {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/1db2319d/case-study-a-bgp-route-fails-to-be-advertised
   isis.errors.interface:
     command: 'display isis error interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
   config.interface:
     command: 'display current-configuration interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: An IS-IS Neighbor Relationship Cannot Be Established'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/8a238899/case-study-an-is-is-neighbor-relationship-cannot-be-established
   optics.dom:
     command: 'display interface {if} transceiver verbose'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/e1bbef8/case-study-crc-error-packets-are-generated-on-an-interface-due-to-a-network-cable-fault'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/e1bbef8/case-study-crc-error-packets-are-generated-on-an-interface-due-to-a-network-cable-fault
   route.table.vrf:
     command: 'display ip routing-table {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/9339ba62/case-study-pe-vpns-cannot-ping-each-other'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/9339ba62/case-study-pe-vpns-cannot-ping-each-other
   route.prefix.vrf:
     command: 'display ip routing-table {vrf-scope} {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/1fc2211e/case-study-evpn-routes-cannot-be-learned'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/1fc2211e/case-study-evpn-routes-cannot-be-learned
   evpn.routes.filtered:
     command: 'display bgp instance {vrf-name} evpn all routing-table | include {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/1fc2211e/case-study-evpn-routes-cannot-be-learned'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/1fc2211e/case-study-evpn-routes-cannot-be-learned
   stp.interface:
     command: 'display stp interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100313446/cccd4e8f/a-spanning-tree-fault-occurs
   arp.interface:
     command: 'display arp interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/5cdfaa40/case-study-the-arp-entries-on-the-local-device-cannot-be-learned-by-the-peer
   qos.policy.statistics:
     command: 'display traffic policy statistics interface {if} inbound'
     verified: doc_claimed
+    sources:
+      - title: 'NetEngine 8000 F8 Troubleshooting — Case Study: The Ping Operation Fails'
+        url: https://support.huawei.com/enterprise/en/doc/EDOC1100280260/3003cee5/case-study-the-ping-operation-fails

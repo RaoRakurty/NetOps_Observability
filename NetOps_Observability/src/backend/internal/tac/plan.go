@@ -73,6 +73,31 @@ type Step struct {
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
 
+// maxBindingSources is how many pages one step may cite.
+//
+// A citation on a step answers ONE question — "where did this command come
+// from" — and two links answer it. The dialect's whole bibliography answers a
+// different question and belongs to the pack, not to a command: attaching it to
+// every step rendered 8,418 links on a single Nokia SR Linux preview
+// (2026-09-06, incident c150bbc5, spine1/ospf-adjacency) and made the plan
+// unreadable. The cap is enforced where a Step is BUILT, so no future path into
+// the plan can reintroduce the pool.
+const maxBindingSources = 2
+
+// stepSources is the citation set one step may carry: the binding's own pages,
+// one entry per page, at most maxBindingSources of them. A binding with no
+// citation of its own gets none — an invented provenance is worse than a blank.
+func stepSources(in []Source) []Source {
+	out := dedupeSources(in)
+	if len(out) > maxBindingSources {
+		out = out[:maxBindingSources]
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return append([]Source(nil), out...)
+}
+
 // TopologyNote is one line of the connected-topology context Correlix supplies
 // from its OWN model. It is evidence, not a command — the plan carries it so a
 // TAC engineer sees the neighbourhood the device sits in.
@@ -294,7 +319,7 @@ func (c *Catalog) Plan(classID string, dev Device, opt PlanOptions) (*Plan, erro
 		p.Steps = append(p.Steps, Step{
 			Intent: intent, Title: in.Title, Section: sec, Bound: true,
 			Command: cmd, Verified: b.Verified,
-			Note: note, Sources: b.Sources, Teardown: b.Teardown, MaxBytes: mb, TimeoutSeconds: to,
+			Note: note, Sources: stepSources(b.Sources), Teardown: b.Teardown, MaxBytes: mb, TimeoutSeconds: to,
 		})
 	}
 	addUnbound := func(intent string, sec Section) {
@@ -326,7 +351,7 @@ func (c *Catalog) Plan(classID string, dev Device, opt PlanOptions) (*Plan, erro
 				st.NeedsConsent = true
 				st.Command = renderCommand(b.Command, dp.vrfScopeKeyword, opt.Target)
 				st.Verified = b.Verified
-				st.Sources = b.Sources
+				st.Sources = stepSources(b.Sources)
 				p.Unbound = append(p.Unbound, st)
 			}
 		default:

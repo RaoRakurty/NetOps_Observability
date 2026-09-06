@@ -19,51 +19,12 @@ profile: cisco/ios_xr
 display: Cisco IOS-XR
 version: correlix-tac-plan-cisco-iosxr-2026-09-05
 
-# The dialect's default citation set. A doc_claimed binding inherits it.
+# The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding
+# cites its own page(s) below; this list never rides on a plan step.
 sources:
   - title: Cisco IOS XR Command References
     url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-xr-software/products-command-reference-list.html
     retrieved: 2026-09-05
-  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
-  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
-    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
-  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
-  - title: Troubleshoot Input Drops in Cisco IOS XR
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
-  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
-  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
-    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
-  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
-  - title: Troubleshoot Input Drops in Cisco IOS XR
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
-  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
-  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
-    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
-  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
-  - title: Troubleshoot Input Drops in Cisco IOS XR
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
-  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
-  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
-    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
-  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
-  - title: Troubleshoot Input Drops in Cisco IOS XR
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
-  - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
-  - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
-    url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/adv-sys/command/reference/b-advsys-cr-asr9000/b-advsys-cr-asr9000_chapter_010.html
-  - title: Transfer Show Tech-Support Files to XR VM on Routers Running eXR
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221131-transfer-show-tech-support-files-to-xr-v.html
-  - title: Troubleshoot Input Drops in Cisco IOS XR
-    url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
   - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
     url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   - title: 'Advanced System Command Reference for Cisco ASR 9000 Series Routers — Tech-Support Commands'
@@ -111,6 +72,9 @@ bindings:
   logging.recent:
     command: show logging
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
   config.running:
     command: show running-config
     verified: doc_claimed
@@ -120,237 +84,471 @@ bindings:
   ospf.neighbor.list:
     command: show ospf neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
   ospf.interface.detail:
     command: 'show ospf interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
   interface.ipv4.mtu:
     command: 'show ipv4 interface {if} | i MTU'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
   interface.im.database:
     command: 'show im database interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
   ospf.process.summary:
     command: show ospf
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
   ospf.database.list:
     command: show ospf database
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
   ospf.interface.timers:
     command: 'show ospf interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.messagequeue.depth:
     command: show ospf message-queue
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.retransmit.list:
     command: show ospf retransmission-list
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.flood.list:
     command: show ospf flood-list
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   interface.controller.stats:
     command: 'show controllers {if} all'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   ospf.route.table:
     command: show ospf routes
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
   ospf.database.lsa:
     command: show ospf database
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
   ospf.abr.list:
     command: show ospf border-routers
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
   ospf.summary.prefix:
     command: show ospf summary-prefix
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
   ospf.virtuallink.state:
     command: show ospf virtual-links
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
   fib.cef.lookup:
     command: 'show cef ipv4 {prefix} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
   interface.ipv6.mtu:
     command: 'show ipv6 interface {if} | i MTU'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html
   isis.adjacency.list:
     command: show isis adjacency
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   isis.adjacency.detail:
     command: 'show isis adjacency {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   isis.interface.detail:
     command: 'show isis interface {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   isis.process.summary:
     command: show isis protocol
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   isis.neighbor.list:
     command: show isis neighbors
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   isis.adjacency.log:
     command: show isis adjacency-log
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   isis.protocol.counters:
     command: show isis statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/integrated-intermediate-system-to-intermediate-system-is-is/220649-troubleshoot-is-is-adjacency-issues.html
   isis.lsdb.list:
     command: show isis database
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html
   isis.lsdb.log:
     command: show isis database-log
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html
   isis.route.table:
     command: show isis route
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html
   isis.topology.list:
     command: show isis topology
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html
   isis.spf.log:
     command: show isis spf-log
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html
   isis.lsp.log:
     command: show isis lsp-log
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html
   isis.hostname.map:
     command: show isis hostname
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-is-is.html
   bgp.summary:
     command: show bgp summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   bgp.session.list:
     command: show bgp sessions
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   bgp.neighbor.detail:
     command: 'show bgp neighbors {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   bgp.process.state:
     command: show bgp process
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   bgp.prefix.entry:
     command: 'show bgp ipv4 unicast {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html
   bgp.advertised.set:
     command: show bgp advertised
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html
   bgp.policy.effect:
     command: show bgp policy
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html
   bgp.updategroup.membership:
     command: show bgp update-group
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html
   bgp.policy.evaluate:
     command: show bgp route-policy
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html
   bgp.update.inbound.errors:
     command: show bgp update in error process
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html
   bgp.neighbor.maxprefix:
     command: 'show bgp neighbors {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/25160-bgp-maximum-prefix.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/25160-bgp-maximum-prefix.html
   bgp.scale.instance:
     command: show bgp instance all scale
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/25160-bgp-maximum-prefix.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/25160-bgp-maximum-prefix.html
   bgp.scale.summary:
     command: show bgp scale
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/25160-bgp-maximum-prefix.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/25160-bgp-maximum-prefix.html
   bgp.rlimit.check:
     command: 'show bgp process performance-statistics | i RLIMIT'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html
   bgp.process.perfstats:
     command: show bgp all all process performance-statistics detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html
   bgp.vrf.table:
     command: 'show bgp {vrf-scope} ipv4 unicast'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html
   bgp.vrf.prefix.entry:
     command: 'show bgp {vrf-scope} ipv4 unicast {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html
   bgp.label.bindings:
     command: show bgp labels
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html
   fib.vrf.lookup:
     command: 'show cef {vrf-scope} ipv4 {prefix} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html
   mpls.vrf.forwarding:
     command: 'show mpls forwarding {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html
   bgp.summary.vpnv4:
     command: show bgp summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html
   mpls.interface.state:
     command: 'show mpls interfaces {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html
   mpls.forwarding.table:
     command: show mpls forwarding
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html
   mpls.forwarding.prefix:
     command: 'show mpls forwarding prefix {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html
   mpls.label.range:
     command: show mpls label range
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html
   mpls.lsd.clients:
     command: show mpls lsd clients
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html
   interface.counters:
     command: 'show interfaces {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html
   interface.controller.all:
     command: 'show controllers {if} all'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html
   interface.controller.phy:
     command: 'show controllers {if} phy'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html
   interface.detail:
     command: 'show interfaces {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html
   optics.levels:
     command: 'show controllers optics {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html
   interface.im.state:
     command: 'show im database interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html
   hardware.inventory:
     command: show inventory
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225385-troubleshoot-interface-crc-errors-on.html
   interface.drops.counter:
     command: 'show interfaces {if} | i "input drops"'
     verified: doc_claimed
+    sources:
+      - title: Troubleshoot Input Drops in Cisco IOS XR
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
   interface.state.summary:
     command: show ip interface brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   interface.controller.state:
     command: 'show controllers {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   interface.controller.internal:
     command: 'show controllers {if} internal'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   interface.phy.state:
     command: 'show controllers {if} phy'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   interface.dampening:
     command: 'show im dampening interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   platform.esd.switch:
     command: show controller switch reachable
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   optics.summary:
     command: 'show controllers optics {if} summary'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   optics.pm.history:
     command: 'show controllers optics {if} pm current 15-min optics 1'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   optics.dsp.state:
     command: 'show controllers coherentDSP {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   optics.dsp.fec:
     command: 'show controllers coherentDSP {if} pm current 15-min fec'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   optics.pid.serial:
     command: show inventory details
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   optics.phy.readout:
     command: 'show controllers {if} phy'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   optics.techsupport.bundle:
     command: show tech-support optics
     verified: doc_claimed
@@ -358,24 +556,45 @@ bindings:
     consent_note: >-
       The vendor's full support bundle: output can be tens of megabytes and take
       minutes on a loaded box.
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   platform.pfm.faults:
     command: show pfm location all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/223141-troubleshoot-packet-drops-on-ncs-5500.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/223141-troubleshoot-packet-drops-on-ncs-5500.html
   platform.np.counters:
     command: show controllers np counters all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/223141-troubleshoot-packet-drops-on-ncs-5500.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/223141-troubleshoot-packet-drops-on-ncs-5500.html
   config.commit.diff:
     command: show configuration commit changes all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221046-resolve-the-full-ipv6-packet-drop-where.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221046-resolve-the-full-ipv6-packet-drop-where.html
   qos.policy.counters:
     command: 'show policy-map interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217222-qos-troubleshooting-guide-for-ncs-5500-s.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217222-qos-troubleshooting-guide-for-ncs-5500-s.html
   qos.interface.program:
     command: 'show qos interface {if} output'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217222-qos-troubleshooting-guide-for-ncs-5500-s.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217222-qos-troubleshooting-guide-for-ncs-5500-s.html
   config.commit.failure:
     command: show configuration failed
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217222-qos-troubleshooting-guide-for-ncs-5500-s.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217222-qos-troubleshooting-guide-for-ncs-5500-s.html
   qos.techsupport.bundle:
     command: show tech-support qos
     verified: doc_claimed
@@ -383,267 +602,531 @@ bindings:
     consent_note: >-
       The vendor's full support bundle: output can be tens of megabytes and take
       minutes on a loaded box.
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217222-qos-troubleshooting-guide-for-ncs-5500-s.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/217222-qos-troubleshooting-guide-for-ncs-5500-s.html
   logging.buffer:
     command: show logging
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html
   logging.filter.fan:
     command: 'show logging | include FAN'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html
   logging.filter.power:
     command: 'show logging | include Power'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html
   platform.node.state:
     command: show platform
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html
   platform.slices:
     command: show platform slices
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html
   platform.cardmgr.inventory:
     command: show controller card-mgr inventory summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html
   config.standby.consistency:
     command: show configuration inconsistency replica
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   system.verify:
     command: show system verify
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html
   config.commit.failure.detail:
     command: show configuration failed inheritance
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   config.startup.failure:
     command: show configuration failed startup
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   config.change.history:
     command: show configuration history
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   config.commit.list:
     command: show configuration commit list
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   config.rollback.preview:
     command: show configuration rollback changes
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   config.sessions:
     command: show configuration sessions
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   bfd.session.list:
     command: show bfd session
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   cpu.processes:
     command: show processes cpu
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/13699-29.html
   rib.route.lookup:
     command: 'show route ipv4 {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
   rpl.policy.active:
     command: show rpl active route-policy
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_010.html
   ospfv3.neighbor.list:
     command: show ospfv3 neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html
   ospfv3.neighbor.detail:
     command: 'show ospfv3 neighbor {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html
   ospfv3.interface.detail:
     command: 'show ospfv3 interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html
   ospfv3.process.summary:
     command: show ospfv3
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html
   ospfv3.database.lsa:
     command: show ospfv3 database
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html
   ospfv3.messagequeue.depth:
     command: show ospfv3 message-queue
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html
   ospfv3.route.table:
     command: show ospfv3 routes
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/routing/b-ncs5500-routing-cli-reference/b-ncs5500-routing-cli-reference_chapter_011.html
   tcp.socket.list:
     command: show tcp brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   rib.route.lookup.peer:
     command: 'show route ipv4 {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   np.drop.counters:
     command: show controllers np counters all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   rpl.policy.attachpoints:
     command: show rpl route-policy attachpoints
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/19345-bgp-noad.html
   rpl.prefixset.active:
     command: show rpl active prefix-set
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/routing/configuration/guide/b-routing-cg-asr9000-711x/implementing-bgp.html
   memory.summary:
     command: show memory summary location all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html
   watchdog.memory.state:
     command: show watchdog memory-state
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html
   process.blocked.list:
     command: show processes blocked location all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/222268-troubleshoot-bgp-virtual-memory-rlimit.html
   rpl.extcommunity.rt:
     command: show rpl extcommunity-set
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html
   rib.vrf.lookup:
     command: 'show route {vrf-scope} ipv4 unicast {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/l3vpn/configuration/guide/b-l3vpn-cg-asr9000-711x/implementing-mpls-layer-3-VPNs.html
   ldp.neighbor.list:
     command: show mpls ldp neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html
   ldp.neighbor.detail:
     command: 'show mpls ldp neighbor {peer} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html
   ldp.discovery.hellos:
     command: show mpls ldp discovery
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html
   ldp.interface.state:
     command: 'show mpls ldp interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html
   ldp.parameters:
     command: show mpls ldp parameters
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html
   ldp.igp.sync:
     command: show mpls ldp igp sync
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html
   ldp.summary:
     command: show mpls ldp summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/mpls/configuration/guide/b-mpls-cg-asr9000-711x/implementing-mpls-ldp.html
   ldp.label.bindings:
     command: 'show mpls ldp bindings {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html
   ldp.forwarding.table:
     command: show mpls ldp forwarding
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-forwarding.html
   te.tunnel.state:
     command: show mpls traffic-eng tunnels
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html
   te.topology.db:
     command: show mpls traffic-eng topology
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html
   te.admission.control:
     command: show mpls traffic-eng link-management admission-control
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html
   te.link.interfaces:
     command: show mpls traffic-eng link-management interfaces
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html
   te.signaling.counters:
     command: show mpls traffic-eng counters signaling
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html
   te.autoroute.announce:
     command: show mpls traffic-eng autoroute
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html
   rsvp.session.list:
     command: show rsvp session
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html
   rsvp.neighbor.detail:
     command: show rsvp neighbor detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html
   rsvp.interface.bandwidth:
     command: 'show rsvp interface {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html'
+        url: https://www.cisco.com/c/en/us/td/docs/iosxr/ncs5500/mpls/b-mpls-cr-ncs5500/b-ncs5500-mpls-te.html
   pim.neighbor.list:
     command: 'show pim neighbor {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html
   pim.interface.state:
     command: 'show pim interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html
   pim.rpf.lookup:
     command: 'show pim rpf {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html
   pim.rp.mapping:
     command: show pim group-map
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html
   pim.topology.state:
     command: show pim topology
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html
   pim.traffic.counters:
     command: show pim traffic
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html
   mrib.route.table:
     command: show mrib route
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html
   mfib.route.table:
     command: show mfib route
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html
   rib.route.lookup.source:
     command: 'show route ipv4 {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/711x/multicast/configuration/guide/b-multicast-cg-asr9k-711x/Implementing-layer3-multicast.html
   bfd.session.detail:
     command: 'show bfd session interface {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/220364-troubleshoot-bidirectional-forwarding-de.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/220364-troubleshoot-bidirectional-forwarding-de.html
   bfd.client.list:
     command: show bfd client
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/220364-troubleshoot-bidirectional-forwarding-de.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/220364-troubleshoot-bidirectional-forwarding-de.html
   bfd.label.session:
     command: show bfd label session
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/220364-troubleshoot-bidirectional-forwarding-de.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/220364-troubleshoot-bidirectional-forwarding-de.html
   forwarding.netio.idb:
     command: 'show netio idb {if}'
     verified: doc_claimed
+    sources:
+      - title: Troubleshoot Input Drops in Cisco IOS XR
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
   forwarding.drops.summary:
     command: show drops
     verified: doc_claimed
+    sources:
+      - title: Troubleshoot Input Drops in Cisco IOS XR
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
   alarms.active:
     command: show alarms brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/network-convergence-system-5500-series/220452-troubleshoot-interface-down-or-flap-issu.html
   lpts.bindings:
     command: show lpts bindings brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/ip-addresses/command/reference/b-ip-addresses-cr-asr9000/b-ipaddr-cr-asr9k_chapter_0111.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/ip-addresses/command/reference/b-ip-addresses-cr-asr9000/b-ipaddr-cr-asr9k_chapter_0111.html
   lpts.flows:
     command: show lpts flows brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/ip-addresses/command/reference/b-ip-addresses-cr-asr9000/b-ipaddr-cr-asr9k_chapter_0111.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/ip-addresses/command/reference/b-ip-addresses-cr-asr9000/b-ipaddr-cr-asr9k_chapter_0111.html
   process.blocked:
     command: show processes blocked location all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html
   process.detail.alarmlogger:
     command: show processes alarm-logger
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html
   process.crash.context:
     command: show context location all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html
   process.list:
     command: show processes
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/200110-High-CPU-utilisation-by-alarm-logger-pro.html
   memory.leak.compare:
     command: show memory compare report
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221183-troubleshoot-os-shmwin-2-error-encounter.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221183-troubleshoot-os-shmwin-2-error-encounter.html
   reload.history:
     command: show reboot history
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   process.core.config:
     command: show exception
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   alarms.detail:
     command: show alarms detail system active
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html
   environment.power:
     command: show environment power
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html
   environment.temperature:
     command: show environment temperatures
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html
   environment.voltage:
     command: show environment voltages
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html'
+        url: https://www.cisco.com/c/en/us/support/docs/routers/asr-9000-series-aggregation-services-routers/225311-troubleshoot-fan-module-failure-in-asr.html
   fpd.status:
     command: show hw-module fpd location all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html
   install.active:
     command: show install active summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html
   install.techsupport.bundle:
     command: show tech install one-showtech
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html
   software.version:
     command: show version
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/221708-troubleshoot-modules-in-sw-inactive-st.html
   fpd.status.all:
     command: show hw-module fpd location all
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   fpd.package.baseline:
     command: show fpd package
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   fpd.techsupport.bundle:
     command: show tech-support fpd
     verified: doc_claimed
@@ -651,105 +1134,210 @@ bindings:
     consent_note: >-
       The vendor's full support bundle: output can be tens of megabytes and take
       minutes on a loaded box.
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   redundancy.state:
     command: show redundancy
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   redundancy.summary:
     command: show redundancy summary
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   install.committed:
     command: show install committed
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   install.log:
     command: show install log
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html
   install.superseded:
     command: show install superceded
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html
   install.package.detail:
     command: show install package pie detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html
   install.request.state:
     command: show install request
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html
   install.audit:
     command: show install audit
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html
   install.boot.options:
     command: show install boot-options location all
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116332-maintain-ios-xr-smu-00.html
   cli.history:
     command: show cli history detail
     verified: doc_claimed
+    sources:
+      - title: 'Troubleshoot Quick Reference Command List for TAC Assistance (IOS XR)'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
   clock.calendar:
     command: show calendar
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/ntp-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/ntp-commands.html
   transport.sessions:
     command: show tcp brief
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/ntp-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/ntp-commands.html
   snmp.status:
     command: show snmp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
   snmp.ifindex.map:
     command: show snmp interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
   snmp.linkupdown.state:
     command: 'show snmp interface notification {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
   snmp.queue.depth:
     command: show snmp request incoming-queue detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
   snmp.duplicate.drops:
     command: show snmp request duplicates
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
   snmp.slow.oids:
     command: show snmp statistics slow oid
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
   snmp.pdu.stats:
     command: show snmp statistics pdu
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
   snmp.traps:
     command: show snmp traps details
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
   snmp.receivers:
     command: show snmp host
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
   snmp.views:
     command: show snmp view
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/system_management/command/reference/b-system-managment-cr-asr9000/snmp-server-commands.html
   aaa.tacacs.servers:
     command: show tacacs
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html
   aaa.tacacs.counters:
     command: show tacacs counters
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html
   aaa.tacacs.detail:
     command: show tacacs details
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html
   aaa.tacacs.groups:
     command: show tacacs server-groups
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html
   aaa.tacacs.source:
     command: show tacacs source-interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html
   aaa.config.state:
     command: show aaa
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html
   aaa.trace:
     command: show aaa trace
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html
   aaa.current.user:
     command: show user
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html
   process.detail.tacacsd:
     command: show processes tacacsd
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html'
+        url: https://www.cisco.com/c/en/us/td/docs/routers/asr9000/software/security/command/reference/b-system-security-cr-asr9k/b-system-security-cr-71x-asr9k_chapter_01.html
   ospf.multicast.reachability:
     command: ping 224.0.0.5
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/116350-trouble-ios-xr-mtu-00.html
   reachability.ping:
     command: 'ping {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html
   reachability.traceroute:
     command: 'traceroute {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/218027-troubleshoot-border-gateway-protocol-bas.html

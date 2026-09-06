@@ -19,461 +19,12 @@ profile: fortinet/fortios
 display: Fortinet FortiOS
 version: correlix-tac-plan-fortinet-fortios-2026-09-05
 
-# The dialect's default citation set. A doc_claimed binding inherits it.
+# The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding
+# cites its own page(s) below; this list never rides on a plan step.
 sources:
   - title: FortiOS CLI Reference
     url: https://docs.fortinet.com/product/fortigate/
     retrieved: 2026-09-05
-  - title: 'CLI troubleshooting cheat sheet (FortiOS)'
-    url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
-  - title: Troubleshooting methodologies
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
-  - title: Troubleshooting scenarios
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/517124/troubleshooting-scenarios
-  - title: Checking CPU and memory resources
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources
-  - title: Troubleshooting high CPU usage
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage
-  - title: Conserve mode
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode
-  - title: IPsec related diagnose commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands
-  - title: Understanding VPN related logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/834425/understanding-vpn-related-logs
-  - title: IPsec monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221346/ipsec-monitor
-  - title: SSL VPN troubleshooting - common issues
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues
-  - title: SSL-VPN monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/28104/ssl-vpn-monitor
-  - title: Troubleshoot an HA formation
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation
-  - title: Check HA synchronization status
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status
-  - title: Troubleshooting BGP
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
-  - title: SD-WAN related diagnose commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/818746/sd-wan-related-diagnose-commands
-  - title: Understanding SD-WAN related logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/856781/understanding-sd-wan-related-logs
-  - title: Log-related diagnostic commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands
-  - title: SNMP OID for logs that failed to send
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668490/snmp-oid-for-logs-that-failed-to-send
-  - title: Troubleshooting process for FortiGuard updates
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates
-  - title: Verifying connectivity to FortiGuard
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/703926/verifying-connectivity-to-fortiguard
-  - title: FortiGuard server settings
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/691153/fortiguard-server-settings
-  - title: DNS troubleshooting
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/126629/dns-troubleshooting
-  - title: Troubleshooting for DNS filter
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/150448/troubleshooting-for-dns-filter
-  - title: VXLAN troubleshooting
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/386565/vxlan-troubleshooting
-  - title: Diagnosing NPU-based interfaces
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/926361/diagnosing-npu-based-interfaces
-  - title: Troubleshooting your installation
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation
-  - title: Using a session table
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table
-  - title: Verifying the correct firewall policy is being used
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used
-  - title: Seven-day rolling counter for policy hit counters
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters
-  - title: ARP table
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/473534/arp-table
-  - title: Checking FortiOS network settings
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings
-  - title: Verifying the correct route is being used
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/838132/verifying-the-correct-route-is-being-used
-  - title: Verifying routing table contents in NAT mode
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221343/verifying-routing-table-contents-in-nat-mode
-  - title: 'Static & dynamic routing monitor'
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/655407/static-dynamic-routing-monitor
-  - title: DHCP monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/38214/dhcp-monitor
-  - title: No session timeout
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/743069/no-session-timeout
-  - title: Full cone NAT for fixed port range IP pools
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/949754/full-cone-nat-for-fixed-port-range-ip-pools-new
-  - title: Controlling return path with auxiliary session
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/14295/controlling-return-path-with-auxiliary-session
-  - title: Testing an antivirus profile
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/315155/testing-an-antivirus-profile
-  - title: ZTNA troubleshooting and debugging commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/286458/ztna-troubleshooting-and-debugging-commands
-  - title: Checking the hardware connections
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/165256/checking-the-hardware-connections
-  - title: Interface MTU packet size
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/596096/interface-mtu-packet-size
-  - title: WAN optimization - testing and troubleshooting the configuration
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/98874/testing-and-troubleshooting-the-configuration
-  - title: FortiToken troubleshooting and diagnosis
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/180506/troubleshooting-and-diagnosis
-  - title: Checking the logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/458906/checking-the-logs
-  - title: 'CLI troubleshooting cheat sheet (FortiOS)'
-    url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
-  - title: Troubleshooting methodologies
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
-  - title: Troubleshooting scenarios
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/517124/troubleshooting-scenarios
-  - title: Checking CPU and memory resources
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources
-  - title: Troubleshooting high CPU usage
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage
-  - title: Conserve mode
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode
-  - title: IPsec related diagnose commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands
-  - title: Understanding VPN related logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/834425/understanding-vpn-related-logs
-  - title: IPsec monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221346/ipsec-monitor
-  - title: SSL VPN troubleshooting - common issues
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues
-  - title: SSL-VPN monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/28104/ssl-vpn-monitor
-  - title: Troubleshoot an HA formation
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation
-  - title: Check HA synchronization status
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status
-  - title: Troubleshooting BGP
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
-  - title: SD-WAN related diagnose commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/818746/sd-wan-related-diagnose-commands
-  - title: Understanding SD-WAN related logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/856781/understanding-sd-wan-related-logs
-  - title: Log-related diagnostic commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands
-  - title: SNMP OID for logs that failed to send
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668490/snmp-oid-for-logs-that-failed-to-send
-  - title: Troubleshooting process for FortiGuard updates
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates
-  - title: Verifying connectivity to FortiGuard
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/703926/verifying-connectivity-to-fortiguard
-  - title: FortiGuard server settings
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/691153/fortiguard-server-settings
-  - title: DNS troubleshooting
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/126629/dns-troubleshooting
-  - title: Troubleshooting for DNS filter
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/150448/troubleshooting-for-dns-filter
-  - title: VXLAN troubleshooting
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/386565/vxlan-troubleshooting
-  - title: Diagnosing NPU-based interfaces
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/926361/diagnosing-npu-based-interfaces
-  - title: Troubleshooting your installation
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation
-  - title: Using a session table
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table
-  - title: Verifying the correct firewall policy is being used
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used
-  - title: Seven-day rolling counter for policy hit counters
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters
-  - title: ARP table
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/473534/arp-table
-  - title: Checking FortiOS network settings
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings
-  - title: Verifying the correct route is being used
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/838132/verifying-the-correct-route-is-being-used
-  - title: Verifying routing table contents in NAT mode
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221343/verifying-routing-table-contents-in-nat-mode
-  - title: 'Static & dynamic routing monitor'
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/655407/static-dynamic-routing-monitor
-  - title: DHCP monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/38214/dhcp-monitor
-  - title: No session timeout
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/743069/no-session-timeout
-  - title: Full cone NAT for fixed port range IP pools
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/949754/full-cone-nat-for-fixed-port-range-ip-pools-new
-  - title: Controlling return path with auxiliary session
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/14295/controlling-return-path-with-auxiliary-session
-  - title: Testing an antivirus profile
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/315155/testing-an-antivirus-profile
-  - title: ZTNA troubleshooting and debugging commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/286458/ztna-troubleshooting-and-debugging-commands
-  - title: Checking the hardware connections
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/165256/checking-the-hardware-connections
-  - title: Interface MTU packet size
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/596096/interface-mtu-packet-size
-  - title: WAN optimization - testing and troubleshooting the configuration
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/98874/testing-and-troubleshooting-the-configuration
-  - title: FortiToken troubleshooting and diagnosis
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/180506/troubleshooting-and-diagnosis
-  - title: Checking the logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/458906/checking-the-logs
-  - title: 'CLI troubleshooting cheat sheet (FortiOS)'
-    url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
-  - title: Troubleshooting methodologies
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
-  - title: Troubleshooting scenarios
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/517124/troubleshooting-scenarios
-  - title: Checking CPU and memory resources
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources
-  - title: Troubleshooting high CPU usage
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage
-  - title: Conserve mode
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode
-  - title: IPsec related diagnose commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands
-  - title: Understanding VPN related logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/834425/understanding-vpn-related-logs
-  - title: IPsec monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221346/ipsec-monitor
-  - title: SSL VPN troubleshooting - common issues
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues
-  - title: SSL-VPN monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/28104/ssl-vpn-monitor
-  - title: Troubleshoot an HA formation
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation
-  - title: Check HA synchronization status
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status
-  - title: Troubleshooting BGP
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
-  - title: SD-WAN related diagnose commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/818746/sd-wan-related-diagnose-commands
-  - title: Understanding SD-WAN related logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/856781/understanding-sd-wan-related-logs
-  - title: Log-related diagnostic commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands
-  - title: SNMP OID for logs that failed to send
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668490/snmp-oid-for-logs-that-failed-to-send
-  - title: Troubleshooting process for FortiGuard updates
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates
-  - title: Verifying connectivity to FortiGuard
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/703926/verifying-connectivity-to-fortiguard
-  - title: FortiGuard server settings
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/691153/fortiguard-server-settings
-  - title: DNS troubleshooting
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/126629/dns-troubleshooting
-  - title: Troubleshooting for DNS filter
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/150448/troubleshooting-for-dns-filter
-  - title: VXLAN troubleshooting
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/386565/vxlan-troubleshooting
-  - title: Diagnosing NPU-based interfaces
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/926361/diagnosing-npu-based-interfaces
-  - title: Troubleshooting your installation
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation
-  - title: Using a session table
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table
-  - title: Verifying the correct firewall policy is being used
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used
-  - title: Seven-day rolling counter for policy hit counters
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters
-  - title: ARP table
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/473534/arp-table
-  - title: Checking FortiOS network settings
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings
-  - title: Verifying the correct route is being used
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/838132/verifying-the-correct-route-is-being-used
-  - title: Verifying routing table contents in NAT mode
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221343/verifying-routing-table-contents-in-nat-mode
-  - title: 'Static & dynamic routing monitor'
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/655407/static-dynamic-routing-monitor
-  - title: DHCP monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/38214/dhcp-monitor
-  - title: No session timeout
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/743069/no-session-timeout
-  - title: Full cone NAT for fixed port range IP pools
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/949754/full-cone-nat-for-fixed-port-range-ip-pools-new
-  - title: Controlling return path with auxiliary session
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/14295/controlling-return-path-with-auxiliary-session
-  - title: Testing an antivirus profile
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/315155/testing-an-antivirus-profile
-  - title: ZTNA troubleshooting and debugging commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/286458/ztna-troubleshooting-and-debugging-commands
-  - title: Checking the hardware connections
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/165256/checking-the-hardware-connections
-  - title: Interface MTU packet size
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/596096/interface-mtu-packet-size
-  - title: WAN optimization - testing and troubleshooting the configuration
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/98874/testing-and-troubleshooting-the-configuration
-  - title: FortiToken troubleshooting and diagnosis
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/180506/troubleshooting-and-diagnosis
-  - title: Checking the logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/458906/checking-the-logs
-  - title: 'CLI troubleshooting cheat sheet (FortiOS)'
-    url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
-  - title: Troubleshooting methodologies
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
-  - title: Troubleshooting scenarios
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/517124/troubleshooting-scenarios
-  - title: Checking CPU and memory resources
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources
-  - title: Troubleshooting high CPU usage
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage
-  - title: Conserve mode
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode
-  - title: IPsec related diagnose commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands
-  - title: Understanding VPN related logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/834425/understanding-vpn-related-logs
-  - title: IPsec monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221346/ipsec-monitor
-  - title: SSL VPN troubleshooting - common issues
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues
-  - title: SSL-VPN monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/28104/ssl-vpn-monitor
-  - title: Troubleshoot an HA formation
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation
-  - title: Check HA synchronization status
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status
-  - title: Troubleshooting BGP
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
-  - title: SD-WAN related diagnose commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/818746/sd-wan-related-diagnose-commands
-  - title: Understanding SD-WAN related logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/856781/understanding-sd-wan-related-logs
-  - title: Log-related diagnostic commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands
-  - title: SNMP OID for logs that failed to send
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668490/snmp-oid-for-logs-that-failed-to-send
-  - title: Troubleshooting process for FortiGuard updates
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates
-  - title: Verifying connectivity to FortiGuard
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/703926/verifying-connectivity-to-fortiguard
-  - title: FortiGuard server settings
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/691153/fortiguard-server-settings
-  - title: DNS troubleshooting
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/126629/dns-troubleshooting
-  - title: Troubleshooting for DNS filter
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/150448/troubleshooting-for-dns-filter
-  - title: VXLAN troubleshooting
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/386565/vxlan-troubleshooting
-  - title: Diagnosing NPU-based interfaces
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/926361/diagnosing-npu-based-interfaces
-  - title: Troubleshooting your installation
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation
-  - title: Using a session table
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table
-  - title: Verifying the correct firewall policy is being used
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used
-  - title: Seven-day rolling counter for policy hit counters
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters
-  - title: ARP table
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/473534/arp-table
-  - title: Checking FortiOS network settings
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings
-  - title: Verifying the correct route is being used
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/838132/verifying-the-correct-route-is-being-used
-  - title: Verifying routing table contents in NAT mode
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221343/verifying-routing-table-contents-in-nat-mode
-  - title: 'Static & dynamic routing monitor'
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/655407/static-dynamic-routing-monitor
-  - title: DHCP monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/38214/dhcp-monitor
-  - title: No session timeout
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/743069/no-session-timeout
-  - title: Full cone NAT for fixed port range IP pools
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/949754/full-cone-nat-for-fixed-port-range-ip-pools-new
-  - title: Controlling return path with auxiliary session
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/14295/controlling-return-path-with-auxiliary-session
-  - title: Testing an antivirus profile
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/315155/testing-an-antivirus-profile
-  - title: ZTNA troubleshooting and debugging commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/286458/ztna-troubleshooting-and-debugging-commands
-  - title: Checking the hardware connections
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/165256/checking-the-hardware-connections
-  - title: Interface MTU packet size
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/596096/interface-mtu-packet-size
-  - title: WAN optimization - testing and troubleshooting the configuration
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/98874/testing-and-troubleshooting-the-configuration
-  - title: FortiToken troubleshooting and diagnosis
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/180506/troubleshooting-and-diagnosis
-  - title: Checking the logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/458906/checking-the-logs
-  - title: 'CLI troubleshooting cheat sheet (FortiOS)'
-    url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
-  - title: Troubleshooting methodologies
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
-  - title: Troubleshooting scenarios
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/517124/troubleshooting-scenarios
-  - title: Checking CPU and memory resources
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/152469/checking-cpu-and-memory-resources
-  - title: Troubleshooting high CPU usage
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/232929/troubleshooting-high-cpu-usage
-  - title: Conserve mode
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/194558/conserve-mode
-  - title: IPsec related diagnose commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands
-  - title: Understanding VPN related logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/834425/understanding-vpn-related-logs
-  - title: IPsec monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221346/ipsec-monitor
-  - title: SSL VPN troubleshooting - common issues
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues
-  - title: SSL-VPN monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/28104/ssl-vpn-monitor
-  - title: Troubleshoot an HA formation
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation
-  - title: Check HA synchronization status
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status
-  - title: Troubleshooting BGP
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
-  - title: SD-WAN related diagnose commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/818746/sd-wan-related-diagnose-commands
-  - title: Understanding SD-WAN related logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/856781/understanding-sd-wan-related-logs
-  - title: Log-related diagnostic commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668197/log-related-diagnostic-commands
-  - title: SNMP OID for logs that failed to send
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/668490/snmp-oid-for-logs-that-failed-to-send
-  - title: Troubleshooting process for FortiGuard updates
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates
-  - title: Verifying connectivity to FortiGuard
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/703926/verifying-connectivity-to-fortiguard
-  - title: FortiGuard server settings
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/691153/fortiguard-server-settings
-  - title: DNS troubleshooting
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/126629/dns-troubleshooting
-  - title: Troubleshooting for DNS filter
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/150448/troubleshooting-for-dns-filter
-  - title: VXLAN troubleshooting
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/386565/vxlan-troubleshooting
-  - title: Diagnosing NPU-based interfaces
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/926361/diagnosing-npu-based-interfaces
-  - title: Troubleshooting your installation
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/36241/troubleshooting-your-installation
-  - title: Using a session table
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table
-  - title: Verifying the correct firewall policy is being used
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used
-  - title: Seven-day rolling counter for policy hit counters
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/290923/seven-day-rolling-counter-for-policy-hit-counters
-  - title: ARP table
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/473534/arp-table
-  - title: Checking FortiOS network settings
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/836009/checking-fortios-network-settings
-  - title: Verifying the correct route is being used
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/838132/verifying-the-correct-route-is-being-used
-  - title: Verifying routing table contents in NAT mode
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221343/verifying-routing-table-contents-in-nat-mode
-  - title: 'Static & dynamic routing monitor'
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/655407/static-dynamic-routing-monitor
-  - title: DHCP monitor
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/38214/dhcp-monitor
-  - title: No session timeout
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/743069/no-session-timeout
-  - title: Full cone NAT for fixed port range IP pools
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/949754/full-cone-nat-for-fixed-port-range-ip-pools-new
-  - title: Controlling return path with auxiliary session
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/14295/controlling-return-path-with-auxiliary-session
-  - title: Testing an antivirus profile
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/315155/testing-an-antivirus-profile
-  - title: ZTNA troubleshooting and debugging commands
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/286458/ztna-troubleshooting-and-debugging-commands
-  - title: Checking the hardware connections
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/165256/checking-the-hardware-connections
-  - title: Interface MTU packet size
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/596096/interface-mtu-packet-size
-  - title: WAN optimization - testing and troubleshooting the configuration
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/98874/testing-and-troubleshooting-the-configuration
-  - title: FortiToken troubleshooting and diagnosis
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/180506/troubleshooting-and-diagnosis
-  - title: Checking the logs
-    url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/458906/checking-the-logs
   - title: 'CLI troubleshooting cheat sheet (FortiOS)'
     url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
   - title: Troubleshooting methodologies
@@ -605,21 +156,39 @@ bindings:
   platform.version:
     command: get system status
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting methodologies
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
   system.health:
     command: get system performance status
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting methodologies
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
   system.process.top:
     command: get system performance top
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting methodologies
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
   system.memory:
     command: get hardware memory
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting methodologies
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
   interface.summary:
     command: get system interface
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting methodologies
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
   route.table:
     command: get router info routing-table all
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting methodologies
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
   system.crashlog:
     command: diagnose debug crashlog read
     verified: doc_claimed
@@ -640,69 +209,135 @@ bindings:
   arp.table:
     command: get system arp
     verified: doc_claimed
+    sources:
+      - title: Using a session table
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/562859/using-a-session-table
   bgp.summary:
     command: get router info bgp summary
     verified: doc_claimed
+    sources:
+      - title: Check HA synchronization status
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/63913/check-ha-synchronization-status
   bgp.neighbors:
     command: get router info bgp neighbors
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting BGP
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
   bgp.prefix.detail:
     command: 'get router info bgp network {prefix}'
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting BGP
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
   route.database:
     command: get router info routing-table database
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting BGP
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
   ospf.status:
     command: get router info ospf status
     verified: doc_claimed
+    sources:
+      - title: 'CLI troubleshooting cheat sheet (FortiOS)'
+        url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
   ospf.neighbors:
     command: get router info ospf neighbor all
     verified: doc_claimed
+    sources:
+      - title: 'CLI troubleshooting cheat sheet (FortiOS)'
+        url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
   ospf.interfaces:
     command: get router info ospf interface
     verified: doc_claimed
+    sources:
+      - title: 'CLI troubleshooting cheat sheet (FortiOS)'
+        url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
   ospf.database:
     command: get router info ospf database brief
     verified: doc_claimed
+    sources:
+      - title: 'CLI troubleshooting cheat sheet (FortiOS)'
+        url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
   route.kernel:
     command: get router info kernel
     verified: doc_claimed
+    sources:
+      - title: Verifying routing table contents in NAT mode
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/221343/verifying-routing-table-contents-in-nat-mode
   interface.physical:
     command: get sys interface physical
     verified: doc_claimed
+    sources:
+      - title: 'CLI troubleshooting cheat sheet (FortiOS)'
+        url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
   interface.transceiver:
     command: get sys interface transceiver
     verified: doc_claimed
+    sources:
+      - title: 'CLI troubleshooting cheat sheet (FortiOS)'
+        url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
   session.count:
     command: get system session status
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting methodologies
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
   dns.config:
     command: show sys dns
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting methodologies
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
   utm.webfilter.stats:
     command: get webfilter ftgd-statistics
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting methodologies
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
   utm.ips.memory:
     command: get ips session
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting methodologies
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/321075/troubleshooting-methodologies
   vpn.ipsec.tunnel.summary:
     command: get vpn ipsec tunnel summary
     verified: doc_claimed
+    sources:
+      - title: IPsec related diagnose commands
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/44240/ipsec-related-diagnose-commands
   vpn.ssl.sessions:
     command: get vpn ssl monitor
     verified: doc_claimed
+    sources:
+      - title: SSL VPN troubleshooting - common issues
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/993282/troubleshooting-common-issues
   ha.status:
     command: get system ha status
     verified: doc_claimed
+    sources:
+      - title: Troubleshoot an HA formation
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/946059/troubleshoot-an-ha-formation
   routing.protocols:
     command: get router info protocols
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting BGP
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
   bfd.neighbors:
     command: get router info bfd neighbor
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting BGP
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
   npu.portmap:
     command: get hardware npu np6 port-list
     verified: doc_claimed
+    sources:
+      - title: Diagnosing NPU-based interfaces
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/926361/diagnosing-npu-based-interfaces
   fortiguard.servers:
     command: diagnose debug rating
     verified: doc_claimed
@@ -714,6 +349,9 @@ bindings:
   fortiguard.webfilter.status:
     command: get webfilter status
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting process for FortiGuard updates
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates
   auth.fsso.serverstatus:
     command: diagnose debug authd fsso server-status
     verified: doc_claimed
@@ -741,17 +379,32 @@ bindings:
   interface.config:
     command: 'show system interface {if}'
     verified: doc_claimed
+    sources:
+      - title: 'CLI troubleshooting cheat sheet (FortiOS)'
+        url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
   interface.detail:
     command: 'get hardware nic {if}'
     verified: doc_claimed
+    sources:
+      - title: 'CLI troubleshooting cheat sheet (FortiOS)'
+        url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
   logging.filter:
     command: execute log filter category 0
     verified: doc_claimed
     teardown: execute log filter reset
+    sources:
+      - title: Verifying the correct firewall policy is being used
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/525166/verifying-the-correct-firewall-policy-is-being-used
   session.filter:
     command: diagnose sys session filter dport 179
     verified: doc_claimed
     teardown: diagnose sys session filter clear
+    sources:
+      - title: Troubleshooting BGP
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/55339/troubleshooting-bgp
   reachability.ping:
     command: execute ping service.fortiguard.net
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting process for FortiGuard updates
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates

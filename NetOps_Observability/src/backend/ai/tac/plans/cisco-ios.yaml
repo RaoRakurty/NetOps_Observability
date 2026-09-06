@@ -17,7 +17,8 @@ profile: cisco/ios
 display: Cisco IOS
 version: correlix-tac-plan-cisco-ios-2026-09-05
 
-# The dialect's default citation set. A doc_claimed binding inherits it.
+# The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding
+# cites its own page(s) below; this list never rides on a plan step.
 sources:
   - title: 'Cisco IOS Command References'
     url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
@@ -42,30 +43,70 @@ bindings:
   system.version:
     command: show version
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Command References'
+        url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
+        retrieved: 2026-09-05
   system.inventory:
     command: show inventory
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Command References'
+        url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
+        retrieved: 2026-09-05
   system.uptime:
     command: show version
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Command References'
+        url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
+        retrieved: 2026-09-05
   hardware.environment:
     command: show environment all
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Command References'
+        url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
+        retrieved: 2026-09-05
   interface.brief:
     command: show ip interface brief
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Command References'
+        url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
+        retrieved: 2026-09-05
   interface.counters:
     command: show interfaces counters
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Command References'
+        url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
+        retrieved: 2026-09-05
   route.summary:
     command: show ip route summary
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Command References'
+        url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
+        retrieved: 2026-09-05
   logging.recent:
     command: show logging
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Command References'
+        url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
+        retrieved: 2026-09-05
   config.running:
     command: show running-config
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Command References'
+        url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
+        retrieved: 2026-09-05
   tech.support:
     command: show tech-support
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Command References'
+        url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-2m-t/products-command-reference-list.html
+        retrieved: 2026-09-05

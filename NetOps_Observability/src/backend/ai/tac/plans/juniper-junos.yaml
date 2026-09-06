@@ -19,7 +19,8 @@ profile: juniper/junos
 display: Juniper Junos
 version: correlix-tac-plan-juniper-junos-2026-09-05
 
-# The dialect's default citation set. A doc_claimed binding inherits it.
+# The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding
+# cites its own page(s) below; this list never rides on a plan step.
 sources:
   - title: 'Junos OS CLI Explorer — operational mode commands'
     url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
@@ -53,148 +54,6 @@ sources:
     url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
   - title: EVPN Type-2 and Type-5 route coexistence
     url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
-  - title: 'Junos OS CLI reference (command pages cited per issue)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
-  - title: 'Data Collection for Customer Support (JTAC)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
-  - title: 'request support information — Junos CLI reference'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
-  - title: Troubleshooting BGP Sessions
-    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
-  - title: BGP Session Flaps
-    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
-  - title: Understanding Hidden Routes
-    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
-  - title: Understanding the Layered MPLS Troubleshooting Model
-    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
-  - title: Troubleshooting MPLS
-    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
-  - title: Layer 3 VPNs Troubleshooting
-    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
-  - title: Troubleshoot Interfaces
-    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
-  - title: Troubleshooting an EX Series Virtual Chassis
-    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
-  - title: 'System Troubleshooting (core files)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
-  - title: Understand Chassis Alarms
-    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
-  - title: EVPN Type-2 and Type-5 route coexistence
-    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
-  - title: 'Junos OS CLI reference (command pages cited per issue)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
-  - title: 'Data Collection for Customer Support (JTAC)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
-  - title: 'request support information — Junos CLI reference'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
-  - title: Troubleshooting BGP Sessions
-    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
-  - title: BGP Session Flaps
-    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
-  - title: Understanding Hidden Routes
-    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
-  - title: Understanding the Layered MPLS Troubleshooting Model
-    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
-  - title: Troubleshooting MPLS
-    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
-  - title: Layer 3 VPNs Troubleshooting
-    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
-  - title: Troubleshoot Interfaces
-    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
-  - title: Troubleshooting an EX Series Virtual Chassis
-    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
-  - title: 'System Troubleshooting (core files)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
-  - title: Understand Chassis Alarms
-    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
-  - title: EVPN Type-2 and Type-5 route coexistence
-    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
-  - title: 'Junos OS CLI reference (command pages cited per issue)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
-  - title: 'Data Collection for Customer Support (JTAC)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
-  - title: 'request support information — Junos CLI reference'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
-  - title: Troubleshooting BGP Sessions
-    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
-  - title: BGP Session Flaps
-    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
-  - title: Understanding Hidden Routes
-    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
-  - title: Understanding the Layered MPLS Troubleshooting Model
-    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
-  - title: Troubleshooting MPLS
-    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
-  - title: Layer 3 VPNs Troubleshooting
-    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
-  - title: Troubleshoot Interfaces
-    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
-  - title: Troubleshooting an EX Series Virtual Chassis
-    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
-  - title: 'System Troubleshooting (core files)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
-  - title: Understand Chassis Alarms
-    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
-  - title: EVPN Type-2 and Type-5 route coexistence
-    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
-  - title: 'Junos OS CLI reference (command pages cited per issue)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
-  - title: 'Data Collection for Customer Support (JTAC)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
-  - title: 'request support information — Junos CLI reference'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
-  - title: Troubleshooting BGP Sessions
-    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
-  - title: BGP Session Flaps
-    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
-  - title: Understanding Hidden Routes
-    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
-  - title: Understanding the Layered MPLS Troubleshooting Model
-    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
-  - title: Troubleshooting MPLS
-    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
-  - title: Layer 3 VPNs Troubleshooting
-    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
-  - title: Troubleshoot Interfaces
-    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
-  - title: Troubleshooting an EX Series Virtual Chassis
-    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
-  - title: 'System Troubleshooting (core files)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
-  - title: Understand Chassis Alarms
-    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
-  - title: EVPN Type-2 and Type-5 route coexistence
-    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
-  - title: 'Junos OS CLI reference (command pages cited per issue)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
-  - title: 'Data Collection for Customer Support (JTAC)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
-  - title: 'request support information — Junos CLI reference'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
-  - title: Troubleshooting BGP Sessions
-    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
-  - title: BGP Session Flaps
-    url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
-  - title: Understanding Hidden Routes
-    url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
-  - title: Understanding the Layered MPLS Troubleshooting Model
-    url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
-  - title: Troubleshooting MPLS
-    url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
-  - title: Layer 3 VPNs Troubleshooting
-    url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
-  - title: Troubleshoot Interfaces
-    url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
-  - title: Troubleshooting an EX Series Virtual Chassis
-    url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
-  - title: 'System Troubleshooting (core files)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/system-mgmt-monitoring/topics/topic-map/troubleshooting-system-management.html
-  - title: Understand Chassis Alarms
-    url: https://www.juniper.net/documentation/us/en/software/junos/chassis/topics/topic-map/chassis-guide-tm-error-handling-alarms.html
-  - title: EVPN Type-2 and Type-5 route coexistence
-    url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
-  - title: 'Junos OS CLI reference (command pages cited per issue)'
-    url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/
 
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
@@ -262,6 +121,9 @@ bindings:
   route.summary:
     command: show route summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/prefix-limit-edit-protocols-bgp.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/prefix-limit-edit-protocols-bgp.html
   route.ospf:
     command: show route protocol ospf
     verified: doc_claimed
@@ -304,6 +166,9 @@ bindings:
   ospf.database:
     command: show ospf database
     verified: doc_claimed
+    sources:
+      - title: Understanding the Layered MPLS Troubleshooting Model
+        url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
   ospf.database.router:
     command: 'show ospf database router advertising-router {rid} detail'
     verified: doc_claimed
@@ -316,21 +181,36 @@ bindings:
   isis.adjacency:
     command: show isis adjacency
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-adjacency.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-adjacency.html
   isis.adjacency.detail:
     command: show isis adjacency extensive
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-adjacency.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-adjacency.html
   isis.database:
     command: show isis database
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html
   isis.database.detail:
     command: show isis database extensive
     verified: doc_claimed
   bgp.summary:
     command: show bgp summary
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting BGP Sessions
+        url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
   bgp.neighbor.detail:
     command: 'show bgp neighbor {peer}'
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting BGP Sessions
+        url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
   bgp.neighbor.received:
     command: 'show route receive-protocol bgp {peer}'
     verified: doc_claimed
@@ -346,6 +226,9 @@ bindings:
   mpls.ldp.neighbor:
     command: show ldp neighbor
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ldp-session.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ldp-session.html
   mpls.ldp.bindings:
     command: show ldp database
     verified: doc_claimed
@@ -361,6 +244,9 @@ bindings:
   logging.recent:
     command: show log messages
     verified: doc_claimed
+    sources:
+      - title: 'Data Collection for Customer Support (JTAC)'
+        url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
   logging.ospf:
     command: 'show log messages | match OSPF'
     verified: doc_claimed
@@ -376,285 +262,570 @@ bindings:
   interface.counters.extensive:
     command: show interfaces extensive
     verified: doc_claimed
+    sources:
+      - title: 'Data Collection for Customer Support (JTAC)'
+        url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
   config.running.redacted:
     command: 'show configuration | except SECRET-DATA'
     verified: doc_claimed
+    sources:
+      - title: 'Data Collection for Customer Support (JTAC)'
+        url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
   route.resolution.unresolved:
     command: show route resolution unresolved detail
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting BGP Sessions
+        url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
   fib.table:
     command: show route forwarding-table
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting BGP Sessions
+        url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/troubleshooting-bgp-sessions.html
   bgp.group:
     command: show bgp group
     verified: doc_claimed
+    sources:
+      - title: BGP Session Flaps
+        url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
   bgp.damping.suppressed:
     command: show route damping suppressed
     verified: doc_claimed
+    sources:
+      - title: BGP Session Flaps
+        url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
   bgp.damping.suppressed.detail:
     command: show route damping suppressed detail
     verified: doc_claimed
+    sources:
+      - title: BGP Session Flaps
+        url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
   bgp.damping.policy:
     command: show policy damping
     verified: doc_claimed
+    sources:
+      - title: BGP Session Flaps
+        url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
   config.commit.history:
     command: show system commit
     verified: doc_claimed
+    sources:
+      - title: BGP Session Flaps
+        url: https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-session-flaps.html
   bgp.routes.received:
     command: 'show route receive-protocol bgp {peer}'
     verified: doc_claimed
+    sources:
+      - title: Understanding Hidden Routes
+        url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
   bgp.routes.received.hidden:
     command: 'show route receive-protocol bgp {peer} hidden'
     verified: doc_claimed
+    sources:
+      - title: Understanding Hidden Routes
+        url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
   route.hidden.detail:
     command: show route hidden detail
     verified: doc_claimed
+    sources:
+      - title: Understanding Hidden Routes
+        url: https://www.juniper.net/documentation/en_US/junos/topics/concept/hidden-routes-understanding.html
   bgp.routes.advertised:
     command: 'show route advertising-protocol bgp {peer}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/en_US/junos/topics/usage-guidelines/routing-applying-policies-to-bgp-routes.html'
+        url: https://www.juniper.net/documentation/en_US/junos/topics/usage-guidelines/routing-applying-policies-to-bgp-routes.html
   route.protocol.bgp:
     command: show route protocol bgp
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/en_US/junos/topics/usage-guidelines/routing-applying-policies-to-bgp-routes.html'
+        url: https://www.juniper.net/documentation/en_US/junos/topics/usage-guidelines/routing-applying-policies-to-bgp-routes.html
   route.protocol.static:
     command: show route protocol static
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/en_US/junos/topics/usage-guidelines/routing-applying-policies-to-bgp-routes.html'
+        url: https://www.juniper.net/documentation/en_US/junos/topics/usage-guidelines/routing-applying-policies-to-bgp-routes.html
   route.protocol.direct:
     command: show route protocol direct
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/en_US/junos/topics/usage-guidelines/routing-applying-policies-to-bgp-routes.html'
+        url: https://www.juniper.net/documentation/en_US/junos/topics/usage-guidelines/routing-applying-policies-to-bgp-routes.html
   route.prefix.detail:
     command: 'show route {prefix} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/en_US/junos12.3/topics/reference/general/bgp-aigp-path-selection-algorithm-understanding.html'
+        url: https://www.juniper.net/documentation/en_US/junos12.3/topics/reference/general/bgp-aigp-path-selection-algorithm-understanding.html
   route.prefix.extensive:
     command: 'show route {prefix} extensive'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/en_US/junos12.3/topics/reference/general/bgp-aigp-path-selection-algorithm-understanding.html'
+        url: https://www.juniper.net/documentation/en_US/junos12.3/topics/reference/general/bgp-aigp-path-selection-algorithm-understanding.html
   ospf.neighbor.detail:
     command: show ospf neighbor extensive
     verified: doc_claimed
+    sources:
+      - title: Understanding the Layered MPLS Troubleshooting Model
+        url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
   ospf.neighbors.instance:
     command: 'show ospf neighbor {vrf-scope}'
     verified: doc_claimed
+    sources:
+      - title: Understanding the Layered MPLS Troubleshooting Model
+        url: https://www.juniper.net/documentation/en_US/junos/topics/task/troubleshooting/mpls-troubleshooting-model.html
   ospf.database.extensive:
     command: show ospf database extensive
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/ospf/topics/ref/command/show-ospf-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/ospf/topics/ref/command/show-ospf-database.html
   isis.overview:
     command: show isis overview
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-adjacency.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-adjacency.html
   isis.database.extensive:
     command: show isis database extensive
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html
   isis.spf.log:
     command: show isis spf log
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html
   isis.spf.results:
     command: show isis spf results
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html
   route.protocol.isis:
     command: show route protocol isis
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-isis-database.html
   mpls.ldp.session:
     command: show ldp session
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ldp-session.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ldp-session.html
   mpls.ldp.session.detail:
     command: show ldp session detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ldp-session.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ldp-session.html
   mpls.interface:
     command: show mpls interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ldp-session.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ldp-session.html
   mpls.inet3:
     command: show route table inet.3
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting MPLS
+        url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
   mpls.table:
     command: show route table mpls.0
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting MPLS
+        url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
   mpls.lsp:
     command: show mpls lsp
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting MPLS
+        url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
   mpls.lsp.extensive:
     command: show mpls lsp extensive
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting MPLS
+        url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
   mpls.lsp.statistics:
     command: show mpls lsp statistics
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting MPLS
+        url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
   interface.list:
     command: show interfaces
     verified: doc_claimed
+    sources:
+      - title: Layer 3 VPNs Troubleshooting
+        url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
   interface.terse:
     command: show interfaces terse
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ethernet-switching-vxlan-tunnel-end-point-remote.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ethernet-switching-vxlan-tunnel-end-point-remote.html
   interface.media:
     command: 'show interfaces {if} media'
     verified: doc_claimed
+    sources:
+      - title: Troubleshoot Interfaces
+        url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
   logging.files:
     command: show log
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-storage.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-storage.html
   qos.queue.counters:
     command: show interfaces queue
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-queue.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-queue.html
   qos.queue.counters.one:
     command: 'show interfaces queue {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-queue.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-queue.html
   qos.interface.map:
     command: show class-of-service interface
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-queue.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-queue.html
   qos.interface.detail:
     command: 'show class-of-service interface {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-queue.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-queue.html
   route.table:
     command: show route
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-pim-neighbors.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-pim-neighbors.html
   version.info:
     command: show version
     verified: doc_claimed
+    sources:
+      - title: 'Data Collection for Customer Support (JTAC)'
+        url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
   inventory.hardware:
     command: show chassis hardware
     verified: doc_claimed
+    sources:
+      - title: 'Data Collection for Customer Support (JTAC)'
+        url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
   environment.all:
     command: show chassis environment
     verified: doc_claimed
+    sources:
+      - title: 'Data Collection for Customer Support (JTAC)'
+        url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
   alarms.chassis:
     command: show chassis alarms
     verified: doc_claimed
+    sources:
+      - title: 'Data Collection for Customer Support (JTAC)'
+        url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
   alarms.system:
     command: show system alarms
     verified: doc_claimed
+    sources:
+      - title: 'Data Collection for Customer Support (JTAC)'
+        url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
   evpn.ipprefix.db:
     command: show evpn ip-prefix-database
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html
   evpn.ipprefix.db.extensive:
     command: show evpn ip-prefix-database extensive
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html
   evpn.database.extensive:
     command: show evpn database extensive
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html
   evpn.instance.extensive:
     command: show evpn instance extensive
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html
   evpn.macip.table:
     command: show ethernet-switching mac-ip-table
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html
   transceiver.dom:
     command: show interfaces diagnostics optics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-extensive.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-extensive.html
   process.list.extensive:
     command: show system processes extensive
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-processes.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-processes.html
   cpu.utilization:
     command: show chassis routing-engine
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-processes.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-processes.html
   core.dumps:
     command: show system core-dumps
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-processes.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-processes.html
   rsvp.session:
     command: show rsvp session
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting MPLS
+        url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
   rsvp.neighbor:
     command: show rsvp neighbor
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting MPLS
+        url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
   rsvp.interface:
     command: show rsvp interface
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting MPLS
+        url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
   rsvp.interface.extensive:
     command: show rsvp interface extensive
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting MPLS
+        url: https://www.juniper.net/documentation/us/en/software/junos/mpls/topics/topic-map/troubleshooting-mpls.html
   l3vpn.bgp.table:
     command: show route table bgp.l3vpn.0 extensive
     verified: doc_claimed
+    sources:
+      - title: Layer 3 VPNs Troubleshooting
+        url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
   l3vpn.bgp.table.hidden:
     command: show route table bgp.l3vpn.0 hidden
     verified: doc_claimed
+    sources:
+      - title: Layer 3 VPNs Troubleshooting
+        url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
   vrf.routes.extensive:
     command: 'show route extensive table {vrf-name}'
     verified: doc_claimed
+    sources:
+      - title: Layer 3 VPNs Troubleshooting
+        url: https://www.juniper.net/documentation/us/en/software/junos/vpn-l3/topics/topic-map/l3-vpns-troubleshooting.html
   vxlan.vtep.remote:
     command: show ethernet-switching vxlan-tunnel-end-point remote
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ethernet-switching-vxlan-tunnel-end-point-remote.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ethernet-switching-vxlan-tunnel-end-point-remote.html
   evpn.database:
     command: show evpn database
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ethernet-switching-vxlan-tunnel-end-point-remote.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ethernet-switching-vxlan-tunnel-end-point-remote.html
   evpn.ipprefix.db.imported:
     command: show evpn ip-prefix-database direction imported
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html
   evpn.ipprefix.db.exported:
     command: show evpn ip-prefix-database direction exported
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-evpn-ip-prefix-database.html
   vc.status:
     command: show virtual-chassis
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting an EX Series Virtual Chassis
+        url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
   vc.ports:
     command: show virtual-chassis vc-port
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting an EX Series Virtual Chassis
+        url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
   vc.ports.all:
     command: show virtual-chassis vc-port all-members
     verified: doc_claimed
+    sources:
+      - title: Troubleshooting an EX Series Virtual Chassis
+        url: https://www.juniper.net/documentation/us/en/software/junos/virtual-chassis/topics/task/virtual-chassis-ex4200.html
   lacp.interfaces:
     command: show lacp interfaces
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-lacp-interfaces.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-lacp-interfaces.html
   lacp.counters:
     command: show lacp statistics interfaces
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-lacp-interfaces.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-lacp-interfaces.html
   transceiver.dom.one:
     command: 'show interfaces diagnostics optics {if}'
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-diagnostics-optics-ex-series.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-diagnostics-optics-ex-series.html
   chassis.fpc:
     command: show chassis fpc
     verified: doc_claimed
+    sources:
+      - title: Troubleshoot Interfaces
+        url: https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/troubleshooting-interfaces.html
   chassis.fpc.detail:
     command: show chassis fpc detail
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-fpc.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-fpc.html
   chassis.fpc.errors:
     command: show chassis fpc errors
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-fpc.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-fpc.html
   inventory.firmware:
     command: show chassis firmware
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-fpc.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-fpc.html
   process.list.summary:
     command: show system processes summary
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-routing-engine.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-routing-engine.html
   memory.utilization:
     command: show chassis routing-engine
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-routing-engine.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-routing-engine.html
   storage.usage:
     command: show system storage
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-routing-engine.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-chassis-routing-engine.html
   session.users:
     command: show system users
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-commit.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-commit.html
   ddos.violations:
     command: show ddos-protection protocols violations
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html
   ddos.protocols:
     command: show ddos-protection protocols
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html
   ddos.protocols.statistics:
     command: show ddos-protection protocols statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html
   ddos.statistics:
     command: show ddos-protection statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html
   ddos.culprit.flows:
     command: show ddos-protection protocols culprit-flows
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ddos-protocols-violations.html
   ntp.status:
     command: show ntp status
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ntp-status.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ntp-status.html
   ntp.associations:
     command: show ntp associations
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ntp-status.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-ntp-status.html
   snmp.stats:
     command: show snmp statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-snmp-statistics.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-snmp-statistics.html
   snmp.stats.subagents:
     command: show snmp statistics subagents
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-snmp-statistics.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-snmp-statistics.html
   aaa.stats:
     command: show network-access aaa statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-network-access-aaa-statistics.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-network-access-aaa-statistics.html
   dhcp.relay.stats:
     command: show dhcp relay statistics
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-dhcp-relay-statistics.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-dhcp-relay-statistics.html
   multicast.pim.neighbors:
     command: show pim neighbors
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-pim-neighbors.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-pim-neighbors.html
   multicast.igmp.groups:
     command: show igmp group
     verified: doc_claimed
+    sources:
+      - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-pim-neighbors.html'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-pim-neighbors.html

@@ -294,6 +294,50 @@ func loadDetect(n *ynode) (Detect, error) {
 	return d, nil
 }
 
+// normSourceURL is a citation's IDENTITY. Two entries that point at the same
+// page are one citation however their titles were written, so the comparison
+// folds the scheme and host, drops a fragment and an empty trailing slash.
+// Everything after the host keeps its case — a documentation path is
+// case-sensitive and folding it would merge two genuinely different pages.
+func normSourceURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if i := strings.IndexByte(s, '#'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSuffix(s, "/")
+	i := strings.Index(s, "://")
+	if i < 0 {
+		return strings.ToLower(s)
+	}
+	head, rest := strings.ToLower(s[:i+3]), s[i+3:]
+	if j := strings.IndexByte(rest, '/'); j >= 0 {
+		return head + strings.ToLower(rest[:j]) + rest[j:]
+	}
+	return head + strings.ToLower(rest)
+}
+
+// dedupeSources keeps the FIRST entry for each page. It is applied at load, so
+// no consumer has to defend itself against a citation list that repeats: the
+// Nokia SR Linux pack carried its 61 pages six times over, and every binding
+// that inherited that pool put 366 links under one command in the escalation
+// preview.
+func dedupeSources(in []Source) []Source {
+	if len(in) < 2 {
+		return in
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]Source, 0, len(in))
+	for _, s := range in {
+		key := normSourceURL(s.URL)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+	return out
+}
+
 func loadSources(n *ynode) ([]Source, error) {
 	items, err := ylist(n, "sources")
 	if err != nil {
@@ -324,7 +368,7 @@ func loadSources(n *ynode) ([]Source, error) {
 		}
 		out = append(out, Source{Title: title, URL: url, Retrieved: ret})
 	}
-	return out, nil
+	return dedupeSources(out), nil
 }
 
 // loadPlan parses and validates one plans/<dialect>.yaml.
@@ -523,10 +567,17 @@ func loadBinding(c *Catalog, dialect, intent string, n *ynode, planSources []Sou
 	if err != nil {
 		return Binding{}, fmt.Errorf("binding %q: %w", intent, err)
 	}
-	if len(srcs) == 0 {
-		srcs = planSources
+	// A binding's `sources` are the pages that establish THIS command, and
+	// nothing else — a binding that cites none gets none. The plan-level list
+	// is the file's BIBLIOGRAPHY: it still answers "where did this dialect come
+	// from" and it still satisfies the doc_claimed citation requirement below,
+	// but it never becomes a binding's own citation set. It used to
+	// (`srcs = planSources`), which put the whole pool on every step of every
+	// plan — 8,418 links on one Nokia SR Linux preview, 2026-09-06.
+	if len(srcs) > maxBindingSources {
+		srcs = srcs[:maxBindingSources]
 	}
-	if Verified(ver) == VerifiedDocClaimed && len(srcs) == 0 {
+	if Verified(ver) == VerifiedDocClaimed && len(srcs) == 0 && len(planSources) == 0 {
 		return Binding{}, fmt.Errorf("binding %q is doc_claimed and neither it nor its plan carries `sources` — an unverified command must say where it came from", intent)
 	}
 	if exception != "" && len(srcs) == 0 {

@@ -19,521 +19,12 @@ profile: nokia/sros
 display: Nokia SR OS
 version: correlix-tac-plan-nokia-sros-2026-09-05
 
-# The dialect's default citation set. A doc_claimed binding inherits it.
+# The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding
+# cites its own page(s) below; this list never rides on a plan step.
 sources:
   - title: Nokia 7750 SR OS Basic System Configuration / Show Command Reference
     url: https://documentation.nokia.com/sr/
     retrieved: 2026-09-05
-  - title: 'SR OS 22.10.R2 — Clear, Monitor, Show, and Tools CLI Command Reference Guide (book index)'
-    url: https://documentation.nokia.com/sr/22-10-2/titles/clear-monitor-show-tools-commands.html
-  - title: 'CMST Command Reference Guide — a Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html
-  - title: 'CMST Command Reference Guide — b Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-b-commands.html
-  - title: 'CMST Command Reference Guide — c Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
-  - title: 'CMST Command Reference Guide — d Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
-  - title: 'CMST Command Reference Guide — e Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-e-commands.html
-  - title: 'CMST Command Reference Guide — f Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html
-  - title: 'CMST Command Reference Guide — h Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-h-commands.html
-  - title: 'CMST Command Reference Guide — i Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-i-commands.html
-  - title: 'CMST Command Reference Guide — l Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-l-commands.html
-  - title: 'CMST Command Reference Guide — m Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html
-  - title: 'CMST Command Reference Guide — n Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
-  - title: 'CMST Command Reference Guide — o Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-o-commands.html
-  - title: 'CMST Command Reference Guide — p Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
-  - title: 'CMST Command Reference Guide — q Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-q-commands.html
-  - title: 'CMST Command Reference Guide — r Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html
-  - title: 'CMST Command Reference Guide — s Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
-  - title: 'CMST Command Reference Guide — t Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-t-commands.html
-  - title: 'CMST Command Reference Guide — u Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-u-commands.html
-  - title: 'CMST Command Reference Guide — v Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html
-  - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
-    url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
-  - title: 'SR OS 23.7.R2 Classic CLI Command Reference — d Commands (admin display-config)'
-    url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html
-  - title: 'SR OS Log Events Guide — BGP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bgp.html
-  - title: 'SR OS Log Events Guide — OSPF'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ospf.html
-  - title: 'SR OS Log Events Guide — ISIS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-isis.html
-  - title: 'SR OS Log Events Guide — LDP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ldp.html
-  - title: 'SR OS Log Events Guide — MPLS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-mpls.html
-  - title: 'SR OS Log Events Guide — RSVP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-rsvp.html
-  - title: 'SR OS Log Events Guide — PORT'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-port.html
-  - title: 'SR OS Log Events Guide — CHASSIS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-chassis.html
-  - title: 'SR OS Log Events Guide — LAG'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-lag.html
-  - title: 'SR OS Log Events Guide — SVCMGR'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html
-  - title: 'SR OS Log Events Guide — VRTR'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-vrtr.html
-  - title: 'SR OS Log Events Guide — SYSTEM'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-system.html
-  - title: 'SR OS Log Events Guide — SECURITY'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-security.html
-  - title: 'SR OS Log Events Guide — USER'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-user.html
-  - title: 'SR OS Log Events Guide — SNMP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-snmp.html
-  - title: 'SR OS Log Events Guide — NTP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ntp.html
-  - title: 'SR OS Log Events Guide — STP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-stp.html
-  - title: 'SR OS Log Events Guide — BFD'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bfd.html
-  - title: '7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — OSPF Show, Clear and Debug Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/ospf_show_cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — IS-IS Show, Clear and Debug Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/isis_show_cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — BGP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/bgp_show_cli.html
-  - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
-  - title: '7750 SR MPLS Guide — LDP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
-  - title: '7750 SR OS Basic System Configuration Guide — Show, Clear, Debug and Tools Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.basic/html/system_show_cli.html
-  - title: '7750 SR OS System Basics Guide — System Command Reference (admin command tree)'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0070-10-01/7750_SR_OS_System_Basics_Guide/system-cli-tree.html
-  - title: '7750 SR OS Router Configuration Guide — Show Command Reference'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0073-10-01/7750_SR_OS_Router_Configuration_Guide/router-cli-Show-CLI.html
-  - title: '7750 SR OS Routing Protocols Guide — BGP Show Commands'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0074-HTML/7750_SR_OS_Routing_Protols_Guide/BGP-CLI-Show-CLI.html
-  - title: '7705 SAR 24.4.R1 — Show Router Commands'
-    url: https://documentation.nokia.com/sar/24-4-1/books/services/show-router-commands.html
-  - title: 'SR OS 22.10.R2 — Clear, Monitor, Show, and Tools CLI Command Reference Guide (book index)'
-    url: https://documentation.nokia.com/sr/22-10-2/titles/clear-monitor-show-tools-commands.html
-  - title: 'CMST Command Reference Guide — a Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html
-  - title: 'CMST Command Reference Guide — b Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-b-commands.html
-  - title: 'CMST Command Reference Guide — c Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
-  - title: 'CMST Command Reference Guide — d Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
-  - title: 'CMST Command Reference Guide — e Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-e-commands.html
-  - title: 'CMST Command Reference Guide — f Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html
-  - title: 'CMST Command Reference Guide — h Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-h-commands.html
-  - title: 'CMST Command Reference Guide — i Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-i-commands.html
-  - title: 'CMST Command Reference Guide — l Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-l-commands.html
-  - title: 'CMST Command Reference Guide — m Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html
-  - title: 'CMST Command Reference Guide — n Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
-  - title: 'CMST Command Reference Guide — o Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-o-commands.html
-  - title: 'CMST Command Reference Guide — p Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
-  - title: 'CMST Command Reference Guide — q Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-q-commands.html
-  - title: 'CMST Command Reference Guide — r Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html
-  - title: 'CMST Command Reference Guide — s Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
-  - title: 'CMST Command Reference Guide — t Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-t-commands.html
-  - title: 'CMST Command Reference Guide — u Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-u-commands.html
-  - title: 'CMST Command Reference Guide — v Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html
-  - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
-    url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
-  - title: 'SR OS 23.7.R2 Classic CLI Command Reference — d Commands (admin display-config)'
-    url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html
-  - title: 'SR OS Log Events Guide — BGP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bgp.html
-  - title: 'SR OS Log Events Guide — OSPF'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ospf.html
-  - title: 'SR OS Log Events Guide — ISIS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-isis.html
-  - title: 'SR OS Log Events Guide — LDP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ldp.html
-  - title: 'SR OS Log Events Guide — MPLS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-mpls.html
-  - title: 'SR OS Log Events Guide — RSVP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-rsvp.html
-  - title: 'SR OS Log Events Guide — PORT'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-port.html
-  - title: 'SR OS Log Events Guide — CHASSIS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-chassis.html
-  - title: 'SR OS Log Events Guide — LAG'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-lag.html
-  - title: 'SR OS Log Events Guide — SVCMGR'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html
-  - title: 'SR OS Log Events Guide — VRTR'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-vrtr.html
-  - title: 'SR OS Log Events Guide — SYSTEM'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-system.html
-  - title: 'SR OS Log Events Guide — SECURITY'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-security.html
-  - title: 'SR OS Log Events Guide — USER'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-user.html
-  - title: 'SR OS Log Events Guide — SNMP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-snmp.html
-  - title: 'SR OS Log Events Guide — NTP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ntp.html
-  - title: 'SR OS Log Events Guide — STP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-stp.html
-  - title: 'SR OS Log Events Guide — BFD'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bfd.html
-  - title: '7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — OSPF Show, Clear and Debug Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/ospf_show_cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — IS-IS Show, Clear and Debug Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/isis_show_cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — BGP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/bgp_show_cli.html
-  - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
-  - title: '7750 SR MPLS Guide — LDP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
-  - title: '7750 SR OS Basic System Configuration Guide — Show, Clear, Debug and Tools Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.basic/html/system_show_cli.html
-  - title: '7750 SR OS System Basics Guide — System Command Reference (admin command tree)'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0070-10-01/7750_SR_OS_System_Basics_Guide/system-cli-tree.html
-  - title: '7750 SR OS Router Configuration Guide — Show Command Reference'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0073-10-01/7750_SR_OS_Router_Configuration_Guide/router-cli-Show-CLI.html
-  - title: '7750 SR OS Routing Protocols Guide — BGP Show Commands'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0074-HTML/7750_SR_OS_Routing_Protols_Guide/BGP-CLI-Show-CLI.html
-  - title: '7705 SAR 24.4.R1 — Show Router Commands'
-    url: https://documentation.nokia.com/sar/24-4-1/books/services/show-router-commands.html
-  - title: 'SR OS 22.10.R2 — Clear, Monitor, Show, and Tools CLI Command Reference Guide (book index)'
-    url: https://documentation.nokia.com/sr/22-10-2/titles/clear-monitor-show-tools-commands.html
-  - title: 'CMST Command Reference Guide — a Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html
-  - title: 'CMST Command Reference Guide — b Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-b-commands.html
-  - title: 'CMST Command Reference Guide — c Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
-  - title: 'CMST Command Reference Guide — d Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
-  - title: 'CMST Command Reference Guide — e Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-e-commands.html
-  - title: 'CMST Command Reference Guide — f Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html
-  - title: 'CMST Command Reference Guide — h Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-h-commands.html
-  - title: 'CMST Command Reference Guide — i Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-i-commands.html
-  - title: 'CMST Command Reference Guide — l Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-l-commands.html
-  - title: 'CMST Command Reference Guide — m Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html
-  - title: 'CMST Command Reference Guide — n Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
-  - title: 'CMST Command Reference Guide — o Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-o-commands.html
-  - title: 'CMST Command Reference Guide — p Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
-  - title: 'CMST Command Reference Guide — q Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-q-commands.html
-  - title: 'CMST Command Reference Guide — r Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html
-  - title: 'CMST Command Reference Guide — s Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
-  - title: 'CMST Command Reference Guide — t Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-t-commands.html
-  - title: 'CMST Command Reference Guide — u Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-u-commands.html
-  - title: 'CMST Command Reference Guide — v Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html
-  - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
-    url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
-  - title: 'SR OS 23.7.R2 Classic CLI Command Reference — d Commands (admin display-config)'
-    url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html
-  - title: 'SR OS Log Events Guide — BGP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bgp.html
-  - title: 'SR OS Log Events Guide — OSPF'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ospf.html
-  - title: 'SR OS Log Events Guide — ISIS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-isis.html
-  - title: 'SR OS Log Events Guide — LDP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ldp.html
-  - title: 'SR OS Log Events Guide — MPLS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-mpls.html
-  - title: 'SR OS Log Events Guide — RSVP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-rsvp.html
-  - title: 'SR OS Log Events Guide — PORT'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-port.html
-  - title: 'SR OS Log Events Guide — CHASSIS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-chassis.html
-  - title: 'SR OS Log Events Guide — LAG'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-lag.html
-  - title: 'SR OS Log Events Guide — SVCMGR'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html
-  - title: 'SR OS Log Events Guide — VRTR'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-vrtr.html
-  - title: 'SR OS Log Events Guide — SYSTEM'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-system.html
-  - title: 'SR OS Log Events Guide — SECURITY'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-security.html
-  - title: 'SR OS Log Events Guide — USER'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-user.html
-  - title: 'SR OS Log Events Guide — SNMP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-snmp.html
-  - title: 'SR OS Log Events Guide — NTP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ntp.html
-  - title: 'SR OS Log Events Guide — STP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-stp.html
-  - title: 'SR OS Log Events Guide — BFD'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bfd.html
-  - title: '7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — OSPF Show, Clear and Debug Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/ospf_show_cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — IS-IS Show, Clear and Debug Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/isis_show_cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — BGP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/bgp_show_cli.html
-  - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
-  - title: '7750 SR MPLS Guide — LDP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
-  - title: '7750 SR OS Basic System Configuration Guide — Show, Clear, Debug and Tools Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.basic/html/system_show_cli.html
-  - title: '7750 SR OS System Basics Guide — System Command Reference (admin command tree)'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0070-10-01/7750_SR_OS_System_Basics_Guide/system-cli-tree.html
-  - title: '7750 SR OS Router Configuration Guide — Show Command Reference'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0073-10-01/7750_SR_OS_Router_Configuration_Guide/router-cli-Show-CLI.html
-  - title: '7750 SR OS Routing Protocols Guide — BGP Show Commands'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0074-HTML/7750_SR_OS_Routing_Protols_Guide/BGP-CLI-Show-CLI.html
-  - title: '7705 SAR 24.4.R1 — Show Router Commands'
-    url: https://documentation.nokia.com/sar/24-4-1/books/services/show-router-commands.html
-  - title: 'SR OS 22.10.R2 — Clear, Monitor, Show, and Tools CLI Command Reference Guide (book index)'
-    url: https://documentation.nokia.com/sr/22-10-2/titles/clear-monitor-show-tools-commands.html
-  - title: 'CMST Command Reference Guide — a Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html
-  - title: 'CMST Command Reference Guide — b Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-b-commands.html
-  - title: 'CMST Command Reference Guide — c Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
-  - title: 'CMST Command Reference Guide — d Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
-  - title: 'CMST Command Reference Guide — e Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-e-commands.html
-  - title: 'CMST Command Reference Guide — f Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html
-  - title: 'CMST Command Reference Guide — h Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-h-commands.html
-  - title: 'CMST Command Reference Guide — i Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-i-commands.html
-  - title: 'CMST Command Reference Guide — l Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-l-commands.html
-  - title: 'CMST Command Reference Guide — m Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html
-  - title: 'CMST Command Reference Guide — n Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
-  - title: 'CMST Command Reference Guide — o Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-o-commands.html
-  - title: 'CMST Command Reference Guide — p Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
-  - title: 'CMST Command Reference Guide — q Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-q-commands.html
-  - title: 'CMST Command Reference Guide — r Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html
-  - title: 'CMST Command Reference Guide — s Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
-  - title: 'CMST Command Reference Guide — t Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-t-commands.html
-  - title: 'CMST Command Reference Guide — u Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-u-commands.html
-  - title: 'CMST Command Reference Guide — v Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html
-  - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
-    url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
-  - title: 'SR OS 23.7.R2 Classic CLI Command Reference — d Commands (admin display-config)'
-    url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html
-  - title: 'SR OS Log Events Guide — BGP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bgp.html
-  - title: 'SR OS Log Events Guide — OSPF'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ospf.html
-  - title: 'SR OS Log Events Guide — ISIS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-isis.html
-  - title: 'SR OS Log Events Guide — LDP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ldp.html
-  - title: 'SR OS Log Events Guide — MPLS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-mpls.html
-  - title: 'SR OS Log Events Guide — RSVP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-rsvp.html
-  - title: 'SR OS Log Events Guide — PORT'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-port.html
-  - title: 'SR OS Log Events Guide — CHASSIS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-chassis.html
-  - title: 'SR OS Log Events Guide — LAG'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-lag.html
-  - title: 'SR OS Log Events Guide — SVCMGR'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html
-  - title: 'SR OS Log Events Guide — VRTR'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-vrtr.html
-  - title: 'SR OS Log Events Guide — SYSTEM'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-system.html
-  - title: 'SR OS Log Events Guide — SECURITY'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-security.html
-  - title: 'SR OS Log Events Guide — USER'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-user.html
-  - title: 'SR OS Log Events Guide — SNMP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-snmp.html
-  - title: 'SR OS Log Events Guide — NTP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ntp.html
-  - title: 'SR OS Log Events Guide — STP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-stp.html
-  - title: 'SR OS Log Events Guide — BFD'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bfd.html
-  - title: '7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — OSPF Show, Clear and Debug Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/ospf_show_cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — IS-IS Show, Clear and Debug Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/isis_show_cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — BGP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/bgp_show_cli.html
-  - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
-  - title: '7750 SR MPLS Guide — LDP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
-  - title: '7750 SR OS Basic System Configuration Guide — Show, Clear, Debug and Tools Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.basic/html/system_show_cli.html
-  - title: '7750 SR OS System Basics Guide — System Command Reference (admin command tree)'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0070-10-01/7750_SR_OS_System_Basics_Guide/system-cli-tree.html
-  - title: '7750 SR OS Router Configuration Guide — Show Command Reference'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0073-10-01/7750_SR_OS_Router_Configuration_Guide/router-cli-Show-CLI.html
-  - title: '7750 SR OS Routing Protocols Guide — BGP Show Commands'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0074-HTML/7750_SR_OS_Routing_Protols_Guide/BGP-CLI-Show-CLI.html
-  - title: '7705 SAR 24.4.R1 — Show Router Commands'
-    url: https://documentation.nokia.com/sar/24-4-1/books/services/show-router-commands.html
-  - title: 'SR OS 22.10.R2 — Clear, Monitor, Show, and Tools CLI Command Reference Guide (book index)'
-    url: https://documentation.nokia.com/sr/22-10-2/titles/clear-monitor-show-tools-commands.html
-  - title: 'CMST Command Reference Guide — a Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html
-  - title: 'CMST Command Reference Guide — b Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-b-commands.html
-  - title: 'CMST Command Reference Guide — c Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
-  - title: 'CMST Command Reference Guide — d Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
-  - title: 'CMST Command Reference Guide — e Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-e-commands.html
-  - title: 'CMST Command Reference Guide — f Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-f-commands.html
-  - title: 'CMST Command Reference Guide — h Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-h-commands.html
-  - title: 'CMST Command Reference Guide — i Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-i-commands.html
-  - title: 'CMST Command Reference Guide — l Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-l-commands.html
-  - title: 'CMST Command Reference Guide — m Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html
-  - title: 'CMST Command Reference Guide — n Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
-  - title: 'CMST Command Reference Guide — o Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-o-commands.html
-  - title: 'CMST Command Reference Guide — p Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
-  - title: 'CMST Command Reference Guide — q Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-q-commands.html
-  - title: 'CMST Command Reference Guide — r Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html
-  - title: 'CMST Command Reference Guide — s Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
-  - title: 'CMST Command Reference Guide — t Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-t-commands.html
-  - title: 'CMST Command Reference Guide — u Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-u-commands.html
-  - title: 'CMST Command Reference Guide — v Commands'
-    url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html
-  - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
-    url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
-  - title: 'SR OS 23.7.R2 Classic CLI Command Reference — d Commands (admin display-config)'
-    url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html
-  - title: 'SR OS Log Events Guide — BGP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bgp.html
-  - title: 'SR OS Log Events Guide — OSPF'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ospf.html
-  - title: 'SR OS Log Events Guide — ISIS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-isis.html
-  - title: 'SR OS Log Events Guide — LDP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ldp.html
-  - title: 'SR OS Log Events Guide — MPLS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-mpls.html
-  - title: 'SR OS Log Events Guide — RSVP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-rsvp.html
-  - title: 'SR OS Log Events Guide — PORT'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-port.html
-  - title: 'SR OS Log Events Guide — CHASSIS'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-chassis.html
-  - title: 'SR OS Log Events Guide — LAG'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-lag.html
-  - title: 'SR OS Log Events Guide — SVCMGR'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-svcmgr.html
-  - title: 'SR OS Log Events Guide — VRTR'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-vrtr.html
-  - title: 'SR OS Log Events Guide — SYSTEM'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-system.html
-  - title: 'SR OS Log Events Guide — SECURITY'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-security.html
-  - title: 'SR OS Log Events Guide — USER'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-user.html
-  - title: 'SR OS Log Events Guide — SNMP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-snmp.html
-  - title: 'SR OS Log Events Guide — NTP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-ntp.html
-  - title: 'SR OS Log Events Guide — STP'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-stp.html
-  - title: 'SR OS Log Events Guide — BFD'
-    url: https://documentation.nokia.com/sr/22-10-2/books/log-events/log-bfd.html
-  - title: '7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — OSPF Show, Clear and Debug Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/ospf_show_cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — IS-IS Show, Clear and Debug Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/isis_show_cli.html
-  - title: '7750 SR Unicast Routing Protocols Guide — BGP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/bgp_show_cli.html
-  - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
-  - title: '7750 SR MPLS Guide — LDP Show Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
-  - title: '7750 SR OS Basic System Configuration Guide — Show, Clear, Debug and Tools Command Reference'
-    url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.basic/html/system_show_cli.html
-  - title: '7750 SR OS System Basics Guide — System Command Reference (admin command tree)'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0070-10-01/7750_SR_OS_System_Basics_Guide/system-cli-tree.html
-  - title: '7750 SR OS Router Configuration Guide — Show Command Reference'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0073-10-01/7750_SR_OS_Router_Configuration_Guide/router-cli-Show-CLI.html
-  - title: '7750 SR OS Routing Protocols Guide — BGP Show Commands'
-    url: https://documentation.nokia.com/html/0_add-h-f/93-0074-HTML/7750_SR_OS_Routing_Protols_Guide/BGP-CLI-Show-CLI.html
-  - title: '7705 SAR 24.4.R1 — Show Router Commands'
-    url: https://documentation.nokia.com/sar/24-4-1/books/services/show-router-commands.html
   - title: 'SR OS 22.10.R2 — Clear, Monitor, Show, and Tools CLI Command Reference Guide (book index)'
     url: https://documentation.nokia.com/sr/22-10-2/titles/clear-monitor-show-tools-commands.html
   - title: 'CMST Command Reference Guide — a Commands'
@@ -683,126 +174,249 @@ bindings:
   platform.version:
     command: show system information
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
   platform.uptime:
     command: show uptime
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
   platform.time:
     command: show system time
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
   platform.environment:
     command: show chassis environment power-supply
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
   platform.cards:
     command: show card state
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
   platform.mda:
     command: show mda
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
   interface.summary:
     command: show port
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
   system.memory:
     command: show system memory-pools
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
   platform.alarms:
     command: show system alarms
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
   platform.redundancy:
     command: show redundancy synchronization
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — t Commands (admin tech-support, ts-location)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
   bgp.summary:
     command: show router bgp summary
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   bgp.auth:
     command: show router bgp auth-keychain
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   bgp.convergence:
     command: show router bgp convergence
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   bgp.policy.test:
     command: show router bgp policy-test
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — r Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html
   bgp.nexthop:
     command: show router bgp next-hop
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   bgp.damping:
     command: show router bgp damping detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — d Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
   bgp.routes.vpn:
     command: show router bgp routes vpn-ipv4 brief
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — v Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html
   bgp.routetarget:
     command: show router bgp routes route-target brief
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — v Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html
   mpls.tunneltable:
     command: show router tunnel-table
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — v Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html
   ospf.neighbors:
     command: show router ospf neighbor detail
     verified: doc_claimed
+    sources:
+      - title: '7750 SR Unicast Routing Protocols Guide — OSPF Show, Clear and Debug Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/ospf_show_cli.html
   ospf.statistics:
     command: show router ospf statistics
     verified: doc_claimed
+    sources:
+      - title: '7750 SR Unicast Routing Protocols Guide — OSPF Show, Clear and Debug Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/ospf_show_cli.html
   ospf.database:
     command: show router ospf database type external
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — d Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
   ospf.database.all:
     command: show router ospf database type all
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — d Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
   ospf.routes:
     command: show router ospf routes
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — d Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
   isis.adjacency:
     command: show router isis adjacency detail
     verified: doc_claimed
+    sources:
+      - title: '7750 SR Unicast Routing Protocols Guide — IS-IS Show, Clear and Debug Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/isis_show_cli.html
   isis.status:
     command: show router isis status
     verified: doc_claimed
+    sources:
+      - title: '7750 SR Unicast Routing Protocols Guide — IS-IS Show, Clear and Debug Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/isis_show_cli.html
   isis.statistics:
     command: show router isis statistics
     verified: doc_claimed
+    sources:
+      - title: '7750 SR Unicast Routing Protocols Guide — IS-IS Show, Clear and Debug Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.unicast/html/isis_show_cli.html
   isis.database:
     command: show router isis database detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — d Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
   isis.hostname:
     command: show router isis hostname
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — d Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
   isis.spflog:
     command: show router isis spf-log detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — d Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
   mpls.status:
     command: show router mpls status
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
   mpls.interface:
     command: show router mpls interface
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
   mpls.srlg:
     command: show router mpls srlg-database
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
   mpls.statistics:
     command: show router mpls statistics-summary
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
   platform.chassis:
     command: show chassis detail
     verified: doc_claimed
+    sources:
+      - title: '7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html
   platform.power:
     command: show chassis power-management utilization
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   platform.power.requirements:
     command: show chassis power-management requirements
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   platform.thresholds:
     command: show system thresholds
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   system.connections:
     command: show system connections detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   config.rollback:
     command: show system rollback
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — d Commands (admin display-config)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html
   config.scriptcontrol:
     command: show system script-control
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — d Commands (admin display-config)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html
   logging.filters:
     command: show log filter-id
     verified: doc_claimed
@@ -815,168 +429,336 @@ bindings:
   security.cpmfilter:
     command: show system security cpm-filter
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   security.cpuprotect:
     command: show system security cpu-protection violators
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   bfd.session:
     command: show router bfd session summary
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — s Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
   ldp.status:
     command: show router ldp status
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — LDP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
   ldp.session:
     command: show router ldp session detail
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — LDP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
   ldp.discovery:
     command: show router ldp discovery detail
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — LDP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
   ldp.interface:
     command: show router ldp interface detail
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — LDP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
   ldp.targpeer:
     command: show router ldp targ-peer detail
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — LDP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
   ldp.parameters:
     command: show router ldp parameters
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — LDP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/ldp_show_cli.html
   ldp.bindings.active:
     command: show router ldp bindings active prefixes
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — p Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
   ldp.bindings.summary:
     command: show router ldp bindings summary
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — p Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
   rsvp.status:
     command: show router rsvp status
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
   rsvp.session:
     command: show router rsvp session detail
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
   rsvp.neighbor:
     command: show router rsvp neighbor detail
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
   rsvp.statistics:
     command: show router rsvp statistics
     verified: doc_claimed
+    sources:
+      - title: '7750 SR MPLS Guide — MPLS/RSVP Show Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.mpls/html/mpls_show_cli.html
   evpn.system.vxlan:
     command: show service system vxlan
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — v Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html
   evpn.routes.imet:
     command: show router bgp routes evpn incl-mcast detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — v Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-v-commands.html
   evpn.ethernetsegment:
     command: show service system bgp-evpn ethernet-segment
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — m Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html
   evpn.routes.ethseg:
     command: show router bgp routes evpn eth-seg detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — e Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-e-commands.html
   evpn.routes.ad:
     command: show router bgp routes evpn auto-disc detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — e Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-e-commands.html
   service.opergroup:
     command: show service oper-group
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — s Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
   service.fdb.info:
     command: show service fdb-info
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — m Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html
   service.fdb.usage:
     command: show service system fdb-usage
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — m Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html
   security.cpuprotect.sources:
     command: show system security cpu-protection excessive-sources
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   snmp.counters:
     command: show snmp counters
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   bfd.session.summary:
     command: show router bfd session summary
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — s Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
   bfd.interface:
     command: show router bfd interface detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — s Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
   bfd.resources:
     command: show router bfd resources
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — s Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
   bfd.template:
     command: show router bfd bfd-template
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — s Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
   aaa.sessions:
     command: show users
     verified: doc_claimed
+    sources:
+      - title: 'SR OS 23.7.R2 Classic CLI Command Reference — d Commands (admin display-config)'
+        url: https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-d-commands.html
   ntp.status:
     command: show system ntp all detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   ntp.servers:
     command: show system ntp servers detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   ntp.peers:
     command: show system ntp peers detail
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   ntp.sntp:
     command: show system sntp
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   snmp.community:
     command: show system security snmp community
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   snmp.acl:
     command: show system security snmp src-access-list
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   snmp.views:
     command: show system security view
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   security.maf:
     command: show system security management-access-filter
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   snmp.trapgroup:
     command: show log snmp-trap-group
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — c Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-c-commands.html
   aaa.statistics:
     command: show system security authentication statistics
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — a Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html
   aaa.profile:
     command: show system security profile
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — a Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html
   aaa.passwordpolicy:
     command: show system security password-options
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — a Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-a-commands.html
   route.prefix:
     command: 'show router route-table {prefix}'
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   interface.detail:
     command: 'show port {if} detail'
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — n Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-n-commands.html
   bgp.routes.prefix:
     command: 'show router bgp routes {prefix} detail'
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — r Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html
   bgp.routes.hunt:
     command: 'show router bgp routes {prefix} hunt'
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — r Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-r-commands.html
   bgp.damping.prefix:
     command: 'show router bgp damping {prefix} detail'
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — d Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-d-commands.html
   optics.dom:
     command: 'show port {if} optical'
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — s Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-s-commands.html
   ldp.bindings.prefix:
     command: 'show router ldp bindings prefixes prefix {prefix} detail'
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — p Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
   interface.ethernet:
     command: 'show port {if} ethernet detail'
     verified: doc_claimed
+    sources:
+      - title: '7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html
   interface.statistics:
     command: 'show port {if} statistics'
     verified: doc_claimed
+    sources:
+      - title: '7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html
   interface.lldp:
     command: 'show port {if} ethernet lldp remote-info detail'
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — p Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
   optics.otu:
     command: 'show port {if} otu'
     verified: doc_claimed
+    sources:
+      - title: '7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html
   optics.thresholds:
     command: 'show port {if} monitor-threshold'
     verified: doc_claimed
+    sources:
+      - title: '7750 SR OS Interfaces Guide — Show, Monitor, Clear, Debug and Tools Command Reference'
+        url: https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html
   qos.queue.depth:
     command: 'show port {if} port-queues queue-depth'
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — p Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
   qos.queuegroup:
     command: 'show port {if} queue-group summary'
     verified: doc_claimed
+    sources:
+      - title: 'CMST Command Reference Guide — p Commands'
+        url: https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-p-commands.html
