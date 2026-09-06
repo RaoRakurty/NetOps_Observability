@@ -23,6 +23,7 @@ package tac
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
 	"time"
 )
@@ -99,6 +100,14 @@ type Service struct {
 	// deployment with no live runner (there is nothing to gate), and a nil
 	// registry allows nothing.
 	reviews *ReviewRegistry
+	// learning is where a finished collection files what the parsers could not
+	// read (learning.go). Nil means the backlog is not kept on this deployment
+	// and a collection simply files nothing — never a failed collection.
+	learning LearningStore
+	// warn routes a non-fatal problem to the caller's structured log. It always
+	// points at something (the constructor sets a process-log default), so a
+	// failure here is never silent (§10).
+	warn func(msg string, fields map[string]any)
 
 	mu     sync.Mutex
 	states map[string]map[string]*State // tenant → incident → state
@@ -132,6 +141,20 @@ func WithOpeners(o ...CaseOpener) ServiceOption {
 // is what the service's own test asserts.
 func WithReviews(r *ReviewRegistry) ServiceOption { return func(s *Service) { s.reviews = r } }
 
+// WithLearning injects the learning store. Nil is the honest "this deployment
+// does not keep the backlog" path: a collection still runs, and files nothing.
+func WithLearning(l LearningStore) ServiceOption { return func(s *Service) { s.learning = l } }
+
+// WithServiceWarn routes the service's non-fatal problems (a learning record
+// that could not be filed) to the caller's structured log.
+func WithServiceWarn(fn func(msg string, fields map[string]any)) ServiceOption {
+	return func(s *Service) {
+		if fn != nil {
+			s.warn = fn
+		}
+	}
+}
+
 // WithServiceClock injects the clock.
 func WithServiceClock(now func() time.Time) ServiceOption {
 	return func(s *Service) {
@@ -153,6 +176,7 @@ func NewService(c *Catalog, opts ...ServiceOption) (*Service, error) {
 	s := &Service{
 		catalog: c, now: time.Now, validator: v,
 		states: map[string]map[string]*State{}, cancel: map[string]context.CancelFunc{},
+		warn: func(msg string, fields map[string]any) { log.Printf("tac: %s %v", msg, fields) },
 	}
 	for _, o := range opts {
 		o(s)
@@ -422,6 +446,13 @@ func (s *Service) runCollect(ctx context.Context, cancel context.CancelFunc, key
 		s.mu.Unlock()
 	})
 
+	// The backlog is filed BEFORE the lock: ObserveCapture runs the parsers over
+	// output already on this host, which is CPU work with no IO, and holding the
+	// service lock across it would stall every other escalation on this api.
+	if err == nil {
+		s.fileLearning(ctx, tenant, capt)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.states[tenant][incident]
@@ -666,4 +697,69 @@ func copyState(st *State) *State {
 	}
 	out.Bundles = append([]StoredBundle(nil), st.Bundles...)
 	return &out
+}
+
+// fileLearning records what this collection's output the parsers could not
+// read (learning.go). It is best-effort ON PURPOSE: a backlog that cannot be
+// written must never turn a completed collection into a failed one, and the
+// operator's bundle is unaffected either way. The failure is not swallowed —
+// the record carries an id and the store's own error reaches the integrator's
+// log through the caller it is handed to.
+//
+// A record with NO gaps is still filed. "This collection was fully recognised"
+// is the evidence that the coverage is real, and dropping it would make the
+// backlog a list of failures with no denominator.
+func (s *Service) fileLearning(ctx context.Context, tenant string, capt *Capture) {
+	if s.learning == nil || capt == nil {
+		return
+	}
+	id := NewRecordID()
+	if id == "" {
+		return
+	}
+	rec := ObserveCapture(capt, id, s.now())
+	rec.TenantID = tenant
+	// The classification that chose this class is state on the escalation, not
+	// on the capture; a class chosen with no signature behind it is itself the
+	// seed of a candidate, so it is recorded rather than recomputed later.
+	s.mu.Lock()
+	if st := s.states[tenant][capt.IncidentID]; st != nil && st.Classification != nil {
+		rec.ClassFromSignature = classFromSignature(st.Classification, capt.ClassID)
+	}
+	s.mu.Unlock()
+	// context.WithoutCancel: the collection's deadline has done its job by the
+	// time this runs, and losing the backlog because the plan's budget expired
+	// would be the silent gap this whole file exists to close.
+	if err := s.learning.PutRecord(context.WithoutCancel(ctx), rec); err != nil {
+		s.warn("a TAC learning record could not be filed", map[string]any{
+			"incident_id": capt.IncidentID, "device_id": capt.DeviceID,
+			"gaps": len(rec.Gaps), "error": err.Error(),
+		})
+	}
+}
+
+// classFromSignature reports whether a SIGNATURE, rather than an alert name or
+// a hypothesis, is why this class was chosen.
+func classFromSignature(c *Classification, classID string) bool {
+	if c == nil {
+		return false
+	}
+	if c.ClassID == classID {
+		for _, r := range c.Why {
+			if r.Kind == "signature" {
+				return true
+			}
+		}
+	}
+	for _, m := range c.Alternatives {
+		if m.ClassID != classID {
+			continue
+		}
+		for _, r := range m.Why {
+			if r.Kind == "signature" {
+				return true
+			}
+		}
+	}
+	return false
 }

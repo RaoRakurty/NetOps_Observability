@@ -402,3 +402,56 @@ def test_the_script_runs_as_a_subprocess_on_the_real_tree():
     proc = subprocess.run([sys.executable, SCRIPT, "--check"], check=False,
                           capture_output=True, text=True, timeout=120, cwd=REPO)
     assert proc.returncode == 0, proc.stderr
+
+
+# ── the Correlix-exported candidate file ─────────────────────────────────────
+#
+# `GET /api/tac/learning/export` renders a tenant's signature candidates as a
+# research document. That is the ONLY exit a candidate has: nothing in the api
+# promotes one into the shipped catalogue, and the file still has to survive
+# this script's refusals like any other research.
+#
+# The fixture is written by the Go exporter itself
+# (internal/tac/candidate_test.go, TestExportFixtureMatchesTheCheckedInFile),
+# which fails if it and this file disagree. So a merge proven here is a merge of
+# bytes Correlix actually emits — not of a hand-written approximation that
+# drifts the day the exporter changes.
+
+EXPORT_FIXTURE = os.path.join(
+    REPO, "src", "backend", "internal", "tac", "testdata", "candidate-export.yaml")
+
+
+def test_a_correlix_candidate_export_merges(sandbox, mod, capsys):
+    body = open(EXPORT_FIXTURE, encoding="utf-8").read()
+    write_research(sandbox, "correlix-candidates", body)
+    assert run(mod) == 0, capsys.readouterr()
+    out = capsys.readouterr().out
+
+    # The proposed class landed as a PROPOSAL, and the known one merged into the
+    # class it named.
+    classes = mod.parse_yaml(open(sandbox / "classes.yaml", encoding="utf-8").read())
+    by_id = {c["id"]: c for c in classes["classes"]}
+    assert "bgp-graceful-restart-stall" in by_id, out
+    assert "bgp-session" in by_id
+
+    # A candidate's log signature becomes a detection cue on its class, escaped —
+    # the operator's literal line, never a pattern they did not write.
+    cues = by_id["bgp-session"]["detect"].get("log_regex", [])
+    assert any("ADJCHANGE" in c for c in cues), cues
+    assert all(c.startswith("(?i)") for c in cues)
+
+    # Every command the export carried is bound, and — the gate that must not
+    # move — bound as doc_claimed, never as verified.
+    plan = mod.parse_yaml(open(sandbox / "plans" / "cisco-iosxe.yaml", encoding="utf-8").read())
+    bindings = plan["bindings"]
+    assert "bgp.summary" in bindings, sorted(bindings)
+    assert bindings["bgp.summary"]["verified"] in ("doc_claimed", "verified")
+
+
+def test_a_candidate_export_is_idempotent(sandbox, mod):
+    body = open(EXPORT_FIXTURE, encoding="utf-8").read()
+    write_research(sandbox, "correlix-candidates", body)
+    run(mod)
+    first = open(sandbox / "classes.yaml", encoding="utf-8").read()
+    run(mod)
+    assert open(sandbox / "classes.yaml", encoding="utf-8").read() == first

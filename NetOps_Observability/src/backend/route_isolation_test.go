@@ -219,6 +219,20 @@ var routeIsolationLedger = map[string]string{
 	"/api/tac/templates/":         "scoped",
 	"/api/tac/templates/defaults": "globalRef",
 	"/api/tac/templates/validate": "globalRef",
+
+	// The TAC LEARNING BACKLOG (tracker 243). Per-tenant DATA in the strongest
+	// sense: a learning record holds redacted excerpts of THIS tenant's device
+	// output, and a signature candidate holds what a vendor told THIS tenant
+	// about it. Scoped exactly as the templates are — requirePerm(infrastructure)
+	// plus the tenant filter, never platform admin — with isolation in the store
+	// itself (a tenant-keyed bucket with no unscoped listing on the seam) and the
+	// owner stamped from the token; the wire type has no tenant field at all.
+	// Another tenant's candidate id answers the same 404 an absent one does, and
+	// the export renders only the calling tenant's candidates. A cross-tenant
+	// principal must scope into one tenant first. Proven by
+	// tac_learning_isolation_test.go.
+	"/api/tac/learning":  "scoped",
+	"/api/tac/learning/": "scoped",
 	// OSPF / IS-IS advanced monitoring (Project 4 D item 11, internal/igpmon).
 	// All six are per-tenant DATA and read NOTHING that is not already
 	// collected. The chain is the pcap/configstore one: requirePerm

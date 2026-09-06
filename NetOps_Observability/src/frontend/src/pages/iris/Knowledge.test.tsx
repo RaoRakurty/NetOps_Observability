@@ -9,24 +9,32 @@
 //    plainly when a dialect binds no command for an intent
 //  · platforms with NO authored plan get their own section rather than being
 //    quietly left out
-//  · the unknown-output backlog renders as an explicit "not yet tracked", never
-//    as a zero (a zero there would claim there is no backlog)
+//  · the unknown-output backlog (tracker 243) distinguishes THREE states — the
+//    api does not carry it, nothing has been collected, and everything
+//    collected was recognised — because one number would flatten them, and the
+//    zero would be a claim nobody had earned
 //  · a read that fails says what did not happen
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, act, within } from "@testing-library/react";
-import type { TacKnowledge } from "../../services/api";
+import type { TacKnowledge, TacLearningRecord, TacLearningResponse } from "../../services/api";
 
 const mocks = vi.hoisted(() => ({
   tacKnowledge: vi.fn(),
   // The command templates tab (tracker 250).
   tacTemplates: vi.fn(), tacTemplate: vi.fn(),
+  // The learning backlog (tracker 243).
+  tacLearning: vi.fn(), tacCandidateSave: vi.fn(),
+  tacCandidateDelete: vi.fn(), tacCandidateExport: vi.fn(),
 }));
 vi.mock("../../services/api", () => ({ api: { ...mocks } }));
 
 import IrisKnowledge from "./Knowledge";
 import {
-  BACKLOG_NOT_TRACKED,
+  BACKLOG_CLEAN,
+  BACKLOG_EMPTY,
+  BACKLOG_UNTRACKED,
+  CANDIDATE_NONE,
   COMMAND_POLICY_NO_EXCLUSIONS,
   DOC_CLAIMED_LABEL,
   KNOWLEDGE_FAILED,
@@ -95,9 +103,43 @@ const knowledge = (over: Partial<TacKnowledge> = {}): TacKnowledge => ({
   ...over,
 });
 
-async function show(k: TacKnowledge = knowledge()) {
+const learning = (over: Partial<TacLearningResponse> = {}): TacLearningResponse => ({
+  tracked: true,
+  records: [],
+  candidates: [],
+  gap_counts: { no_parser: 0, no_dialect: 0, unparsed: 0 },
+  gap_total: 0,
+  gap_kinds: ["no_parser", "no_dialect", "unparsed"],
+  dialects: ["cisco-iosxe"],
+  limit: 200,
+  note: "A candidate is a proposal.",
+  engine: "correlix-tac-2026-09-05",
+  record_cap: 200,
+  candidate_n: 0,
+  ...over,
+});
+
+const gapRecord = (over: Partial<TacLearningRecord> = {}): TacLearningRecord => ({
+  id: "lr-1", incident_id: "inc-1", device_id: "d1", hostname: "leaf1",
+  platform: "Cisco IOS-XE 17.9", dialect: "cisco-iosxe",
+  class_id: "bgp-session", class_title: "BGP session down", class_from_signature: false,
+  engine_version: "correlix-tac-2026-09-05", collected_at: "2026-09-06T10:00:00Z",
+  commands: 4, recognised: 3,
+  gaps: [{
+    kind: "unparsed", intent: "interface.detail", title: "Interface detail",
+    command: "show interfaces Gi1", dialect: "cisco-iosxe",
+    reason: "the parser did not recognise this output",
+    excerpt: "% Invalid input detected", bytes: 24,
+  }],
+  ...over,
+});
+
+async function show(k: TacKnowledge = knowledge(), l: TacLearningResponse | Error = learning()) {
   mocks.tacKnowledge.mockResolvedValue(k);
+  if (l instanceof Error) mocks.tacLearning.mockRejectedValue(l);
+  else mocks.tacLearning.mockResolvedValue(l);
   const utils = render(<IrisKnowledge />);
+  await act(async () => { await Promise.resolve(); });
   await act(async () => { await Promise.resolve(); });
   return utils;
 }
@@ -106,6 +148,11 @@ beforeEach(() => {
   mocks.tacKnowledge.mockReset();
   mocks.tacTemplates.mockReset();
   mocks.tacTemplate.mockReset();
+  mocks.tacLearning.mockReset();
+  mocks.tacCandidateSave.mockReset();
+  mocks.tacCandidateDelete.mockReset();
+  mocks.tacCandidateExport.mockReset();
+  mocks.tacLearning.mockResolvedValue(learning());
   mocks.tacTemplates.mockResolvedValue({
     templates: [], defaults: [], count: 0, limit: 200, dialects: [], note: "",
   });
@@ -193,11 +240,93 @@ describe("how the knowledge grows", () => {
     expect(screen.getByText(/tac-merge-research\.py/)).toBeInTheDocument();
   });
 
-  it("renders the unknown-output backlog as NOT TRACKED, never as a zero", async () => {
-    await show();
+  it("says the build does not track the backlog, rather than showing a zero", async () => {
+    await show(knowledge(), new Error("404 Not Found"));
     const backlog = screen.getByTestId("tac-backlog");
-    expect(backlog).toHaveTextContent(BACKLOG_NOT_TRACKED);
     expect(backlog.textContent).not.toMatch(/\b0\b/);
+  });
+
+  it("an api without the backlog is a THIRD state, not an empty one", async () => {
+    await show(knowledge(), learning({ tracked: false }));
+    expect(screen.getByTestId("tac-backlog")).toHaveTextContent(BACKLOG_UNTRACKED);
+  });
+
+  it("says nothing has been collected rather than claiming there are no gaps", async () => {
+    await show(knowledge(), learning({ records: [], gap_total: 0 }));
+    expect(screen.getByTestId("tac-backlog")).toHaveTextContent(BACKLOG_EMPTY);
+  });
+
+  it("a zero is only shown once collections have actually been read", async () => {
+    await show(knowledge(), learning({
+      records: [gapRecord({ gaps: [] })], gap_total: 0,
+    }));
+    expect(screen.getByTestId("tac-backlog")).toHaveTextContent(BACKLOG_CLEAN);
+  });
+});
+
+// ── the learning backlog and the signature-candidate loop (tracker 243) ──────
+
+describe("the learning backlog", () => {
+  it("names the work item, the reason and the redacted excerpt", async () => {
+    await show(knowledge(), learning({
+      records: [gapRecord()], gap_total: 1,
+      gap_counts: { no_parser: 0, no_dialect: 0, unparsed: 1 },
+    }));
+    const gap = screen.getByTestId("tac-gap-lr-1-0");
+    expect(gap).toHaveTextContent("show interfaces Gi1");
+    expect(gap).toHaveTextContent("Parser could not read it");
+    expect(gap).toHaveTextContent("the parser did not recognise this output");
+    expect(gap).toHaveTextContent("% Invalid input detected");
+    // The counts are per KIND, because the three are three different work items.
+    expect(screen.getByTestId("tac-backlog")).toHaveTextContent("Parser could not read it");
+  });
+
+  it("promotes a TAC answer into a CANDIDATE, seeded from the gap", async () => {
+    mocks.tacCandidateSave.mockResolvedValue({ candidate: { id: "cand-1" } });
+    await show(knowledge(), learning({
+      records: [gapRecord()], gap_total: 1,
+      gap_counts: { no_parser: 0, no_dialect: 0, unparsed: 1 },
+    }));
+    fireEvent.click(screen.getByRole("button", { name: /Write the answer/ }));
+    const form = screen.getByTestId("tac-cand-form");
+    fireEvent.change(within(form).getByLabelText("Title"), { target: { value: "Peer stuck in Idle" } });
+    fireEvent.change(within(form).getByLabelText("Issue class"), { target: { value: "bgp-session" } });
+    fireEvent.change(within(form).getByLabelText("What TAC said"), { target: { value: "An empty prefix-list." } });
+    await act(async () => { fireEvent.submit(form); });
+
+    expect(mocks.tacCandidateSave).toHaveBeenCalledTimes(1);
+    const sent = mocks.tacCandidateSave.mock.calls[0][0];
+    // The dialect and the command Correlix ran are FACTS, seeded from the gap —
+    // not something an operator retypes and can get wrong.
+    expect(sent.dialect).toBe("cisco-iosxe");
+    expect(sent.commands).toEqual([{ intent: "interface.detail", command: "show interfaces Gi1" }]);
+    expect(sent.class_id).toBe("bgp-session");
+    // The wire body carries no tenant, id, owner or status-of-record: ownership
+    // is stamped by the server and cannot be expressed here.
+    for (const forbidden of ["tenant_id", "id", "created_by", "proposed_class"]) {
+      expect(Object.keys(sent)).not.toContain(forbidden);
+    }
+  });
+
+  it("says no answer has been written down rather than showing an empty list", async () => {
+    await show(knowledge(), learning());
+    expect(screen.getByTestId("tac-cand-none")).toHaveTextContent(CANDIDATE_NONE);
+  });
+
+  it("a saved candidate is labelled a PROPOSAL and never as coverage", async () => {
+    await show(knowledge(), learning({
+      candidates: [{
+        id: "cand-1", issue_id: "bgp-session-peer-idle", dialect: "cisco-iosxe",
+        class_id: "bgp-graceful-restart-stall", proposed_class: true,
+        title: "Graceful restart never completes", status: "proposed",
+        created_at: "2026-09-06T10:00:00Z", updated_at: "2026-09-06T10:00:00Z",
+      }],
+    }));
+    const row = screen.getByTestId("tac-cand-cand-1");
+    expect(row).toHaveTextContent("proposed class");
+    expect(row).toHaveTextContent("proposed");
+    // The standing rule is stated wherever candidates are listed, not buried.
+    expect(screen.getByText("A candidate is a proposal, never a rule.")).toBeInTheDocument();
   });
 });
 

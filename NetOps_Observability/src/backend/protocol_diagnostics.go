@@ -1717,6 +1717,13 @@ func (s *server) buildTACService() error {
 	s.tacConnectors = ticketing.NewTACConnectorStore(
 		envOr("TAC_CONNECTOR_CONFIG_FILE", filepath.Join(envOr("DATA_DIR", "/data"), "tac_connectors.json")))
 	opts = append(opts, tac.WithOpeners(s.tacCaseOpeners()...))
+	// The learning backlog (tracker 243). Always built: without it the Knowledge
+	// page would say "not yet tracked" forever.
+	s.tacLearningStore = newTACLearningStore()
+	opts = append(opts,
+		tac.WithLearning(s.tacLearningStore),
+		tac.WithServiceWarn(func(m string, f map[string]any) { logWarn("tac", m, f) }),
+	)
 	svc, err := tac.NewService(cat, opts...)
 	if err != nil {
 		return err
@@ -1733,7 +1740,43 @@ func (s *server) buildTACService() error {
 		return fmt.Errorf("tac templates: %w", aerr)
 	}
 	s.tacTemplates = api
+
+	learn, lerr := tac.NewLearningAPI(tac.LearningAPIDeps{
+		// The SAME gate the templates use: both are this tenant's operator data.
+		Authz: s.tacTemplateAuthz, Store: s.tacLearningStore, Validator: svc.Validator(),
+		Catalog: cat, Audit: s.tacTemplateAudit,
+		WriteJSON: writeJSON, WriteError: writeError,
+		Now: func() time.Time { return time.Now().UTC() },
+	})
+	if lerr != nil {
+		return fmt.Errorf("tac learning: %w", lerr)
+	}
+	s.tacLearning = learn
 	return nil
+}
+
+// newTACLearningStore builds the backlog's backend: FILE-backed, the sibling of
+// the BUNDLE store rather than of the template store, because a learning record
+// is per-collection evidence with a ceiling, not control-plane state. Isolation
+// is the store's own (§3a rule 4), and a corrupt file serves an empty backlog
+// and SAYS so — one that failed to load must not look like one never written.
+func newTACLearningStore() tac.LearningStore {
+	fs := tac.NewFileLearningStore(envOr(tac.EnvLearningFile, filepath.Join(envOr("DATA_DIR", "/data"), "tac_learning.json")))
+	if err := fs.LoadErr(); err != nil {
+		logError("tac", "the TAC learning backlog could not be read — it starts EMPTY; collections still run and file new records",
+			map[string]any{"err": err.Error()})
+	}
+	return fs
+}
+
+// The two learning entry points, resolved at REQUEST time; the module nil-checks
+// its receiver, so an unbuilt surface answers 404 rather than reading unscoped.
+func (s *server) handleTACLearning(w http.ResponseWriter, r *http.Request) {
+	s.tacLearning.HandleLearning(w, r)
+}
+
+func (s *server) handleTACLearningSubtree(w http.ResponseWriter, r *http.Request) {
+	s.tacLearning.HandleLearningSubtree(w, r)
 }
 
 // newTACTemplateStore picks the template backend the way every other per-tenant

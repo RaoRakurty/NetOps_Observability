@@ -110,6 +110,12 @@ func TestTACRoutesLiveInsideTheirMarkers(t *testing.T) {
 		"/api/tac/templates/defaults": false,
 		"/api/tac/templates/validate": false,
 		"/api/tac/templates/":         false,
+		// The learning backlog (tracker 243) is per-TENANT for the same reason
+		// the templates are: a learning record holds redacted excerpts of that
+		// tenant's own device output, and a candidate holds what a vendor told
+		// that tenant. Neither belongs under one incident id.
+		"/api/tac/learning":  false,
+		"/api/tac/learning/": false,
 	}
 	for _, m := range tplRE.FindAllStringSubmatch(in, -1) {
 		if _, ok := wantTpl[m[1]]; !ok {
@@ -149,6 +155,8 @@ func TestTACAdapterLivesInsideItsMarkers(t *testing.T) {
 		// tracker 250 — the command-review + template wiring.
 		"handleTACTemplates", "handleTACTemplateItem", "handleTACTemplateDefaults",
 		"handleTACTemplateValidate", "tacTemplateAuthz", "tacApplyReview", "newTACTemplateStore",
+		// tracker 243 — the learning backlog wiring.
+		"handleTACLearning", "handleTACLearningSubtree", "newTACLearningStore",
 	} {
 		if !strings.Contains(in, "func (s *server) "+want) && !strings.Contains(in, "func "+want) {
 			t.Errorf("%s is not inside the TAC-ROUTES markers", want)
@@ -160,7 +168,13 @@ func TestTACAdapterLivesInsideItsMarkers(t *testing.T) {
 	// the answers. A ceiling on its size is the mechanical form of that rule.
 	//
 	// It was raised from 900 to 1100 when the command-review + template surface
-	// landed (tracker 250). The RULE did not move: that feature's model,
+	// landed (tracker 250), and NOT raised again when the learning backlog
+	// landed (tracker 243): that feature's gap detection, candidate model,
+	// export, store and HTTP surface are internal/tac/learning*.go and
+	// candidate.go, and what arrived here was a store picker, two one-line
+	// handler entry points and one service option. Its gate is literally the
+	// template gate — the surfaces are the same kind of per-tenant data, so
+	// there is one mapping, not two. The RULE did not move: that feature's model,
 	// validation, store, defaults and its whole HTTP surface are
 	// internal/tac/templates*.go — roughly 1,600 lines that never touched this
 	// file. What arrived here is wiring and nothing else: the backend picker,

@@ -268,6 +268,14 @@ type server struct {
 	// itself falls back to paste.
 	tacTemplates     *tac.TemplateAPI
 	tacTemplateStore tac.TemplateStore
+	// tacLearning is the LEARNING BACKLOG surface (tracker 243) and
+	// tacLearningStore its backing store: what a collection produced that the
+	// parsers could not read, and the signature CANDIDATES an operator writes
+	// from a TAC answer. Built unconditionally for the same reason the templates
+	// are — the backlog is read on every deployment, including one that cannot
+	// collect at all.
+	tacLearning      *tac.LearningAPI
+	tacLearningStore tac.LearningStore
 	// TAC-ROUTES-END
 	tenants          tenantRepo
 	orgs             *tenant.OrgStore
@@ -2916,6 +2924,13 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tac/templates/defaults", s.handleTACTemplateDefaults)
 	mux.HandleFunc("/api/tac/templates/validate", s.handleTACTemplateValidate)
 	mux.HandleFunc("/api/tac/templates/", s.handleTACTemplateItem) // GET|PUT|DELETE {id}
+	// The LEARNING BACKLOG (tracker 243). Per-tenant data, scoped like the
+	// templates: requirePerm(infrastructure) + the tenant filter, never
+	// platform admin. The subtree handler routes /candidates, /candidates/{id}
+	// and /export; Go dispatches on the prefix, so a second registration would
+	// not narrow it.
+	mux.HandleFunc("/api/tac/learning", s.handleTACLearning)
+	mux.HandleFunc("/api/tac/learning/", s.handleTACLearningSubtree)
 	// TAC-ROUTES-END
 	// IGP-MONITORING-BEGIN — OSPF/IS-IS advanced monitoring (Project 4 D item
 	// 11, internal/igpmon). READ-ONLY over telemetry the platform already

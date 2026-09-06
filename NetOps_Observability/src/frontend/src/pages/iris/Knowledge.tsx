@@ -18,30 +18,52 @@
 //     per family — and only as a count. A config / restart / daemon command is
 //     not knowledge Correlix holds (owner, 2026-09-05), and this page is
 //     knowledge, so the command text is never rendered here or anywhere else;
-//   · the unknown-output backlog is NOT counted anywhere yet, so it renders as
-//     an explicit "not yet tracked" — a zero there would read as "there is
-//     none", which is a claim nobody has earned.
+//   · the unknown-output backlog IS counted now (tracker 243): every collection
+//     is read back through the parsers and what they could not recognise
+//     becomes a work item here, with the reason and a redacted excerpt.
 //
-// Everything on this page is version-pinned REFERENCE data, identical for every
-// tenant; it reveals nothing about anyone's devices or incidents. Every string
-// is still rendered as escaped React text.
+// THE BACKLOG IS THE ONE TENANT-SCOPED THING ON THIS PAGE. The coverage
+// catalogue above it is version-pinned REFERENCE data, identical for every
+// tenant and revealing nothing about anyone's devices. A learning record is the
+// opposite: it holds redacted excerpts of THIS tenant's own device output, and
+// a candidate holds what a vendor told THIS tenant. Both are scoped by the
+// caller's token on the server (`/api/tac/learning`, requirePerm + the tenant
+// filter); the page renders what that returns and asks for nothing wider.
+//
+// A CANDIDATE IS A PROPOSAL, AND THE PAGE SAYS SO EVERY TIME. Promoting an
+// answer here writes a candidate and nothing else: the shipped catalogue, the
+// version pin and the doc_claimed gate are untouched. The only exit is the
+// exported research file, reviewed by a human and merged by
+// scripts/tac-merge-research.py.
+//
+// Every string on the page is rendered as escaped React text.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "../troubleshoot/investigation.css";
 import {
   api,
+  type TacCandidate,
   type TacDialectCoverage,
+  type TacGap,
   type TacKnowledge,
+  type TacLearningResponse,
   type TacTemplate,
   type TacTemplateItemResponse,
 } from "../../services/api";
 import WindowedList from "../../components/WindowedList";
 import {
-  BACKLOG_NOT_TRACKED,
+  BACKLOG_CLEAN,
+  BACKLOG_EMPTY,
+  BACKLOG_FAILED,
+  BACKLOG_UNTRACKED,
+  CANDIDATE_EXPORT_FAILED,
+  CANDIDATE_NONE,
+  CANDIDATE_NOTE,
   COMMAND_POLICY_NO_EXCLUSIONS,
   COMMAND_POLICY_NOTE,
   KNOWLEDGE_FAILED,
   KNOWLEDGE_GROWTH_NOTE,
+  GAP_KIND_LABEL,
   NO_UNPLANNED_DIALECTS,
   REVIEW_POLICY_NOTE,
   TEMPLATES_FAILED,
@@ -67,6 +89,24 @@ export default function IrisKnowledge() {
   const [templates, setTemplates] = useState<TacTemplate[]>([]);
   const [defaults, setDefaults] = useState<TacTemplate[]>([]);
   const [tplErr, setTplErr] = useState("");
+  // The learning backlog (tracker 243). `learn === null` with no error is
+  // "the api does not carry it", which is a third state, not an empty one.
+  const [learn, setLearn] = useState<TacLearningResponse | null>(null);
+  const [learnErr, setLearnErr] = useState("");
+
+  const reloadLearning = useCallback(() => {
+    api.tacLearning()
+      .then((r) => { setLearn(r); setLearnErr(""); })
+      .catch((e: unknown) => setLearnErr(tacError(e, BACKLOG_FAILED)));
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    api.tacLearning()
+      .then((r) => { if (alive) { setLearn(r); setLearnErr(""); } })
+      .catch((e: unknown) => { if (alive) setLearnErr(tacError(e, BACKLOG_FAILED)); });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -249,10 +289,7 @@ export default function IrisKnowledge() {
       <section className="tac-step" aria-labelledby="tac-know-grow-h">
         <h2 id="tac-know-grow-h" className="tac-step-h">How this grows</h2>
         <p className="mini-meta tac-note">{KNOWLEDGE_GROWTH_NOTE}</p>
-        <p className="mini-meta tac-note">
-          <strong>Unrecognised outputs:</strong>{" "}
-          <span data-testid="tac-backlog">{BACKLOG_NOT_TRACKED}</span>
-        </p>
+        <LearningBacklog learn={learn} err={learnErr} onChange={reloadLearning} />
       </section>
     </div>
   );
@@ -377,5 +414,223 @@ function DialectDetail({ d }: { d: TacDialectCoverage }) {
         </>
       )}
     </div>
+  );
+}
+
+// ── the learning backlog (tracker 243) ───────────────────────────────────────
+//
+// THREE STATES, NOT TWO, and the difference matters to an operator deciding
+// whether coverage is real:
+//   · the api does not carry the backlog (an older build) — say so;
+//   · it carries it and nothing has been collected — say that instead of 0;
+//   · it carries it, collections ran, and everything was recognised — that IS
+//     a zero, and it is the only case where showing one is honest.
+//
+// A gap names the WORK ITEM, not just a failure: "no parser for this concept"
+// sends someone to write one, "no parser on this platform" sends them to extend
+// one, and "the parser could not read it" hands them the excerpt that proves it.
+function LearningBacklog(
+  { learn, err, onChange }: { learn: TacLearningResponse | null; err: string; onChange: () => void },
+) {
+  const [writing, setWriting] = useState<TacGap | null>(null);
+
+  if (err) {
+    return (
+      <>
+        <h3 className="tac-section-h">Unrecognised outputs</h3>
+        <p className="tac-bad" role="alert" data-testid="tac-backlog">{err}</p>
+      </>
+    );
+  }
+  if (!learn || !learn.tracked) {
+    return (
+      <>
+        <h3 className="tac-section-h">Unrecognised outputs</h3>
+        <p className="mini-meta tac-note" data-testid="tac-backlog">{BACKLOG_UNTRACKED}</p>
+      </>
+    );
+  }
+
+  const collected = learn.records.length;
+  const state = collected === 0 ? BACKLOG_EMPTY : learn.gap_total === 0 ? BACKLOG_CLEAN : "";
+
+  return (
+    <>
+      <h3 className="tac-section-h">Unrecognised outputs</h3>
+      {state ? (
+        <p className="mini-meta tac-note" data-testid="tac-backlog">{state}</p>
+      ) : (
+        <>
+          <ul className="tac-gap-counts" data-testid="tac-backlog">
+            {learn.gap_kinds.map((k) => (
+              <li key={k}>
+                <span className="tac-gap-n">{learn.gap_counts[k] ?? 0}</span>{" "}
+                <span className="tac-learn-meta">{GAP_KIND_LABEL[k] ?? k}</span>
+              </li>
+            ))}
+          </ul>
+          <ul className="tac-gaps" data-testid="tac-gap-list">
+            {learn.records.flatMap((rec) =>
+              rec.gaps.map((g, i) => (
+                <li key={`${rec.id}-${i}`} className="tac-gap" data-testid={`tac-gap-${rec.id}-${i}`}>
+                  <code className="tac-id">{g.command}</code>{" "}
+                  <span className="tac-learn-meta">
+                    {(GAP_KIND_LABEL[g.kind] ?? g.kind) + " · " + g.dialect + " · " + rec.hostname}
+                  </span>
+                  <p className="tac-gap-why">{g.reason}</p>
+                  {g.excerpt && <pre className="tac-gap-out">{g.excerpt}</pre>}
+                  <button type="button" className="btn sm" onClick={() => setWriting(g)}>
+                    Write the answer
+                  </button>
+                </li>
+              )),
+            )}
+          </ul>
+        </>
+      )}
+
+      <h3 className="tac-section-h">Signature candidates</h3>
+      <p className="mini-meta tac-note">{CANDIDATE_NOTE}</p>
+      {writing && (
+        <CandidateForm
+          gap={writing}
+          onClose={() => setWriting(null)}
+          onSaved={() => { setWriting(null); onChange(); }}
+        />
+      )}
+      {learn.candidates.length === 0 ? (
+        <p className="tac-cand-empty" data-testid="tac-cand-none">{CANDIDATE_NONE}</p>
+      ) : (
+        <ul className="tac-cands" data-testid="tac-cand-list">
+          {learn.candidates.map((c) => (
+            <CandidateRow key={c.id} c={c} onChange={onChange} />
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+/** One saved candidate, with the export that carries it out to a research file
+ *  and the delete that drops it. Both are the operator's, never the engine's. */
+function CandidateRow({ c, onChange }: { c: TacCandidate; onChange: () => void }) {
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+
+  const exportOne = () => {
+    setBusy("export");
+    api.tacCandidateExport(c.dialect)
+      .then((text) => {
+        setErr("");
+        // A Blob, not a link to the route: the route needs the session header,
+        // and a bare href would arrive unauthenticated and read as broken.
+        const url = URL.createObjectURL(new Blob([text], { type: "text/yaml" }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${c.dialect}-candidates.yaml`;
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch((e: unknown) => setErr(tacError(e, CANDIDATE_EXPORT_FAILED)))
+      .finally(() => setBusy(""));
+  };
+
+  return (
+    <li data-testid={`tac-cand-${c.id}`}>
+      <span className="tac-alt-t">{c.title}</span>{" "}
+      <code className="tac-id">{c.class_id}</code>{" "}
+      <span className="tac-learn-meta">
+        {c.dialect + (c.proposed_class ? " · proposed class" : "") + " · " + c.status}
+      </span>
+      {err && <p className="tac-bad" role="alert">{err}</p>}
+      <span className="tac-cand-actions">
+        <button type="button" className="btn sm" disabled={busy !== ""} onClick={exportOne}>
+          Export research file
+        </button>
+        <button
+          type="button"
+          className="btn sm"
+          disabled={busy !== ""}
+          onClick={() => {
+            setBusy("delete");
+            api.tacCandidateDelete(c.id)
+              .then(() => { setErr(""); onChange(); })
+              .catch((e: unknown) => setErr(tacError(e, CANDIDATE_EXPORT_FAILED)))
+              .finally(() => setBusy(""));
+          }}
+        >
+          Drop
+        </button>
+      </span>
+    </li>
+  );
+}
+
+/** Writing a TAC answer down against one gap.
+ *
+ *  The form is seeded from the gap — the command Correlix ran and the dialect it
+ *  ran on are facts, not something an operator should retype — and everything
+ *  else is theirs. The server re-validates every field; a refusal is rendered
+ *  verbatim rather than reduced to "invalid", because the operator needs to
+ *  know WHICH line Correlix will not carry. */
+function CandidateForm(
+  { gap, onClose, onSaved }: { gap: TacGap; onClose: () => void; onSaved: () => void },
+) {
+  const [title, setTitle] = useState("");
+  const [classID, setClassID] = useState("");
+  const [logLine, setLogLine] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [source, setSource] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const save = () => {
+    setBusy(true);
+    api.tacCandidateSave({
+      dialect: gap.dialect,
+      class_id: classID.trim(),
+      title: title.trim(),
+      log_signatures: logLine.trim() ? [logLine.trim()] : [],
+      commands: [{ intent: gap.intent, command: gap.command }],
+      sources: source.trim() ? [{ url: source.trim() }] : [],
+      answer: answer.trim(),
+    })
+      .then(() => { setErr(""); onSaved(); })
+      .catch((e: unknown) => setErr(tacError(e, CANDIDATE_EXPORT_FAILED)))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <form
+      className="tac-cand-form"
+      data-testid="tac-cand-form"
+      onSubmit={(e) => { e.preventDefault(); save(); }}
+    >
+      <label>
+        Title
+        <input value={title} onChange={(e) => setTitle(e.target.value)} required />
+      </label>
+      <label>
+        Issue class
+        <input value={classID} onChange={(e) => setClassID(e.target.value)} required />
+      </label>
+      <label>
+        Log line
+        <input value={logLine} onChange={(e) => setLogLine(e.target.value)} />
+      </label>
+      <label>
+        What TAC said
+        <textarea value={answer} onChange={(e) => setAnswer(e.target.value)} rows={3} />
+      </label>
+      <label>
+        Source link
+        <input value={source} onChange={(e) => setSource(e.target.value)} type="url" />
+      </label>
+      {err && <p className="tac-bad" role="alert">{err}</p>}
+      <span className="tac-cand-actions">
+        <button type="submit" className="btn sm" disabled={busy}>Save candidate</button>
+        <button type="button" className="btn sm" onClick={onClose}>Cancel</button>
+      </span>
+    </form>
   );
 }

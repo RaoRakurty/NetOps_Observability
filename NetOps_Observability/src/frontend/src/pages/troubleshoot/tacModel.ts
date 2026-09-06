@@ -98,10 +98,34 @@ export const CASE_HUMAN_APPROVED =
 export const KNOWLEDGE_FAILED = "The coverage catalogue could not be read.";
 export const KNOWLEDGE_GROWTH_NOTE =
   "Coverage grows from owner runbooks: vendor research is filed under ai/tac/research/<vendor>.yaml and merged into the classes and the per-dialect plans by scripts/tac-merge-research.py.";
-/** The unknown-output backlog is NOT counted anywhere yet, and a 0 would read
- *  as "there is none". Say the truth instead. */
-export const BACKLOG_NOT_TRACKED =
-  "Not yet tracked — outputs the parsers do not recognise are not counted anywhere yet, so no number is shown here.";
+// ── the learning backlog (tracker 243) ───────────────────────────────────────
+//
+// W1 could only say "not yet tracked", because nothing counted unrecognised
+// output and a 0 would have read as "there is none". W3 counts it, so the page
+// now distinguishes THREE states that a single number would have flattened:
+// the backlog does not exist on this build, it exists and nothing has been
+// collected yet, and it exists and everything collected was recognised.
+
+/** The api does not carry the backlog at all (an older build). */
+export const BACKLOG_UNTRACKED =
+  "This build does not read collections for unrecognised output.";
+/** The backlog exists and no collection has run yet. */
+export const BACKLOG_EMPTY = "Nothing collected yet, so nothing has been read.";
+/** The backlog exists, collections have run, and every output was recognised. */
+export const BACKLOG_CLEAN = "Every collected output was recognised.";
+export const BACKLOG_FAILED = "The learning backlog could not be read.";
+
+/** What each gap kind means as a work item — the point of separating them. */
+export const GAP_KIND_LABEL: Record<string, string> = {
+  no_parser: "No parser for this concept",
+  no_dialect: "No parser on this platform",
+  unparsed: "Parser could not read it",
+};
+
+/** A candidate is a proposal. Stated wherever candidates are listed. */
+export const CANDIDATE_NOTE = "A candidate is a proposal, never a rule.";
+export const CANDIDATE_NONE = "No answer has been written down yet.";
+export const CANDIDATE_EXPORT_FAILED = "The research file could not be built.";
 export const NO_UNPLANNED_DIALECTS =
   "Every platform Correlix recognises carries an authored plan.";
 /** The owner's 2026-09-05 output-only command rule, as the coverage page states

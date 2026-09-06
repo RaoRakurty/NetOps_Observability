@@ -3249,6 +3249,113 @@ export type TacTemplateListResponse = {
   note: string;
 };
 
+// ---------- TAC learning backlog (tracker 243) ------------------------------
+//
+// What a collection produced that the parsers could not read, and the signature
+// CANDIDATES an operator writes from a TAC answer. Per-tenant data throughout: a
+// record holds redacted excerpts of that tenant's own device output.
+//
+// A candidate is a PROPOSAL. Nothing on this surface promotes one into the
+// shipped catalogue; the only exit is the exported research file, which a human
+// reviews and merges with scripts/tac-merge-research.py.
+
+/** Why one collected output was not recognised. */
+export type TacGapKind = "no_parser" | "no_dialect" | "unparsed";
+
+/** One command whose output no parser could read. */
+export type TacGap = {
+  kind: TacGapKind;
+  intent: string;
+  title?: string;
+  command: string;
+  dialect: string;
+  reason: string;
+  /** The redacted, bounded head of the output. */
+  excerpt?: string;
+  /** The FULL output's size, so an excerpt does not read as the whole answer. */
+  bytes: number;
+};
+
+/** One collection's unrecognised output. */
+export type TacLearningRecord = {
+  id: string;
+  incident_id: string;
+  device_id: string;
+  hostname: string;
+  platform: string;
+  dialect: string;
+  class_id: string;
+  class_title: string;
+  class_from_signature: boolean;
+  engine_version: string;
+  collected_at: string;
+  commands: number;
+  recognised: number;
+  gaps: TacGap[];
+  truncated?: boolean;
+};
+
+/** One proposed issue signature, in the research vocabulary. */
+export type TacCandidate = {
+  id: string;
+  issue_id: string;
+  dialect: string;
+  class_id: string;
+  proposed_class: boolean;
+  title: string;
+  symptoms?: string[];
+  log_signatures?: string[];
+  likely_causes?: string[];
+  commands?: { intent: string; command: string }[];
+  tac_first_look?: string;
+  sources?: { title?: string; url: string; retrieved?: string }[];
+  answer?: string;
+  from_incident?: string;
+  from_record?: string;
+  status: "proposed" | "exported" | "rejected";
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+/** The POST/PUT body. There is deliberately no tenant, id, owner or timestamp:
+ *  ownership is stamped by the server and `proposed_class` is derived from the
+ *  taxonomy, never claimed here. */
+export type TacCandidateWrite = {
+  issue_id?: string;
+  dialect: string;
+  class_id: string;
+  title: string;
+  symptoms?: string[];
+  log_signatures?: string[];
+  likely_causes?: string[];
+  commands?: { intent?: string; command: string }[];
+  tac_first_look?: string;
+  sources?: { title?: string; url: string; retrieved?: string }[];
+  answer?: string;
+  from_incident?: string;
+  from_record?: string;
+  status?: string;
+};
+
+/** GET /api/tac/learning */
+export type TacLearningResponse = {
+  /** True once the backlog exists at all — what lets the page stop saying
+   *  "not yet tracked". It is NOT the same as "there are no gaps". */
+  tracked: boolean;
+  records: TacLearningRecord[];
+  candidates: TacCandidate[];
+  gap_counts: Record<string, number>;
+  gap_total: number;
+  gap_kinds: TacGapKind[];
+  dialects: string[];
+  limit: number;
+  note: string;
+  engine: string;
+  record_cap: number;
+  candidate_n: number;
+};
+
 /** GET /api/tac/templates/defaults */
 export type TacTemplateDefaultsResponse = {
   defaults: TacTemplate[];
@@ -6006,6 +6113,48 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ dialect, commands }),
     }),
+
+  // ---------- TAC learning backlog (tracker 243) ---------------------------
+  // Reads need infrastructure:read, writes infrastructure:write. Per-tenant
+  // data: a cross-tenant principal must scope into a tenant first, and another
+  // tenant's candidate id answers the same 404 an absent one does.
+  /** This tenant's unrecognised-output backlog and its signature candidates. */
+  tacLearning: (dialect?: string) =>
+    request<TacLearningResponse>(
+      `/api/tac/learning${dialect ? `?dialect=${encodeURIComponent(dialect)}` : ""}`,
+    ),
+  /** Write a TAC answer down as a candidate. The owner is stamped from the
+   *  token — the body has no tenant — and every command is re-validated
+   *  server-side against the output-only policy before the row exists. */
+  tacCandidateSave: (body: TacCandidateWrite) =>
+    request<{ candidate: TacCandidate }>("/api/tac/learning/candidates", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /** Revise a candidate. Identity and provenance are immutable across the edit. */
+  tacCandidateUpdate: (id: string, body: TacCandidateWrite) =>
+    request<{ candidate: TacCandidate }>(`/api/tac/learning/candidates/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  /** Drop one of this tenant's candidates. */
+  tacCandidateDelete: (id: string) =>
+    request<{ deleted: string }>(`/api/tac/learning/candidates/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  /** The research YAML for one dialect's candidates, as text.
+   *
+   *  It is FETCHED with the session header rather than offered as a link: a
+   *  bare href would arrive unauthenticated and the route would refuse it, and
+   *  the operator would read that as "the export is broken". */
+  tacCandidateExport: async (dialect: string): Promise<string> => {
+    const token = getToken();
+    const res = await fetch(`/api/tac/learning/export?dialect=${encodeURIComponent(dialect)}`, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
+    return res.text();
+  },
 
   // ---------- Packet capture (FEATURE_PACKET_CAPTURE) ----------------------
   // Reads need infrastructure:read; start, download and delete need
