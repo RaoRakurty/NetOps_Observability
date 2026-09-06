@@ -96,10 +96,22 @@ function metricsLine(metrics: Record<string, number | string> | undefined): stri
 }
 
 type BBox = { minX: number; minY: number; maxX: number; maxY: number; w: number; h: number; cx: number; cy: number };
-function bboxOf(ids: string[], positions: LayoutResult): BBox | null {
+
+/**
+ * Union of the boxes occupied by `nodeIds` (device cards, NODE_SIZE) and
+ * `groupIds` (container rectangles ELK solved, when it solved one).
+ *
+ * The group ids matter for NESTING: a REGION's members are not devices, they are
+ * other GROUPS (VPCs, which nest via `parent_id`). Measuring only the device
+ * cards would still work for a region whose VPCs contain devices, but it would
+ * clip a nested container that ELK padded — and it returned null outright for a
+ * container whose descendants are all groups, which is how every region box was
+ * silently dropped (#134).
+ */
+function bboxOf(nodeIds: string[], positions: LayoutResult, groupIds: string[] = []): BBox | null {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   let any = false;
-  for (const id of ids) {
+  for (const id of nodeIds) {
     const p = positions[id];
     if (!p) continue;
     any = true;
@@ -107,6 +119,15 @@ function bboxOf(ids: string[], positions: LayoutResult): BBox | null {
     minY = Math.min(minY, p.y);
     maxX = Math.max(maxX, p.x + NODE_SIZE.width);
     maxY = Math.max(maxY, p.y + NODE_SIZE.height);
+  }
+  for (const id of groupIds) {
+    const p = positions[id];
+    if (!p || !p.w || !p.h) continue;
+    any = true;
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x + p.w);
+    maxY = Math.max(maxY, p.y + p.h);
   }
   if (!any) return null;
   return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
@@ -127,23 +148,76 @@ export function topologyToReactFlow(
   const focus = new Set<string>([...ui.spotlight, ...ui.searchMatches]);
   const density = ui.density ?? "operator";
 
-  // node → group membership, and helpers for collapse hiding / edge rerouting.
+  // node → its DIRECT group, plus the group hierarchy (parent_id). Both are needed:
+  // membership is declared on the leaf group, nesting only on `parent_id`.
   const nodeGroup = new Map<string, string>();
   for (const g of view.groups) for (const c of g.children) nodeGroup.set(c, g.id);
-  const isHidden = (nodeId: string) => {
-    const g = nodeGroup.get(nodeId);
-    return !!(g && collapsed.has(g));
+  const groupById = new Map(view.groups.map((g) => [g.id, g]));
+  // parent → child GROUPS. A region's members are groups, not nodes.
+  const childGroups = new Map<string, string[]>();
+  for (const g of view.groups) {
+    const p = g.parent_id;
+    if (!p || p === g.id || !groupById.has(p)) continue;
+    const arr = childGroups.get(p);
+    if (arr) arr.push(g.id);
+    else childGroups.set(p, [g.id]);
+  }
+
+  /**
+   * Every node and every group BELOW `id` in the container tree. Iterative with a
+   * visited set so a malformed cycle (`a.parent=b`, `b.parent=a`) cannot hang the
+   * renderer — the same bounded-walk discipline `depthOf` uses.
+   */
+  const descendantCache = new Map<string, { nodes: string[]; groups: string[] }>();
+  const descendantsOf = (id: string): { nodes: string[]; groups: string[] } => {
+    const hit = descendantCache.get(id);
+    if (hit) return hit;
+    const nodes: string[] = [];
+    const groups: string[] = [];
+    const seen = new Set<string>([id]);
+    const stack = [id];
+    while (stack.length > 0) {
+      const cur = stack.pop() as string;
+      for (const c of groupById.get(cur)?.children ?? []) nodes.push(c);
+      for (const kid of childGroups.get(cur) ?? []) {
+        if (seen.has(kid)) continue;
+        seen.add(kid);
+        groups.push(kid);
+        stack.push(kid);
+      }
+    }
+    const out = { nodes, groups };
+    descendantCache.set(id, out);
+    return out;
   };
-  const resolveEndpoint = (nodeId: string) => {
-    const g = nodeGroup.get(nodeId);
-    return g && collapsed.has(g) ? g : nodeId;
+
+  /**
+   * The OUTERMOST collapsed container above a node, or undefined. Collapse has to
+   * look at ancestors, not just the direct group: collapsing a region must hide the
+   * devices inside its VPCs (and reroute their edges to the region card), otherwise
+   * the aggregate card floats beside the members it claims to have swallowed.
+   */
+  const collapsedRootCache = new Map<string, string | undefined>();
+  const collapsedRootOf = (nodeId: string): string | undefined => {
+    if (collapsedRootCache.has(nodeId)) return collapsedRootCache.get(nodeId);
+    let cur: string | undefined = nodeGroup.get(nodeId);
+    let out: string | undefined;
+    let d = 0;
+    while (cur && d < 8) {
+      if (collapsed.has(cur)) out = cur;
+      cur = groupById.get(cur)?.parent_id;
+      d++;
+    }
+    collapsedRootCache.set(nodeId, out);
+    return out;
   };
+  const isHidden = (nodeId: string) => collapsedRootOf(nodeId) !== undefined;
+  const resolveEndpoint = (nodeId: string) => collapsedRootOf(nodeId) ?? nodeId;
 
   // ── group nodes (container when expanded, aggregate card when collapsed) ──────
   const groupNodes: Node<RFGroupData>[] = [];
   // Nesting depth per group, from parent_id. Bounded walk: a malformed cycle
   // must not hang the renderer.
-  const groupById = new Map(view.groups.map((g) => [g.id, g]));
   const depthOf = (id: string): number => {
     let d = 0;
     let cur = groupById.get(id)?.parent_id;
@@ -153,26 +227,57 @@ export function topologyToReactFlow(
     }
     return d;
   };
+  /** True when some PROPER ancestor of `id` is collapsed (this box is swallowed). */
+  const hasCollapsedAncestor = (id: string): boolean => {
+    let cur = groupById.get(id)?.parent_id;
+    let d = 0;
+    while (cur && d < 8) {
+      if (collapsed.has(cur)) return true;
+      cur = groupById.get(cur)?.parent_id;
+      d++;
+    }
+    return false;
+  };
 
+  const nodeById = new Map(view.nodes.map((n) => [n.id, n]));
   for (const g of view.groups) {
-    const memberNodes = g.children.map((id) => view.nodes.find((n) => n.id === id)).filter(Boolean) as typeof view.nodes;
-    const bbox = bboxOf(g.children, positions);
-    if (memberNodes.length === 0 || !bbox) continue;
+    // A container's members are its DESCENDANTS, not only its direct children: a
+    // region declares no node children at all (its VPCs do), so measuring direct
+    // children dropped every region box — the canvas drew 0 region boundaries for
+    // a cloud view that declares 2 (#134). ELK already nests the containers
+    // correctly; only this derivation was flat.
+    const desc = descendantsOf(g.id);
+    const memberNodes = desc.nodes.map((id) => nodeById.get(id)).filter(Boolean) as typeof view.nodes;
+    const bbox = bboxOf(desc.nodes, positions, desc.groups);
+    // A box that is inside a collapsed ancestor is not drawn at all — the ancestor's
+    // aggregate card stands for it.
+    if (hasCollapsedAncestor(g.id)) continue;
+    // DRAW THE RECT ELK SOLVED when it solved one (single-source geometry rule
+    // below); it is also what lets a region render whose descendants are groups.
+    const solved = positions[g.id];
+    const solvedRect = solved?.w && solved?.h ? { x: solved.x, y: solved.y, w: solved.w, h: solved.h } : null;
+    if (memberNodes.length === 0 && desc.groups.length === 0) continue; // genuinely empty
+    if (!bbox && !solvedRect) continue; // nothing laid out yet
 
     const critical = memberNodes.filter((n) => n.health === "critical").length;
     const warning = memberNodes.filter((n) => n.health === "warning").length;
-    const links = view.edges.filter((e) => g.children.includes(e.source) || g.children.includes(e.target)).length;
+    const memberSet = new Set(desc.nodes);
+    const links = view.edges.filter((e) => memberSet.has(e.source) || memberSet.has(e.target)).length;
     const worst: Health = rollupHealth(memberNodes);
     const counts = { total: memberNodes.length, critical, warning, links };
     const isCollapsed = collapsed.has(g.id);
     const emphasis: NodeEmphasis = ui.selection.groupId === g.id ? "spotlight" : "normal";
+    // Centre for the collapsed aggregate card: the measured descendants when we
+    // have them, else the rect ELK solved.
+    const cx = bbox ? bbox.cx : (solvedRect as { x: number; w: number }).x + (solvedRect as { w: number }).w / 2;
+    const cy = bbox ? bbox.cy : (solvedRect as { y: number; h: number }).y + (solvedRect as { h: number }).h / 2;
 
     if (isCollapsed) {
       groupNodes.push({
         id: g.id,
         type: "groupNode",
-        position: { x: bbox.cx - 104, y: bbox.cy - 44 },
-        data: { group: g, collapsed: true, emphasis, counts, health: worst, onToggle: ui.onToggleGroup },
+        position: { x: cx - 104, y: cy - 44 },
+        data: { group: g, collapsed: true, emphasis, counts, health: worst, onToggle: ui.onToggleGroup, depth: depthOf(g.id) },
         zIndex: 2,
         selectable: true,
         // A group's position is always re-derived from its children's bbox, so a
@@ -185,16 +290,15 @@ export function topologyToReactFlow(
       // with padding constants that differed from the ones ELK reserved with —
       // is what produced asymmetric padding and sibling boxes that nearly
       // touched despite a clean layout. The fallback keeps a view whose layout
-      // predates container geometry rendering rather than dropping the group.
-      const solved = positions[g.id];
-      const rect = solved?.w && solved?.h
-        ? { x: solved.x, y: solved.y, w: solved.w, h: solved.h }
-        : {
-            x: bbox.minX - GROUP_PAD,
-            y: bbox.minY - GROUP_PAD - LABEL_BAND,
-            w: bbox.w + GROUP_PAD * 2,
-            h: bbox.h + GROUP_PAD * 2 + LABEL_BAND,
-          };
+      // predates container geometry rendering rather than dropping the group,
+      // and measures DESCENDANTS (nested container rects included) so a region's
+      // fallback box still encloses its VPCs.
+      const rect = solvedRect ?? {
+        x: (bbox as BBox).minX - GROUP_PAD,
+        y: (bbox as BBox).minY - GROUP_PAD - LABEL_BAND,
+        w: (bbox as BBox).w + GROUP_PAD * 2,
+        h: (bbox as BBox).h + GROUP_PAD * 2 + LABEL_BAND,
+      };
       groupNodes.push({
         id: g.id,
         type: "groupNode",
@@ -361,6 +465,9 @@ export function topologyToReactFlow(
     });
   }
 
-  // groups first → they render behind the device cards.
+  // groups first → they render behind the device cards; OUTER containers before
+  // inner ones (equal zIndex ⇒ array order decides), so a region never paints
+  // over the VPC boxes nested inside it.
+  groupNodes.sort((a, b) => ((a.data.depth ?? 0) - (b.data.depth ?? 0)));
   return { nodes: [...groupNodes, ...deviceNodes], edges };
 }

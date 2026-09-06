@@ -74,3 +74,127 @@ describe("topologyToReactFlow — RCA overlay edges", () => {
     expect(edges.find((e) => e.id === "e-sus")!.type).toBe("rcaEdge");
   });
 });
+
+// ── #134: nested containers (region → VPC) ────────────────────────────────────
+//
+// A group's box used to be derived from its DIRECT node children, and a group
+// with none was skipped outright. A REGION declares no node children — its
+// members are VPC groups, which nest via `parent_id` — so every region box was
+// discarded: the deployed cloud view declares 2 regions and the canvas drew 0.
+// ELK already lays the nesting out correctly (containers inside containers);
+// only this rendering half was flat. Structural assertions, no snapshot.
+describe("topologyToReactFlow — nested groups (region → VPC)", () => {
+  const cloudNode = (id: string): TopologyView["nodes"][number] => ({
+    id,
+    label: id,
+    kind: "cloud",
+    health: "unknown",
+    confidence: 0.9,
+    evidence: [{ source: "cloud_api", confidence: 0.9 }],
+  });
+
+  // region:aws:us-west-2 ─┬─ vpc-a ── subnet-a1, subnet-a2
+  //                       └─ vpc-b ── subnet-b1
+  const nestedView: TopologyView = {
+    view_id: "nested-groups",
+    mode: "explore",
+    layout_type: "cloud_grouped",
+    generated_at: "2026-08-02T00:00:00Z",
+    nodes: [cloudNode("subnet-a1"), cloudNode("subnet-a2"), cloudNode("subnet-b1")],
+    edges: [],
+    groups: [
+      { id: "region:aws:us-west-2", label: "aws · us-west-2", group_type: "region", children: [], health: "unknown", collapsed: false },
+      { id: "vpc-a", label: "VPC · a", group_type: "vpc", parent_id: "region:aws:us-west-2", children: ["subnet-a1", "subnet-a2"], health: "unknown", collapsed: false },
+      { id: "vpc-b", label: "VPC · b", group_type: "vpc", parent_id: "region:aws:us-west-2", children: ["subnet-b1"], health: "unknown", collapsed: false },
+    ],
+    overlays: ["health"],
+  };
+
+  // What ELK returns: containers carry a solved rect, leaves only a position.
+  const positions = {
+    "region:aws:us-west-2": { x: 0, y: 0, w: 900, h: 400 },
+    "vpc-a": { x: 24, y: 60, w: 400, h: 300 },
+    "vpc-b": { x: 470, y: 60, w: 380, h: 300 },
+    "subnet-a1": { x: 48, y: 120 },
+    "subnet-a2": { x: 220, y: 120 },
+    "subnet-b1": { x: 500, y: 120 },
+  };
+
+  const groupsOf = (nodes: Node<RFNodeData | RFGroupData>[]) =>
+    nodes.filter((n) => n.type === "groupNode");
+
+  it("renders the region container whose only members are other GROUPS", () => {
+    const { nodes } = topologyToReactFlow(nestedView, positions);
+    const ids = groupsOf(nodes).map((n) => n.id);
+    expect(ids).toContain("region:aws:us-west-2");
+    expect(ids).toContain("vpc-a");
+    expect(ids).toContain("vpc-b");
+  });
+
+  it("the region's box ENCLOSES every descendant group box and device card", () => {
+    const { nodes } = topologyToReactFlow(nestedView, positions);
+    const region = groupsOf(nodes).find((n) => n.id === "region:aws:us-west-2")!;
+    const rx = region.position.x;
+    const ry = region.position.y;
+    const rw = Number(region.style?.width);
+    const rh = Number(region.style?.height);
+    expect(rw).toBeGreaterThan(0);
+    expect(rh).toBeGreaterThan(0);
+    for (const child of ["vpc-a", "vpc-b"]) {
+      const box = groupsOf(nodes).find((n) => n.id === child)!;
+      expect(box.position.x).toBeGreaterThanOrEqual(rx);
+      expect(box.position.y).toBeGreaterThanOrEqual(ry);
+      expect(box.position.x + Number(box.style?.width)).toBeLessThanOrEqual(rx + rw);
+      expect(box.position.y + Number(box.style?.height)).toBeLessThanOrEqual(ry + rh);
+    }
+  });
+
+  it("falls back to the DESCENDANT bounding box when ELK solved no rect for the region", () => {
+    // Same view, but the layout predates container geometry (no w/h anywhere) —
+    // the region must still be drawn, around everything below it.
+    const flat = {
+      "subnet-a1": { x: 48, y: 120 },
+      "subnet-a2": { x: 220, y: 120 },
+      "subnet-b1": { x: 500, y: 120 },
+    };
+    const { nodes } = topologyToReactFlow(nestedView, flat);
+    const region = groupsOf(nodes).find((n) => n.id === "region:aws:us-west-2")!;
+    expect(region).toBeTruthy();
+    const rx = region.position.x;
+    const rw = Number(region.style?.width);
+    // Encloses the leftmost and rightmost descendant cards.
+    expect(rx).toBeLessThan(48);
+    expect(rx + rw).toBeGreaterThan(500 + 120);
+  });
+
+  it("counts the region's DESCENDANT devices, not its (empty) direct children", () => {
+    const { nodes } = topologyToReactFlow(nestedView, positions);
+    const region = groupsOf(nodes).find((n) => n.id === "region:aws:us-west-2")!;
+    expect((region.data as RFGroupData).counts.total).toBe(3);
+    expect((region.data as RFGroupData).depth).toBe(0);
+    const vpcA = groupsOf(nodes).find((n) => n.id === "vpc-a")!;
+    expect((vpcA.data as RFGroupData).counts.total).toBe(2);
+    expect((vpcA.data as RFGroupData).depth).toBe(1);
+  });
+
+  it("outer containers are emitted BEFORE the containers nested in them", () => {
+    const { nodes } = topologyToReactFlow(nestedView, positions);
+    const order = groupsOf(nodes).map((n) => n.id);
+    expect(order.indexOf("region:aws:us-west-2")).toBeLessThan(order.indexOf("vpc-a"));
+    expect(order.indexOf("region:aws:us-west-2")).toBeLessThan(order.indexOf("vpc-b"));
+  });
+
+  it("collapsing the REGION hides the nested VPC boxes and every device under them", () => {
+    const { nodes } = topologyToReactFlow(nestedView, positions, {
+      ...baseUI,
+      spotlight: new Set<string>(),
+      collapsedGroups: new Set<string>(["region:aws:us-west-2"]),
+    });
+    const ids = nodes.map((n) => n.id);
+    expect(ids).toContain("region:aws:us-west-2");
+    expect(ids).not.toContain("vpc-a");
+    expect(ids).not.toContain("vpc-b");
+    expect(ids).not.toContain("subnet-a1");
+    expect(ids).not.toContain("subnet-b1");
+  });
+});
