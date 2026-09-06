@@ -230,6 +230,15 @@ bash deployment/helm/stage-configs.sh --check  # what CI runs
 `tests/test_helm_chart.py::test_staged_configs_match_canonical_sources` fails
 until you do. Never edit `files/` by hand.
 
+**Adding a file to a directory the compose stack mounts whole** — `syslog-ng/`,
+`gnmic/`, `vector/`, `vector-router/`, `opensearch/`, `src/config/` — also
+requires staging it, and `test_whole_directory_mounts_are_staged_whole` fails
+until you either stage it or record why it does not belong in the chart. That
+guard exists because the first pass of this chart cherry-picked
+`syslog-ng/syslog-ng.conf` and missed the `core.conf` it `@include`s: helm
+rendered, kubeconform passed, every probe and limit was in place, and the daemon
+would have refused to start.
+
 ---
 
 ## Network policy

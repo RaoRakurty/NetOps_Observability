@@ -229,6 +229,75 @@ def test_staged_configs_match_canonical_sources():
     )
 
 
+# Directories the compose stack mounts WHOLE (`./x:/somewhere`), mapped to the
+# chart's staged subdirectory, with the files deliberately left out and why.
+#
+# WHY THIS EXISTS. The chart stages files one by one, and the first pass of it
+# missed `syslog-ng/core.conf` — the file `syslog-ng.conf` `@include`s, without
+# which the daemon refuses to start. Nothing caught it: helm rendered,
+# kubeconform passed, every probe and resource was in place. The generator of
+# that bug is "compose mounts a directory, the chart cherry-picks files", so
+# the guard is on the directory, not on that one file. A NEW file in one of
+# these directories fails here until someone decides whether it belongs in the
+# chart.
+WHOLE_DIR_MOUNTS = {
+    "deployment/docker/syslog-ng": ("syslog-ng", {}),
+    "deployment/docker/gnmic": ("gnmic", {}),
+    "deployment/docker/vector": ("vector", {
+        "tests": "Vector unit-test fixtures; not read at runtime",
+        "generated": "spliced INTO vector.yaml at generation time, staged flat "
+                     "instead — pinned by the next test",
+    }),
+    "deployment/docker/vector-router": ("vector-router", {
+        "Dockerfile": "build input, not a mounted config",
+        "tests": "Vector unit-test fixtures; not read at runtime",
+    }),
+    "deployment/docker/opensearch": ("opensearch", {
+        "Dockerfile": "build input for the slim image, which the chart does not use",
+        "opensearch-security.yml": "consumed by the security bootstrap, whose ConfigMap the operator builds",
+        "security": "per-identity roles/mappings an operator reviews and creates themselves",
+        "SNAPSHOTS-DO-NOT-DELETE-README.txt": "a note to a human on the snapshot volume, not config",
+    }),
+    "src/config": ("config", {
+        "rules-tests": "promtool rule fixtures; run by preflight-configs.sh, never mounted",
+        "examples": "documentation samples",
+        "devices.lab-clos.yaml": "lab topology fixture, not a shipped default",
+        "snmp_profiles.example.json": "an example beside the real snmp_profiles.json",
+    }),
+}
+
+
+def test_whole_directory_mounts_are_staged_whole():
+    missing: list[str] = []
+    for src_rel, (staged_rel, skip) in WHOLE_DIR_MOUNTS.items():
+        src_dir = os.path.join(ROOT, src_rel)
+        staged_dir = os.path.join(CHART, "files", staged_rel)
+        assert os.path.isdir(src_dir), f"{src_rel} no longer exists"
+        assert os.path.isdir(staged_dir), f"{staged_rel} is not staged at all"
+        staged = set(os.listdir(staged_dir))
+        for name in sorted(os.listdir(src_dir)):
+            if name in skip:
+                continue
+            if name not in staged:
+                missing.append(f"{src_rel}/{name} -> files/{staged_rel}/")
+    assert not missing, (
+        "compose mounts these directories WHOLE, so a file present there and "
+        "absent from the chart is a config the container will not find:\n  "
+        + "\n  ".join(missing)
+        + "\n\nAdd it to deployment/helm/stage-configs.sh, or add it to this "
+          "test's skip map WITH A REASON."
+    )
+
+
+def test_generated_vrl_is_staged_beside_the_config_it_documents():
+    """`vector/generated/syslog-admission.vrl` is spliced INTO vector.yaml by
+    scripts/gen-syslog-admission.py rather than loaded at runtime, so it is
+    staged flat. Pinned so the flattening stays deliberate."""
+    assert os.path.isfile(os.path.join(CHART, "files", "vector", "syslog-admission.vrl"))
+    assert os.path.isfile(os.path.join(
+        ROOT, "deployment", "docker", "vector", "generated", "syslog-admission.vrl"))
+
+
 def test_gateway_config_differs_from_compose_only_in_the_resolver():
     """The one deliberate edit, pinned.
 
