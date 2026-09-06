@@ -31,13 +31,36 @@ import (
 	"testing"
 
 	"netops/backend/internal/compliancemodel"
+	"netops/backend/internal/entitlement"
+	"netops/backend/internal/licence"
 	"netops/backend/secapi"
 )
 
-// secFwServer is secTestServer plus the in-memory framework-selection store.
+// secFwServer is secTestServer plus the in-memory framework-selection store,
+// under a licence that includes the compliance-framework crosswalks.
+//
+// WHY THE LICENCE. The crosswalks for the three frameworks beyond the shipped
+// default two are the `security_dialects` entitlement (its locked scope is
+// "dialects beyond the default set AND compliance frameworks beyond the default
+// two"), so an unlicensed deployment gets the honest not-installed scorecard
+// instead of a HIPAA score. This suite is about per-tenant SELECTION and
+// ISOLATION, which are core and never licensed, so it runs entitled and keeps
+// asserting exactly what it always did. The gate itself is proven separately:
+// TestSecurityComplianceCrosswalkGate below, and licence_dialect_gate_test.go
+// for the dialect half.
 func secFwServer(t *testing.T) *server {
 	t.Helper()
+	k := newLicTestKey(t)
+	return secFwServerWithLicence(t, k.service(t,
+		k.issue(t, entitlement.TierEnterprise, []entitlement.Feature{entitlement.FeatureSecurityDialects}, nil)))
+}
+
+// secFwServerWithLicence is secFwServer at a caller-chosen entitlement, so the
+// Community path can be exercised on the same wiring.
+func secFwServerWithLicence(t *testing.T, ent *licence.Service) *server {
+	t.Helper()
 	s := secTestServer(t)
+	s.entitlements = ent
 	s.secFrameworks = secapi.NewFrameworkFileStore("") // in-memory
 	s.secAPI = secapi.New(s.securityAPIDeps())
 	return s
@@ -270,17 +293,21 @@ func TestSecurityFrameworkAsTenantIgnoredForNonOwner(t *testing.T) {
 }
 
 // complianceBody is the scorecard response.
+// complianceCard is one framework scorecard as the page reads it. It is a
+// NAMED type so more than one test can hold a pointer into the list.
+type complianceCard struct {
+	Framework       string   `json:"framework"`
+	Version         string   `json:"version"`
+	ScorePercent    *float64 `json:"score_percent"`
+	CoveragePercent float64  `json:"coverage_percent"`
+	Assessed        int      `json:"assessed"`
+	Failed          int      `json:"failed"`
+	Note            string   `json:"note"`
+	Caption         string   `json:"caption"`
+}
+
 type complianceBody struct {
-	Frameworks []struct {
-		Framework       string   `json:"framework"`
-		Version         string   `json:"version"`
-		ScorePercent    *float64 `json:"score_percent"`
-		CoveragePercent float64  `json:"coverage_percent"`
-		Assessed        int      `json:"assessed"`
-		Failed          int      `json:"failed"`
-		Note            string   `json:"note"`
-		Caption         string   `json:"caption"`
-	} `json:"frameworks"`
+	Frameworks []complianceCard  `json:"frameworks"`
 	Enabled    []string          `json:"enabled"`
 	Configured bool              `json:"configured"`
 	Findings   int               `json:"current_findings"`
@@ -348,16 +375,7 @@ func TestSecurityComplianceScoresOnlyTheEnabledFrameworks(t *testing.T) {
 	if !b.Configured {
 		t.Error("after a save the tenant must read as configured")
 	}
-	var hipaa *struct {
-		Framework       string   `json:"framework"`
-		Version         string   `json:"version"`
-		ScorePercent    *float64 `json:"score_percent"`
-		CoveragePercent float64  `json:"coverage_percent"`
-		Assessed        int      `json:"assessed"`
-		Failed          int      `json:"failed"`
-		Note            string   `json:"note"`
-		Caption         string   `json:"caption"`
-	}
+	var hipaa *complianceCard
 	for i := range b.Frameworks {
 		if strings.Contains(b.Frameworks[i].Framework, "HIPAA") {
 			hipaa = &b.Frameworks[i]
@@ -365,6 +383,14 @@ func TestSecurityComplianceScoresOnlyTheEnabledFrameworks(t *testing.T) {
 	}
 	if hipaa == nil {
 		t.Fatalf("HIPAA was enabled but not scored: %+v", b.Frameworks)
+	}
+	if strings.Contains(hipaa.Note, "not included in this deployment") {
+		// An Apache-2.0-only tree (src/backend/enterprise deleted): the HIPAA
+		// CROSSWALK is a commercial add-on, so there is no projection to assert
+		// here. The framework is still in the vocabulary, still selectable and
+		// still reported — which is the property the Community test below owns.
+		t.Skip("the HIPAA crosswalk is not installed in this build; " +
+			"TestSecurityComplianceCrosswalkGate covers that case")
 	}
 	// The rule tags TWO controls (AC-17 remote access, SC-8 transmission
 	// protection) and HIPAA scopes both, so one finding fails two controls —
@@ -379,6 +405,78 @@ func TestSecurityComplianceScoresOnlyTheEnabledFrameworks(t *testing.T) {
 	}
 	if hipaa.CoveragePercent >= 100 {
 		t.Errorf("coverage must stay honest below 100%%, got %.1f", hipaa.CoveragePercent)
+	}
+}
+
+// TestSecurityComplianceCrosswalkGate is the licence half of the framework
+// model, at the wire.
+//
+// A tenant on a licence without `security_dialects` may still ENABLE any
+// framework — the vocabulary and the selection are Apache-2.0 core, and taking
+// a stored choice away because a licence lapsed would be silently rewriting the
+// customer's configuration. What it does not get is the CROSSWALK, so the
+// scorecard is an honest non-answer: the framework is still listed, the score is
+// NULL (never 0 %, which reads as total failure), the verdict is unassessed, and
+// the card SAYS why. The one thing that must never happen is the card quietly
+// disappearing — an operator who enabled HIPAA and sees no HIPAA has been told
+// nothing at all.
+func TestSecurityComplianceCrosswalkGate(t *testing.T) {
+	secStartFakeOS(t, &secFakeOS{})
+	k := newLicTestKey(t)
+	s := secFwServerWithLicence(t, k.service(t, nil)) // nil = Community
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFrameworks(w, req(http.MethodPut, "/api/security/frameworks",
+		`[{"framework_id":"`+compliancemodel.IDHIPAA+`","enabled":true}]`, tAdmin("acme")))
+	if w.Code != http.StatusOK {
+		t.Fatalf("a Community tenant must still be able to choose its frameworks: %d (%s)",
+			w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	s.secAPI.HandleCompliance(w, req(http.MethodGet, "/api/security/compliance", "", tAdmin("acme")))
+	if w.Code != http.StatusOK {
+		t.Fatalf("compliance = %d (%s)", w.Code, w.Body.String())
+	}
+	b := complianceBody{}
+	if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var hipaa *complianceCard
+	for i := range b.Frameworks {
+		if strings.Contains(b.Frameworks[i].Framework, "HIPAA") {
+			hipaa = &b.Frameworks[i]
+		}
+	}
+	if hipaa == nil {
+		t.Fatalf("the enabled framework vanished from the page instead of reporting itself: %+v", b.Frameworks)
+	}
+	if hipaa.ScorePercent != nil {
+		t.Errorf("a framework with no installed crosswalk must report a NULL score, got %v", *hipaa.ScorePercent)
+	}
+	if hipaa.Assessed != 0 || hipaa.Failed != 0 {
+		t.Errorf("nothing was projected, so nothing may be reported as assessed: %+v", hipaa)
+	}
+	if !strings.Contains(hipaa.Note, "not included in this deployment") {
+		t.Errorf("the card must SAY why it has no score, got %q", hipaa.Note)
+	}
+	if hipaa.Caption == "" {
+		t.Error("the §5d honesty caption belongs on every framework view, including this one")
+	}
+
+	// The two DEFAULT frameworks are Apache-2.0 and are never gated: a
+	// Community tenant still gets a real 800-53 and CIS scorecard.
+	for _, want := range []string{"800-53", "CIS"} {
+		found := false
+		for i := range b.Frameworks {
+			if strings.Contains(b.Frameworks[i].Framework, want) &&
+				!strings.Contains(b.Frameworks[i].Note, "not included in this deployment") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s is a core framework and must be scored at every tier: %+v", want, b.Frameworks)
+		}
 	}
 }
 
