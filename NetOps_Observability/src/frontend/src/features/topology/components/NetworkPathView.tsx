@@ -21,7 +21,7 @@ import { ShapeSVG, kindForRole, type ShapeKind } from "../../../components/graph
 import { fmtMs, fmtMbps } from "../utils/pathFormat";
 import PathAnalysisPanel from "./PathAnalysisPanel";
 
-const MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+const MONO = "var(--font-mono)";
 
 /** A node is an unresolved/external boundary when discovery never managed it. */
 function isBoundary(n: TopologyNode | undefined, id: string): boolean {

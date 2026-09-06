@@ -9,7 +9,7 @@ import type { TopologyView, EvidenceRef } from "../api/topologyTypes";
 import { HEALTH_COLOR, HEALTH_LABEL, SOURCE_LABEL, confidencePct } from "../utils/topologyHealth";
 import { RCA_OVERLAY } from "../utils/rcaOverlay";
 
-const MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+const MONO = "var(--font-mono)";
 
 function EvidenceRows({ evidence }: { evidence: EvidenceRef[] }) {
   if (!evidence || evidence.length === 0) return null;

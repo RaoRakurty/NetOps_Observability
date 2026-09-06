@@ -71,30 +71,128 @@ const COPIES = [
     expect: "Eclipse Public License - v 2.0",
   },
   {
-    pkg: "@fontsource/inter",
+    pkg: "@fontsource-variable/inter",
     from: "LICENSE",
     to: "fonts/inter-OFL-1.1.txt",
     expect: "SIL OPEN FONT LICENSE",
   },
   {
-    pkg: "@fontsource/ibm-plex-mono",
+    pkg: "@fontsource-variable/jetbrains-mono",
     from: "LICENSE",
-    to: "fonts/ibm-plex-mono-OFL-1.1.txt",
+    to: "fonts/jetbrains-mono-OFL-1.1.txt",
     expect: "SIL OPEN FONT LICENSE",
   },
   {
-    pkg: "@fontsource/space-grotesk",
+    pkg: "@fontsource-variable/space-grotesk",
     from: "LICENSE",
     to: "fonts/space-grotesk-OFL-1.1.txt",
     expect: "SIL OPEN FONT LICENSE",
   },
-  {
-    pkg: "@fontsource-variable/manrope",
-    from: "LICENSE",
-    to: "fonts/manrope-OFL-1.1.txt",
-    expect: "SIL OPEN FONT LICENSE",
-  },
 ];
+
+// ── the font BINARIES we redistribute ────────────────────────────────────────
+// The .woff2 files are checked into public/fonts/ rather than pulled out of
+// node_modules by the bundler, so that index.html can preload them from a
+// stable URL and nginx can cache them immutably (see public/fonts/README.md).
+// That decouples the shipped bytes from the package they came from, and a
+// decoupled copy is a copy that can silently rot — a font could be swapped for
+// an unlicensed one, or edited, and nothing would notice. Two invariants are
+// therefore re-derived on EVERY build:
+//
+//   1. the filename's hash fragment is the file's own SHA-256 prefix (which is
+//      what makes `Cache-Control: immutable` truthful), and
+//   2. the bytes are IDENTICAL to the pinned Fontsource package's own file, so
+//      "redistributed unmodified" under OFL-1.1 stays a checked fact, and the
+//      LICENSE beside it provably covers the binary next to it.
+//
+// A mismatch is a HARD failure, never a warning: shipping a font whose licence
+// we cannot vouch for is the exact defect this directory exists to prevent.
+const FONTS = [
+  { pkg: "@fontsource-variable/inter",
+    file: "inter/inter-latin-opsz-normal.2c295d99.woff2",
+    upstream: "files/inter-latin-opsz-normal.woff2" },
+  { pkg: "@fontsource-variable/inter",
+    file: "inter/inter-latin-ext-opsz-normal.5e6d4fe9.woff2",
+    upstream: "files/inter-latin-ext-opsz-normal.woff2" },
+  { pkg: "@fontsource-variable/jetbrains-mono",
+    file: "jetbrains-mono/jetbrains-mono-latin-wght-normal.18be4527.woff2",
+    upstream: "files/jetbrains-mono-latin-wght-normal.woff2" },
+  { pkg: "@fontsource-variable/jetbrains-mono",
+    file: "jetbrains-mono/jetbrains-mono-latin-ext-wght-normal.79bfdab9.woff2",
+    upstream: "files/jetbrains-mono-latin-ext-wght-normal.woff2" },
+  { pkg: "@fontsource-variable/space-grotesk",
+    file: "space-grotesk/space-grotesk-latin-wght-normal.06408904.woff2",
+    upstream: "files/space-grotesk-latin-wght-normal.woff2" },
+  { pkg: "@fontsource-variable/space-grotesk",
+    file: "space-grotesk/space-grotesk-latin-ext-wght-normal.952dddb4.woff2",
+    upstream: "files/space-grotesk-latin-ext-wght-normal.woff2" },
+];
+
+const FONT_DIR = path.join(FRONTEND, "public", "fonts");
+
+function sha256(buf) {
+  return createHash("sha256").update(buf).digest("hex");
+}
+
+function verifyFonts() {
+  for (const f of FONTS) {
+    const shipped = path.join(FONT_DIR, f.file);
+    let bytes;
+    try {
+      bytes = fs.readFileSync(shipped);
+    } catch (err) {
+      throw new InputError(
+        `cannot read the shipped font public/fonts/${f.file}: ${err.message}`,
+      );
+    }
+    const digest = sha256(bytes);
+    const stamped = path.basename(f.file).split(".").at(-2);
+    if (digest.slice(0, stamped.length) !== stamped) {
+      throw new InputError(
+        `public/fonts/${f.file} is named for SHA-256 ${stamped}… but its bytes ` +
+          `hash to ${digest.slice(0, 16)}…. The URL is served ` +
+          `Cache-Control: immutable, so the name MUST match the content — ` +
+          `rename the file to its real hash and update styles.css, index.html ` +
+          `and public/fonts/README.md.`,
+      );
+    }
+    const upstream = path.join(NODE_MODULES, f.pkg, f.upstream);
+    let orig;
+    try {
+      orig = fs.readFileSync(upstream);
+    } catch (err) {
+      throw new InputError(
+        `cannot read ${f.pkg}/${f.upstream} to verify public/fonts/${f.file} ` +
+          `against it (${err.message}). The package is a declared dependency ` +
+          `precisely so this check can run — do not remove it.`,
+      );
+    }
+    if (!orig.equals(bytes)) {
+      throw new InputError(
+        `public/fonts/${f.file} does NOT match ${f.pkg}/${f.upstream}. ` +
+          `Correlix redistributes these fonts UNMODIFIED under OFL-1.1; a ` +
+          `divergent copy is either a modification (which OFL-1.1 constrains) ` +
+          `or a different font wearing this one's licence. Re-copy it.`,
+      );
+    }
+    // OFL-1.1 §2: the notice must travel WITH the fonts, so each family also
+    // carries its LICENSE in its own directory, not only under /licenses/.
+    const beside = path.join(FONT_DIR, f.file.split("/")[0], "LICENSE");
+    const text = readInput(beside, `OFL-1.1 text beside ${f.file}`);
+    if (!text.includes("SIL OPEN FONT LICENSE")) {
+      throw new InputError(
+        `${path.relative(REPO, beside)} is not the SIL Open Font License — the ` +
+          `fonts beside it would ship with no valid notice.`,
+      );
+    }
+    if (text !== fs.readFileSync(path.join(NODE_MODULES, f.pkg, "LICENSE"), "utf8")) {
+      throw new InputError(
+        `${path.relative(REPO, beside)} differs from ${f.pkg}/LICENSE — the ` +
+          `shipped notice must be the upstream text verbatim.`,
+      );
+    }
+  }
+}
 
 function pkgVersion(pkg) {
   const meta = JSON.parse(
@@ -133,24 +231,25 @@ function fontNotice() {
   return `SIL Open Font License 1.1 — fonts distributed with the Correlix web UI
 ================================================================================
 
-The Correlix web UI ships the following font families as .woff/.woff2 files.
-All four are licensed under the SIL Open Font License, Version 1.1. OFL-1.1
-section 2 requires this notice and the licence to accompany the fonts, so the
-complete licence text for each family sits beside this file.
+The Correlix web UI ships the following font families as .woff2 files, served
+from /fonts/. All three are licensed under the SIL Open Font License,
+Version 1.1. OFL-1.1 section 2 requires this notice and the licence to
+accompany the fonts, so the complete licence text for each family sits both
+beside this file and in the font's own directory (/fonts/<family>/LICENSE).
 
   Inter           Copyright 2016 The Inter Project Authors
                   https://github.com/rsms/inter            inter-OFL-1.1.txt
-  IBM Plex Mono   Copyright 2017 IBM Corp.
-                  https://github.com/IBM/plex              ibm-plex-mono-OFL-1.1.txt
+  JetBrains Mono  Copyright 2020 The JetBrains Mono Project Authors
+                  https://github.com/JetBrains/JetBrainsMono
+                                                           jetbrains-mono-OFL-1.1.txt
   Space Grotesk   Copyright 2020 The Space Grotesk Project Authors
                   https://github.com/floriankarsten/space-grotesk
                                                            space-grotesk-OFL-1.1.txt
-  Manrope         Copyright 2019 The Manrope Project Authors
-                  https://github.com/sharanda/manrope      manrope-OFL-1.1.txt
 
-The fonts are redistributed UNMODIFIED. Correlix does not sell them on their
-own and does not reuse any Reserved Font Name in a modified version, the two
-things OFL-1.1 forbids.
+The fonts are redistributed UNMODIFIED — the build verifies each shipped
+.woff2 byte-for-byte against its upstream package on every run. Correlix does
+not sell them on their own and does not reuse any Reserved Font Name in a
+modified version, the two things OFL-1.1 forbids.
 `;
 }
 
@@ -392,6 +491,8 @@ function main() {
     write(c.to, text);
     shipped.push({ href: c.to, label: `${c.pkg} — ${path.basename(c.to)}` });
   }
+
+  verifyFonts();
 
   const elkVersion = pkgVersion("elkjs");
   write("elkjs/SOURCE.txt", elkjsSourceOffer(elkVersion));

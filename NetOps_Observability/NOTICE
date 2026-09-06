@@ -78,19 +78,22 @@ docs/THIRD_PARTY_LICENSES.md, is that notice.
 Fonts — SIL Open Font License 1.1
 --------------------------------------------------------------------------------
 
-The web UI redistributes the following font families UNMODIFIED as .woff/.woff2
-files. Each is licensed under the SIL Open Font License, Version 1.1, whose
-section 2 requires this notice and the licence to accompany the fonts; the full
-text for each ships at /licenses/fonts/.
+The web UI redistributes the following font families UNMODIFIED as .woff2 files,
+served from /fonts/. Each is licensed under the SIL Open Font License,
+Version 1.1, whose section 2 requires this notice and the licence to accompany
+the fonts; the full text for each ships BOTH beside the binaries, at
+/fonts/<family>/LICENSE, and at /licenses/fonts/.
 
-  Inter          Copyright 2016 The Inter Project Authors
-                 https://github.com/rsms/inter
-  IBM Plex Mono  Copyright 2017 IBM Corp.
-                 https://github.com/IBM/plex
-  Space Grotesk  Copyright 2020 The Space Grotesk Project Authors
-                 https://github.com/floriankarsten/space-grotesk
-  Manrope        Copyright 2019 The Manrope Project Authors
-                 https://github.com/sharanda/manrope
+  Inter           Copyright 2016 The Inter Project Authors
+                  https://github.com/rsms/inter
+  JetBrains Mono  Copyright 2020 The JetBrains Mono Project Authors
+                  https://github.com/JetBrains/JetBrainsMono
+  Space Grotesk   Copyright 2020 The Space Grotesk Project Authors
+                  https://github.com/floriankarsten/space-grotesk
+
+"Unmodified" is verified, not asserted: the frontend build re-hashes every
+shipped .woff2 against its pinned upstream package on each run and fails if a
+byte differs (src/frontend/scripts/gen-licenses.mjs).
 
 Correlix does not sell these fonts on their own and does not reuse any Reserved
 Font Name in a modified version.

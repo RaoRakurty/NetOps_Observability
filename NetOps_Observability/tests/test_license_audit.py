@@ -271,9 +271,8 @@ SHIPPED_LICENCE_FILES = {
     "elkjs/SOURCE.txt": "github.com/kieler/elkjs",
     "fonts/NOTICE.txt": "SIL Open Font License",
     "fonts/inter-OFL-1.1.txt": "SIL OPEN FONT LICENSE",
-    "fonts/ibm-plex-mono-OFL-1.1.txt": "SIL OPEN FONT LICENSE",
+    "fonts/jetbrains-mono-OFL-1.1.txt": "SIL OPEN FONT LICENSE",
     "fonts/space-grotesk-OFL-1.1.txt": "SIL OPEN FONT LICENSE",
-    "fonts/manrope-OFL-1.1.txt": "SIL OPEN FONT LICENSE",
     "icons/feather-lucide-NOTICE.txt": "Cole Bemis",
 }
 
@@ -420,7 +419,7 @@ def test_installer_licences_dry_run_produces_a_complete_notice(tmp_path):
     text = bundles[0].read_text(encoding="utf-8")
 
     # Libraries — the whole category the old file omitted.
-    for library in ("elkjs", "certifi", "@fontsource/inter", "github.com/jackc/pgx",
+    for library in ("elkjs", "certifi", "@fontsource-variable/inter", "github.com/jackc/pgx",
                     "golang.org/x/crypto", "react"):
         assert library in text, f"bundle LICENSES.md omits {library}"
     # Images the old file forgot, now that `sso` is in BASE_PROFILES.
@@ -445,7 +444,7 @@ def test_notice_carries_the_four_missing_attributions():
     text = read(NOTICE_FILE)
     for name in ("elkjs", "Feather", "Lucide", "certifi"):
         assert name in text, f"NOTICE does not attribute {name}"
-    for font in ("Inter", "IBM Plex Mono", "Space Grotesk", "Manrope"):
+    for font in ("Inter", "JetBrains Mono", "Space Grotesk"):
         assert font in text, f"NOTICE does not attribute the {font} font"
     for licence in ("Eclipse Public License", "SIL Open Font License",
                     "MIT License", "ISC License", "Mozilla Public License"):
@@ -704,8 +703,9 @@ def test_the_five_attribution_findings_are_closed():
     Each is recorded FIXED with where the notice now ships."""
     data = license_audit.load_data()
     exc = data["exceptions"]
-    for name in ("elkjs", "certifi", "@fontsource/inter", "@fontsource/ibm-plex-mono",
-                 "@fontsource/space-grotesk", "@fontsource-variable/manrope",
+    for name in ("elkjs", "certifi", "@fontsource-variable/inter",
+                 "@fontsource-variable/jetbrains-mono",
+                 "@fontsource-variable/space-grotesk",
                  "connector-marks"):
         assert str(exc[name].get("status", "")).upper() == "FIXED", (
             f"'{name}' is one of the audit's attribution findings and should be FIXED")

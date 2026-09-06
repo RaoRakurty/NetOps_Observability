@@ -1,20 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-// Inter — bundled (no external CDN) so the modern type renders offline.
-import "@fontsource/inter/400.css";
-import "@fontsource/inter/500.css";
-import "@fontsource/inter/600.css";
-import "@fontsource/inter/700.css";
-// Manrope (variable) — the shell-v2 UI face: elegant, rounded-humanist, very
-// legible at small sizes. Bundled offline like Inter.
-import "@fontsource-variable/manrope";
-// Space Grotesk (display) + IBM Plex Mono (data) — the "Indigo Causal" identity
-// faces for the Operations Overview; bundled offline.
-import "@fontsource/space-grotesk/500.css";
-import "@fontsource/space-grotesk/600.css";
-import "@fontsource/space-grotesk/700.css";
-import "@fontsource/ibm-plex-mono/500.css";
-import "@fontsource/ibm-plex-mono/600.css";
+// Fonts are NOT imported here any more. Importing @fontsource CSS from TS made
+// Vite emit 99 hashed .woff/.woff2 files (1.36 MB) under content-hashed URLs
+// that index.html cannot preload, and it pinned the UI to four discrete static
+// weights — so body text rendered at 400 and looked thin. The three variable
+// faces (Inter, JetBrains Mono, Space Grotesk — all SIL OFL-1.1) are now
+// checked into public/fonts/ and declared once, at the top of ./styles.css.
+// See public/fonts/README.md and docs/design/TYPOGRAPHY_2026-09-06.md.
 import App from "./App";
 import { captureSSORedirect } from "./services/api";
 import { applyPrefs } from "./theme/prefs";

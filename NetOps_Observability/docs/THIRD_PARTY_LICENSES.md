@@ -156,10 +156,9 @@ distributed and carries no notice obligation.
 
 | Component | Version | Licence | Notes |
 |---|---|---|---|
-| `@fontsource-variable/manrope` | 5.2.8 | OFL-1.1 | minified into the served JS/CSS/font assets |
-| `@fontsource/ibm-plex-mono` | 5.2.7 | OFL-1.1 | minified into the served JS/CSS/font assets |
-| `@fontsource/inter` | 5.2.8 | OFL-1.1 | minified into the served JS/CSS/font assets |
-| `@fontsource/space-grotesk` | 5.2.10 | OFL-1.1 | minified into the served JS/CSS/font assets |
+| `@fontsource-variable/inter` | 5.3.0 | OFL-1.1 | minified into the served JS/CSS/font assets |
+| `@fontsource-variable/jetbrains-mono` | 5.3.0 | OFL-1.1 | minified into the served JS/CSS/font assets |
+| `@fontsource-variable/space-grotesk` | 5.3.0 | OFL-1.1 | minified into the served JS/CSS/font assets |
 | `@types/d3-color` | 3.1.3 | MIT | minified into the served JS/CSS/font assets |
 | `@types/d3-drag` | 3.0.7 | MIT | minified into the served JS/CSS/font assets |
 | `@types/d3-interpolate` | 3.0.4 | MIT | minified into the served JS/CSS/font assets |
@@ -551,18 +550,21 @@ image and are likewise bound by the UBI EULA with respect to it. If that is not
 acceptable in your environment, Correlix can be run with an external identity
 provider instead; contact us before deploying.
 
-### SIL Open Font License 1.1 — Inter, IBM Plex Mono, Space Grotesk, Manrope
+### SIL Open Font License 1.1 — Inter, JetBrains Mono, Space Grotesk
 
 Copyright (c) The Inter Project Authors (https://github.com/rsms/inter)
-Copyright (c) IBM Corporation (IBM Plex Mono)
-Copyright (c) Florian Karsten (Space Grotesk)
-Copyright (c) The Manrope Project Authors (https://github.com/sharanda/manrope)
+Copyright (c) The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+Copyright (c) The Space Grotesk Project Authors (https://github.com/floriankarsten/space-grotesk)
 
 These fonts are licensed under the SIL Open Font License, Version 1.1.
 The full licence is available at https://openfontlicense.org and is
-distributed alongside the font files in this product. The fonts may be
+distributed alongside the font files in this product — both beside the
+binaries (/fonts/<family>/LICENSE) and under /licenses/. The fonts may be
 freely used, embedded and redistributed, but may not be sold on their own,
 and any Reserved Font Name may not be reused in a modified version.
+
+Correlix ships them UNMODIFIED: the frontend build verifies every shipped
+.woff2 byte-for-byte against its upstream package on each run.
 
 ### Written offer for Corresponding Source (GPL / AGPL / MPL / EPL components)
 

@@ -33,7 +33,7 @@ export const CARD_H = 56;
 /** Resting size of the far-zoom badge (drawn centred inside the fixed box). */
 export const BADGE_SIZE = 36;
 
-const MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+const MONO = "var(--font-mono)";
 
 /** Small health ring/badge (top-right) with an accessible glyph — never a fill. */
 function HealthRing({ health }: { health: RFNodeData["node"]["health"] }) {

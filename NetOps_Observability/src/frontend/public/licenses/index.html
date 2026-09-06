@@ -64,10 +64,9 @@ which keeps its own licences and its own obligations.</p>
 <ul>
 <li><a href="THIRD_PARTY_LICENSES.md">All components — THIRD_PARTY_LICENSES.md</a></li>
 <li><a href="elkjs/LICENSE-EPL-2.0.txt">elkjs — LICENSE-EPL-2.0.txt</a></li>
-<li><a href="fonts/inter-OFL-1.1.txt">@fontsource/inter — inter-OFL-1.1.txt</a></li>
-<li><a href="fonts/ibm-plex-mono-OFL-1.1.txt">@fontsource/ibm-plex-mono — ibm-plex-mono-OFL-1.1.txt</a></li>
-<li><a href="fonts/space-grotesk-OFL-1.1.txt">@fontsource/space-grotesk — space-grotesk-OFL-1.1.txt</a></li>
-<li><a href="fonts/manrope-OFL-1.1.txt">@fontsource-variable/manrope — manrope-OFL-1.1.txt</a></li>
+<li><a href="fonts/inter-OFL-1.1.txt">@fontsource-variable/inter — inter-OFL-1.1.txt</a></li>
+<li><a href="fonts/jetbrains-mono-OFL-1.1.txt">@fontsource-variable/jetbrains-mono — jetbrains-mono-OFL-1.1.txt</a></li>
+<li><a href="fonts/space-grotesk-OFL-1.1.txt">@fontsource-variable/space-grotesk — space-grotesk-OFL-1.1.txt</a></li>
 <li><a href="elkjs/SOURCE.txt">elkjs — how to obtain the source (EPL-2.0 §3.2)</a></li>
 <li><a href="fonts/NOTICE.txt">Fonts — SIL OFL-1.1 notice</a></li>
 <li><a href="icons/feather-lucide-NOTICE.txt">Icons — Feather (MIT) and Lucide (ISC) notice</a></li>
@@ -204,10 +203,9 @@ which keeps its own licences and its own obligations.</p>
 <h2 id="frontend-image-netops-frontend-spa-bundle">frontend image (netops-frontend) — SPA bundle</h2>
 <div class="tw"><table>
 <tr><th>Component</th><th>Version</th><th>Licence</th><th>Notes</th></tr>
-<tr><td><code>@fontsource-variable/manrope</code></td><td>5.2.8</td><td>OFL-1.1</td><td>minified into the served JS/CSS/font assets</td></tr>
-<tr><td><code>@fontsource/ibm-plex-mono</code></td><td>5.2.7</td><td>OFL-1.1</td><td>minified into the served JS/CSS/font assets</td></tr>
-<tr><td><code>@fontsource/inter</code></td><td>5.2.8</td><td>OFL-1.1</td><td>minified into the served JS/CSS/font assets</td></tr>
-<tr><td><code>@fontsource/space-grotesk</code></td><td>5.2.10</td><td>OFL-1.1</td><td>minified into the served JS/CSS/font assets</td></tr>
+<tr><td><code>@fontsource-variable/inter</code></td><td>5.3.0</td><td>OFL-1.1</td><td>minified into the served JS/CSS/font assets</td></tr>
+<tr><td><code>@fontsource-variable/jetbrains-mono</code></td><td>5.3.0</td><td>OFL-1.1</td><td>minified into the served JS/CSS/font assets</td></tr>
+<tr><td><code>@fontsource-variable/space-grotesk</code></td><td>5.3.0</td><td>OFL-1.1</td><td>minified into the served JS/CSS/font assets</td></tr>
 <tr><td><code>@types/d3-color</code></td><td>3.1.3</td><td>MIT</td><td>minified into the served JS/CSS/font assets</td></tr>
 <tr><td><code>@types/d3-drag</code></td><td>3.0.7</td><td>MIT</td><td>minified into the served JS/CSS/font assets</td></tr>
 <tr><td><code>@types/d3-interpolate</code></td><td>3.0.4</td><td>MIT</td><td>minified into the served JS/CSS/font assets</td></tr>
@@ -559,16 +557,18 @@ packaging implies a Red Hat endorsement, certification or support relationship.<
 image and are likewise bound by the UBI EULA with respect to it. If that is not
 acceptable in your environment, Correlix can be run with an external identity
 provider instead; contact us before deploying.</pre>
-<h3 id="sil-open-font-license-1-1-inter-ibm-plex-mono-space-grotesk-manrope">SIL Open Font License 1.1 — Inter, IBM Plex Mono, Space Grotesk, Manrope</h3>
+<h3 id="sil-open-font-license-1-1-inter-jetbrains-mono-space-grotesk">SIL Open Font License 1.1 — Inter, JetBrains Mono, Space Grotesk</h3>
 <pre>Copyright (c) The Inter Project Authors (https://github.com/rsms/inter)
-Copyright (c) IBM Corporation (IBM Plex Mono)
-Copyright (c) Florian Karsten (Space Grotesk)
-Copyright (c) The Manrope Project Authors (https://github.com/sharanda/manrope)</pre>
+Copyright (c) The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+Copyright (c) The Space Grotesk Project Authors (https://github.com/floriankarsten/space-grotesk)</pre>
 <pre>These fonts are licensed under the SIL Open Font License, Version 1.1.
 The full licence is available at https://openfontlicense.org and is
-distributed alongside the font files in this product. The fonts may be
+distributed alongside the font files in this product — both beside the
+binaries (/fonts/&lt;family&gt;/LICENSE) and under /licenses/. The fonts may be
 freely used, embedded and redistributed, but may not be sold on their own,
 and any Reserved Font Name may not be reused in a modified version.</pre>
+<pre>Correlix ships them UNMODIFIED: the frontend build verifies every shipped
+.woff2 byte-for-byte against its upstream package on each run.</pre>
 <h3 id="written-offer-for-corresponding-source-gpl-agpl-mpl-epl-components">Written offer for Corresponding Source (GPL / AGPL / MPL / EPL components)</h3>
 <pre>Correlix redistributes the following components UNMODIFIED, as separate
 containers or as separate files. For each, the complete corresponding source
