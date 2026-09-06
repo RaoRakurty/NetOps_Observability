@@ -35,8 +35,10 @@ Phases (each emits PASS/FAIL + evidence into the run dir):
               counters, Vector loss counters.
   onboard     create N devices via the API (names `mlx-<runid>-NNNNN`,
               addresses in 198.18/15 — RFC 2544 benchmark space, unroutable
-              on purpose). Creation rate over the LAST window must be
-              >= linearity-floor x the FIRST window's rate. Records an
+              on purpose). Creation rate over the LAST window must clear the
+              absolute end-rate floor AND stay >= linearity-floor x the rate
+              over the run's BODY (everything after the first window); the
+              last/first ratio is recorded but ADVISORY (tracker 202). Records an
               `onboard_stop_reason`: `absorbed` (dedupe folded creates into
               other devices) or `shortfall` (fewer own devices than requested)
               SKIP the workload and go straight to cleanup — the fleet the
@@ -421,6 +423,14 @@ ONBOARD_RATE_PLAN_PER_S = float(
     os.environ.get("MLX_ONBOARD_RATE_PLAN_PER_S", "30"))
 ONBOARD_RATE_FLOOR_PER_S = float(
     os.environ.get("MLX_ONBOARD_RATE_FLOOR_PER_S", "15"))
+# The END-RATE floor the onboard phase is GATED on (tracker 202; see
+# Harness.onboard_rate_verdict for why the old last/first ratio could not be
+# the gate). Same number as the budget floor above and for the same reason: a
+# create rate at or below the tombstone-laden slow case is the only absolute
+# reading that distinguishes a collapsed store from a fast start.
+ONBOARD_END_RATE_FLOOR_PER_S = float(
+    os.environ.get("MLX_ONBOARD_END_RATE_FLOOR_PER_S",
+                   str(ONBOARD_RATE_FLOOR_PER_S)))
 # Fixed cost before the first create returns (login, preflight residue list).
 ONBOARD_BUDGET_BASE_S = float(
     os.environ.get("MLX_ONBOARD_BUDGET_BASE_S", "300"))
@@ -5609,23 +5619,116 @@ class Harness:
                 f"(stop={self.onboard_stop_reason}): the burst is SKIPPED and "
                 f"the run goes straight to cleanup (first: {failures[0]})")
 
-        first_rate = k / max(sum(durations[:k]), 1e-9)
-        last_rate = k / max(sum(durations[-k:]), 1e-9)
-        ratio = last_rate / first_rate
-        ev.update({"first_window_rate_per_s": round(first_rate, 2),
-                   "last_window_rate_per_s": round(last_rate, 2),
-                   "last_over_first": round(ratio, 3),
-                   "floor": self.args.linearity_floor})
-        ok = ratio >= self.args.linearity_floor
+        v = self.onboard_rate_verdict(durations, k,
+                                      self.args.linearity_floor,
+                                      self.args.onboard_end_rate_floor)
+        ev.update(v["evidence"])
+        ok = v["ok"]
+        advisory = ("" if not v["ratio_below_floor"] else
+                    f" [advisory: last/first {v['last_over_first']:.2f} < "
+                    f"{self.args.linearity_floor} — a FASTER START, not decay; "
+                    f"the ratio is not a gate (tracker 202)]")
         return self.phase(
             "onboard", "PASS" if ok else "FAIL", ev,
-            f"create rate first {first_rate:.1f}/s -> last {last_rate:.1f}/s "
-            f"(ratio {ratio:.2f}, floor {self.args.linearity_floor}) — "
-            + ("linear enough" if ok else
-               f"SUPER-LINEAR SLOWDOWN (O(N^2) class) — all {n} devices exist "
-               f"and are attributable, so the workload still runs and this "
-               f"verdict stands on its own")
+            f"create rate first {v['first_rate']:.1f}/s -> last "
+            f"{v['last_rate']:.1f}/s (end floor "
+            f"{self.args.onboard_end_rate_floor:.0f}/s; body "
+            f"{v['body_rate']:.1f}/s, last/body {v['last_over_body']:.2f} vs "
+            f"floor {self.args.linearity_floor}) — "
+            + ("linear enough" + advisory if ok else
+               "; ".join(v["failures"]) +
+               f" — all {n} devices exist and are attributable, so the "
+               f"workload still runs and this verdict stands on its own")
             + f" [stop={self.onboard_stop_reason}]")
+
+    # ── The onboard verdict: an END-RATE floor, decay measured on the BODY ──
+    #
+    # TRACKER 202. The clause this replaces was `last_window_rate >=
+    # --linearity-floor x FIRST_window_rate`, and at 2,500 devices it graded
+    # the wrong thing. The LAST-window create rate is a stable property of the
+    # device store — 30.5 / 28.6 / 26.1 / 25.2 / 24.8 /s across the five clean
+    # legs (s05, s06, s07, n2k5, s09) — while the FIRST-window rate swings
+    # 27.7 -> 44.5 /s with api process age and tombstone-store state. The ratio
+    # therefore measured how fast the run STARTED: on `storm-s09` the
+    # tracker-175 compaction had just IMPROVED the start (44.5/s against s08's
+    # 27.7/s, tombstones capped at 10,000) and the clause FAILED the leg at
+    # 0.56 against the 0.6 floor for exactly that improvement — while s06's
+    # 28.5 -> 28.6 "PASS 1.00" merely started slow. All 2,500 devices were
+    # created, 0 failures, 103 s of a 467 s budget: a five-run-stable end rate
+    # is not a super-linear collapse. A FASTER START MUST NEVER FAIL THE GATE.
+    #
+    # The purpose of the clause — catch a super-linear (O(N^2)) per-device
+    # persistence collapse — is kept, by two readings a fast start cannot move:
+    #
+    #   END-RATE FLOOR  last-window rate >= --onboard-end-rate-floor (default
+    #                   ONBOARD_END_RATE_FLOOR_PER_S = 15/s, the already
+    #                   documented tombstone-laden slow case the wall budget is
+    #                   built on). A store whose per-device cost has collapsed
+    #                   cannot still be creating at 15/s at the end.
+    #   BODY DECAY      last-window rate >= --linearity-floor x the rate over
+    #                   the run's BODY = everything AFTER the first window. The
+    #                   first window is excluded by construction, so start
+    #                   speed cannot move this number; a genuinely decaying run
+    #                   still fails it, because its body average sits far above
+    #                   its end rate.
+    #
+    # `last_over_first` is still measured and recorded — it is a true reading
+    # of start-vs-end — but it is ADVISORY and never decides the phase.
+    #
+    # Pure arithmetic on purpose: no stack, no clock, no self. The false
+    # failure and the genuine slowdown are both unit-tested against it
+    # (`tests/test_miniladder_onboard_rate_gate.py`).
+    @staticmethod
+    def onboard_rate_verdict(durations: list, k: int, decay_floor: float,
+                             end_rate_floor: float) -> dict:
+        n = len(durations)
+        # A fleet smaller than the nominal window still gets a verdict, on the
+        # window it actually has: `k` as a numerator over fewer samples would
+        # invent a rate. The window used is recorded, never assumed.
+        w = max(1, min(int(k), n)) if n else 1
+        first_rate = w / max(sum(durations[:w]), 1e-9)
+        last_rate = w / max(sum(durations[-w:]), 1e-9)
+        # The body is the run minus its first window. When the fleet is no
+        # bigger than one window there IS no body — the whole run is the
+        # reference, which makes the decay reading exactly 1.0 and leaves the
+        # end-rate floor as the only clause that can speak. That is honest:
+        # a 10-device run carries no decay evidence either way.
+        body = durations[w:] if n > w else durations
+        body_rate = len(body) / max(sum(body), 1e-9)
+        decay = last_rate / max(body_rate, 1e-9)
+        ratio = last_rate / max(first_rate, 1e-9)
+        failures: list = []
+        if last_rate < end_rate_floor:
+            failures.append(
+                f"END RATE {last_rate:.1f}/s BELOW THE {end_rate_floor:.0f}/s "
+                f"FLOOR — the store is not keeping up at the end of the fleet")
+        if decay < decay_floor:
+            failures.append(
+                f"SUPER-LINEAR SLOWDOWN (O(N^2) class): last window "
+                f"{last_rate:.1f}/s is {decay:.2f} of the {body_rate:.1f}/s "
+                f"body rate (floor {decay_floor})")
+        return {
+            "ok": not failures,
+            "failures": failures,
+            "first_rate": first_rate,
+            "last_rate": last_rate,
+            "body_rate": body_rate,
+            "last_over_body": decay,
+            "last_over_first": ratio,
+            "ratio_below_floor": ratio < decay_floor,
+            "evidence": {
+                "window_used": w,
+                "first_window_rate_per_s": round(first_rate, 2),
+                "last_window_rate_per_s": round(last_rate, 2),
+                "body_rate_per_s": round(body_rate, 2),
+                "last_over_body": round(decay, 3),
+                # ADVISORY (tracker 202): recorded, never gated.
+                "last_over_first": round(ratio, 3),
+                "last_over_first_is_advisory": True,
+                "end_rate_floor_per_s": end_rate_floor,
+                "floor": decay_floor,
+            },
+        }
 
     # -- phase 3: burst ------------------------------------------------------
     #
@@ -8559,6 +8662,7 @@ class Harness:
                 "producer_key": self.args.producer_key,
                 "load_generator": self.args.load_generator,
                 "linearity_floor": self.args.linearity_floor,
+                "onboard_end_rate_floor": self.args.onboard_end_rate_floor,
                 "drain_factor": self.args.drain_factor,
                 "lag_epsilon": self.args.lag_epsilon,
                 "mem_factor": self.args.mem_factor,
@@ -8587,7 +8691,8 @@ class Harness:
             (f"- Parameters: {self.args.devices} devices, "
              f"{self.args.burst_minutes} min burst @ {self.args.eps} eps target, "
              f"event mix `{self.args.event_mix}`, "
-             f"linearity floor {self.args.linearity_floor}, "
+             f"onboard decay floor {self.args.linearity_floor} + end-rate "
+             f"floor {self.args.onboard_end_rate_floor:.0f}/s, "
              f"drain budget {self.args.drain_factor}x burst, "
              f"lag epsilon {self.args.lag_epsilon}, mem factor {self.args.mem_factor}"),
             "",
@@ -8870,7 +8975,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                          "syslog rate and ABOVE the ~1k/s correlation drain ceiling "
                          "so the drain proof is not vacuous (default 2000)")
     ap.add_argument("--linearity-floor", type=float, default=0.6,
-                    help="last-window/first-window creation-rate floor (default 0.6)")
+                    help="creation-rate DECAY floor: last window / the run's "
+                         "body rate, the first window excluded (default 0.6). "
+                         "Tracker 202: the last/first ratio is advisory, never "
+                         "a gate — a faster start is not a slowdown")
+    ap.add_argument("--onboard-end-rate-floor", type=float,
+                    default=ONBOARD_END_RATE_FLOOR_PER_S,
+                    help=f"absolute last-window creation-rate floor in "
+                         f"devices/s (default {ONBOARD_END_RATE_FLOOR_PER_S:.0f})")
     ap.add_argument("--drain-factor", type=float, default=3.0,
                     help="drain budget as a multiple of burst duration (default 3.0)")
     ap.add_argument("--lag-epsilon", type=int, default=100,
@@ -9111,8 +9223,9 @@ def main(argv: list[str]) -> int:
               f"active bus consumers (bounded wait {args.consumer_settle_seconds}s), "
               f"baselines (RSS/offsets/lag/CH/VM/durability)")
         print(f"  phase 2 onboard  : create {args.devices} devices "
-              f"(mlx-<runid>-NNNNN @ 198.18/15); last/first window rate floor "
-              f"{args.linearity_floor}; expect ~"
+              f"(mlx-<runid>-NNNNN @ 198.18/15); end-rate floor "
+              f"{args.onboard_end_rate_floor:.0f}/s + body-decay floor "
+              f"{args.linearity_floor} (last/first advisory only); expect ~"
               f"{args.devices / ONBOARD_RATE_PLAN_PER_S:.0f}s at the measured "
               f"{ONBOARD_RATE_PLAN_PER_S:.0f}/s, budget "
               f"{onboard_budget_s(args.devices):.0f}s (informational)")
