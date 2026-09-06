@@ -533,7 +533,8 @@ describe("the incident view", () => {
     await openIncident();
     const verify = screen.getByRole("region", { name: /Recovery verification/i });
     expect(within(verify).getByText(/Not verified yet\./i)).toBeInTheDocument();
-    expect(within(verify).getByText(/An action completing is a fact about the action/i)).toBeInTheDocument();
+    expect(within(verify).getByText(/Action done is not recovery\./i)).toBeInTheDocument();
+    expect(within(verify).getByRole("button", { name: /Ask Iris about verified recovery/ })).toBeInTheDocument();
   });
 });
 
@@ -635,7 +636,7 @@ describe("incident filters", () => {
       expect(mockApi.demIncidents).toHaveBeenCalledWith(
         expect.objectContaining({ severity: "critical" }),
       ));
-    expect(screen.getByText(/What is hidden by a filter is not the same as what is absent/i))
+    expect(screen.getByRole("button", { name: /Ask Iris about a filtered list/ }))
       .toBeInTheDocument();
   });
 

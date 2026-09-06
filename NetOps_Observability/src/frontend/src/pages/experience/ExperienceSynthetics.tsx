@@ -133,8 +133,7 @@ export default function ExperienceSynthetics({ window: win }: { window: DemWindo
           <LoadError what="The per-check scores" error={exp.error} onRetry={exp.reload} />
         )}
         {exp.status === "ready" && exp.data && (
-          <ExperienceHeatmap cells={buildHeatCells(exp.data).cells}
-            caption="Experience band per site and application, from the checks in the catalogue." />
+          <ExperienceHeatmap cells={buildHeatCells(exp.data).cells} caption="Site by application" />
         )}
       </Panel>
 
@@ -170,7 +169,7 @@ export default function ExperienceSynthetics({ window: win }: { window: DemWindo
                         <tr key={t.id}>
                           <td>
                             <b>{t.name}</b>
-                            {t.paused && <div className="dx-cap">paused by an operator</div>}
+                            {t.paused && <div className="dx-cap">Paused</div>}
                           </td>
                           <td>{t.kind}</td>
                           <td className="dx-mono">{t.host}</td>

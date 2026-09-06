@@ -116,8 +116,10 @@ describe("Active Alerts on a failed load", () => {
 
     // A real, page-scoped error state is rendered instead.
     expect(await screen.findByText(/Alert episodes could not be loaded\./)).toBeTruthy();
-    expect(screen.getByText(/this is not an all-clear/i)).toBeTruthy();
-    expect(screen.getByText("Alert feed unavailable")).toBeTruthy();
+    // The words shrank in the 2026-09-06 sweep; the CLAIM must not.
+    expect(screen.getByText(/Unknown, not all-clear\./)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about an unavailable alert feed/ })).toBeTruthy();
+    expect(screen.getAllByText("Feed unavailable").length).toBeGreaterThan(0);
   });
 
   it("renders the KPIs as unknown, not as green zeros", async () => {
@@ -125,10 +127,12 @@ describe("Active Alerts on a failed load", () => {
     alerts.mockImplementation(() => Promise.reject(new Error("503 Service Unavailable")));
     render(<Alerts />);
 
-    // Every KPI reads "—" (unknown) and says why; none reads a confident 0.
+    // Every KPI reads "—" (unknown); none reads a confident 0. The caption that
+    // used to spell out "unknown — feed failed" under each tile is gone (word
+    // sweep); the em dash IS the claim, and what it means is on the tile's (i).
     await waitFor(() => expect(screen.getAllByText("—").length).toBe(4));
-    expect(screen.getAllByText("unknown — feed failed").length).toBe(4);
     expect(screen.queryByText("0")).toBeNull();
+    expect(screen.getAllByRole("button", { name: /^Ask Iris about/ }).length).toBeGreaterThanOrEqual(4);
   });
 });
 
@@ -139,7 +143,7 @@ describe("EpisodeDetailBody triage affordances", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mute notifications" }));
     await waitFor(() => expect(episodeMute).toHaveBeenCalledWith("ep-1", true));
     expect(await screen.findByRole("button", { name: "Resume notifications" })).toBeTruthy();
-    expect(screen.getByText(/Notifications are paused for this episode/)).toBeTruthy();
+    expect(screen.getByText(/Notifications paused by admin\./)).toBeTruthy();
   });
 
   it("assigns to a username and snoozes for a preset duration", async () => {

@@ -19,6 +19,7 @@ import { useMemo, useState } from "react";
 import { fmtDateTime } from "../../lib/time";
 import type { DemChangeRelevance, DemTimelineEntry } from "../../services/api";
 import { ProvenanceChip } from "./honest";
+import AskIris from "../../components/AskIris";
 
 export interface ScrubEntry {
   at: number;
@@ -91,8 +92,7 @@ export function TimelineScrubber({ entries, start, end, label }: {
   if (entries.length === 0) {
     return (
       <p className="dx-note">
-        Nothing was placed on this incident&apos;s timeline. That is an absence of recorded
-        events, not evidence that nothing happened.
+        No entry on this timeline.<AskIris topic="dem.absence-not-health" label="an empty timeline" />
       </p>
     );
   }
@@ -127,13 +127,12 @@ export function TimelineScrubber({ entries, start, end, label }: {
           onChange={(ev) => setCursor(Number(ev.target.value))}
           aria-label="Scrub the incident timeline" />
         <span className="dx-mono dx-subtle">{fmtDateTime(new Date(cutoff))}</span>
-        <span className="dx-cap">{shown.length} of {entries.length} entries by this point</span>
+        <span className="dx-cap">{shown.length} of {entries.length}</span>
       </div>
 
       {!bounds.declared && (
         <p className="dx-cap">
-          The incident did not carry a window, so the axis spans the recorded entries instead.
-          It therefore says nothing about how much of the window produced no entry at all.
+          Axis spans the entries<AskIris topic="dem.timeline-window" label="the timeline axis" />
         </p>
       )}
 

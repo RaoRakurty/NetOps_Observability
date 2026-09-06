@@ -17,6 +17,7 @@ import {
   buildItem, isActionableCorr, bySeverityThenAge, filterItems,
 } from "./commandCenter.model";
 import { FilterBar, queueColumns, ExpandPanel } from "./CommandCenter";
+import AskIris from "../components/AskIris";
 import WirelessRemediation from "./WirelessRemediation";
 
 export default function ActionQueue() {
@@ -52,25 +53,23 @@ export default function ActionQueue() {
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Action Queue</h3>
-          <span className="cc-panel-meta">
-            correlated incidents — what to work next · KPIs and the ticketing gap live in the{" "}
-            <a href="#/overview/home">Command Center</a>
-          </span>
+          <AskIris topic="queue.action-queue" label="Action Queue" />
+          <span className="cc-panel-meta"><a href="#/overview/home">KPIs in Command Center →</a></span>
         </div>
         {err && <p className="cc-err">{err}</p>}
         {loaded && items.length > 0 && (
           <FilterBar filters={filters} setFilters={setFilters} total={items.length} shown={visible.length} />
         )}
         {!loaded ? (
-          <div className="cc-empty">Loading correlated incidents…</div>
+          <div className="cc-empty">Loading…</div>
         ) : err && items.length === 0 ? (
           // A failed read is NOT an empty queue — never render "nothing to do"
           // out of an API error (the same honesty rule the panels follow).
-          <div className="cc-empty">The queue could not be loaded — correlated incidents are unknown, not absent.</div>
+          <div className="cc-empty">Queue unknown — the read failed.<AskIris topic="queue.read-failed" label="a queue that could not be read" /></div>
         ) : items.length === 0 ? (
-          <div className="cc-empty">No correlated incidents require action. The queue groups raw alerts into incidents — none have correlated.</div>
+          <div className="cc-empty">Nothing correlated yet. <AskIris topic="queue.nothing-correlated" label="an empty queue" /></div>
         ) : visible.length === 0 ? (
-          <div className="cc-empty">No incidents match the current filters. <button type="button" className="cc-filter-clear" onClick={() => setFilters({})}>Clear filters</button></div>
+          <div className="cc-empty">No match for these filters. <button type="button" className="cc-filter-clear" onClick={() => setFilters({})}>Clear filters</button></div>
         ) : (
           <div className="cc-table-wrap">
             <DataTable<ActionItem>

@@ -7,6 +7,7 @@ import Icon from "../components/Icon";
 import { useWorkspace } from "../context/workspace";
 import { friendlyIncidentId } from "../components/rca/labels";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import AskIris from "../components/AskIris";
 
 // Incidents — the actionable system-of-record view. Lists incidents (deduped from
 // alerts/anomalies), drives the lifecycle in-platform (ack → investigate →
@@ -115,7 +116,7 @@ export default function Incidents() {
     // #103 UX-2: the human incident handle — same INC-XXXXXX the Slack card shows.
     { key: "display_id", header: "ID", width: 96, sortable: true,
       text: (i) => friendlyIncidentId(i.id),
-      render: (i) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }} title={i.id}>{friendlyIncidentId(i.id)}</span> },
+      render: (i) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }} title={i.id}>{friendlyIncidentId(i.id)}</span> },
     { key: "severity", header: "Severity", width: 84, sortable: true,
       text: (i) => i.severity, sortValue: (i) => severityRank(i.severity),
       render: (i) => <span className={`badge ${severityClass(i.severity)}`}>{i.severity}</span> },
@@ -126,13 +127,13 @@ export default function Incidents() {
     { key: "count", header: "Count", width: 70, align: "right", sortable: true,
       sortValue: (i) => Number(i.occurrences) || 0, render: (i) => i.occurrences },
     { key: "source", header: "Source", width: 92, text: (i) => i.source_type,
-      render: (i) => <span style={{ fontSize: 12, color: "var(--muted)" }}>{i.source_type}</span> },
-    { key: "notified", header: "Notified via", width: 168,
+      render: (i) => <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{i.source_type}</span> },
+    { key: "notified", header: "Notified", width: 168,
       text: (i) => [i.external_ticket_id ?? "", ...(i.notified_via ?? []).map(channelLabel)].filter(Boolean).join(" "),
       render: (i) => notifiedCell(i) },
     { key: "last_seen", header: "Last seen", width: 170, sortable: true,
       sortValue: (i) => new Date(i.last_seen_at ?? 0).getTime() || 0,
-      render: (i) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmt(i.last_seen_at)}</span> },
+      render: (i) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{fmt(i.last_seen_at)}</span> },
   ], []);
 
   // v1 fallback: render the selected incident's detail inline (shell-v2 uses the
@@ -147,14 +148,14 @@ export default function Incidents() {
     <div className="dm-board cc-board">
       <NocHeader
         title="Operational Incidents"
-        subtitle="Tracked problems opened from deduplicated alerts, driven through their lifecycle and optionally mirrored to ITSM."
-        chips={<><Chip label={`${items.length} incidents`} /><LiveChip /></>}
+        topic="page.incidents"
+        chips={<><Chip label={`Incidents ${items.length}`} /><LiveChip /></>}
       >
         <NocKpis cols={4}>
-          <NocKpi n={iOpen} label="Open" interp="unresolved + in-progress" tone={iOpen ? "var(--warn)" : undefined} />
-          <NocKpi n={iCrit} label="Critical" interp="severe impact" tone={iCrit ? "var(--crit)" : undefined} />
-          <NocKpi n={iUnassigned} label="Unassigned" interp="owner missing" tone={iUnassigned ? "var(--crit)" : "var(--ok)"} />
-          <NocKpi n={iTicketed} label="Ticketed" interp="synced to ITSM" />
+          <NocKpi n={iOpen} label="Open" topic="incidents.open" tone={iOpen ? "var(--warn)" : undefined} />
+          <NocKpi n={iCrit} label="Critical" topic="incidents.critical" tone={iCrit ? "var(--crit)" : undefined} />
+          <NocKpi n={iUnassigned} label="Unassigned" topic="incidents.unassigned" tone={iUnassigned ? "var(--crit)" : "var(--ok)"} />
+          <NocKpi n={iTicketed} label="Ticketed" topic="incidents.ticketed" />
         </NocKpis>
       </NocHeader>
       <div className="cc-panel">
@@ -180,17 +181,15 @@ export default function Incidents() {
             <p role="alert" style={{ color: "var(--bad)", marginBottom: 8 }}>
               <strong>Incidents could not be loaded:</strong> {error}
               <br />
-              <span style={{ color: "var(--muted)" }}>
-                The queue is unknown — this is not an empty queue.
-              </span>
+              <span style={{ color: "var(--muted)" }}>Unknown, not empty.</span>
             </p>
           )}
           {/* "quiet is good" is a claim only a successful read can support, so it
               is mutually exclusive with the error above. */}
           {unavailable ? (
-            <div className="empty">Incident management isn’t enabled in this environment yet.</div>
+            <div className="empty">Incident management is not enabled here.</div>
           ) : items.length === 0 ? (
-            error ? null : <div className="empty">{busy ? "Loading…" : "No incidents match — quiet is good."}</div>
+            error ? null : <div className="empty">{busy ? "Loading…" : "No incidents match."}<AskIris topic="incidents.empty-queue" label="an empty incident queue" /></div>
           ) : (
             <DataTable<Incident>
               rows={items}
@@ -267,14 +266,14 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
         <h2 style={{ margin: 0 }}>
           <span className={`badge ${severityClass(inc.severity)}`}>{inc.severity}</span> {inc.title}
         </h2>
-        <span style={{ color: "var(--muted)", fontSize: 12 }}>
+        <span style={{ color: "var(--muted)", fontSize: 12.5 }}>
           <span style={{ fontFamily: "var(--font-mono)" }} title={inc.id}>{friendlyIncidentId(inc.id)}</span>
           {" · "}{inc.status} · {inc.occurrences}× · opened {fmt(inc.first_seen_at)}
         </span>
       </div>
       {inc.description && <p style={{ color: "var(--muted)", fontSize: 13 }}>{inc.description}</p>}
       {inc.external_ticket_id && (
-        <p style={{ fontSize: 12, margin: "2px 0 0" }}>
+        <p style={{ fontSize: 12.5, margin: "2px 0 0" }}>
           {inc.external_url ? (
             <a href={inc.external_url} target="_blank" rel="noreferrer">
               {inc.external_system}: {inc.external_ticket_id}
@@ -285,7 +284,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
         </p>
       )}
       {error && (
-        <p style={{ color: "var(--bad)", fontSize: 12 }}>
+        <p style={{ color: "var(--bad)", fontSize: 12.5 }}>
           <strong>Error:</strong> {error}
         </p>
       )}
@@ -329,7 +328,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
       </div>
 
       {/* Timeline — lifecycle events and ITSM sync events, merged chronologically */}
-      <h3 style={{ fontSize: 13, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4 }}>Timeline</h3>
+      <h3 style={{ fontSize: 13, color: "var(--muted)", letterSpacing: 0.2 }}>Timeline</h3>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         {timeline.map((ev) => (
           <div
@@ -337,7 +336,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
             style={{
               display: "flex",
               gap: 10,
-              fontSize: 12,
+              fontSize: 12.5,
               alignItems: "baseline",
               borderLeft: `3px solid ${ev.kind === "sync" ? "var(--accent)" : "transparent"}`,
               paddingLeft: 8,
@@ -371,7 +370,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
             )}
           </div>
         ))}
-        {timeline.length === 0 && <span style={{ fontSize: 12, color: "var(--muted)" }}>Loading timeline…</span>}
+        {timeline.length === 0 && <span style={{ fontSize: 12.5, color: "var(--muted)" }}>Loading timeline…</span>}
       </div>
     </>
   );

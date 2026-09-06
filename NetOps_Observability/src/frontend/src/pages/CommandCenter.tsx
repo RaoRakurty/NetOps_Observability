@@ -3,6 +3,7 @@ import { api, Incident, CorrObject } from "../services/api";
 import { signatureNocTitle, entityLabel, friendlyProblemId } from "../components/rca/labels";
 import DataTable, { type Column } from "../components/DataTable";
 import { LogTime } from "../lib/logfmt";
+import AskIris from "../components/AskIris";
 import { timeRank } from "./appobs/sortRanks";
 import {
   type ActionItem, type RcaState, type OwnerState, type TicketState, type Sev,
@@ -42,7 +43,7 @@ export function FilterBar({ filters, setFilters, total, shown }: {
       <button type="button" className={`cc-filter-chip${filters.needsAction ? " on" : ""}`}
         aria-pressed={!!filters.needsAction}
         onClick={() => setFilters({ ...filters, needsAction: !filters.needsAction })}
-        title="Missing owner, unticketed confirmed incident, or RCA blocked on evidence">
+        title="Missing owner, a confirmed incident with no ticket, or RCA blocked on evidence">
         Needs action
       </button>
       <span className="cc-filter-count">{n > 0 ? `${shown} of ${total}` : `${total}`}</span>
@@ -105,7 +106,7 @@ export function queueColumns(openKey: string | null): Column<ActionItem>[] {
       render: (it) => <span className="cc-sevdot" style={{ background: SEV_TONE[it.sev] }} title={it.sev} />,
     },
     {
-      key: "pid", header: "Problem ID", width: 104,
+      key: "pid", header: "Problem", width: 104,
       sortValue: (it) => shortProblemId(it.corr.correlation_id), text: (it) => it.corr.correlation_id,
       render: (it) => (
         <a className="cc-pid-link" href={rcaHref(it.corr.correlation_id)}
@@ -114,7 +115,7 @@ export function queueColumns(openKey: string | null): Column<ActionItem>[] {
       ),
     },
     {
-      key: "title", header: "Incident / correlation group", width: "minmax(220px,1.6fr)",
+      key: "title", header: "Incident", width: "minmax(220px,1.6fr)",
       sortValue: (it) => signatureNocTitle(it.corr.top_hypothesis),
       text: (it) => signatureNocTitle(it.corr.top_hypothesis),
       render: (it) => (
@@ -126,7 +127,7 @@ export function queueColumns(openKey: string | null): Column<ActionItem>[] {
       ),
     },
     {
-      key: "rca", header: "RCA state", width: 124,
+      key: "rca", header: "RCA", width: 124,
       sortValue: (it) => rcaRank(it.rca), text: (it) => it.rca,
       render: (it) => ccChip(it.rca, RCA_TONE[it.rca], `confidence ${(it.corr.top_confidence * 100).toFixed(0)}%`),
     },
@@ -137,7 +138,7 @@ export function queueColumns(openKey: string | null): Column<ActionItem>[] {
       render: (it) => <span className="cc-mono cc-dim">{impactLabel(it.affected)}</span>,
     },
     {
-      key: "fault", header: "Fault domain", width: 132,
+      key: "fault", header: "Domain", width: 132,
       sortValue: (it) => it.fault, text: (it) => it.fault,
       render: (it) => ccChip(it.fault, it.fault === "Unknown" ? "var(--fg-subtle)" : "var(--fg-muted)"),
     },
@@ -175,7 +176,7 @@ export function queueColumns(openKey: string | null): Column<ActionItem>[] {
       render: (it) => ccChip(it.ticket, TICKET_TONE[it.ticket]),
     },
     {
-      key: "next", header: "Next action", width: "minmax(150px,1fr)",
+      key: "next", header: "Next", width: "minmax(150px,1fr)",
       sortValue: (it) => it.nextAction, text: (it) => it.nextAction,
       render: (it) => <span className="cc-next">{it.nextAction}</span>,
     },
@@ -271,10 +272,10 @@ export function ExpandPanel({ it }: { it: ActionItem }) {
             <a key={d} className="cc-pill cc-mono cc-pill-link" href={deviceStatusHref(d)}
               title={`Open ${entityLabel(d)} status`} onClick={(e) => e.stopPropagation()}>{entityLabel(d)}</a>
           ))}</div>
-            : <p className="cc-dim">Blast radius pending topology mapping.</p>}
+            : <p className="cc-dim">Blast radius not mapped yet.</p>}
         </div>
         <div>
-          <h5 className="cc-eh">Evidence</h5>
+          <h5 className="cc-eh">Evidence<AskIris topic="queue.evidence" label="Evidence" /></h5>
           {/* The whole evidence brief drills into the RCA Inspector's full evidence
               ledger — count, reason and each signal domain are clickable. */}
           <a className="cc-evlink" href={rcaHref(c.correlation_id)} onClick={(e) => e.stopPropagation()}
@@ -282,7 +283,7 @@ export function ExpandPanel({ it }: { it: ActionItem }) {
             {c.signal_count} correlated signal{c.signal_count > 1 ? "s" : ""} across {c.node_count} node{c.node_count > 1 ? "s" : ""} →
           </a>
           {ev === null
-            ? <p className="cc-dim">Reading correlated evidence…</p>
+            ? <p className="cc-dim">Reading evidence…</p>
             : ev.reason
               ? <p className="cc-evtext">{ev.reason}</p>
               : null}
@@ -294,17 +295,15 @@ export function ExpandPanel({ it }: { it: ActionItem }) {
           )}
           {it.missing.length > 0
             ? <div className="cc-chips">{it.missing.map((m) => <span key={m} className="cc-pill cc-miss">missing: {m}</span>)}</div>
-            : <p className="cc-ok">All expected evidence streams present.</p>}
+            : <p className="cc-ok">All evidence present.</p>}
         </div>
         <div>
-          <h5 className="cc-eh">Recommended next action</h5>
+          <h5 className="cc-eh">Next action<AskIris topic="queue.next-action" label="Next action" /></h5>
           <div className="cc-recd">{it.nextAction}</div>
           <p className="cc-dim" style={{ marginTop: 6 }}>
-            {it.rca === "Suspected" || it.rca === "Blocked"
-              ? "HOLD — suspected only. Customer impact is not confirmed; independent evidence is needed before ticketing."
-              : it.rca === "Confirmed"
-                ? "Customer impact confirmed by correlated evidence. Eligible for ticketing and escalation."
-                : "Correlated group still gathering evidence."}
+            {it.rca === "Suspected" || it.rca === "Blocked" ? "Hold — impact not confirmed."
+              : it.rca === "Confirmed" ? "Confirmed. Ticket and escalate."
+                : "Still gathering evidence."}
           </p>
           {ticketCTA && <div style={{ marginTop: 8 }}><CreateTicketButton corrId={c.correlation_id} label="Open ticket" cls="cc-btn cc-btn-warn" /></div>}
         </div>
@@ -320,18 +319,31 @@ export function ExpandPanel({ it }: { it: ActionItem }) {
 }
 
 // ── KPI card ────────────────────────────────────────────────────────────────────
-function CcKpi({ n, label, interp, tone, href, onClick, active }: { n: number | string; label: string; interp: string; tone?: string; href?: string; onClick?: () => void; active?: boolean }) {
+// The tile carries the number, the name and nothing else. The sentence that used
+// to sit under it ("grouped, not individual alerts", "≥2 evidence streams align")
+// now lives in ai/skills/explain/<topic>.md and is one click away on the `(i)` —
+// the 2026-09-06 "fewer words, Iris explains" programme.
+//
+// The `(i)` is a SIBLING of the tile, never a child: the tile is itself a filter
+// button, and a button inside a button is invalid DOM.
+function CcKpi({ n, label, topic, tone, href, onClick, active }: { n: number | string; label: string; topic?: string; tone?: string; href?: string; onClick?: () => void; active?: boolean }) {
   const body = (
     <>
       <div className="cc-kpi-n" style={tone ? { color: tone } : undefined}>{n}</div>
       <div className="cc-kpi-l">{label}</div>
-      <div className="cc-kpi-i">{interp}</div>
     </>
   );
   // A KPI that filters the queue is a button (consistent, accessible, counts always
   // match the data it filters). Only the ITSM tile keeps an external href.
-  if (onClick) return <button type="button" className={`cc-kpi cc-kpi-btn${active ? " on" : ""}`} aria-pressed={!!active} onClick={onClick}>{body}</button>;
-  return href ? <a className="cc-kpi" href={href}>{body}</a> : <div className="cc-kpi">{body}</div>;
+  const tile = onClick
+    ? <button type="button" className={`cc-kpi cc-kpi-btn${active ? " on" : ""}`} aria-pressed={!!active} onClick={onClick}>{body}</button>
+    : href ? <a className="cc-kpi" href={href}>{body}</a> : <div className="cc-kpi">{body}</div>;
+  return (
+    <div className="cc-kpi-cell">
+      {tile}
+      {topic && <AskIris topic={topic} label={label} className="cc-kpi-ask" />}
+    </div>
+  );
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────────
@@ -385,59 +397,54 @@ export default function CommandCenter() {
   const pressure = critical >= 3 ? "Severe" : critical >= 1 ? "Elevated" : suspected > 0 ? "Watch" : "Nominal";
   const pressureTone = pressure === "Severe" ? "var(--crit)" : pressure === "Elevated" ? "var(--warn)" : pressure === "Watch" ? "var(--accent)" : "var(--ok)";
 
-  const decision = items.length === 0
-    ? "No correlated incidents require action. Individual alerts have not yet grouped into an incident."
-    : `${items.length} correlated incident${items.length > 1 ? "s" : ""} in queue · ${critical} critical · ${confirmed} with confirmed RCA · ${ownerMissing} missing owner · ${ticketNeeded} awaiting a ticket. ` +
-      (confirmed > 0 ? "Work confirmed-RCA criticals with missing owners first." : suspected > 0 ? "Confirm impact on suspected incidents before any ticketing." : "Triage correlated groups by blast radius.");
-
   return (
     <div className="dm-board cc-board">
       <div className="cc-hero">
         <div className="cc-hero-head">
-          <div>
+          <div className="cc-h1-row">
             <h1 className="cc-h1">Command Center</h1>
-            <p className="cc-sub">What's burning, who owns it, and what still needs human action.</p>
+            <AskIris topic="page.command-center" label="Command Center" />
           </div>
+          {/* Plain outcomes. The NOC term each one is short for lives in its
+              tooltip, and the reasoning behind it lives with Iris. */}
           <div className="cc-chips-row">
-            {ccChip(`NOC pressure: ${pressure}`, pressureTone)}
-            {ccChip(`${critical} critical`, critical ? "var(--crit)" : "var(--fg-subtle)")}
-            {ccChip(`${ownerMissing} owner gap`, ownerMissing ? "var(--crit)" : "var(--ok)")}
-            {ccChip(`${ticketNeeded} ticket gap`, ticketNeeded ? "var(--warn)" : "var(--ok)")}
-            {ccChip(`${blocked} RCA blocked`, blocked ? "var(--warn)" : "var(--ok)")}
+            {ccChip(pressure, pressureTone, "NOC pressure")}
+            {ccChip(`Critical ${critical}`, critical ? "var(--crit)" : "var(--fg-subtle)", "Critical severity")}
+            {ccChip(`Unassigned ${ownerMissing}`, ownerMissing ? "var(--crit)" : "var(--ok)", "Owner gap")}
+            {ccChip(`No ticket ${ticketNeeded}`, ticketNeeded ? "var(--warn)" : "var(--ok)", "Ticket gap")}
+            {ccChip(`Blocked ${blocked}`, blocked ? "var(--warn)" : "var(--ok)", "RCA blocked on missing evidence")}
             <span className="cc-live"><span className="cc-live-dot" /> Live · 30s</span>
           </div>
         </div>
         <div className="cc-kpis">
           {/* KPIs filter the queue below (same data → counts always match) and toggle. */}
-          <CcKpi n={items.length} label="Correlated incidents" interp="grouped, not individual alerts" onClick={() => setFilters({})} active={activeFilterCount(filters) === 0} />
-          <CcKpi n={critical} label="Critical" interp="confirmed impact or high blast radius" tone={critical ? "var(--crit)" : undefined} onClick={() => applyKpi({ sev: "crit" })} active={kpiActive({ sev: "crit" })} />
-          <CcKpi n={untriaged} label="Untriaged" interp="correlated, RCA not yet run" tone={untriaged ? "var(--warn)" : undefined} onClick={() => applyKpi({ untriaged: true })} active={kpiActive({ untriaged: true })} />
-          <CcKpi n={suspected} label="Suspected RCA" interp="impact not confirmed" tone={suspected ? "var(--warn)" : undefined} onClick={() => applyKpi({ rca: "Suspected" })} active={kpiActive({ rca: "Suspected" })} />
-          <CcKpi n={confirmed} label="Confirmed RCA" interp="≥2 evidence streams align" tone={confirmed ? "var(--crit)" : undefined} onClick={() => applyKpi({ rca: "Confirmed" })} active={kpiActive({ rca: "Confirmed" })} />
-          <CcKpi n={ownerMissing} label="Owner missing" interp="needs assignment" tone={ownerMissing ? "var(--crit)" : "var(--ok)"} onClick={() => applyKpi({ owner: "Missing" })} active={kpiActive({ owner: "Missing" })} />
-          <CcKpi n={blocked} label="RCA blocked" interp="missing evidence streams" tone={blocked ? "var(--warn)" : "var(--ok)"} onClick={() => applyKpi({ rca: "Blocked" })} active={kpiActive({ rca: "Blocked" })} />
-          <CcKpi n={`${ticketed}/${ticketNeeded || 0}`} label="Ticketed" interp="confirmed → ITSM" href="#/admin/integrations" />
+          <CcKpi n={items.length} label="Correlated incidents" topic="kpi.correlated-incidents" onClick={() => setFilters({})} active={activeFilterCount(filters) === 0} />
+          <CcKpi n={critical} label="Critical" topic="kpi.critical" tone={critical ? "var(--crit)" : undefined} onClick={() => applyKpi({ sev: "crit" })} active={kpiActive({ sev: "crit" })} />
+          <CcKpi n={untriaged} label="Untriaged" topic="kpi.untriaged" tone={untriaged ? "var(--warn)" : undefined} onClick={() => applyKpi({ untriaged: true })} active={kpiActive({ untriaged: true })} />
+          <CcKpi n={suspected} label="Suspected RCA" topic="kpi.suspected-rca" tone={suspected ? "var(--warn)" : undefined} onClick={() => applyKpi({ rca: "Suspected" })} active={kpiActive({ rca: "Suspected" })} />
+          <CcKpi n={confirmed} label="Confirmed RCA" topic="kpi.confirmed-rca" tone={confirmed ? "var(--crit)" : undefined} onClick={() => applyKpi({ rca: "Confirmed" })} active={kpiActive({ rca: "Confirmed" })} />
+          <CcKpi n={ownerMissing} label="Owner missing" topic="kpi.owner-missing" tone={ownerMissing ? "var(--crit)" : "var(--ok)"} onClick={() => applyKpi({ owner: "Missing" })} active={kpiActive({ owner: "Missing" })} />
+          <CcKpi n={blocked} label="RCA blocked" topic="kpi.rca-blocked" tone={blocked ? "var(--warn)" : "var(--ok)"} onClick={() => applyKpi({ rca: "Blocked" })} active={kpiActive({ rca: "Blocked" })} />
+          <CcKpi n={`${ticketed}/${ticketNeeded || 0}`} label="Ticketed" topic="kpi.ticketed" href="#/admin/integrations" />
         </div>
-        <div className="cc-decision">{decision}</div>
         {err && <p className="cc-err">{err}</p>}
       </div>
 
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Action Queue</h3>
-          <span className="cc-panel-meta">
-            correlated incidents — what to work next · <a href="#/operations/queue">open as page →</a>
-          </span>
+          <AskIris topic="queue.action-queue" label="Action Queue" />
+          <span className="cc-panel-meta"><a href="#/operations/queue">Open as page →</a></span>
         </div>
         {loaded && items.length > 0 && (
           <FilterBar filters={filters} setFilters={setFilters} total={items.length} shown={visible.length} />
         )}
         {!loaded ? (
-          <div className="cc-empty">Loading correlated incidents…</div>
+          <div className="cc-empty">Loading…</div>
         ) : items.length === 0 ? (
-          <div className="cc-empty">No correlated incidents require action. The queue groups raw alerts into incidents — none have correlated.</div>
+          <div className="cc-empty">Nothing correlated yet. <AskIris topic="queue.nothing-correlated" label="an empty queue" /></div>
         ) : visible.length === 0 ? (
-          <div className="cc-empty">No incidents match the current filters. <button type="button" className="cc-filter-clear" onClick={() => setFilters({})}>Clear filters</button></div>
+          <div className="cc-empty">No match for these filters. <button type="button" className="cc-filter-clear" onClick={() => setFilters({})}>Clear filters</button></div>
         ) : (
           <div className="cc-table-wrap">
             <DataTable<ActionItem>
@@ -458,12 +465,12 @@ export default function CommandCenter() {
 
       <div className="cc-panel cc-ticketgap">
         <div className="cc-panel-h"><h3 className="cc-panel-t">Ticketing gap</h3>
-          <span className="cc-panel-meta">tickets open at the correlated-incident level, not per raw alert</span></div>
+          <AskIris topic="ticket.gap" label="Ticketing gap" /></div>
         <div className="cc-kpis cc-kpis-4">
-          <CcKpi n={ticketed} label="Ticketed" interp="synced to ITSM" tone={ticketed ? "var(--ok)" : undefined} />
-          <CcKpi n={ticketNeeded} label="Ticket needed" interp="confirmed RCA, not yet opened" tone={ticketNeeded ? "var(--warn)" : undefined} />
-          <CcKpi n={items.filter((i) => i.ticket === "Not eligible").length} label="Not eligible" interp="RCA not confirmed — hold" />
-          <CcKpi n={incidents.filter((i) => i.sync_status === "failed").length} label="Sync failed" interp="ITSM push errored" tone={incidents.some((i) => i.sync_status === "failed") ? "var(--crit)" : undefined} href="#/admin/integrations" />
+          <CcKpi n={ticketed} label="Ticketed" topic="ticket.ticketed" tone={ticketed ? "var(--ok)" : undefined} />
+          <CcKpi n={ticketNeeded} label="Ticket needed" topic="ticket.needed" tone={ticketNeeded ? "var(--warn)" : undefined} />
+          <CcKpi n={items.filter((i) => i.ticket === "Not eligible").length} label="Not eligible" topic="ticket.not-eligible" />
+          <CcKpi n={incidents.filter((i) => i.sync_status === "failed").length} label="Sync failed" topic="ticket.sync-failed" tone={incidents.some((i) => i.sync_status === "failed") ? "var(--crit)" : undefined} href="#/admin/integrations" />
         </div>
       </div>
     </div>

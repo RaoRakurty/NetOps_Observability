@@ -39,8 +39,11 @@ describe("DigitalExperience", () => {
     render(<DigitalExperience />);
     expect(await screen.findByRole("button", { name: /measure over the last 1h/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /measure over the last 24h/i })).toBeInTheDocument();
+    // The honesty rule is still stated, in four words, with the reasoning behind
+    // it one click away (ai/skills/explain/dem.absence-not-health.md).
+    expect(screen.getByText(/Absent is not healthy\./)).toBeInTheDocument();
     expect(
-      screen.getByText(/renders an absent measurement as a healthy one/i),
+      screen.getByRole("button", { name: /Ask Iris about an absent measurement/ }),
     ).toBeInTheDocument();
   });
 

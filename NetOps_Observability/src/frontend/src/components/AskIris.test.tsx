@@ -11,6 +11,9 @@
 
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import AskIris, { IRIS_ASK_EVENT, irisAskQuestion, type IrisAskDetail } from "./AskIris";
 import { ShellContext, type ShellState, TIME_RANGES } from "../context/shell";
 
@@ -48,7 +51,11 @@ describe("AskIris", () => {
     expect(seen[0].topic).toBe("kpi.confirmed-rca");
   });
 
-  it("opens the assistant when a shell is present", () => {
+  // The button reads NO context on purpose: it is dropped into cards that are
+  // unit tested with the shell module mocked, and a context read here would make
+  // an explanation affordance the reason an unrelated page test fails. Opening
+  // the drawer belongs to the drawer (components/OpsisDrawer.tsx).
+  it("touches no shell state — it only raises the event", () => {
     const setCopilotOpen = vi.fn();
     render(
       <ShellContext.Provider value={shell({ setCopilotOpen })}>
@@ -56,7 +63,16 @@ describe("AskIris", () => {
       </ShellContext.Provider>,
     );
     fireEvent.click(screen.getByRole("button", { name: /Ask Iris/ }));
-    expect(setCopilotOpen).toHaveBeenCalledWith(true);
+    expect(setCopilotOpen).not.toHaveBeenCalled();
+  });
+
+  it("asking the same topic twice raises the event twice", () => {
+    const seen = listen();
+    render(<AskIris topic="kpi.critical" label="Critical" />);
+    const btn = screen.getByRole("button", { name: /Ask Iris/ });
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    expect(seen).toHaveLength(2);
   });
 
   // The regression that would otherwise be found in production: a KPI tile IS a
@@ -90,5 +106,51 @@ describe("AskIris", () => {
     const btn = container.querySelector("button.ask-iris") as HTMLElement;
     expect(btn.textContent).toBe("");
     expect(btn.querySelector("svg")?.getAttribute("width")).toBe("16");
+  });
+});
+
+// ── the cross-language contract ─────────────────────────────────────────────
+//
+// An `(i)` whose topic has no authored file is worse than no `(i)` at all: it
+// promises an explanation and delivers a refusal. The backend refuses honestly
+// (ai/explain.go), but the gap must never SHIP — so the shipped UI and the
+// authored corpus are checked against each other here, in the one test that
+// fails fast and names the missing file.
+
+const SRC = dirname(dirname(fileURLToPath(import.meta.url)));   // src/frontend/src
+const EXPLAIN = join(SRC, "..", "..", "backend", "ai", "skills", "explain");
+
+/** Every topic id a shipped .tsx/.ts hands to AskIris. */
+function referencedTopics(dir: string, out = new Set<string>()): Set<string> {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) {
+      if (e.name !== "node_modules") referencedTopics(full, out);
+      continue;
+    }
+    if (!/\.tsx?$/.test(e.name) || e.name.includes(".test.")) continue;
+    const src = readFileSync(full, "utf-8");
+    // `topic="x"`, `topic: "x"`, and the expression forms `topic={cond ? "a" : "b"}`.
+    for (const m of src.matchAll(/topic[=:]\s*(?:"([\w.-]+)"|\{([^}]*)\})/g)) {
+      if (m[1]) { out.add(m[1]); continue; }
+      for (const q of (m[2] ?? "").matchAll(/"([a-z][a-z0-9]*(?:[.-][a-z0-9]+)+)"/g)) out.add(q[1]);
+    }
+  }
+  return out;
+}
+
+describe("AskIris topics are authored", () => {
+  it("every topic the UI asks for has a file in ai/skills/explain", () => {
+    expect(existsSync(EXPLAIN), `explain corpus not found at ${EXPLAIN}`).toBe(true);
+    const authored = new Set(readdirSync(EXPLAIN).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)));
+    const missing = [...referencedTopics(SRC)].filter((t) => !authored.has(t)).sort();
+    expect(
+      missing,
+      "an (i) promises an explanation; write src/backend/ai/skills/explain/<topic>.md for:\n" + missing.join("\n"),
+    ).toEqual([]);
+  });
+
+  it("finds topics to check (a broken walk must not pass silently)", () => {
+    expect(referencedTopics(SRC).size).toBeGreaterThan(30);
   });
 });

@@ -25,6 +25,7 @@ import { ownerLabel } from "../../components/rca/labels";
 import {
   ConfidenceChip, Money, NotMeasured, SeverityChip, fmtDuration, pct,
 } from "./honest";
+import AskIris from "../../components/AskIris";
 
 export function IncidentTable({ rows, onOpen, caption }: {
   rows: DemIncidentSummary[];
@@ -34,8 +35,7 @@ export function IncidentTable({ rows, onOpen, caption }: {
   if (rows.length === 0) {
     return (
       <p className="dx-note">
-        No experience incident is open in this window. That is a real result only if the
-        telemetry behind it is flowing — the Data Health tab says whether it is.
+        No incident open in this window.<AskIris topic="dem.absence-not-health" label="an empty incident list" />
       </p>
     );
   }

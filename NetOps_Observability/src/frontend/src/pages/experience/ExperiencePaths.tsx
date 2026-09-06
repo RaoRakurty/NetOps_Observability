@@ -20,6 +20,7 @@ import { SeamRibbon } from "./ribbon";
 import { Loading, LoadError, Panel, SeverityChip, reasonText } from "./honest";
 import { useDemRead } from "./state";
 import type { DxRoute } from "./state";
+import AskIris from "../../components/AskIris";
 
 export default function ExperiencePaths({ window: win, route }: {
   window: DemWindow;
@@ -40,17 +41,13 @@ export default function ExperiencePaths({ window: win, route }: {
     <div className="dx-section">
       <Panel title="Service paths" label="Service paths">
         <p className="dx-note">
-          A path is shown only where one was observed. The ordered hops belong to the service
-          path graph and are fetched from it by the observation reference below; they are never
-          reconstructed here from whatever evidence happened to be collected.
+          Observed paths only.<AskIris topic="dem.observed-paths" label="observed service paths" />
         </p>
         {!list.data.measured && (
           <p className="dx-error" role="alert">{reasonText(list.data.reason)} {list.data.note}</p>
         )}
         {rows.length === 0 ? (
-          <p className="dx-note">
-            No experience incident is open in this window, so there is no path to look at.
-          </p>
+          <p className="dx-note">No incident open in this window.</p>
         ) : (
           <div className="dx-field">
             <label htmlFor="dx-path-incident">Incident</label>

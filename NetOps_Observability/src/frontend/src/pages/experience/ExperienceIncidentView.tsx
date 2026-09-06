@@ -35,6 +35,7 @@ import {
   SeverityChip, fmtDuration, pct, reasonText,
 } from "./honest";
 import { useDemRead } from "./state";
+import AskIris from "../../components/AskIris";
 
 type EvidenceFilter = "all" | "supporting" | "contradicting" | "missing";
 
@@ -191,8 +192,7 @@ export default function ExperienceIncidentView({ id, window: win, onBack }: {
       <Panel title="Hypotheses" label="Incident hypotheses">
         {(inc.hypotheses ?? []).length === 0 ? (
           <p className="dx-note">
-            No cause was proposed. That means the evidence did not implicate anything, not that
-            nothing is wrong.
+            No cause proposed.<AskIris topic="dem.no-cause-proposed" label="no proposed cause" />
           </p>
         ) : (
           <div className="dx-section">
@@ -207,8 +207,7 @@ export default function ExperienceIncidentView({ id, window: win, onBack }: {
       <Panel title="Changes" label="Changes ranked against this incident">
         {(inc.changes ?? []).length === 0 ? (
           <p className="dx-note">
-            No change in the lookback bears on this incident. Only the producers that are wired
-            report here, so this is not proof that nothing changed.
+            No change bears on this incident.<AskIris topic="dem.unwired-producers" label="an empty change list" />
           </p>
         ) : (
           <div className="dx-scroll">
@@ -269,8 +268,7 @@ export default function ExperienceIncidentView({ id, window: win, onBack }: {
       <Panel title="Action" label="Recommended actions">
         {(inc.recommended_actions ?? []).length === 0 ? (
           <p className="dx-note">
-            Nothing is recommended for this incident. A proposal nobody can ground in the
-            evidence above is not offered.
+            Nothing recommended.<AskIris topic="dem.no-action-recommended" label="no recommended action" />
           </p>
         ) : (
           <div className="dx-section">
@@ -311,8 +309,7 @@ export default function ExperienceIncidentView({ id, window: win, onBack }: {
           {" "}{inc.verification?.detail}
         </p>
         <p className="dx-cap">
-          An action completing is a fact about the action, not about the experience: recovery is
-          only recorded when the measurements agree.
+          Action done is not recovery.<AskIris topic="dem.action-vs-recovery" label="verified recovery" />
         </p>
         {(inc.verification?.checks ?? []).length > 0 && (
           <div className="dx-scroll">
@@ -345,8 +342,7 @@ export default function ExperienceIncidentView({ id, window: win, onBack }: {
       <AiInvestigatorPanel availability={packet.data.ai_investigator} subject={inc.title} />
       {!packet.data.evidence_packet_available && (
         <p className="dx-cap">
-          No briefing could be built from this incident: every item on it is above the data class
-          that may leave the platform.
+          No briefing<AskIris topic="dem.briefing-data-class" label="an unavailable briefing" />
         </p>
       )}
       <p className="dx-cap">
@@ -471,8 +467,7 @@ function EvidenceList({ data, filter }: {
     if (missing.length === 0) {
       return (
         <p className="dx-note">
-          Nothing is recorded as missing. That is only reassuring when every source is
-          reporting — the Data Health tab is where that is decided.
+          Nothing recorded as missing.<AskIris topic="dem.nothing-missing" label="nothing recorded as missing" />
         </p>
       );
     }
@@ -500,8 +495,8 @@ function EvidenceList({ data, filter }: {
   if (shown.length === 0) {
     return (
       <p className="dx-note">
-        No observation of this kind is recorded for this incident.
-        {missing.length > 0 && ` ${missing.length} source(s) that could have produced one are not reporting — see Missing.`}
+        No observation of this kind.
+        {missing.length > 0 && ` ${missing.length} source(s) not reporting.`}
       </p>
     );
   }

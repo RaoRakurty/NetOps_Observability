@@ -20,7 +20,6 @@ import {
 import Icon from "../components/Icon";
 import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
-import { IRIS_ASK_EVENT } from "../components/AskIris";
 
 // Iris AI — the in-app assistant chat. Posts to /api/copilot/chat (provider
 // fallback chain server-side); key-free questions fall through to the grounded
@@ -88,7 +87,13 @@ function cmdToSlash(c: AiCommand): SlashCmd {
   };
 }
 
-export default function Opsis({ split, onToggleSplit }: { split?: boolean; onToggleSplit?: () => void }) {
+export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
+  split?: boolean;
+  onToggleSplit?: () => void;
+  /** A pending AskIris request handed down by the drawer (components/AskIris.tsx). */
+  ask?: { topic: string; question: string; seq: number } | null;
+  onAskHandled?: () => void;
+}) {
   const { setCopilotOpen, openHelp } = useShell();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [history, setHistory] = useState<CopilotMessage[]>([]);
@@ -326,29 +331,23 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
   };
 
   // AskIris (components/AskIris.tsx) — the `(i)` beside a number on any screen.
-  // It raises one named window event; the drawer is the single listener, so the
-  // pages that lost their explanatory prose never learn anything about the
-  // assistant beyond "an explanation exists for this topic".
+  // The drawer catches the event and hands the pending ask down here.
   //
-  // The ask goes through the GROUNDED route with the topic in context: the server
+  // It goes through the GROUNDED route with the topic in context: the server
   // answers from its own authored file and refuses an unknown topic, so nothing
   // a page sends can widen or invent an answer.
   //
-  // A ref, because the listener is registered once for the drawer's lifetime and
-  // sendGrounded closes over the CURRENT history — without it the second `(i)` of
-  // a session would append to a stale conversation.
+  // A ref, because the effect must fire on the ASK and nothing else: depending on
+  // sendGrounded (which closes over the current history) would re-run it on every
+  // turn of the conversation.
   const askRef = useRef(sendGrounded);
   askRef.current = sendGrounded;
   useEffect(() => {
-    const onAsk = (e: Event) => {
-      const d = (e as CustomEvent<{ topic?: string; question?: string }>).detail;
-      const topic = (d?.topic || "").trim();
-      if (!topic) return;
-      askRef.current(d?.question?.trim() || `What does ${topic} mean?`, { topic });
-    };
-    window.addEventListener(IRIS_ASK_EVENT, onAsk);
-    return () => window.removeEventListener(IRIS_ASK_EVENT, onAsk);
-  }, []);
+    if (!ask?.topic) return;
+    askRef.current(ask.question?.trim() || `What does ${ask.topic} mean?`, { topic: ask.topic });
+    onAskHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask?.seq]);
 
   if (enabled === false) {
     return (

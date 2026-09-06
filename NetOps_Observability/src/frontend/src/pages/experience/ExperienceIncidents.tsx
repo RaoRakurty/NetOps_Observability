@@ -16,6 +16,7 @@ import { IncidentTable } from "./incidentTable";
 import { Loading, LoadError, Panel, reasonText } from "./honest";
 import { useDemRead } from "./state";
 import type { DxRoute } from "./state";
+import AskIris from "../../components/AskIris";
 
 const SEVERITIES: readonly DemSeverity[] = ["critical", "high", "medium", "low", "info"];
 
@@ -69,7 +70,7 @@ export default function ExperienceIncidents({ window: win, route, onIncident }: 
               route.setParam("journey", "");
             }}>Clear filters</button>
             <span className="dx-cap">
-              This list is narrowed. What is hidden by a filter is not the same as what is absent.
+              Filtered<AskIris topic="dem.filtered-not-absent" label="a filtered list" />
             </span>
           </div>
         )}

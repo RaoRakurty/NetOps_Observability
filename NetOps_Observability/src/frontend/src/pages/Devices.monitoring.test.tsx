@@ -14,7 +14,7 @@
 //      deleted, and the operator is told what to do about it.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import type { Device } from "../services/api";
 
 const mockApi = vi.hoisted(() => ({
@@ -66,7 +66,7 @@ describe("discovered is not licensed", () => {
       device({ id: "d3" }),
     ]);
     render(<Devices />);
-    expect(await screen.findByText("Discovered devices: 3 · Monitored devices: 1")).toBeTruthy();
+    expect(await screen.findByText("Discovered 3 · Monitored 1")).toBeTruthy();
     expect(screen.getByText("Discovered devices")).toBeTruthy();
     expect(screen.getByText("Monitored devices")).toBeTruthy();
   });
@@ -82,7 +82,7 @@ describe("discovered is not licensed", () => {
     // Two telemetry methods on ONE device: shown, but still one monitored
     // device on the count above.
     expect(screen.getByText("gnmi · snmp")).toBeTruthy();
-    expect(screen.getByText("Discovered devices: 2 · Monitored devices: 1")).toBeTruthy();
+    expect(screen.getByText("Discovered 2 · Monitored 1")).toBeTruthy();
   });
 });
 
@@ -126,7 +126,7 @@ describe("the monitoring switch", () => {
     expect(screen.getByText(/Nothing has been removed and nothing has stopped/)).toBeTruthy();
     // And the device is still on the page: the cap is on monitoring, not on
     // seeing.
-    expect(screen.getByText("Discovered devices: 1 · Monitored devices: 0")).toBeTruthy();
+    expect(screen.getByText("Discovered 1 · Monitored 0")).toBeTruthy();
   });
 });
 
@@ -199,7 +199,10 @@ describe("the monitored-device overage banner", () => {
     expect(banner.textContent).toContain("nothing has been blocked, disabled or deleted");
     // The C4 wording, reused verbatim from the ceiling itself.
     expect(banner.textContent).toContain("monitored devices");
-    expect(banner.textContent).toContain("Discovery does not consume your monitoring allowance.");
+    // The sentence "Discovery does not consume your monitoring allowance" left
+    // the banner in the 2026-09-06 word sweep; it is now the authored answer
+    // behind the banner's (i) (ai/skills/explain/devices.allowance.md).
+    expect(within(banner).getByRole("button", { name: /Ask Iris about the monitored-device allowance/ })).toBeTruthy();
   });
 
   it("keeps the honest hard wording where the ceiling really does bite", async () => {

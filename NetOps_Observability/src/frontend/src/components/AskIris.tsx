@@ -18,14 +18,18 @@
 // through it and nothing on the wire is trusted (§3: the server re-resolves the
 // topic; an unknown one is refused, never improvised).
 //
+// The event is also why this component touches NO context. It is dropped into
+// dozens of cards that are unit tested standalone, often with the shell module
+// mocked; a context read here would make an explanation affordance the reason an
+// unrelated page test fails. Opening the drawer is the drawer's job.
+//
 // The component makes NO network call until it is clicked, and none itself even
 // then: the drawer owns the ask.
 
-import { useContext, type MouseEvent } from "react";
+import { type MouseEvent } from "react";
 import Icon from "./Icon";
-import { ShellContext } from "../context/shell";
 
-/** The window event AskIris raises. tabs/Opsis.tsx is the only listener. */
+/** The window event AskIris raises. components/OpsisDrawer.tsx is the only listener. */
 export const IRIS_ASK_EVENT = "iris:ask";
 
 export type IrisAskDetail = {
@@ -62,17 +66,11 @@ export default function AskIris({ topic, label, className }: {
   label: string;
   className?: string;
 }) {
-  // useContext, NOT useShell: this button is dropped inside cards that are unit
-  // tested standalone, and a hook that throws outside the provider would make an
-  // explanation affordance the reason a page test fails. Without a shell the
-  // event still fires and the drawer, when it exists, still opens itself.
-  const shell = useContext(ShellContext);
   const open = (e: MouseEvent<HTMLButtonElement>) => {
     // KPI tiles and table rows are themselves clickable; explaining a number must
     // never also filter or navigate.
     e.preventDefault();
     e.stopPropagation();
-    shell?.setCopilotOpen(true);
     askIris(topic, label);
   };
   return (

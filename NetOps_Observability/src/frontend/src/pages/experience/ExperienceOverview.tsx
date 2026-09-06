@@ -34,6 +34,7 @@ import {
 } from "./honest";
 import { useDemRead } from "./state";
 import type { DxTab } from "./state";
+import AskIris from "../../components/AskIris";
 
 export default function ExperienceOverview({ window: win, onTab, onIncident }: {
   window: DemWindow;
@@ -102,8 +103,7 @@ export default function ExperienceOverview({ window: win, onTab, onIncident }: {
         actions={<button type="button" className="btn" onClick={() => onTab("changes")}>Change feed</button>}>
         {d.changes.length === 0 ? (
           <p className="dx-note">
-            Nothing was recorded in this window. A quiet estate reports nothing — but this is
-            not proof that nothing changed: only the producers that are wired report here.
+            Nothing recorded in this window.<AskIris topic="dem.unwired-producers" label="an empty change feed" />
           </p>
         ) : (
           <div className="dx-scroll">
@@ -289,8 +289,7 @@ function JourneyHealthList({ rows }: { rows: DemJourneyHealth[] }) {
   if (rows.length === 0) {
     return (
       <p className="dx-note">
-        No journey is declared for this tenant. A workflow nobody described cannot be
-        reported on, and it will not be guessed.
+        No journey is declared.<AskIris topic="dem.no-journey-declared" label="a declared journey" />
       </p>
     );
   }
@@ -466,13 +465,10 @@ function HeatmapFrom({ data }: { data: DemExperienceResponse }) {
   const { cells, unplaced } = buildHeatCells(data);
   return (
     <>
-      <ExperienceHeatmap cells={cells}
-        caption="Experience band per site and application, from the per-check scores." />
+      <ExperienceHeatmap cells={cells} caption="Site by application" />
       {unplaced > 0 && (
         <p className="dx-cap">
-          {unplaced} check{unplaced === 1 ? " carries" : "s carry"} no site or no application
-          label, so {unplaced === 1 ? "it is" : "they are"} not plotted here. That is a labelling
-          gap, not a healthy result.
+          {unplaced} unplotted<AskIris topic="dem.unplaced-checks" label="unplotted checks" />
         </p>
       )}
     </>

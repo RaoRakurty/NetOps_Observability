@@ -6,6 +6,7 @@ import DataTable, { Column } from "../components/DataTable";
 import { Segmented } from "../components/ui";
 import { useWorkspace } from "../context/workspace";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import AskIris from "../components/AskIris";
 import Logs from "./Logs";
 import { operatorError } from "../lib/errors";
 // Active Alerts, grouped by EPISODE: repeated firings of the same
@@ -16,7 +17,7 @@ import { operatorError } from "../lib/errors";
 // the dockable Inspector (shell-v2) with a "View logs" pivot; v1 falls back
 // to an inline detail section.
 
-const mono: React.CSSProperties = { fontFamily: "var(--font-mono, monospace)", fontSize: 12 };
+const mono: React.CSSProperties = { fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 };
 
 type EpisodeFilter = "open" | "closed" | "all";
 
@@ -149,18 +150,18 @@ export default function Alerts() {
     <div className="dm-board cc-board">
       <NocHeader
         title="Active Alerts"
-        subtitle="Repeated firings collapse into episodes — triage each once with acknowledge, assign, mute, snooze and notes."
+        topic="page.active-alerts"
         chips={
           <>
             {loadErr ? (
               <Chip
-                label="Alert feed unavailable"
+                label="Feed unavailable"
                 tone="var(--crit)"
                 title="The alert episode API did not answer — the counts below are unknown, not zero."
               />
             ) : (
               <Chip
-                label={`${rawFiring} firing · ${active.length} episode${active.length === 1 ? "" : "s"}`}
+                label={`Firing ${rawFiring} · Episodes ${active.length}`}
                 tone={active.length ? "var(--warn)" : "var(--ok)"}
                 title="Currently-firing alerts, folded into episodes"
               />
@@ -170,12 +171,13 @@ export default function Alerts() {
         }
       >
         {/* On a failed read every KPI is UNKNOWN — a green zero would be a claim
-            about the network that the API never made. */}
+            about the network that the API never made. The em dash says so; what
+            "unknown" means for each tile is one click away on its (i). */}
         <NocKpis cols={4}>
-          <NocKpi n={loadErr ? "—" : active.length} label="Active episodes" interp={loadErr ? "unknown — feed failed" : "conditions firing now"} tone={loadErr ? "var(--fg-subtle)" : active.length ? "var(--warn)" : "var(--ok)"} />
-          <NocKpi n={loadErr ? "—" : eCrit} label="Critical" interp={loadErr ? "unknown — feed failed" : "severe condition"} tone={loadErr ? "var(--fg-subtle)" : eCrit ? "var(--crit)" : undefined} />
-          <NocKpi n={loadErr ? "—" : eFlap} label="Flapping" interp={loadErr ? "unknown — feed failed" : "rapid state changes"} tone={loadErr ? "var(--fg-subtle)" : eFlap ? "var(--warn)" : undefined} />
-          <NocKpi n={loadErr ? "—" : ePaused} label="Notifications paused" interp={loadErr ? "unknown — feed failed" : "muted or snoozed"} tone={loadErr ? "var(--fg-subtle)" : ePaused ? "var(--fg-subtle)" : undefined} />
+          <NocKpi n={loadErr ? "—" : active.length} label="Active episodes" topic="alerts.active-episodes" tone={loadErr ? "var(--fg-subtle)" : active.length ? "var(--warn)" : "var(--ok)"} />
+          <NocKpi n={loadErr ? "—" : eCrit} label="Critical" topic="alerts.critical" tone={loadErr ? "var(--fg-subtle)" : eCrit ? "var(--crit)" : undefined} />
+          <NocKpi n={loadErr ? "—" : eFlap} label="Flapping" topic="alerts.flapping" tone={loadErr ? "var(--fg-subtle)" : eFlap ? "var(--warn)" : undefined} />
+          <NocKpi n={loadErr ? "—" : ePaused} label="Notifications paused" topic="alerts.notifications-paused" tone={loadErr ? "var(--fg-subtle)" : ePaused ? "var(--fg-subtle)" : undefined} />
         </NocKpis>
       </NocHeader>
       <div className="cc-panel">
@@ -193,9 +195,9 @@ export default function Alerts() {
               ]}
             />
             {loadErr
-              ? "feed unavailable"
+              ? "Feed unavailable"
               : truncated
-                ? `showing ${items.length} of ${total} episodes (most recent)`
+                ? `${items.length} of ${total}`
                 : `${items.length} episode${items.length === 1 ? "" : "s"}`}
           </span>
         </div>
@@ -205,8 +207,8 @@ export default function Alerts() {
               <strong>Alert episodes could not be loaded.</strong>
               <div style={{ marginTop: 4 }}>{loadErr}</div>
               <div style={{ marginTop: 4, color: "var(--muted)" }}>
-                Whether any condition is firing is UNKNOWN — this is not an all-clear.
-                {items.length > 0 ? " The rows below are the last successful read and may be stale." : ""}
+                Unknown, not all-clear.{items.length > 0 ? " Rows below may be stale." : ""}
+                <AskIris topic="alerts.feed-unavailable" label="an unavailable alert feed" />
               </div>
             </div>
           )}
@@ -214,9 +216,8 @@ export default function Alerts() {
           {items.length === 0 ? (
             loadErr || !loaded ? null : (
               <div className="empty">
-                {filter === "open"
-                  ? "No open alert episodes — all monitored conditions are within threshold."
-                  : "No episodes match this filter."}
+                {filter === "open" ? "Nothing firing." : "No episodes match this filter."}
+                <AskIris topic="alerts.nothing-firing" label="an empty alert list" />
               </div>
             )
           ) : (
@@ -292,7 +293,7 @@ export function EpisodeDetailBody({
   };
 
   const row = (k: string, v: React.ReactNode) => (
-    <div style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}>
+    <div style={{ display: "flex", gap: 8, fontSize: 12.5, padding: "2px 0" }}>
       <span style={{ color: "var(--muted)", minWidth: 96 }}>{k}</span>
       <span>{v}</span>
     </div>
@@ -311,9 +312,10 @@ export function EpisodeDetailBody({
       </div>
       {ep.summary && <div style={{ fontSize: 13 }}>{ep.summary}</div>}
       {isSuppressed(ep) && (
-        <div style={{ fontSize: 12, color: "var(--muted)" }}>
-          Notifications are paused for this episode
-          {ep.muted ? ` (muted by ${ep.muted_by || "an operator"})` : ` until ${fmt(ep.snoozed_until)}`}. It stays visible here and keeps updating.
+        <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
+          Notifications paused
+          {ep.muted ? ` by ${ep.muted_by || "an operator"}` : ` until ${fmt(ep.snoozed_until)}`}.
+          <AskIris topic="alerts.notifications-paused" label="paused notifications" />
         </div>
       )}
       <div>
@@ -383,19 +385,19 @@ export function EpisodeDetailBody({
           </button>
         )}
       </div>
-      {err && <div style={{ fontSize: 12, color: "var(--crit)" }}>{err}</div>}
+      {err && <div style={{ fontSize: 12.5, color: "var(--crit)" }}>{err}</div>}
 
       {/* Notes */}
       <div>
-        <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+        <div style={{ fontSize: 12.5, color: "var(--muted)", letterSpacing: 0.2, marginBottom: 4 }}>
           Notes
         </div>
         {(ep.notes ?? []).length === 0 ? (
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>No notes yet.</div>
+          <div style={{ fontSize: 12.5, color: "var(--muted)" }}>No notes yet.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {(ep.notes ?? []).map((n, i) => (
-              <div key={i} style={{ fontSize: 12, borderLeft: "2px solid var(--border)", paddingLeft: 8 }}>
+              <div key={i} style={{ fontSize: 12.5, borderLeft: "2px solid var(--border)", paddingLeft: 8 }}>
                 <div style={{ color: "var(--muted)" }}>
                   <span style={mono}>{n.by}</span> · {fmt(n.at)}
                 </div>

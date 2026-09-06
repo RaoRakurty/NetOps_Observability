@@ -132,8 +132,9 @@ describe("Every column is sortable, with a visible indicator + aria-sort", () =>
     render(<CommandCenter />);
     await screen.findByRole("grid", { name: /Action Queue/i });
 
-    const names = ["Sev", "Problem ID", "Incident / correlation group", "RCA state", "Impact",
-      "Fault domain", "Evidence", "Owner", "Started", "Age", "Ticket", "Next action"];
+    // Column headers were cut to <= 2 words in the 2026-09-06 word sweep.
+    const names = ["Sev", "Problem", "Incident", "RCA", "Impact",
+      "Domain", "Evidence", "Owner", "Started", "Age", "Ticket", "Next"];
     for (const n of names) {
       const th = header(n);
       expect(th.className, `${n} must be sortable`).toContain("sortable");
@@ -167,7 +168,7 @@ describe("Every column is sortable, with a visible indicator + aria-sort", () =>
     render(<CommandCenter />);
     await screen.findByRole("grid", { name: /Action Queue/i });
 
-    fireEvent.click(header("RCA state"));
+    fireEvent.click(header("RCA"));
     // Ladder: Confirmed(0) → Suspected(1) → Correlated(3) ×2.
     // A LEXICAL sort would give Confirmed, Correlated, Correlated, Suspected —
     // burying Suspected below two benign correlated groups.
@@ -232,18 +233,18 @@ describe("Row expansion survives the DataTable migration (hard constraint)", () 
     render(<CommandCenter />);
     await screen.findByRole("grid", { name: /Action Queue/i });
 
-    expect(screen.queryByText("Recommended next action")).toBeNull();
+    expect(screen.queryByText("Next action")).toBeNull();
 
     fireEvent.click(screen.getByText("Routing adjacency change"));
 
     // The detail row renders the real ExpandPanel content for that correlation.
-    expect(await screen.findByText("Recommended next action")).toBeTruthy();
+    expect(await screen.findByText("Next action")).toBeTruthy();
     expect(screen.getByText("Impacted entities")).toBeTruthy();
     await waitFor(() => expect(rcaPathView).toHaveBeenCalledWith("aaaaaa11-0000-0000-0000-000000000001"));
 
     // Clicking the same row again collapses it.
     fireEvent.click(screen.getByText("Routing adjacency change"));
-    expect(screen.queryByText("Recommended next action")).toBeNull();
+    expect(screen.queryByText("Next action")).toBeNull();
   });
 
   it("marks the expanded row with aria-expanded for assistive tech", async () => {
@@ -262,7 +263,7 @@ describe("Row expansion survives the DataTable migration (hard constraint)", () 
     await screen.findByRole("grid", { name: /Action Queue/i });
 
     fireEvent.click(screen.getByText("P-AAAAAA")); // the Problem ID → RCA deep link
-    expect(screen.queryByText("Recommended next action")).toBeNull();
+    expect(screen.queryByText("Next action")).toBeNull();
   });
 });
 
@@ -272,7 +273,7 @@ describe("Filtering still narrows the queue (no regression)", () => {
     await screen.findByRole("grid", { name: /Action Queue/i });
     expect(rowOrder()).toHaveLength(4);
 
-    fireEvent.click(screen.getByRole("button", { name: /Critical/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^\d+\s*Critical$/ }));
     await waitFor(() => expect(rowOrder()).toEqual(["P-AAAAAA"]));
   });
 

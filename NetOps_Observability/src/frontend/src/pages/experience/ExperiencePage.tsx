@@ -35,6 +35,7 @@ import ExperienceSynthetics from "./ExperienceSynthetics";
 import "./experience.css";
 import { DX_TABS, DX_TAB_LABEL, DX_WINDOWS, useDxRoute } from "./state";
 import type { DxTab } from "./state";
+import AskIris from "../../components/AskIris";
 
 export default function ExperiencePage() {
   const route = useDxRoute();
@@ -77,8 +78,7 @@ export default function ExperiencePage() {
           </div>
         </div>
         <p className="dx-cap">
-          Nothing on this surface renders an absent measurement as a healthy one: where a
-          number could not be made, the reason it could not is shown in its place.
+          Absent is not healthy.<AskIris topic="dem.absence-not-health" label="an absent measurement" />
         </p>
       </div>
 

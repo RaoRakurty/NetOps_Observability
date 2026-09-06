@@ -28,6 +28,7 @@ import {
   BandChip, Loading, LoadError, Money, NotMeasured, Panel, bandFor, pct, reasonText,
 } from "./honest";
 import { useDemRead } from "./state";
+import AskIris from "../../components/AskIris";
 
 const IMPORTANCE = ["critical", "high", "normal", "low"] as const;
 
@@ -296,7 +297,7 @@ function JourneyForm({ initial, targets, busy, onSave, onCancel }: {
             <label htmlFor="dx-j-lat">Objective, p95 milliseconds</label>
             <input id="dx-j-lat" type="number" min={0} value={latencyMs}
               onChange={(e) => setLatencyMs(e.target.value)} />
-            <span className="dx-cap">Leave empty to declare no latency objective — none is invented.</span>
+            <span className="dx-cap">Empty = no objective<AskIris topic="dem.latency-objective" label="the latency objective" /></span>
           </div>
           <div className="dx-field">
             <label htmlFor="dx-j-value">Value of one successful traversal</label>
@@ -325,9 +326,7 @@ function JourneyForm({ initial, targets, busy, onSave, onCancel }: {
 
         <h3 className="dx-h3">Steps</h3>
         <p className="dx-cap">
-          A step may branch to several others, may point back at an earlier one (a retry
-          loop is legal), and must end somewhere: at least one step has to be a success
-          terminal, or the journey has no way to succeed and no success rate.
+          One step must be a success terminal.<AskIris topic="dem.journey-steps" label="journey steps" />
         </p>
 
         {steps.map((s, i) => (
@@ -386,8 +385,7 @@ function JourneyForm({ initial, targets, busy, onSave, onCancel }: {
             </div>
             {!s.target_id && (
               <p className="dx-cap">
-                Nothing measures this step, so it will be reported as a coverage gap rather
-                than as a success.
+                Unmeasured — reported as a coverage gap.<AskIris topic="dem.step-coverage-gap" label="an unmeasured step" />
               </p>
             )}
           </fieldset>

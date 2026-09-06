@@ -185,9 +185,9 @@ export function scanWordBudget(source: string): Breach[] {
 // ── the sweep debt ───────────────────────────────────────────────────────────
 //
 // Seeded 2026-09-06 with every file that was over budget on the day the guard
-// landed — 92 files, 401 breaches. The number is that file's breach count on
-// that day, so the whole backlog is visible in one diff and each sweep is a
-// deletion from this list.
+// landed (92 files, 401 breaches); sweep 1 then removed 14 of them, leaving 78
+// files and 353 breaches. The number is that file's breach count, so the whole
+// backlog is visible in one diff and each sweep is a deletion from this list.
 // Sweep order and the "done" definition are in the design doc; a swept file
 // loses its line here.
 export const ALLOW: Readonly<Record<string, number>> = Object.freeze(
@@ -256,6 +256,35 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
       else if (actual < allowed) stale.push(`${label}: down to ${actual} (recorded ${allowed}) — lower it`);
     }
     expect(stale, `wordBudget.allow.json is out of date:\n${stale.join("\n")}`).toEqual([]);
+  });
+
+  // Sweep 1 (Dashboard/Command Center · Operations · Alerts) is DONE, so these
+  // files must never reappear in the debt list — the allowlist may not grow a
+  // new entry for one, and its breach count must stay zero.
+  it.each([
+    "components/noc.tsx",
+    "pages/CommandCenter.tsx",
+    "pages/Dashboard.tsx",
+    "pages/ActionQueue.tsx",
+    "pages/Devices.tsx",
+    "pages/DigitalExperience.tsx",
+    "tabs/Alerts.tsx",
+    "tabs/Incidents.tsx",
+    "pages/experience/ExperiencePage.tsx",
+    "pages/experience/ExperienceOverview.tsx",
+    "pages/experience/ExperienceIncidents.tsx",
+    "pages/experience/ExperienceIncidentView.tsx",
+    "pages/experience/ExperienceJourneys.tsx",
+    "pages/experience/ExperiencePaths.tsx",
+    "pages/experience/ExperienceSynthetics.tsx",
+    "pages/experience/ExperienceChanges.tsx",
+    "pages/experience/ExperienceDataHealth.tsx",
+    "pages/experience/incidentTable.tsx",
+    "pages/experience/heatmap.tsx",
+    "pages/experience/scrubber.tsx",
+  ])("%s stays swept (sweep 1)", (label) => {
+    expect(ALLOW[label], `${label} is in sweep 1 and may not carry budget debt`).toBeUndefined();
+    expect(counted.get(label)?.map((b) => fmtBreach(label, b)) ?? [], `${label} regressed`).toEqual([]);
   });
 
   // Teeth: every rule must still fire on the copy it was written to remove, or a

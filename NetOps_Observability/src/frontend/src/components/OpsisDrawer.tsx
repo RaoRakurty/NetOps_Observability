@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Opsis from "../tabs/Opsis";
 import { useShell } from "../context/shell";
 import { AI_NAME } from "../brand";
+import { IRIS_ASK_EVENT, type IrisAskDetail } from "./AskIris";
 
 // Iris AI panel — a LEFT-docked assistant that slides in from the icon rail
 // (attached to the "Iris AI" knob), not a right slide-over (which clipped on
@@ -14,6 +15,29 @@ import { AI_NAME } from "../brand";
 export default function OpsisDrawer() {
   const { copilotOpen, setCopilotOpen } = useShell();
   const [split, setSplit] = useState<boolean>(() => localStorage.getItem("aiSplit") === "1");
+
+  // AskIris — the `(i)` beside a number on any screen (components/AskIris.tsx)
+  // raises one named window event. THIS is its only listener, and it is the right
+  // place for it: the drawer already owns the shell state, and Opsis is mounted
+  // only while the panel is open, so a listener inside Opsis could not have
+  // opened it. The panel opens, then the pending ask is handed down and sent.
+  //
+  // `seq` is what makes the SAME topic askable twice: the payload is otherwise
+  // identical, so without it React would see no change and Opsis would ignore the
+  // second click.
+  const [pendingAsk, setPendingAsk] = useState<(IrisAskDetail & { seq: number }) | null>(null);
+  useEffect(() => {
+    let seq = 0;
+    const onAsk = (e: Event) => {
+      const d = (e as CustomEvent<IrisAskDetail>).detail;
+      if (!d?.topic?.trim()) return;
+      seq += 1;
+      setCopilotOpen(true);
+      setPendingAsk({ topic: d.topic.trim(), question: d.question, seq });
+    };
+    window.addEventListener(IRIS_ASK_EVENT, onAsk);
+    return () => window.removeEventListener(IRIS_ASK_EVENT, onAsk);
+  }, [setCopilotOpen]);
 
   // Esc closes the panel.
   useEffect(() => {
@@ -55,7 +79,14 @@ export default function OpsisDrawer() {
         role="complementary"
         aria-label={AI_NAME + " assistant"}
       >
-        {copilotOpen && <Opsis split={split} onToggleSplit={toggleSplit} />}
+        {copilotOpen && (
+          <Opsis
+            split={split}
+            onToggleSplit={toggleSplit}
+            ask={pendingAsk}
+            onAskHandled={() => setPendingAsk(null)}
+          />
+        )}
       </aside>
     </>
   );

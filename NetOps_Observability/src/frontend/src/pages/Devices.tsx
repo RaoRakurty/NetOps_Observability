@@ -11,6 +11,7 @@ const DeviceTerminal = lazy(() => import("./DeviceTerminal"));
 import Wizard from "../components/Wizard";
 import DataTable, { Column, Sev } from "../components/DataTable";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import AskIris from "../components/AskIris";
 import UpgradeCard, { licenceRefusalFromError, type LicenceRefusal } from "../components/licence/UpgradeCard";
 import { overageSummary, tierLabel } from "./licence.model";
 
@@ -311,7 +312,7 @@ export default function Devices() {
       text: (d) => d.name ?? "", render: (d) => <span className="device-name" title={d.name || ""}>{d.name || "—"}</span>,
     },
     {
-      key: "address", header: "IP address", width: "12%",
+      key: "address", header: "IP", width: "12%",
       text: (d) => d.address,
       render: (d) => <span title={d.address} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{d.address}</span>,
     },
@@ -399,35 +400,31 @@ export default function Devices() {
     <div className="dm-board">
       <NocHeader
         title="Inventory & Devices"
-        subtitle="Every discovered and declared device. Discovery is free; the licence counts the devices monitoring is switched on for."
+        topic="page.devices"
         chips={<>
-          <Chip label={`${devices.length} discovered`} />
-          <Chip label={`${monitoredCount} monitored`} />
+          <Chip label={`Discovered ${devices.length}`} />
+          <Chip label={`Monitored ${monitoredCount}`} />
           <LiveChip detail="30s poll" />
         </>}
       >
         <NocKpis cols={5}>
-          <NocKpi n={devices.length} label="Discovered devices" interp="in the inventory — free" />
-          <NocKpi
-            n={monitoredCount}
-            label="Monitored devices"
-            interp="collected from — the licensed unit"
-          />
+          <NocKpi n={devices.length} label="Discovered devices" topic="devices.discovered" />
+          <NocKpi n={monitoredCount} label="Monitored devices" topic="devices.monitored" />
           <NocKpi
             n={counts.up}
             label="Up"
-            interp={alertsErr ? "heartbeat only — alert state unknown" : "fresh heartbeat"}
+            topic={alertsErr ? "devices.heartbeat-only" : "devices.up"}
             tone={alertsErr ? "var(--warn)" : counts.up ? "var(--ok)" : undefined}
           />
-          <NocKpi n={counts.degraded} label="Degraded" interp={alertsErr ? "stale heartbeat only" : "stale or alerting"} tone={counts.degraded ? "var(--warn)" : undefined} />
-          <NocKpi n={counts.down} label="Down" interp="no heartbeat" tone={counts.down ? "var(--crit)" : undefined} />
+          <NocKpi n={counts.degraded} label="Degraded" topic="devices.degraded" tone={counts.degraded ? "var(--warn)" : undefined} />
+          <NocKpi n={counts.down} label="Down" topic="devices.down" tone={counts.down ? "var(--crit)" : undefined} />
         </NocKpis>
       </NocHeader>
 
       {alertsErr && (
         <p className="empty" role="alert" style={{ color: "var(--warn)", margin: "0 0 10px" }}>
-          <strong>Alert correlation unavailable</strong> — device health below is derived from the
-          heartbeat alone, so a device shown as <em>Up</em> may still be alerting. ({alertsErr})
+          <strong>Alert correlation unavailable</strong> — health below is heartbeat only. ({alertsErr})
+          <AskIris topic="devices.heartbeat-only" label="heartbeat-only health" />
         </p>
       )}
 
@@ -438,7 +435,7 @@ export default function Devices() {
           style={{ color: deviceOverage.every((o) => o.soft) ? "var(--warn)" : "var(--crit)", margin: "0 0 10px" }}
         >
           <strong>{deviceOverage.every((o) => o.soft) ? "Above your monitored-device allowance" : "Over the monitored-device ceiling"}</strong>{" "}
-          — {overageSummary(deviceOverage)} Discovery does not consume your monitoring allowance.
+          — {overageSummary(deviceOverage)}<AskIris topic="devices.allowance" label="the monitored-device allowance" />
         </p>
       )}
 
@@ -460,8 +457,8 @@ export default function Devices() {
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Device inventory</h3>
-          <span style={{ color: "var(--fg-muted)", fontSize: 12 }}>
-            Discovered devices: {devices.length} · Monitored devices: {monitoredCount}
+          <span style={{ color: "var(--fg-muted)", fontSize: 12.5 }}>
+            Discovered {devices.length} · Monitored {monitoredCount}
           </span>
         </div>
         <div style={{ padding: "11px 13px" }}>

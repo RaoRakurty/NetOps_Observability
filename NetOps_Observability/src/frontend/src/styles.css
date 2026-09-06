@@ -966,9 +966,9 @@ code, kbd, pre, .mono, td.mono {
    rules + tight grid; per-section hue via --sec. Our twist over the reference. ===== */
 .mydash { padding: 4px 2px 28px; }
 .mydash-head { display: flex; align-items: flex-end; justify-content: space-between; margin: 4px 4px 16px; gap: 12px; flex-wrap: wrap; }
-.mydash-eyebrow { font-family: var(--font-display); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .14em; color: var(--accent); }
+.mydash-eyebrow { font-family: var(--font-display); font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--accent); }
 .mydash-title { margin: 2px 0 0; font-family: var(--font-display); font-size: 26px; font-weight: 680; letter-spacing: -0.02em; }
-.mydash-head-meta { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--fg-muted); }
+.mydash-head-meta { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--fg-muted); }
 .mydash-live { display: inline-flex; align-items: center; gap: 6px; color: var(--good); font-weight: 600; }
 .mydash-live-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); animation: mydash-pulse 2s ease-in-out infinite; }
 @keyframes mydash-pulse { 50% { opacity: .35; } }
@@ -976,11 +976,10 @@ code, kbd, pre, .mono, td.mono {
 .mydash-asof { font-variant-numeric: tabular-nums; }
 .mydash-sec { margin-bottom: 16px; }
 .mydash-sec-h { display: flex; align-items: center; gap: 10px; margin: 0 4px 8px; }
-.mydash-sec-n { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--sec, var(--accent));
+.mydash-sec-n { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700; color: var(--sec, var(--accent));
   background: color-mix(in srgb, var(--sec, var(--accent)) 15%, transparent);
   border: 1px solid color-mix(in srgb, var(--sec, var(--accent)) 38%, transparent); border-radius: 5px; padding: 2px 6px; }
 .mydash-sec-t { margin: 0; font-family: var(--font-display); font-size: 14.5px; font-weight: 650; letter-spacing: -0.01em; }
-.mydash-sec-cap { font-size: 12px; color: var(--fg-muted); }
 .mydash-sec-rule { flex: 1; height: 1px; margin-left: 4px;
   background: linear-gradient(90deg, color-mix(in srgb, var(--sec, var(--accent)) 45%, transparent), transparent); }
 .mydash-grid { gap: 10px; }
@@ -4508,24 +4507,39 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
 .cc-h1 { font-family: var(--font-display); font-size: 21px; font-weight: 650; letter-spacing: -0.01em; margin: 0; color: var(--fg); }
 .cc-sub { font-size: 13px; color: var(--fg-muted); margin: 3px 0 0; }
 .cc-chips-row { margin-left: auto; display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
-.cc-badge { font-family: var(--font-display); font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
+/* Readable at a glance. 10.5px was below the 12.5px floor the owner set on
+   2026-09-06, and the uppercase transform is what turned "NOC pressure: Watch"
+   into a shouted "NOC PRESSURE: WATCH". Sentence case is switched on per swept
+   surface (.cc-board below) rather than globally, because a page that has not
+   been swept yet may still hand a chip a raw lowercase enum. */
+.cc-badge { font-family: var(--font-display); font-size: 12.5px; font-weight: 650; letter-spacing: 0.02em;
   text-transform: uppercase; padding: 3px 9px; border-radius: 6px; border: 1px solid currentColor; background: color-mix(in srgb, currentColor 11%, transparent); white-space: nowrap; }
-.cc-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); }
+.cc-board .cc-badge { text-transform: none; }
+.cc-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-muted); }
+.cc-h1-row { display: flex; align-items: center; gap: 2px; }
 .cc-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
 /* KPI cards */
 .cc-kpis { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin-top: 14px; }
 .cc-kpis-4 { grid-template-columns: repeat(4, 1fr); }
 @media (max-width: 1180px) { .cc-kpis { grid-template-columns: repeat(4, 1fr); } }
+/* The tile and its `(i)` are siblings inside one grid cell — a button cannot
+   contain a button, and the KPI tile is itself the queue filter. */
+.cc-kpi-cell { position: relative; display: flex; }
+.cc-kpi-cell > .cc-kpi { flex: 1 1 auto; }
+.cc-kpi-ask { position: absolute; top: 5px; right: 5px; margin-left: 0; }
 .cc-kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; text-decoration: none; color: inherit; display: block; transition: background .12s, border-color .12s; }
 a.cc-kpi:hover { border-color: var(--accent); background: var(--accent-soft); }
 /* KPI as a queue filter — button reset + clear active state. */
 button.cc-kpi-btn { width: 100%; text-align: left; font: inherit; cursor: pointer; }
 button.cc-kpi-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
 button.cc-kpi-btn.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
-button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5px; font-size: 12.5px; font-weight: 650; letter-spacing: 0.01em; color: var(--accent); }
 .cc-kpi-n { font-family: var(--font-mono); font-feature-settings: "tnum" 1; font-size: 40px; font-weight: 680; line-height: 1.02; letter-spacing: -0.025em; color: var(--fg); }
-.cc-kpi-l { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-subtle); margin-top: 6px; }
-.cc-kpi-i { font-size: 11.5px; color: var(--fg-muted); margin-top: 3px; line-height: 1.35; }
+/* The tile's whole vocabulary on a swept surface: a number and its name. The
+   sentence that used to sit under it moved to ai/skills/explain/ behind the
+   `(i)`; .cc-kpi-i survives for the pages later sweeps have not reached. */
+.cc-kpi-l { font-size: 12.5px; font-weight: 600; letter-spacing: 0.02em; color: var(--fg-subtle); margin-top: 6px; }
+.cc-kpi-i { font-size: 12.5px; color: var(--fg-muted); margin-top: 3px; line-height: 1.35; }
 .cc-decision { margin-top: 13px; padding: 10px 13px; border-radius: 9px; background: var(--accent-soft); border: 1px solid var(--accent-soft-2, var(--border)); border-left: 3px solid var(--accent);
   font-size: 13px; line-height: 1.5; color: var(--fg); }
 .cc-err { color: var(--crit); font-size: 13px; margin: 8px 0 0; }
@@ -4534,7 +4548,7 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   backdrop-filter: blur(12px) saturate(115%); -webkit-backdrop-filter: blur(12px) saturate(115%); box-shadow: var(--shadow-1); }
 .cc-panel-h { display: flex; align-items: baseline; gap: 10px; padding: 11px 15px; border-bottom: 1px solid var(--border); }
 .cc-panel-t { font-family: var(--font-display); font-size: 13px; font-weight: 650; letter-spacing: 0.02em; text-transform: uppercase; margin: 0; color: var(--fg); }
-.cc-panel-meta { font-size: 11.5px; color: var(--fg-subtle); }
+.cc-panel-meta { font-size: 12.5px; color: var(--fg-subtle); }
 .cc-ticketgap .cc-kpis { margin-top: 0; padding: 13px 15px; }
 /* app-select — the standard modern dropdown (elegant, animated, consistent).
    Reusable across forms + guided windows so selects look unified app-wide. */

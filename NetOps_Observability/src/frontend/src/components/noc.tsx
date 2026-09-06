@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import AskIris from "./AskIris";
 
 // noc.tsx — the shared premium NOC workspace kit. One source of truth for the
 // section header, status strip, KPI cards and badges so every Monitoring / Event
@@ -6,16 +7,22 @@ import { ReactNode } from "react";
 // Styling is token-driven (premium glass via the active theme), reusing the
 // .cc-* style layer introduced with the Command Center. Identity faces.
 
-// ── Page header: title + subtitle + status chips ───────────────────────────────
-export function NocHeader({ title, subtitle, chips, children }: {
-  title: string; subtitle: string; chips?: ReactNode; children?: ReactNode;
+// ── Page header: title + status chips ──────────────────────────────────────────
+// `subtitle` is legacy and optional: a swept page passes `topic` instead, and the
+// sentence that stood under the title becomes an authored explanation behind the
+// `(i)` (docs/design/UI_WORDS_IRIS_EXPLAINS_2026-09-06.md).
+export function NocHeader({ title, subtitle, topic, chips, children }: {
+  title: string; subtitle?: string; topic?: string; chips?: ReactNode; children?: ReactNode;
 }) {
   return (
     <div className="cc-hero">
       <div className="cc-hero-head">
         <div>
-          <h1 className="cc-h1">{title}</h1>
-          <p className="cc-sub">{subtitle}</p>
+          <div className="cc-h1-row">
+            <h1 className="cc-h1">{title}</h1>
+            {topic && <AskIris topic={topic} label={title} />}
+          </div>
+          {subtitle && <p className="cc-sub">{subtitle}</p>}
         </div>
         {chips && <div className="cc-chips-row">{chips}</div>}
       </div>
@@ -38,17 +45,27 @@ export function LiveChip({ label = "Live", detail }: { label?: string; detail?: 
 export function NocKpis({ children, cols }: { children: ReactNode; cols?: number }) {
   return <div className={`cc-kpis${cols === 4 ? " cc-kpis-4" : ""}`}>{children}</div>;
 }
-export function NocKpi({ n, label, interp, tone, href }: {
-  n: ReactNode; label: string; interp?: string; tone?: string; href?: string;
+// A swept tile passes `topic` and carries a number, a name and a 16px `(i)`.
+// `interp` is the pre-sweep caption and stays only for the pages later sweeps
+// have not reached; passing both is meaningless, so `topic` wins.
+export function NocKpi({ n, label, interp, topic, tone, href }: {
+  n: ReactNode; label: string; interp?: string; topic?: string; tone?: string; href?: string;
 }) {
   const body = (
     <>
       <div className="cc-kpi-n" style={tone ? { color: tone } : undefined}>{n}</div>
       <div className="cc-kpi-l">{label}</div>
-      {interp && <div className="cc-kpi-i">{interp}</div>}
+      {!topic && interp && <div className="cc-kpi-i">{interp}</div>}
     </>
   );
-  return href ? <a className="cc-kpi" href={href}>{body}</a> : <div className="cc-kpi">{body}</div>;
+  const tile = href ? <a className="cc-kpi" href={href}>{body}</a> : <div className="cc-kpi">{body}</div>;
+  if (!topic) return tile;
+  return (
+    <div className="cc-kpi-cell">
+      {tile}
+      <AskIris topic={topic} label={label} className="cc-kpi-ask" />
+    </div>
+  );
 }
 
 // ── Decision / context strip ────────────────────────────────────────────────────
