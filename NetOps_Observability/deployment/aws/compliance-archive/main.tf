@@ -117,8 +117,48 @@ resource "aws_s3_bucket_policy" "archive" {
 # administrator separation. Off by default only because an account may already
 # have an organisation trail covering it; set var.create_cloudtrail = true if
 # not, and never leave both false.
+# Customer-managed KMS key for the trail's log files (Trivy AVD-AWS-0015).
+# CloudTrail must be able to use it; the key policy grants exactly that plus
+# the account root's administration — no other principal.
+resource "aws_kms_key" "cloudtrail" {
+  count                   = var.create_cloudtrail ? 1 : 0
+  description             = "${var.bucket_name}-trail log encryption (corresponding-source archive audit)"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AccountAdministration"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid       = "CloudTrailEncrypt"
+        Effect    = "Allow"
+        Principal = { Service = "cloudtrail.amazonaws.com" }
+        Action    = ["kms:GenerateDataKey*", "kms:DescribeKey"]
+        Resource  = "*"
+        Condition = {
+          StringLike = { "kms:EncryptionContext:aws:cloudtrail:arn" = "arn:aws:cloudtrail:*:${data.aws_caller_identity.current.account_id}:trail/*" }
+        }
+      }
+    ]
+  })
+  tags = var.tags
+}
+
+resource "aws_kms_alias" "cloudtrail" {
+  count         = var.create_cloudtrail ? 1 : 0
+  name          = "alias/${var.bucket_name}-trail"
+  target_key_id = aws_kms_key.cloudtrail[0].key_id
+}
+
 resource "aws_cloudtrail" "archive" {
   count                         = var.create_cloudtrail ? 1 : 0
+  kms_key_id                    = aws_kms_key.cloudtrail[0].arn
   name                          = "${var.bucket_name}-trail"
   s3_bucket_name                = var.cloudtrail_log_bucket
   include_global_service_events = true

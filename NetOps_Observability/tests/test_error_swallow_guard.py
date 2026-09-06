@@ -67,6 +67,19 @@ AllowKey = tuple[str, str, str] | tuple[str, int]
 
 ALLOWLIST: dict[AllowKey, str] = {
     # ===================================================================
+    # 2026-09-06 — scripts/source-archive.py (tracker 262, S3 corresponding-
+    # source archive). Two reviewed sites, neither a warn-and-continue:
+    ("source-archive.py", "S3ObjectStore._request", "71c2853a"):
+        "reads the S3 error BODY for the diagnostic only; the enclosing branch "
+        "RAISES ArchiveError on the very next statement whatever the body read "
+        "did, so the failure is escalated — the except merely keeps the message "
+        "honest ('<error body unreadable>') instead of masking the HTTP error",
+    ("source-archive.py", "selftest", "3d80725a"):
+        "POSITIVE assertion in --selftest: an Object-Lock-protected key MUST "
+        "refuse deletion, so PermissionError is the expected outcome; the try "
+        "body appends a selftest FAILURE when the delete is NOT refused, which "
+        "is the escalation — the except is the pass branch of the check",
+    # ===================================================================
     # 2026-08-31 — RE-PIN + KEY CHANGE. The 5k/10k ladder profiles
     # (63198dcd) and the memflat backfill-refusal clause (c0faf797) moved
     # every one of scale-miniladder.py's SEVENTEEN reviewed sites without
