@@ -2078,7 +2078,12 @@ func Run() {
 	// it is kept. No-op unless AUDIT_RETENTION_DAYS is a positive integer and
 	// the Postgres backend is active (the file backend self-bounds).
 	if ps, ok := platformdb.ActivePG(); ok && ps != nil {
-		audit.StartRetention(ctx, ps.DB(), audit.ParseRetentionDays(os.Getenv("AUDIT_RETENTION_DAYS")))
+		// The platform-global config changes keep their own, longer floor under
+		// the general horizon (tracker 235) — the same policy the file backend's
+		// retained trail uses, so the two backends promise the same thing.
+		audit.StartRetention(ctx, ps.DB(),
+			audit.ParseRetentionDays(os.Getenv("AUDIT_RETENTION_DAYS")),
+			audit.ParseTrailPolicy(os.Getenv(audit.EnvTrailDays), os.Getenv(audit.EnvTrailMaxEvents)).Days)
 	}
 	// Self-heal the ClickHouse tenant row policies (#20 Phase 2) in the background.
 	ensureCHRowPolicies()

@@ -45,12 +45,12 @@ func TestSweepRetentionIsANoOpWithoutConfiguration(t *testing.T) {
 	// nil db / days<=0 must not attempt a DELETE. Guards against a future
 	// refactor that would let an unconfigured deployment start deleting.
 	for _, days := range []int{0, -1} {
-		n, err := SweepRetention(context.Background(), nil, days)
+		n, err := SweepRetention(context.Background(), nil, days, DefaultTrailDays)
 		if err != nil || n != 0 {
 			t.Fatalf("sweep(days=%d) = (%d, %v), want (0, nil)", days, n, err)
 		}
 	}
-	if n, err := SweepRetention(context.Background(), nil, 30); err != nil || n != 0 {
+	if n, err := SweepRetention(context.Background(), nil, 30, DefaultTrailDays); err != nil || n != 0 {
 		t.Fatalf("sweep with a nil db = (%d, %v), want (0, nil)", n, err)
 	}
 }
@@ -62,6 +62,6 @@ func TestSweepRetentionIsANoOpWithoutConfiguration(t *testing.T) {
 func TestStartRetentionIsANoOpWithoutADB(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	StartRetention(ctx, nil, 30) // must not panic, must not start anything
-	StartRetention(ctx, nil, 0)
+	StartRetention(ctx, nil, 30, DefaultTrailDays) // must not panic, must not start anything
+	StartRetention(ctx, nil, 0, DefaultTrailDays)
 }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"netops/backend/internal/audit"
 	"netops/backend/internal/platformdb"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,7 +70,25 @@ func newAuditStore(path string) (auditRepo, error) {
 	if ps, ok := platformdb.ActivePG(); ok {
 		return audit.NewPGStore(ps.DB(), logError), nil
 	}
-	return audit.NewFileStore(path, platformKV{})
+	// Tracker 235: the file ring is shared by every authenticated request and
+	// spans hours, so platform-global config changes get their own separately
+	// bounded trail beside it. The env READ stays here (the ParseRetentionDays
+	// precedent); the package owns the defaults and the ceiling.
+	policy := audit.ParseTrailPolicy(os.Getenv(audit.EnvTrailDays), os.Getenv(audit.EnvTrailMaxEvents))
+	store, err := audit.NewFileStore(path, platformKV{}, audit.WithTrailPolicy(policy))
+	if err != nil {
+		return nil, err
+	}
+	// The horizon is stated at boot. A retention bound nobody can read is
+	// indistinguishable from no bound at all — and the whole point of this
+	// trail is that an operator can rely on how far back it reaches.
+	st := store.TrailStats()
+	logInfo("audit", "platform config-change trail", map[string]any{
+		"retention_days": policy.Days, "max_events": policy.MaxEvents,
+		"retained": st.Kept, "oldest": st.Oldest.Format(time.RFC3339),
+		"request_ring_events": audit.MaxEvents,
+	})
+	return store, nil
 }
 
 func auditDecision(status int) string {

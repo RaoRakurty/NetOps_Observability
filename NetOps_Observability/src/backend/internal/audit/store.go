@@ -141,19 +141,82 @@ type FileStore struct {
 	path    string
 	kv      KV
 	events  []Event // append-only, capped at MaxEvents
+
+	// The retained platform trail (tracker 235): the same events, but only the
+	// platform-global CONFIG CHANGES, in their own file under their own policy,
+	// so the request ring rolling cannot take them with it. See platformtrail.go.
+	trailPath string
+	policy    TrailPolicy
+	retained  []Event
+	dropped   int64 // cumulative retained-trail evictions, for TrailStats
+}
+
+// FileOption configures a FileStore at construction.
+type FileOption func(*FileStore)
+
+// WithTrailPolicy sets the retained platform trail's bounds. Unset = the
+// conservative default (DefaultTrailPolicy).
+func WithTrailPolicy(p TrailPolicy) FileOption {
+	return func(s *FileStore) { s.policy = p }
 }
 
 // NewFileStore opens the bounded in-memory ring mirrored to the kv layer
-// (backend selection is the integrator's job).
-func NewFileStore(path string, kv KV) (*FileStore, error) {
+// (backend selection is the integrator's job), together with the separately
+// bounded platform trail beside it.
+func NewFileStore(path string, kv KV, opts ...FileOption) (*FileStore, error) {
 	if path == "" {
 		path = "/data/audit.json"
 	}
-	s := &FileStore{path: path, kv: kv}
+	s := &FileStore{path: path, kv: kv, policy: DefaultTrailPolicy()}
+	for _, opt := range opts {
+		opt(s)
+	}
+	// The trail sits beside the ring, named for it, so an operator looking at
+	// the data directory can see immediately which file is which.
+	s.trailPath = strings.TrimSuffix(path, ".json") + "-platform.json"
 	if b, err := kv.Load(path); err == nil {
 		_ = json.Unmarshal(b, &s.events) // best-effort: a corrupt/empty trail just starts fresh
 	}
+	if b, err := kv.Load(s.trailPath); err == nil {
+		_ = json.Unmarshal(b, &s.retained) // best-effort, same contract as the ring
+	}
+	// Apply the policy on LOAD as well as on write: a horizon shortened between
+	// two boots must take effect at the next boot, not at the next change.
+	kept, byAge, byCount := pruneTrail(s.retained, s.policy, time.Now().UTC())
+	s.retained = kept
+	s.noteTrailDrops(byAge, byCount)
 	return s, nil
+}
+
+// TrailStats reports what the retained platform trail holds and what it has had
+// to evict. It exists so the ceiling is OBSERVABLE — a bound nobody can read is
+// indistinguishable from no bound at all.
+func (s *FileStore) TrailStats() TrailStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	st := TrailStats{Policy: s.policy, Kept: len(s.retained), Dropped: s.dropped}
+	if len(s.retained) > 0 {
+		st.Oldest = s.retained[0].Time
+	}
+	return st
+}
+
+// noteTrailDrops counts and REPORTS evictions. An eviction is a permanent loss
+// of attribution, so it is never silent (§10), and the two reasons are logged
+// distinctly: aging out is the policy working as configured, hitting the count
+// ceiling is the trail being NARROWER than the operator asked for.
+func (s *FileStore) noteTrailDrops(byAge, byCount int) {
+	if byAge > 0 {
+		s.dropped += int64(byAge)
+		applog.Info("audit", "platform trail: events aged out of the retention horizon",
+			map[string]any{"dropped": byAge, "retention_days": s.policy.Days})
+	}
+	if byCount > 0 {
+		s.dropped += int64(byCount)
+		applog.Error("audit", "platform trail: FULL — oldest platform config changes evicted before their retention horizon; raise "+
+			EnvTrailMaxEvents+" or move the audit trail to Postgres",
+			map[string]any{"dropped": byCount, "max_events": s.policy.MaxEvents, "retention_days": s.policy.Days})
+	}
 }
 
 // Record appends an event (id/time stamped here) and persists. Best-effort: an
@@ -190,9 +253,32 @@ func (s *FileStore) record(e Event) error {
 		s.events = s.events[len(s.events)-MaxEvents:]
 	}
 	b, err := json.Marshal(s.events)
+	// Tracker 235: a platform-global config change is ALSO appended to the
+	// retained trail, which the request ring's eviction cannot reach. It is
+	// marshalled under the same lock so the two snapshots can never disagree
+	// about an event, and written outside it (below) like the ring is.
+	var trail []byte
+	var trailErr error
+	if retain := IsPlatformChange(e); retain {
+		s.retained = append(s.retained, e)
+		kept, byAge, byCount := pruneTrail(s.retained, s.policy, e.Time)
+		s.retained = kept
+		s.noteTrailDrops(byAge, byCount)
+		trail, trailErr = json.Marshal(s.retained)
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return err
+	}
+	if trailErr != nil {
+		return trailErr
+	}
+	if trail != nil {
+		// The retained trail is written FIRST: if only one of the two lands,
+		// the one that must survive is the long-lived record of the change.
+		if err := s.kv.Save(s.trailPath, trail); err != nil {
+			return err
+		}
 	}
 	return s.kv.Save(s.path, b)
 }
@@ -228,21 +314,36 @@ func (s *FileStore) Count(tenant string, cross bool, q Query) int {
 func (s *FileStore) matching(tenant string, cross bool, q Query) []Event {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]Event, 0, len(s.events))
-	for _, e := range s.events {
+	out := make([]Event, 0, len(s.events)+len(s.retained))
+	seen := make(map[string]bool, len(s.events))
+	keep := func(e Event, dedupe bool) {
 		if !(cross || sameTenantStrict(e.Tenant, tenant)) {
-			continue
+			return
 		}
 		if !q.Before.IsZero() && !e.Time.Before(q.Before) {
-			continue
+			return
 		}
 		if !q.Since.IsZero() && e.Time.Before(q.Since) {
-			continue
+			return
 		}
 		if q.Path != "" && e.Path != q.Path {
-			continue
+			return
+		}
+		if dedupe && seen[e.ID] {
+			return
 		}
 		out = append(out, e)
+	}
+	for _, e := range s.events {
+		seen[e.ID] = true
+		keep(e, false)
+	}
+	// Tracker 235: the retained platform trail is part of the ANSWER, not a
+	// separate surface. A change that has fallen out of the request ring is
+	// still returned here — same tenant scope, same window, deduplicated by id
+	// against the ring so a recent change is not reported twice.
+	for _, e := range s.retained {
+		keep(e, true)
 	}
 	return out
 }
