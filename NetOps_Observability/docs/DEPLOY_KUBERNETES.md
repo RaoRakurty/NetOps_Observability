@@ -462,9 +462,11 @@ Stated here rather than left to be discovered.
    points the chart at a mirror; populating that mirror is not automated the way
    `make-installer.sh` automates the compose bundle.
 7. **The `netops_app` PostgreSQL role is not provisioned.** Create it yourself.
-8. **NetBox, Keycloak, Telegraf, the mock services and the cloud-ingest sidecar
-   are not in the chart.** They are compose profiles for lab and integration
-   work; add them if you need them.
+8. **Eight compose services are not in the chart.** `secrets-seal` (the swtpm
+   custody sidecar — it has no Kubernetes equivalent, which is why the TLS mesh
+   is not ported), `keycloak`, `netbox` + `netbox-postgres`, `telegraf` (legacy,
+   does not run), `cloud-ingest`, and the two mock services. All are compose
+   profiles for lab, SSO and integration work; add them if you need them.
 9. **`opensearch-security-init` needs a ConfigMap you build.** The security
    directory carries per-identity role and mapping YAML an operator is expected
    to review; the chart deliberately does not stage a copy of it.
