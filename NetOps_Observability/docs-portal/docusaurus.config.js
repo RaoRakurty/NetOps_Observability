@@ -1,4 +1,7 @@
 // @ts-check
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Correlix documentation portal.
 //
 // Content lives in ./docs as portable Markdown with a `page_type` in front

@@ -1,4 +1,7 @@
 // @ts-check
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // The documentation sidebar is declared EXPLICITLY rather than generated from
 // the folder tree.
 //

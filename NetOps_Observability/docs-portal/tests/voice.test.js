@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // voice.test.js — the mechanical half of docs-portal/STYLE.md.
 //
 // STYLE.md is the prose rulebook; this file enforces the parts a machine can

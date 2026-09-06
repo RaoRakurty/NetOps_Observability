@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Generate the Reference pages that must never drift from the code.
 
 Three pages are machine-written from the source of truth and must not be edited
