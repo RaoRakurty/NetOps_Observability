@@ -1863,11 +1863,30 @@ type hostAddr struct {
 	IP    string
 }
 
-// hostIPv4s lists every non-loopback, up, IPv4 address on this host. It is the
-// single source of the management-address list: install-correlix.sh asks for it
-// with --list-ips instead of parsing `ip addr` (which is not guaranteed to be
-// on a minimal appliance PATH), and mintCert uses it for the certificate SANs
-// so the certificate is valid for whichever address the operator picks.
+// virtualIface reports interfaces that are container/VM plumbing rather than a
+// way onto the operator's network. Offering `docker0 172.17.0.1` beside the
+// real NIC is not a neutral extra choice: it is an invitation to bind the
+// installer somewhere nobody can reach it, on the one host where Docker is
+// guaranteed to be running. The `br-` case is deliberately narrow — Docker
+// names compose networks `br-<12 hex>`, while a hand-made bridge is `br0`, and
+// a hand-made bridge IS a legitimate management interface.
+var dockerBridgeRE = regexp.MustCompile(`^br-[0-9a-f]{12}$`)
+
+func virtualIface(name string) bool {
+	for _, p := range []string{"docker", "veth", "virbr", "cni", "flannel", "kube", "cali", "tunl", "nerdctl"} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return dockerBridgeRE.MatchString(name)
+}
+
+// hostIPv4s lists every non-loopback, up, IPv4 address on this host that could
+// plausibly be a MANAGEMENT address. It is the single source of that list:
+// install-correlix.sh asks for it with --list-ips instead of parsing `ip addr`
+// (which is not guaranteed to be on a minimal appliance PATH), and mintCert
+// uses it for the certificate SANs so the certificate is valid for whichever
+// address the operator picks.
 func hostIPv4s() []hostAddr {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -1875,7 +1894,7 @@ func hostIPv4s() []hostAddr {
 	}
 	var out []hostAddr
 	for _, in := range ifaces {
-		if in.Flags&net.FlagUp == 0 || in.Flags&net.FlagLoopback != 0 {
+		if in.Flags&net.FlagUp == 0 || in.Flags&net.FlagLoopback != 0 || virtualIface(in.Name) {
 			continue
 		}
 		addrs, err := in.Addrs()

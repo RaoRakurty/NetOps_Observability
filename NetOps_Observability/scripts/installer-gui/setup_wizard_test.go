@@ -520,3 +520,23 @@ func TestWizardWalkAgainstRealScripts(t *testing.T) {
 		t.Fatalf("success screen data is wrong: %+v", st.Result)
 	}
 }
+
+func TestVirtualInterfacesAreNotOfferedAsManagementAddresses(t *testing.T) {
+	// Container plumbing is not a management address: binding the installer to
+	// docker0 puts it somewhere nobody can reach, on the one host where Docker
+	// is certain to be running.
+	for _, name := range []string{"docker0", "br-4c23885e4c53", "veth9a1b2c3",
+		"virbr0", "cni0", "flannel.1", "kube-bridge", "cali1234abcd", "tunl0"} {
+		if !virtualIface(name) {
+			t.Fatalf("%q should not be offered as a management interface", name)
+		}
+	}
+	// A hand-made bridge, a bonded pair or a VLAN sub-interface IS a management
+	// interface. Docker names compose networks br-<12 hex>; br0 is the operator's.
+	for _, name := range []string{"eth0", "enp1s0", "ens192", "br0", "bond0",
+		"eth0.100", "wlan0", "brtrunk"} {
+		if virtualIface(name) {
+			t.Fatalf("%q is a real interface and must stay on the list", name)
+		}
+	}
+}
