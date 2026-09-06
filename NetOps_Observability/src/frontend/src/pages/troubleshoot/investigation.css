@@ -1,113 +1,95 @@
 /* SPDX-License-Identifier: Apache-2.0
    Copyright 2026 Correlix */
 
-/* investigation.css — styles for the guided Troubleshooting investigation.
+/* investigation.css — styles for the Troubleshooting investigation surface.
  *
- * The page is FOUR NUMBERED STEPS (owner, 2026-09-06: "not sure how to use this
- * page … what's the goal"): what's wrong → where is it breaking → evidence →
- * answer & next action. The rules below exist to make that sequence readable at
- * a glance, on one grid, with equal gutters, in both themes.
+ * The page is THREE BLOCKS (owner, 2026-09-06: "There are two sections which
+ * look similar … simplify these pages and make it intuitive"):
  *
- * TYPOGRAPHY FLOOR (owner: "fonts are too small"). Body copy is >= 14px, step
+ *   1. What's wrong?  — one list of open cases + one box to describe a new one
+ *   2. The answer     — one card: cause, layer, blast radius, onset, actions
+ *   3. The evidence   — one collapsed disclosure over the lanes
+ *
+ * The rules below exist to make that read at a glance, on one grid, with equal
+ * gutters, in both themes. What went with the old layout: the numbered step
+ * frame, the "how this page works" list, the two-tab entry picker with its
+ * search box, the symptom grid, the four-rung ladder and the quiet-lane toggle.
+ *
+ * TYPOGRAPHY FLOOR (owner: "fonts are too small"). Body copy is >= 14px, block
  * headings are >= 16px, and NOTHING on this surface is below 12.5px. Any new
  * rule here must hold that line.
  *
  * Deliberately small otherwise: the page reuses the app's shared primitives
- * (.card, .chip, .badge, .empty, .dm-grid, .btn-accent, .chip-btn, .seg-mini)
+ * (.card, .chip, .badge, .empty, .dm-grid, .btn-accent, .chip-btn, .fact-line)
  * and adds only what has no existing equivalent. Everything is scoped under
  * .ts-inv (and .tsl-card / .ts-iris, which the lanes render) so nothing leaks
  * into another page. Colours come from the theme tokens, so light and dark both
  * work with no second palette.
  */
-
 .ts-inv { display: flex; flex-direction: column; gap: 16px; font-size: 14px; }
 .ts-inv .card { margin-bottom: 0; }
 .ts-inv .empty { font-size: 14px; }
 
-/* ── "How this page works" ───────────────────────────────────────────────── */
-.ts-how { padding: 14px 16px; }
-.ts-how-h { margin: 0 0 8px; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
-.ts-how-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
-.ts-how-list li { display: flex; align-items: flex-start; gap: 9px; font-size: 14px; line-height: 1.5; color: var(--fg); }
-.ts-how-n {
-  flex: 0 0 auto; width: 21px; height: 21px; border-radius: 50%; margin-top: 1px;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: var(--accent-soft); color: var(--accent); font-size: 12.5px; font-weight: 700;
+/* ── the block frame ─────────────────────────────────────────────────────── */
+.ts-block { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+.ts-block-h {
+  margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.01em;
+  display: flex; align-items: center; gap: 4px;
 }
-
-/* ── the numbered step frame ─────────────────────────────────────────────── */
-.ts-step { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
-.ts-step-head { display: flex; align-items: flex-start; gap: 12px; }
-.ts-step-n {
-  flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: var(--accent); color: #fff; font-size: 14px; font-weight: 700;
-}
-.ts-step-headings { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.ts-step-h { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; }
-.ts-step-sub { margin: 0; font-size: 14px; line-height: 1.5; color: var(--muted); }
-.ts-step-foot { margin: 0; font-size: 13px; line-height: 1.55; color: var(--muted); }
 .ts-bad { margin: 0; font-size: 14px; line-height: 1.5; color: var(--bad, #ef4444); }
 
-/* ── step 1: the one picker, two tabs ────────────────────────────────────── */
-.ts-entry-tabs { align-self: flex-start; }
-.ts-entry-tabs button { font-size: 14px; padding: 7px 14px; }
-.ts-search input {
-  width: 100%; padding: 9px 12px; border-radius: 8px; font-size: 14px;
-  border: 1px solid var(--border); background: var(--bg-2, var(--bg)); color: var(--fg);
-}
-.ts-search input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.ts-symptoms, .ts-cases {
+/* ── 1 · the one list, then the one box ──────────────────────────────────── */
+.ts-cases {
   list-style: none; margin: 0; padding: 0; display: grid; gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
-.ts-symptom, .ts-case {
+.ts-case {
   width: 100%; height: 100%; text-align: left; cursor: pointer;
-  display: flex; flex-direction: column; gap: 3px;
+  display: grid; gap: 3px 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
   padding: 10px 12px; border-radius: 9px;
   border: 1px solid var(--border); background: transparent; color: var(--fg);
 }
-.ts-symptom:hover, .ts-case:hover { border-color: var(--accent); }
-.ts-symptom.on, .ts-case.on { border-color: var(--accent); background: var(--accent-soft); }
-.ts-symptom:focus-visible, .ts-case:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ts-symptom-l, .ts-case-l { font-weight: 650; font-size: 14px; line-height: 1.4; }
-.ts-symptom-h, .ts-case-h { font-size: 13px; line-height: 1.45; color: var(--muted); }
-.ts-case-id { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; font-weight: 650; }
-.ts-picked { margin: 0; font-size: 14px; color: var(--fg); }
+.ts-case:hover { border-color: var(--accent); }
+.ts-case.on { border-color: var(--accent); background: var(--accent-soft); }
+.ts-case:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ts-case-l { grid-column: 1; font-weight: 650; font-size: 14px; line-height: 1.4; }
+.ts-case-f { grid-column: 1; }
+.ts-case-chip {
+  grid-column: 2; grid-row: 1 / span 2; align-self: center;
+  font-size: 12.5px; white-space: nowrap;
+}
 
-/* ── step 2: the four-rung layer ladder ──────────────────────────────────── */
-.ts-bisect-sub { margin: 0; font-size: 14px; line-height: 1.55; color: var(--muted); }
-.ts-bisect-sub b { color: var(--fg); }
-.ts-rungs { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.ts-rung {
-  display: grid; align-items: baseline; gap: 4px 12px;
-  grid-template-columns: 26px minmax(140px, 200px) minmax(150px, 210px) minmax(0, 1fr);
-  padding: 10px 12px; border-radius: 9px;
+.ts-describe { display: flex; flex-direction: column; gap: 6px; }
+.ts-describe-l { font-size: 14px; font-weight: 600; color: var(--fg); }
+.ts-describe-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.ts-describe-row input {
+  flex: 1 1 320px; min-width: 0; padding: 9px 12px; border-radius: 8px; font-size: 14px;
+  border: 1px solid var(--border); background: var(--bg-2, var(--bg)); color: var(--fg);
+}
+.ts-describe-row input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ts-describe-row button { font-size: 14px; }
+
+/* ── 2 · the answer card ─────────────────────────────────────────────────── */
+.ts-answer {
   border: 1px solid var(--border); border-left: 3px solid var(--border);
+  border-radius: 9px; padding: 12px 14px; display: flex; flex-direction: column;
+  align-items: flex-start; gap: 5px;
 }
-.ts-rung-n {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 21px; height: 21px; border-radius: 50%;
-  background: var(--accent-soft); color: var(--accent); font-size: 12.5px; font-weight: 700;
-}
-.ts-rung-l { font-size: 14px; font-weight: 650; }
-.ts-rung-s { font-size: 14px; font-weight: 600; }
-.ts-rung-note { font-size: 13px; color: var(--muted); line-height: 1.45; }
-.ts-rung.found { border-left-color: var(--warn, #d97706); }
-.ts-rung.found .ts-rung-s { color: var(--warn, #d97706); }
-.ts-rung.ok { border-left-color: var(--good, #16a34a); }
-.ts-rung.ok .ts-rung-s { color: var(--good, #16a34a); }
-.ts-rung.blind { border-left-style: dashed; }
-.ts-rung.blind .ts-rung-s, .ts-rung.skipped .ts-rung-s, .ts-rung.checking .ts-rung-s { color: var(--muted); }
-.ts-rung.skipped { opacity: .72; }
+.ts-answer[data-answer="confirmed"] { border-left-color: var(--bad, #ef4444); }
+.ts-answer[data-answer="likely"] { border-left-color: var(--warn, #d97706); }
+.ts-answer[data-answer="recovered"] { border-left-color: var(--good, #16a34a); }
+.ts-answer-h { margin: 0; font-size: 18px; font-weight: 650; line-height: 1.35; letter-spacing: -0.01em; }
+.ts-answer-f { margin: 0; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.ts-answer-f b { color: var(--fg); font-weight: 600; }
+.ts-answer-chip { margin-top: 3px; font-size: 12.5px; }
+.ts-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.ts-actions button { font-size: 14px; }
 
-@media (max-width: 760px) {
-  .ts-rung { grid-template-columns: 26px minmax(0, 1fr); }
-  .ts-rung-s, .ts-rung-note { grid-column: 2; }
-}
-
-/* ── step 3: evidence cards ──────────────────────────────────────────────── */
+/* ── 3 · the one evidence disclosure ─────────────────────────────────────── */
+.ts-inv .ts-ev-toggle { align-self: flex-start; font-size: 14px; }
+.ts-ev-body { display: flex; flex-direction: column; gap: 14px; }
+.ts-ev-body[hidden] { display: none; }
 .ts-lanes { align-items: stretch; }
 .ts-lane-slot { display: flex; min-width: 0; }
 /* `[hidden]` and a class have equal specificity, so an author `display:flex`
@@ -115,7 +97,8 @@
    still be painted. State it explicitly. */
 .ts-lane-slot[hidden] { display: none; }
 .ts-lane-slot > .tsl-card { flex: 1 1 auto; }
-.ts-quiet-toggle { align-self: flex-start; font-size: 13px; }
+.ts-quiet { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 
 .tsl-card { display: flex; flex-direction: column; gap: 8px; margin-bottom: 0; }
 .tsl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
@@ -133,7 +116,6 @@
 }
 .tsl-disclose:hover { border-bottom-color: var(--accent); }
 .tsl-disclose:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.tsl-detail-body { display: flex; flex-direction: column; gap: 8px; }
 .tsl-src { font-size: 12.5px; color: var(--muted); }
 .tsl-api { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; }
 .tsl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
@@ -151,22 +133,7 @@
 .tsl-dot.state { background: var(--accent); }
 .tsl-foot { margin: 0; font-size: 12.5px; color: var(--muted); }
 
-/* ── step 4: answer, actions, Iris ───────────────────────────────────────── */
-.ts-answer {
-  border: 1px solid var(--border); border-left: 3px solid var(--border);
-  border-radius: 9px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;
-}
-.ts-answer[data-answer="confirmed"] { border-left-color: var(--bad, #ef4444); }
-.ts-answer[data-answer="likely"] { border-left-color: var(--warn, #d97706); }
-.ts-answer[data-answer="recovered"] { border-left-color: var(--good, #16a34a); }
-.ts-answer-h { margin: 0; font-size: 16px; font-weight: 650; line-height: 1.35; letter-spacing: -0.01em; }
-.ts-answer-d { margin: 0; font-size: 14px; line-height: 1.55; color: var(--fg); }
-.ts-answer-o { margin: 0; font-size: 14px; line-height: 1.5; color: var(--muted); }
-.ts-answer-o b { color: var(--fg); }
-.ts-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.ts-actions button { font-size: 14px; }
-.ts-disclose { display: flex; flex-direction: column; gap: 10px; }
-
+/* ── the Iris assistant panel (opened by the answer card's Ask Iris) ────── */
 .ts-iris {
   display: flex; flex-direction: column; gap: 8px;
   border: 1px solid var(--accent); border-radius: 9px; padding: 12px 14px;

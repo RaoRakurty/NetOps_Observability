@@ -348,4 +348,22 @@ describe("model output is untrusted (§15 LLM02)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
     expect(await screen.findByText("No answer.")).toBeInTheDocument();
   });
+
+  // The investigation surface opens this panel FROM an "Ask Iris" press, so it
+  // asks on mount rather than making the operator press a second button inside
+  // it. Exactly ONE call: a re-render must never re-spend a model call.
+  it("asks once on mount when the host opened it deliberately", async () => {
+    aiAsk.mockResolvedValue(answer({ text: "grounded" }));
+    const { rerender } = render(<IrisLane auto />);
+    expect(await screen.findByText("grounded")).toBeInTheDocument();
+    rerender(<IrisLane auto />);
+    rerender(<IrisLane auto />);
+    expect(aiAsk).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not ask on its own without that flag", async () => {
+    render(<IrisLane />);
+    expect(aiAsk).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Ask Iris" })).toBeInTheDocument();
+  });
 });

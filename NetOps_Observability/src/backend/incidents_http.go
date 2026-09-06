@@ -114,10 +114,132 @@ func (s *server) notifyIncidentSlackActions(inc Incident) {
 
 // ---- REST API --------------------------------------------------------------
 
-// handleIncidents serves GET /api/incidents (tenant-scoped list with filters).
+// MaxManualIncidentTitle bounds the operator's own words. It is generous enough
+// for a sentence and small enough that a title is never a payload.
+const MaxManualIncidentTitle = 200
+
+// MaxManualIncidentDescription bounds the optional longer statement.
+const MaxManualIncidentDescription = 4000
+
+// maxManualIncidentBody bounds the request itself (§15 LLM04 / §9: no unbounded read).
+const maxManualIncidentBody = 16 << 10
+
+// clipRunes bounds a remote string by RUNES, so a multi-byte word is never cut
+// in half into an invalid sequence.
+func clipRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+// normalizeManualTitle collapses the operator's whitespace and bounds the result.
+// Nothing else is invented: the title is what they will recognise the case by.
+func normalizeManualTitle(s string) string {
+	return clipRunes(strings.Join(strings.Fields(s), " "), MaxManualIncidentTitle)
+}
+
+// handleManualIncident serves POST /api/incidents — an operator describes a
+// problem in their own words and gets an investigation record back.
+//
+// WHY IT EXISTS. The Troubleshooting page used to carry a second, parallel
+// surface for "a symptom I can describe but cannot act on" (owner, 2026-09-06:
+// "one place we can describe the problem but cannot do anything its just fixed
+// page"). There is now ONE way in: a described symptom becomes a record through
+// the SAME seam an alert-born incident uses (incident.Repo.Ingest, source
+// `manual`), so every action that hangs off a case — escalation, the lifecycle,
+// the timeline — works on it without a second store or a second vocabulary.
+//
+// §3a. The owning tenant is stamped from the TOKEN. A tenant in the body is
+// REFUSED (400) rather than ignored, so a client that believes it can choose an
+// owner learns otherwise instead of silently writing to its own tenant. A
+// cross-tenant (platform) principal owns no tenant and is refused the same way.
+//
+// Idempotent by the incident store's own dedup rule: describing the same
+// symptom twice while the first is open folds into it (200) instead of minting
+// a second record (201).
+func (s *server) handleManualIncident(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requirePerm(w, r, "alerts", LevelWrite)
+	if !ok {
+		return
+	}
+	// §3: validate at the boundary, before asking whether the store is wired.
+	if err := httppage.RejectUnknownQuery(r); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var body struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Severity    string `json:"severity"`
+		// Accepted ONLY so it can be refused by name (§3a): the owner is the
+		// token's tenant, never the payload's.
+		TenantID string `json:"tenant_id"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxManualIncidentBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
+		return
+	}
+	if strings.TrimSpace(body.TenantID) != "" {
+		writeError(w, http.StatusBadRequest, errors.New(
+			"tenant_id is not accepted here: the owning tenant is stamped from your token"))
+		return
+	}
+	title := normalizeManualTitle(body.Title)
+	if title == "" {
+		writeError(w, http.StatusBadRequest, errors.New("title is required: describe the problem in your own words"))
+		return
+	}
+	sev := strings.TrimSpace(body.Severity)
+	if sev == "" {
+		sev = "medium"
+	}
+	if !incident.ValidSeverity(sev) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf(
+			"severity must be one of %s (got %q)", strings.Join(incident.Severities, ", "), sev))
+		return
+	}
+	if s.incidents == nil {
+		writeError(w, http.StatusConflict, errIncidentsUnavailable)
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	if cross {
+		writeError(w, http.StatusBadRequest, errors.New(
+			"a platform-wide principal owns no tenant: sign in as a tenant operator to open an investigation"))
+		return
+	}
+	inc, created, err := s.incidents.Ingest(r.Context(), incident.Input{
+		TenantID:    tenant,
+		Title:       title,
+		Description: clipRunes(strings.TrimSpace(body.Description), MaxManualIncidentDescription),
+		Severity:    sev,
+		SourceType:  incident.SourceManual,
+		Actor:       claims.Sub,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, map[string]any{"incident": inc, "created": created})
+}
+
+// handleIncidents serves GET /api/incidents (tenant-scoped list with filters)
+// and POST /api/incidents (an operator's described problem → a manual record).
 func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.handleManualIncident(w, r)
+		return
+	}
 	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
+		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}

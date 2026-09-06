@@ -29,6 +29,12 @@ import (
 // incident surfaces can render and filter the DEM lane.
 const SourceExperience = "experience"
 
+// SourceManual is the evidence class of an incident an OPERATOR opened by
+// describing a problem in their own words (the Troubleshooting page's one way
+// in). It is the historical `manual` value of normalizeSourceType's closed
+// vocabulary, named so the creating code cannot drift from the store's spelling.
+const SourceManual = "manual"
+
 // Incident severity ladder (low→high) and status set.
 var Severities = []string{"info", "low", "medium", "high", "critical"}
 

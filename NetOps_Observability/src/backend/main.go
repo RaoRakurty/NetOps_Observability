@@ -3155,7 +3155,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/telemetry/unrecognized", s.parserCov.HandleUnrecognized)
 	mux.HandleFunc("/api/telemetry/unrecognized/", s.parserCov.HandlePropose)
 
-	mux.HandleFunc("/api/incidents", s.handleIncidents)     // GET list (tenant-scoped)
+	mux.HandleFunc("/api/incidents", s.handleIncidents)     // GET list (tenant-scoped); POST opens one from an operator's own words
 	mux.HandleFunc("/api/incidents/", s.handleIncidentByID) // GET {id}; POST {id}/ack|resolve|note|assign|…
 	// seam.Seam inventory (#67 build ⑤): suggest→confirm→active lifecycle; the
 	// correlation engine pulls ?state=active as its grounding targets.

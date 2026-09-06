@@ -1,15 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// investigationModel — the pure model behind the symptom-first Troubleshooting
-// investigation surface (Project 4 §A; design of record
+// investigationModel — the pure model behind the Troubleshooting investigation
+// surface (Project 4 §A; design of record
 // docs/design/research/TROUBLESHOOTING_PAGE_RESEARCH_2026-08-25.md).
 //
+// THE PAGE IS THREE BLOCKS (owner, 2026-09-06: "There are two sections which
+// look similar … simplify these pages and make it intuitive"):
+//
+//   1. What's wrong?   — the open cases, plus one box to describe a new one
+//   2. The answer      — cause · where it breaks · who it affects · since when
+//   3. The evidence    — one disclosure, collapsed, over the lanes
+//
+// What LEFT the model with the old layout: the nine-symptom picker and the
+// lanes-per-symptom map (a case now opens every lane, and a described symptom
+// becomes a case), the "how this page works" intro copy, and the symptom-only
+// headline. The engine ladder stays — not as a step an operator reads, but as
+// what earns the answer card's one "Breaking at" line.
+//
 // Everything that decides WHAT an operator sees lives here as pure functions so
-// it is unit-testable without a DOM: the nine canonical NOC workflows, which
-// evidence lanes each one opens, the bisection ladder (physical → L2 → IGP →
-// BGP → path/seam → application → logs), and — most importantly — the HONEST
-// STATE of a lane.
+// it is unit-testable without a DOM: the bisection ladder (physical → L2 → IGP →
+// BGP → path/seam → application → logs), the answer card's four facts, and —
+// most importantly — the HONEST STATE of a lane.
 //
 // Honesty is the whole point of the lane contract. A lane is never allowed to
 // render a reassuring blank. It is exactly one of:
@@ -23,8 +35,8 @@
 // "not_connected" and "empty" are different facts and are never collapsed: the
 // first means "we cannot see", the second means "we looked and it was quiet".
 
-import type { FeedItem, PathHealthItem, ProbePath, PromInstantSeries } from "../../services/api";
-import { kindLabel } from "../../components/rca/labels";
+import type { CorrObject, FeedItem, Incident, PathHealthItem, ProbePath, PromInstantSeries } from "../../services/api";
+import { kindLabel, signatureNocTitle } from "../../components/rca/labels";
 
 // ── Lanes ────────────────────────────────────────────────────────────────────
 
@@ -73,95 +85,6 @@ export interface LaneResult<T> {
 
 export const laneLoading = <T,>(): LaneResult<T> => ({ state: "loading", note: "Loading…", rows: [] });
 export const laneError = <T,>(msg: string): LaneResult<T> => ({ state: "error", note: msg, rows: [] });
-
-// ── The nine canonical NOC workflows (research §a) ───────────────────────────
-
-export type SymptomId =
-  | "app_slow"
-  | "site_down"
-  | "link_interface"
-  | "routing_adjacency"
-  | "bgp_upstream"
-  | "dns"
-  | "wireless"
-  | "cloud_saas"
-  | "security_exposure";
-
-export interface Symptom {
-  id: SymptomId;
-  /** The operator's own words, as it appears in the picker. */
-  label: string;
-  /** One line of what this workflow bisects. */
-  hint: string;
-  /** The evidence lanes this symptom opens, in reading order. */
-  lanes: LaneId[];
-}
-
-export const SYMPTOMS: Symptom[] = [
-  {
-    id: "app_slow",
-    label: "An app is slow or unreachable",
-    hint: "Exonerate or own the network: probe the app path, compare to baseline, look for a change.",
-    lanes: ["dem", "path", "changed", "flows", "health", "events"],
-  },
-  {
-    id: "site_down",
-    label: "A site or device is down",
-    hint: "Originating vs dependent: check the parent's interface before blaming the leaf.",
-    lanes: ["health", "path", "changed", "events", "routing"],
-  },
-  {
-    id: "link_interface",
-    label: "A link or interface is erroring",
-    hint: "Trend versus baseline, the link partner's counters, flap count and utilization.",
-    lanes: ["health", "flows", "changed", "events"],
-  },
-  {
-    id: "routing_adjacency",
-    label: "A routing adjacency dropped (OSPF / IS-IS)",
-    hint: "Adjacency state and flaps, the underlying interface, a config change at either end.",
-    lanes: ["routing", "health", "changed", "events"],
-  },
-  {
-    id: "bgp_upstream",
-    label: "BGP or an upstream is unstable",
-    hint: "Session state and flaps, prefixes received, upstream reachability and route changes.",
-    lanes: ["routing", "path", "changed", "events", "dem"],
-  },
-  {
-    id: "dns",
-    label: "DNS, DHCP or authentication is failing",
-    hint: "The #1 ticket class: resolve the service, probe it, and look for a change near onset.",
-    lanes: ["dem", "changed", "events", "flows"],
-  },
-  {
-    id: "wireless",
-    label: "Wireless clients are struggling",
-    hint: "Client experience first, then the wired uplink behind the access layer.",
-    lanes: ["dem", "health", "events", "changed"],
-  },
-  {
-    id: "cloud_saas",
-    label: "A cloud or SaaS service is degraded",
-    hint: "Provider-side change and health versus our own seam — who owns the fault.",
-    lanes: ["dem", "changed", "path", "events", "flows"],
-  },
-  {
-    id: "security_exposure",
-    label: "Something looks exposed or compromised",
-    hint: "Security evidence is a corroborating class, never a verdict on its own.",
-    lanes: ["events", "changed", "flows", "health"],
-  },
-];
-
-export function symptomById(id: string | null | undefined): Symptom | null {
-  return SYMPTOMS.find((s) => s.id === id) ?? null;
-}
-
-/** Lanes a symptom opens; an unknown symptom opens every lane (never fewer). */
-export function lanesForSymptom(id: string | null | undefined): LaneId[] {
-  return symptomById(id)?.lanes ?? ALL_LANES;
-}
 
 // ── The bisection ladder (research §a cross-cutting: Google-SRE bisection) ───
 
@@ -270,6 +193,9 @@ export const ANOMALY_LANES: LaneId[] = ["health", "routing"];
 
 export type PlainRungState = "found" | "checking" | "ok" | "blind" | "skipped";
 
+/** The one status only an ANOMALY lane can promote a rung to. */
+export const PLAIN_PROBLEM_STATUS = "Problem found here";
+
 export interface PlainRung {
   id: PlainRungId;
   label: string;
@@ -330,7 +256,7 @@ export function buildPlainLadder(
       id: p.id,
       label: p.label,
       state,
-      status: problem ? "Problem found here" : PLAIN_STATUS[state],
+      status: problem ? PLAIN_PROBLEM_STATUS : PLAIN_STATUS[state],
       note: problem ? "Something on this layer is out of state right now." : PLAIN_NOTE[state],
     };
   });
@@ -496,35 +422,6 @@ export function classifyEventsLane(items: FeedItem[]): LaneResult<FeedItem> {
   return { state: "ready", note: "", rows: items };
 }
 
-// ── Step 0: how the page works, in three lines ───────────────────────────────
-
-/**
- * The whole page in three sentences, in the order the operator will work them.
- * Kept here (not inline in the JSX) so the copy is asserted by a test rather
- * than re-invented every time the layout moves.
- */
-export const HOW_IT_WORKS: string[] = [
-  "Tell us what is wrong — pick the problem you are seeing, or an open case.",
-  "We gather the evidence — Correlix checks each layer of the network for you.",
-  "You get an answer — a likely cause, or a clean handoff to the owner or vendor support.",
-];
-
-// ── Verdict header (symptom-only) ────────────────────────────────────────────
-
-/**
- * bisectingHeadline — the honest header used when the operator picked a symptom
- * but no correlation case backs it. It states plainly that we do not have the
- * cause; it never borrows RCA's verdict language, and it uses no engine words.
- */
-export function bisectingHeadline(symptom: Symptom | null): { title: string; sub: string } {
-  return {
-    title: symptom ? symptom.label : "What's wrong?",
-    sub: symptom
-      ? "We do not have the cause yet. We are working through the layers below."
-      : "Pick a problem or an open case to start.",
-  };
-}
-
 // ── Step 4: the answer, in plain words ───────────────────────────────────────
 
 /** The five verdict states the RCA adapter can reach, structurally typed so the
@@ -593,6 +490,154 @@ export function plainOwner(ownershipLabel: string | undefined): string {
     : "Nobody is named yet — we name an owner only once the evidence points at one.";
 }
 
+// ── The one picker — every open case, however it was opened ──────────────────
+//
+// A correlation object the engine built and an investigation an operator opened
+// by describing a symptom are ONE list here. That is the whole point of the
+// rewrite: there is no second surface where a problem can be described but not
+// acted on (owner, 2026-09-06). The two differ only in what they can already
+// tell you, and the row says which.
+
+export type PickKind = "correlation" | "investigation";
+
+export interface PickRow {
+  kind: PickKind;
+  id: string;
+  /** The case in NOC words. Never an engine signature id. */
+  title: string;
+  /** Who it touches — the same sentence the answer card's "Affects" line uses. */
+  affects: string;
+  /** Raw onset timestamp; the view formats it in the operator's timezone. */
+  since: string;
+  /** One-word state. */
+  chip: string;
+}
+
+/** The engine's verdict tier as ONE word an operator reads without training. */
+export function tierChip(tier: string): string {
+  switch ((tier || "").trim()) {
+    case "confirmed": return "Confirmed";
+    case "suspected": return "Likely";
+    case "recovered": return "Recovered";
+    default: return "Unconfirmed";
+  }
+}
+
+/** An investigation is still live until somebody resolves or closes it. */
+export function isLiveInvestigation(i: Incident): boolean {
+  const st = (i.status || "").trim();
+  return st !== "resolved" && st !== "closed";
+}
+
+const byNewest = (a: PickRow, b: PickRow): number => (a.since < b.since ? 1 : a.since > b.since ? -1 : 0);
+
+/**
+ * pickRows — the one list block 1 renders. Correlated cases lead (the engine
+ * already did work on them); the operator's own open investigations follow.
+ * A record we cannot name is still listed under a plain fallback rather than
+ * dropped: a case an operator opened must never vanish from their own list.
+ */
+export function pickRows(cases: CorrObject[] | undefined, investigations: Incident[] | undefined): PickRow[] {
+  const corr: PickRow[] = (cases ?? []).map((c) => ({
+    kind: "correlation",
+    id: c.correlation_id,
+    title: signatureNocTitle(c.top_hypothesis || "") || "Correlated problem",
+    affects: affectsLine(c.affected),
+    since: c.window_start || c.created_at || "",
+    chip: tierChip(c.verdict_tier),
+  }));
+  const mine: PickRow[] = (investigations ?? []).filter(isLiveInvestigation).map((i) => ({
+    kind: "investigation",
+    id: i.id,
+    title: (i.title || "").trim() || "Described problem",
+    affects: affectsLine(""),
+    since: i.first_seen_at || i.created_at || "",
+    chip: "Described",
+  }));
+  return [...corr.sort(byNewest), ...mine.sort(byNewest)];
+}
+
+// ── The answer card — four facts and one chip ────────────────────────────────
+//
+// The card answers, in one screen, the four things an operator asks before they
+// act: what is it, WHERE is it breaking, WHO does it affect, and SINCE when. Each
+// is a stated fact or an honest "we do not know" — never a reassuring default.
+
+/** The plain layer the evidence points at, or "Unknown" while nothing points. */
+export const BREAKING_UNKNOWN = "Unknown";
+
+/**
+ * breakingAt — the ONE layer line of the answer card, read off the same engine
+ * ladder the old step-2 list rendered. A layer is named ONLY when an anomaly
+ * lane earned it (buildPlainLadder's "Problem found here"): a lane that merely
+ * returned observations — alerts in the window, measured paths, busy talkers —
+ * is evidence to read, not a located fault, and naming a layer off it would be
+ * exactly the "we have data" → "we found it" upgrade the model forbids
+ * everywhere else. Everything short of that is honestly Unknown.
+ */
+export function breakingAt(states: Partial<Record<LaneId, LaneState>>): string {
+  const found = buildPlainLadder(ALL_LANES, states).find((r) => r.status === PLAIN_PROBLEM_STATUS);
+  return found ? found.label : BREAKING_UNKNOWN;
+}
+
+/** The affected inventory a case names. A malformed blob is an EMPTY one. */
+export function affectedEntities(affected: string | undefined): { devices: string[]; sites: string[] } {
+  let raw: unknown = null;
+  try { raw = JSON.parse(affected || "{}"); } catch { raw = null; }
+  const obj = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw as Record<string, unknown> : {};
+  const list = (v: unknown): string[] =>
+    (Array.isArray(v) ? v : []).filter((x): x is string => typeof x === "string" && x.trim() !== "");
+  return { devices: list(obj.devices), sites: list(obj.sites) };
+}
+
+const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/**
+ * affectsLine — "2 devices, 1 site". When the case named nothing we say exactly
+ * that: an empty inventory is not "0 devices", it is a gap in what we were told.
+ */
+export function affectsLine(affected: string | undefined): string {
+  const { devices, sites } = affectedEntities(affected);
+  const parts: string[] = [];
+  if (devices.length > 0) parts.push(plural(devices.length, "device"));
+  if (sites.length > 0) parts.push(plural(sites.length, "site"));
+  return parts.length > 0 ? parts.join(", ") : "Nothing named yet";
+}
+
+/**
+ * confidenceChip — how sure the engine is, as a band rather than a percentage
+ * an operator would over-read. A case the engine never scored says so.
+ */
+export function confidenceChip(confidence: number | undefined): string {
+  const c = Number(confidence);
+  if (!Number.isFinite(c) || c <= 0) return "Not scored";
+  if (c >= 0.8) return "High confidence";
+  if (c >= 0.5) return "Medium confidence";
+  return "Low confidence";
+}
+
+/**
+ * quietLaneLine — a quiet lane collapses to ONE line inside the disclosure, and
+ * is never deleted. The two quiet states stay DISTINCT even at one line, because
+ * they are different facts: "nothing feeds this" means we cannot see the layer
+ * at all, "nothing from this" means we looked and it was silent.
+ */
+export function quietLaneLine(id: LaneId, state: LaneState): string {
+  return state === "not_connected" ? `Nothing feeds ${LANE_TITLE[id]}` : `Nothing from ${LANE_TITLE[id]}`;
+}
+
+/** The longest symptom an operator may type before we stop accepting it. */
+export const MAX_SYMPTOM_CHARS = 200;
+
+/**
+ * describedTitle — the operator's own words, normalised into a case title.
+ * Whitespace is collapsed and the text is bounded; nothing else is invented,
+ * because the title is what the operator will recognise their case by.
+ */
+export function describedTitle(text: string): string {
+  return String(text || "").replace(/\s+/g, " ").trim().slice(0, MAX_SYMPTOM_CHARS);
+}
+
 // ── Deep link ────────────────────────────────────────────────────────────────
 
 // The page carries TWO sections. "Protocol diagnostics" was removed on
@@ -604,20 +649,19 @@ export function plainOwner(ownershipLabel: string | undefined): string {
 export type TroubleshootSection = "investigate" | "pipeline";
 
 /**
- * Reads the section, symptom and case out of the page hash. Anything
- * unrecognized falls back to the investigation surface — a deep link never
- * lands on a blank page.
+ * Reads the section and case out of the page hash. Anything unrecognized falls
+ * back to the investigation surface — a deep link never lands on a blank page.
+ * `?symptom=` is no longer a mode, so an old symptom link lands on the picker
+ * rather than on a surface that no longer exists.
  */
 export function parseInvestigationHash(hash: string): {
   section: TroubleshootSection;
-  symptom: SymptomId | null;
   caseId: string;
 } {
   const q = new URLSearchParams(String(hash || "").split("?")[1] || "");
   const raw = q.get("section");
   const section: TroubleshootSection = raw === "pipeline" ? "pipeline" : "investigate";
-  const sym = symptomById(q.get("symptom"));
   // Only an opaque token is accepted as a case id — never rendered as markup.
   const caseId = /^[A-Za-z0-9_-]{1,64}$/.test(q.get("case") || "") ? String(q.get("case")) : "";
-  return { section, symptom: sym ? sym.id : null, caseId };
+  return { section, caseId };
 }

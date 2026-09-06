@@ -5460,6 +5460,16 @@ export const api = {
     const qs = p.toString();
     return request<Incident[]>(`/api/incidents${qs ? `?${qs}` : ""}`);
   },
+  // POST /api/incidents — an operator describes a problem in their own words and
+  // gets an investigation record back. The owning tenant is stamped SERVER-SIDE
+  // from the token: nothing here sends one, and a tenant in the body is refused.
+  // Idempotent by the store's dedup rule (`created:false` = it folded into the
+  // open record for the same words), so a double press never mints a twin.
+  createIncident: (body: { title: string; description?: string; severity?: string }) =>
+    request<{ incident: Incident; created: boolean }>("/api/incidents", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   getIncident: (id: string) =>
     request<{ incident: Incident; events: IncidentEvent[] }>(`/api/incidents/${encodeURIComponent(id)}`),
   getIncidentTimeline: (id: string) =>

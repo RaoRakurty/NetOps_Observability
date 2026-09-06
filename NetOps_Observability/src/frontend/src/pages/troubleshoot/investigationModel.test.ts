@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// investigationModel.test.ts — the pure model behind the symptom-first
+// investigationModel.test.ts — the pure model behind the three-block
 // Troubleshooting investigation surface (Project 4 §A).
 //
 // The contract this file exists to defend is HONESTY: a lane classifier must
@@ -12,17 +12,17 @@
 // stay distinct with distinct operator sentences.
 
 import { describe, it, expect } from "vitest";
-import type { FeedItem, PathHealthItem, ProbePath, PromInstantSeries } from "../../services/api";
+import type { CorrObject, FeedItem, Incident, PathHealthItem, ProbePath, PromInstantSeries } from "../../services/api";
 import {
   ALL_LANES,
   DEVICE_CONFIG_CHANGE_KIND,
-  HOW_IT_WORKS,
   LADDER,
   PLAIN_LADDER,
   LANE_SOURCE,
   LANE_TITLE,
-  SYMPTOMS,
-  bisectingHeadline,
+  affectsLine,
+  affectedEntities,
+  breakingAt,
   buildLadder,
   buildPlainLadder,
   changeLabel,
@@ -32,19 +32,22 @@ import {
   classifyFlowLane,
   classifyMetricLane,
   classifyPathLane,
+  confidenceChip,
+  describedTitle,
   isConfigChangeKind,
+  isLiveInvestigation,
   laneError,
   laneIsQuiet,
   laneLoading,
   laneSummary,
-  lanesForSymptom,
   parseInvestigationHash,
+  pickRows,
   plainAnswer,
   plainOwner,
-  symptomById,
+  quietLaneLine,
+  tierChip,
   type LaneId,
   type LaneState,
-  type SymptomId,
 } from "./investigationModel";
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -69,76 +72,28 @@ const probePath = (over: Partial<ProbePath> = {}): ProbePath =>
 
 const series = (device: string): PromInstantSeries => ({ metric: { device }, value: [0, "1"] });
 
-// ── the nine canonical NOC workflows ─────────────────────────────────────────
-
-describe("SYMPTOMS — the nine canonical NOC workflows", () => {
-  it("carries exactly nine workflows with unique ids and labels", () => {
-    expect(SYMPTOMS).toHaveLength(9);
-    expect(new Set(SYMPTOMS.map((s) => s.id)).size).toBe(9);
-    expect(new Set(SYMPTOMS.map((s) => s.label)).size).toBe(9);
-  });
-
-  it("gives every workflow an operator label and a bisection hint", () => {
-    for (const s of SYMPTOMS) {
-      expect(s.label.trim().length).toBeGreaterThan(0);
-      expect(s.hint.trim().length).toBeGreaterThan(0);
-    }
-  });
-
-  // The lanes each workflow opens, straight from the design of record
-  // (docs/design/research/TROUBLESHOOTING_PAGE_RESEARCH_2026-08-25.md §a).
-  const expected: [SymptomId, LaneId[]][] = [
-    ["app_slow", ["dem", "path", "changed", "flows", "health", "events"]],
-    ["site_down", ["health", "path", "changed", "events", "routing"]],
-    ["link_interface", ["health", "flows", "changed", "events"]],
-    ["routing_adjacency", ["routing", "health", "changed", "events"]],
-    ["bgp_upstream", ["routing", "path", "changed", "events", "dem"]],
-    ["dns", ["dem", "changed", "events", "flows"]],
-    ["wireless", ["dem", "health", "events", "changed"]],
-    ["cloud_saas", ["dem", "changed", "path", "events", "flows"]],
-    ["security_exposure", ["events", "changed", "flows", "health"]],
-  ];
-
-  it.each(expected)("%s opens exactly the lanes its workflow needs", (id, lanes) => {
-    expect(lanesForSymptom(id)).toEqual(lanes);
-  });
-
-  it("never opens a lane twice, and only opens lanes that exist", () => {
-    for (const s of SYMPTOMS) {
-      expect(new Set(s.lanes).size).toBe(s.lanes.length);
-      for (const l of s.lanes) expect(ALL_LANES).toContain(l);
-    }
-  });
-
-  it("every workflow opens the change lane or the event lane (change awareness)", () => {
-    for (const s of SYMPTOMS) {
-      expect(s.lanes.some((l) => l === "changed" || l === "events")).toBe(true);
-    }
-  });
-
-  it("titles and sources are defined for every lane, and each source names an API path", () => {
-    for (const l of ALL_LANES) {
-      expect(LANE_TITLE[l]?.trim().length).toBeGreaterThan(0);
-      expect(LANE_SOURCE[l]).toMatch(/^\/api\//);
-    }
-  });
+const corr = (over: Partial<CorrObject> = {}): CorrObject => ({
+  correlation_id: "corr-1", version: 1, state: "open",
+  window_start: "2026-09-06 10:00:00", window_end: "2026-09-06 10:20:00",
+  top_hypothesis: "upstream_link_fault", top_confidence: 0.6, verdict_tier: "suspected",
+  evidence_missing: "[]", affected: JSON.stringify({ devices: ["wan-r2"] }),
+  signal_count: 3, node_count: 2, engine_version: "v2", catalog_version: "c1",
+  created_at: "2026-09-06 10:00:00", ...over,
 });
 
-describe("symptomById / lanesForSymptom", () => {
-  it("resolves a known id", () => {
-    expect(symptomById("dns")?.label).toBe("DNS, DHCP or authentication is failing");
-  });
-
-  it.each([["", null], ["nope", null], [null, null], [undefined, null]] as const)(
-    "returns null for %p", (input) => { expect(symptomById(input as string | null)).toBeNull(); },
-  );
-
-  it("an unknown symptom opens EVERY lane — never fewer", () => {
-    expect(lanesForSymptom(null)).toEqual(ALL_LANES);
-    expect(lanesForSymptom("not-a-symptom")).toEqual(ALL_LANES);
-    expect(lanesForSymptom(undefined)).toEqual(ALL_LANES);
-  });
+const incidentRow = (over: Partial<Incident> = {}): Incident => ({
+  id: "inc-1", tenant_id: "t1", title: "Described problem", severity: "medium",
+  status: "open", source_type: "manual", occurrences: 1,
+  created_at: "2026-09-06 11:00:00", updated_at: "2026-09-06 11:00:00",
+  first_seen_at: "2026-09-06 11:00:00", last_seen_at: "2026-09-06 11:00:00",
+  sync_status: "none", ...over,
 });
+
+// Two lane sets the ladder tests use. They used to come from the retired
+// symptom→lanes map; they are written out here so the ladder is still exercised
+// with a PARTIAL set (the case that proves a rung can be "not opened").
+const ROUTING_LANES: LaneId[] = ["routing", "health", "changed", "events"];
+const APP_LANES: LaneId[] = ["dem", "path", "changed", "flows", "health", "events"];
 
 // ── the bisection ladder ─────────────────────────────────────────────────────
 
@@ -153,9 +108,9 @@ describe("buildLadder", () => {
     expect(LADDER.map((l) => l.id)).toEqual(buildLadder(ALL_LANES, {}).map((r) => r.id));
   });
 
-  it("marks a rung not_opened when the symptom opened none of its lanes", () => {
-    // routing_adjacency opens routing/health/changed/events — no path, no dem, no flows.
-    const st = byId(buildLadder(lanesForSymptom("routing_adjacency"), {}));
+  it("marks a rung not_opened when none of its lanes were opened", () => {
+    // a routing-shaped set opens routing/health/changed/events — no path, no dem.
+    const st = byId(buildLadder(ROUTING_LANES, {}));
     expect(st.path).toBe("not_opened");
     expect(st.physical).not.toBe("not_opened");
   });
@@ -191,7 +146,7 @@ describe("buildLadder", () => {
       dem: "ready", changed: "empty", health: "not_connected", path: "loading",
       routing: "error", flows: "not_connected", events: "ready",
     };
-    for (const r of buildLadder(lanesForSymptom("app_slow"), states)) {
+    for (const r of buildLadder(APP_LANES, states)) {
       expect(r.note.trim().length).toBeGreaterThan(0);
       expect(r.label.trim().length).toBeGreaterThan(0);
     }
@@ -344,24 +299,6 @@ describe("change vocabulary", () => {
   });
 });
 
-// ── the honest symptom-only header ───────────────────────────────────────────
-
-describe("bisectingHeadline", () => {
-  it("asks the question when nothing has been picked", () => {
-    const h = bisectingHeadline(null);
-    expect(h.title).toBe("What's wrong?");
-    expect(h.sub).toMatch(/pick a problem or an open case/i);
-  });
-
-  it("states plainly that we do not have the cause yet", () => {
-    const h = bisectingHeadline(symptomById("bgp_upstream"));
-    expect(h.title).toBe("BGP or an upstream is unstable");
-    expect(h.sub).toMatch(/do not have the cause yet/i);
-    // never borrows the RCA verdict vocabulary, and never engine words either
-    expect(h.sub.toLowerCase()).not.toMatch(/confirmed|root cause|because|correlat|verdict|bisect/);
-  });
-});
-
 // ── deep link ────────────────────────────────────────────────────────────────
 
 describe("parseInvestigationHash", () => {
@@ -382,11 +319,12 @@ describe("parseInvestigationHash", () => {
     expect(parseInvestigationHash("#/x?section=Protocol").section).toBe("investigate");
   });
 
-  it("reads a known symptom and drops an unknown one", () => {
-    expect(parseInvestigationHash("#/x?symptom=dns").symptom).toBe("dns");
-    expect(parseInvestigationHash("#/x?section=investigate&symptom=app_slow").symptom).toBe("app_slow");
-    expect(parseInvestigationHash("#/x?symptom=made_up").symptom).toBeNull();
-    expect(parseInvestigationHash("#/x").symptom).toBeNull();
+  // `?symptom=` is no longer a mode: a described problem becomes a case, so an
+  // old symptom link lands on the picker rather than on a surface that is gone.
+  it("ignores a retired symptom link instead of failing on it", () => {
+    expect(parseInvestigationHash("#/x?symptom=dns")).toEqual({ section: "investigate", caseId: "" });
+    expect(parseInvestigationHash("#/x?symptom=dns&case=corr-9"))
+      .toEqual({ section: "investigate", caseId: "corr-9" });
   });
 
   it("accepts only an opaque case token", () => {
@@ -405,9 +343,9 @@ describe("parseInvestigationHash", () => {
     expect(parseInvestigationHash(`#/x?case=${encodeURIComponent(bad)}`).caseId).toBe("");
   });
 
-  it("reads section, symptom and case together", () => {
-    expect(parseInvestigationHash("#/investigate/troubleshooting?section=investigate&symptom=site_down&case=corr-1"))
-      .toEqual({ section: "investigate", symptom: "site_down", caseId: "corr-1" });
+  it("reads section and case together", () => {
+    expect(parseInvestigationHash("#/investigate/troubleshooting?section=investigate&case=corr-1"))
+      .toEqual({ section: "investigate", caseId: "corr-1" });
   });
 
   it.each([null, undefined, "#", "#?", "#/x?", "#/x?&&"] as const)("survives the malformed hash %p", (h) => {
@@ -469,7 +407,7 @@ describe("buildPlainLadder", () => {
 
   it("says a layer this problem does not need was not checked", () => {
     // routing_adjacency opens routing/health/changed/events — no path, no dem
-    const r = byId(buildPlainLadder(lanesForSymptom("routing_adjacency"), {})).overlay;
+    const r = byId(buildPlainLadder(ROUTING_LANES, {})).overlay;
     expect(r.status).toBe("Not checked yet");
     expect(r.state).toBe("skipped");
   });
@@ -573,14 +511,157 @@ describe("plainOwner", () => {
 
 // ── the three-line intro ─────────────────────────────────────────────────────
 
-describe("HOW_IT_WORKS", () => {
-  it("is exactly three plain lines, in the order the operator works them", () => {
-    expect(HOW_IT_WORKS).toHaveLength(3);
-    expect(HOW_IT_WORKS[0]).toMatch(/what is wrong/i);
-    expect(HOW_IT_WORKS[1]).toMatch(/evidence/i);
-    expect(HOW_IT_WORKS[2]).toMatch(/answer/i);
-    for (const l of HOW_IT_WORKS) {
-      expect(l.toLowerCase()).not.toMatch(/lane|rung|seam|correlat|verdict|bisect|signal/);
-    }
+
+// ── the one picker: correlated cases and described investigations, one list ──
+
+describe("tierChip", () => {
+  it.each([
+    ["confirmed", "Confirmed"],
+    ["suspected", "Likely"],
+    ["recovered", "Recovered"],
+    ["undetermined", "Unconfirmed"],
+    ["", "Unconfirmed"],
+    ["   ", "Unconfirmed"],
+  ])("%p → %p", (tier, chip) => { expect(tierChip(tier)).toBe(chip); });
+});
+
+describe("isLiveInvestigation", () => {
+  it.each([["open", true], ["acknowledged", true], ["investigating", true], ["resolved", false], ["closed", false]] as const)(
+    "%p → %p", (status, live) => {
+      expect(isLiveInvestigation(incidentRow({ status }))).toBe(live);
+    });
+});
+
+describe("pickRows", () => {
+  it("lists correlated cases first, then the operator's own investigations", () => {
+    const rows = pickRows(
+      [corr({ correlation_id: "c1", window_start: "2026-09-06 09:00:00" })],
+      [incidentRow({ id: "i1", title: "CRM is unreachable" })],
+    );
+    expect(rows.map((r) => r.kind)).toEqual(["correlation", "investigation"]);
+    expect(rows[0].id).toBe("c1");
+    expect(rows[1].title).toBe("CRM is unreachable");
+    expect(rows[1].chip).toBe("Described");
+  });
+
+  it("names a case in NOC words and never as an engine signature id", () => {
+    const [row] = pickRows([corr({ top_hypothesis: "upstream_link_fault" })], []);
+    expect(row.title).not.toBe("upstream_link_fault");
+    expect(row.title.length).toBeGreaterThan(0);
+  });
+
+  it("orders each group newest first", () => {
+    const rows = pickRows([
+      corr({ correlation_id: "old", window_start: "2026-09-01 00:00:00" }),
+      corr({ correlation_id: "new", window_start: "2026-09-06 00:00:00" }),
+    ], []);
+    expect(rows.map((r) => r.id)).toEqual(["new", "old"]);
+  });
+
+  it("drops a resolved investigation and keeps a live one", () => {
+    const rows = pickRows([], [
+      incidentRow({ id: "live", status: "investigating" }),
+      incidentRow({ id: "done", status: "resolved" }),
+    ]);
+    expect(rows.map((r) => r.id)).toEqual(["live"]);
+  });
+
+  it("still lists a record whose title nobody wrote", () => {
+    const rows = pickRows([corr({ correlation_id: "c9", top_hypothesis: "" })], [incidentRow({ id: "i9", title: "  " })]);
+    // The shared NOC vocabulary names an unmatched signature; only a record with
+    // no words at all falls back, and it is LISTED rather than dropped.
+    expect(rows[0].title.trim().length).toBeGreaterThan(0);
+    expect(rows[1].title).toBe("Described problem");
+  });
+
+  it("survives absent lists — a missing store is never a crash", () => {
+    expect(pickRows(undefined, undefined)).toEqual([]);
+  });
+});
+
+// ── the answer card ──────────────────────────────────────────────────────────
+
+describe("breakingAt", () => {
+  it("names the layer whose ANOMALY lane actually returned rows", () => {
+    expect(breakingAt({ routing: "ready" })).toBe("Routing");
+    expect(breakingAt({ health: "ready" })).toBe("Physical link");
+  });
+
+  it("never names a layer off an observation lane — that is evidence, not a fault", () => {
+    // the event feed reports what happened, not that a layer is out of state
+    expect(breakingAt({ events: "ready" })).toBe("Unknown");
+    expect(breakingAt({ dem: "ready", flows: "ready", path: "ready", changed: "ready" })).toBe("Unknown");
+  });
+
+  it("names the LOWEST layer with evidence when more than one has it", () => {
+    expect(breakingAt({ health: "ready", routing: "ready" })).toBe("Physical link");
+  });
+
+  it("says Unknown while nothing has been found — never a reassuring guess", () => {
+    expect(breakingAt({})).toBe("Unknown");
+    expect(breakingAt({ routing: "loading" })).toBe("Unknown");
+    expect(breakingAt({ routing: "empty", health: "empty" })).toBe("Unknown");
+    expect(breakingAt({ routing: "not_connected" })).toBe("Unknown");
+  });
+});
+
+describe("affectedEntities / affectsLine", () => {
+  it("counts the devices and sites a case named", () => {
+    expect(affectsLine(JSON.stringify({ devices: ["a", "b"], sites: ["dc1"] }))).toBe("2 devices, 1 site");
+    expect(affectsLine(JSON.stringify({ devices: ["a"] }))).toBe("1 device");
+  });
+
+  it("says nothing was named rather than claiming zero", () => {
+    expect(affectsLine("")).toBe("Nothing named yet");
+    expect(affectsLine("not json")).toBe("Nothing named yet");
+    expect(affectsLine(JSON.stringify({ devices: [] }))).toBe("Nothing named yet");
+  });
+
+  it("ignores blanks and non-strings in the blob", () => {
+    expect(affectedEntities(JSON.stringify({ devices: ["  ", "r1", { id: "x" }] })).devices).toEqual(["r1"]);
+    expect(affectedEntities(JSON.stringify(["a"])).devices).toEqual([]);
+  });
+});
+
+describe("confidenceChip", () => {
+  it.each([
+    [0.95, "High confidence"],
+    [0.8, "High confidence"],
+    [0.62, "Medium confidence"],
+    [0.5, "Medium confidence"],
+    [0.2, "Low confidence"],
+  ])("%p → %p", (c, label) => { expect(confidenceChip(c)).toBe(label); });
+
+  it("says a case was never scored rather than calling it low", () => {
+    expect(confidenceChip(0)).toBe("Not scored");
+    expect(confidenceChip(undefined)).toBe("Not scored");
+    expect(confidenceChip(Number.NaN)).toBe("Not scored");
+  });
+});
+
+describe("quietLaneLine", () => {
+  it("names the lane that had nothing to say", () => {
+    expect(quietLaneLine("flows", "empty")).toBe("Nothing from Traffic");
+    for (const id of ALL_LANES) expect(quietLaneLine(id, "empty")).toContain(LANE_TITLE[id]);
+  });
+
+  it("keeps 'we cannot see this' distinct from 'we looked and it was quiet'", () => {
+    expect(quietLaneLine("flows", "not_connected")).toBe("Nothing feeds Traffic");
+    expect(quietLaneLine("flows", "not_connected")).not.toBe(quietLaneLine("flows", "empty"));
+  });
+});
+
+describe("describedTitle", () => {
+  it("keeps the operator's words, collapsed", () => {
+    expect(describedTitle("  Branch   users\tcannot reach\nthe CRM ")).toBe("Branch users cannot reach the CRM");
+  });
+
+  it("is empty for text that says nothing", () => {
+    expect(describedTitle("")).toBe("");
+    expect(describedTitle("   \t\n ")).toBe("");
+  });
+
+  it("bounds the text so a title is never a payload", () => {
+    expect(describedTitle("x".repeat(500))).toHaveLength(200);
   });
 });

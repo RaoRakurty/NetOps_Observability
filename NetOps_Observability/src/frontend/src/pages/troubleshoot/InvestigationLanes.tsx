@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// InvestigationLanes — the parallel evidence lanes of the symptom-first
-// Troubleshooting surface. One card per lane, each fed by an ALREADY-DEPLOYED
-// API, each carrying its own honest empty and not-connected states.
+// InvestigationLanes — the parallel evidence lanes of the Troubleshooting
+// surface, rendered inside its ONE "Show the evidence" disclosure. One card per
+// lane, each fed by an ALREADY-DEPLOYED API, each carrying its own honest empty
+// and not-connected states.
+//
+// A card has NO disclosure of its own (owner, 2026-09-06: "simplify these pages
+// and make it intuitive"). It is shown with its sentence and its rows, or the
+// page collapses it to one "Nothing from …" line. There is no third state.
 //
 // The lanes run in PARALLEL on purpose (design §c): the operator should not have
 // to open seven windows serially to find which layer the fault is on. Each card
@@ -64,27 +69,23 @@ export type LaneStateReport = (id: LaneId, state: LaneState) => void;
 
 // ── the card shell ───────────────────────────────────────────────────────────
 
-function LaneCard({ id, result, children, action }: {
+function LaneCard({ id, result, children }: {
   id: LaneId;
   result: LaneResult<unknown>;
   children?: ReactNode;
-  action?: ReactNode;
 }) {
   const headingId = `lane-h-${id}`;
-  // The raw material — the rows and the API path behind them — sits behind ONE
-  // disclosure so the card leads with a sentence a NOC admin can read. It opens
-  // by default exactly when the lane HAS something (rows, or a failure): the
-  // operator never has to click to discover that a lane found the fault.
-  // `null` = follow the lane's own state; a boolean = the operator decided.
-  const [override, setOverride] = useState<boolean | null>(null);
-  const open = override ?? (result.state === "ready" || result.state === "error");
+  // NO per-card disclosure (owner, 2026-09-06: "Instead of show so many details,
+  // simplify these pages"). A lane is now one of two things and nothing in
+  // between: it is SHOWN, with its sentence and its rows, or the page collapses
+  // it to a single "Nothing from …" line. A "Details" button on top of a
+  // disclosure the page already owns was the third state that made this read as
+  // a wall.
   const summary = laneSummary(id, result.state, result.rows.length);
-  const detailId = `lane-d-${id}`;
   return (
     <section className="tsl-card card" role="region" aria-labelledby={headingId} data-lane={id} data-state={result.state}>
       <div className="tsl-head">
         <h3 id={headingId} className="tsl-title">{LANE_TITLE[id]}</h3>
-        {action}
       </div>
 
       {/* One plain sentence, always. For every state but "ready" the lane's own
@@ -100,18 +101,8 @@ function LaneCard({ id, result, children, action }: {
       {result.state === "ready" && <p className="tsl-sum">{summary}</p>}
 
       <div className="tsl-detail">
-        <button
-          type="button" className="tsl-disclose" aria-expanded={open} aria-controls={detailId}
-          onClick={() => setOverride(!open)}
-        >
-          {open ? "Hide details" : "Details"}
-        </button>
-        {open && (
-          <div id={detailId} className="tsl-detail-body">
-            {result.state === "ready" && children}
-            <div className="tsl-src">Read from <span className="tsl-api">{LANE_SOURCE[id]}</span></div>
-          </div>
-        )}
+        {result.state === "ready" && children}
+        <div className="tsl-src">Read from <span className="tsl-api">{LANE_SOURCE[id]}</span></div>
       </div>
     </section>
   );
@@ -207,10 +198,13 @@ export function ChangedLane({ scope, report }: { scope: LaneScope; report?: Lane
 const HEALTH_METRICS = ["device_if_oper_status", "device_sysuptime", "device_resource_cpu_pct"];
 const HEALTH_QUERY = 'device_if_oper_status == 0';
 
-export function HealthLane({ scope, report, protocolSlot }: {
-  scope: LaneScope; report?: LaneStateReport; protocolSlot?: ReactNode;
+// No `protocolSlot` any more: the manual protocol-diagnostics bench was retired
+// on 2026-09-05 (TAC_ESCALATION_2026-09-05 §5) and nothing has supplied the slot
+// since, so the toggle that opened it was a control for a surface that no longer
+// exists. The escalation flow in the answer card replaces it.
+export function HealthLane({ scope, report }: {
+  scope: LaneScope; report?: LaneStateReport;
 }) {
-  const [openDiag, setOpenDiag] = useState(false);
   const res = useLane<PromInstantSeries>(
     "health",
     async () => {
@@ -226,36 +220,18 @@ export function HealthLane({ scope, report, protocolSlot }: {
     report,
   );
   return (
-    <>
-      <LaneCard
-        id="health"
-        result={res}
-        // The toggle exists only when a host actually supplies the slot. It used
-        // to render unconditionally, and after the protocol-diagnostics bench
-        // was retired (TAC_ESCALATION_2026-09-05 §5) that left a control which
-        // expanded to nothing — a button that promises a surface it cannot open.
-        action={
-          protocolSlot ? (
-            <button type="button" className="chip-btn" aria-expanded={openDiag}
-              onClick={() => setOpenDiag((o) => !o)}>
-              {openDiag ? "Hide protocol diagnostics" : "Protocol diagnostics"}
-            </button>
-          ) : undefined
-        }
-      >
-        <ul className="tsl-list">
-          {res.rows.slice(0, 8).map((s, i) => (
-            <li key={`${s.metric.device}-${s.metric.ifName ?? s.metric.index ?? ""}-${i}`} className="tsl-row">
-              <span className="tsl-dot bad" aria-hidden="true" />
-              <span className="tsl-k">{s.metric.device ?? "unknown device"}</span>
-              <span className="tsl-v">{s.metric.ifName ?? s.metric.interface ?? s.metric.index ?? "interface"}</span>
-              <span className="fact-line">operationally down</span>
-            </li>
-          ))}
-        </ul>
-      </LaneCard>
-      {openDiag && protocolSlot}
-    </>
+    <LaneCard id="health" result={res}>
+      <ul className="tsl-list">
+        {res.rows.slice(0, 8).map((s, i) => (
+          <li key={`${s.metric.device}-${s.metric.ifName ?? s.metric.index ?? ""}-${i}`} className="tsl-row">
+            <span className="tsl-dot bad" aria-hidden="true" />
+            <span className="tsl-k">{s.metric.device ?? "unknown device"}</span>
+            <span className="tsl-v">{s.metric.ifName ?? s.metric.interface ?? s.metric.index ?? "interface"}</span>
+            <span className="fact-line">operationally down</span>
+          </li>
+        ))}
+      </ul>
+    </LaneCard>
   );
 }
 
@@ -390,7 +366,7 @@ export function EventsLane({ scope, report }: { scope: LaneScope; report?: LaneS
 
 export const LANE_COMPONENT: Record<
   LaneId,
-  (p: { scope: LaneScope; report?: LaneStateReport; protocolSlot?: ReactNode }) => JSX.Element
+  (p: { scope: LaneScope; report?: LaneStateReport }) => JSX.Element
 > = {
   dem: DemLane,
   changed: ChangedLane,

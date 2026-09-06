@@ -31,7 +31,7 @@
 // The grounding we send carries only what is already on the operator's screen —
 // no secrets, no other tenant's data (LLM06).
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type AiAnswer, type AiCitation, type AiSkillHop } from "../../services/api";
 
 /** A relative, same-origin path is safe to link. Everything else is inert text.
@@ -69,11 +69,18 @@ export function chainHops(ans: AiAnswer | null): AiSkillHop[] {
   return chain.length > 1 ? chain : [];
 }
 
-export default function IrisLane({ caseId, symptomLabel, onOpenDrawer }: {
+export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDrawer }: {
   /** Correlation id when a case drives the investigation (the grounding key). */
   caseId?: string;
-  /** The chosen symptom's own words, used to ground a symptom-only ask. */
+  /** The chosen case's own words, used to ground an ask with no correlation. */
   symptomLabel?: string;
+  /**
+   * Ask once on mount. The investigation surface opens this panel FROM an
+   * explicit "Ask Iris" press, so making the operator press a second button
+   * inside it would be a second door to the same room. Default false, so every
+   * other host keeps the press-to-ask behaviour.
+   */
+  auto?: boolean;
   /** Opens the docked Iris drawer. Absent = the control is not rendered. */
   onOpenDrawer?: () => void;
 }) {
@@ -97,6 +104,16 @@ export default function IrisLane({ caseId, symptomLabel, onOpenDrawer }: {
       setBusy(false);
     }
   };
+
+  // Exactly ONE automatic ask per mount: a re-render must never re-spend a
+  // model call the operator did not ask for (§15 LLM04 — bound the cost).
+  const asked = useRef(false);
+  useEffect(() => {
+    if (!auto || asked.current) return;
+    asked.current = true;
+    void ask();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auto]);
 
   const cites = ans?.citations ?? [];
   const hops = chainHops(ans);

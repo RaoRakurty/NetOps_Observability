@@ -13,7 +13,7 @@
 // that a device name carrying markup arrives on screen as characters (§15).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, within } from "@testing-library/react";
 import type { FeedItem, PathHealthItem, ProbePath, PromInstantSeries } from "../../services/api";
 
 const mocks = vi.hoisted(() => ({
@@ -343,28 +343,6 @@ describe("each lane reports its state up to the ladder", () => {
   });
 });
 
-// ── health lane's protocol-diagnostics slot ──────────────────────────────────
-
-describe("the health lane hosts the protocol diagnostics on demand", () => {
-  it("keeps the slot closed until asked, then shows it", async () => {
-    render(<HealthLane scope={scope} protocolSlot={<div data-testid="diag">DIAG</div>} />);
-    await waitFor(() => expect(stateOf("health")).not.toBe("loading"));
-    expect(screen.queryByTestId("diag")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Protocol diagnostics" }));
-    expect(screen.getByTestId("diag")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Hide protocol diagnostics" }));
-    expect(screen.queryByTestId("diag")).toBeNull();
-  });
-
-  // A control that expands to nothing is a promise the page cannot keep, so the
-  // toggle is not rendered at all when the host supplies no slot.
-  it("renders no toggle at all when the host supplied no slot", async () => {
-    render(<HealthLane scope={scope} />);
-    await waitFor(() => expect(stateOf("health")).not.toBe("loading"));
-    expect(screen.queryByRole("button", { name: "Protocol diagnostics" })).toBeNull();
-  });
-});
-
 // ── remote strings are text, never markup (§15) ──────────────────────────────
 
 describe("remote-authored values are escaped text", () => {
@@ -389,12 +367,13 @@ describe("remote-authored values are escaped text", () => {
   });
 });
 
-// ── the card shell: one plain sentence, raw material behind "Details" ─────────
+// ── the card shell: one plain sentence, then the rows ────────────────────────
 //
-// Owner, 2026-09-06: the page showed everything at once, in engine vocabulary.
-// The evidence card now LEADS with a sentence a NOC admin can read and keeps the
-// rows and the API path behind one disclosure — open when the lane has something
-// to show, closed when it does not, and always openable.
+// Owner, 2026-09-06: "Instead of show so many details, simplify these pages".
+// A card LEADS with a sentence a NOC admin can read and then shows its rows and
+// the API path behind them. There is NO per-card disclosure any more: the page
+// owns the one "Show the evidence" toggle, and a lane with nothing to say is
+// collapsed by the page to a single line rather than to a button.
 
 describe("the evidence card leads with one plain sentence", () => {
   it("counts what a lane found, in words", async () => {
@@ -416,24 +395,20 @@ describe("the evidence card leads with one plain sentence", () => {
     expect(card("health")).toHaveTextContent("2 interfaces are down right now.");
   });
 
-  it("opens the details when the lane HAS something, and closes them on demand", async () => {
+  it("shows the rows and the API behind them with NO second click", async () => {
     render(<EventsLane scope={scope} />);
     await waitFor(() => expect(stateOf("events")).toBe("ready"));
     expect(within(card("events")).getByText(LANE_SOURCE.events)).toBeInTheDocument();
-    fireEvent.click(within(card("events")).getByRole("button", { name: "Hide details" }));
-    expect(within(card("events")).queryByText(LANE_SOURCE.events)).toBeNull();
-    fireEvent.click(within(card("events")).getByRole("button", { name: "Details" }));
-    expect(within(card("events")).getByText(LANE_SOURCE.events)).toBeInTheDocument();
+    expect(within(card("events")).queryByRole("button", { name: /details/i })).toBeNull();
   });
 
-  it("keeps the raw material closed for a QUIET lane — and still lets the operator open it", async () => {
+  it("prints a QUIET lane's honest sentence and no rows", async () => {
     mocks.eventsFeed.mockResolvedValue({ items: [] });
     render(<EventsLane scope={scope} />);
     await waitFor(() => expect(stateOf("events")).toBe("empty"));
-    expect(within(card("events")).queryByText(LANE_SOURCE.events)).toBeNull();
-    // the honest sentence is NOT hidden — only the raw material is
     expect(card("events")).toHaveTextContent(/no event was recorded/i);
-    fireEvent.click(within(card("events")).getByRole("button", { name: "Details" }));
+    expect(within(card("events")).queryByRole("listitem")).toBeNull();
+    // the API it read is still named — nothing on this page is unverifiable
     expect(within(card("events")).getByText(LANE_SOURCE.events)).toBeInTheDocument();
   });
 

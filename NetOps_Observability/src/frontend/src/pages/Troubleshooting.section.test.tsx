@@ -15,7 +15,8 @@
 //  · each surviving section is reachable as a deep link
 //    (#/investigate/troubleshooting?section=…), and an unrecognized link falls
 //    back to the investigation surface rather than a blank page
-//  · a symptom / case deep link lands the investigation on that entry point
+//  · a case deep link lands the investigation on that case, and the retired
+//    `?symptom=` parameter lands on the picker rather than on a blank
 //  · picking a section mounts the REAL component (route registration, not a
 //    stub): the investigation surface and the legacy board
 //
@@ -52,7 +53,8 @@ vi.mock("../components/ui", () => ({
 const mocks = vi.hoisted(() => ({
   flowsByType: vi.fn(), searchLogs: vi.fn(), devices: vi.fn(), permissions: vi.fn(),
   tacState: vi.fn(), tacClassify: vi.fn(),
-  correlations: vi.fn(), seams: vi.fn(), getSeamOwners: vi.fn(),
+  correlations: vi.fn(), listIncidents: vi.fn(), createIncident: vi.fn(),
+  seams: vi.fn(), getSeamOwners: vi.fn(),
   correlationDetail: vi.fn(), correlationTimeline: vi.fn(),
   correlationTickets: vi.fn(), correlationTicketCreate: vi.fn(), downloadRcaReport: vi.fn(),
   pathsHealth: vi.fn(), eventsFeed: vi.fn(), metricNames: vi.fn(), metricsQuery: vi.fn(),
@@ -101,6 +103,7 @@ beforeEach(() => {
     state: null, state_note: "This incident has not been escalated in this api process.",
   });
   mocks.correlations.mockResolvedValue({ data: [openCase()] });
+  mocks.listIncidents.mockResolvedValue([]);
   mocks.seams.mockResolvedValue([]);
   mocks.getSeamOwners.mockResolvedValue({ seam_owners: {} });
   mocks.correlationDetail.mockResolvedValue({ object: openCase(), edges: [] });
@@ -129,7 +132,8 @@ describe("sectionFromHash", () => {
     ["#/investigate/troubleshooting?section=protocol", "investigate"],
     ["#/investigate/troubleshooting?section=pipeline", "pipeline"],
     ["#/investigate/troubleshooting?section=nonsense", "investigate"],
-    ["#/investigate/troubleshooting?symptom=dns", "investigate"],
+    ["#/investigate/troubleshooting?symptom=dns", "investigate"],   // retired param
+
     ["#/investigate/troubleshooting?case=corr-1", "investigate"],
     ["", "investigate"],
   ] as const)("%p → %s", (hash, section) => {
@@ -148,7 +152,7 @@ describe("the section switch", () => {
   it("defaults to the INVESTIGATION surface", async () => {
     await show("#/investigate/troubleshooting");
     expect(pressed()).toBe("Investigation");
-    expect(screen.getByRole("heading", { name: "What's wrong?", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /What's wrong\?/, level: 2 })).toBeInTheDocument();
     expect(screen.queryByText("Monitored devices")).toBeNull();
     expect(screen.queryByRole("group", { name: "Protocol" })).toBeNull();
   });
@@ -179,20 +183,20 @@ describe("the section switch", () => {
     expect(screen.getByText(/Legacy board/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ask Iris about Collection pipeline board" })).toBeInTheDocument();
     expect(screen.queryByText(/answers one question/i)).toBeNull();
-    expect(screen.queryByRole("heading", { name: "What's wrong?" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: /What's wrong\?/ })).toBeNull();
   });
 
   it("switches back to the investigation surface", async () => {
     await show("#/investigate/troubleshooting?section=pipeline");
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Investigation" })); });
     expect(pressed()).toBe("Investigation");
-    expect(screen.getByRole("heading", { name: "What's wrong?", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /What's wrong\?/, level: 2 })).toBeInTheDocument();
   });
 
   it("shows only ONE section at a time — never stacked", async () => {
     await show("#/investigate/troubleshooting?section=pipeline");
     expect(screen.getByText("Monitored devices")).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "What's wrong?" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: /What's wrong\?/ })).toBeNull();
   });
 });
 
@@ -202,7 +206,7 @@ describe("deep links", () => {
   it("lands a retired protocol-diagnostics link on the investigation surface", async () => {
     await show("#/investigate/troubleshooting?section=protocol");
     expect(pressed()).toBe("Investigation");
-    expect(screen.getByRole("heading", { name: "What's wrong?", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /What's wrong\?/, level: 2 })).toBeInTheDocument();
   });
 
   it("opens on the legacy pipeline board", async () => {
@@ -211,40 +215,37 @@ describe("deep links", () => {
     expect(screen.getByText("Monitored devices")).toBeInTheDocument();
   });
 
-  it("opens the investigation on the linked symptom", async () => {
+  // `?symptom=` was the old describe-only mode. It is gone: a described problem
+  // is a real record now, so an old symptom link simply opens the picker.
+  it("lands a retired symptom link on the picker, not on a blank", async () => {
     await show("#/investigate/troubleshooting?section=investigate&symptom=bgp_upstream");
     expect(pressed()).toBe("Investigation");
-    expect(screen.getByRole("button", { name: /BGP or an upstream is unstable/ }))
-      .toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByTestId("ts-bisect-header")).toHaveTextContent(/do not have the cause yet/i);
+    expect(screen.getByRole("heading", { name: /What's wrong\?/, level: 2 })).toBeInTheDocument();
+    expect(screen.queryByTestId("ts-answer-block")).toBeNull();
   });
 
   it("opens the investigation on the linked correlation case", async () => {
     await show(`#/investigate/troubleshooting?case=${CASE_ID}`);
     expect(pressed()).toBe("Investigation");
     await waitFor(() => expect(mocks.correlationDetail).toHaveBeenCalledWith(CASE_ID));
-    // the engine's RCA header is one disclosure away — the plain answer leads
-    expect(await screen.findByRole("button", { name: "Full RCA detail" })).toBeInTheDocument();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Full RCA detail" })); });
+    // the plain answer leads; the engine's RCA header is inside the ONE
+    // evidence disclosure, which is closed until it is asked for
+    expect(screen.getByTestId("ts-answer")).toBeInTheDocument();
+    expect(document.getElementById("ts-ev-body")).toHaveAttribute("hidden");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show the evidence" })); });
+    expect(document.getElementById("ts-ev-body")).not.toHaveAttribute("hidden");
     expect(await screen.findByTestId("ts-rca-header")).toBeInTheDocument();
-  });
-
-  it("ignores a symptom the model does not know, and still opens the surface", async () => {
-    await show("#/investigate/troubleshooting?section=investigate&symptom=made_up");
-    expect(pressed()).toBe("Investigation");
-    expect(screen.queryByTestId("ts-bisect-header")).toBeNull();
-    expect(screen.getByText(/pick a problem or an open case/i)).toBeInTheDocument();
   });
 
   it("ignores a case token that is not an opaque id", async () => {
     await show("#/investigate/troubleshooting?case=%3Cscript%3E");
     expect(mocks.correlationDetail).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("ts-rca-header")).toBeNull();
+    expect(screen.queryByTestId("ts-answer-block")).toBeNull();
   });
 
   it("falls back to the investigation surface on an unrecognized section", async () => {
     await show("#/investigate/troubleshooting?section=nonsense");
     expect(pressed()).toBe("Investigation");
-    expect(screen.getByRole("heading", { name: "What's wrong?", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /What's wrong\?/, level: 2 })).toBeInTheDocument();
   });
 });

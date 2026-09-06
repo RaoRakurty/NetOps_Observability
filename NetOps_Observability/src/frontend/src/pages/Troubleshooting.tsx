@@ -83,10 +83,9 @@ const snmpReachQuery = [
 // The page carries TWO sections, switched (never stacked) so neither buries the
 // other, each reachable as a deep link (#/investigate/troubleshooting?section=…):
 //
-//  · Investigation (DEFAULT) — the symptom-first operator surface: pick what is
-//    wrong, get a verdict header, escalate to TAC from that verdict, then
-//    parallel evidence lanes, Iris and a seam-owned handoff. This is the page's
-//    reason to exist (Project 4 §A).
+//  · Investigation (DEFAULT) — the operator surface, in three blocks: pick an
+//    open case (or describe one), read the answer, open the evidence. This is
+//    the page's reason to exist (Project 4 §A).
 //  · Collection pipeline — the old June board (is the PIPELINE or the DEVICE at
 //    fault?). Kept reachable for ONE RELEASE while operators migrate; its
 //    step-zero insight now lives beside the investigation lanes.
@@ -122,7 +121,7 @@ export default function Troubleshooting({ rangeMinutes = 60 }: { rangeMinutes?: 
       </div>
 
       {section === "investigate" ? (
-        <InvestigationPage rangeMinutes={m} initialSymptom={initial.symptom} initialCaseId={initial.caseId} />
+        <InvestigationPage rangeMinutes={m} initialCaseId={initial.caseId} />
       ) : (
       <>
       {/* WORDS (sweep 5, tracker 270). What this board IS stays on screen — it is a
