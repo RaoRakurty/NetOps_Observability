@@ -35,6 +35,17 @@
 #     source-offer/                      corresponding source for the copyleft
 #                                        components we redistribute (GPL/LGPL),
 #                                        mirrored per release — see write_source_offer()
+#     README.txt                         START HERE — plain text, one page, no
+#                                        markdown, for the person who has just
+#                                        untarred this on a server console
+#     OPERATIONS.md                      sizing, upgrade, rollback, uninstall
+#     SUPPORT.txt                        how to get help + what to send
+#     RELEASE-NOTES.md                   what changed, generated from the log
+#     docs/index.html                    the FULL product documentation, built
+#                                        static and readable with no network
+#     CHECKSUMS.sha256                   the integrity manifest under the name
+#                                        customers look for (a symlink to
+#                                        SHA256SUMS, which stays canonical)
 #
 # Client install (the whole thing):
 #   ./install-correlix.sh
@@ -883,6 +894,227 @@ collected data but keeps your URL and login.
 16 GB / 4 vCPU for real use.
 EOF
 
+# 7e. OPERATIONS.md — the questions a customer asks on day 2, not day 1:
+#     how big a host does this need, how do I upgrade, how do I go back, how do
+#     I remove it. Kept out of README.md on purpose: the quickstart earns its
+#     value by being short.
+cat > "$BUNDLE_DIR/OPERATIONS.md" <<EOF
+# Correlix — Operations ($VERSION)
+
+## Host requirements
+
+| | Evaluation | Production (recommended) |
+|---|---|---|
+| CPU | 2 vCPU | 4 vCPU |
+| RAM | 8 GB | 16 GB |
+| Disk | 40 GB | 100 GB+ (telemetry retention) |
+| OS | Ubuntu 22.04+ / Debian 12, x86_64 | same |
+| Network | none required | none required |
+
+Correlix runs entirely on this host. It never contacts Correlix, and it needs
+no internet access to install or to run.
+
+Disk is the setting that matters: telemetry retention is what fills it. Give
+the volume room to grow, and keep it under 85% — the log store stops accepting
+writes when the filesystem gets close to full.
+
+## Sizing to your workload
+
+The installer sizes the stack to the host it finds. To size it to your
+WORKLOAD instead, drop a \`correlix-sizing.yaml\` next to this file declaring
+devices, flows/s, events/s, retention, users and tenants, then install. The
+planner refuses, with a report, when the workload cannot safely fit the host —
+that refusal is the feature.
+
+    ./install-correlix.sh install          # size to the detected host
+    CORRELIX_NO_SIZING=1 ./install-correlix.sh install    # opt out entirely
+
+## Upgrading
+
+1. Read RELEASE-NOTES.md in the NEW bundle.
+2. Take a backup (below). An upgrade is not a substitute for one.
+3. Extract the new bundle into its own directory — never over this one.
+4. Run \`./install-correlix.sh\` from the NEW directory. It loads the new
+   images, keeps your \`.env\`, your data and your login, and restarts the
+   services in place.
+5. Confirm with \`./install-correlix.sh status\` and sign in.
+
+Your configuration and data live outside the bundle
+(\`NetOps_Observability/deployment/docker/.env\` and
+\`NetOps_Observability/data/\`), which is why an upgrade is a fresh directory
+plus one command.
+
+## Rolling back
+
+1. \`./install-correlix.sh stop\` in the new directory.
+2. \`./install-correlix.sh\` in the PREVIOUS bundle directory — its images are
+   still in the bundle, so this needs no download.
+3. \`./install-correlix.sh status\` to confirm.
+
+Roll back only to the version you came from. Data written by a newer version is
+not guaranteed readable by an older one, which is what step 2 of the upgrade is
+for.
+
+## Backups
+
+Back up two things while the stack is stopped, or from a filesystem snapshot:
+
+    NetOps_Observability/deployment/docker/.env     your secrets — treat as one
+    NetOps_Observability/data/                      everything Correlix stores
+
+Restore is the reverse: put both back, then \`./install-correlix.sh start\`.
+
+## Uninstalling
+
+    ./install-correlix.sh uninstall            # remove the services, KEEP data
+    ./install-correlix.sh uninstall --purge    # remove the services AND data
+
+\`--purge\` is irreversible. It deletes \`data/\` and every collected record.
+EOF
+
+# 7f. README.txt — the one file that assumes nothing. Plain text, one page, no
+#     markdown syntax to read past, for someone on a server console who has
+#     just untarred this and does not yet know what Correlix is.
+cat > "$BUNDLE_DIR/README.txt" <<EOF
+CORRELIX $VERSION - START HERE
+$(printf '=%.0s' $(seq 1 $((22 + ${#VERSION}))))
+
+WHAT THIS IS
+  Correlix watches your network, correlates what it sees, and tells you what
+  broke and why. Everything runs on YOUR server. No internet access needed,
+  at install time or afterwards.
+
+BEFORE YOU START
+  A Linux x86_64 server (Ubuntu 22.04+ or Debian 12) you have sudo on.
+  Recommended: 4 CPU, 16 GB RAM, 100 GB disk.
+  Evaluation minimum: 2 CPU, 8 GB RAM, 40 GB disk.
+
+INSTALL - THREE COMMANDS
+  1)  sha256sum -c CHECKSUMS.sha256     confirm the download is intact
+  2)  sudo ./prepare-host.sh            installs Docker; skip if you have it
+  3)  ./install-correlix.sh             asks: graphical, or terminal?
+
+  Log out and back in after step 2 - it adds you to the docker group.
+
+  GRAPHICAL opens a setup wizard in your browser. It asks which management
+  address to serve on, and serves it over HTTPS behind a one-time token that
+  is printed in this terminal. Nothing else is exposed.
+
+  TERMINAL walks the same install from a numbered menu, right here.
+
+  Both paths run the same installer. Neither can do anything the other cannot.
+
+WHEN IT FINISHES
+  The installer prints your dashboard URL and the administrator password.
+  The password is shown once. It is also written into
+  NetOps_Observability/deployment/docker/.env - treat that file as a secret.
+
+DAY TO DAY
+  ./install-correlix.sh status          service health
+  ./install-correlix.sh logs [service]  recent logs
+  ./install-correlix.sh stop | start    stop/start, your data is kept
+  ./install-correlix.sh uninstall       remove (add --purge to delete data)
+
+WHAT ELSE IS IN THIS FOLDER
+  README.md            the same quickstart, formatted
+  OPERATIONS.md        sizing, upgrade, rollback, backup, uninstall
+  ADVANCED.md          external Kafka, ports, licence file, diagnostics
+  TROUBLESHOOTING.md   the usual first-day problems and their fixes
+  SUPPORT.txt          how to reach us, and what to send
+  RELEASE-NOTES.md     what changed in this version
+  docs/index.html      the full product documentation, offline
+  MANIFEST             exactly what this bundle contains
+  CHECKSUMS.sha256     integrity manifest (the same file as SHA256SUMS)
+  LICENSE LICENSING.md LICENSES/ LICENSES.md NOTICE
+  source-offer/        source for the GPL/LGPL components we redistribute
+EOF
+
+# 7g. SUPPORT.txt — what to do before contacting anyone, and exactly what to
+#     send when you do. Every tool it names ships in this folder.
+cat > "$BUNDLE_DIR/SUPPORT.txt" <<EOF
+CORRELIX $VERSION - SUPPORT
+$(printf '=%.0s' $(seq 1 $((19 + ${#VERSION}))))
+
+BEFORE YOU CONTACT ANYONE
+  1) ./install-correlix.sh status    which service is unhappy?
+  2) TROUBLESHOOTING.md              the usual first-day problems
+  3) docs/index.html                 the full documentation, offline
+
+COLLECT A DIAGNOSTIC BUNDLE
+  ./install-correlix.sh support-bundle
+
+  Writes one .tar.zst holding compose state, container logs, health, and store
+  and bus summaries. Secret values are stripped. It carries no packet payloads
+  and no telemetry records. Read its MANIFEST before you send it.
+
+IF TELEMETRY GOES IN AND NOTHING COMES OUT
+  ./correlix-debug trace --root NetOps_Observability --kind syslog --device ID
+  ./correlix-debug bundle --root NetOps_Observability --last 1
+
+  This sends one marked synthetic record through the real ingest path and
+  reports, hop by hop, where it was last seen. It writes to no device, and
+  everything it injects is tagged synthetic.
+
+LICENCE QUESTIONS
+  ./correlix-licence show   licence.json     customer, tier, expiry, ceilings
+  ./correlix-licence verify licence.json     valid for this product? exit code
+
+  Both work offline, from the file alone, with the product stopped.
+
+WHAT TO SEND
+  * the support bundle
+  * this bundle's MANIFEST (it carries the version and the exact build)
+  * what you expected, what happened, and when - with the timezone
+
+WHERE TO SEND IT
+  Your Correlix support contact, or the address in your agreement.
+  Correlix never phones home. Nothing leaves your network unless you send it.
+EOF
+
+# 7h. RELEASE-NOTES.md — generated from the log, never hand-written, so it
+#     cannot claim a change that is not in this build. Scope is the SHIPPABLE
+#     paths (the same set bundle-staleness.sh measures drift over), and only
+#     feat()/fix() subjects: a customer note is not a commit dump.
+echo "-- generating release notes"
+{
+  printf '# Correlix %s — release notes\n\n' "$VERSION"
+  printf 'Built %s from %s. Generated from the commit log; nothing here is\nhand-written.\n\n' "$(date -Is)" "$GITSHA"
+  since="$(git -C "$ROOT" describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || true)"
+  if [ -n "$since" ]; then
+    printf 'Changes since %s.\n\n' "$since"
+    range="$since..HEAD"
+  else
+    printf 'Changes in the most recent 120 commits (no previous release tag).\n\n'
+    range="HEAD~120..HEAD"
+  fi
+  notes="$(git -C "$ROOT" log --no-merges --format='%s' "$range" -- src deployment scripts telemetry-catalog 2>/dev/null \
+    | grep -E '^(feat|fix)(\([^)]*\))?!?: ' | head -200 || true)"
+  if [ -z "$notes" ]; then
+    printf 'No customer-visible changes were recorded for this build.\n'
+  else
+    printf '%s\n' "$notes" | sed 's/^/- /'
+  fi
+} > "$BUNDLE_DIR/RELEASE-NOTES.md"
+# The lab-leak guard covers the source archive; release notes are a SECOND
+# customer-facing surface generated from repo content, so it gets the same
+# treatment rather than being trusted because it is "only text" (§16.5).
+if grep -qE "$LAB_MARKERS" "$BUNDLE_DIR/RELEASE-NOTES.md"; then
+  echo "FATAL: a lab identifier reached the generated release notes" >&2; exit 1
+fi
+
+# 7i. The offline documentation portal. docs-portal/build is a gitignored
+#     build artifact that the frontend image COPYs, so `docker compose build`
+#     above has already failed if it were missing — but a bundle silently
+#     shipping no documentation is exactly the omission §16.1 forbids, so this
+#     is checked by name rather than inferred.
+[ -d "$ROOT/docs-portal/build" ] \
+  || { echo "FATAL: docs-portal/build is missing — the customer bundle ships the documentation portal offline. Build it (cd docs-portal && npm ci && npm run build) and rerun." >&2; exit 1; }
+[ -f "$ROOT/docs-portal/build/index.html" ] \
+  || { echo "FATAL: docs-portal/build has no index.html — refusing to ship a documentation portal with no entry point" >&2; exit 1; }
+echo "-- copying the offline documentation portal"
+rm -rf "$BUNDLE_DIR/docs"
+cp -a "$ROOT/docs-portal/build" "$BUNDLE_DIR/docs"
+
 write_licenses
 # The GPL/LGPL corresponding source ships in the SAME hand-over as the binaries
 # it belongs to (GPL-2.0 §3a) — see write_source_offer() above. It is mirrored
@@ -931,7 +1163,17 @@ fi
 # It also covers ./source-offer/* (licence audit D2): the mirrored GPL/LGPL
 # corresponding source is a compliance artifact, and a customer must be able to
 # prove the tarball they received is the one we measured.
-(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md LICENSE NOTICE ./LICENSES/*.txt MANIFEST install-correlix.sh prepare-host.sh correlix-setup correlix-debug correlix-licence ./source-offer/* > SHA256SUMS)
+# ./*.txt covers README.txt and SUPPORT.txt.
+(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md ./*.txt LICENSE NOTICE ./LICENSES/*.txt MANIFEST install-correlix.sh prepare-host.sh correlix-setup correlix-debug correlix-licence ./source-offer/* > SHA256SUMS)
+# The documentation portal is a TREE, so it is appended rather than globbed: a
+# documentation set the customer cannot verify is one an attacker can edit, and
+# the offline portal is what a customer reads when the product will not start.
+(cd "$BUNDLE_DIR" && find ./docs -type f -print0 | sort -z | xargs -0 sha256sum >> SHA256SUMS)
+
+# CHECKSUMS.sha256 is the name a customer looks for; SHA256SUMS is the name the
+# installer and every existing runbook use. A symlink gives both without a
+# second file that can drift from the first.
+ln -sfn SHA256SUMS "$BUNDLE_DIR/CHECKSUMS.sha256"
 
 if [ -n "$SIGNING_FPR" ]; then
   gpg --batch --yes --local-user "$SIGNING_FPR" --armor \

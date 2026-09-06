@@ -8,11 +8,16 @@
 // never re-implements install logic, so CLI and GUI can't drift apart.
 //
 // Zero-trust posture (§3/§8/§15 + design gui-installer-2026-08.md §5):
-//   - TLS always: a self-signed ECDSA P-256 certificate is minted in memory at
-//     launch; its SHA-256 fingerprint is printed under the URLs so the operator
-//     can pin it in the browser (H1).
-//   - Binds 127.0.0.1 by default; --remote opts into 0.0.0.0 for headless
-//     appliances set up from a laptop on the LAN (H1).
+//   - TLS by default: a self-signed ECDSA P-256 certificate is minted in memory
+//     at launch, valid for localhost, this host's name and every management
+//     IPv4 it has; its SHA-256 fingerprint is printed under the URL so the
+//     operator can pin it in the browser (H1). --http is an explicit, loudly
+//     warned cleartext opt-out that also drops the cookie's Secure attribute
+//     and leaves the sudo route refusing (H3).
+//   - Binds 127.0.0.1 by default; --addr <mgmt-ip>:8800 binds one chosen
+//     management address (what install-correlix.sh does after asking), and
+//     --remote opts into 0.0.0.0 for headless appliances set up from a laptop
+//     on the LAN (H1). --list-ips prints the candidates the shell offers.
 //   - Every request must carry a one-time session token (printed at launch);
 //     the token is exchanged exactly once for an HttpOnly Secure session
 //     cookie. A second token exchange while a session lives is refused (H2),
@@ -227,6 +232,13 @@ type server struct {
 	shutdownFn func(reason string)                     // auto-stop action
 	setupPort  int
 
+	// secureCookie stamps the Secure attribute on the session cookie. TRUE in
+	// every default deployment (the server serves TLS). It is turned off ONLY
+	// by the explicit --http opt-out, because a Secure cookie is never sent
+	// back over cleartext and the operator who chose --http would otherwise
+	// get a wizard that silently cannot hold a session.
+	secureCookie bool
+
 	sessMu   sync.Mutex
 	sessID   string
 	sessLast time.Time
@@ -245,6 +257,9 @@ func newServer(bundle, token string, run runner) *server {
 		now:       time.Now,
 		afterFunc: time.AfterFunc,
 		setupPort: 8800,
+		// TLS is the default and the only supported posture; --http flips this
+		// off explicitly in main().
+		secureCookie: true,
 	}
 	s.probePort = func(port int) bool {
 		ln, err := net.Listen("tcp", net.JoinHostPort("", strconv.Itoa(port)))
@@ -556,6 +571,8 @@ type Profile struct {
 	Version          int            `json:"version"`
 	Port             int            `json:"port"`
 	TLS              string         `json:"tls"`
+	AdminUser        string         `json:"admin_user,omitempty"`
+	StoreBackend     string         `json:"store_backend,omitempty"`
 	RetentionProfile string         `json:"retention_profile,omitempty"`
 	Addons           []string       `json:"addons,omitempty"`
 	ExternalKafka    *ExternalKafka `json:"external_kafka,omitempty"`
@@ -580,6 +597,14 @@ var (
 	retentionProfiles = map[string]bool{"lab": true, "demo": true, "production": true, "extended": true}
 	sizingProfiles    = map[string]bool{"auto": true, "demo": true, "small": true, "medium": true, "large": true}
 	knownAddons       = map[string]bool{"log-search-ui": true, "self-monitoring": true, "netbox": true, "sso": true}
+	// The application-state backend. PostgreSQL is the default for every fresh
+	// install (tracker 245); "file" is the explicit compatibility choice. There
+	// is deliberately no "memory" option here — it is never a shipped install.
+	storeBackends = map[string]bool{"postgres": true, "file": true}
+	// The initial Correlix administrator login. Deliberately narrow: it becomes
+	// ADMIN_USERNAME in .env, so it must be a plain identifier with no shell,
+	// dotenv or LDAP-ish punctuation in it.
+	adminUserRE = regexp.MustCompile(`^[a-z][a-z0-9._-]{2,31}$`)
 )
 
 // decodeProfile parses and validates a Profile fail-closed: unknown fields are
@@ -605,6 +630,12 @@ func validateProfile(p *Profile) error {
 	}
 	if p.TLS != "yes" && p.TLS != "no" {
 		return fmt.Errorf(`tls: must be "yes" or "no"`)
+	}
+	if p.AdminUser != "" && !adminUserRE.MatchString(p.AdminUser) {
+		return fmt.Errorf("admin_user: 3-32 characters, lowercase letter first, then letters, digits, dot, dash or underscore")
+	}
+	if p.StoreBackend != "" && !storeBackends[p.StoreBackend] {
+		return fmt.Errorf("store_backend: must be postgres (default) or file")
 	}
 	if p.RetentionProfile != "" && !retentionProfiles[p.RetentionProfile] {
 		return fmt.Errorf("retention_profile: must be one of lab, demo, production, extended")
@@ -1694,9 +1725,14 @@ func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if cookie != "" {
+			// #nosec G124 — Secure is a variable, not a weakened default. It is
+			// TRUE in every default deployment (this server serves TLS) and is
+			// set false ONLY by the explicit, twice-warned --http opt-out, where
+			// a Secure cookie would never be sent back and the wizard could not
+			// hold a session at all. HttpOnly and SameSite=Strict are constant.
 			http.SetCookie(w, &http.Cookie{
 				Name: "cx_setup", Value: cookie, Path: "/",
-				HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
+				HttpOnly: true, Secure: s.secureCookie, SameSite: http.SameSiteStrictMode,
 			})
 		}
 		next(w, r)
@@ -1819,27 +1855,81 @@ func listenAddr(addrFlag string, remote bool) string {
 	return net.JoinHostPort(host, port)
 }
 
-// lanIP returns the host's first non-loopback IPv4 address ("" if none).
-func lanIP() string {
-	addrs, err := net.InterfaceAddrs()
+// hostAddr is one candidate management address: the interface it lives on and
+// its IPv4. Order is the kernel's interface order, so the first entry is the
+// stable "primary NIC" default the installer offers.
+type hostAddr struct {
+	Iface string
+	IP    string
+}
+
+// hostIPv4s lists every non-loopback, up, IPv4 address on this host. It is the
+// single source of the management-address list: install-correlix.sh asks for it
+// with --list-ips instead of parsing `ip addr` (which is not guaranteed to be
+// on a minimal appliance PATH), and mintCert uses it for the certificate SANs
+// so the certificate is valid for whichever address the operator picks.
+func hostIPv4s() []hostAddr {
+	ifaces, err := net.Interfaces()
 	if err != nil {
-		return ""
+		return nil
 	}
-	for _, a := range addrs {
-		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() {
-			if v4 := ipn.IP.To4(); v4 != nil {
-				return v4.String()
+	var out []hostAddr
+	for _, in := range ifaces {
+		if in.Flags&net.FlagUp == 0 || in.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := in.Addrs()
+		if err != nil {
+			continue // this NIC is unreadable; the others still count
+		}
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
 			}
+			v4 := ipn.IP.To4()
+			if v4 == nil || ipn.IP.IsLoopback() || ipn.IP.IsLinkLocalUnicast() {
+				continue
+			}
+			out = append(out, hostAddr{Iface: in.Name, IP: v4.String()})
 		}
 	}
+	return out
+}
+
+// lanIP returns the host's first non-loopback IPv4 address ("" if none).
+func lanIP() string {
+	if a := hostIPv4s(); len(a) > 0 {
+		return a[0].IP
+	}
 	return ""
+}
+
+// printIPs writes the management-address candidates as TAB-separated
+// "iface<TAB>ip" lines for install-correlix.sh to read. Machine-readable on
+// purpose: the shell must never have to parse human prose.
+func printIPs(w io.Writer) {
+	for _, a := range hostIPv4s() {
+		fmt.Fprintf(w, "%s\t%s\n", a.Iface, a.IP)
+	}
 }
 
 func main() {
 	addr := flag.String("addr", ":8800", "listen address (host defaults to 127.0.0.1 unless --remote)")
 	remote := flag.Bool("remote", false, "bind all interfaces (0.0.0.0) so setup can be driven from another machine")
 	bundle := flag.String("bundle", ".", "bundle directory (holds prepare-host.sh / install-correlix.sh)")
+	// HTTPS is the default and needs no flag. --http is the explicit, warned
+	// opt-out for an operator who cannot get past a browser's self-signed
+	// warning; it downgrades the session cookie and leaves the sudo-password
+	// route refusing (apiPrepare is TLS-only by contract, H3).
+	plain := flag.Bool("http", false, "serve cleartext HTTP instead of HTTPS (NOT recommended — the setup session is unencrypted)")
+	listIPs := flag.Bool("list-ips", false, "print this host's management address candidates (iface<TAB>ip) and exit")
 	flag.Parse()
+
+	if *listIPs {
+		printIPs(os.Stdout)
+		return
+	}
 
 	if abs, err := filepath.Abs(*bundle); err == nil {
 		*bundle = abs // so the UI shows the real bundle name, not "."
@@ -1868,17 +1958,22 @@ func main() {
 	if err != nil {
 		host = ""
 	}
+	bindHost, _, _ := net.SplitHostPort(la)
 	lan := lanIP()
+	// The certificate has to be valid for whatever address the operator opened
+	// in the browser, so it carries localhost, the hostname, the address we are
+	// actually bound to, and every management IPv4 on this host. Minting for
+	// only one of them is how "you picked eth1, the certificate says eth0"
+	// happens.
 	sans := []string{"localhost", "127.0.0.1"}
 	if host != "" {
 		sans = append(sans, host)
 	}
-	if *remote && lan != "" {
-		sans = append(sans, lan)
+	if bindHost != "" && bindHost != "0.0.0.0" {
+		sans = append(sans, bindHost)
 	}
-	cert, fp, err := mintCert(sans, time.Now())
-	if err != nil {
-		log.Fatalf("could not mint the setup TLS certificate: %v", err)
+	for _, a := range hostIPv4s() {
+		sans = append(sans, a.IP)
 	}
 
 	done := make(chan struct{})
@@ -1890,26 +1985,58 @@ func main() {
 		})
 	}
 
+	scheme := "https"
+	var cert tls.Certificate
+	fp := ""
+	if *plain {
+		// Explicit, warned opt-out. The wizard still demands the one-time
+		// token, but the token, the session cookie and every answer now cross
+		// the network in the clear.
+		scheme = "http"
+		s.secureCookie = false
+	} else {
+		cert, fp, err = mintCert(sans, time.Now())
+		if err != nil {
+			log.Fatalf("could not mint the setup TLS certificate: %v", err)
+		}
+	}
+
 	srv := &http.Server{
 		Addr:              la,
 		Handler:           s.handler(),
-		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 		ReadHeaderTimeout: 10 * time.Second, // §9: bound header IO (slowloris)
+	}
+	if !*plain {
+		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	}
 	ln, err := net.Listen("tcp", la)
 	if err != nil {
 		log.Fatalf("cannot listen on %s: %v", la, err)
 	}
 
-	fmt.Printf("\n  Correlix Setup is running (TLS).\n\n")
-	if *remote {
-		where := firstNonEmpty(lan, host, "0.0.0.0")
-		fmt.Printf("  Open from your laptop:    https://%s/?t=%s\n", net.JoinHostPort(where, portStr), token)
-	} else {
-		fmt.Printf("  Open from this machine:   https://localhost:%s/?t=%s\n", portStr, token)
+	where := "localhost"
+	switch {
+	case bindHost != "" && bindHost != "0.0.0.0":
+		where = bindHost
+	case *remote:
+		where = firstNonEmpty(lan, host, "0.0.0.0")
 	}
-	fmt.Printf("\n  Certificate SHA-256 fingerprint (compare in the browser's warning screen):\n    %s\n\n", fp)
-	fmt.Printf("  (The link contains a one-time access token — treat it like a password.)\n\n")
+	if *plain {
+		fmt.Printf("\n  ############################################################\n")
+		fmt.Printf("  #  WARNING: Correlix Setup is running WITHOUT encryption.  #\n")
+		fmt.Printf("  #  The access token and every answer you type cross the    #\n")
+		fmt.Printf("  #  network in clear text. Use this only on a trusted,      #\n")
+		fmt.Printf("  #  isolated management network, and prefer HTTPS.          #\n")
+		fmt.Printf("  #  Host preparation (the sudo step) stays DISABLED here.   #\n")
+		fmt.Printf("  ############################################################\n\n")
+	} else {
+		fmt.Printf("\n  Correlix Setup is running (TLS).\n\n")
+	}
+	fmt.Printf("  Open in your browser:     %s://%s/?t=%s\n", scheme, net.JoinHostPort(where, portStr), token)
+	if !*plain {
+		fmt.Printf("\n  Certificate SHA-256 fingerprint (compare in the browser's warning screen):\n    %s\n", fp)
+	}
+	fmt.Printf("\n  (The link contains a one-time access token — treat it like a password.)\n\n")
 
 	go func() {
 		<-done
@@ -1917,7 +2044,12 @@ func main() {
 		defer cancel()
 		_ = srv.Shutdown(ctx) // best-effort drain — the process is exiting either way
 	}()
-	if err := srv.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
+	if *plain {
+		err = srv.Serve(ln)
+	} else {
+		err = srv.ServeTLS(ln, "", "")
+	}
+	if err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

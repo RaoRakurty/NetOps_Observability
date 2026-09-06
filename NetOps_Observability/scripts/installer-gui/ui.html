@@ -2,154 +2,238 @@
 <!-- Correlix Setup — wizard UI. Single file, inline everything: the appliance
      host is offline by design (no CDNs, no webfonts, no frameworks).
      Served by main.go via go:embed; talks only to the same-origin API defined
-     in the setup server. Visual language: matte instrument panel — monospace
-     voice, hairline rules, one accent. -->
+     in the setup server. Visual language: GLASS — a dark aurora ground,
+     frosted translucent panels, hairline luminous borders, one restrained
+     accent, no logos. Everything (gradients, blur, type stack) is native CSS
+     so the page still renders on an air-gapped appliance. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Correlix Setup</title>
 <style>
+  /* ---------------------------------------------------------------------
+     Correlix Setup — glass. A dark aurora ground, frosted translucent
+     panels, hairline luminous borders, one restrained accent. No logos,
+     no webfonts, no network: every pixel is in this file (the appliance
+     host is offline by design).
+     Class names are unchanged from the previous stylesheet on purpose —
+     this is a skin, not a rewrite, so the wizard's DOM and JS are untouched.
+     --------------------------------------------------------------------- */
   :root{
-    --bg:#0a0c0f; --panel:#0f1216; --panel2:#12161b;
-    --line:#232a33; --line2:#2e3945;
-    --ink:#e7ebef; --mut:#97a2af; --dim:#5c6773;
-    --acc:#4dd6e8; --acc-ink:#06171b;
-    --ok:#46d6a0; --warn:#e5b34a; --bad:#f0716b;
+    --ink:#eaf2f7; --mut:#9fb1c1; --dim:#66788a;
+    --acc:#6fe3f2; --acc-ink:#04191f; --acc-soft:rgba(111,227,242,.16);
+    --ok:#5fe3b0; --warn:#f0c96a; --bad:#ff8a84;
+
+    /* glass tokens */
+    --glass:rgba(255,255,255,.045);
+    --glass-2:rgba(255,255,255,.075);
+    --edge:rgba(255,255,255,.10);
+    --edge-lit:rgba(111,227,242,.34);
+    --shadow:0 18px 50px rgba(0,0,0,.45);
+    --r:16px;
+
     --mono:ui-monospace,"Cascadia Code","JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html{-webkit-text-size-adjust:100%}
   body{
-    background:var(--bg); color:var(--ink);
-    font:13px/1.6 var(--mono);
-    min-height:100vh;
+    min-height:100vh; color:var(--ink);
+    font:14px/1.65 var(--sans);
+    background:
+      radial-gradient(1100px 700px at 12% -10%, rgba(60,150,220,.30), transparent 60%),
+      radial-gradient(900px 620px at 92% 6%,  rgba(111,227,242,.20), transparent 62%),
+      radial-gradient(1000px 800px at 60% 108%, rgba(120,86,220,.24), transparent 60%),
+      linear-gradient(180deg,#070b12 0%,#080d16 45%,#060911 100%);
+    background-attachment:fixed;
   }
-  ::selection{background:rgba(77,214,232,.25)}
+  /* a faint moving sheen — the only motion on the page */
+  body::before{
+    content:"";position:fixed;inset:-30vh -30vw;pointer-events:none;z-index:0;
+    background:radial-gradient(closest-side, rgba(111,227,242,.10), transparent 70%);
+    animation:drift 26s ease-in-out infinite alternate;
+  }
+  @keyframes drift{from{transform:translate3d(-6vw,-4vh,0)}to{transform:translate3d(8vw,6vh,0)}}
+  @media (prefers-reduced-motion:reduce){body::before{animation:none}}
+  ::selection{background:rgba(111,227,242,.28)}
 
   /* ---------- header ---------- */
   .hd{
+    position:relative;z-index:1;
     display:flex;align-items:baseline;gap:18px;flex-wrap:wrap;
-    padding:20px 28px 16px;border-bottom:1px solid var(--line);
+    padding:22px 32px 18px;
+    border-bottom:1px solid var(--edge);
+    background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0));
+    backdrop-filter:blur(14px) saturate(140%);
+    -webkit-backdrop-filter:blur(14px) saturate(140%);
   }
-  .mark{font-size:15px;font-weight:700;letter-spacing:.34em}
-  .mark b{color:var(--acc);font-weight:700}
-  .mark span{color:var(--dim);letter-spacing:.34em}
-  .hd .meta{margin-left:auto;color:var(--dim);font-size:11px;letter-spacing:.08em;display:flex;gap:22px}
+  .mark{font:600 15px/1 var(--mono);letter-spacing:.34em;color:var(--ink)}
+  .mark b{color:var(--acc);font-weight:700;text-shadow:0 0 18px rgba(111,227,242,.6)}
+  .mark span{color:var(--dim);letter-spacing:.34em;font-weight:400}
+  .hd .meta{margin-left:auto;color:var(--dim);font:11px var(--mono);letter-spacing:.08em;display:flex;gap:20px;flex-wrap:wrap}
   .hd .meta b{color:var(--mut);font-weight:400}
 
   /* ---------- shell ---------- */
-  .shell{display:grid;grid-template-columns:224px 1fr;min-height:calc(100vh - 62px)}
-  @media (max-width:780px){.shell{grid-template-columns:1fr}.rail{display:flex;overflow-x:auto;border-right:none;border-bottom:1px solid var(--line)}}
+  .shell{position:relative;z-index:1;display:grid;grid-template-columns:250px 1fr;gap:22px;padding:22px 32px 32px;align-items:start}
+  @media (max-width:820px){.shell{grid-template-columns:1fr;padding:16px}}
 
-  .rail{border-right:1px solid var(--line);padding:26px 0}
+  .rail{
+    padding:18px 10px;border-radius:var(--r);
+    background:var(--glass);border:1px solid var(--edge);
+    box-shadow:var(--shadow);
+    backdrop-filter:blur(22px) saturate(150%);
+    -webkit-backdrop-filter:blur(22px) saturate(150%);
+    position:sticky;top:22px;
+  }
+  @media (max-width:820px){.rail{position:static;display:flex;overflow-x:auto;padding:10px}}
+  .rail .cap{font:10px var(--mono);letter-spacing:.28em;color:var(--dim);padding:2px 16px 12px}
+  @media (max-width:820px){.rail .cap{display:none}}
   .rs{
-    display:flex;gap:14px;align-items:baseline;width:100%;text-align:left;
-    background:none;border:none;border-left:2px solid transparent;
-    color:var(--dim);font:inherit;font-size:12px;letter-spacing:.10em;
-    padding:10px 24px;cursor:pointer;white-space:nowrap;
+    display:flex;gap:12px;align-items:baseline;width:100%;text-align:left;
+    background:none;border:1px solid transparent;border-radius:10px;
+    color:var(--dim);font:12px var(--mono);letter-spacing:.10em;
+    padding:10px 14px;cursor:pointer;white-space:nowrap;
+    transition:background .18s,color .18s,border-color .18s;
   }
   .rs em{font-style:normal;font-size:11px;color:var(--dim);min-width:20px}
-  .rs:hover{color:var(--mut)}
-  .rs:focus-visible{outline:1px solid var(--acc);outline-offset:-1px}
-  .rs[aria-current="step"]{color:var(--ink);border-left-color:var(--acc)}
+  .rs:hover{color:var(--mut);background:rgba(255,255,255,.04)}
+  .rs:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+  .rs[aria-current="step"]{
+    color:var(--ink);background:var(--acc-soft);border-color:var(--edge-lit);
+    box-shadow:0 0 22px rgba(111,227,242,.18) inset;
+  }
   .rs[aria-current="step"] em{color:var(--acc)}
   .rs.done em{color:var(--ok)}
-  .rs:disabled{opacity:.45;cursor:default}
-  .rail .cap{font-size:10px;letter-spacing:.28em;color:var(--dim);padding:0 24px 14px}
+  .rs:disabled{opacity:.42;cursor:default}
+  @media (prefers-reduced-motion:reduce){.rs{transition:none}}
 
-  /* ---------- stage ---------- */
-  .stage{display:none;padding:30px 40px 26px;max-width:860px;flex-direction:column}
+  /* ---------- stage (the frosted card) ---------- */
+  .stage{
+    display:none;flex-direction:column;max-width:900px;
+    padding:32px 36px 28px;border-radius:var(--r);
+    background:linear-gradient(180deg,var(--glass-2),var(--glass));
+    border:1px solid var(--edge);
+    box-shadow:var(--shadow);
+    backdrop-filter:blur(26px) saturate(150%);
+    -webkit-backdrop-filter:blur(26px) saturate(150%);
+  }
   .stage.on{display:flex}
-  .crumb{font-size:10px;letter-spacing:.28em;color:var(--acc);margin-bottom:10px}
-  h1{font-size:19px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
-  .lede{color:var(--mut);max-width:66ch;margin-bottom:22px}
+  .crumb{font:10px var(--mono);letter-spacing:.28em;color:var(--acc);margin-bottom:10px}
+  h1{font:600 24px/1.25 var(--sans);letter-spacing:-.01em;margin-bottom:8px}
+  .lede{color:var(--mut);max-width:66ch;margin-bottom:24px}
 
-  .sect{border-top:1px solid var(--line);padding:16px 0 6px;margin-bottom:10px}
-  .sect > .cap{font-size:10px;letter-spacing:.24em;color:var(--dim);margin-bottom:12px}
+  .sect{border-top:1px solid var(--edge);padding:18px 0 6px;margin-bottom:10px}
+  .sect > .cap{font:10px var(--mono);letter-spacing:.24em;color:var(--dim);margin-bottom:12px}
 
   .facts{display:grid;grid-template-columns:1fr 1fr;gap:2px 40px}
-  @media (max-width:680px){.facts{grid-template-columns:1fr}}
-  .f{display:flex;gap:12px;align-items:baseline;padding:4px 0}
+  @media (max-width:700px){.facts{grid-template-columns:1fr}}
+  .f{display:flex;gap:12px;align-items:baseline;padding:5px 0}
   .f .s{min-width:14px;font-weight:700}
   .s.ok{color:var(--ok)} .s.warn{color:var(--warn)} .s.bad{color:var(--bad)} .s.dim{color:var(--dim)}
-  .f small{margin-left:auto;color:var(--dim);font-size:11px;white-space:nowrap;padding-left:12px}
+  .f small{margin-left:auto;color:var(--dim);font:11px var(--mono);white-space:nowrap;padding-left:12px}
 
-  .tag{font-size:9.5px;letter-spacing:.16em;padding:2px 7px;border:1px solid var(--line2);color:var(--mut);margin-left:10px;vertical-align:1px}
-  .tag.rec{color:var(--acc);border-color:rgba(77,214,232,.4)}
+  .tag{
+    font:9.5px var(--mono);letter-spacing:.16em;padding:3px 8px;border-radius:999px;
+    border:1px solid var(--edge);color:var(--mut);margin-left:10px;vertical-align:1px;
+    background:rgba(255,255,255,.05);
+  }
+  .tag.rec{color:var(--acc);border-color:var(--edge-lit);background:var(--acc-soft)}
   .tag.det{color:var(--mut)}
-  .tag.adv{color:var(--warn);border-color:rgba(229,179,74,.4)}
+  .tag.adv{color:var(--warn);border-color:rgba(240,201,106,.4);background:rgba(240,201,106,.12)}
 
   /* options */
-  label.opt{display:flex;gap:12px;align-items:flex-start;padding:8px 10px;cursor:pointer;border:1px solid transparent}
-  label.opt:hover{border-color:var(--line)}
-  label.opt input{accent-color:var(--acc);margin-top:4px;width:13px;height:13px;flex:none}
-  label.opt input:focus-visible{outline:1px solid var(--acc);outline-offset:2px}
-  .opt b{font-weight:700;letter-spacing:.04em}
-  .opt .why{display:block;color:var(--dim);font-size:12px;max-width:60ch}
-
-  .field{margin:10px 0 6px}
-  .field label{display:block;font-size:10px;letter-spacing:.2em;color:var(--dim);margin-bottom:6px}
-  input[type=text],input[type=password]{
-    background:var(--panel);border:1px solid var(--line2);color:var(--ink);
-    font:13px var(--mono);padding:9px 12px;min-width:260px;border-radius:0;
+  label.opt{
+    display:flex;gap:13px;align-items:flex-start;padding:11px 13px;cursor:pointer;
+    border:1px solid transparent;border-radius:12px;transition:background .16s,border-color .16s;
   }
-  input[type=text]:focus,input[type=password]:focus{outline:1px solid var(--acc);outline-offset:-1px}
-  input::placeholder{color:var(--dim)}
-  select{background:var(--panel);border:1px solid var(--line2);color:var(--ink);font:13px var(--mono);padding:9px 12px;border-radius:0}
-  select:focus{outline:1px solid var(--acc);outline-offset:-1px}
+  label.opt:hover{border-color:var(--edge);background:rgba(255,255,255,.045)}
+  label.opt:has(input:checked){border-color:var(--edge-lit);background:var(--acc-soft)}
+  label.opt input{accent-color:var(--acc);margin-top:4px;width:14px;height:14px;flex:none}
+  label.opt input:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+  .opt b{font-weight:650;letter-spacing:.01em}
+  .opt .why{display:block;color:var(--dim);font-size:12.5px;max-width:62ch}
+  @media (prefers-reduced-motion:reduce){label.opt{transition:none}}
 
-  table{border-collapse:collapse;width:100%;font-size:12.5px}
-  th{font-size:10px;letter-spacing:.2em;color:var(--dim);text-align:left;font-weight:400;padding:4px 12px 8px 0;border-bottom:1px solid var(--line)}
-  td{padding:6px 12px 6px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+  .field{margin:12px 0 6px}
+  .field label{display:block;font:10px var(--mono);letter-spacing:.2em;color:var(--dim);margin-bottom:7px}
+  input[type=text],input[type=password],select{
+    background:rgba(8,14,22,.55);border:1px solid var(--edge);color:var(--ink);
+    font:13px var(--mono);padding:10px 13px;min-width:260px;border-radius:10px;
+    backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  }
+  select{min-width:220px}
+  input[type=text]:focus,input[type=password]:focus,select:focus{
+    outline:none;border-color:var(--edge-lit);box-shadow:0 0 0 3px var(--acc-soft);
+  }
+  input::placeholder{color:var(--dim)}
+
+  table{border-collapse:collapse;width:100%;font:12.5px var(--mono)}
+  th{font-size:10px;letter-spacing:.2em;color:var(--dim);text-align:left;font-weight:400;padding:4px 12px 8px 0;border-bottom:1px solid var(--edge)}
+  td{padding:7px 12px 7px 0;border-bottom:1px solid rgba(255,255,255,.06);font-variant-numeric:tabular-nums}
   td.n{text-align:right}
   .scroll{overflow-x:auto}
 
   /* progress */
-  .ps{display:flex;gap:14px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--panel2)}
+  .ps{display:flex;gap:14px;align-items:baseline;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06)}
   .ps .s{min-width:14px;font-weight:700}
   .ps.todo{color:var(--dim)}
   .ps.run{color:var(--ink)}
   .ps.run .s{color:var(--acc)}
   .ps .msg{color:var(--bad);font-size:12px;display:block}
-  .meter{height:2px;background:var(--line);margin:18px 0 8px}
-  .meter i{display:block;height:100%;background:var(--acc);width:0;transition:width .6s}
+  .meter{height:4px;border-radius:999px;background:rgba(255,255,255,.08);margin:20px 0 8px;overflow:hidden}
+  .meter i{
+    display:block;height:100%;width:0;border-radius:999px;
+    background:linear-gradient(90deg,rgba(111,227,242,.7),var(--acc));
+    box-shadow:0 0 18px rgba(111,227,242,.55);transition:width .6s;
+  }
   @media (prefers-reduced-motion:reduce){.meter i{transition:none}}
-  .pct{text-align:right;color:var(--dim);font-size:11px;letter-spacing:.12em}
+  .pct{text-align:right;color:var(--dim);font:11px var(--mono);letter-spacing:.12em}
 
-  .note{border:1px solid var(--line2);border-left:2px solid var(--acc);padding:14px 18px;margin-top:16px;background:var(--panel)}
+  .note{
+    border:1px solid var(--edge);border-left:2px solid var(--acc);border-radius:12px;
+    padding:15px 19px;margin-top:18px;background:rgba(255,255,255,.05);
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  }
   .note.warn{border-left-color:var(--warn)}
   .note.bad{border-left-color:var(--bad)}
   .note.ok{border-left-color:var(--ok)}
-  .note h3{font-size:12px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px}
-  .note p{color:var(--mut);font-size:12.5px;max-width:66ch}
+  .note h3{font:600 12px var(--mono);letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px}
+  .note p{color:var(--mut);font-size:13px;max-width:66ch}
 
   pre.log{
-    background:#07090b;border:1px solid var(--line);padding:12px 14px;
-    font:11.5px/1.5 var(--mono);color:var(--mut);max-height:260px;overflow:auto;
-    white-space:pre-wrap;word-break:break-all;margin-top:12px;
+    background:rgba(4,8,13,.66);border:1px solid var(--edge);border-radius:12px;
+    padding:13px 15px;font:11.5px/1.55 var(--mono);color:var(--mut);
+    max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:14px;
   }
-  .kv{display:grid;grid-template-columns:170px 1fr;gap:5px 20px;font-size:12.5px}
+  .kv{display:grid;grid-template-columns:180px 1fr;gap:6px 20px;font:12.5px var(--mono)}
   .kv dt{color:var(--dim);letter-spacing:.06em} .kv dd{color:var(--ink)}
-  .url{font-size:15px;color:var(--acc);letter-spacing:.03em;word-break:break-all}
+  .url{font:16px var(--mono);color:var(--acc);letter-spacing:.02em;word-break:break-all;text-shadow:0 0 22px rgba(111,227,242,.45)}
 
   /* buttons */
-  .btns{margin-top:auto;padding-top:26px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .btns{margin-top:auto;padding-top:28px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
   .btn{
-    border:1px solid var(--line2);background:none;color:var(--ink);
-    font:700 11px var(--mono);letter-spacing:.18em;text-transform:uppercase;
-    padding:12px 20px;cursor:pointer;border-radius:0;
+    border:1px solid var(--edge);border-radius:11px;
+    background:rgba(255,255,255,.06);color:var(--ink);
+    font:650 11px var(--mono);letter-spacing:.18em;text-transform:uppercase;
+    padding:12px 22px;cursor:pointer;
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    transition:border-color .16s,background .16s,box-shadow .16s;
   }
-  .btn:hover{border-color:var(--mut)}
-  .btn:focus-visible{outline:1px solid var(--acc);outline-offset:2px}
-  .btn:disabled{opacity:.4;cursor:default}
-  .btn.pri{background:var(--acc);border-color:var(--acc);color:var(--acc-ink)}
-  .btn.pri:hover{filter:brightness(1.1)}
-  .btn.ghost{border-color:transparent;color:var(--dim)}
-  .btn.ghost:hover{color:var(--mut)}
+  .btn:hover{border-color:var(--edge-lit);background:rgba(255,255,255,.10)}
+  .btn:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+  .btn:disabled{opacity:.38;cursor:default}
+  .btn.pri{
+    background:linear-gradient(180deg,#8ef0fb,var(--acc));border-color:rgba(111,227,242,.6);
+    color:var(--acc-ink);box-shadow:0 8px 26px rgba(111,227,242,.28);
+  }
+  .btn.pri:hover{filter:brightness(1.06);box-shadow:0 10px 32px rgba(111,227,242,.4)}
+  .btn.ghost{border-color:transparent;background:none;color:var(--dim)}
+  .btn.ghost:hover{color:var(--mut);background:rgba(255,255,255,.05)}
+  @media (prefers-reduced-motion:reduce){.btn{transition:none}}
   .spacer{flex:1}
-  .hint{color:var(--dim);font-size:11px;letter-spacing:.06em}
-  .err{color:var(--bad);font-size:12px;margin-top:8px;min-height:1em}
+  .hint{color:var(--dim);font:11px var(--mono);letter-spacing:.06em}
+  .err{color:var(--bad);font-size:12.5px;margin-top:8px;min-height:1em}
 </style>
 </head>
 <body>
@@ -170,7 +254,7 @@
       <button class="rs" data-s="deploy"  ><em>03</em> DEPLOYMENT</button>
       <button class="rs" data-s="disc"    ><em>04</em> DISCOVERY</button>
       <button class="rs" data-s="size"    ><em>05</em> SIZING</button>
-      <button class="rs" data-s="sec"     ><em>06</em> SECURITY</button>
+      <button class="rs" data-s="sec"     ><em>06</em> SETTINGS</button>
       <button class="rs" data-s="review"  ><em>07</em> REVIEW</button>
       <button class="rs" data-s="install" disabled><em>08</em> INSTALL</button>
     </nav>
@@ -332,10 +416,10 @@
     </section>
 
     <!-- 06 SECURITY -->
-    <section class="stage" id="st-sec" aria-label="Security">
+    <section class="stage" id="st-sec" aria-label="Settings">
       <div class="crumb">06 / CONFIGURATION</div>
-      <h1>Security</h1>
-      <p class="lede">Transport security is on by default. The full mesh means every internal hop — bus, stores, collectors — speaks mTLS, not just your browser.</p>
+      <h1>Settings</h1>
+      <p class="lede">Transport, the administrator account, where Correlix keeps its own records, and the URL you will sign in at. Every default here is the recommended one.</p>
       <div class="sect"><div class="cap">TRANSPORT</div>
         <label class="opt"><input type="radio" name="tls" value="yes" checked>
           <span><b>Full TLS/mTLS mesh</b><span class="tag rec">RECOMMENDED</span>
@@ -345,8 +429,28 @@
           <span class="why">Every hop unencrypted. Never expose this to a real network.</span></span></label>
       </div>
       <div class="sect"><div class="cap">CORRELIX ADMINISTRATOR</div>
-        <div class="f"><span class="s ok">✓</span> User <b>&nbsp;admin&nbsp;</b> is created on first boot <small>password generated · shown once at the end</small></div>
-        <div class="f"><span class="s ok">✓</span> This is a Correlix login, not an OS account <small>no root password is ever asked</small></div>
+        <div class="field">
+          <label for="admin-user">ADMINISTRATOR USERNAME</label>
+          <input type="text" id="admin-user" value="admin" autocomplete="off" spellcheck="false">
+          <div class="hint">3–32 characters. Lowercase letter first, then letters, digits, dot, dash, underscore.</div>
+          <div class="err" id="sec-err"></div>
+        </div>
+        <div class="f"><span class="s ok">✓</span> Password is generated on this host <small>16 characters · shown once at the end</small></div>
+        <div class="f"><span class="s ok">✓</span> A Correlix login, not an OS account <small>no root password is ever asked</small></div>
+        <div class="f"><span class="s ok">✓</span> Change it in Settings after first sign-in <small>the generated one stops being the password</small></div>
+      </div>
+      <div class="sect"><div class="cap">APPLICATION STATE STORE</div>
+        <div class="field">
+          <label for="store">WHERE CORRELIX KEEPS ITS OWN RECORDS</label>
+          <select id="store">
+            <option value="postgres" selected>PostgreSQL — default</option>
+            <option value="file">Files — compatibility</option>
+          </select>
+          <div class="hint">PostgreSQL enforces tenant isolation in the database itself.</div>
+        </div>
+      </div>
+      <div class="sect"><div class="cap">MANAGEMENT URL</div>
+        <div class="f"><span class="s dim">→</span> <b id="mgmt-url">…</b> <small>where you sign in after the install</small></div>
       </div>
       <div class="btns">
         <button class="btn" data-back="size">Back</button>
@@ -487,6 +591,8 @@ document.querySelectorAll('.rs').forEach(r => r.addEventListener('click', () => 
 document.querySelectorAll('[data-next]').forEach(b => b.addEventListener('click', () => {
   if (b.dataset.next === 'disc' && !validateDeploy()) return;
   if (b.dataset.next === 'size' && !validateDiscovery()) return;
+  if (b.dataset.next === 'sec') refreshMgmtURL();
+  if (b.dataset.next === 'review' && !validateSecurity()) return;
   if (b.dataset.next === 'review') buildReview();
   show(b.dataset.next);
 }));
@@ -612,6 +718,28 @@ function validateDeploy() {
   $('deploy-err').textContent = ''; markDone('deploy'); return true;
 }
 
+/* ---------- 06 security / settings ---------- */
+/* The URL the operator will actually sign in at: this host, the chosen
+   dashboard port, and the scheme the transport choice implies. */
+function refreshMgmtURL() {
+  const port = parseInt($('port').value, 10);
+  const tls = document.querySelector('input[name=tls]:checked').value === 'yes';
+  const host = location.hostname || 'this-host';
+  $('mgmt-url').textContent = (tls ? 'https://' : 'http://') + host + ':' + (port >= 1 && port <= 65535 ? port : 8000);
+}
+document.querySelectorAll('input[name=tls]').forEach(r => r.addEventListener('change', refreshMgmtURL));
+/* Mirrors adminUserRE in main.go — the server re-validates, this is only so the
+   operator hears about it before the review screen. */
+const ADMIN_USER_RE = /^[a-z][a-z0-9._-]{2,31}$/;
+function validateSecurity() {
+  const u = $('admin-user').value.trim();
+  if (!ADMIN_USER_RE.test(u)) {
+    $('sec-err').textContent = 'Username must be 3\u201332 characters, starting with a lowercase letter.';
+    return false;
+  }
+  $('sec-err').textContent = ''; return true;
+}
+
 /* ---------- 04 discovery ---------- */
 $('disc-on').addEventListener('change', () => { $('f-cidrs').hidden = !$('disc-on').checked; scope(); });
 $('cidrs').addEventListener('input', scope);
@@ -658,7 +786,9 @@ function buildProfile() {
     external_kafka: preset === 'external-kafka' ? {broker_urls: $('brokers').value.trim()} : null,
     discovery: {enabled: $('disc-on').checked,
                 cidrs: $('disc-on').checked ? $('cidrs').value.split(',').map(s=>s.trim()).filter(Boolean) : []},
-    sizing: {profile: $('size-prof').value}
+    sizing: {profile: $('size-prof').value},
+    admin_user: $('admin-user').value.trim(),
+    store_backend: $('store').value
   };
 }
 function buildReview() {
@@ -672,6 +802,9 @@ function buildReview() {
     '<dt>Retention</dt><dd>'+esc(p.retention_profile)+'</dd>'+
     '<dt>Sizing</dt><dd>'+esc(p.sizing.profile)+(facts&&facts.sizing&&p.sizing.profile==='auto'?' → '+esc(facts.sizing.suggested_profile):'')+'</dd>'+
     '<dt>Transport</dt><dd>'+(p.tls==='yes'?'full mTLS mesh':'plaintext — lab only')+'</dd>'+
+    '<dt>Administrator</dt><dd>'+esc(p.admin_user)+' <span class="hint">password generated</span></dd>'+
+    '<dt>State store</dt><dd>'+(p.store_backend==='postgres'?'PostgreSQL (default)':'files (compatibility)')+'</dd>'+
+    '<dt>Sign-in URL</dt><dd>'+esc($('mgmt-url').textContent)+'</dd>'+
     '<dt>Source</dt><dd>'+esc($('m-bundle').textContent)+'</dd>';
 }
 function exportProfile() {
@@ -821,6 +954,7 @@ $('b-watchdog').addEventListener('click', async () => {
 /* ---------- boot ---------- */
 (async function boot(){
   show('ready');
+  refreshMgmtURL();
   await loadFacts();
   await runCheck();
 })();

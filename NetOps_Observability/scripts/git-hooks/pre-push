@@ -12,7 +12,9 @@ if echo "$changed" | grep -q 'NetOps_Observability/src/backend/.*\.go$'; then
 fi
 
 # #97 customer-bundle lockstep: WARN (never block) when the newest offline
-# bundle in dist/ lags the shippable code being pushed. Rebuild: make bundle
+# bundle in dist/ lags the shippable code being pushed. Rebuild:
+#   bash scripts/make-installer.sh   (`make bundle` wraps it; make is not
+#   installed on every build host, so the direct call is the reliable one)
 #
 # BOUNDED (2026-08-14, §16.3): the staleness check lists dist/ and walks git
 # history — a wedged mount or pathological rev-list once hung `git push`
@@ -24,9 +26,9 @@ if command -v timeout >/dev/null 2>&1; then
   staleness_rc=0
   timeout --kill-after=2 10 bash "$root/NetOps_Observability/scripts/bundle-staleness.sh" --quiet || staleness_rc=$?
   if [ "$staleness_rc" -eq 124 ] || [ "$staleness_rc" -eq 137 ]; then
-    echo "⚠⚠ pre-push: bundle-staleness check TIMED OUT after 10s — bundle freshness UNKNOWN; push continues. Investigate with: make bundle-status" >&2
+    echo "⚠⚠ pre-push: bundle-staleness check TIMED OUT after 10s — bundle freshness UNKNOWN; push continues. Investigate with: bash scripts/bundle-staleness.sh" >&2
   elif [ "$staleness_rc" -ne 0 ]; then
-    echo "⚠ pre-push: customer bundle is STALE (details above) — push continues; rebuild with 'make bundle'"
+    echo "⚠ pre-push: customer bundle is STALE (details above) — push continues; rebuild with 'bash scripts/make-installer.sh'"
   fi
 else
   # §16.2: never assume the tool; and never fall back to the unbounded call.

@@ -17,7 +17,9 @@
 # Exit codes: 0 fresh · 1 stale (or unverifiable stamp) · 2 no bundle / bad args
 #
 # Wired into: scripts/git-hooks/pre-push (warn-only, every push) and
-# `make bundle-status`. Rebuild with `make bundle` (full) / `make bundle-core`.
+# `make bundle-status`. Rebuild with `bash scripts/make-installer.sh` (full) or
+# `bash scripts/make-installer.sh --core` — the make targets wrap exactly those,
+# and make is not installed on every build host.
 
 set -euo pipefail
 
@@ -34,7 +36,7 @@ done
 
 newest="$(ls -1dt "$ROOT"/dist/correlix-*/MANIFEST 2>/dev/null | head -1 || true)"
 if [ -z "$newest" ]; then
-  echo "bundle-staleness: NO customer bundle found under $ROOT/dist — build one: make bundle" >&2
+  echo "bundle-staleness: NO customer bundle found under $ROOT/dist — build one: bash scripts/make-installer.sh" >&2
   exit 2
 fi
 bundle_name="$(basename "$(dirname "$newest")")"
@@ -43,7 +45,7 @@ built="$(sed -n 's/^built:[[:space:]]*//p' "$newest" | head -1)"
 head_sha="$(git -C "$ROOT" rev-parse --short HEAD)"
 
 if [ -z "$sha" ] || ! git -C "$ROOT" cat-file -e "${sha}^{commit}" 2>/dev/null; then
-  echo "bundle-staleness: newest bundle $bundle_name has an unverifiable git_sha ('${sha:-<missing>}') — rebuild: make bundle" >&2
+  echo "bundle-staleness: newest bundle $bundle_name has an unverifiable git_sha ('${sha:-<missing>}') — rebuild: bash scripts/make-installer.sh" >&2
   exit 1
 fi
 
@@ -64,7 +66,7 @@ fi
   echo "  newest bundle : $bundle_name  (git_sha $sha, built $built)"
   echo "  HEAD          : $head_sha"
   echo "  drift         : $behind shippable commit(s) ($total total) are NOT in the customer package"
-  echo "  rebuild       : make bundle        # full (base + add-on packs)"
-  echo "                  make bundle-core   # smallest eval bundle"
+  echo "  rebuild       : bash scripts/make-installer.sh          # full (base + add-on packs)"
+  echo "                  bash scripts/make-installer.sh --core   # smallest eval bundle"
 } >&2
 exit 1

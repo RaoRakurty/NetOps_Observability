@@ -6,10 +6,13 @@
 #
 #     ./install-correlix.sh
 #
-# In an interactive terminal with no arguments this opens the SETUP CONSOLE —
-# numbered menu navigation over every operation (prepare host, install,
-# health, logs, add-ons, stop/start, reset, uninstall). In a pipeline/script
-# it installs non-interactively. Explicit subcommands below always work.
+# In an interactive terminal with no arguments this asks ONE question first —
+# graphical installer or terminal? The graphical path serves the setup wizard
+# on a management address you pick, over HTTPS, behind a one-time token
+# (`gui`). The terminal path is the SETUP CONSOLE: numbered menu navigation
+# over every operation — prepare host, install, health, logs, add-ons,
+# stop/start, reset, uninstall (`console`). In a pipeline/script it installs
+# non-interactively. Explicit subcommands below always work.
 #
 # Everything under the hood (Apache Kafka event bus, Valkey cache, PostgreSQL,
 # OpenSearch, ClickHouse, VictoriaMetrics, the Correlix services) is embedded,
@@ -18,6 +21,8 @@
 #
 # Commands (no argument = install):
 #     ./install-correlix.sh install [--ui-port N] [--config profile.json]
+#     ./install-correlix.sh gui                 graphical installer (browser)
+#     ./install-correlix.sh console             terminal setup console
 #     ./install-correlix.sh status
 #     ./install-correlix.sh logs [service]
 #     ./install-correlix.sh stop
@@ -121,9 +126,9 @@ PRINT_FLAGS=0
 SB_ARGS=()
 if [ $# -gt 0 ]; then
   case "$1" in
-    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu|gui|support-bundle) CMD="$1"; shift ;;
+    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu|console|gui|support-bundle) CMD="$1"; shift ;;
     -*) : ;;  # bare options → install
-    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable support-bundle menu" ;;
+    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable support-bundle gui console menu" ;;
   esac
 elif [ -t 0 ] && [ -t 1 ]; then
   # No arguments in an interactive terminal → the setup console (menu
@@ -459,6 +464,7 @@ friendly_status() {
 # ever emits CFG_* lines whose values are restricted to shell-safe charsets.
 CFG_PORT="" CFG_TLS="" CFG_RETENTION="" CFG_ADDONS=""
 CFG_BROKER_URLS="" CFG_SNMP_CIDRS="" CFG_SIZING=""
+CFG_ADMIN_USER="" CFG_STORE_BACKEND=""
 CONFIG_ADDON_PROFILES=""
 
 load_config() {
@@ -479,8 +485,8 @@ except (OSError, ValueError) as e:
 if not isinstance(doc, dict):
     bad("top level must be a JSON object")
 
-ALLOWED = {"version", "port", "tls", "retention_profile", "addons",
-           "external_kafka", "discovery", "sizing"}
+ALLOWED = {"version", "port", "tls", "admin_user", "store_backend",
+           "retention_profile", "addons", "external_kafka", "discovery", "sizing"}
 unknown = sorted(set(doc) - ALLOWED)
 if unknown:
     bad("unknown top-level key(s): " + ", ".join(unknown))
@@ -494,6 +500,19 @@ if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535
 tls = doc.get("tls", "no")
 if tls not in ("yes", "no"):
     bad(f"\"tls\" must be \"yes\" or \"no\", got {tls!r}")
+
+# The initial Correlix administrator login. Narrow on purpose: it is written
+# verbatim into .env as ADMIN_USERNAME, so it must be a plain identifier.
+admin_user = doc.get("admin_user", "admin")
+if not isinstance(admin_user, str) or not re.fullmatch(r"[a-z][a-z0-9._-]{2,31}", admin_user):
+    bad(f"\"admin_user\" must be 3-32 chars, lowercase letter first, then letters/digits/._-, got {admin_user!r}")
+
+# Application-state backend. PostgreSQL is the default for fresh installs
+# (tracker 245); "file" is the explicit compatibility choice. "memory" is never
+# a shipped install and is not offered here.
+store_backend = doc.get("store_backend", "postgres")
+if store_backend not in ("postgres", "file"):
+    bad(f"\"store_backend\" must be postgres or file, got {store_backend!r}")
 
 retention = doc.get("retention_profile", "production")
 if retention not in ("lab", "demo", "production", "extended"):
@@ -545,6 +564,8 @@ print(f"CFG_ADDONS={','.join(addons)}")
 print(f"CFG_BROKER_URLS={broker}")
 print(f"CFG_SNMP_CIDRS={cidrs}")
 print(f"CFG_SIZING={sizing_profile}")
+print(f"CFG_ADMIN_USER={admin_user}")
+print(f"CFG_STORE_BACKEND={store_backend}")
 PYCFG
   ); then
     die "Invalid installation profile: $file" \
@@ -559,6 +580,8 @@ PYCFG
       CFG_BROKER_URLS=*) CFG_BROKER_URLS="${line#CFG_BROKER_URLS=}" ;;
       CFG_SNMP_CIDRS=*)  CFG_SNMP_CIDRS="${line#CFG_SNMP_CIDRS=}" ;;
       CFG_SIZING=*)      CFG_SIZING="${line#CFG_SIZING=}" ;;
+      CFG_ADMIN_USER=*)  CFG_ADMIN_USER="${line#CFG_ADMIN_USER=}" ;;
+      CFG_STORE_BACKEND=*) CFG_STORE_BACKEND="${line#CFG_STORE_BACKEND=}" ;;
       *) die "Unexpected config-parser output: $line" ;;
     esac
   done <<< "$out"
@@ -651,6 +674,11 @@ assemble_install_args() {
     fi
   fi
   if [ -n "$CONFIG_FILE" ]; then
+    # install.py owns .env authoring, so these two ride the environment rather
+    # than becoming flags: they are values it writes once into the template,
+    # not decisions it makes. Both are already validated above.
+    [ -n "$CFG_ADMIN_USER" ] && export CORRELIX_ADMIN_USERNAME="$CFG_ADMIN_USER"
+    [ -n "$CFG_STORE_BACKEND" ] && export CORRELIX_STORE_BACKEND="$CFG_STORE_BACKEND"
     INSTALL_ARGS+=(--tls "$CFG_TLS" --bootstrap-docker no)
     if [ -n "$CFG_SNMP_CIDRS" ]; then
       INSTALL_ARGS+=(--snmp-discovery "$CFG_SNMP_CIDRS")
@@ -913,13 +941,126 @@ cmd_menu() {
   done
 }
 
+# ---------- graphical installer launch -----------------------------------
+# The GUI is served on a MANAGEMENT ADDRESS the operator picks, over HTTPS by
+# default. Both questions are asked here, in the terminal, because that is the
+# one channel we know is already trusted: the operator is sitting in it.
+#
+# The address list comes from `correlix-setup --list-ips` (iface<TAB>ip) rather
+# than from parsing `ip addr`, so the answer cannot disagree with the SANs the
+# binary puts in its own certificate, and no extra tool has to exist on PATH.
+setup_bin() {
+  local bin="$BUNDLE_DIR/correlix-setup"
+  [ -n "$BUNDLE_DIR" ] && [ -x "$bin" ] && { printf '%s' "$bin"; return 0; }
+  bin="$HERE/correlix-setup"
+  [ -x "$bin" ] && { printf '%s' "$bin"; return 0; }
+  return 1
+}
+
+cmd_gui() {
+  local bin
+  bin=$(setup_bin) || die "correlix-setup binary missing from this bundle." \
+    "Re-download the bundle, or use the terminal installer: ./install-correlix.sh install"
+
+  local ips=() ifaces=() line iface ip iplist
+  # Never swallow the failure (§16.1): if the binary cannot enumerate the
+  # host's interfaces, say so by name instead of silently offering loopback.
+  if ! iplist="$("$bin" -list-ips)"; then
+    die "correlix-setup could not list this host's network interfaces." \
+        "Run '$bin -list-ips' to see the error, or install from the terminal: ./install-correlix.sh install"
+  fi
+  while IFS=$'\t' read -r iface ip; do
+    [ -n "${ip:-}" ] || continue
+    ifaces+=("$iface"); ips+=("$ip")
+  done <<< "$iplist"
+
+  local chosen=""
+  if [ "${#ips[@]}" -eq 0 ]; then
+    warn "No management interface with an IPv4 address was found — using localhost."
+    chosen="127.0.0.1"
+  elif [ ! -t 0 ] || [ ! -t 1 ]; then
+    chosen="${ips[0]}"
+    say "Management address: ${chosen} (${ifaces[0]}) — first non-loopback interface."
+  else
+    local i=1
+    say ""
+    say "${BOLD}Which address should the installer be reachable on?${RST}"
+    for i in "${!ips[@]}"; do
+      printf '  %d) %-10s %s%s\n' "$((i + 1))" "${ifaces[$i]}" "${ips[$i]}" \
+        "$([ "$i" -eq 0 ] && printf ' %s(default)%s' "$DIM" "$RST")"
+    done
+    printf '  %d) %-10s %s\n' "$(( ${#ips[@]} + 1 ))" "loopback" "127.0.0.1 (this machine only)"
+    printf '\n  Choose [1-%d, Enter for 1]: ' "$(( ${#ips[@]} + 1 ))"
+    read -r line || true
+    line="${line:-1}"
+    case "$line" in
+      ''|*[!0-9]*) die "Not a number: $line" ;;
+    esac
+    if [ "$line" -ge 1 ] && [ "$line" -le "${#ips[@]}" ]; then
+      chosen="${ips[$((line - 1))]}"
+    elif [ "$line" -eq $(( ${#ips[@]} + 1 )) ]; then
+      chosen="127.0.0.1"
+    else
+      die "Choice out of range: $line"
+    fi
+  fi
+
+  # HTTPS is the default; HTTP has to be typed out in full, and is warned twice
+  # (here, and again by the binary at launch).
+  local scheme_arg=()
+  if [ -t 0 ] && [ -t 1 ]; then
+    say ""
+    say "${BOLD}How should the installer be served?${RST}"
+    say "  1) HTTPS ${DIM}(default — self-signed certificate, fingerprint printed below)${RST}"
+    say "  2) HTTP  ${DIM}(no encryption — trusted isolated network only)${RST}"
+    printf '\n  Choose [1-2, Enter for 1]: '
+    read -r line || true
+    case "${line:-1}" in
+      1|'') : ;;
+      2) warn "HTTP selected: the one-time token and everything you type will cross the network unencrypted."
+         warn "Host preparation (the sudo step) stays disabled in this mode — run 'sudo ./prepare-host.sh' here instead."
+         printf '  Type %shttp%s to confirm: ' "$BOLD" "$RST"
+         read -r line || true
+         [ "${line:-}" = "http" ] || die "Not confirmed — re-run and choose HTTPS."
+         scheme_arg=(-http) ;;
+      *) die "Not a valid choice: $line" ;;
+    esac
+  fi
+
+  exec "$bin" -bundle "${BUNDLE_DIR:-$HERE}" -addr "$chosen:8800" "${scheme_arg[@]}"
+}
+
+# ---------- first-run chooser (GUI or CLI) --------------------------------
+# The very first question a customer is asked. Everything downstream is the
+# path they picked; both paths run the SAME install-correlix.sh install engine,
+# so neither can drift ahead of the other.
+cmd_choose() {
+  say ""
+  say "${BOLD}┌──────────────────────────────────────────────┐${RST}"
+  say "${BOLD}│  Correlix installer                          │${RST}"
+  say "${BOLD}└──────────────────────────────────────────────┘${RST}"
+  say ""
+  say "  How would you like to install Correlix?"
+  say ""
+  say "  1) ${BOLD}Graphical${RST}  — guided wizard in your browser ${DIM}(recommended)${RST}"
+  say "  2) ${BOLD}Terminal${RST}   — text menu, right here"
+  say "  q) Quit"
+  say ""
+  printf '  Choose [1-2, Enter for 1]: '
+  local pick
+  read -r pick || exit 0
+  case "${pick:-1}" in
+    1|'') cmd_gui ;;
+    2)    cmd_menu ;;
+    q|Q)  exit 0 ;;
+    *)    die "Not a valid choice: $pick" ;;
+  esac
+}
+
 case "$CMD" in
-  menu)            cmd_menu ;;
-  gui)             # Graphical installer: serves the setup wizard on :8800 with
-                   # a one-time tokened URL (printed below). Everything the CLI
-                   # does, from a browser.
-                   [ -x "$BUNDLE_DIR/correlix-setup" ] || die "correlix-setup binary missing from this bundle."
-                   exec "$BUNDLE_DIR/correlix-setup" -bundle "$BUNDLE_DIR" ;;
+  menu)            cmd_choose ;;
+  console)         cmd_menu ;;
+  gui)             cmd_gui ;;
   install)         cmd_install ;;
   status)          friendly_status ;;
   logs)            [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet."

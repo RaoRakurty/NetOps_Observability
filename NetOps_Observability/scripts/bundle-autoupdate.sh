@@ -12,7 +12,7 @@
 # gated on the build passing — that is the source of truth for a shippable
 # bundle. This script remains for a DELIBERATE local build:
 #
-#     make bundle                      # or: scripts/bundle-autoupdate.sh
+#     bash scripts/make-installer.sh   # or: scripts/bundle-autoupdate.sh
 #     GIT_SHA=$(git rev-parse HEAD) scripts/make-installer.sh
 #
 # Run it when you actually need a fresh eval/demo bundle from the current branch
@@ -20,7 +20,7 @@
 #
 #   * runs bundle-staleness.sh; exits 0 quietly when the bundle already
 #     matches HEAD's shippable code;
-#   * when stale: `make bundle` (full bundle: base + add-on packs) at HEAD;
+#   * when stale: `bash scripts/make-installer.sh` (base + add-on packs) at HEAD;
 #   * prunes old bundles, keeping the newest KEEP_BUNDLES (default 2) —
 #     bundles are multi-GB and this host has had a disk-full incident;
 #   * disk preflight is a REAL gate (below): it refuses to build rather than

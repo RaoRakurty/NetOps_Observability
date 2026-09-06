@@ -776,6 +776,23 @@ def write_env(env_path: Path, port: int, *, force: bool,
     # DSN says on every run — so rotating it is "edit DATABASE_URL, re-run
     # install.py", not a --reset-env class. URL-safe: it rides URL userinfo.
     app_db_password = generate_urlsafe_password(28)
+    # Two values the GUI installer collects and this template writes verbatim.
+    # They arrive through the environment rather than as flags because they are
+    # not decisions install.py makes — they are strings it records once, on a
+    # FRESH install only (this whole function only ever writes a new .env).
+    # Both are re-validated here: install-correlix.sh already checked them, and
+    # a value that reaches .env unchecked is a value nobody checked.
+    admin_username = os.environ.get("CORRELIX_ADMIN_USERNAME", "admin").strip() or "admin"
+    if not re.fullmatch(r"[a-z][a-z0-9._-]{2,31}", admin_username):
+        fail(f"CORRELIX_ADMIN_USERNAME={admin_username!r} is not a valid administrator name "
+             f"(3-32 characters, lowercase letter first, then letters, digits, dot, dash "
+             f"or underscore).")
+    # PostgreSQL is the default state backend for every fresh install
+    # (tracker 245). "file" is the explicit compatibility choice; there is no
+    # implicit fallback and "memory" is never a shipped install.
+    store_backend = os.environ.get("CORRELIX_STORE_BACKEND", "postgres").strip() or "postgres"
+    if store_backend not in ("postgres", "file"):
+        fail(f"CORRELIX_STORE_BACKEND={store_backend!r} must be 'postgres' (default) or 'file'.")
     # Values the rotation gate ruled un-rotatable keep their current value; a
     # regenerated one would be a lie the stores never agreed to.
     for key, value in (preserve or {}).items():
@@ -808,7 +825,7 @@ CORRELIX_GID={os.getgid()}
 # the password from the Settings tab in the dashboard. `--reset-env`
 # refuses to pretend it rotates this; scripts/reset-admin.sh wipes the
 # user store deliberately (destroying every local account) to re-seed it.
-ADMIN_USERNAME=admin
+ADMIN_USERNAME={admin_username}
 ADMIN_INITIAL_PASSWORD={secrets_map["ADMIN_INITIAL_PASSWORD"]}
 
 # Database (Postgres — app state)
@@ -1036,7 +1053,7 @@ NETBOX_URL=
 # DATABASE_URL must authenticate as a NON-superuser role: superusers bypass
 # Row-Level Security, so the api refuses to start as one. install.py provisions
 # `netops_app` with the password below and keeps them in step on every re-run.
-STORE_BACKEND=postgres
+STORE_BACKEND={store_backend}
 DATABASE_URL=postgres://netops_app:{app_db_password}@postgres:5432/netops?sslmode=disable
 # On a --tls install postgres REQUIRES TLS (pg_hba `hostssl`, F-4): install.py
 # rewrites the DSN to ?sslmode=verify-full&sslrootcert=/data/tls/ca.pem in TLS
