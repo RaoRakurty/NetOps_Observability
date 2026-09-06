@@ -32,14 +32,22 @@ Use this when the target host has no egress. For a host that can reach a registr
 
    | File | What it is |
    |---|---|
+   | `README.txt` | Start here. Plain text, one page, no markdown to read past. |
    | `install-correlix.sh` | The customer entry point. |
    | `prepare-host.sh` | Host preparation, run once with `sudo`. |
    | `correlix-source-<version>.tar.gz` | The source tree: compose files, configurations, installer. |
    | `correlix-images-core-<version>.tar.zst` | The base appliance images. |
    | `correlix-addon-<name>-<version>.tar.zst` | One archive per optional add-on pack. |
-   | `SHA256SUMS` | The integrity manifest covering every file above. |
+   | `SHA256SUMS`, `CHECKSUMS.sha256` | The integrity manifest, under both names. The second is a symlink to the first. |
    | `MANIFEST` | Version, git sha, profile and image list. |
-   | `README.md`, `ADVANCED.md`, `TROUBLESHOOTING.md`, `LICENSES.md` | Customer quickstart, advanced settings, fixes, third-party notices. |
+   | `README.md`, `ADVANCED.md`, `TROUBLESHOOTING.md` | Quickstart, advanced settings, fixes. |
+   | `OPERATIONS.md` | Requirements, workload sizing, upgrade, rollback, backup, uninstall. |
+   | `SUPPORT.txt` | What to try first, and exactly what to send when you contact support. |
+   | `RELEASE-NOTES.md` | What changed in this version, generated from the commit log. |
+   | `docs/index.html` | The full documentation portal, built static. Readable with no network. |
+   | `LICENSES.md`, `LICENSE`, `LICENSING.md`, `LICENSES/`, `NOTICE` | Third-party notices and the project's own licence. |
+   | `source-offer/` | Corresponding source for the GPL/LGPL components Correlix redistributes. |
+   | `correlix-setup`, `correlix-debug`, `correlix-licence` | The graphical installer, the pipeline debugger, the offline licence verifier. |
 
 3. Transfer the whole bundle directory to the target host and extract it there.
 
@@ -61,10 +69,25 @@ Use this when the target host has no egress. For a host that can reach a registr
    sudo ./prepare-host.sh
    ```
 
-6. Install. With no arguments in an interactive terminal this opens a numbered setup console; in a script it installs directly.
+6. Install. With no arguments in an interactive terminal, the first question is how you want to install — graphical or terminal. In a script it installs directly, with no questions.
 
    ```bash
    ./install-correlix.sh
+   ```
+
+   **Graphical.** The installer lists this host's management addresses, defaults to the first non-loopback interface, and asks which to serve the wizard on. HTTPS is the default: a certificate is generated at launch and its SHA-256 fingerprint is printed in the terminal so you can compare it in the browser's warning screen. A one-time access token is printed with the URL. HTTP is available but has to be chosen and then confirmed by typing `http`; in that mode host preparation stays disabled, because the sudo password is only ever accepted over TLS.
+
+   The wizard walks readiness, host preparation, deployment options, discovery, sizing, settings, review, install and done. Nothing on the host changes until you press **Install** on the review screen, and the review screen exports the configuration as a profile you can replay on any other host.
+
+   **Terminal.** The same install as a numbered console menu. Both paths drive the same installer.
+
+   Skip the question and go straight to one path:
+
+   ```bash
+   ./install-correlix.sh gui         # graphical
+   ./install-correlix.sh console     # terminal menu
+   ./install-correlix.sh install     # non-interactive
+   ./install-correlix.sh install --config profile.json   # replay an exported profile
    ```
 
    To pin the console port, name it:

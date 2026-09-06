@@ -257,10 +257,35 @@ P0+P1 ship value even if P2 slips (hardened prototype + unattended profiles). Ea
 
 ---
 
+## 12a. Shipped beyond the phase table (2026-09-06, tracker 266)
+
+The owner's brief was "a delicious install package… nice GUI install method…
+just select via CLI, if GUI use http or https via mgmt ip… glossy elegant
+futuristic… glassy transparent". P0–P3 were already in the tree; what that brief
+added, and what shipped:
+
+* **The first question is the choice.** `./install-correlix.sh` with no
+  arguments now opens a chooser — *Graphical* or *Terminal* — instead of going
+  straight to the console menu. The console is still reachable directly as
+  `./install-correlix.sh console`, and `gui` still launches the wizard.
+* **Management address + transport are asked, not assumed** (open decision 2,
+  now decided — see §13).
+* **The wizard is glass.** `ui.html`'s stylesheet was replaced, not its DOM: a
+  dark aurora ground, frosted translucent panels (`backdrop-filter`), hairline
+  luminous borders, one restrained accent, rounded geometry, no logos. Still one
+  file, still no webfonts and no CDN — an appliance is offline by design. Motion
+  is one slow background sheen, disabled under `prefers-reduced-motion`.
+* **S6 became Settings**, carrying the administrator username (validated against
+  the same expression the Go side enforces), the password rules stated plainly,
+  the application-state backend (PostgreSQL default, files as the explicit
+  compatibility choice — tracker 245) and the sign-in URL the operator will
+  actually use. Both new fields ride Profile v1 → `install --config` →
+  `CORRELIX_ADMIN_USERNAME` / `CORRELIX_STORE_BACKEND` → the `.env` template.
+
 ## 13. Open decisions for the owner
 
 1. **Watchdog shipping** — promote `stack-watchdog.sh` (or a trimmed variant) into the customer bundle so S8 can wire it? (Design assumes yes.)
-2. **Remote setup default** — H1 proposes localhost-bind default with `--remote` opt-in. Headless-server customers will mostly need `--remote`; acceptable friction, or should remote stay the default with TLS+token deemed sufficient?
+2. **Remote setup default** — ~~H1 proposes localhost-bind default with `--remote` opt-in.~~ **DECIDED (owner, 2026-09-06, tracker 266):** neither. `install-correlix.sh` ASKS. It lists the host's management addresses (`correlix-setup --list-ips`, which is also what mints the certificate SANs, so the two cannot disagree), defaults to the first non-loopback interface, and binds exactly that address via `--addr <ip>:8800`. `--remote` (0.0.0.0) and the loopback default both remain, for scripted launches. Transport is asked the same way: HTTPS is the default and the only unqualified answer; HTTP has to be chosen, then confirmed by typing `http`, and is warned twice — once by the shell, once by the binary's launch banner. In HTTP mode the session cookie drops `Secure` (it would otherwise never be sent back) and the sudo route keeps refusing, because H3 is not negotiable.
 3. **Licensing** — no entitlement mechanism exists; confirm v1 ships without a license gate.
 4. **Bundle signing** — GPG signing is a make-installer TODO; v1 stays checksum-only unless prioritized.
 5. **`ui.html` growth path** — the wizard multiplies UI surface; keep single-file embedded HTML (zero-dependency doctrine) vs. adopt the SPA build for the installer too. Design recommends **staying single-file** (the installer must work when the product stack is down and must stay auditable).

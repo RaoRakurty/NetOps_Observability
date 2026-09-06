@@ -227,6 +227,80 @@ same number:
   16 after). Deleting the evidence to save 1 MB is a bad trade. Revisit if the
   image ever ships to a size-constrained edge target.
 
+### 8.4 The bundle, actually built and measured (2026-09-06, tracker 125)
+
+§8's own caveat was that "the bundle itself was NOT built here". It has been
+now, on the lab host at `6fda92e8`, with `APK_REPO_SCHEME=http` and a local
+corresponding-source mirror. **These are file sizes on disk, not estimates.**
+
+| Artifact | Bytes | |
+|---|---:|---|
+| `correlix-images-core-<v>.tar.zst` | 1 577 598 722 | 1.58 GB — the 20 base-appliance images |
+| `correlix-source-<v>.tar.gz` | 18 091 804 | 18.1 MB — the whole source tree |
+| `correlix-setup` | 7 291 042 | 7.3 MB — the graphical installer |
+| `correlix-debug` | 7 377 058 | 7.4 MB — the pipeline debugger |
+| `correlix-licence` | 4 653 218 | 4.7 MB — the offline licence verifier |
+| `docs/` | ~10 400 000 | 9.9 MB, 305 files — the offline documentation portal |
+| `source-offer/` | ~40 000 000 | 35 corresponding-source archives |
+| notices, docs, MANIFEST, checksums | ~110 000 | |
+| **base download (`--core`)** | **≈ 1.67 GB** | what an evaluation or a standard install needs |
+| `correlix-addon-log-search-ui-<v>.tar.zst` | 447 216 664 | 447 MB — optional |
+| `correlix-addon-self-monitoring-<v>.tar.zst` | 184 609 379 | 185 MB — optional |
+| **full download (default build)** | **≈ 2.30 GB** | base + both add-on packs |
+
+**Per image, inside the base archive.** Measured by walking the archive's tar
+members and attributing each blob to the images that reference it — a layer
+shared by N images is charged N ways, so this column sums to the archive rather
+than over-counting the shared bases. The archive's uncompressed tar is
+1 588 498 048 B against a 1 577 598 722 B `.zst`: **zstd removes 0.7 %**, which
+confirms §8's finding that the containerd store already holds layers compressed
+and the `docker save` stream IS the bundle contribution.
+
+| Image | MB | |
+|---|---:|---|
+| `netops-opensearch:2.16.0-slim` | 403.8 | our slimmed repackage; still the single biggest line |
+| `quay.io/keycloak/keycloak:25.0` | 235.3 | SSO is default-on (owner, 2026-08-04) |
+| `apache/kafka:4.1.1` | 232.1 | the `kafka-native` swap in §8.3 targets this |
+| `balabit/syslog-ng:4.7.1` | 188.3 | the Vector consolidation in §8.3 targets this |
+| `clickhouse/clickhouse-server:24.8-alpine` | 146.0 | |
+| `postgres:16-alpine` | 108.1 | |
+| `netops-secrets-seal` | 44.8 | |
+| `netops-correlation` | 44.2 | post-L1 (was 66.5 on `python:3.12-slim`) |
+| `ghcr.io/openconfig/gnmic:0.46.0` | 30.6 | |
+| `netops-vector-router:0.40.0-curl` | 26.5 | |
+| `timberio/vector:0.40.0-alpine` | 24.2 | |
+| `netops-frontend` | 18.9 | dist + docs portal only (L5) |
+| `valkey/valkey:8-alpine` | 17.4 | |
+| `victoriametrics/victoria-metrics:v1.101.0` | 13.5 | |
+| `victoriametrics/vmalert:v1.101.0` | 10.7 | |
+| `netsampler/goflow2:v2.2.1` | 10.1 | |
+| `netops-nginx` | 9.9 | |
+| `curlimages/curl:8.10.1` | 9.4 | |
+| `netops-prober` | 6.8 | L3 stripped Go binary on distroless |
+| `netops-api` | 6.8 | L3 stripped Go binary on distroless |
+
+Correlix-built images account for **561.7 MB** of the 1.59 GB (and 403.8 MB of
+that is the OpenSearch repackage); third-party images are **1 026.8 MB**. The
+four §8.3 items sit on the top four rows, which is why they remain the list.
+
+**What the build needs, and the two things that stopped it before.** ~20 GB of
+free disk (the 2026-09-06 first attempt died at 96 % and tripped OpenSearch's
+flood-stage watermark — tracker 125), `make` is not installed on this host so
+the invocation is `bash scripts/make-installer.sh`, and on a host whose egress
+re-signs TLS `APK_REPO_SCHEME=http` is required for the vector-router build. A
+third blocker surfaced on this run: the corresponding-source mirror in
+`compliance/corresponding-sources/` deliberately holds only the SMALL archives
+(the large upstream tarballs belong in the Correlix source archive, which is
+blocked on tracker 262), so nine components are fetched from upstream per
+release — and `busybox.net` and `musl.libc.org` are unreachable through the
+lab's egress. The build was completed by pre-fetching all 35 pinned archives
+into one local directory and pointing `CORRELIX_SOURCE_MIRROR_DIR` at it, which
+is the mechanism the script's own error message prescribes; every file was
+accepted only after matching the pinned sha256, so a mirror URL substituted for
+an unreachable upstream (musl from `distfiles.alpinelinux.org`) changes the
+retrieval path and not the bytes. **Until tracker 262 lands, a release build
+needs that pre-fetch step.**
+
 ### 8.3 What is still open (unchanged from tracker 148)
 
 These are functional migrations, not build changes, and each needs its own
