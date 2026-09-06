@@ -1,15 +1,26 @@
-// InvestigationPage.test.tsx — the symptom-first Troubleshooting surface.
+// InvestigationPage.test.tsx — the guided Troubleshooting surface.
 //
-// The shape under test (design of record §c): symptom entry → verdict header →
-// parallel evidence lanes → IRIS → seam-owned handoff.
+// The shape under test (owner, 2026-09-06 — "this page doesn't make sense,
+// what's the goal of this page"): FOUR NUMBERED STEPS, in order.
 //
-// The two things that must never regress:
-//  · POSITIONING — picking a CASE shows the SAME RcaCaseHeader the RCA
-//    workspace shows (one verdict vocabulary, not two). Picking only a SYMPTOM
-//    shows an honest bisecting header that says there is no verdict, plus a
-//    ladder whose rungs are earned by lane state, never by being on screen.
-//  · HONESTY — an unwired source says "not connected", a quiet one says it was
-//    quiet, and a failure is shown verbatim instead of an eternal spinner.
+//   1 What's wrong?          2 Where is it breaking?
+//   3 Evidence               4 Answer & next action
+//
+// The things that must never regress:
+//  · ORDER — the four steps render, numbered, in that sequence. A NOC admin can
+//    follow the page top to bottom without training.
+//  · DENSITY — quiet lanes (nothing seen / nothing feeding us) are hidden behind
+//    ONE toggle, and every lane's raw material sits behind its own "Details".
+//    Hidden is never deleted: the API still runs and the operator can open it.
+//  · POSITIONING — picking a CASE still builds the SAME RcaCaseHeader the RCA
+//    workspace builds (one verdict vocabulary, not two); it now lives behind
+//    step 4's "Full RCA detail" so the plain answer leads. Picking only a
+//    SYMPTOM says honestly that we do not have the cause, and the ladder's rungs
+//    are earned by lane state, never by being on screen.
+//  · HONESTY — an unwired source says it has no data source, a quiet one says it
+//    was quiet, and a failure is shown instead of an eternal spinner.
+//  · CAPABILITY — nothing was removed: ticket, TAC escalation, Correlate, the
+//    report, Iris and all seven lanes are still reachable.
 //
 // The lanes are the REAL lane components against a mocked api, so the ladder is
 // asserted end-to-end rather than through a stub.
@@ -50,7 +61,7 @@ vi.mock("../../services/api", () => ({
 }));
 vi.mock("../../components/rca/rcaExport", () => ({ exportRcaPdf: (...a: unknown[]) => mocks.exportRcaPdf(...a) }));
 
-import InvestigationPage, { caseDevice } from "./InvestigationPage";
+import InvestigationPage, { caseDevice, tierLabel } from "./InvestigationPage";
 import { LANE_TITLE, lanesForSymptom, type LaneId } from "./investigationModel";
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -102,6 +113,18 @@ async function show(ui: React.ReactElement) {
 const laneIds = () => Array.from(document.querySelectorAll("[data-lane]"))
   .map((el) => el.getAttribute("data-lane"));
 const rung = (id: string) => document.querySelector(`[data-rung="${id}"]`);
+/** The step headings, in DOM order — the page's order of operations. */
+const stepHeadings = () => Array.from(document.querySelectorAll(".ts-step .ts-step-h"))
+  .map((el) => el.textContent);
+const laneSlot = (id: LaneId) => document.querySelector(`[data-lane="${id}"]`)?.closest(".ts-lane-slot");
+const click = async (name: string | RegExp) => {
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name })); });
+};
+/** Step 1 is one control with two tabs — a case is picked on the second. */
+const pickCase = async () => {
+  await click("Open cases (1)");
+  await click(/P-CORRAB/);
+};
 
 beforeEach(() => {
   Object.values(mocks).forEach((f) => f.mockReset());
@@ -123,8 +146,8 @@ beforeEach(() => {
   mocks.aiAsk.mockResolvedValue({ mode: "grounded", intent: "x", modules: [], text: "ok", citations: [], disclaimers: [] });
   mocks.exportRcaPdf.mockReturnValue(true);
   mocks.devices.mockResolvedValue([]);
-  // The escalation panel reads the incident's escalation state as soon as a case
-  // is open. Nothing has been escalated in these fixtures, which is the state
+  // The escalation panel reads the incident's escalation state as soon as it is
+  // opened. Nothing has been escalated in these fixtures, which is the state
   // the panel renders its one "Escalate to TAC" button for.
   mocks.tacState.mockResolvedValue({
     incident_id: CASE_ID, incident_ref: "INC-2026-0007", title: "",
@@ -135,14 +158,52 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
+// ── the guided flow: four numbered steps, in order ───────────────────────────
+
+describe("the guided flow", () => {
+  it("opens with a three-line 'How this page works' in plain words", async () => {
+    await show(<InvestigationPage />);
+    const how = screen.getByRole("heading", { name: "How this page works", level: 2 });
+    const list = how.parentElement!.querySelector("ol")!;
+    expect(list.querySelectorAll("li")).toHaveLength(3);
+    expect(list).toHaveTextContent(/pick the problem you are seeing/i);
+    expect(list).toHaveTextContent(/checks each layer of the network for you/i);
+    expect(list).toHaveTextContent(/a likely cause, or a clean handoff/i);
+  });
+
+  it("renders the four steps IN ORDER once an investigation has started", async () => {
+    await show(<InvestigationPage initialSymptom="dns" />);
+    expect(stepHeadings()).toEqual([
+      "What's wrong?", "Where is it breaking?", "Evidence", "Answer & next action",
+    ]);
+  });
+
+  it("numbers each step so the order of operations is visible, not implied", async () => {
+    await show(<InvestigationPage initialSymptom="dns" />);
+    expect(Array.from(document.querySelectorAll(".ts-step")).map((s) => s.getAttribute("data-step")))
+      .toEqual(["1", "2", "3", "4"]);
+    expect(Array.from(document.querySelectorAll(".ts-step .ts-step-n")).map((n) => n.textContent))
+      .toEqual(["1", "2", "3", "4"]);
+  });
+
+  it("shows only step 1 until the operator has picked something", async () => {
+    await show(<InvestigationPage />);
+    expect(stepHeadings()).toEqual(["What's wrong?"]);
+    expect(screen.queryByTestId("ts-lanes")).toBeNull();
+    expect(screen.queryByTestId("ts-handoff")).toBeNull();
+    expect(screen.getByText(/pick a problem or an open case/i)).toBeInTheDocument();
+  });
+});
+
 // ── it renders outside the app shell ─────────────────────────────────────────
 
 describe("outside the app shell", () => {
   it("renders the entry surface with no shell provider and does not crash", async () => {
     await show(<InvestigationPage />);
     expect(screen.getByRole("heading", { name: "What's wrong?", level: 2 })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Symptom", level: 3 })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Open correlation case", level: 3 })).toBeInTheDocument();
+    const tabs = screen.getByRole("group", { name: "How to start" });
+    expect(within(tabs).getAllByRole("button").map((b) => b.textContent))
+      .toEqual(["Describe the problem", "Open cases (1)"]);
   });
 
   it("offers NO 'Open Iris' control when there is no shell to open the drawer", async () => {
@@ -163,33 +224,44 @@ describe("outside the app shell", () => {
   });
 });
 
-// ── the entry surface ────────────────────────────────────────────────────────
+// ── step 1: one picker, two tabs ─────────────────────────────────────────────
 
-describe("symptom + case entry", () => {
-  it("offers the nine canonical workflows and the open cases as equal citizens", async () => {
+describe("step 1 — what's wrong?", () => {
+  it("offers the nine canonical workflows on the first tab", async () => {
     await show(<InvestigationPage />);
     const list = screen.getByRole("list", { name: "Symptom" });
     expect(within(list).getAllByRole("button")).toHaveLength(9);
-    expect(screen.getByRole("button", { name: /P-CORRAB/ })).toBeInTheDocument();
+    // the two entry points are equal citizens — the cases are one tab away
+    expect(screen.queryByRole("button", { name: /P-CORRAB/ })).toBeNull();
+  });
+
+  it("shows the open cases on the second tab, named in NOC words", async () => {
+    await show(<InvestigationPage />);
+    await click("Open cases (1)");
+    const row = screen.getByRole("button", { name: /P-CORRAB/ });
+    expect(row).toHaveTextContent("Link state change");   // signatureNocTitle, not "upstream_link_fault"
+    expect(row).toHaveTextContent("Likely cause");        // not the raw verdict tier
+    expect(screen.queryByRole("list", { name: "Symptom" })).toBeNull();
   });
 
   it("says plainly when there is no open case — never a blank column", async () => {
     mocks.correlations.mockResolvedValue({ data: [] });
     await show(<InvestigationPage />);
+    await click("Open cases (0)");
     expect(screen.getByText("No open correlation case right now.")).toBeInTheDocument();
   });
 
   it("renders the case-list failure verbatim", async () => {
     mocks.correlations.mockRejectedValue(new Error("403 correlations forbidden"));
     await show(<InvestigationPage />);
+    await click("Open cases (0)");
     expect(await screen.findByRole("alert")).toHaveTextContent("403 correlations forbidden");
   });
 
-  it("filters both columns from one search box", async () => {
+  it("filters the visible tab from one search box", async () => {
     await show(<InvestigationPage />);
     fireEvent.change(screen.getByRole("searchbox", { name: /search symptoms/i }), { target: { value: "wireless" } });
     expect(within(screen.getByRole("list", { name: "Symptom" })).getAllByRole("button")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: /P-CORRAB/ })).toBeNull();
   });
 
   it("says so when nothing matches the search", async () => {
@@ -198,23 +270,37 @@ describe("symptom + case entry", () => {
     expect(screen.getByText("No symptom matches that.")).toBeInTheDocument();
   });
 
-  it("prompts for a starting point before anything is picked", async () => {
-    await show(<InvestigationPage />);
-    expect(screen.getByText(/pick a symptom or an open correlation case/i)).toBeInTheDocument();
-    expect(screen.queryByTestId("ts-lanes")).toBeNull();
-    expect(screen.queryByTestId("ts-handoff")).toBeNull();
+  it("names what is being investigated once something is picked", async () => {
+    await show(<InvestigationPage initialSymptom="dns" />);
+    expect(screen.getByText(/^Investigating:/)).toHaveTextContent("DNS, DHCP or authentication is failing");
   });
 });
 
-// ── the honest symptom-only header ───────────────────────────────────────────
+describe("tierLabel", () => {
+  it.each([
+    ["confirmed", "Cause confirmed"],
+    ["suspected", "Likely cause"],
+    ["recovered", "Recovered"],
+    ["undetermined", "Cause not known yet"],
+    ["", "Cause not known yet"],
+  ])("%p → %p", (tier, label) => { expect(tierLabel(tier)).toBe(label); });
+});
 
-describe("symptom-only — the bisecting header", () => {
-  it("states that there is no correlated verdict and names what it bisects", async () => {
+// ── step 2: where is it breaking? ────────────────────────────────────────────
+
+describe("step 2 — where is it breaking?", () => {
+  it("renders FOUR rungs in plain language, numbered bottom-up", async () => {
+    await show(<InvestigationPage initialSymptom="bgp_upstream" />);
+    const ladder = screen.getByRole("list", { name: "Where it is breaking" });
+    expect(Array.from(ladder.querySelectorAll(".ts-rung-l")).map((e) => e.textContent))
+      .toEqual(["Physical link", "Routing", "Overlay / Service", "Application"]);
+  });
+
+  it("states honestly that we do not have the cause on a symptom-only investigation", async () => {
     await show(<InvestigationPage initialSymptom="bgp_upstream" />);
     const head = screen.getByTestId("ts-bisect-header");
-    expect(within(head).getByRole("heading", { level: 2 })).toHaveTextContent("BGP or an upstream is unstable");
-    expect(head).toHaveTextContent(/no correlated verdict yet/i);
-    expect(head).toHaveTextContent("Session state and flaps");
+    expect(head).toHaveTextContent("BGP or an upstream is unstable");
+    expect(head).toHaveTextContent(/do not have the cause yet/i);
     expect(screen.queryByTestId("ts-rca-header")).toBeNull();
   });
 
@@ -223,38 +309,169 @@ describe("symptom-only — the bisecting header", () => {
     expect(laneIds()).toEqual([...lanesForSymptom("link_interface"), "iris"]);
   });
 
-  it("earns each ladder rung from lane state — never from being on screen", async () => {
+  it("earns each rung from lane state — never from being on screen", async () => {
     // routing metrics were never scraped; probes never reported; the feed is
     // wired and quiet; flows have no exporter.
     mocks.metricNames.mockResolvedValue({ status: "success", data: ["collector_targets"] });
     mocks.pathsHealth.mockResolvedValue({ paths: [], count: 0 });
     await show(<InvestigationPage initialSymptom="bgp_upstream" />);
-    await waitFor(() => expect(rung("igp")?.getAttribute("data-state")).toBe("not_connected"));
-    expect(rung("bgp")?.getAttribute("data-state")).toBe("not_connected");
-    expect(rung("path")?.getAttribute("data-state")).toBe("not_connected");
-    // the physical rung's lane (health) is not opened by this workflow
-    expect(rung("physical")?.getAttribute("data-state")).toBe("not_opened");
-    // the feed answered and was quiet — looked, saw nothing
-    expect(rung("logs")?.getAttribute("data-state")).toBe("no_data");
+    await waitFor(() => expect(rung("routing")?.getAttribute("data-state")).toBe("blind"));
+    expect(rung("routing")).toHaveTextContent("Can't check");
+    expect(rung("overlay")?.getAttribute("data-state")).toBe("blind");
+    // the event feed IS wired and was quiet, so the link rung honestly reads OK
+    expect(rung("link")?.getAttribute("data-state")).toBe("ok");
+    expect(rung("link")).toHaveTextContent("OK");
   });
 
-  it("marks a rung has_data only once a lane returned rows", async () => {
-    mocks.eventsFeed.mockResolvedValue({ items: [{ signal_id: "s1", ts: "t", source: "lab", kind: "link_down", severity: "warning", entity_type: "device", entity_id: "wan-r1", site: "", title: "Link down", correlation_id: null }] });
-    await show(<InvestigationPage initialSymptom="bgp_upstream" />);
-    await waitFor(() => expect(rung("logs")?.getAttribute("data-state")).toBe("has_data"));
+  it("says a layer this problem does not need was simply not checked", async () => {
+    // link_interface opens health/flows/changed/events — no path, no dem, so the
+    // overlay rung has nothing behind it and must NOT claim to be clean.
+    await show(<InvestigationPage initialSymptom="link_interface" />);
+    await waitFor(() => expect(rung("overlay")?.getAttribute("data-state")).toBe("skipped"));
+    expect(rung("overlay")).toHaveTextContent("Not checked yet");
+  });
+
+  it("says 'Problem found here' only once an anomaly lane returned rows", async () => {
+    mocks.metricsQuery.mockResolvedValue({
+      status: "success",
+      data: { resultType: "vector", result: [{ metric: { device: "wan-r1", ifName: "Gi0/1" }, value: [0, "0"] }] },
+    });
+    await show(<InvestigationPage initialSymptom="link_interface" />);
+    await waitFor(() => expect(rung("link")?.getAttribute("data-state")).toBe("found"));
+    expect(rung("link")).toHaveTextContent("Problem found here");
   });
 
   it("switching symptom re-opens the right lanes", async () => {
     await show(<InvestigationPage initialSymptom="dns" />);
     expect(laneIds()).toEqual([...lanesForSymptom("dns"), "iris"]);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /Wireless clients are struggling/ }));
-    });
+    await click(/Wireless clients are struggling/);
     expect(laneIds()).toEqual([...lanesForSymptom("wireless"), "iris"]);
   });
 });
 
-// ── the case path shows the SAME RCA header ──────────────────────────────────
+// ── step 3: the evidence cards ───────────────────────────────────────────────
+
+describe("step 3 — evidence", () => {
+  it("hides the QUIET lanes by default and offers one toggle to reveal them", async () => {
+    // default fixtures: dem has rows (loud); path + flows are unwired, changed +
+    // health + events are quiet → five quiet lanes on app_slow.
+    await show(<InvestigationPage initialSymptom="app_slow" />);
+    await waitFor(() => expect(laneSlot("flows")).toHaveAttribute("hidden"));
+    expect(laneSlot("dem")).not.toHaveAttribute("hidden");
+    for (const id of ["path", "changed", "health", "events"] as LaneId[]) {
+      expect(laneSlot(id)).toHaveAttribute("hidden");
+    }
+    // hidden means hidden from the reader, not from the accessibility tree by accident
+    expect(screen.queryByRole("region", { name: LANE_TITLE.flows })).toBeNull();
+
+    const toggle = screen.getByTestId("ts-quiet-toggle");
+    expect(toggle).toHaveTextContent("Show 5 quiet lanes");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await act(async () => { fireEvent.click(toggle); });
+    for (const id of ["path", "changed", "health", "events", "flows"] as LaneId[]) {
+      expect(laneSlot(id)).not.toHaveAttribute("hidden");
+    }
+    expect(screen.getByTestId("ts-quiet-toggle")).toHaveTextContent("Hide 5 quiet lanes");
+  });
+
+  it("hides a quiet lane WITHOUT skipping its API call — nothing is lost", async () => {
+    await show(<InvestigationPage initialSymptom="app_slow" />);
+    await waitFor(() => expect(laneSlot("flows")).toHaveAttribute("hidden"));
+    // the flow lane is hidden and still read both of its sources
+    expect(mocks.flowsByType).toHaveBeenCalled();
+    expect(mocks.topTalkers).toHaveBeenCalled();
+    expect(document.querySelector('[data-lane="flows"]')?.getAttribute("data-state")).toBe("not_connected");
+  });
+
+  it("offers no quiet toggle when every lane has something to say", async () => {
+    mocks.eventsFeed.mockResolvedValue({ items: [{ signal_id: "s1", ts: "t", source: "lab", kind: "link_down", severity: "warning", entity_type: "device", entity_id: "wan-r1", site: "", title: "Link down", correlation_id: null }] });
+    mocks.probePaths.mockResolvedValue([{ dst: "10.0.0.1", method: "icmp", hops: [], reached: true, changed: false, ts: "t" }]);
+    mocks.flowsByType.mockResolvedValue({ data: [{ flow_type: "netflow", flows: 1, exporters: 1 }] });
+    mocks.topTalkers.mockResolvedValue({ data: [{ src_addr: "a", dst_addr: "b", bytes: 1 }] });
+    mocks.metricsQuery.mockResolvedValue({
+      status: "success", data: { resultType: "vector", result: [{ metric: { device: "d" }, value: [0, "0"] }] },
+    });
+    await show(<InvestigationPage initialSymptom="app_slow" />);
+    await waitFor(() => expect(document.querySelector('[data-lane="flows"]')?.getAttribute("data-state")).toBe("ready"));
+    expect(screen.queryByTestId("ts-quiet-toggle")).toBeNull();
+  });
+
+  it("renders each opened lane with its own honest state", async () => {
+    await show(<InvestigationPage initialSymptom="app_slow" />);
+    await waitFor(() => {
+      expect(document.querySelector('[data-lane="flows"]')?.getAttribute("data-state")).toBe("not_connected");
+    });
+    expect(document.querySelector('[data-lane="dem"]')?.getAttribute("data-state")).toBe("ready");
+    expect(document.querySelector('[data-lane="path"]')?.getAttribute("data-state")).toBe("not_connected");
+    expect(document.querySelector('[data-lane="changed"]')?.getAttribute("data-state")).toBe("empty");
+    expect(document.querySelector('[data-lane="health"]')?.getAttribute("data-state")).toBe("empty");
+  });
+
+  it("every lane names the API behind it, once revealed", async () => {
+    await show(<InvestigationPage initialSymptom="app_slow" />);
+    await waitFor(() => expect(screen.getByTestId("ts-quiet-toggle")).toBeInTheDocument());
+    await act(async () => { fireEvent.click(screen.getByTestId("ts-quiet-toggle")); });
+    for (const id of lanesForSymptom("app_slow") as LaneId[]) {
+      expect(screen.getByRole("region", { name: LANE_TITLE[id] })).toBeInTheDocument();
+    }
+  });
+});
+
+// ── step 4: the answer, and the case path ────────────────────────────────────
+
+describe("step 4 — answer & next action", () => {
+  it("says plainly that no cause is confirmed on a symptom-only investigation", async () => {
+    await show(<InvestigationPage initialSymptom="dns" />);
+    const ans = screen.getByTestId("ts-answer");
+    expect(ans).toHaveTextContent("No cause confirmed yet");
+    expect(ans).toHaveTextContent(/nobody is named yet/i);
+  });
+
+  it("offers exactly the four next actions, disabled until a case backs them", async () => {
+    await show(<InvestigationPage initialSymptom="dns" />);
+    const actions = screen.getByTestId("ts-handoff");
+    expect(within(actions).getAllByRole("button").map((b) => b.textContent))
+      .toEqual(["Open ticket", "Escalate to TAC", "Correlate", "Download report"]);
+    for (const b of within(actions).getAllByRole("button")) expect(b).toBeDisabled();
+    expect(screen.getByText(/pick an open case above to escalate/i)).toBeInTheDocument();
+  });
+
+  it("names the seam owner the evidence attributed, from the tenant registry", async () => {
+    await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    await waitFor(() => expect(screen.getByTestId("ts-answer")).toHaveTextContent("Lumen"));
+  });
+
+  it("keeps Iris inside step 4 — the assistant, not an eighth lane", async () => {
+    await show(<InvestigationPage initialSymptom="dns" />);
+    const step4 = screen.getByTestId("ts-step-4");
+    expect(within(step4).getByRole("region", { name: "Ask Iris" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("ts-step-3")).queryByRole("region", { name: "Ask Iris" })).toBeNull();
+  });
+
+  it("opens the TAC escalation on demand rather than sitting open", async () => {
+    await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    await waitFor(() => expect(mocks.correlationDetail).toHaveBeenCalled());
+    expect(screen.queryByLabelText("Escalate to TAC")).toBeNull();
+    await click("Escalate to TAC");
+    expect(await screen.findByLabelText("Escalate to TAC")).toBeInTheDocument();
+    expect(mocks.tacState).toHaveBeenCalledWith(CASE_ID);
+    await click("Close TAC escalation");
+    expect(screen.queryByLabelText("Escalate to TAC")).toBeNull();
+  });
+
+  it("jumps to the correlation workspace from Correlate", async () => {
+    const st = shell();
+    await show(
+      <ShellContext.Provider value={st}>
+        <InvestigationPage initialCaseId={CASE_ID} />
+      </ShellContext.Provider>,
+    );
+    await waitFor(() => expect(mocks.correlationDetail).toHaveBeenCalled());
+    await click("Correlate");
+    expect(st.navigate).toHaveBeenCalledWith(`investigate/rca?id=${CASE_ID}`);
+  });
+});
 
 describe("case-driven — the correlated verdict", () => {
   it("fetches the case, its timeline and its ticket state", async () => {
@@ -264,18 +481,23 @@ describe("case-driven — the correlated verdict", () => {
     expect(mocks.correlationTickets).toHaveBeenCalledWith(CASE_ID);
   });
 
-  it("renders the SAME RcaCaseHeader the RCA workspace renders, not a second verdict", async () => {
+  it("renders the SAME RcaCaseHeader the RCA workspace renders, behind one disclosure", async () => {
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Full RCA detail" })).toBeInTheDocument());
+    // the engine header does NOT lead the page any more — the plain answer does
+    expect(screen.queryByTestId("ts-rca-header")).toBeNull();
+    await click("Full RCA detail");
     const header = await screen.findByTestId("ts-rca-header");
     expect(header.querySelector(".rw-case")).not.toBeNull();
     expect(within(header).getByRole("heading", { level: 2 })).toBeInTheDocument();
     expect(header).toHaveTextContent("RCA ID:");
-    expect(screen.queryByTestId("ts-bisect-header")).toBeNull();
+    await click("Hide the full RCA detail");
+    expect(screen.queryByTestId("ts-rca-header")).toBeNull();
   });
 
   it("opens EVERY lane for a case — the engine did not pre-narrow the evidence", async () => {
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
-    await screen.findByTestId("ts-rca-header");
+    await waitFor(() => expect(mocks.correlationDetail).toHaveBeenCalled());
     expect(laneIds()).toEqual([...lanesForSymptom(null), "iris"]);
   });
 
@@ -284,13 +506,14 @@ describe("case-driven — the correlated verdict", () => {
     await waitFor(() => expect(mocks.eventsFeed).toHaveBeenCalledWith(expect.objectContaining({ entity: "wan-r2" })));
   });
 
-  it("says the verdict is loading, then renders it", async () => {
+  it("says the case is being read, then renders the answer", async () => {
     let resolve!: (v: unknown) => void;
     mocks.correlationDetail.mockReturnValue(new Promise((r) => { resolve = r; }));
     render(<InvestigationPage initialCaseId={CASE_ID} />);
     expect(screen.getByTestId("ts-case-loading")).toBeInTheDocument();
     await act(async () => { resolve({ object: openCase(), edges: [] }); });
-    expect(await screen.findByTestId("ts-rca-header")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Full RCA detail" })).toBeInTheDocument();
+    expect(screen.queryByTestId("ts-case-loading")).toBeNull();
   });
 
   it("renders a failed case read VERBATIM instead of spinning forever", async () => {
@@ -304,13 +527,14 @@ describe("case-driven — the correlated verdict", () => {
 
   it("picking a case clears the symptom, and picking a symptom clears the case", async () => {
     await show(<InvestigationPage initialSymptom="dns" />);
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /P-CORRAB/ })); });
-    await screen.findByTestId("ts-rca-header");
-    expect(screen.getByRole("button", { name: /DNS, DHCP/ })).toHaveAttribute("aria-pressed", "false");
+    await pickCase();
+    await waitFor(() => expect(mocks.correlationDetail).toHaveBeenCalledWith(CASE_ID));
+    expect(screen.getByRole("button", { name: /P-CORRAB/ })).toHaveAttribute("aria-pressed", "true");
 
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /DNS, DHCP/ })); });
+    await click("Describe the problem");
+    await click(/DNS, DHCP/);
     expect(screen.getByTestId("ts-bisect-header")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /P-CORRAB/ })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: /DNS, DHCP/ })).toHaveAttribute("aria-pressed", "true");
   });
 });
 
@@ -324,10 +548,10 @@ describe("deep-link initial props", () => {
     expect(screen.getByTestId("ts-bisect-header")).toHaveTextContent("A cloud or SaaS service is degraded");
   });
 
-  it("pre-selects the case from the link", async () => {
+  it("opens step 1 on the CASE tab when the link named a case", async () => {
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
-    await screen.findByTestId("ts-rca-header");
     expect(screen.getByRole("button", { name: /P-CORRAB/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("list", { name: "Symptom" })).toBeNull();
   });
 
   it("starts on the entry prompt when the link named neither", async () => {
@@ -342,53 +566,16 @@ describe("deep-link initial props", () => {
   });
 });
 
-// ── lanes render per their state ─────────────────────────────────────────────
-
-describe("the evidence lanes", () => {
-  it("renders each opened lane with its own honest state", async () => {
-    await show(<InvestigationPage initialSymptom="app_slow" />);
-    await waitFor(() => {
-      expect(document.querySelector('[data-lane="flows"]')?.getAttribute("data-state")).toBe("not_connected");
-    });
-    expect(document.querySelector('[data-lane="dem"]')?.getAttribute("data-state")).toBe("ready");
-    expect(document.querySelector('[data-lane="path"]')?.getAttribute("data-state")).toBe("not_connected");
-    expect(document.querySelector('[data-lane="changed"]')?.getAttribute("data-state")).toBe("empty");
-    expect(document.querySelector('[data-lane="health"]')?.getAttribute("data-state")).toBe("empty");
-  });
-
-  it("every lane names the API behind it", async () => {
-    await show(<InvestigationPage initialSymptom="app_slow" />);
-    for (const id of lanesForSymptom("app_slow") as LaneId[]) {
-      expect(screen.getByRole("region", { name: LANE_TITLE[id] })).toBeInTheDocument();
-    }
-  });
-});
-
 // ── the seam-owned handoff ───────────────────────────────────────────────────
 
 describe("the handoff", () => {
-  it("names the seam owner the evidence attributed, from the tenant registry", async () => {
-    await show(<InvestigationPage initialCaseId={CASE_ID} />);
-    await screen.findByTestId("ts-rca-header");
-    expect(screen.getByTestId("ts-handoff")).toHaveTextContent("Lumen");
-  });
-
-  it("refuses to name an owner on a symptom-only investigation", async () => {
-    await show(<InvestigationPage initialSymptom="dns" />);
-    const handoff = screen.getByTestId("ts-handoff");
-    expect(handoff).toHaveTextContent(/no seam owner is attributed yet/i);
-    expect(within(handoff).getByRole("button", { name: "Create ticket" })).toBeDisabled();
-    expect(within(handoff).getByRole("button", { name: "Export PDF" })).toBeDisabled();
-    expect(handoff).toHaveTextContent(/attached to a correlation case/i);
-  });
-
   it("creates a ticket and re-reads the authoritative state instead of inventing a number", async () => {
     mocks.correlationTickets
       .mockResolvedValueOnce({ status: { state: "none" }, audit: [] })
       .mockResolvedValueOnce({ status: { state: "open", ticket_number: "INC0012345" }, audit: [] });
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
-    await screen.findByTestId("ts-rca-header");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Create ticket" })); });
+    await waitFor(() => expect(mocks.correlationDetail).toHaveBeenCalled());
+    await click("Open ticket");
     expect(mocks.correlationTicketCreate).toHaveBeenCalledWith(CASE_ID);
     expect(await screen.findByText(/Ticket request enqueued to servicenow\./)).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Ticket INC0012345" })).toBeInTheDocument();
@@ -397,15 +584,15 @@ describe("the handoff", () => {
   it("reports a ticket failure verbatim", async () => {
     mocks.correlationTicketCreate.mockRejectedValue(new Error("ticketing not configured"));
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
-    await screen.findByTestId("ts-rca-header");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Create ticket" })); });
+    await waitFor(() => expect(mocks.correlationDetail).toHaveBeenCalled());
+    await click("Open ticket");
     expect(await screen.findByText("Could not create a ticket: ticketing not configured")).toBeInTheDocument();
   });
 
   it("exports the server-built report under the friendly problem id", async () => {
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
-    await screen.findByTestId("ts-rca-header");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Export PDF" })); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Download report" })).toBeEnabled());
+    await click("Download report");
     expect(mocks.downloadRcaReport).toHaveBeenCalledWith(CASE_ID, "P-CORRAB");
     expect(mocks.exportRcaPdf).not.toHaveBeenCalled();
   });
@@ -413,8 +600,8 @@ describe("the handoff", () => {
   it("explains an UN-PROMOTED case as policy, and never prints a document the platform refused", async () => {
     mocks.downloadRcaReport.mockRejectedValue(new FakeNotPromoted("This candidate is not promoted."));
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
-    await screen.findByTestId("ts-rca-header");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Export PDF" })); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Download report" })).toBeEnabled());
+    await click("Download report");
     expect(await screen.findByText(/not promoted.*Promote it from the RCA workspace/i)).toBeInTheDocument();
     expect(mocks.exportRcaPdf).not.toHaveBeenCalled();
   });
@@ -422,8 +609,8 @@ describe("the handoff", () => {
   it("falls back to the client-rendered report when the server report is unavailable", async () => {
     mocks.downloadRcaReport.mockRejectedValue(new Error("502"));
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
-    await screen.findByTestId("ts-rca-header");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Export PDF" })); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Download report" })).toBeEnabled());
+    await click("Download report");
     expect(mocks.exportRcaPdf).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("Could not generate the incident report.")).toBeNull();
   });
@@ -432,8 +619,8 @@ describe("the handoff", () => {
     mocks.downloadRcaReport.mockRejectedValue(new Error("502"));
     mocks.exportRcaPdf.mockReturnValue(false);
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
-    await screen.findByTestId("ts-rca-header");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Export PDF" })); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Download report" })).toBeEnabled());
+    await click("Download report");
     expect(await screen.findByText("Could not generate the incident report.")).toBeInTheDocument();
   });
 });

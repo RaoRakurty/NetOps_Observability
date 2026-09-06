@@ -32,6 +32,7 @@ import {
   isConfigChangeKind,
   laneError,
   laneLoading,
+  laneSummary,
   type LaneId,
   type LaneResult,
   type LaneState,
@@ -59,22 +60,48 @@ function LaneCard({ id, result, children, action }: {
   action?: ReactNode;
 }) {
   const headingId = `lane-h-${id}`;
+  // The raw material — the rows and the API path behind them — sits behind ONE
+  // disclosure so the card leads with a sentence a NOC admin can read. It opens
+  // by default exactly when the lane HAS something (rows, or a failure): the
+  // operator never has to click to discover that a lane found the fault.
+  // `null` = follow the lane's own state; a boolean = the operator decided.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? (result.state === "ready" || result.state === "error");
+  const summary = laneSummary(id, result.state, result.rows.length);
+  const detailId = `lane-d-${id}`;
   return (
     <section className="tsl-card card" role="region" aria-labelledby={headingId} data-lane={id} data-state={result.state}>
       <div className="tsl-head">
         <h3 id={headingId} className="tsl-title">{LANE_TITLE[id]}</h3>
         {action}
       </div>
-      <div className="tsl-src mini-meta">{LANE_SOURCE[id]}</div>
-      {result.state === "loading" && <div className="empty" role="status">Loading…</div>}
-      {result.state === "error" && <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{result.note}</div>}
+
+      {/* One plain sentence, always. For every state but "ready" the lane's own
+          honest note IS that sentence, so it is printed instead — never both. */}
+      {result.state === "loading" && <p className="tsl-sum" role="status">Checking…</p>}
+      {result.state === "error" && <p className="tsl-sum bad" role="alert">{result.note}</p>}
       {result.state === "not_connected" && (
-        <div className="tsl-notwired empty" role="status">
-          <span className="badge">Not connected</span> {result.note}
-        </div>
+        <p className="tsl-sum tsl-notwired" role="status">
+          <span className="badge">Nothing feeding this</span> {result.note}
+        </p>
       )}
-      {result.state === "empty" && <div className="empty" role="status">{result.note}</div>}
-      {result.state === "ready" && children}
+      {result.state === "empty" && <p className="tsl-sum" role="status">{result.note}</p>}
+      {result.state === "ready" && <p className="tsl-sum">{summary}</p>}
+
+      <div className="tsl-detail">
+        <button
+          type="button" className="tsl-disclose" aria-expanded={open} aria-controls={detailId}
+          onClick={() => setOverride(!open)}
+        >
+          {open ? "Hide details" : "Details"}
+        </button>
+        {open && (
+          <div id={detailId} className="tsl-detail-body">
+            {result.state === "ready" && children}
+            <div className="tsl-src">Read from <span className="tsl-api">{LANE_SOURCE[id]}</span></div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

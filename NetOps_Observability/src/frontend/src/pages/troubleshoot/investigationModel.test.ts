@@ -13,12 +13,15 @@ import type { FeedItem, PathHealthItem, ProbePath, PromInstantSeries } from "../
 import {
   ALL_LANES,
   DEVICE_CONFIG_CHANGE_KIND,
+  HOW_IT_WORKS,
   LADDER,
+  PLAIN_LADDER,
   LANE_SOURCE,
   LANE_TITLE,
   SYMPTOMS,
   bisectingHeadline,
   buildLadder,
+  buildPlainLadder,
   changeLabel,
   classifyChangeLane,
   classifyDemLane,
@@ -28,9 +31,13 @@ import {
   classifyPathLane,
   isConfigChangeKind,
   laneError,
+  laneIsQuiet,
   laneLoading,
+  laneSummary,
   lanesForSymptom,
   parseInvestigationHash,
+  plainAnswer,
+  plainOwner,
   symptomById,
   type LaneId,
   type LaneState,
@@ -340,15 +347,15 @@ describe("bisectingHeadline", () => {
   it("asks the question when nothing has been picked", () => {
     const h = bisectingHeadline(null);
     expect(h.title).toBe("What's wrong?");
-    expect(h.sub).toMatch(/pick a symptom/i);
+    expect(h.sub).toMatch(/pick a problem or an open case/i);
   });
 
-  it("states plainly that there is NO verdict yet", () => {
+  it("states plainly that we do not have the cause yet", () => {
     const h = bisectingHeadline(symptomById("bgp_upstream"));
     expect(h.title).toBe("BGP or an upstream is unstable");
-    expect(h.sub).toMatch(/no correlated verdict yet/i);
-    // never borrows the RCA verdict vocabulary
-    expect(h.sub.toLowerCase()).not.toMatch(/confirmed|root cause|because/);
+    expect(h.sub).toMatch(/do not have the cause yet/i);
+    // never borrows the RCA verdict vocabulary, and never engine words either
+    expect(h.sub.toLowerCase()).not.toMatch(/confirmed|root cause|because|correlat|verdict|bisect/);
   });
 });
 
@@ -403,5 +410,174 @@ describe("parseInvestigationHash", () => {
   it.each([null, undefined, "#", "#?", "#/x?", "#/x?&&"] as const)("survives the malformed hash %p", (h) => {
     expect(() => parseInvestigationHash(h as unknown as string)).not.toThrow();
     expect(parseInvestigationHash(h as unknown as string).section).toBe("investigate");
+  });
+});
+
+// ── the OPERATOR reading of the ladder (step 2) ──────────────────────────────
+//
+// Owner, 2026-09-06: "too much jargon… NOC admin doesn't need all the jargon".
+// The engine's seven-rung bisection ladder stays exactly as it was; this is the
+// four-rung reading a NOC admin can act on, with plain status words.
+
+describe("buildPlainLadder", () => {
+  const byId = (rungs: ReturnType<typeof buildPlainLadder>) =>
+    Object.fromEntries(rungs.map((r) => [r.id, r]));
+
+  it("renders exactly four rungs, in operator language, in bottom-up order", () => {
+    expect(buildPlainLadder(ALL_LANES, {}).map((r) => r.label))
+      .toEqual(["Physical link", "Routing", "Overlay / Service", "Application"]);
+    expect(PLAIN_LADDER.map((l) => l.id)).toEqual(["link", "routing", "overlay", "application"]);
+  });
+
+  it("uses no engine vocabulary in any status or note", () => {
+    const states: Partial<Record<LaneId, LaneState>> = {
+      health: "ready", routing: "not_connected", path: "empty", dem: "loading", flows: "empty",
+      events: "ready", changed: "empty",
+    };
+    for (const r of buildPlainLadder(ALL_LANES, states)) {
+      expect(r.status.trim().length).toBeGreaterThan(0);
+      expect(r.note.trim().length).toBeGreaterThan(0);
+      expect(`${r.label} ${r.status} ${r.note}`.toLowerCase())
+        .not.toMatch(/lane|rung|igp|bgp|l2|not_connected|no_data|has_data|bisect|seam/);
+    }
+  });
+
+  it("says 'Problem found here' only when an ANOMALY lane answered", () => {
+    // the health lane's query returns only out-of-state interfaces — a row IS a fault
+    expect(byId(buildPlainLadder(ALL_LANES, { health: "ready" })).link.status)
+      .toBe("Problem found here");
+    // the flow lane returns observations; rows there are evidence, not a verdict
+    expect(byId(buildPlainLadder(ALL_LANES, { flows: "ready" })).application.status)
+      .toBe("Evidence to review");
+  });
+
+  it("says OK only after a lane looked and saw nothing", () => {
+    expect(byId(buildPlainLadder(ALL_LANES, { routing: "empty" })).routing.status).toBe("OK");
+    // still in flight is NOT "OK" — that would be a claim we have not earned
+    expect(byId(buildPlainLadder(ALL_LANES, { routing: "loading" })).routing.status).toBe("Checking…");
+    expect(byId(buildPlainLadder(ALL_LANES, {})).routing.status).toBe("Checking…");
+  });
+
+  it("says it cannot check when nothing feeds the layer", () => {
+    const r = byId(buildPlainLadder(["path", "dem"], { path: "not_connected", dem: "not_connected" })).overlay;
+    expect(r.status).toBe("Can't check");
+    expect(r.state).toBe("blind");
+  });
+
+  it("says a layer this problem does not need was not checked", () => {
+    // routing_adjacency opens routing/health/changed/events — no path, no dem
+    const r = byId(buildPlainLadder(lanesForSymptom("routing_adjacency"), {})).overlay;
+    expect(r.status).toBe("Not checked yet");
+    expect(r.state).toBe("skipped");
+  });
+
+  it("takes the most informative state of the engine layers beneath it", () => {
+    // physical (health) is clean, L2 (health OR events) has rows → the rung reports the finding
+    expect(byId(buildPlainLadder(ALL_LANES, { health: "empty", events: "ready" })).link.state).toBe("found");
+  });
+});
+
+// ── the quiet/loud split and the plain lane summary (step 3) ─────────────────
+
+describe("laneIsQuiet", () => {
+  it("counts nothing-to-say states as quiet, and everything else as loud", () => {
+    expect(laneIsQuiet("empty")).toBe(true);
+    expect(laneIsQuiet("not_connected")).toBe(true);
+    expect(laneIsQuiet("ready")).toBe(false);
+    expect(laneIsQuiet("error")).toBe(false);
+    expect(laneIsQuiet("loading")).toBe(false);
+  });
+});
+
+describe("laneSummary", () => {
+  it("says what a lane found, with a singular and a plural form", () => {
+    expect(laneSummary("health", "ready", 1)).toBe("1 interface is down right now.");
+    expect(laneSummary("health", "ready", 3)).toBe("3 interfaces are down right now.");
+    expect(laneSummary("routing", "ready", 1)).toBe("1 routing neighbour is not up.");
+    expect(laneSummary("changed", "ready", 2)).toBe("2 changes were recorded in this window.");
+  });
+
+  it("says nothing for a state whose own honest note is already the sentence", () => {
+    for (const st of ["loading", "error", "empty", "not_connected"] as LaneState[]) {
+      expect(laneSummary("health", st, 0)).toBe("");
+    }
+  });
+
+  it("has a sentence for every lane", () => {
+    for (const l of ALL_LANES) expect(laneSummary(l, "ready", 2).trim().length).toBeGreaterThan(0);
+  });
+});
+
+// ── the answer, in plain words (step 4) ──────────────────────────────────────
+
+const rca = (over: Partial<Parameters<typeof plainAnswer>[0] & object> = {}) => ({
+  verdictState: "suspected" as const, decision: { text: "" }, summary: "", title: "Upstream link fault",
+  ...over,
+});
+
+describe("plainAnswer", () => {
+  it("says plainly that there is no cause when no case backs the investigation", () => {
+    const a = plainAnswer(null);
+    expect(a.state).toBe("unconfirmed");
+    expect(a.headline).toBe("No cause confirmed yet");
+    expect(a.detail).toMatch(/ask iris/i);
+  });
+
+  it("leads with the engine's decision for a CONFIRMED verdict", () => {
+    const a = plainAnswer(rca({ verdictState: "confirmed", decision: { text: "The carrier's circuit is down." }, summary: "Two independent observers saw it." }));
+    expect(a).toEqual({ state: "confirmed", headline: "The carrier's circuit is down.", detail: "Two independent observers saw it." });
+  });
+
+  it("never upgrades a SUSPECTED verdict past 'likely'", () => {
+    const a = plainAnswer(rca({ possiblyCause: "possibly because of the upstream circuit" }));
+    expect(a.state).toBe("likely");
+    expect(a.headline).toBe("possibly because of the upstream circuit");
+  });
+
+  it("says a ruled-out cause was ruled out rather than showing a blank", () => {
+    const a = plainAnswer(rca({ verdictState: "contradicted" }));
+    expect(a.state).toBe("unconfirmed");
+    expect(a.headline).toMatch(/ruled out/i);
+    expect(a.detail.trim().length).toBeGreaterThan(0);
+  });
+
+  it("says an undetermined verdict is undetermined", () => {
+    expect(plainAnswer(rca({ verdictState: "undetermined" })).headline).toBe("No cause confirmed yet");
+  });
+
+  it("names a recovered incident as recovered", () => {
+    expect(plainAnswer(rca({ verdictState: "recovered" })).state).toBe("recovered");
+  });
+
+  it("always produces a non-empty headline", () => {
+    for (const v of ["confirmed", "suspected", "undetermined", "contradicted", "recovered"] as const) {
+      expect(plainAnswer(rca({ verdictState: v })).headline.trim().length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("plainOwner", () => {
+  it("returns the attributed owner verbatim", () => {
+    expect(plainOwner("Lumen (DIA #12345) · ISP / carrier")).toBe("Lumen (DIA #12345) · ISP / carrier");
+  });
+
+  it("never invents an owner — it says nobody is named yet", () => {
+    for (const v of ["", "   ", undefined]) {
+      expect(plainOwner(v)).toMatch(/nobody is named yet/i);
+    }
+  });
+});
+
+// ── the three-line intro ─────────────────────────────────────────────────────
+
+describe("HOW_IT_WORKS", () => {
+  it("is exactly three plain lines, in the order the operator works them", () => {
+    expect(HOW_IT_WORKS).toHaveLength(3);
+    expect(HOW_IT_WORKS[0]).toMatch(/what is wrong/i);
+    expect(HOW_IT_WORKS[1]).toMatch(/evidence/i);
+    expect(HOW_IT_WORKS[2]).toMatch(/answer/i);
+    for (const l of HOW_IT_WORKS) {
+      expect(l.toLowerCase()).not.toMatch(/lane|rung|seam|correlat|verdict|bisect|signal/);
+    }
   });
 });

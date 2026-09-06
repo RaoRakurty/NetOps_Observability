@@ -209,13 +209,16 @@ describe("deep links", () => {
     expect(pressed()).toBe("Investigation");
     expect(screen.getByRole("button", { name: /BGP or an upstream is unstable/ }))
       .toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByTestId("ts-bisect-header")).toHaveTextContent(/no correlated verdict yet/i);
+    expect(screen.getByTestId("ts-bisect-header")).toHaveTextContent(/do not have the cause yet/i);
   });
 
   it("opens the investigation on the linked correlation case", async () => {
     await show(`#/investigate/troubleshooting?case=${CASE_ID}`);
     expect(pressed()).toBe("Investigation");
     await waitFor(() => expect(mocks.correlationDetail).toHaveBeenCalledWith(CASE_ID));
+    // the engine's RCA header is one disclosure away — the plain answer leads
+    expect(await screen.findByRole("button", { name: "Full RCA detail" })).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Full RCA detail" })); });
     expect(await screen.findByTestId("ts-rca-header")).toBeInTheDocument();
   });
 
@@ -223,7 +226,7 @@ describe("deep links", () => {
     await show("#/investigate/troubleshooting?section=investigate&symptom=made_up");
     expect(pressed()).toBe("Investigation");
     expect(screen.queryByTestId("ts-bisect-header")).toBeNull();
-    expect(screen.getByText(/pick a symptom or an open correlation case/i)).toBeInTheDocument();
+    expect(screen.getByText(/pick a problem or an open case/i)).toBeInTheDocument();
   });
 
   it("ignores a case token that is not an opaque id", async () => {

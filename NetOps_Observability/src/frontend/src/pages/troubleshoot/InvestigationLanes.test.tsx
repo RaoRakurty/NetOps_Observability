@@ -91,7 +91,7 @@ describe("every lane renders the loading state before its source answers", () =>
     const Lane = LANE_COMPONENT[id];
     render(<Lane scope={scope} />);
     expect(stateOf(id)).toBe("loading");
-    expect(within(card(id)).getByRole("status")).toHaveTextContent("Loading…");
+    expect(within(card(id)).getByRole("status")).toHaveTextContent("Checking…");
   });
 });
 
@@ -115,7 +115,7 @@ describe("not_connected — the source was never wired", () => {
     mocks.pathsHealth.mockResolvedValue({ paths: [], count: 0 });
     render(<DemLane scope={scope} />);
     await waitFor(() => expect(stateOf("dem")).toBe("not_connected"));
-    expect(within(card("dem")).getByText("Not connected")).toBeInTheDocument();
+    expect(within(card("dem")).getByText("Nothing feeding this")).toBeInTheDocument();
     expect(card("dem")).toHaveTextContent(/probe collector is not measuring/i);
   });
 
@@ -155,7 +155,7 @@ describe("empty — the source is wired and was quiet", () => {
     render(<ChangedLane scope={scope} />);
     await waitFor(() => expect(stateOf("changed")).toBe("empty"));
     expect(card("changed")).toHaveTextContent(/no change was recorded/i);
-    expect(within(card("changed")).queryByText("Not connected")).toBeNull();
+    expect(within(card("changed")).queryByText("Nothing feeding this")).toBeNull();
   });
 
   it("events: no rows is EMPTY, never not connected", async () => {
@@ -170,7 +170,7 @@ describe("empty — the source is wired and was quiet", () => {
     render(<HealthLane scope={scope} />);
     await waitFor(() => expect(stateOf("health")).toBe("empty"));
     expect(card("health")).toHaveTextContent(/nothing is out of state right now/i);
-    expect(within(card("health")).queryByText("Not connected")).toBeNull();
+    expect(within(card("health")).queryByText("Nothing feeding this")).toBeNull();
   });
 
   it("routing: adjacencies polled and all established", async () => {
@@ -376,5 +376,70 @@ describe("remote-authored values are escaped text", () => {
     await waitFor(() => expect(stateOf("events")).toBe("ready"));
     expect(screen.getByText(hostile)).toBeInTheDocument();
     expect(container.querySelector("b")).toBeNull();
+  });
+});
+
+// ── the card shell: one plain sentence, raw material behind "Details" ─────────
+//
+// Owner, 2026-09-06: the page showed everything at once, in engine vocabulary.
+// The evidence card now LEADS with a sentence a NOC admin can read and keeps the
+// rows and the API path behind one disclosure — open when the lane has something
+// to show, closed when it does not, and always openable.
+
+describe("the evidence card leads with one plain sentence", () => {
+  it("counts what a lane found, in words", async () => {
+    mocks.metricsQuery.mockResolvedValue({
+      status: "success", data: { resultType: "vector", result: [promSeries({ device: "wan-r1", ifName: "Gi0/1" })] },
+    });
+    render(<HealthLane scope={scope} />);
+    await waitFor(() => expect(stateOf("health")).toBe("ready"));
+    expect(card("health")).toHaveTextContent("1 interface is down right now.");
+  });
+
+  it("pluralises that count", async () => {
+    mocks.metricsQuery.mockResolvedValue({
+      status: "success",
+      data: { resultType: "vector", result: [promSeries({ device: "a", ifName: "1" }), promSeries({ device: "b", ifName: "2" })] },
+    });
+    render(<HealthLane scope={scope} />);
+    await waitFor(() => expect(stateOf("health")).toBe("ready"));
+    expect(card("health")).toHaveTextContent("2 interfaces are down right now.");
+  });
+
+  it("opens the details when the lane HAS something, and closes them on demand", async () => {
+    render(<EventsLane scope={scope} />);
+    await waitFor(() => expect(stateOf("events")).toBe("ready"));
+    expect(within(card("events")).getByText(LANE_SOURCE.events)).toBeInTheDocument();
+    fireEvent.click(within(card("events")).getByRole("button", { name: "Hide details" }));
+    expect(within(card("events")).queryByText(LANE_SOURCE.events)).toBeNull();
+    fireEvent.click(within(card("events")).getByRole("button", { name: "Details" }));
+    expect(within(card("events")).getByText(LANE_SOURCE.events)).toBeInTheDocument();
+  });
+
+  it("keeps the raw material closed for a QUIET lane — and still lets the operator open it", async () => {
+    mocks.eventsFeed.mockResolvedValue({ items: [] });
+    render(<EventsLane scope={scope} />);
+    await waitFor(() => expect(stateOf("events")).toBe("empty"));
+    expect(within(card("events")).queryByText(LANE_SOURCE.events)).toBeNull();
+    // the honest sentence is NOT hidden — only the raw material is
+    expect(card("events")).toHaveTextContent(/no event was recorded/i);
+    fireEvent.click(within(card("events")).getByRole("button", { name: "Details" }));
+    expect(within(card("events")).getByText(LANE_SOURCE.events)).toBeInTheDocument();
+  });
+
+  it("opens the details for a FAILED lane, so the failure is never a click away", async () => {
+    mocks.pathsHealth.mockRejectedValue(new Error("upstream 502"));
+    render(<DemLane scope={scope} />);
+    await waitFor(() => expect(stateOf("dem")).toBe("error"));
+    expect(within(card("dem")).getByRole("alert")).toBeInTheDocument();
+    expect(within(card("dem")).getByText(LANE_SOURCE.dem)).toBeInTheDocument();
+  });
+
+  it("titles every lane in the operator's words, not the engine's", () => {
+    for (const t of Object.values(LANE_TITLE)) {
+      expect(t).not.toMatch(/telemetry|protocol health|correlated|digital experience|DEM/i);
+    }
+    expect(LANE_TITLE.health).toBe("Devices & links");
+    expect(LANE_TITLE.dem).toBe("User experience");
   });
 });

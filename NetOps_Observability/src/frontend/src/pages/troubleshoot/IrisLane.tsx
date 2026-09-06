@@ -99,9 +99,9 @@ export default function IrisLane({ caseId, symptomLabel, onOpenDrawer }: {
   const hops = chainHops(ans);
 
   return (
-    <section className="tsl-card card tsl-iris" role="region" aria-labelledby="lane-h-iris" data-lane="iris">
+    <section className="ts-iris" role="region" aria-labelledby="lane-h-iris" data-lane="iris">
       <div className="tsl-head">
-        <h3 id="lane-h-iris" className="tsl-title">Iris co-pilot</h3>
+        <h3 id="lane-h-iris" className="tsl-title">Ask Iris</h3>
         <div className="tsl-head-actions">
           <button type="button" className="btn-accent" onClick={ask} disabled={busy} aria-busy={busy}>
             {busy ? "Thinking…" : ans ? "Re-ask" : "Ask Iris"}
@@ -111,14 +111,12 @@ export default function IrisLane({ caseId, symptomLabel, onOpenDrawer }: {
           )}
         </div>
       </div>
-      <div className="tsl-src mini-meta">/api/ai/ask</div>
-
-      {err && <p className="empty" role="alert" style={{ color: "var(--bad)" }}>Iris: {err}</p>}
+      {err && <p className="ts-bad" role="alert">Iris: {err}</p>}
 
       {!ans && !busy && !err && (
-        <p className="mini-meta tsl-foot">
-          Ask for a grounded, evidence-cited read of this investigation — what the evidence supports, what is missing,
-          and a recommended next step. Nothing is executed on your behalf.
+        <p className="tsl-sum">
+          Iris reads the evidence above and tells you what it supports, what is missing, and what to check next.
+          It cites what it read, and it never changes anything on your network.
         </p>
       )}
 
@@ -183,6 +181,7 @@ export default function IrisLane({ caseId, symptomLabel, onOpenDrawer }: {
           )}
         </div>
       )}
+      <div className="tsl-src">Read from <span className="tsl-api">/api/ai/ask</span></div>
     </section>
   );
 }

@@ -143,7 +143,7 @@ describe("the ask carries the investigation and nothing else", () => {
   it("names the endpoint it reads and offers no execution", () => {
     render(<IrisLane />);
     expect(screen.getByText("/api/ai/ask")).toBeInTheDocument();
-    expect(screen.getByText(/nothing is executed on your behalf/i)).toBeInTheDocument();
+    expect(screen.getByText(/never changes anything on your network/i)).toBeInTheDocument();
   });
 
   it("disables the button while thinking and re-labels it after an answer", async () => {

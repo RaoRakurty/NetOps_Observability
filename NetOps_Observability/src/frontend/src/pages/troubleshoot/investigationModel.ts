@@ -34,14 +34,16 @@ export type LaneId =
   | "flows"
   | "events";
 
+// The lane's name in the operator's words. These are TITLES A NOC ADMIN READS,
+// not engine vocabulary: "Devices & links", never "device/protocol health".
 export const LANE_TITLE: Record<LaneId, string> = {
-  dem: "Digital experience & probes",
-  changed: "What changed",
-  health: "Device & protocol health",
-  path: "Path",
-  routing: "Routing & BGP",
-  flows: "Flows",
-  events: "Correlated events",
+  dem: "User experience",
+  changed: "Recent changes",
+  health: "Devices & links",
+  path: "Network path",
+  routing: "Routing",
+  flows: "Traffic",
+  events: "Alerts & events",
 };
 
 /** The API each lane reads, named on the card so an operator can go verify it. */
@@ -228,6 +230,141 @@ export function buildLadder(openLanes: LaneId[], states: Partial<Record<LaneId, 
   });
 }
 
+// ── The PLAIN ladder — step 2, "Where is it breaking?" ───────────────────────
+//
+// The seven-rung bisection ladder above is the ENGINE's ladder and stays exactly
+// as it was (it is what earns a rung its state). This is its OPERATOR reading:
+// four rungs a NOC admin recognises without training — Physical link · Routing ·
+// Overlay/Service · Application — each with a plain status word instead of an
+// engine state name.
+//
+// "Logs & changes" is deliberately NOT a rung: change and alert evidence is not
+// a layer of the network. It reads as its own evidence card in step 3.
+
+export type PlainRungId = "link" | "routing" | "overlay" | "application";
+
+export interface PlainLayer {
+  id: PlainRungId;
+  label: string;
+  /** The engine ladder layers this plain rung reads. */
+  layers: LadderLayerId[];
+}
+
+export const PLAIN_LADDER: PlainLayer[] = [
+  { id: "link", label: "Physical link", layers: ["physical", "l2"] },
+  { id: "routing", label: "Routing", layers: ["igp", "bgp"] },
+  { id: "overlay", label: "Overlay / Service", layers: ["path"] },
+  { id: "application", label: "Application", layers: ["application"] },
+];
+
+/**
+ * The lanes whose query returns ONLY out-of-state rows: a row on one of them is
+ * a fault, so the rung may honestly say "Problem found here". Every other lane
+ * returns observations, and rows on it earn the weaker "Evidence to review" —
+ * we never upgrade "we have data" into "we found the fault".
+ */
+export const ANOMALY_LANES: LaneId[] = ["health", "routing"];
+
+export type PlainRungState = "found" | "checking" | "ok" | "blind" | "skipped";
+
+export interface PlainRung {
+  id: PlainRungId;
+  label: string;
+  state: PlainRungState;
+  /** The status word an operator reads. Never empty. */
+  status: string;
+  /** One plain sentence saying why it says that. Never empty. */
+  note: string;
+}
+
+const PLAIN_STATUS: Record<PlainRungState, string> = {
+  found: "Evidence to review",
+  checking: "Checking…",
+  ok: "OK",
+  blind: "Can't check",
+  skipped: "Not checked yet",
+};
+
+const PLAIN_NOTE: Record<PlainRungState, string> = {
+  found: "We found something here worth reading.",
+  checking: "Still reading this layer.",
+  ok: "We looked and found nothing wrong here.",
+  blind: "Nothing is feeding us data for this layer.",
+  skipped: "This problem does not need this layer.",
+};
+
+/** The worst-first order in which a plain rung takes its state from its layers. */
+const PLAIN_PRECEDENCE: RungState[] = ["has_data", "checking", "no_data", "not_connected", "not_opened"];
+
+const PLAIN_OF: Record<RungState, PlainRungState> = {
+  has_data: "found",
+  checking: "checking",
+  no_data: "ok",
+  not_connected: "blind",
+  not_opened: "skipped",
+};
+
+/**
+ * buildPlainLadder — the four-rung operator reading of buildLadder. A rung takes
+ * the most informative state of the engine layers under it (evidence beats
+ * "still checking" beats "clean" beats "blind" beats "not needed"), and only an
+ * ANOMALY lane may promote "Evidence to review" to "Problem found here".
+ */
+export function buildPlainLadder(
+  openLanes: LaneId[],
+  states: Partial<Record<LaneId, LaneState>>,
+): PlainRung[] {
+  const engine = new Map(buildLadder(openLanes, states).map((r) => [r.id, r.state]));
+  const open = new Set(openLanes);
+  return PLAIN_LADDER.map((p) => {
+    const sub = p.layers.map((l) => engine.get(l) ?? "not_opened");
+    const worst = PLAIN_PRECEDENCE.find((c) => sub.includes(c)) ?? "not_opened";
+    const state = PLAIN_OF[worst];
+    const lanes = p.layers.flatMap((l) => LADDER.find((x) => x.id === l)?.lanes ?? []);
+    const problem = state === "found"
+      && lanes.some((l) => open.has(l) && ANOMALY_LANES.includes(l) && states[l] === "ready");
+    return {
+      id: p.id,
+      label: p.label,
+      state,
+      status: problem ? "Problem found here" : PLAIN_STATUS[state],
+      note: problem ? "Something on this layer is out of state right now." : PLAIN_NOTE[state],
+    };
+  });
+}
+
+// ── Evidence cards — plain summaries and the quiet/loud split (step 3) ───────
+
+/**
+ * A QUIET lane has nothing to report: the source is wired and was silent, or it
+ * was never wired at all. Quiet lanes are collapsed behind one toggle so the
+ * page leads with what it actually found — they are never DELETED, because
+ * "we cannot see this" is a fact an operator has to be able to reach.
+ */
+export function laneIsQuiet(state: LaneState): boolean {
+  return state === "empty" || state === "not_connected";
+}
+
+const LANE_FINDING: Record<LaneId, (n: number) => string> = {
+  dem: (n) => `${n} measured user path${n === 1 ? "" : "s"} — the worst are listed first.`,
+  changed: (n) => `${n} change${n === 1 ? " was" : "s were"} recorded in this window.`,
+  health: (n) => `${n} interface${n === 1 ? " is" : "s are"} down right now.`,
+  path: (n) => `${n} traceroute${n === 1 ? "" : "s"} recorded for this scope.`,
+  routing: (n) => `${n} routing neighbour${n === 1 ? " is" : "s are"} not up.`,
+  flows: (n) => `${n} busiest conversation${n === 1 ? "" : "s"} in this window.`,
+  events: (n) => `${n} alert${n === 1 ? "" : "s"} or event${n === 1 ? "" : "s"} in this window.`,
+};
+
+/**
+ * laneSummary — the ONE plain sentence a lane card leads with. For a lane with
+ * rows it says what was found and how much; for every other state the lane's own
+ * honest note is already that sentence, so this returns "" and the card prints
+ * the note instead of saying the same thing twice.
+ */
+export function laneSummary(id: LaneId, state: LaneState, rows: number): string {
+  return state === "ready" ? LANE_FINDING[id](rows) : "";
+}
+
 // ── "What changed" — change kinds and their operator labels ──────────────────
 
 /**
@@ -356,20 +493,101 @@ export function classifyEventsLane(items: FeedItem[]): LaneResult<FeedItem> {
   return { state: "ready", note: "", rows: items };
 }
 
+// ── Step 0: how the page works, in three lines ───────────────────────────────
+
+/**
+ * The whole page in three sentences, in the order the operator will work them.
+ * Kept here (not inline in the JSX) so the copy is asserted by a test rather
+ * than re-invented every time the layout moves.
+ */
+export const HOW_IT_WORKS: string[] = [
+  "Tell us what is wrong — pick the problem you are seeing, or an open case.",
+  "We gather the evidence — Correlix checks each layer of the network for you.",
+  "You get an answer — a likely cause, or a clean handoff to the owner or vendor support.",
+];
+
 // ── Verdict header (symptom-only) ────────────────────────────────────────────
 
 /**
  * bisectingHeadline — the honest header used when the operator picked a symptom
- * but no correlation case backs it. It states that there is NO verdict; it never
- * borrows RCA's verdict language.
+ * but no correlation case backs it. It states plainly that we do not have the
+ * cause; it never borrows RCA's verdict language, and it uses no engine words.
  */
 export function bisectingHeadline(symptom: Symptom | null): { title: string; sub: string } {
   return {
     title: symptom ? symptom.label : "What's wrong?",
     sub: symptom
-      ? "No correlated verdict yet — bisecting the layers below."
-      : "Pick a symptom or an open correlation case to start an investigation.",
+      ? "We do not have the cause yet. We are working through the layers below."
+      : "Pick a problem or an open case to start.",
   };
+}
+
+// ── Step 4: the answer, in plain words ───────────────────────────────────────
+
+/** The five verdict states the RCA adapter can reach, structurally typed so the
+ *  model stays independent of the RCA workspace's own module. */
+export type AnswerSource = {
+  verdictState: "confirmed" | "suspected" | "undetermined" | "contradicted" | "recovered";
+  decision: { text: string };
+  summary: string;
+  possiblyCause?: string;
+  title: string;
+};
+
+export type AnswerState = "confirmed" | "likely" | "unconfirmed" | "recovered";
+
+export interface PlainAnswer {
+  state: AnswerState;
+  /** The one-line answer. Never empty. */
+  headline: string;
+  /** The supporting sentence — may be empty when the engine offered none. */
+  detail: string;
+}
+
+const NO_ANSWER: PlainAnswer = {
+  state: "unconfirmed",
+  headline: "No cause confirmed yet",
+  detail: "Read the evidence above, or ask Iris to read it for you.",
+};
+
+/**
+ * plainAnswer — the engine verdict said in NOC words. It never upgrades what the
+ * engine said: a suspected verdict reads "Most likely cause", a contradicted one
+ * says the leading cause was ruled out, and no verdict at all says exactly that
+ * rather than showing a reassuring blank.
+ */
+export function plainAnswer(c: AnswerSource | null | undefined): PlainAnswer {
+  if (!c) return NO_ANSWER;
+  const detail = (c.summary || "").trim();
+  const lead = (c.decision?.text || "").trim() || (c.title || "").trim();
+  switch (c.verdictState) {
+    case "confirmed":
+      return { state: "confirmed", headline: lead || "Cause confirmed", detail };
+    case "recovered":
+      return { state: "recovered", headline: "This problem has recovered", detail: detail || lead };
+    case "contradicted":
+      return {
+        state: "unconfirmed",
+        headline: "The leading cause was ruled out",
+        detail: detail || "The evidence contradicted it. Keep looking, or hand it to the owner.",
+      };
+    case "suspected":
+      return {
+        state: "likely",
+        headline: (c.possiblyCause || "").trim() || lead || "A likely cause, not yet confirmed",
+        detail,
+      };
+    default:
+      return { ...NO_ANSWER, detail: detail || NO_ANSWER.detail };
+  }
+}
+
+/** The owner sentence for step 4 — plain words, and never an invented owner. */
+export function plainOwner(ownershipLabel: string | undefined): string {
+  const o = (ownershipLabel || "").trim();
+  return o
+    ? o
+    : "Nobody is named yet — we name an owner only once the evidence points at one.";
 }
 
 // ── Deep link ────────────────────────────────────────────────────────────────
