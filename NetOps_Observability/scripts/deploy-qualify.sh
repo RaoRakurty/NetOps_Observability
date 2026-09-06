@@ -475,7 +475,7 @@ CANONICAL_TOPICS=(
   netops.controller_events netops.app.edge netops.verification
   netops.cloudlogs netops.cloudcosts netops.deadletter
   netops.wireless_sessions netops.wireless_events
-  netops.security netops.bgp
+  netops.security netops.bgp netops.experience
 )
 
 # Names the topics that are absent, one line, space separated. Prints the
