@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package snmpcred
 
 // sentinel.go — self-healing SNMP credential resolution (extracted P2 RA.14).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dataprotect
 
 // config_test.go — the backup INTENT: what an operator may store, and the two

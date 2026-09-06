@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // path_health_baselines_test.go — PBH V1 precompute: hour-of-week bucketing,

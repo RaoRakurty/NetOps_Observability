@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // caseconn_retry.go — the bounded retry every TAC connector call runs through

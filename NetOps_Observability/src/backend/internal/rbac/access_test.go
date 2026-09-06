@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rbac
 
 // access_test.go — the deny-wins reachability algorithms over pure fixtures.

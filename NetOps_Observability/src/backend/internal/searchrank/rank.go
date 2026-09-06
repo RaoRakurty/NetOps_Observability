@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package searchrank is the unified-search ranking core (Phase-2 W4.3,
 // extracted from package main's search_unified.go): the hit/score model, the
 // prefix/word/substring ranking, the case-id hex parser, the per-kind result

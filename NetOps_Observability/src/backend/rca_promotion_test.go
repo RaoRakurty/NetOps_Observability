@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // rca_promotion_test.go — #113 point 3: RCA documents are a promoted tier, not

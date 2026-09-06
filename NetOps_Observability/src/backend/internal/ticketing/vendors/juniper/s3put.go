@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package juniper
 
 // s3put.go — the middle leg of Juniper's three-step attachment flow:

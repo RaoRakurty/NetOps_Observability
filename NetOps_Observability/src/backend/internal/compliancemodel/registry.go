@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package compliancemodel
 
 // registry.go — THE FRAMEWORK CATALOGUE AND THE SHIPPED DEFAULT SET.

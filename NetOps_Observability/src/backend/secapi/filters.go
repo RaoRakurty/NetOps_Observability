@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package secapi is the READ surface over the security-findings store plus the
 // small mutable control-plane state behind it (P3-API,
 // docs/design/SECURITY_FINDINGS_STORE_DECISION_2026-08-28.md).

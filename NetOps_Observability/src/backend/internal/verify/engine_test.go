@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package verify
 
 // verify_engine_test.go — Active Verification engine (RCA spec item 8):

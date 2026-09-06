@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // flows_apps.go — GET /api/flows/apps (#81 P1b). Flow traffic attributed per

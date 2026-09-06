@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // svc_rollup_schema.go — #69 P2 service flow attribution rollup schema

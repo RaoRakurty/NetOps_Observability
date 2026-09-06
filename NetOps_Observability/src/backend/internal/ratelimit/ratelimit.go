@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package ratelimit is the per-key fixed-window request limiter guarding the
 // export, verify and copilot endpoints against flooding and enumeration.
 // Keys are AUTHENTICATED identities (tenant, or tenant|user) — never a

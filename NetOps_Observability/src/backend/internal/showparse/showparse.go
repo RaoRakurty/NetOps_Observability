@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package showparse is Correlix's DETERMINISTIC SHOW-OUTPUT PARSER LIBRARY —
 // the in-house equivalent of Genie, scoped to the state battery the Iris
 // troubleshooting model actually names (design

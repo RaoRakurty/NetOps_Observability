@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package wireless
 
 // architecture_proof_test.go — the §15 multi-vendor architecture proof

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // auth_config_test.go — unit + HTTP tests for the runtime-configurable native

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // wireless_devices_test.go — the wireless→fleet projection (#128 follow-on):

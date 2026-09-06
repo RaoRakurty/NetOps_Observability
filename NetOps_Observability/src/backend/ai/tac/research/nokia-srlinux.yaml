@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 vendor: nokia-srlinux
 # Nokia SR Linux (SR Linux CLI, `nokia/srlinux` dialect).
 # Every command below appears literally in one of the `sources` pages that was

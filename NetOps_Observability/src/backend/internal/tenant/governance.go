@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tenant
 
 // governance.go — the per-tenant governance store (Phase-2 W3.2, extracted

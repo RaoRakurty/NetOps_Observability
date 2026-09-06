@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package seam
 
 // seam_test.go — the pure lifecycle/validation/identity contracts: the

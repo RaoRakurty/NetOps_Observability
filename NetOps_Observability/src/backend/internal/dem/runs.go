@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dem
 
 // runs.go — the PER-RUN record: the prober's immutable "this check executed and

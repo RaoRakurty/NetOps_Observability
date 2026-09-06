@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Command correlix-debug traces one record through the Correlix pipeline and
 // packages the evidence (docs/design/PIPELINE_DEBUGGER_2026-09-04.md).
 //

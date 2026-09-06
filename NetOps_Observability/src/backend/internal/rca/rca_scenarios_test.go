@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // rca_scenarios_test.go — the table-driven generic scenario harness (mission

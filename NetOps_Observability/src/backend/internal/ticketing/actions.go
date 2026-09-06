@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // actions.go — the canonical ticket-audit `action` vocabulary (P2 RA.4): the

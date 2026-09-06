@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package protocoldiag
 
 // sshrunner.go — the POLICY layer between the Collector and the SSH transport.

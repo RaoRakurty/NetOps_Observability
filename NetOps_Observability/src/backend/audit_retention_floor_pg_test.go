@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // audit_retention_floor_pg_test.go — tracker 235's Postgres half.

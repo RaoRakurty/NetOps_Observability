@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dem
 
 // stats.go — turning the experience time series into WindowStats.

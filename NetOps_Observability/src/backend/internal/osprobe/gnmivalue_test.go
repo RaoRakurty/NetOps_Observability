@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package osprobe
 
 // gnmivalue_test.go — leaf extraction, which is where a gNMI rung either finds

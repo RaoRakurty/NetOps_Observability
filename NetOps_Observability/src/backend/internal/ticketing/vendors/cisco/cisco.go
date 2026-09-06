@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package cisco is the wire client for Cisco's two case-facing services: CXD
 // (attach a file to an existing SR) and Smart Bonding (open an SR).
 //

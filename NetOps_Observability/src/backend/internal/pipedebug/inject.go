@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package pipedebug
 
 // inject.go — building and sending the ONE marked synthetic record a trace

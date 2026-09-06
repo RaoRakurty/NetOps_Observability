@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // skill_select_test.go — selection must be DETERMINISTIC and reproducible by an

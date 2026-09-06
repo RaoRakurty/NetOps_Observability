@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // verify_trigger.go — the Active Verification auto-trigger (RCA spec item 8).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package pipedebug
 
 // deps.go — the injected collaborators the debug API runs over (§2/§5: this

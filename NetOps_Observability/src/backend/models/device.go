@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package models holds the shared data types exchanged between subsystems
 // and over the public HTTP API. Keep this package free of behaviour so it
 // can be imported anywhere without creating dependency cycles.

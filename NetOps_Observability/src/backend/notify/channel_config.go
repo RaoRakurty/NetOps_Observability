@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package notify
 
 // channel_config.go — the notification channel-config model + constructors

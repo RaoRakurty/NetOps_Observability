@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package verify
 
 // helpers.go — small pure helpers this package needs, duplicated from package

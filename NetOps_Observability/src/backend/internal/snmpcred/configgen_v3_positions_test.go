@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package snmpcred
 
 // configgen_v3_positions_test.go — the two structural contracts a generated

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package hardening is Correlix's network-device hardening rule engine (§5e of
 // SECURITY_OBSERVABILITY_HLD_2026-08-25): the security-track differentiator.
 //

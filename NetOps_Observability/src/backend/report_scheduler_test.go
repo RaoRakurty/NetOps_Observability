@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // report_scheduler_test.go — the scheduler-side pure tests that stayed with

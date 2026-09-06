@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // caseconn_juniper.go — Juniper Service Case API as a CaseConnector.

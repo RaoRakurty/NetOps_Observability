@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // caseconn_itsm.go — the Tier-1 ITSM connectors: ServiceNow and Jira as

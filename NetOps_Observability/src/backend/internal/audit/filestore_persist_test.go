@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package audit
 
 // filestore_persist_test.go — D-11. The live api logged, on repeat:

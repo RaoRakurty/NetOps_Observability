@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package notify
 
 // platform_scope_test.go — #103: the platform self-health lane accepts ONLY

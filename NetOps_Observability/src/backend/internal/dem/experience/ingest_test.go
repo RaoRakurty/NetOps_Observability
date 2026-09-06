@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // ingest_test.go — tracker 254: the two ingest routes' contract.

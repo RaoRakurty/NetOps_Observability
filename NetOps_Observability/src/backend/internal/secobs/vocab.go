@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package secobs is the security-observability domain (SEC-020/021): the single
 // vocabulary for security metrics and audit events, the transport-inventory
 // reader, and the posture assembly that joins declared policy with observed

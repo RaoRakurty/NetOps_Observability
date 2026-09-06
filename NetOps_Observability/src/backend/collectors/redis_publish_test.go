@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package collectors
 
 // SEC-012.1: a failed evidence publish must be COUNTED, never silent — the

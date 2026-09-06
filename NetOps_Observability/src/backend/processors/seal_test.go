@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package processors
 
 // seal_test.go — the `seal` action's contract inside the processor framework.

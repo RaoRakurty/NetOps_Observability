@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package topology
 
 // cloudgraph_test.go — #130a/b. The path graph reaches into the cloud, and says

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package metering records WHAT A CUSTOMER ACTUALLY CONSUMED. It is a
 // SEPARATE DATA CONTRACT from internal/entitlement + internal/licence, which
 // answer a different question, and the two must never be conflated (owner

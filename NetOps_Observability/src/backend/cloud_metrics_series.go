@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_metrics_series.go — tenant-scoped cloud metric time-series (Wave 5 #14

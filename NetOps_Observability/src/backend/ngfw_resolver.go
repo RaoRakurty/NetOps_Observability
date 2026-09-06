@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // ngfw_resolver.go — Application Identification: the NGFW App-ID overlay (#81

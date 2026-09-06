@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package parsercov
 
 // http.go — the HTTP surface. Every handler runs the same steps, in this order,

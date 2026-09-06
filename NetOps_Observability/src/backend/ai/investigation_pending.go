@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // investigation_pending.go — the WRITE side of IRIS Phase B investigation

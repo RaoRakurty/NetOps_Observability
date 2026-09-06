@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package showparse
 
 // showparse_test.go — the library's contract proofs.

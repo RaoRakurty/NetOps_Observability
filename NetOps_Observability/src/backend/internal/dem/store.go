@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dem
 
 // store.go — the target catalogue's non-Postgres backend.

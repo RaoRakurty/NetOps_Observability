@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // corr_merge_budget.go — bound the background-merge cost of the correlation

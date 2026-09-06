@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // views.go — the API/UI projections of a connector (Phase-2 W3.10, extracted

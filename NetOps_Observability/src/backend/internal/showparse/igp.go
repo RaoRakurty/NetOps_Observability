@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package showparse
 
 // igp.go — OSPF and IS-IS adjacency-table parsers (CmdOSPFNeighbor,

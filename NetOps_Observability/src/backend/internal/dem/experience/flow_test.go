@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // flow_test.go — the passive-flow producer (tracker 252).

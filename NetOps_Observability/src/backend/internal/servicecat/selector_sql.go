@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package servicecat
 
 // selector_sql.go — the selector-spec → ClickHouse flow-condition compiler

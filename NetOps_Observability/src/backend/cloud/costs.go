@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // costs.go — the cloud-cost surface domain (Phase-2 W4.9, extracted from

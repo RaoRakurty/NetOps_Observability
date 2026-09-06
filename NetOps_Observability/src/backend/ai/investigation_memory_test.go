@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // investigation_memory_test.go — the IRIS Phase B store contract. The

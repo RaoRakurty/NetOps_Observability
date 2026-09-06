@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // inbound_sync.go — the INBOUND ServiceNow state sync (#84, extracted P2 RA.4).

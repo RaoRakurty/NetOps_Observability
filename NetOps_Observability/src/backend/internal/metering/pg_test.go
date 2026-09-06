@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package metering
 
 // pg_test.go — the Postgres backend against a REAL database, proving that the

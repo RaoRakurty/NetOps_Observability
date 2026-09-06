@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package timeintel
 
 // reliability_derive.go — the reliability-rollup derivations (Phase-2 W4.2,

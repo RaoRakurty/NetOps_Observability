@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package policy is the security-policy engine for the platform. It models
 // authentication, password, session and account-lifecycle controls as typed
 // SECURITY POLICIES (not free-form user preferences) and resolves them through

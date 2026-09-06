@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package vault
 
 // tenantkeys_test.go — versioned per-tenant key material.

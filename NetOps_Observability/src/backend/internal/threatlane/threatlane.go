@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package threatlane is Correlix's THREAT-DETECTION lane (T6 of
 // SECURITY_BUILD_PLAN_2026-08-25 / SECURITY_OBSERVABILITY_HLD §5b): the third
 // security evidence class, "signal" — an active security signal derived from

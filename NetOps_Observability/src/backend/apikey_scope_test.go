@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // apikey_scope_test.go — tracker 226: the API-key mint surface can issue WRITE

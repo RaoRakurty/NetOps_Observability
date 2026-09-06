@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // probe_gcp.go — LIVE GCP identity + permission probes (Wave 4 #13), stdlib-only.

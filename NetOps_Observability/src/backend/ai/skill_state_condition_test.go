@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // skill_state_condition_test.go — the `state:` half of the condition grammar

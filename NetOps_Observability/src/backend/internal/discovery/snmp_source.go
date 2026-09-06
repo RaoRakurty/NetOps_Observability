@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package discovery
 
 // snmp_source.go — the real SNMP subnet scanner (Phase-2 W3.9, extracted from

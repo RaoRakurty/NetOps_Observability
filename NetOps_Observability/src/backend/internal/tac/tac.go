@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package tac is the TAC ESCALATION PACK: the closed issue-class taxonomy, the
 // per-dialect command plans, the read-only collection that runs them, and the
 // redacted evidence bundle a vendor TAC engineer can actually work from.

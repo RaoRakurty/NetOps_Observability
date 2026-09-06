@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package workloadid is the SEC-003.3 workload identity registry: the single
 // authoritative table of which compose service holds which SPIFFE identity in
 // the correlix mesh, encoded as data so guards can enforce completeness.

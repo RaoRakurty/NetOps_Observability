@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package platformdb
 
 // atomicfile_test.go — the concurrency proof for the house durable-write

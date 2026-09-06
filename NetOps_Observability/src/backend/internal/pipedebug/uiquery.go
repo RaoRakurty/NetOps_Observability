@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package pipedebug
 
 // uiquery.go — stage 10: the UI-query contract (design §2, stage 8).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tac
 
 // collect.go — running an approved plan, read-only, against one device.

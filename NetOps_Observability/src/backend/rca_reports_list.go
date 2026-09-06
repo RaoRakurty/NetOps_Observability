@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // rca_reports_list.go — GET /api/correlations/rca-reports (#113 point 3, the

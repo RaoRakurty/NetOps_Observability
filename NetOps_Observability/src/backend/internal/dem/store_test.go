@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dem
 
 // store_test.go — the file catalogue, with the isolation properties CLAUDE.md

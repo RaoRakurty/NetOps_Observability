@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package parsercov
 
 // http_test.go — the isolation and honesty tests for the HTTP surface.

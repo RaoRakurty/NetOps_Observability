@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // pipeline_processors.go — the Pipeline Processors HTTP surface and the

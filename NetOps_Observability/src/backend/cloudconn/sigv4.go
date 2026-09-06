@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // sigv4.go — AWS Signature Version 4 request signing, stdlib-only.

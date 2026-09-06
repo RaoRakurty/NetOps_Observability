@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package pipedebug
 
 // sessions.go — the SESSION routes: what the GUI reads when it opens a past

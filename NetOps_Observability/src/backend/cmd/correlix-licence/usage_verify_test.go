@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package main
 
 // usage_verify_test.go — the offline usage-report check, end to end through the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // caseconn_tac.go — THE ADAPTER POINT. It makes every connector in this package

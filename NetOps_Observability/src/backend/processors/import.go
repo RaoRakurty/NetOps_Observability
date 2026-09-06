@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package processors
 
 // import.go — the one-time file→Postgres cutover for the pipeline-processor

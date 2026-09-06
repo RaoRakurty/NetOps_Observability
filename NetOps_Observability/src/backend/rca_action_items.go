@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // rca_action_items.go — Phase 1 structured action items (postmortem spec §3 +

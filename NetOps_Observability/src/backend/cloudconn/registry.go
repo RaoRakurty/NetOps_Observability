@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // registry.go — the ONE provider registry (Wave 5 #17: extensibility).

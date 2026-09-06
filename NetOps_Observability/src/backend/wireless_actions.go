@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // wireless_actions.go — guarded wireless remediation (#128 Phase 8, design

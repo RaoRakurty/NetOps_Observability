@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package seclane
 
 // seclane_test.go — the producer lane's unit + §3a isolation tests.

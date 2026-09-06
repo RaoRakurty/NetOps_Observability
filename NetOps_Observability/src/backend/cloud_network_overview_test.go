@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_network_overview_test.go — the MANDATED cross-tenant isolation test for

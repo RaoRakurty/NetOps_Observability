@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // skill_select_health_test.go — D-3 regression suite (QA run 2026-09-03,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // rca_emit.go — #81 Fusion Layer §L RCAEvidenceEmitter. Maps a fused identity onto the

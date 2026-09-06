@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # plans/nokia-srlinux.yaml — the Nokia SR Linux command plan for the TAC escalation pack.
 #
 # Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven

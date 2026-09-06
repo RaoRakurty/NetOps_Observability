@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package oslog is the OpenSearch log-search projection core (Phase-2 W3.6,
 // extracted from package main's logs.go): index-pattern algebra (heavily
 // commented as a CONTRACT with vector.yaml), the per-tenant index segment,

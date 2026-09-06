@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # forbidden.yaml — the OUTPUT-ONLY command policy for the TAC escalation pack.
 #
 # Owner decision, 2026-09-05, verbatim:

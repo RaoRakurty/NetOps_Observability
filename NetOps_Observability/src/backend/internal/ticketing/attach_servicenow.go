@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // attach_servicenow.go — the one thing the ServiceNow adapter was missing:

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // tacacs_wiring.go — what stays in main after the TACACS+ wire client moved to

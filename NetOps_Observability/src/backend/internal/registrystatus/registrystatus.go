@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package registrystatus answers one question honestly, per registry: WHICH
 // storage backend is responsible for this registry's records right now, does it
 // persist them, and can it serve?

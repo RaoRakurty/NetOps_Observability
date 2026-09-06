@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chhttp
 
 // chhttp_test.go — the fault-injection suite for the ClickHouse seam.

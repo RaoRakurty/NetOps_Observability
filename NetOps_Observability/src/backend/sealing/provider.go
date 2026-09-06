@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package sealing is the CryptoProvider abstraction behind Sealed Fields
 // (reversible masking): a sensitive value is ENCRYPTED at ingest rather than
 // destroyed, so an authorized operator can recover it later through an audited

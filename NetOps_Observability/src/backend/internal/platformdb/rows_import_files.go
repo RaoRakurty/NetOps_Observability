@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package platformdb
 
 // rows_import_files.go — WHAT the one-time file→Postgres cutover moves, and the

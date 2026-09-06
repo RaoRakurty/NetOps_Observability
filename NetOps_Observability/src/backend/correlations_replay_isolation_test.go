@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // correlations_replay_isolation_test.go — §3a guard for the ONE correlation

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package keycloak is a stdlib-only admin REST client for the bundled Keycloak
 // broker (GUI-configurable SSO). It automates the console work the Okta guide
 // walks an operator through by hand — realm, confidential client, the

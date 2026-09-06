@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package dem is the Digital Experience Monitoring domain: the per-tenant
 // catalogue of experience TARGETS, the identity model every experience
 // measurement is stamped with, and the pure score maths that turns raw

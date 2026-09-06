@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // rca_promotion_model.go — the promotion block of the report (#113 point 3)

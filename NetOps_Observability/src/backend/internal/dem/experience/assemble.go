@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // assemble.go — the ADAPTERS: turning what Correlix actually measures today

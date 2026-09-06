@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package collectors
 
 // dem.go — the Digital Experience runner: the prober-side half of the DEM

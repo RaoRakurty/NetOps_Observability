@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package logexport is the Explore→Logs export core (Phase-2 W3.11, extracted
 // from package main's logs_export.go): the export spec, the bounded
 // search_after pager (row + byte caps with the honest ErrTooLarge), the

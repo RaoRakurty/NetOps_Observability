@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // svc_health.go — #69 P2: GET /api/health/score?scope=service&service_id=…

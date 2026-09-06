@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package reports holds the dependency-light core of the asynchronous reporting
 // pipeline: the calendar/timezone schedule evaluator, the render view-model and
 // renderer seam, and the queue/execution/artifact interfaces. It imports no

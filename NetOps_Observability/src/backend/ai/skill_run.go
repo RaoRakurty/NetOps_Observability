@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // skill_run.go — the skill-guided turn: the second half of the routing-inversion

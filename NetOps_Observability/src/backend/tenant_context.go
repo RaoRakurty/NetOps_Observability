@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // tenant_context.go — the canonical, server-derived tenant identity (Phase 1 of

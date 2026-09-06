@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package secapi
 
 // store.go — the MUTABLE control-plane state behind the Security surface: which

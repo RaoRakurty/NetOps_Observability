@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // access_explain.go — the L3 "Explain" surface (docs/design/saas-identity-pbac.md

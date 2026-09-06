@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package seam
 
 // bootstrap_rules.go — the seam SUGGESTION rules R1–R5 (Phase-2 W2.4,

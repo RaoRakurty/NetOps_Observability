@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // Path Behavior Health API — wraps the pure scoring core (path_health.go) with a

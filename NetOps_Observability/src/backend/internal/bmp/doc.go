@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package bmp is a RECEIVER for the BGP Monitoring Protocol (RFC 7854).
 //
 // A router with `bmp server` configured opens a TCP session TO this platform

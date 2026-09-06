@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // wireless_actions_test.go — the five gates (#128 Phase 8), each proven to

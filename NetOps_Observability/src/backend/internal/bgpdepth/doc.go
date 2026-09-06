@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package bgpdepth is the "BGP depth" half of the BGP Operations page (frontend
 // wave item 10): RPKI origin validation, ASPA, RFC 8805 geofeeds, an AS-path
 // graph, and a near-live BGP update feed with a per-tenant bounded ring buffer.

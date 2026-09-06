@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // business_service_store.go — persistent, tenant-isolated storage for the

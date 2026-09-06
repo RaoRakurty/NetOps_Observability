@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // seam_links_test.go — #131c (lateral seam links) and #130b (the on-prem seam).

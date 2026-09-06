@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // bgp_watchlist_isolation_test.go — the §3a rule-5 proof for the BGP watchlist,

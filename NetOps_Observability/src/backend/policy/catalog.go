@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package policy
 
 // catalog.go defines the immutable, built-in catalog of security-policy

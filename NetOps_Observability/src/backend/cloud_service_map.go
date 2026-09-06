@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_service_map.go — GET /api/cloud/service-map (cloud-platform-backlog #9).

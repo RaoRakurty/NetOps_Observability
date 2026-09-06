@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bgpwatch
 
 // metrics.go — the module's Prometheus surface (§10: every service emits

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // replay.go — #81 Fusion Layer §M ReplayEngine. Recompute identity deterministically

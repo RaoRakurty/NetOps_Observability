@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // rca_impact_provenance.go — Phase 1 quantified impact (spec §2,

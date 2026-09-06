@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_slo.go — main-side wiring for per-tenant SLOs / error budgets

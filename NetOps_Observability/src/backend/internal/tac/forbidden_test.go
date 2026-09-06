@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tac
 
 // forbidden_test.go — the STRUCTURAL guards behind the owner's 2026-09-05

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package discovery
 
 // os_version_test.go — tracker 231: the inventory row must be able to CARRY the

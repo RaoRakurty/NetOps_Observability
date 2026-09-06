@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // clickhouse_client.go — the main package's adapter onto the chhttp seam.

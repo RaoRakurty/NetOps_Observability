@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // skill_chain.go — the BOUNDED INVESTIGATION LOOP (IRIS Phase A2).

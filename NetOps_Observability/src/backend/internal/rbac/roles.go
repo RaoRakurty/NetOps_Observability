@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package rbac is the role/permission domain for PBAC: the module-level role
 // model with its monotonic permission ladder, the compiled rule-bundle view,
 // the file-backed role store, the role_binding store (bindings.go) and the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // llm_transport.go — the copilot LLM transport + prompt hygiene (Phase-2

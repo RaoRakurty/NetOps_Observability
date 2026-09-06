@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package collectors
 
 // SNMPv3's User-based Security Model (USM) fixes its crypto on the wire: RFC 3414

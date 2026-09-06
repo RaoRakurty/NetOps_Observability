@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // route_isolation_coverage_test.go — CLAUDE.md §3a RULE 5 enforcement.

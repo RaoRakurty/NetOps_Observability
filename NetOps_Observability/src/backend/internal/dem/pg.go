@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dem
 
 // pg.go — the Postgres catalogue (migration 0043, `dem_targets` with the

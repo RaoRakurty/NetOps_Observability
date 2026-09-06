@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // ticketing_jira_test.go — #103 Jira RCA-lane tests: lifecycle (create/update/

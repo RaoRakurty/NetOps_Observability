@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chhttp
 
 // SEC-009.1: a TLS verification failure against ClickHouse must surface as a

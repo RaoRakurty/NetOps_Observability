@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dataprotect
 
 // ops_test.go — the snapshot surface's own behaviour, tested against the

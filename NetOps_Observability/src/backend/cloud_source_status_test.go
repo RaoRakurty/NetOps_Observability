@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_source_status_test.go — Wave 2 #4: poller-reported permission_denied /

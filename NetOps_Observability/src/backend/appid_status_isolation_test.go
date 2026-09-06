@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // appid_status_isolation_test.go — CLAUDE.md §3a for the App-ID coverage read,

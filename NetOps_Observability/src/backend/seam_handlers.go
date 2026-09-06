@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // seam_handlers.go — REST surface for the seam inventory (#67 build ⑤).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package verify
 
 // verify_modules.go — prebuilt deterministic troubleshooting MODULES for the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package sealing
 
 // vrl_parity_test.go — the test that makes two implementations of one cipher

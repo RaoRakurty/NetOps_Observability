@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package wireless
 
 // identity.go — deterministic identity for every wireless entity (report §7.2)

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // rca_phase2_test.go — Phase 2 of the postmortem spec (report layout, causal

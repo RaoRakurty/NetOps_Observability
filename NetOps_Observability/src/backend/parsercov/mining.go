@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package parsercov
 
 // mining.go — the template miner. PURE: no clock, no network, no randomness,

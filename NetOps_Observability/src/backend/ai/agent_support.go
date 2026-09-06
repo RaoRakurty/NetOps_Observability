@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // agent_support.go — the agent-loop support pieces (Phase-2 W4.13, extracted

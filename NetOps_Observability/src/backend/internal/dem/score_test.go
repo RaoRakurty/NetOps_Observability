@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dem
 
 // score_test.go — the maths, and above all the NOT-MEASURED branches. The rule

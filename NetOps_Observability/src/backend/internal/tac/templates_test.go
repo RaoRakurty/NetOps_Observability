@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tac
 
 // templates_test.go — the command REVIEW and TEMPLATE guarantees (tracker 250).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package parsercov
 
 // metrics.go — netops_parsercov_mining_runs_total{outcome} and

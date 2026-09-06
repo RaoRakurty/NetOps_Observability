@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // business_service_isolation_test.go — CROSS-TENANT isolation for the Business

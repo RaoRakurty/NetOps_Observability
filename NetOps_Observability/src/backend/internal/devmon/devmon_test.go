@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package devmon_test
 
 // devmon_test.go — the DEFINITION of a monitored device.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // env_docs_guard_test.go — the CLASS guard behind INVARIANTS standing gap #6.

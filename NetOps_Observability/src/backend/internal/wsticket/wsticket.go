@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package wsticket issues and redeems one-time, scope-bound tickets that let a
 // browser open an authenticated WebSocket WITHOUT putting a reusable session
 // credential in the URL.

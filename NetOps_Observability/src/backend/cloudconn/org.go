@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // org.go — org-level (multi-account) onboarding contract (Wave 5 #17 slice 2).

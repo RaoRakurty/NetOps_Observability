@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package collectors
 
 // redis_bulklen_test.go — RESP wire-length cap. A bulk-string length header is

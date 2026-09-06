@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // rca_window_test.go — F-80 and F-81, the last two stored-not-read findings.

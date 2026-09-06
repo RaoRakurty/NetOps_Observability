@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // Unified event feed (#69 §5 / #53 Explorer half) — one spine, two consumers.

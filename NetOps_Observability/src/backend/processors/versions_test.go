@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package processors
 
 // versions_test.go — the history/rollback contract (review test-gap: versioning

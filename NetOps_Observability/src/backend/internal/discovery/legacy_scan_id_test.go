@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package discovery
 
 // legacy_scan_id_test.go — scan-id migration safety.

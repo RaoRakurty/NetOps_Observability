@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // vulns_http.go — the HTTP surface of Vulnerability Management (#13). The feed

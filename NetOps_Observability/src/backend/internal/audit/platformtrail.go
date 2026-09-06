@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package audit
 
 // platformtrail.go — the LONG-LIVED half of the file audit backend (tracker 235).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bgpdepth
 
 // aspath.go — the AS-path graph (the flagship of the 91df4f62 design):

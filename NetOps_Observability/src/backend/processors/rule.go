@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package processors is the Pipeline Processors framework (tracker item 121 +
 // the 2026-07-31 framework spec): tenant-scoped, ordered, versioned log
 // processing that runs against incoming events BEFORE storage.

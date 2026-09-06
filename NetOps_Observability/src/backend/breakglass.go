@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // breakglass.go — PBAC Phase C: access-as-an-event for the platform operator.

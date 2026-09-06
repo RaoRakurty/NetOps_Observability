@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package collectors
 
 // tunnels_insert_test.go — regression guards for audit F-56.

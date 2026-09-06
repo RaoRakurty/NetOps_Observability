@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // pg_hostssl_guard_test.go — F-4 regression pin (TLS assurance run 2026-08-09).

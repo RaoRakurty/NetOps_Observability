@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package pipedebug
 
 // trace_retention_test.go — the two lifetimes of a trace, kept apart.

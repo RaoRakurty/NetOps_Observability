@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package rcafeedback holds the operator VERDICT feedback loop for RCA cases
 // (Project 2, P7): the record an operator writes after reading a correlation
 // case — "the engine got this right / wrong / partly right", and when it was

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // bounded_io_test.go — #100 incident guardrails (2026-07-09 ClickHouse

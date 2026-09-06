@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // layered_test.go — the static-fixture / live-runtime split (P0 hygiene):

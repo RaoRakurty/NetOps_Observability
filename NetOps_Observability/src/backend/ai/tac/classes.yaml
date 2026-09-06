@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # classes.yaml — the TAC escalation issue-class taxonomy and intent vocabulary.
 #
 # Schema, closed enums and the rules for adding to this file: ai/tac/README.md.

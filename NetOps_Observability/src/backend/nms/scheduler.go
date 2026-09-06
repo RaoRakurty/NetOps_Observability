@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package nms
 
 // scheduler.go — the NMS poll runtime (#95 P3b, extracted P2 W4.17). A single

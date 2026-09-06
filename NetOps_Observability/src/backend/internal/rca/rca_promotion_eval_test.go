@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // rca_promotion_eval_test.go — the pure auto-promotion criteria (#113 point 3):

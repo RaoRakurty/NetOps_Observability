@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package pipedebug
 
 // parser.go — stage 2's SERVER-SIDE half: the Go collectors' decision path, and

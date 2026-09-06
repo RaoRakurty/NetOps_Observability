@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package discovery
 
 // os_version.go — running the OS-VERSION SOURCE LADDER from the enrichment

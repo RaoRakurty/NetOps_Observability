@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package workloadid
 
 // SEC-003.3 guards. The registry is only trustworthy if it is COMPLETE (every

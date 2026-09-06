@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cli
 
 // logs.go — the `logs` verb: raise chosen modules to debug for a BOUNDED

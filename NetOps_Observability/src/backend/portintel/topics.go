@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package portintel
 
 // topics.go — the ingestion topic names for the Port Intelligence plane (#94,

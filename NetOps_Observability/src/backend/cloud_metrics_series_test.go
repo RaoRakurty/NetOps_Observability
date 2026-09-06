@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_metrics_series_test.go — unit tests for the Wave 5 #14 slice 1 chart

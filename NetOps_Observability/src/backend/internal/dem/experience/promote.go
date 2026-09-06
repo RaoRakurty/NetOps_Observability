@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // promote.go — promoting a DERIVED experience incident into the platform

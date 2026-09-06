@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bgpdepth
 
 // mock_test.go — the offline upstream. CI has no network (§11), so EVERY test

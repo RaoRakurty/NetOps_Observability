@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // confidence_test.go — the owner's Phase O backend list, items 2 to 7: what

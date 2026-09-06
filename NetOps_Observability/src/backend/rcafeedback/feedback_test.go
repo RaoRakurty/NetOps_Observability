@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rcafeedback
 
 // feedback_test.go — unit tests for the RCA operator-verdict domain (CLAUDE.md

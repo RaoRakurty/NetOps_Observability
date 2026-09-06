@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // rbac_wiring.go — main-side aliases for the extracted internal/rbac domain

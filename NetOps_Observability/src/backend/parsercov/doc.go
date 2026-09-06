@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package parsercov is the parser-coverage surface (parser programme A6,
 // backend half): what the correlation engine's parser recognises today, and
 // what it does NOT.

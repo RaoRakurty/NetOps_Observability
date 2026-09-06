@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package wireless
 
 // edges.go — canonical edge derivation (#128 Phase 5, design

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package osprobe is the OS-VERSION SOURCE LADDER: the one place that answers
 // "what software is this device running?" using every transport the platform
 // already has credentials for, in a fixed order, recording WHICH one answered.

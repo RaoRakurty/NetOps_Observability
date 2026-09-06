@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package safehttp provides an SSRF-hardened HTTP client for outbound calls to
 // operator/tenant-configurable destinations (SR-015): notification webhooks and
 // ITSM connectors whose URLs an admin can set to an arbitrary host.

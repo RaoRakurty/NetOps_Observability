@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // rca_coverage_engine_test.go — Phase C coverage-engine tests (plan §3, spec tests

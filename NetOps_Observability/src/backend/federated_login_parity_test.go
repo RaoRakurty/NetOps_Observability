@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // federated_login_parity_test.go — #146b: a federated (SSO/LDAP/TACACS) sign-in

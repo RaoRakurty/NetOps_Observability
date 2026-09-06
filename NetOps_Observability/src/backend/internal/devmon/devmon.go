@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package devmon is the ONE definition of "Correlix is monitoring this device".
 //
 // # Why it exists (owner decision C4, 2026-09-05)

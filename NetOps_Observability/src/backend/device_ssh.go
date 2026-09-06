@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // device_ssh.go — opt-in, zero-trust SSH-over-WebSocket gateway for the

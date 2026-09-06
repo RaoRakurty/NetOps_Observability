@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // ch_sql.go — pure SQL/DDL fragments shared across the schema statements.

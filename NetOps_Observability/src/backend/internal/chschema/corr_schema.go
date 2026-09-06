@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // corr_schema.go — Correlation Engine v2 (#67) ClickHouse schema, FROZEN at

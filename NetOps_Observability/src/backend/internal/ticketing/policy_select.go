@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // policy_select.go — the single policy-selection brain (P2 RA.5): the sweeper,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tlsprobe
 
 // tls_peer_probe.go — SEC-019.1: served-certificate expiry observability.

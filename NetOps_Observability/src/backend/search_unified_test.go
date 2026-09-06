@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // Unit tests for the Wave 6 #20 unified search: ranking (exact > prefix >

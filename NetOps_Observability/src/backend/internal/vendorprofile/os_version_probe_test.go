@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package vendorprofile
 
 // os_version_probe_test.go — the OS-VERSION SOURCE LADDER's profile contract.

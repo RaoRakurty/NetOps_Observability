@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // signals.go — the cloud signal-surface domain (Phase-2 W2.2, extracted from

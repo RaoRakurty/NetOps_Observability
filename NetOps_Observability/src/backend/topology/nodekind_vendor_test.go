@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package topology
 
 // nodekind_vendor_test.go — the PARITY GOLDEN for the move of the firewall

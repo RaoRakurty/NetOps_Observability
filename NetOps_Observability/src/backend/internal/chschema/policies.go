@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // chRowPolicyDDL is the LENIENT telemetry policy: untagged (tenant_id = ”)

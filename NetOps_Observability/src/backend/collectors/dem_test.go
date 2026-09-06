@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package collectors
 
 // dem_test.go — the Digital Experience runner, per kind, with fakes. No real

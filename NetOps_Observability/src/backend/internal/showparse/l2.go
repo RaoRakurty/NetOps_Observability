@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package showparse
 
 // l2.go — ARP / neighbour-cache and MAC forwarding-table parsers (CmdARP,

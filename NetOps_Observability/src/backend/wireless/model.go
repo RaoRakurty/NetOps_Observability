@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package wireless is Correlix's vendor-neutral wireless canonical model
 // (tracker #128, design docs/Wireslessdesign.md §7, owner-approved 2026-07-26).
 //

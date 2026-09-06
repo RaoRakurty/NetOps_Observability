@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // env_gate_guard_test.go — the CLASS guard behind review finding H8.

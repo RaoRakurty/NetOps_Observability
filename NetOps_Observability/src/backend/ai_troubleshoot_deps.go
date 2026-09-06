@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // ai_troubleshoot_deps.go — the SERVER half of ai.TroubleshootDeps (IRIS Phase

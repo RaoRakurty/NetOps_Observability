@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package session
 
 // session_store.go — server-side sessions: the source of truth for a login's

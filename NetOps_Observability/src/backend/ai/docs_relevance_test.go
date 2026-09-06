@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // docs_relevance_test.go — the ABSOLUTE relevance floor on documentation

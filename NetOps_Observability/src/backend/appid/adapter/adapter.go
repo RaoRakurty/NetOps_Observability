@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package adapter is the vendor-neutral ingestion framework for the Application
 // Identity Fusion Layer (#81, Phase 2). An Adapter turns ONE raw vendor event into a
 // normalized appid.ApplicationObservation — preserving the original vendor values,

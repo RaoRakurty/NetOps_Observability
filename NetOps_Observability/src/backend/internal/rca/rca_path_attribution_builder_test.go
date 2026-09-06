@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // rca_path_attribution_test.go — the path-causality RCA P2 attribution passthrough:

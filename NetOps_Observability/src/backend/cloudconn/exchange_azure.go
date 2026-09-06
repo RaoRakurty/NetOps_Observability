@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // exchange_azure.go — LIVE Azure Entra token acquisition, stdlib-only.

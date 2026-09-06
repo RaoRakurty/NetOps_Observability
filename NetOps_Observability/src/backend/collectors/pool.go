@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package collectors orchestrates per-protocol metric collectors.
 //
 // Each Collector implementation is a self-contained goroutine that reads

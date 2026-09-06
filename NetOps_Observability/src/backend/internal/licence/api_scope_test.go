@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package licence_test
 
 // api_scope_test.go — the READ SPLIT at the module's own boundary.

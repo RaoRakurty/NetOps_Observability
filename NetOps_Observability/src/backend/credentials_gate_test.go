@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // credentials_gate_test.go — GET /api/credentials reports the PLATFORM-GLOBAL

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_connectors_probe_live_test.go — Wave 4 #13: end-to-end tests for LIVE

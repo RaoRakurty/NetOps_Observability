@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // cloud_connectors_metrics_test.go — Wave 4 #13 slice 4: per-provider exchange

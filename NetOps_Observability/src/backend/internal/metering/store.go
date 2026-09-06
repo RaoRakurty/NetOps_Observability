@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package metering
 
 // store.go — the durable home of the daily rows, and its non-Postgres backend.

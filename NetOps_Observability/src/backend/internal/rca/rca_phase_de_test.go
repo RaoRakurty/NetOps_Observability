@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // rca_phase_de_test.go — Phase D (renderers + wording) and Phase E (quality gate

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package seclane is the SECURITY EVIDENCE PRODUCER runtime (Project 3,
 // P3-EMIT). It is the wiring that turns the four inert security packages —
 // internal/secbus (T2), internal/advisory (T3), internal/hardening (T5) and

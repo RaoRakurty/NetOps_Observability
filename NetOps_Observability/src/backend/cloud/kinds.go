@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // kinds.go — the component vocabulary of the Cloud Network Overview (P0).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // sql_alias_shadow_guard_test.go — the STRUCTURAL guard for the alias-shadowing

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package devmon
 
 // api.go — the monitoring switch: GET|PUT /api/devices/{id}/monitoring.

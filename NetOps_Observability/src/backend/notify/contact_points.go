@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package notify
 
 // contact_points.go — reusable, tenant-scoped notification audiences (Phase 1

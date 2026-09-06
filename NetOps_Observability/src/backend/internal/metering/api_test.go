@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package metering
 
 // api_test.go — the two Usage routes, and the isolation posture they hold

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package metricval is the parse boundary for metric-store values (F-21).
 //
 // strconv.ParseFloat("NaN", 64) SUCCEEDS. So does "+Inf", "-Inf", "inf".

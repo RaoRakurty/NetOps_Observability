@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package secpolicy owns the scope-wide security policy domain (P2 RA.2): the
 // Security Settings model + store, the password-rule validation, and the F-68
 // account-lifecycle gate. It is pure policy over injected state — no HTTP, no

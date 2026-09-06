@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package protocoldiag
 
 // env.go — the ENVIRONMENT CONTRACT for the LIVE command source.

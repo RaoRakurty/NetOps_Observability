@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package main
 
 // keys_test.go — the operator surface of the embedded-key guard (tracker 259).

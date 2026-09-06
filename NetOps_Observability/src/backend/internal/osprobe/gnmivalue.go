@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package osprobe
 
 // gnmivalue.go — turning what a gNMI Get hands back into the leaf's VALUE.

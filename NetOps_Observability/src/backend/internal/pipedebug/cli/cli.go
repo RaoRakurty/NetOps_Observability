@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cli
 
 // cli.go — argument parsing, signal handling and verb dispatch.

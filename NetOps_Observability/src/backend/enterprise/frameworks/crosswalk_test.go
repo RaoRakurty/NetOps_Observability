@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-Correlix-Enterprise
+// Copyright 2026 Correlix
 
 package frameworks
 

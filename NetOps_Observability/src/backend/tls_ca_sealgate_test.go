@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // tls_ca_sealgate_test.go — the internal CA must never mint its 10-year root

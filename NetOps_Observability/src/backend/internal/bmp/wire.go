@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bmp
 
 // wire.go — the RFC 7854 frame parser.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // Cross-tenant isolation for the Wave 6 #20 surfaces (CLAUDE.md §3a.5):

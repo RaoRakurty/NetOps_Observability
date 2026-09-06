@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package sealedfields
 
 // edgekeys.go — the ONE endpoint that serves key material.

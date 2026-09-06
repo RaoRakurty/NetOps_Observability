@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package topology
 
 // cloudgraph.go — the cloud half of the path graph (#130a).

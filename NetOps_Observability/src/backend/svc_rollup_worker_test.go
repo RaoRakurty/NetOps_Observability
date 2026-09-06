@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // svc_rollup_worker_test.go — unit + isolation tests for the #69 P2 rollup

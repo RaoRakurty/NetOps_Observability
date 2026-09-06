@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package devmon_test
 
 // api_test.go — the monitoring switch's HTTP contract, in isolation from the

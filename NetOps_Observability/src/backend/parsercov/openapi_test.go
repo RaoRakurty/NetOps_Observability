@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package parsercov
 
 // openapi_test.go — the three routes are advertised, and advertised correctly.

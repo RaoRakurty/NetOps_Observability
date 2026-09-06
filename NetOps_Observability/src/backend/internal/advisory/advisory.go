@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package advisory owns the VENDOR-ADVISORY provider seam (§5g/§5h,
 // SECURITY_OBSERVABILITY_HLD_2026-08-25). It answers one question — "which
 // advisories affect (vendor, platform, version)?" — behind a vendor-AGNOSTIC

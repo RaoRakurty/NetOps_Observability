@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package igpmon
 
 // pure_test.go — the module's pure core: protocol vocabulary, the two state

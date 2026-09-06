@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dataprotect
 
 // drill_test.go — the BUNDLE restore drill's contribution to the coverage

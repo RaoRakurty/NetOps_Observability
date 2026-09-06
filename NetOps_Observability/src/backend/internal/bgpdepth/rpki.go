@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bgpdepth
 
 // rpki.go — origin validation per watchlist prefix.

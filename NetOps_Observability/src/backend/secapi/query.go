@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package secapi
 
 // query.go — the OpenSearch query BUILDERS. Every function here is PURE (a

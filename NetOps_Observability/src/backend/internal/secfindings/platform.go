@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package secfindings
 
 // platform.go — the subject's PLATFORM IDENTITY, resolved through the one vendor

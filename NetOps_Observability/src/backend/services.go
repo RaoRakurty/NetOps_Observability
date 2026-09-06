@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // Service catalog (#69 §2, P2) — the semantic lens over the truth streams.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // monitor_eval_test.go — evaluator honesty/transition semantics (no_data ≠ ok,

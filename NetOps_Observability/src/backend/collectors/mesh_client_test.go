@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package collectors
 
 // mesh_client_test.go — regression guards for the 2026-08-05 finding: when

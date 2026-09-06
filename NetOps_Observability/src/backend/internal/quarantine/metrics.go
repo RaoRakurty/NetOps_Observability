@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package quarantine
 
 // metrics.go — F-11 D6: the quarantine observability families

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // oidc_bearer_platform_owner_test.go — SR-025 parity for the RS256 BEARER path.

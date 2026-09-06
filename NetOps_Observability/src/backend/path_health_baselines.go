@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // path_health_baselines.go — Path Behavior Health V1 baseline precompute

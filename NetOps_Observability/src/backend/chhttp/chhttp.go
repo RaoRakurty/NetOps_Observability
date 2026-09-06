@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package chhttp is the single transport seam for every ClickHouse HTTP call.
 //
 // # WHY THIS PACKAGE EXISTS

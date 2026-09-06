@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // binding_sync.go — Phase A glue that keeps the role_binding store (bindings.go)

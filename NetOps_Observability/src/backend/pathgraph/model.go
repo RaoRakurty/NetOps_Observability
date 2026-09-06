@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package pathgraph implements the Service Path Graph frozen domain contract
 // (docs/design/service-path-graph-contract.md, contract_version = 1).
 //

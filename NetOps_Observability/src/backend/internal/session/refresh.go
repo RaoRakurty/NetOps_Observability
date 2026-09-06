@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package session
 
 // refresh.go — rotating refresh tokens with reuse detection.

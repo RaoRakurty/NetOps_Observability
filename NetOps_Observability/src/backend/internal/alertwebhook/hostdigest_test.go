@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package alertwebhook
 
 // hostdigest_test.go — the WARNING DIGEST, the page-tier retry ladder and the

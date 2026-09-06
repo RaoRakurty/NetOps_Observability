@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package alerts hosts the rule-driven alert evaluator and the state
 // machine that decides when alerts fire, deduplicate, and resolve.
 package alerts

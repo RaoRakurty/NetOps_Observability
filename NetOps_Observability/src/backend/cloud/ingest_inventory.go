@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // ingest_inventory.go — the per-connector snapshot registry + the §3a.2

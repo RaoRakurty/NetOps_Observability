@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // investigator.go — SLICE 6 CONTRACTS: the AI Investigator's bounded interface.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // seam_bootstrap_test.go — unit tests for the seam bootstrap rules (#67 build

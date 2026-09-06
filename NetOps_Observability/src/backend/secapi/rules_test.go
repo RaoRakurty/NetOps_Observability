@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package secapi
 
 // rules_test.go — the catalog's contract with the registries it is assembled

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_handlers.go — Cloud App Observability API (#81 P3A). Read surfaces over the

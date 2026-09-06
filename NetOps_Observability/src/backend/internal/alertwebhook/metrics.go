@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package alertwebhook
 
 // metrics.go — the receiver's Prometheus surface (§10: every service emits

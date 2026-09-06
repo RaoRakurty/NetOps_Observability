@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bgpwatch
 
 // watchlist_test.go — the WatchFileStore's own unit suite (§11). The

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package quarantine is the operator half of F-11 seal-or-quarantine (design
 // doc docs/design/f11-seal-or-quarantine.md, D5): the pure logic behind
 // GET /api/quarantine and POST /api/quarantine/reattribute.

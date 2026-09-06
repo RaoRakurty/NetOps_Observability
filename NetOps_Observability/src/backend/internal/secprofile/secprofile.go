@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package secprofile is the production security validator: the control that
 // turns Correlix's security posture from a set of features into a property of
 // the deployment.

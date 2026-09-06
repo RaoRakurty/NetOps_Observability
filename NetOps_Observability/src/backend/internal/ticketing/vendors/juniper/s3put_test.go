@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package juniper
 
 // s3put_test.go — the hand-rolled SigV4 signer. This is the highest-risk code

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // exchange_azure_cert_test.go — the Azure certificate credential path (Wave 4

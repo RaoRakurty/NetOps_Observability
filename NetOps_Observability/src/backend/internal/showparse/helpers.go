@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package showparse
 
 // helpers.go — the small, shared, allocation-cheap primitives every parser is

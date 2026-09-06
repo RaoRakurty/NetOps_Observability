@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package internalca
 
 // SEC-008: issued SVID keys must be PKCS#8 — the OpenSearch security plugin

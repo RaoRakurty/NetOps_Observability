@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package servicecat is the Service catalog domain (#69 §2, P2) — the semantic
 // lens over the truth streams. Postgres-backed (lifecycle/catalog state, RLS
 // tenant-isolated), nil on the file backend like incidents/seams. Three split

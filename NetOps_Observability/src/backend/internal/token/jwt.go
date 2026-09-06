@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package token is the auth-crypto boundary: the session/API token claims
 // model and a minimal HS256 JWT signer/verifier implemented in pure stdlib.
 //

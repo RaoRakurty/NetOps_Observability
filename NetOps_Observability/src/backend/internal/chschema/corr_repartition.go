@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // corr_repartition.go — the LIVE-deployment half of the P2 storage-shape fix

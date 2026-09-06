@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // security_lane_removability_test.go — the REMOVABLE-MODULE guard for the

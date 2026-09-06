@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package alertwebhook is the DELIVERY layer for the vmalert evaluator.
 //
 // Until this package existed, vmalert ran with `-notifier.blackhole`: every

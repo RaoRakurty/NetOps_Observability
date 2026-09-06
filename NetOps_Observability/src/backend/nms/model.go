@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package nms is Correlix's vendor-controller intelligence framework — it
 // harvests INTELLIGENCE (metrics, state, events) from third-party network
 // management systems (Meraki, Catalyst Center, vManage, NDFC, Versa, Prime, …)

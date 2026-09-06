@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // source_status.go — the poller-reported per-source ERROR store (Wave 2 #4,

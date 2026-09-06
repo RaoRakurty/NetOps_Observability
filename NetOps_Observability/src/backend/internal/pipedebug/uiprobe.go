@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package pipedebug
 
 // uiprobe.go — the RUNNER behind stage 10: it actually issues the query the SPA

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package ai is the Iris AI platform: an application-aware, evidence-grounded
 // NOC assistant. It turns a natural-language question into a governed plan
 // (intent → module routing → read-only tool selection → cited evidence bundle →

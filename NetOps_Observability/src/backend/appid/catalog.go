@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // catalog.go — the IP→app catalog (#81 P1): feed parsers for the free, vendor-

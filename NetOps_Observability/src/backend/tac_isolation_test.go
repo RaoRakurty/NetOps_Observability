@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Route templates covered (the coverage guard matches this literal text):
 //   "/api/incidents/{id}/tac"          "/api/incidents/{id}/tac/classify"
 //   "/api/incidents/{id}/tac/plan"     "/api/incidents/{id}/tac/collect"

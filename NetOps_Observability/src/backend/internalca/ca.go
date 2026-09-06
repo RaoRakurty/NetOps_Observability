@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package internalca is a small, stdlib-only certificate authority for the
 // internal service mesh (#18 phase 2). It issues SHORT-LIVED leaf certs ("SVIDs")
 // carrying a SPIFFE URI SAN, all chaining to a private root that is NEVER a public

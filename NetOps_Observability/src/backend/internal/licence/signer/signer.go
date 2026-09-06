@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package signer issues Correlix licence files: key generation, signing, and
 // the file handling around a private key.
 //

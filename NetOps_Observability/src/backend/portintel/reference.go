@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package portintel
 
 // reference.go — static reference the API serves to the UI: the normalized

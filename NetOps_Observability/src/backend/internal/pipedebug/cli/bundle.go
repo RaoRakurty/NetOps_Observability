@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cli
 
 // bundle.go — the `bundle` verb: package one or more sessions for support.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // slo.go — per-tenant SLOs / error budgets (Wave 5 #14 slice 2, extracted P2

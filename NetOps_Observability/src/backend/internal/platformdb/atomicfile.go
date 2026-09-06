@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package platformdb
 
 // atomicfile.go — the house durable-write primitive, lifted out of

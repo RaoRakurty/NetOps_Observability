@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tac
 
 // candidate_test.go — the properties the signature-candidate loop must hold.

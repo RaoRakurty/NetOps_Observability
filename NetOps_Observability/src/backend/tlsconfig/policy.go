@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package tlsconfig is the single source of transport-security policy for the
 // platform (#18). Every TLS server and client — the API ingress, internal
 // service-to-service mTLS, and the API's clients to OpenSearch/ClickHouse/

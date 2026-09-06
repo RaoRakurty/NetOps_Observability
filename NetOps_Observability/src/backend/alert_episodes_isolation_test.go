@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // alert_episodes_isolation_test.go — §3a cross-org isolation guard for the

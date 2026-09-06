@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tac
 
 // learning.go — what a TAC collection produced that Correlix could NOT read.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // gotenberg_client_guard_test.go — structural guards for the api → gotenberg

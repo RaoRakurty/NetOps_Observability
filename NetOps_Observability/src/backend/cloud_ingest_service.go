@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_ingest_service.go — Wave 1 #2 (per-tenant ingestion): the poller-facing

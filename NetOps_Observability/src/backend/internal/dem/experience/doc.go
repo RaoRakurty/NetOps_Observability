@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package experience is the Digital Experience causality domain: the canonical
 // objects an experience verdict is built from (evidence, hypotheses, journeys,
 // changes, incidents), the confidence maths that grades them, and the published

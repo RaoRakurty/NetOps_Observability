@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package discovery
 
 // monitoring.go — WHICH devices Correlix collects from, and the one place that

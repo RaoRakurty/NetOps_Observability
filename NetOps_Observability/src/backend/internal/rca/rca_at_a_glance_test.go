@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // rca_at_a_glance_test.go — #113 point 2: the RCA document's FIRST section must

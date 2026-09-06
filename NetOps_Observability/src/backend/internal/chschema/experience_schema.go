@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // experience_schema.go — ClickHouse DDL for the DEM EXPERIENCE EVENT lane

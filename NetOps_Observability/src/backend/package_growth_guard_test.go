@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // package_growth_guard_test.go — a RATCHET on the flat `package main`.

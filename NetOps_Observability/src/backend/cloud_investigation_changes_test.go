@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_investigation_changes_test.go — Wave 4 #12 slice 3: the change→incident

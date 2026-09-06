@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bgpdepth
 
 // fetch_test.go — the SSRF gate. Every case here is an input a THIRD PARTY can

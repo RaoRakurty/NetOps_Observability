@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // platform_config_authz_test.go — platform-GLOBAL config (auth providers, LLM

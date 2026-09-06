@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package pathgraph
 
 // export.go — the seams.json enrichment EXPORT schema (Phase-2 W4.12,

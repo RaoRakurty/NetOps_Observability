@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // snmp_handlers.go — CRUD for SNMP credential profiles, gated on

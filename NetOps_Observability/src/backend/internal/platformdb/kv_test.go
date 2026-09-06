@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package platformdb
 
 // kv_test.go — D-11. FileKV.Save used a FIXED temp path ("<key>.tmp"), so two

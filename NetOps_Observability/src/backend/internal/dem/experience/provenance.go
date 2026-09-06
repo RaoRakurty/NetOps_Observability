@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // provenance.go — Phase D ("provenance everywhere") and Phase L (data

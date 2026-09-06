@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // skill_memory_test.go — how INVESTIGATION MEMORY plugs into the skill layer

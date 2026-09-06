@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package protocoldiag
 
 // fanout_test.go — the parallel-collection proofs, all against an in-memory

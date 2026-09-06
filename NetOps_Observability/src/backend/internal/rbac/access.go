@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rbac
 
 // access.go — PBAC Phase B: binding-based scope reachability (deny-wins).

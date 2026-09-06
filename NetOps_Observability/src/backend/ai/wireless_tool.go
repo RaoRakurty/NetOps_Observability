@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // wireless_tool.go — the Iris wireless module's read-only tools (#128 Phase 6,

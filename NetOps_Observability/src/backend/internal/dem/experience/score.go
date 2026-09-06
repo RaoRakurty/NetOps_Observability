@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // score.go — THE PUBLISHED EXPERIENCE SCORE (§M.4, the owner's Phase I).

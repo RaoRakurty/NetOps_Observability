@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // router.go — the Model Router (HLD §10). A provider-neutral routing POLICY: it

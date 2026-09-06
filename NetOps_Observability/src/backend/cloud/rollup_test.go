@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // rollup_test.go — table-driven tests for the P1 roll-up engine: the worst-of

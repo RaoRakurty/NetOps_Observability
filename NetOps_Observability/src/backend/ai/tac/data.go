@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package tacdata is the EMBEDDED TAC-escalation knowledge: the issue-class
 // taxonomy and the per-dialect command plans, as reviewed data.
 //

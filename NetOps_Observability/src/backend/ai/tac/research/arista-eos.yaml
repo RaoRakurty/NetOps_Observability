@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # TAC escalation research — Arista EOS
 # Design of record: docs/design/TAC_ESCALATION_2026-09-05.md
 # Schema: as specified in the research brief (no ai/tac/README.md existed at time of writing).

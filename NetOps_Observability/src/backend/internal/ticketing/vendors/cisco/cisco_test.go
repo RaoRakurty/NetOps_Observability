@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cisco
 
 // cisco_test.go — the parts of the Cisco wire client that the connector tests

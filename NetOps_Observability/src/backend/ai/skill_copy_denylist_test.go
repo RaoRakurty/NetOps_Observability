@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // skill_copy_denylist_test.go — a COPY guard over the DETERMINISTIC action list.

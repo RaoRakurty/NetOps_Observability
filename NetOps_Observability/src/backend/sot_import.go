@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // sot_import.go — external Source-of-Truth IMPORT: a ONE-WAY, file-based seed of

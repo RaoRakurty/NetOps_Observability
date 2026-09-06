@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // caseconn_tac_test.go — the adapter onto W1's internal/tac.CaseOpener seam.

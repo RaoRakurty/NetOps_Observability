@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package configstore is Correlix's device CONFIG BACKUP module (P3-CFG, design
 // docs/design/CONFIG_BACKUP_AND_DRIFT_DESIGN_2026-08-25.md): capture a device's
 // running-configuration over the platform's audited SSH gateway, normalize it,

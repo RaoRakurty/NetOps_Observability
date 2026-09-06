@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package wireless
 
 // Inventory is one connector poll's canonical-inventory output — what a

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bgpwatch
 
 // evaluate.go — tracker row #10: the evaluator.

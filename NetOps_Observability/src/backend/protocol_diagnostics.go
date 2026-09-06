@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // protocol_diagnostics.go — HTTP surface for the operator-initiated routing-

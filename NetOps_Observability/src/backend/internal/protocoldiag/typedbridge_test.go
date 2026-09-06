@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package protocoldiag
 
 // typedbridge_test.go — the typed-first / regex-fallback proofs.

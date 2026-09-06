@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // seam_bootstrap.go — the seam bootstrap engine (#67 build ⑤, design

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package entitlement is the CENTRAL entitlement service: the one place the
 // product asks "is capability X entitled?" and "what is the limit on Y?".
 //

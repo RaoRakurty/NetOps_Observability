@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // troubleshoot_uncollected_test.go — D-4 (QA run 2026-09-03).

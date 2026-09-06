@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // svc_rollup_schema_test.go — contract pins for the #69 P2 rollup + PBH V1

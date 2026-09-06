@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // identity_handlers.go — admin CRUD for users, roles, tenants and API keys.

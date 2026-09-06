@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package cli is the host-side half of the pipeline debugger — everything
 // `correlix-debug` does that the API cannot do from inside a container:
 // authenticate as the platform admin, drive the debug routes, read container

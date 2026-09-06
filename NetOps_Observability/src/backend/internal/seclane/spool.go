@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package seclane
 
 // spool.go — the LAST rung of the dead-letter ladder: a bounded local JSONL

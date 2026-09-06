@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package secapi
 
 // metrics.go — netops_security_findings_queries_total{op}.

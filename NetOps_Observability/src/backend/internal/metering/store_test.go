@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package metering
 
 // store_test.go — the file backend, and the isolation posture that lives IN it

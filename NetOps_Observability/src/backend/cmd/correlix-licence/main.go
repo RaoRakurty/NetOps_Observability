@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Command correlix-licence issues and inspects Correlix licence files.
 //
 //	correlix-licence keygen  --dir <dir> [--name <base>]

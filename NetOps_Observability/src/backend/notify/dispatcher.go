@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package notify fans alert events out to one or more channels.
 //
 // Channels are kept tiny and self-contained so adding a new destination is

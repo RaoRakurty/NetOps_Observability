@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package keycloak
 
 // reconcile.go — the idempotent ensure-style operations (GET, then create or

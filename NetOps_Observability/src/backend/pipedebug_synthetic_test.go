@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // pipedebug_synthetic_test.go — the customer-facing log search must NEVER show

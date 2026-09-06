@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package pipedebug
 
 // sessions_test.go — the W3 (in-GUI viewer) surface: the session routes, the

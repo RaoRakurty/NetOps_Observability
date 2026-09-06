@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package integration is the pluggable, bidirectional ITSM/collaboration
 // integration core for the NMS — the "integration control plane" described in
 // docs/design/itsm-integration-platform.md.

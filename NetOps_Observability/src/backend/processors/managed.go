@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package processors
 
 // managed.go — the MANAGED RULES catalog and the SensitiveDataDetector

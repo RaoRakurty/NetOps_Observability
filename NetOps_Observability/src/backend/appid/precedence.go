@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // precedence.go — per-tenant attribution precedence (Wave 4 #11 slice 3).

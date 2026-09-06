@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // store_test.go — the store half of §3a rule 4: isolation lives in the STORE,

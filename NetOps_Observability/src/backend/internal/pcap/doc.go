@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package pcap is the per-interface, BOUNDED, on-device packet-capture module
 // (docs/design/PACKET_CAPTURE_DESIGN_2026-08-25.md).
 //

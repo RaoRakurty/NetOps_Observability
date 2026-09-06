@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // caseconn_config_isolation_test.go — the CLAUDE.md §3a.5 isolation test for

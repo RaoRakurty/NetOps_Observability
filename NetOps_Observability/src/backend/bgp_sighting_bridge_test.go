@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // bgp_sighting_bridge_test.go — the two IMMEDIATE sighting paths.

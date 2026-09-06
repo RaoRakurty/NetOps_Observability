@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // onboarding_cost_test.go — G1 GA-gate: the API-LEVEL onboarding cost budget.

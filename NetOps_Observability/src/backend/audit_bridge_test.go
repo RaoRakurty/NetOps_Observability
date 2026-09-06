@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // audit_bridge_test.go — the audit → corr_signals mirror (item 121): only

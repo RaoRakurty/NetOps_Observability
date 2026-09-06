@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package protocoldiag
 
 // typedbridge.go — the SIGNATURE ↔ PARSER bridge (design

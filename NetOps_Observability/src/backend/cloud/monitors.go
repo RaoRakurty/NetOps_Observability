@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // monitors.go — the tenant-scoped cloud monitor store (Phase-2 W4.5,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package quarantine
 
 // quarantine_test.go — F-11 slice 4 (design doc D5): the pure logic behind the

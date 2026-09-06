@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package protocoldiag is Correlix's operator-initiated ROUTING-PROTOCOL
 // DIAGNOSTICS backend (Troubleshooting page, item 7, owner spec
 // TROUBLESHOOTING_PROTOCOL_DIAGNOSTICS_2026-08-27).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package metering
 
 // metering_test.go — the vocabulary and the roll-up arithmetic.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package storagemeter MEASURES bytes on disk, per store, and refuses to guess.
 //
 // WHY IT EXISTS (tracker 204, owner directive 2026-09-01). Every storage and

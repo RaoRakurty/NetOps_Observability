@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package timeintel
 
 // cursor.go — the incident_time_metrics backfill HIGH-WATER MARK (tracker 186).

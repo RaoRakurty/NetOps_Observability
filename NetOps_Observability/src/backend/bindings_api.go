@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // bindings_api.go — REST for role bindings (PBAC Phase B). This is the data

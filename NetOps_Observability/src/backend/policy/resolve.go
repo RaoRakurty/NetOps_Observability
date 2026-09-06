@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package policy
 
 // resolve.go is the deterministic resolution engine. Given the catalog, the set

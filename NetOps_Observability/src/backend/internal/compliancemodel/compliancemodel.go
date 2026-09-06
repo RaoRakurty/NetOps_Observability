@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package compliancemodel owns Correlix's CANONICAL compliance model — the
 // Control layer and the Check→Control Mapping — plus the abstract framework
 // (crosswalk) provider seam. It is the "OWNED middle" of the compliance model

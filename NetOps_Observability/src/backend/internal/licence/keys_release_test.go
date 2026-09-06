@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package licence
 
 // keys_release_test.go — the embedded-key guard (tracker 259, owner decision

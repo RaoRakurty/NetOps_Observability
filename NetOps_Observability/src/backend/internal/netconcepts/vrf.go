@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package netconcepts canonicalizes vendor-dialect networking terms into one
 // platform vocabulary (product wave item 4, 2026-08-25).
 //

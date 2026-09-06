@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // igpmon_deps.go — the wiring for internal/igpmon (OSPF + IS-IS advanced

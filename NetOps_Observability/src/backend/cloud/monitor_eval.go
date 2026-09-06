@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // monitor_eval.go — the bounded poll evaluator for per-tenant cloud monitors

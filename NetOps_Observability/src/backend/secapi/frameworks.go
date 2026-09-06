@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package secapi
 
 // frameworks.go — WHICH COMPLIANCE FRAMEWORKS THIS TENANT IS ASSESSED AGAINST,

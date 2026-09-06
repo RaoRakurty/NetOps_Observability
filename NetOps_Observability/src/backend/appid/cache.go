@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // cache.go — a bounded LRU over the global catalog's IP→signals lookup (#81 P4).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tac
 
 // plan_reach_test.go — THE REACHABILITY INVARIANT (tracker 271).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package gqlparse is a real (small) GraphQL document parser for the subset
 // /api/graphql serves. Replaces the substring dispatch that made F-72 possible.
 //

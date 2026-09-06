@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package juniper is the wire client for Juniper's Service Case API
 // (css-caseapi): open a service request, attach a file through the S3 token
 // flow, and poll status.

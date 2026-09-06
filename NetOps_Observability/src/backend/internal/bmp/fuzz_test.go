@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bmp
 
 // fuzz_test.go — the property that matters most for a network-facing parser:

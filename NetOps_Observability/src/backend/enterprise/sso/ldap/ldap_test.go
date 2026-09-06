@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-Correlix-Enterprise
+// Copyright 2026 Correlix
 //
 // COMMERCIAL ADD-ON MODULE. This package implements the `ldap` entitlement
 // (Enterprise tier) and is NOT Apache-2.0 core. See the LICENSE notice file in

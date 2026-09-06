@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // troubleshoot_test.go — the Phase-A tool contract. Three properties are load-

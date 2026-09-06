@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package audit is the tamper-evident-ish append-only audit trail: the event
 // model, the bounded file ring and the per-row FORCE-RLS pg repository. The
 // capture chokepoint (withAudit middleware) and the org-scoped read merge stay

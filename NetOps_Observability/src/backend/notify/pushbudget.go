@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package notify
 
 // pushbudget.go — the OUTBOUND PUSH BUDGET, keyed by PUSH SERVER HOST.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // verify_http.go — Active Verification HTTP surface (RCA spec item 8):

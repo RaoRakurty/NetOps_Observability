@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package sealing
 
 // sealing_test.go — the security contract of Sealed Fields.

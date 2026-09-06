@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package safego runs work that must not be able to take the process down.
 //
 // Go recovers panics only on the goroutine net/http runs a handler on. Every

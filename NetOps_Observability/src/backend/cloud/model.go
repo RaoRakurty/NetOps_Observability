@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package cloud is the canonical model + pure resolution logic for Cloud App
 // Observability (#81 P3) — the app-to-underlay RCA story: Identity → Health →
 // Change → Cloud Network → Underlay → RCA, every step evidence-grounded with an

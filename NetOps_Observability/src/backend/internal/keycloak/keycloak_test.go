@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package keycloak
 
 // keycloak_test.go — unit tests over an httptest.Server mocking the Keycloak 25

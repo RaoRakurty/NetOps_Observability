@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // seam_links.go — the LATERAL seam links (#131c): the edges that say "these two

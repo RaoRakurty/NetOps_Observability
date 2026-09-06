@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package topology projects raw, tenant-scoped telemetry (deduped adjacencies,
 // device inventory, active alerts, measured traceroute paths) into the canonical
 // renderer-agnostic TopologyView the frontend consumes. It is PURE and

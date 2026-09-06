@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package timeintel
 
 // cursor_test.go — the watermark's own invariants (tracker 186). These are the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package seclane
 
 // http.go — the lane's two operator surfaces. Both are §3a-scoped through the

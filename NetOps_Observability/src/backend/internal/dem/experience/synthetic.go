@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // synthetic.go — SLICE 5 CONTRACTS: SyntheticDefinition, SyntheticRun with its

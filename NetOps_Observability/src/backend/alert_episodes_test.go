@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // alert_episodes_test.go — the engine→server adapters and the HTTP triage

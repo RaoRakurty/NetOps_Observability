@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // Cross-tenant isolation for the DEM passive-flow lane (§3a.5, tracker 252).

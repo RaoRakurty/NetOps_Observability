@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // troubleshoot_state.go — `get_device_state`: the SHOW-FIRST tool (IRIS Phase

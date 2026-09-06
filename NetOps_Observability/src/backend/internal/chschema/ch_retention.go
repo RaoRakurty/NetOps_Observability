@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // ch_retention.go — F-58: boot-time TTL convergence for the TELEMETRY family

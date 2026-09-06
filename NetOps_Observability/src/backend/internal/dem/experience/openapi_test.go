@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // openapi_test.go — every route this package serves must be DOCUMENTED, and the

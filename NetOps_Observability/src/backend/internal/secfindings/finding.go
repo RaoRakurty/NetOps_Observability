@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package secfindings owns Correlix's NORMALIZED security-finding model — the
 // stable core every evidence provider produces into and every consumer reads
 // from. Per the provider principle (SECURITY_OBSERVABILITY_HLD §5h): Correlix

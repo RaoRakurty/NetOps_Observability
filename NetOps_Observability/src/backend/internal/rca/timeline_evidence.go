@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // timeline_evidence.go — the read-side evidence-merge derivation (Phase-2

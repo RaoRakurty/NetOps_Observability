@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // netbox_sync.go — reconciles DISCOVERED devices INTO NetBox as the source of

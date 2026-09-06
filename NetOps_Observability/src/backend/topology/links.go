@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package topology
 
 // links.go — LLDP/CDP/BGP-LS adjacency normalization (extracted P2 RA.16).

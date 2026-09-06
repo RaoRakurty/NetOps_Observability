@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // import_file_state_pg_test.go — the one-time file→Postgres cutover, end to end

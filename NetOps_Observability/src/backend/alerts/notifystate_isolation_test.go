@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package alerts
 
 // notifystate_isolation_test.go — CLAUDE.md §3a for the durable notified set.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_monitors.go — per-tenant cloud monitor authoring (Wave 5 #14 slice 3).

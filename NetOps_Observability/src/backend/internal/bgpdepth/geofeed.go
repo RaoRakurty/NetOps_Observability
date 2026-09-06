@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bgpdepth
 
 // geofeed.go — RFC 8805 self-published IP geolocation feeds, discovered per

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package secpolicy
 
 // account.go — F-68: the account-lifecycle half of Security Settings.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // mfa_throttle_test.go — the TOTP second factor must be as brute-force-resistant

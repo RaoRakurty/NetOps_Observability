@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_costs.go — the cloud cost read surface (Wave 5 #18 slice 2).

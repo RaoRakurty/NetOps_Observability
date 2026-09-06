@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package osprobe
 
 // osprobe_test.go — the LADDER ITSELF: the order, the overwrite rule, and the

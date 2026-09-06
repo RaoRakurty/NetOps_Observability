@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // skill_condition_test.go — the A2 CONDITION GRAMMAR is a build gate, exactly as

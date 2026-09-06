@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package secpolicy
 
 // password.go — the password-rule half of the #24 Security Policy wiring.

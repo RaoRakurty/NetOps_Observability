@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // data_protection_routes_test.go — the Data Protection surface AS REGISTERED.

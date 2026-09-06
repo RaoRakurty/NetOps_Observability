@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package expbus is the DEM experience-event lane's producer: a bounded,
 // backpressure-aware writer that carries validated ExperienceEvents and
 // BusinessEvents from the ingest routes onto the platform's existing event bus.

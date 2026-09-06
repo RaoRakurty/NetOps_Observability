@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rca
 
 // action_items.go — the persisted RCA action-item register (Phase-2 W3.3,

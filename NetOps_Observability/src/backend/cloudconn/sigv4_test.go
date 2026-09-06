@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // sigv4_test.go — runs the OFFICIAL AWS SigV4 test-vector suite (vendored under

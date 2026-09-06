@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // appid_catalog.go — Application Identification resolver wiring (#81 P1). Loads the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package ifgroup serves ONE read: a device's interfaces grouped by the routing
 // instance they belong to, in the vendor's own dialect (frontend-wave item 4).
 //

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package cloudconn is the canonical, provider-neutral contract for connecting a
 // customer's cloud account (AWS / Azure / GCP) to Correlix.
 //

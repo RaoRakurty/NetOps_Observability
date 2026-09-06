@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package vendorprofile
 
 // vocabulary_guard_test.go — the ONE VENDOR VOCABULARY guard (CLAUDE.md §13,

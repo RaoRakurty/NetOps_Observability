@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // catalog_holder.go — the atomically-swapped application catalog (Phase-2

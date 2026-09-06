@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package ws is the platform's hand-rolled RFC 6455 WebSocket codec
 // (Phase-2 W1.10, extracted from device_ssh.go): handshake-by-hijack upgrade,
 // masked-frame reads with ping/pong and size bounds, and locked binary/JSON

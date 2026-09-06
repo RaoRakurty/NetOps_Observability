@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package parsercov
 
 // propose_test.go — the drafted catalog row is CHECKED, not merely produced.

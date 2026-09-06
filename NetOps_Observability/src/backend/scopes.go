@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // scopes.go — the scope containment TREE for PBAC (docs/design/saas-identity-pbac.md

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tac
 
 // gate.go — the CLOSED COMMAND TABLE for TAC plans: the second of the three

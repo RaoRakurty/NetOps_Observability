@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package timeintel
 
 // metrics_store_bounds_test.go — §9 bound proof for the in-memory metrics

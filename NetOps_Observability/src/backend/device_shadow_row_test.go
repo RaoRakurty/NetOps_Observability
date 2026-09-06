@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // device_shadow_row_test.go — TRACKER 181: a create that dedupe absorbs must

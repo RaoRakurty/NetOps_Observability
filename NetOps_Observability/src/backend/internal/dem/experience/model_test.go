@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // model_test.go — the rest of the Phase O backend list: the score (O-14), the

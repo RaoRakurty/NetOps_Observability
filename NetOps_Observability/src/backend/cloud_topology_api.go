@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_topology_api.go — GET /api/topology/cloud : the in-cloud NETWORK topology

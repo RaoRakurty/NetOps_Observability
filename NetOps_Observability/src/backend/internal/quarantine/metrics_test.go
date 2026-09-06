@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package quarantine
 
 // metrics_test.go — F-11 D6: the depth/age sampler and restore counters.

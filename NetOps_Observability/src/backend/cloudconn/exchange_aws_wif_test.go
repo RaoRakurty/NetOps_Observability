@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // exchange_aws_wif_test.go — Wave 4 #13 slice 3: the KEYLESS AWS

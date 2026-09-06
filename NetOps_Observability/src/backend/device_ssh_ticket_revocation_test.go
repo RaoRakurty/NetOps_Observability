@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // device_ssh_ticket_revocation_test.go — wsticket revocation: redeeming a

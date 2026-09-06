@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bgpwatch
 
 // helpers.go — the package's own small primitives. Duplicated rather than

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package igpmon
 
 // metrics_test.go — §10: every served read is counted, and the scrape text is

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package metricval
 
 // F-21 parse-boundary contract (moved from package main's resource_bounds_test

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // auth_flow_test.go — end-to-end HTTP tests for the whole authentication

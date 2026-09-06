@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package main is the entry point for the NetOps Observability backend API.
 //
 // The binary serves a RESTful JSON API over HTTP plus a WebSocket endpoint

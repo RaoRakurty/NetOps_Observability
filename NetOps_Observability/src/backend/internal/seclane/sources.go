@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package seclane
 
 // sources.go — the three INPUT adapters that feed the producer lanes, plus the

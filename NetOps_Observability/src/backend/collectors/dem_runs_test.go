@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package collectors
 
 // dem_runs_test.go — tracker 253, the PROBER half: one immutable run record per

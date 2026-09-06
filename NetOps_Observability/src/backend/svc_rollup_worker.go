@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // svc_rollup_worker.go — #69 P2 scheduled flow→service attribution roll-up

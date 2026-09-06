@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package igpmon serves READ-ONLY OSPF and IS-IS monitoring over telemetry the
 // platform ALREADY collects. It collects nothing itself and it invents nothing.
 //

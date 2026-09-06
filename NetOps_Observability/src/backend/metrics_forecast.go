@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // Capacity forecast (#69 panel 10) — days-to-90% utilization per interface from a

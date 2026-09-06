@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // tenant_config.go — the per-tenant AI entitlement + BYO provider-key store

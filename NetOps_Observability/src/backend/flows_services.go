@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // GET /api/flows/services (#69 P2) — flow traffic attributed per defined service.

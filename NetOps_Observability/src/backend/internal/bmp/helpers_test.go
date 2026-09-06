@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bmp
 
 // helpers_test.go — the MOCK TELEMETRY STREAM (§11): hand-built RFC 7854

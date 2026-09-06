@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // troubleshoot_state_test.go — the `get_device_state` contract (IRIS Phase A4).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // verify_ssh_test.go — the SSH runner's defense-in-depth refusal: even when a

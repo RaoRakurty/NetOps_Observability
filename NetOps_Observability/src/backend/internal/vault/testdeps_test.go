@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package vault
 
 // testdeps_test.go — in-memory Store/Warnf for this package's tests.

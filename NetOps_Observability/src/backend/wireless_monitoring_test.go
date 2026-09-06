@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // wireless_monitoring_test.go — tracker 256, owner decision 2026-09-05:

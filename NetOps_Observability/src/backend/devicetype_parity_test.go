@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // devicetype_parity_test.go — the PARITY GOLDEN for the move of the device-type

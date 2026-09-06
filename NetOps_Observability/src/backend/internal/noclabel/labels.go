@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package noclabel holds the server-side NOC humanizers for AI/RCA text.
 // These MIRROR the frontend RCA label library
 // (src/frontend/src/components/rca/labels.ts) so an operator sees identical

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package bmp
 
 // store.go — the in-memory, tenant-keyed, BOUNDED record of what arrived.

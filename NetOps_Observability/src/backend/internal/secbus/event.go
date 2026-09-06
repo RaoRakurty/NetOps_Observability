@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package secbus is the COMMON BUS SEAM the security evidence providers emit
 // through (T2, SECURITY_OBSERVABILITY_HLD §5b). It turns Correlix's owned,
 // normalized secfindings.Finding into a GENERIC evidence event on the bus, so

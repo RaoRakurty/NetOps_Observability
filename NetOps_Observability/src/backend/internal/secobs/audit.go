@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package secobs
 
 // audit.go names the security audit-event types once (SEC-020.1, T22).

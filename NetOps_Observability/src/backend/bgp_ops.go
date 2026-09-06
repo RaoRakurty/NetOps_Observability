@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // bgp_ops.go — BGP Operations (product wave item 10, 2026-08-25): the api-side
 // half of the consolidated BGP outage page. v0.9 strategy per
 // docs/design/research/BGP_OPS_CONSOLIDATION_RESEARCH_2026-08-25.md: serve the

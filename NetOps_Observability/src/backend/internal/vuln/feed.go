@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package vuln owns the vulnerability advisory feed (build-order #13): loading
 // the operator-provisioned CSV and matching a device's OS (vendor, product,
 // version) against it. The HTTP surface (/api/vulns) stays in package main;

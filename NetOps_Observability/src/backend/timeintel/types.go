@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package timeintel is the pure core of RCA Time Intelligence (Incident Time
 // Decomposition): it turns an incident's lifecycle events into source-attributed,
 // honestly-incomplete time-phase metrics and a "where did the time go" driver.

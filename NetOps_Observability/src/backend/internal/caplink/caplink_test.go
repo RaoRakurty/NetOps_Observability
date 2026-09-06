@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package caplink
 
 // In-package contract pins. The end-to-end suites (log masking through the

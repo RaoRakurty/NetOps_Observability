@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // verify_http_test.go — Active Verification isolation + gating (§3a rule 5):

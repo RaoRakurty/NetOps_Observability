@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package vendorprofile
 
 // consumer_bindings_test.go — the ROW PINS for the vendor knowledge that moved

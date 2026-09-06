@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // bgp_depth_test.go — the HTTP boundary for the BGP depth panels (item 10):

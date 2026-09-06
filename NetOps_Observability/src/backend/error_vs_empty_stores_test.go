@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // error_vs_empty_stores_test.go — proof for the file-backed store half of the

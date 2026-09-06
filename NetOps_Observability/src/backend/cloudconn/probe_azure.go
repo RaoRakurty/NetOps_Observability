@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloudconn
 
 // probe_azure.go — LIVE Azure identity + permission probes (Wave 4 #13),

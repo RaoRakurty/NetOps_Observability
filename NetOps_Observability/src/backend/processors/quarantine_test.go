@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package processors
 
 // quarantine_test.go — F-11 seal-or-quarantine (tracker #151 step 3, owner

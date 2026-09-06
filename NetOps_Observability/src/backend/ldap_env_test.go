@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // ldap_env_test.go — the LDAP_* env constructor stays in main (env reads live

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // domain.go — the domain/SNI tier (#81 P2). A hostname→app matcher: exact and

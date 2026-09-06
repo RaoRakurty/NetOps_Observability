@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ratelimit
 
 // White-box tests for the F-33 leak fix — they reach into the windows map, so

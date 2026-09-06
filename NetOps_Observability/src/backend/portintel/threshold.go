@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package portintel
 
 // threshold.go — vendor-aware threshold policy with fallback heuristics (#94 P4,

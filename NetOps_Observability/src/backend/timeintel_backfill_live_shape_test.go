@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // timeintel_backfill_live_shape_test.go — the test class that was MISSING when

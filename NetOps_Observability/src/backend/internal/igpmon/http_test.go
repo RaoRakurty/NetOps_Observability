@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package igpmon
 
 // http_test.go — the read surface. Each handler is asserted on the five things

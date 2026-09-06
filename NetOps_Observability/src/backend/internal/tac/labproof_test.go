@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tac
 
 // labproof_test.go — the LIVE LAB PROOF, skipped everywhere except a lab run.

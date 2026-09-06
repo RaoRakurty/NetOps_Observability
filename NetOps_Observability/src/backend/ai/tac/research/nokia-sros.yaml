@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 # Nokia SR OS (7750 SR / 7250 IXR / 7705 SAR / 7210 SAS) — TAC escalation pack.
 # Dialect: nokia/sros, CLASSIC CLI. Every command below is quoted from an
 # official Nokia public documentation page listed in `sources` (the SR OS

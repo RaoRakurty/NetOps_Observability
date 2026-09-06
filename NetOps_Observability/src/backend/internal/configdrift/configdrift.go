@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package configdrift is the CONSUMER half of the config keystone (P3-CFG,
 // design docs/design/CONFIG_BACKUP_AND_DRIFT_DESIGN_2026-08-25.md §4): it turns
 // each capture internal/configstore takes into a per-device SYNC VERDICT (the

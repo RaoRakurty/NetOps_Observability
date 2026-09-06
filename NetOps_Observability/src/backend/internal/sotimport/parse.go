@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package sotimport parses external Source-of-Truth exports into site and
 // device-site-binding rows (Phase-2 W1.7, extracted from package main): CSV
 // with header aliases, JSON arrays, and RFC 7946 GeoJSON FeatureCollections

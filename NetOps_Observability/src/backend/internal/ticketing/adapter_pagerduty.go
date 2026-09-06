@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ticketing
 
 // ticketing_pagerduty.go — PagerDuty as an RCA incident-policy destination

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // The runner half of SILENT-CRITICAL-1 (see internal/verify/truncation_test.go

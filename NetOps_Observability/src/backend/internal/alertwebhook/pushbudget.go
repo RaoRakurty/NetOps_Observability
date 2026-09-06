@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package alertwebhook
 
 // pushbudget.go — this route's view of the OUTBOUND PUSH BUDGET.

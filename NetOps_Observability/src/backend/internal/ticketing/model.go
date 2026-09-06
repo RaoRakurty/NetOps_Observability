@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package ticketing holds the pure domain core of RCA-driven auto-ticketing
 // (#78): the data records, the corr-object fact projection, and the I/O-free
 // incident-policy decision.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // trie.go — a compact bitwise radix trie for longest-prefix-match IP→entry lookup

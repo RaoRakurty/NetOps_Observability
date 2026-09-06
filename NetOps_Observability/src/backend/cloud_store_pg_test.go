@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_store_pg_test.go — CROSS-TENANT isolation for the Postgres cloud inventory

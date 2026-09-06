@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package seam
 
 // seams.go — the canonical seam inventory (#67 build ⑤ / #68 §4). A seam is an

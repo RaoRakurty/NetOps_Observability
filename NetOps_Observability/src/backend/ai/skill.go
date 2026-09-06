@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // skill.go — the SKILLS LAYER (IRIS Phase A): troubleshooting method as DATA,

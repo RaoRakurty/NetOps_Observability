@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // topology_view_cloud_path_test.go — #130b, the two halves of the honesty claim,

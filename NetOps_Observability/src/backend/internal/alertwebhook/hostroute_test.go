@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package alertwebhook
 
 // hostroute_test.go — the HOST-MONITORING route (owner decision, 2026-09-03).

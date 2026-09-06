@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package ai
 
 // troubleshoot_bgp_test.go — the read-only BGP-operations tools (IRIS Phase A4).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // transport_posture_isolation_test.go — §3a.5 isolation + gate coverage for the

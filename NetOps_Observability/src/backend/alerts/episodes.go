@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package alerts
 
 // episodes.go — alert EPISODE grouping + triage state (cloud-platform backlog

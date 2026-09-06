@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_ingestion.go — GET /api/cloud/ingestion: the REAL per-source ingestion

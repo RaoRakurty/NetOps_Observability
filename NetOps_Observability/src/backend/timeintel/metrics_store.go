@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package timeintel
 
 // metrics_store.go — the persisted phase-metrics snapshot store (RCA Time

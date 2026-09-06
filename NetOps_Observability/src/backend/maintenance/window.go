@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package maintenance holds tenant-scoped maintenance windows (tracker item
 // 121, the #53 remnant): declared periods of planned work during which alert
 // NOTIFICATIONS for the covered scope are paused and incidents are stamped as

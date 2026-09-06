@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dem
 
 // stats_test.go — the metrics-query layer. Two things matter here: the tenant

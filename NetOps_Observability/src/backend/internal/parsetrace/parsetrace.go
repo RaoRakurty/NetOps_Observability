@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package parsetrace is the runtime PARSER DECISION TRACE
 // (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §2, stage 2).
 //

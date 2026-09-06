@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package selfheal
 
 // self_heal_test.go — the guard's two pure decision points. The heal rule is

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package ssoidp is the desired-state domain for GUI-configurable SSO identity
 // providers (the Keycloak-side half of SSO; the relying-party half is the OIDC
 // config domain). Each record describes ONE upstream IdP (Okta, Azure AD, …)

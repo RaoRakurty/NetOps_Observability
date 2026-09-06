@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package portintel is the Port Intelligence / physical-layer domain (#94,
 // design docs/design/port-intelligence.md). It holds the normalized models for
 // ports, transceivers, lanes, DDM/DOM, FEC/BER, coherent PM and fiber paths,

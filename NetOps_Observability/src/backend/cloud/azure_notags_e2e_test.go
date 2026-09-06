@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // azure_notags_e2e_test.go — end-to-end attribution of an Azure subscription the

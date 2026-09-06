@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package healthscore is the scope health-score aggregation core (Phase-2
 // W3.4, extracted from package main's health_score.go): signal-class weights,
 // the weighted blend with the anti-averaging floor, coverage honesty, deficit

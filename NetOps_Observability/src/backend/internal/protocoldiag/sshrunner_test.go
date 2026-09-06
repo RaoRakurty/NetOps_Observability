@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package protocoldiag
 
 // sshrunner_test.go — the live-runner policy proofs, all against a FAKE gateway.

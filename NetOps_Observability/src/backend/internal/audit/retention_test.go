@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package audit
 
 // retention_test.go — guards for the retention half of audit F-57.

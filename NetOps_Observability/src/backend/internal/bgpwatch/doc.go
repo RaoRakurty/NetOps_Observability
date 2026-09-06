@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package bgpwatch is the BGP watchlist EVALUATOR: the half of the BGP
 // Operations page that watches, classifies and ALERTS, rather than answering a
 // question an operator typed.

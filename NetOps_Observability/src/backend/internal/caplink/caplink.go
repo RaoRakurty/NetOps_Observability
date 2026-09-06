@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package caplink owns the bearer-capability link crypto (P2 RA.3): the
 // tamper-proof, short-lived, tenant-bound tokens that authorize report views
 // and raw log exports without a session, and the log-masking algorithm that

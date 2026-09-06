@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package wan is the WAN path-metrics projection core (Phase-2 W1.6),
 // extracted from package main: the endpoint/circuit model, the per-tenant
 // measurement policy vocabulary, the ranked target derivation

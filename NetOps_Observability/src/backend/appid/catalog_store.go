@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // catalog_store.go — the operator app-catalog stores (#81 P1c, extracted P2

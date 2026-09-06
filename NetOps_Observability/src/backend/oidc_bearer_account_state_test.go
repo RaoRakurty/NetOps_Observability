@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // oidc_bearer_account_state_test.go — H2: the RS256 bearer path must honour the

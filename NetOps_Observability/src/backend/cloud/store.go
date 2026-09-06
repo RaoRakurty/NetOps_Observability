@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package cloud
 
 // cloud_store.go — Cloud App Observability inventory store (#81 P3A; WAVE 1 #1).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // Correlations inspector API (#67 build ⑦ follow-up) — the first owner-facing

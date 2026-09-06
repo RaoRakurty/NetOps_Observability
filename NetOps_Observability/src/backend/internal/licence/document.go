@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package licence implements the Correlix licence FILE: a JSON document signed
 // with ed25519 (Go stdlib `crypto/ed25519`), verified offline, that supplies the
 // answers the central entitlement service (internal/entitlement) hands to

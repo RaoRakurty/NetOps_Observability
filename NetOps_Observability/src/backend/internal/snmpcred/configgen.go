@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package snmpcred
 
 // configgen.go — the SNMP onboarding credential generator (extracted P2

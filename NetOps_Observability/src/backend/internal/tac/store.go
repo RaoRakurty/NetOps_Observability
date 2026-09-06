@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tac
 
 // store.go — where bundles live: data/tac/<tenant>/<incident>/<name>.zip.

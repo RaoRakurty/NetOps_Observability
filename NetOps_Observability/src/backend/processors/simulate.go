@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package processors
 
 // simulate.go — DRY RUN. Not a parallel implementation: it runs the ordered

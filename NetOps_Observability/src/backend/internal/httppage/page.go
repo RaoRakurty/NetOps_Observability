@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package httppage is the bounded-read pagination CONTRACT (Phase-2 W4.1,
 // extracted from package main's pagination.go): the request parse with
 // fail-closed limits (F-71), unknown-query rejection, the truncation-honesty

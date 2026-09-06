@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package igpmon
 
 // copy_denylist_test.go — a COPY guard, not a behaviour guard.

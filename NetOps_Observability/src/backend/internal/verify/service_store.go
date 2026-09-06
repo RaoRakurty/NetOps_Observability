@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package verify
 
 // service_store.go — the Active Verification service-layer stores (RCA spec

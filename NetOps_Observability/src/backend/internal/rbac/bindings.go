@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rbac
 
 // bindings.go — the role_binding store: the auditable join of

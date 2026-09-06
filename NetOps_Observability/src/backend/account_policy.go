@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // account_policy.go — main-side wiring for the F-68 account-lifecycle gate

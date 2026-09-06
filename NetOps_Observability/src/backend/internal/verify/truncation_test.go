@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package verify
 
 // verify_truncation_test.go — SILENT-CRITICAL-1 from the 2026-07-27 audit: the

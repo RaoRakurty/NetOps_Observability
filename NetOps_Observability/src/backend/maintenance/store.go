@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package maintenance
 
 // store.go — persistence for maintenance windows. Two backends behind one

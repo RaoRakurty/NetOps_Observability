@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package dataprotect
 
 // policy_test.go — #150: the snapshot-policy control plane.

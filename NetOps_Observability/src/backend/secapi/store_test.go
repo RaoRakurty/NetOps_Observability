@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package secapi
 
 // store_test.go — the CLAUDE.md §3a rule 4 proof for the file backend: the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package audit
 
 // strict_record_test.go — M19. Record is deliberately best-effort (an audit

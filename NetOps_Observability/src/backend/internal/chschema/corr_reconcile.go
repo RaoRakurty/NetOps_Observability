@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // corr_reconcile.go — the corr_current drift/orphan reconciliation SQL

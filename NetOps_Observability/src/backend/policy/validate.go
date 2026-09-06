@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package policy
 
 // validate.go enforces the zero-trust write path: no override may be stored

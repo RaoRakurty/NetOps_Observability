@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package platformdb
 
 // fileroot_test.go — the CI tls-boot leg's find (2026-08-12): store keys are

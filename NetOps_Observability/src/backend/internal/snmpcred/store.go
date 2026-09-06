@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package snmpcred
 
 // snmp_creds.go — SNMP credential profiles (v1 / v2c / v3 USM).

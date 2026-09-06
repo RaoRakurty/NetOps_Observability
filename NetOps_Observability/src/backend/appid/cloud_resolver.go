@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // cloud_resolver.go — the cloud identity-map consumer (#81 P3F+1, extracted P2

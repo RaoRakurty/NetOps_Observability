@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package httppage
 
 // contract_test.go — INVARIANTS gap #7: the paginated response SHAPE was

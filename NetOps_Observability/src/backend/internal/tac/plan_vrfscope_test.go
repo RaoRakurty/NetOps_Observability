@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tac
 
 // plan_vrfscope_test.go — the gate on how a TAC plan command is scoped to a VRF.

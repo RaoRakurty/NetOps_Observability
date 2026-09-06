@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package vendorprofile is Correlix's VENDOR PROFILE REGISTRY (T9,
 // SECURITY_BUILD_PLAN_2026-08-25; design VENDOR_EXTENSIBILITY_DESIGN_2026-08-25).
 //

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package appid is the pure (DB-free, dependency-free) contract for application
 // identification (#81). It defines the verdict vocabulary and the multi-signal
 // FUSION rule that turns a set of identification signals into one confidence-scored

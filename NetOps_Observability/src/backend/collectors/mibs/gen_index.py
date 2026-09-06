@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Generate + validate the embedded OID index (oididx.json) — BUILD TIME ONLY.
 
 Design: docs/design/research/telemetry-normalization-architecture.md §6.

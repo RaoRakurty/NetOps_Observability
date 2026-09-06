@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // notify_g10_test.go — G10 (Project 2 integrations residue): Microsoft Teams and

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package wireless
 
 // actions.go — the guarded wireless remediation register (Phase-2 W4.6,

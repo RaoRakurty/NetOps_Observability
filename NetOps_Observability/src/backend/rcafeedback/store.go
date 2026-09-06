@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package rcafeedback
 
 // store.go — persistence for RCA operator verdicts. Two backends behind ONE

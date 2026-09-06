@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Pytest: `gen_index.py`'s curated severity table, against the index it emits.
 
 Run it from here (it imports the generator by path and reads the checked-in

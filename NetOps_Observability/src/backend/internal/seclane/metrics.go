@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package seclane
 
 // metrics.go — the security lane's Prometheus surface (§10).

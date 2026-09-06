@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package experience
 
 // confidence.go — THE CONFIDENCE MATHS, in one place, pure, and documented to

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package appid
 
 // scoring.go — #81 Fusion Layer §G EvidenceScorer policy. ALL fusion weights,

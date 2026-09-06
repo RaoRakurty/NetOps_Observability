@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package applog is the process-wide structured logger — one JSON line per
 // event to stdout. Vector's docker_logs source picks them up, parses the
 // JSON, ships to the Kafka bus (topic netops.applogs), and vector-router then

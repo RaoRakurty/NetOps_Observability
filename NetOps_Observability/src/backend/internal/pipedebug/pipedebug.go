@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package pipedebug is the shared model of the pipeline debugger
 // (`correlix-debug`, docs/design/PIPELINE_DEBUGGER_2026-09-04.md).
 //

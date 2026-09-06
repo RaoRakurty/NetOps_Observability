@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package users
 
 // local_source_test.go — H1 regression coverage for the local/federated split:

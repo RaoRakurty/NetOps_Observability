@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package chschema
 
 // wireless_schema.go — ClickHouse DDL for the wireless per-client event tier

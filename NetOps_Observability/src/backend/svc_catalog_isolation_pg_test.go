@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // svc_catalog_isolation_pg_test.go — CROSS-TENANT isolation for the #69 P2

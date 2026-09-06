@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // cloud_slo_test.go — unit tests for the SLO/error-budget slice (Wave 5 #14

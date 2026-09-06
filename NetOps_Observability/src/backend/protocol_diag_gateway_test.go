@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // protocol_diag_gateway_test.go — proves the DEPLOY-TIME wiring of the live

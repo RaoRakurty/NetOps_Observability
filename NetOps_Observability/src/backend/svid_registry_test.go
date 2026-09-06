@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package backend
 
 // svid_registry_test.go — SEC-003.3 issuance end-to-end: drive the real CA

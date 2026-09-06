@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Package dataprotect is the platform's DATA PROTECTION domain: the backup
 // intent store, the OpenSearch snapshot-policy control plane, the snapshot
 // inventory + management surface, the restorability probe, the bounded async

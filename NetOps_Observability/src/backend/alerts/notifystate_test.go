@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package alerts
 
 // notifystate_test.go — the RESTART defect (2026-09-03).

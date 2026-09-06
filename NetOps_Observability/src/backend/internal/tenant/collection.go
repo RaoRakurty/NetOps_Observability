@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 package tenant
 
 // tenantkv.go — a default-closed, tenant-scoped kv store for file/in-memory app
