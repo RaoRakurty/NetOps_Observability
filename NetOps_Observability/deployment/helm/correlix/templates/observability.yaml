@@ -107,6 +107,15 @@ spec:
 {{ include "correlix.containerSecurity" (dict) | indent 12 }}
           args:
             - -auth.config=/etc/vmauth/config/vmauth.yml
+            {{- if .Values.tls.enabled }}
+            # vmauth exists to stop anonymous WRITE to the metrics store
+            # (alert forgery/suppression). Serving it in plaintext would put a
+            # credential on the wire in front of the thing it protects, so the
+            # TLS flags are not optional when the mesh is on.
+            - -tls
+            - -tlsCertFile=/tls/tls.crt
+            - -tlsKeyFile=/tls/tls.key
+            {{- end }}
             - -httpListenAddr=:8427
           envFrom:
             # vmauth.yml expands the per-identity credentials with %{ENV}.
@@ -127,8 +136,16 @@ spec:
 {{ toYaml .Values.vmauth.resources | indent 12 }}
           volumeMounts:
             - {name: config, mountPath: /etc/vmauth/config, readOnly: true}
+            {{- if .Values.tls.enabled }}
+            - {name: tls, mountPath: /tls, readOnly: true}
+            {{- end }}
       volumes:
         - {name: config, configMap: {name: correlix-config}}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ default "correlix-vmauth-tls" (get .Values.tls.existingSecrets "vmauth") }}
+        {{- end }}
 {{- end }}
 {{- if .Values.kafkaExporter.enabled }}
 ---
@@ -204,12 +221,45 @@ spec:
           securityContext:
 {{ include "correlix.containerSecurity" (dict) | indent 12 }}
           env:
-            # Served behind the gateway at /grafana/, which is auth_request
-            # gated against the api. Anonymous access is off.
+            # Served behind the gateway at /grafana/. The gateway runs an
+            # auth_request against the api and forwards the resolved user in
+            # X-WEBAUTH-USER; the GF_AUTH_PROXY_* block below is what makes
+            # Grafana trust that header. Drop it and the iframe stops working
+            # — this is a contract with nginx/default.conf, not decoration.
+            #
+            # ROOT_URL is derived from the request rather than compose's
+            # hardcoded http://localhost:8000/grafana/, so it is correct behind
+            # whatever host the Ingress serves.
             - {name: GF_SERVER_ROOT_URL, value: "%(protocol)s://%(domain)s/grafana/"}
             - {name: GF_SERVER_SERVE_FROM_SUB_PATH, value: "true"}
+            - {name: GF_AUTH_PROXY_ENABLED, value: "true"}
+            - {name: GF_AUTH_PROXY_HEADER_NAME, value: "X-WEBAUTH-USER"}
+            - {name: GF_AUTH_PROXY_HEADER_PROPERTY, value: "username"}
+            - {name: GF_AUTH_PROXY_AUTO_SIGN_UP, value: "true"}
+            - {name: GF_AUTH_PROXY_SYNC_TTL, value: "60"}
+            - {name: GF_AUTH_PROXY_HEADERS_ENCODED, value: "false"}
+            - {name: GF_USERS_AUTO_ASSIGN_ORG, value: "true"}
+            - {name: GF_USERS_AUTO_ASSIGN_ORG_ROLE, value: "Admin"}
+            # Anonymous is Viewer-only and reachable ONLY through the gateway,
+            # which authenticates first. The NetworkPolicy above is the second
+            # layer: nothing but the gateway may open :3000.
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "true"}
+            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: "Viewer"}
+            - {name: GF_AUTH_ANONYMOUS_ORG_NAME, value: "Main Org."}
+            - {name: GF_AUTH_DISABLE_LOGIN_FORM, value: "true"}
+            - {name: GF_AUTH_DISABLE_SIGNOUT_MENU, value: "true"}
+            - {name: GF_SECURITY_ALLOW_EMBEDDING, value: "true"}
+            - {name: GF_USERS_DEFAULT_THEME, value: "light"}
+            - {name: GF_NEWS_NEWS_FEED_ENABLED, value: "false"}
+            - {name: GF_ANALYTICS_REPORTING_ENABLED, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false"}
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
             - name: GF_SECURITY_ADMIN_PASSWORD
               valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: GRAFANA_ADMIN_PASSWORD}}
+            # The ClickHouse datasource credential the provisioning files read.
+            - name: GRAFANA_CH_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: GRAFANA_CH_PASSWORD}}
           ports:
             - {name: http, containerPort: 3000}
           readinessProbe:
@@ -319,6 +369,11 @@ spec:
           imagePullPolicy: {{ .Values.images.pullPolicy }}
           securityContext:
 {{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          # JavaScript is DISABLED in the renderer. A report template is
+          # untrusted HTML as far as this sidecar is concerned (CLAUDE.md §15
+          # LLM02: anything derived from model output is data, not code), and
+          # the api timeout bounds a template that tries to hang it.
+          args: ["gotenberg", "--chromium-disable-javascript=true", "--api-timeout=30s"]
           ports:
             - {name: http, containerPort: 3000}
           readinessProbe:
