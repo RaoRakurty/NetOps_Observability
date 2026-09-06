@@ -11,11 +11,15 @@ import {
   EMPTY_PAGE, HistoryMode, PageState, appendPage, evidenceClassLabel, historyQuery,
   mapFacetRows, severityFacetRows, severityRank, statusFacetRows, subjectLine, verdictOf,
 } from "./model";
+import AskIris from "../../components/AskIris";
 
 // Exposures — the findings workbench (P3-T8). A faceted, cursor-paginated list
 // over the tenant's own security findings, with the full Finding detail in the
 // Inspector: observed vs intended, the by-reference evidence pointer, the
 // remediation, and the standards chips.
+//
+// WORD SWEEP (2026-09-06, tracker 270): the scope, pagination and read-only
+// facet explanations are ai/skills/explain/exposures.*.md behind the `(i)`.
 //
 // Honesty: an empty result says WHICH filter emptied it; "current" and
 // "history" are an explicit, labelled choice (a history row is a past verdict,
@@ -208,11 +212,9 @@ export default function Exposures() {
               Clear {chosen.length} filter{chosen.length === 1 ? "" : "s"}
             </button>
           )}
-          <span className="mini-meta" role="status" aria-live="polite">
-            {(busy ? "Loading…" : `${page.items.length.toLocaleString()} of ${page.total.toLocaleString()} shown`)
-              + (mode === "history"
-                ? " · every recorded verdict, including superseded ones"
-                : " · latest verdict per check")}
+          <span className="sec-line" role="status" aria-live="polite">
+            {busy ? "Loading…" : `${page.items.length.toLocaleString()} of ${page.total.toLocaleString()} shown`}
+            <AskIris topic="exposures.scope" label={mode === "history" ? "Full history" : "Current verdicts"} />
           </span>
         </div>
 
@@ -229,7 +231,7 @@ export default function Exposures() {
             <FacetGroup
               title="Evidence lane"
               rows={mapFacetRows(facets?.evidence_class, undefined, evidenceClassLabel)}
-              note="Breakdown of the current result set. Open Threat Detection for the threat lane on its own."
+              topic="exposures.evidence-lane"
             />
           </aside>
 
@@ -242,7 +244,7 @@ export default function Exposures() {
               <div className="empty">
                 {chosen.length > 0
                   ? `No finding matches ${chosen.join(" · ")}. Clear a filter to widen the search.`
-                  : "No security findings have been recorded for this tenant yet. An empty list means nothing was assessed — not that the estate is clear."}
+                  : <>No findings recorded yet.<AskIris topic="exposures.none-recorded" label="an empty findings list" /></>}
               </div>
             ) : (
               <>
@@ -269,9 +271,7 @@ export default function Exposures() {
                   >
                     {page.hasMore ? (busy ? "Loading…" : "Load more") : "All rows loaded"}
                   </button>
-                  <span className="mini-meta">
-                    Cursor pagination — rows are appended, never re-ordered.
-                  </span>
+                  <AskIris topic="exposures.pagination" label="Load more" />
                 </div>
               </>
             )}

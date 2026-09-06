@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../services/api";
 import { useAppNames } from "../services/appNames";
 import { Group, BarPanel, Panel, fmtNum, fmtBytes } from "../components/board/panels";
+import AskIris from "../components/AskIris";
 
+// WORD SWEEP (2026-09-06, tracker 270): the scan-signature and high-risk-port
+// explanations are ai/skills/explain/threats.*.md behind the `(i)`.
+//
 // Threat Detection — flow-derived (IPFIX/NetFlow) network threat signals. No new
 // collection: every panel is computed from netops.flows. v1 surfaces scan
 // behavior (a source touching many distinct hosts or ports) and traffic to
@@ -68,17 +72,17 @@ export default function ThreatDetection({ sinceSeconds }: { sinceSeconds?: numbe
 
   return (
     <div className="dm-board">
-      <Group title="Scan detection (flow fan-out)" hue="#EF4444">
+      <Group title="Scan detection" hue="#EF4444">
         <div className="dm-grid">
           <BarPanel
-            title="Horizontal scan suspects — distinct destination hosts per source"
+            title="Horizontal scan suspects"
             rows={horiz.rows.map((r) => ({ label: withApp(r.k), value: Number(r.dst_count), danger: Number(r.dst_count) >= 25 }))}
             fmtX={(n) => `${n.toFixed(0)} hosts`}
             loading={horiz.loading}
             err={horiz.err}
           />
           <BarPanel
-            title="Vertical scan suspects — distinct destination ports per source"
+            title="Vertical scan suspects"
             rows={vert.rows.map((r) => ({ label: withApp(r.k), value: Number(r.port_count), danger: Number(r.port_count) >= 25 }))}
             fmtX={(n) => `${n.toFixed(0)} ports`}
             loading={vert.loading}
@@ -86,21 +90,25 @@ export default function ThreatDetection({ sinceSeconds }: { sinceSeconds?: numbe
           />
         </div>
         <p className="mini-meta" style={{ margin: 0 }}>
-          A single source touching many distinct hosts (horizontal) or many distinct ports (vertical) is a scan signature. Bars turn red past 25 — tune to your environment. Derived from flow records (IPFIX/NetFlow).
+          Red past 25 targets, from flow records.
+          <AskIris topic="threats.scan-signature" label="a scan signature" />
         </p>
       </Group>
 
       <Group title="High-risk service exposure" hue="#F59E0B">
         <BarPanel
-          title="Traffic to high-risk destination ports (bytes)"
+          title="High-risk ports, bytes"
           rows={riskyHits.map((p) => ({ label: `${p.k} (${RISKY_PORTS[p.k]})`, value: Number(p.bytes_total), danger: true }))}
           fmtX={fmtBytes}
           err={portErr}
         />
         {riskyHits.length === 0 && !portErr && (
-          <p className="mini-meta" style={{ margin: 0 }}>No traffic to known high-risk ports (FTP/Telnet/SMB/RDP/VNC/DB/…) in this window.</p>
+          <p className="sec-line" style={{ margin: 0 }}>
+            No high-risk port traffic in this window.
+            <AskIris topic="threats.risky-ports" label="high-risk ports" />
+          </p>
         )}
-        <Panel title="All top destination ports">
+        <Panel title="Top destination ports">
           {portErr ? (
             <div className="empty" style={{ color: "var(--bad)" }}>{portErr}</div>
           ) : ports.length === 0 ? (

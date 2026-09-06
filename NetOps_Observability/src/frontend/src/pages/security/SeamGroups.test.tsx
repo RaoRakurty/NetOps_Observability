@@ -55,7 +55,8 @@ describe("SeamGroups — reading", () => {
     render(<SeamGroups />);
     const table = await screen.findByRole("table", { name: /seam groups/i });
     const row = within(table).getByText("HQ dual ISP").closest("tr")!;
-    expect(within(row).getByText(/proposed grouping, not confirmed/i)).toBeTruthy();
+    expect(within(row).getByText(/proposed, not confirmed/i)).toBeTruthy();
+    expect(within(row).getByRole("button", { name: /Ask Iris about a proposed grouping/i })).toBeTruthy();
     expect(within(row).getByText("engine")).toBeTruthy();
     expect(within(row).getByText("82%")).toBeTruthy();
   });
@@ -78,8 +79,8 @@ describe("SeamGroups — reading", () => {
   it("a 501 says the seam registry is not deployed, not that there are no groups", async () => {
     seamGroups.mockRejectedValue(new Error("501 Not Implemented: "));
     render(<SeamGroups />);
-    expect(await screen.findByText(/not available on this deployment/i)).toBeTruthy();
-    expect(screen.getByText(/not the same as an estate with no redundant seams/i)).toBeTruthy();
+    expect(await screen.findByText(/seam registry is not available here/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about the seam registry/i })).toBeTruthy();
   });
 
   it("a failed read says the grouping is unknown, not absent", async () => {

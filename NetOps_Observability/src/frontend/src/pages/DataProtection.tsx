@@ -38,6 +38,15 @@
 // visually distinct from "never" (we looked, and it has not happened) — the
 // second is a gap, the first is only silence.
 //
+// WORD SWEEP (2026-09-06, tracker 270). The honesty rule above did not move —
+// only the words did. Every paragraph that TAUGHT what a posture verdict, a
+// proven restore, a measured byte count or an external job means now lives in
+// ai/skills/explain/backup.*.md, one click away on the `(i)`. What is left on
+// screen is the verdict, the number, the reason it is absent, and the action.
+// The destructive-path warnings (in-place restore, delete) stay ON SCREEN in
+// full: a consequence you must read before typing a confirmation is not an
+// explanation, it is part of the action.
+//
 // GATING. Every route behind this page is platform-global and requirePlatformAdmin
 // on the server. A tenant admin sees the posture read-only and is told why the
 // controls are absent, rather than being shown buttons that 403.
@@ -62,6 +71,7 @@ import DataTable, { type Column } from "../components/DataTable";
 import { Modal } from "../components/ui";
 import Wizard, { type WizardStep } from "../components/Wizard";
 import { operatorError } from "../lib/errors";
+import AskIris from "../components/AskIris";
 import {
   BACKUP_DOC,
   DEFAULT_RESTORE_PREFIX,
@@ -167,14 +177,18 @@ function Pill({ tone, children, title }: { tone: Tone; children: ReactNode; titl
 }
 
 /** A section of the console: a landmark, a stable id, and its own header. */
-function Section({ id, title, note, actions, children }: {
-  id: string; title: string; note?: ReactNode; actions?: ReactNode; children: ReactNode;
+function Section({ id, title, note, topic, actions, children }: {
+  id: string; title: string; note?: ReactNode;
+  /** The authored explanation for this section (ai/skills/explain/<topic>.md). */
+  topic?: string;
+  actions?: ReactNode; children: ReactNode;
 }) {
   return (
     <section className="dp-sec" data-section={id} role="region" aria-label={title}>
       <div className="dp-sec-hd">
         <h2>{title}</h2>
         {note && <span className="dp-sec-note">{note}</span>}
+        {topic && <AskIris topic={topic} label={title} />}
         <span className="dp-sp" />
         {actions}
       </div>
@@ -194,13 +208,19 @@ function Value<T>({ m, render }: { m: Measured<T>; render: (v: T) => ReactNode }
 }
 
 /** An honest state: what is wrong, the exact next action, and the procedure. */
-function HonestState({ tone, headline, remedy, doc }: {
-  tone: Tone; headline: string; remedy: string; doc?: string;
+function HonestState({ tone, headline, remedy, topic, doc }: {
+  tone: Tone; headline: string; remedy: string;
+  /** Where the reasoning went when the remedy was cut to one sentence. */
+  topic?: string;
+  doc?: string;
 }) {
   return (
     <div className={`dp-honest dp-${tone}`} role="note">
       <strong>{headline}</strong>
-      <span>{remedy}</span>
+      <span>
+        {remedy}
+        {topic && <AskIris topic={topic} label={headline} />}
+      </span>
       {doc && (
         <a className="dp-doclink" href={doc} target="_blank" rel="noopener noreferrer">
           Back up and restore procedure
@@ -219,7 +239,7 @@ function PanelError({ text, onRetry }: { text: string; onRetry: () => void }) {
   return (
     <div className="dp-honest dp-bad" role="alert">
       <strong>{text}</strong>
-      <span>Nothing on this panel is a statement about the backup posture until it loads.</span>
+      <span>Nothing here is a posture statement until it loads.</span>
       <button type="button" className="dp-more" onClick={onRetry}>Read it again</button>
     </div>
   );
@@ -257,7 +277,7 @@ function ProtectionHealth({ coverage, list, repoBroken, policy, now }: {
 
       <dl className="dp-stats">
         <div className="dp-stat">
-          <dt>Last proven restorable copy</dt>
+          <dt>Proven restorable<AskIris topic="backup.proven-restore" label="Proven restorable" /></dt>
           <dd>
             <Value
               m={proven}
@@ -265,7 +285,7 @@ function ProtectionHealth({ coverage, list, repoBroken, policy, now }: {
                 <>
                   <Pill tone="good">Proved</Pill>{" "}
                   <span className="mono">{fmtAgo(v.at, now) ?? v.at}</span>
-                  <span className="dp-sub"> · {v.engine}</span>
+                  <span className="dp-fine"> · {v.engine}</span>
                 </>
               )}
             />
@@ -280,7 +300,7 @@ function ProtectionHealth({ coverage, list, repoBroken, policy, now }: {
               render={(v) => (
                 <>
                   <span className="mono">{fmtUntil(v, now) ?? v}</span>
-                  <span className="dp-sub"> · {v}</span>
+                  <span className="dp-fine"> · {v}</span>
                 </>
               )}
             />
@@ -288,7 +308,7 @@ function ProtectionHealth({ coverage, list, repoBroken, policy, now }: {
         </div>
 
         <div className="dp-stat">
-          <dt>Repository headroom</dt>
+          <dt>Headroom<AskIris topic="backup.repository" label="Repository headroom" /></dt>
           {/* The one header number the contract does not carry yet. It is named
               as unreported rather than dropped, so the gap is visible to the
               operator and to whoever closes it. */}
@@ -302,7 +322,7 @@ function ProtectionHealth({ coverage, list, repoBroken, policy, now }: {
               {repoState === "ok" ? "Registered and verified" : repositoryStateWord(repoState)}
             </Pill>{" "}
             {list?.repository && (
-              <span className="dp-sub">
+              <span className="dp-fine">
                 {list.repository.name}
                 {list.total > 0 ? ` · ${list.total} restore points` : ""}
               </span>
@@ -312,7 +332,10 @@ function ProtectionHealth({ coverage, list, repoBroken, policy, now }: {
       </dl>
 
       <div className="dp-rpo">
-        <span className="dp-rpo-h">Recovery point per engine</span>
+        <span className="dp-rpo-h">
+          Recovery point
+          <AskIris topic="backup.recovery-point" label="Recovery point" />
+        </span>
         {rpoRows.length === 0 ? (
           <span className="dp-unmeasured">{notMeasuredText("the coverage table reported no engines")}</span>
         ) : (
@@ -389,14 +412,15 @@ function CoverageRow({ e, now }: { e: EngineCoverage; now: number }) {
       <th scope="row">
         {label}
         {isExternal(e) && (
-          <span className="dp-sub dp-block" title={e.schedule?.detail}>
-            External, not governed here{e.schedule?.detail ? ` — ${e.schedule.detail}` : ""}
+          <span className="dp-fine dp-block" title={e.schedule?.detail}>
+            External{e.schedule?.detail ? ` — ${e.schedule.detail}` : ""}
+            <AskIris topic="backup.external-job" label="External" />
           </span>
         )}
       </th>
       <td>
         <Pill tone={coverageTone(e.covered)} title={e.covered_reason}>{coverageLabel(e.covered)}</Pill>
-        <span className="dp-sub dp-block">{e.covered_reason}</span>
+        <span className="dp-fine dp-block">{e.covered_reason}</span>
       </td>
       <td>
         <Value
@@ -404,7 +428,7 @@ function CoverageRow({ e, now }: { e: EngineCoverage; now: number }) {
           render={(v) => (
             <>
               <span className="mono">{v.cron || "no schedule expression"}</span>
-              {!v.enabled && <span className="dp-sub dp-block">off — {v.detail}</span>}
+              {!v.enabled && <span className="dp-fine dp-block">off — {v.detail}</span>}
             </>
           )}
         />
@@ -418,7 +442,7 @@ function CoverageRow({ e, now }: { e: EngineCoverage; now: number }) {
                 {v.result}
               </Pill>{" "}
               <span className="mono">{fmtAgo(v.at, now) ?? v.at}</span>
-              {v.detail && v.result !== "success" ? <span className="dp-sub dp-block">{v.detail}</span> : null}
+              {v.detail && v.result !== "success" ? <span className="dp-fine dp-block">{v.detail}</span> : null}
             </>
           )}
         />
@@ -460,7 +484,7 @@ function CoverageRow({ e, now }: { e: EngineCoverage; now: number }) {
               title={targetMeaning(e.target.kind)}>
           {e.target.kind}
         </Pill>
-        {e.target.location ? <span className="dp-sub dp-block">{e.target.location}</span> : null}
+        {e.target.location ? <span className="dp-fine dp-block">{e.target.location}</span> : null}
         <span className="dp-badges">
           <BoolBadge on={e.target.immutable} onLabel="Immutable" offLabel="Mutable" detail={e.target.immutable_detail} />
           <BoolBadge on={e.target.encrypted} onLabel="Encrypted" offLabel="Not encrypted" detail={e.target.encrypted_detail} />
@@ -477,7 +501,7 @@ function CoverageMatrix({ engines, now }: { engines: readonly EngineCoverage[]; 
       <HonestState
         tone="warn"
         headline="The platform listed no engines to protect."
-        remedy="Until it does, treat nothing on this page as coverage. Read it again, and if the list stays empty check that the data-protection service is running."
+        remedy="Read it again; if the list stays empty, check the data-protection service."
         doc={BACKUP_DOC}
       />
     );
@@ -534,8 +558,8 @@ function ComponentBreakdown({ r }: { r: StorageReading }) {
             <li key={c.name} className="dp-part">
               <span className="dp-part-n mono">{c.name}</span>
               <span className="mono">{fmtBytes(c.bytes_on_disk)}</span>
-              {c.rows !== null && <span className="dp-sub">{c.rows} rows</span>}
-              {ratio !== null && <span className="dp-sub">{fmtRatio(ratio)} (measured)</span>}
+              {c.rows !== null && <span className="dp-fine">{c.rows} rows</span>}
+              {ratio !== null && <span className="dp-fine">{fmtRatio(ratio)} (measured)</span>}
             </li>
           );
         })}
@@ -555,7 +579,7 @@ function StorageRow({ r, now }: { r: StorageReading; now: number }) {
         <td className="num"><ReadingSize r={r} /></td>
         <td>
           <span className="mono">{taken}</span>
-          {isMeasured && r.detail ? <span className="dp-sub dp-block">{r.detail}</span> : null}
+          {isMeasured && r.detail ? <span className="dp-fine dp-block">{r.detail}</span> : null}
         </td>
         <td>
           {r.source
@@ -582,7 +606,7 @@ function StorageMeasured({ report, now }: { report: StorageMeasuredReport; now: 
           <dt>{measuredTotalLabel(report.unmeasured_stores)}</dt>
           <dd>
             <span className="mono">{fmtBytes(report.total_measured_bytes)}</span>
-            <span className="dp-sub dp-block">
+            <span className="dp-fine dp-block">
               {scopeLabel(report.scope)}
               {report.cross_tenant ? " · every tenant" : ""}
               {" · taken "}
@@ -606,12 +630,15 @@ function StorageMeasured({ report, now }: { report: StorageMeasuredReport; now: 
         </div>
       </dl>
 
-      <p className="dp-msg">{report.measurement_note}</p>
+      <p className="dp-msg">
+        {report.measurement_note}
+        <AskIris topic="backup.measured-bytes" label="Bytes on disk" />
+      </p>
 
       {readings.length === 0 ? (
         <HonestState
           tone="warn"
-          headline="Nothing was weighed for this scope."
+          headline="Nothing was weighed."
           remedy={report.measurement_note}
         />
       ) : (
@@ -984,7 +1011,7 @@ export default function DataProtection() {
     {
       key: "duration", header: "Duration", width: 100, align: "right", sortable: true,
       sortValue: (r) => r.duration_seconds,
-      render: (r) => (r.ended_at ? fmtDuration(r.duration_seconds) : <span className="dp-sub">still running</span>),
+      render: (r) => (r.ended_at ? fmtDuration(r.duration_seconds) : <span className="dp-fine">still running</span>),
     },
     {
       key: "indices", header: "Indices", width: 90, align: "right", sortable: true,
@@ -1014,7 +1041,7 @@ export default function DataProtection() {
       key: "failures", header: "Failures", width: "1fr",
       text: (r) => r.failures.map((f) => f.reason).join(" "),
       render: (r) => {
-        if (r.failures.length === 0) return <span className="dp-sub">none reported</span>;
+        if (r.failures.length === 0) return <span className="dp-fine">none reported</span>;
         const first = r.failures[0];
         return (
           <span className="dp-bad-text" title={r.failures.map((f) => `${f.index}[${f.shard}] ${f.reason}`).join("\n")}>
@@ -1062,7 +1089,8 @@ export default function DataProtection() {
       <Section
         id="health"
         title="Protection health"
-        note="Platform-global — one posture for the whole stack"
+        note="Platform-wide"
+        topic="backup.posture"
         actions={<button type="button" className="btn sm" onClick={refreshAll}><Icon name="refresh" size={13} /> Re-read</button>}
       >
         {coverage.error ? (
@@ -1083,8 +1111,9 @@ export default function DataProtection() {
         {!authLoading && !platformAdmin && (
           <HonestState
             tone="muted"
-            headline="You are seeing this posture read-only."
-            remedy="Backup and recovery is platform-global configuration. Taking, restoring, verifying and deleting restore points requires a platform administrator."
+            headline="This posture is read-only for you."
+            remedy="Taking, restoring, verifying and deleting requires a platform administrator."
+            topic="backup.read-only"
           />
         )}
       </Section>
@@ -1093,7 +1122,7 @@ export default function DataProtection() {
       <Section
         id="coverage"
         title="Coverage"
-        note="One row per engine the platform is responsible for"
+        note="One row per engine"
       >
         {coverage.error ? (
           <PanelError text={coverage.error} onRetry={reloadCoverage} />
@@ -1117,8 +1146,9 @@ export default function DataProtection() {
       {/* ── 2b · bytes on disk ── */}
       <Section
         id="bytes-on-disk"
-        title="Bytes on disk (measured)"
-        note="Read back from each store — never derived from a rate"
+        title="Bytes on disk"
+        note="Measured, not derived"
+        topic="backup.measured-bytes"
       >
         {storage.error ? (
           <PanelError text={storage.error} onRetry={reloadStorage} />
@@ -1133,7 +1163,7 @@ export default function DataProtection() {
       <Section
         id="restore-points"
         title="Restore points"
-        note="OpenSearch snapshots — the copies a restore can come from"
+        note="Copies a restore can use"
         actions={
           <>
             <input
@@ -1176,12 +1206,13 @@ export default function DataProtection() {
           <HonestState
             tone="warn"
             headline="No restore point exists yet."
-            remedy="There is nothing to restore from. Take one now, then run a restore drill so the first copy is proved rather than assumed."
+            remedy="Take one now, then run a restore drill."
+            topic="backup.no-restore-point"
             doc={BACKUP_DOC}
           />
         ) : (
           <>
-            {list.data?.detail && <p className="dp-sub">{list.data.detail}</p>}
+            {list.data?.detail && <p className="dp-fine">{list.data.detail}</p>}
             <DataTable
               rows={snapshots}
               columns={columns}
@@ -1190,14 +1221,14 @@ export default function DataProtection() {
               height={420}
               rowActions={rowActions}
               ariaLabel="Restore points"
-              empty={<span className="dp-sub">No restore point matches that filter.</span>}
+              empty={<span className="dp-fine">No restore point matches that filter.</span>}
             />
           </>
         )}
       </Section>
 
       {/* ── 4 · policies ── */}
-      <Section id="policies" title="Policies" note="What creates restore points, and how long they live">
+      <Section id="policies" title="Policies" note="What creates copies, and for how long">
         <SnapshotPolicyForm panel={policy} onReload={reloadPolicy} canEdit={platformAdmin} onSaved={refreshAll} />
         <BundlePolicyForm panel={bundle} onReload={reloadBundle} canEdit={platformAdmin} />
         {external.map((x) => (
@@ -1214,7 +1245,7 @@ export default function DataProtection() {
       <Section
         id="activity"
         title="Activity and drills"
-        note={ops.data ? `The platform keeps the newest ${ops.data.capacity} operations` : "Who ran what, and what it returned"}
+        note={ops.data ? `Newest ${ops.data.capacity} operations` : "Who ran what"}
         actions={
           platformAdmin ? (
             <button type="button" className="btn sm" onClick={() => start(() => api.verifySnapshot())}>
@@ -1233,8 +1264,8 @@ export default function DataProtection() {
             ) : opRows.length === 0 ? (
               <HonestState
                 tone="muted"
-                headline="No backup or restore action has been recorded."
-                remedy={ops.data?.detail || "Nothing has been taken, restored, verified or deleted since the platform last started."}
+                headline="No action has been recorded."
+                remedy={ops.data?.detail || "Nothing has run since the platform last started."}
               />
             ) : (
               <>
@@ -1259,7 +1290,8 @@ export default function DataProtection() {
               <HonestState
                 tone="warn"
                 headline="No restore has ever been proved."
-                remedy="A copy nobody has restored is a copy nobody knows is good. Run a restore drill: it restores the smallest index of the newest good copy under a temporary name, compares document counts against the live source, and records the result here."
+                remedy="Run a restore drill; its result is recorded here."
+                topic="backup.proven-restore"
                 doc={BACKUP_DOC}
               />
             ) : (
@@ -1272,7 +1304,7 @@ export default function DataProtection() {
                         {a.verify ? (a.verify.match ? "documents matched" : "documents did not match") : a.state}
                       </Pill>
                       <span>{a.target?.snapshot ?? a.verify?.snapshot ?? "target not recorded"}</span>
-                      {verifyEvidence(a) && <span className="dp-sub">{verifyEvidence(a)}</span>}
+                      {verifyEvidence(a) && <span className="dp-fine">{verifyEvidence(a)}</span>}
                       {a.error && <span className="dp-bad-text">{a.error}</span>}
                     </li>
                   ))}
@@ -1399,9 +1431,9 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
         <HonestState
           tone="bad"
           headline="The recovery-point policy is disabled."
+          topic="backup.recovery-point"
           remedy={
-            "No new restore points will be created. Everything already taken stays restorable until " +
-            "retention removes it, and from then on the achieved recovery point only gets older. " +
+            "No new restore points will be created. " +
             (snap.disabled_reason
               ? `Turned off by ${snap.disabled_by || "an unrecorded operator"}${snap.disabled_at ? ` on ${snap.disabled_at}` : ""}: ${snap.disabled_reason}`
               : "The platform recorded no reason for it being off, so this may not have been deliberate.")
@@ -1476,7 +1508,7 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
       </ul>
 
       {msg && <p className={`dp-msg dp-${msg.tone}`} role="status">{msg.text}</p>}
-      {!canEdit && <p className="dp-sub">Changing the policy requires a platform administrator.</p>}
+      {!canEdit && <p className="dp-fine">Changing the policy requires a platform administrator.</p>}
     </div>
   );
 }
@@ -1500,7 +1532,7 @@ function BundlePolicyForm({ panel, onReload, canEdit }: {
     try {
       const r = await api.setBackupConfig(cfg);
       setCfg(r.config);
-      setMsg({ tone: "good", text: "Saved. The host-side applier writes the schedule and destination on its next run." });
+      setMsg({ tone: "good", text: "Saved. The host-side applier picks it up on its next run." });
     } catch (e: unknown) {
       setMsg({ tone: "bad", text: operatorError(e, "The change could not be saved.") });
     } finally { setBusy(false); }
@@ -1513,7 +1545,7 @@ function BundlePolicyForm({ panel, onReload, canEdit }: {
         <HonestState
           tone="warn"
           headline="The bundle has no off-host destination."
-          remedy="Copies stay on the same disk as the live data, so one disk failure loses both. Name a destination below; the schedule cannot be enabled without one."
+          remedy="One disk failure would lose both copies — name a destination below."
           doc={BACKUP_DOC}
         />
       )}

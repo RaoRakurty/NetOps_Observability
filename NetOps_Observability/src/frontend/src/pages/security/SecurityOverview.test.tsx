@@ -132,16 +132,21 @@ describe("Security Overview — honesty", () => {
     expect(within(isp).getByText("2")).toBeTruthy();
   });
 
+  // The 2026-09-06 word sweep moved "counts of tagged hardening findings, not a
+  // framework compliance verdict" into ai/skills/explain/sec.standards-untagged.md.
+  // The lane must still NOT claim compliance, and the `(i)` must still be there
+  // to say what the count is — both are pinned here.
   it("labels standards counts as tagged hardening findings, never framework compliance", async () => {
     render(<SecurityOverview />);
-    expect(await screen.findByText(/not a framework compliance verdict/i)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /Ask Iris about Standards coverage/i })).toBeTruthy();
     expect(screen.queryByText(/framework compliance score/i)).toBeNull();
   });
 
   it("says why the trend is empty rather than drawing a reassuring blank chart", async () => {
     securityFindingTrend.mockResolvedValue({ buckets: [] });
     render(<SecurityOverview />);
-    expect(await screen.findByText(/a trend needs at least one completed scan/i)).toBeTruthy();
+    expect(await screen.findByText(/No assessment history in range/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about the verdict trend/i })).toBeTruthy();
   });
 });
 
@@ -154,13 +159,15 @@ describe("Security Overview — exposure story hero", () => {
 
   it("degrades to a note when the chronology cannot be read (never a fabricated chain)", async () => {
     render(<SecurityOverview />);
-    expect(await screen.findByText(/chronology for this story has not loaded/i)).toBeTruthy();
+    expect(await screen.findByText(/Chronology not loaded/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about a missing chronology/i })).toBeTruthy();
   });
 
   it("says nothing correlated yet when there is no story, instead of an empty hero", async () => {
     securityExposureStories.mockResolvedValue([]);
     render(<SecurityOverview />);
-    expect(await screen.findByText(/No security-lane correlation has been grounded yet/i)).toBeTruthy();
+    expect(await screen.findByText(/No story grounded yet/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about an empty story list/i })).toBeTruthy();
   });
 });
 

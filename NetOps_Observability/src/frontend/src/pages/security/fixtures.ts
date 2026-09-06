@@ -296,7 +296,7 @@ export const COMPLIANCE: SecCompliance = {
       controls_in_scope: 4, controls_with_check: 2, coverage_percent: 50,
       assessed: 2, passed: 1, warned: 0, failed: 1, unassessed: 0,
       verdict_id: 3, verdict: "Fail", score_percent: 50,
-      caption: "Audit-ready control evidence mapped to framework controls — not certified compliance.",
+      caption: "Evidence, not certification.",
       controls: [
         {
           control_id: "AC-17", family: "AC", title: "Remote Access", has_check: true,
@@ -323,7 +323,7 @@ export const COMPLIANCE: SecCompliance = {
       controls_in_scope: 3, controls_with_check: 1, coverage_percent: 33.3,
       assessed: 0, passed: 0, warned: 0, failed: 0, unassessed: 1,
       verdict_id: 0, verdict: "Unknown", score_percent: null,
-      caption: "Audit-ready control evidence mapped to framework controls — not certified compliance.",
+      caption: "Evidence, not certification.",
       note: "No assessed control maps to this framework yet — this is an absence of assessment, not a passing or failing result.",
       controls: [
         {

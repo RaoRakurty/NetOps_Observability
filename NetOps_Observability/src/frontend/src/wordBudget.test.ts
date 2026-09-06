@@ -185,8 +185,9 @@ export function scanWordBudget(source: string): Breach[] {
 // ── the sweep debt ───────────────────────────────────────────────────────────
 //
 // Seeded 2026-09-06 with every file that was over budget on the day the guard
-// landed (92 files, 401 breaches); sweep 1 then removed 14 of them, leaving 78
-// files and 353 breaches. The number is that file's breach count, so the whole
+// landed (92 files, 401 breaches); sweep 1 removed 14 of them (78 files, 353
+// breaches) and sweep 2 (Security + Data Protection) removed 16 more, leaving
+// 62 files and 312 breaches. The number is that file's breach count, so the whole
 // backlog is visible in one diff and each sweep is a deletion from this list.
 // Sweep order and the "done" definition are in the design doc; a swept file
 // loses its line here.
@@ -258,9 +259,10 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     expect(stale, `wordBudget.allow.json is out of date:\n${stale.join("\n")}`).toEqual([]);
   });
 
-  // Sweep 1 (Dashboard/Command Center · Operations · Alerts) is DONE, so these
-  // files must never reappear in the debt list — the allowlist may not grow a
-  // new entry for one, and its breach count must stay zero.
+  // Sweeps 1 (Dashboard/Command Center · Operations · Alerts) and 2 (Security ·
+  // Data Protection) are DONE, so these files must never reappear in the debt
+  // list — the allowlist may not grow a new entry for one, and its breach count
+  // must stay zero.
   it.each([
     "components/noc.tsx",
     "pages/CommandCenter.tsx",
@@ -282,7 +284,26 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     "pages/experience/incidentTable.tsx",
     "pages/experience/heatmap.tsx",
     "pages/experience/scrubber.tsx",
-  ])("%s stays swept (sweep 1)", (label) => {
+    // sweep 2 — Security (Findings, Exposures, Stories, Vulnerabilities, Threat
+    // Detection, Lane health, Compliance) and Data Protection.
+    "pages/security/SecurityOverview.tsx",
+    "pages/security/Exposures.tsx",
+    "pages/security/ExposureStories.tsx",
+    "pages/security/ThreatDetectionView.tsx",
+    "pages/security/SecurityCompliance.tsx",
+    "pages/security/ComplianceFrameworks.tsx",
+    "pages/security/SecurityRules.tsx",
+    "pages/security/SavedViews.tsx",
+    "pages/security/LaneHealth.tsx",
+    "pages/security/SeamGroups.tsx",
+    "pages/security/parts.tsx",
+    "pages/security/model.ts",
+    "pages/security/fixtures.ts",
+    "pages/ThreatDetection.tsx",
+    "pages/VulnerabilityManagement.tsx",
+    "pages/ComplianceMonitoring.tsx",
+    "pages/DataProtection.tsx",
+  ])("%s stays swept", (label) => {
     expect(ALLOW[label], `${label} is in sweep 1 and may not carry budget debt`).toBeUndefined();
     expect(counted.get(label)?.map((b) => fmtBreach(label, b)) ?? [], `${label} regressed`).toEqual([]);
   });

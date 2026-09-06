@@ -108,7 +108,7 @@ describe("Exposures a11y", () => {
 
   it("the row count is a polite live region", async () => {
     render(<Exposures />);
-    const status = await screen.findByText(/shown · latest verdict per check/);
+    const status = await screen.findByText(/shown$/);
     expect(status.getAttribute("aria-live")).toBe("polite");
   });
 

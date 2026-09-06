@@ -60,11 +60,14 @@ describe("Exposures — facets", () => {
     expect(screen.getByRole("button", { name: /^ISP 2$/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^CIS 3$/ })).toBeTruthy();
     // The evidence lane is a READ-ONLY breakdown (the read API has no lane
-    // filter), so it must not be exposed as a clickable toggle.
-    const lanes = screen.getByRole("heading", { name: "Evidence lane" }).parentElement!;
+    // filter), so it must not be exposed as a clickable toggle. Since the
+    // 2026-09-06 word sweep the REASON is an `(i)` instead of a sentence — the
+    // only button allowed in this group, and it must be there.
+    const lanes = screen.getByRole("heading", { name: /Evidence lane/ }).parentElement!;
     expect(within(lanes).getByText("Hardening & posture")).toBeTruthy();
     expect(within(lanes).getByText("3")).toBeTruthy();
-    expect(within(lanes).queryByRole("button")).toBeNull();
+    expect(lanes.querySelectorAll("button.sec-facet-btn").length).toBe(0);
+    expect(within(lanes).getByRole("button", { name: /Ask Iris about Evidence lane/i })).toBeTruthy();
   });
 
   it("a facet click re-queries with that filter and marks the toggle pressed", async () => {
@@ -93,7 +96,7 @@ describe("Exposures — current vs history", () => {
   it("opens on current verdicts and says so", async () => {
     render(<Exposures />);
     await waitFor(() => expect(lastQuery().current).toBe(true));
-    expect(screen.getByText(/latest verdict per check/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about Current verdicts/i })).toBeTruthy();
   });
 
   it("switching to history re-queries with current=false and labels superseded rows", async () => {
@@ -101,7 +104,7 @@ describe("Exposures — current vs history", () => {
     await waitFor(() => expect(securityFindings).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "Full history" }));
     await waitFor(() => expect(lastQuery().current).toBe(false));
-    expect(screen.getByText(/including superseded ones/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about Full history/i })).toBeTruthy();
   });
 });
 
@@ -135,7 +138,8 @@ describe("Exposures — search + pagination", () => {
   it("an unfiltered empty result says nothing was assessed, not that the estate is clear", async () => {
     securityFindings.mockResolvedValue({ items: [], next_cursor: null, total: 0 });
     render(<Exposures />);
-    expect(await screen.findByText(/nothing was assessed — not that the estate is clear/i)).toBeTruthy();
+    expect(await screen.findByText(/No findings recorded yet/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about an empty findings list/i })).toBeTruthy();
   });
 });
 
@@ -167,7 +171,8 @@ describe("Exposures — Inspector detail", () => {
     cleanup();
     render(openInspector.mock.calls[0][0] as JSX.Element);
     expect(screen.getAllByText("Unassessed").length).toBeGreaterThan(0);
-    expect(screen.getByText(/cannot be replayed against the raw artifact/i)).toBeTruthy();
+    expect(screen.getByText(/No evidence pointer/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about an evidence pointer/i })).toBeTruthy();
     expect(screen.getByText("untagged")).toBeTruthy();
     expect(screen.getAllByText("not recorded").length).toBe(2);
   });

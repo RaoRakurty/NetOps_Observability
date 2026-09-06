@@ -6,6 +6,10 @@ import { Group, Panel } from "../../components/board/panels";
 import { fmtDateTime } from "../../lib/time";
 import { storyConfidence, storyList } from "./model";
 import { operatorError } from "../../lib/errors";
+import AskIris from "../../components/AskIris";
+// WORD SWEEP (2026-09-06, tracker 270): the "security is a fourth evidence
+// class" paragraph is now ai/skills/explain/story.rca-workspace.md.
+//
 // Exposure Stories — the flagship object: a correlation whose evidence set
 // includes the security lane, grounded on the same entities and seams as the
 // rest of the telemetry (HLD §3). The DETAIL view is the existing RCA
@@ -101,7 +105,7 @@ export default function ExposureStories() {
         {detailErr ? (
           <Panel title="Exposure story">
             <div className="empty" role="alert">
-              This exposure story is not available to you: {detailErr}
+              Not available to you: {detailErr}
             </div>
           </Panel>
         ) : !detailOk ? (
@@ -122,14 +126,13 @@ export default function ExposureStories() {
           <div className="empty" role="status">Loading…</div>
         ) : stories.length === 0 ? (
           <div className="empty">
-            No exposure story has been grounded yet. A story appears when security evidence lands on
-            the same entity and seam as other telemetry inside one correlation window — an empty list
-            means nothing correlated, not that nothing is wrong.
+            No exposure story grounded yet.
+            <AskIris topic="sec.no-stories" label="an empty story list" />
           </div>
         ) : (
           <>
             {flagship && (
-              <p className="mini-meta" style={{ margin: "0 0 6px" }} role="status">
+              <p className="sec-line" style={{ margin: "0 0 6px" }} role="status">
                 {stories.length} stor{stories.length === 1 ? "y" : "ies"} · newest window opened{" "}
                 {flagship.window_start ? fmtDateTime(flagship.window_start) : "—"}
               </p>
@@ -137,9 +140,9 @@ export default function ExposureStories() {
             <Panel title="Stories">
               {stories.map((s) => <StoryCard key={s.correlation_id} story={s} onOpen={open} />)}
             </Panel>
-            <p className="mini-meta" style={{ margin: 0 }}>
-              Each story opens in the RCA workspace — the same causality path, ownership and export the
-              network incidents use. Security is a fourth evidence class, not a separate product.
+            <p className="sec-line" style={{ margin: 0 }}>
+              Each story opens in the RCA workspace.
+              <AskIris topic="story.rca-workspace" label="the RCA workspace" />
             </p>
           </>
         )}

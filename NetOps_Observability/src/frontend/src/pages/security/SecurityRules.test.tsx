@@ -80,7 +80,8 @@ describe("Detection rules", () => {
   it("an empty inventory says nothing is being evaluated, not that nothing was found", async () => {
     securityRules.mockResolvedValue([]);
     render(<SecurityRules />);
-    expect(await screen.findByText(/not looked at/i)).toBeTruthy();
+    expect(await screen.findByText(/No rules are registered/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about a disabled rule/i })).toBeTruthy();
   });
 });
 

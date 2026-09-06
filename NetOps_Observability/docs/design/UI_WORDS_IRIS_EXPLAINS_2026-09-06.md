@@ -91,3 +91,30 @@ Written from working knowledge of these consoles, not from a fetch.
   boards, headers cut ("Incident / correlation group" → "Incident").
 - **All four** — none explains a protocol on the page. That is the rule the
   `skills/explain/` corpus now carries instead.
+
+## Vendor observation — what sweep 2 matched (2026-09-06)
+
+Sweep 2 = Security (Overview/Findings, Exposures, Exposure Stories,
+Vulnerabilities, Threat Detection, Detection Rules, Saved Views, Lane health,
+Seam groups, Compliance + frameworks) and Data Protection. Same four consoles,
+same reading.
+
+- **Datadog** — a security tile is a count and a two-word name, with the
+  definition behind an `(i)`. Matched: the CTEM band lost its coverage
+  paragraph ("N assets were never assessed. Absence of a finding means
+  unknown"), the evidence lanes lost their per-lane sentences, and each gained
+  one `AskIris topic=`.
+- **Kentik** — a caveat is stated once per view, never per row. Matched: the
+  five "this is not a clear estate" restatements across Lane health, Exposures,
+  Threat Detection and Rules are now one authored file each, cited from the
+  `(i)` beside the number they qualify.
+- **ThousandEyes** — protocol/lane vocabulary lives in the tooltip, not the
+  page. Matched: evidence class, seam group, fidelity, cursor pagination and
+  "grounded" all left the screen; `title=` and the `(i)` carry them.
+- **Meraki** — plain outcomes, sentence case, one- or two-word column headers.
+  Matched: the lane counters read "Over the cap", "Dead-lettered", "No durable
+  copy"; badges and chips are sentence case under `.sec` and `.dp-pill`
+  (scoped, so an unswept page's raw enum is untouched); nothing on a swept
+  Security or Data Protection surface renders below 12.5 px.
+- **All four** — none explains a protocol, a framework or a backup verdict on
+  the page. 54 more authored files carry it instead.

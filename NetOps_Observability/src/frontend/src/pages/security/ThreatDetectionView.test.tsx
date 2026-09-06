@@ -28,7 +28,7 @@ describe("Threat Detection", () => {
     render(<ThreatDetectionView />);
     expect(await screen.findByText("Outbound beacon to a rare destination")).toBeTruthy();
     expect(screen.queryByText("Non-TLS HTTP server")).toBeNull();
-    expect(screen.getByText(/1 current device-log detection$/)).toBeTruthy();
+    expect(screen.getByText(/1 current detection$/)).toBeTruthy();
   });
 
   it("treats the store's 'signal' lane as the same lane as the contract's 'threat'", async () => {
@@ -53,7 +53,8 @@ describe("Threat Detection", () => {
   it("an empty detections list says no rule matched, not that the estate is clean", async () => {
     securityFindings.mockResolvedValue({ items: [], next_cursor: null, total: 0 });
     render(<ThreatDetectionView />);
-    expect(await screen.findByText(/it does not mean the estate is clean/i)).toBeTruthy();
+    expect(await screen.findByText(/No detection fired in this window/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about an empty detections list/i })).toBeTruthy();
   });
 
   it("Network Behavior renders the existing flow panels, unchanged", async () => {
@@ -61,7 +62,8 @@ describe("Threat Detection", () => {
     await screen.findByText("Outbound beacon to a rare destination");
     fireEvent.click(screen.getByRole("button", { name: "Network Behavior" }));
     expect(screen.getByText("flow panels")).toBeTruthy();
-    expect(screen.getByText(/no new collection/i)).toBeTruthy();
+    expect(screen.getByText(/Flow-derived behavior/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about Threat detection/i })).toBeTruthy();
   });
 
   it("opens the same Finding detail in the Inspector", async () => {

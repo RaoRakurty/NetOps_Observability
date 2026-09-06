@@ -3,6 +3,7 @@ import "./Security.css";
 import { api, SecFindingQuery, SecSavedView } from "../../services/api";
 import { Group } from "../../components/board/panels";
 import { operatorError } from "../../lib/errors";
+import AskIris from "../../components/AskIris";
 // Saved views — named filter sets over the Exposures workbench. A view stores a
 // FILTER, never rows: applying one re-queries under the caller's own token, so
 // a view can never widen what its owner may see (§3a) and can never carry
@@ -111,8 +112,8 @@ export default function SavedViews() {
           <div className="empty" role="status">Loading…</div>
         ) : views.length === 0 ? (
           <div className="empty">
-            No saved view yet. A view stores a filter, not rows — it re-runs under your own scope
-            every time it is opened.
+            No saved view yet.
+            <AskIris topic="views.saved-view" label="a saved view" />
           </div>
         ) : (
           <table className="ds-table" aria-label="Saved views">
@@ -123,7 +124,7 @@ export default function SavedViews() {
               {views.map((v) => (
                 <tr key={v.id}>
                   <th scope="row" style={{ textAlign: "left", fontWeight: 500 }}>{v.name}</th>
-                  <td className="mini-meta">{describeFilters(v.filters)}</td>
+                  <td className="sec-line">{describeFilters(v.filters)}</td>
                   <td style={{ display: "flex", gap: 6 }}>
                     <a className="btn" href={`#/security/exposures?view=${encodeURIComponent(v.id)}`}>Open</a>
                     <button className="btn" type="button" disabled={busy} onClick={() => { void remove(v); }}>

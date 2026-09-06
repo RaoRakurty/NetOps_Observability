@@ -47,7 +47,10 @@ describe("Compliance — framework selection", () => {
     expect(within(inUse).queryByText("HIPAA Security Rule")).toBeNull();
     expect(within(inUse).queryByText("PCI DSS v4.0.1")).toBeNull();
     expect(screen.queryByRole("list", { name: /frameworks available to add/i })).toBeNull();
-    expect(screen.getByText(/shipped default set is shown/i)).toBeTruthy();
+    // The 2026-09-06 word sweep cut the per-customer scoping paragraph to the
+    // fact plus an `(i)` (ai/skills/explain/compliance.framework-scope.md).
+    expect(screen.getByText(/Shipped default set/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about framework selection/i })).toBeTruthy();
   });
 
   it("offers the opt-in frameworks behind 'Add framework' and saves only what changed", async () => {
@@ -73,7 +76,10 @@ describe("Compliance — framework selection", () => {
     render(<SecurityCompliance />);
     const card = await screen.findByRole("button", { name: /NIST SP 800-53 Rev5/i });
     expect(within(card).getByText("50%")).toBeTruthy();      // 1 pass of 2 assessed
-    expect(screen.getByText(/not certified compliance/i)).toBeTruthy();
+    // The claim itself is server-authored ("Evidence, not certification.") and
+    // the reasoning is ai/skills/explain/compliance.not-certified.md.
+    expect(screen.getByText(/not certification/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about a framework score/i })).toBeTruthy();
   });
 
   it("shows a benchmark section as a citation INSIDE the control row, never as a framework", async () => {
@@ -89,7 +95,8 @@ describe("Compliance — framework selection", () => {
     render(<SecurityCompliance />);
     const table = await screen.findByRole("table", { name: /NIST SP 800-53 Rev5 controls/i });
     const row = within(table).getByText("SI-7").closest("tr")!;
-    expect(within(row).getByText(/no check for this control/i)).toBeTruthy();
+    expect(within(row).getByText(/^No check$/i)).toBeTruthy();
+    expect(within(row).getByRole("button", { name: /Ask Iris about a control with no check/i })).toBeTruthy();
     expect(within(row).getByText("Unassessed")).toBeTruthy();
   });
 
@@ -130,7 +137,8 @@ describe("Compliance — unassessed controls and why", () => {
   it("says the unassessed are counted in NO passing share — unknown, not compliant", async () => {
     render(<SecurityCompliance />);
     await screen.findByRole("list", { name: /unassessed controls by reason/i });
-    expect(screen.getByText(/an unassessed control is UNKNOWN, not compliant/i)).toBeTruthy();
+    expect(screen.getByText(/Counted in no passing share/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about an unassessed control/i })).toBeTruthy();
   });
 
   it("asks the server for the unassessed statuses only, over current verdicts", async () => {
@@ -152,7 +160,7 @@ describe("Compliance — unassessed controls and why", () => {
     // "nothing was unassessed" empty state, which would be a false clear.
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/did not answer|could not be loaded/i);
-    expect(screen.queryByText(/no control reached this scan without a verdict/i)).toBeNull();
+    expect(screen.queryByText(/Every control reached a verdict/i)).toBeNull();
     expect(screen.queryByRole("list", { name: /unassessed controls by reason/i })).toBeNull();
     // …and the scores are unaffected: the two loads are independent.
     expect(screen.getByRole("table", { name: /NIST SP 800-53 Rev5 controls/i })).toBeTruthy();
@@ -161,6 +169,6 @@ describe("Compliance — unassessed controls and why", () => {
   it("an estate with nothing unassessed says exactly that", async () => {
     securityFindings.mockResolvedValue({ items: [], next_cursor: null, total: 0 });
     render(<SecurityCompliance />);
-    expect(await screen.findByText(/no control reached this scan without a verdict/i)).toBeTruthy();
+    expect(await screen.findByText(/Every control reached a verdict/i)).toBeTruthy();
   });
 });

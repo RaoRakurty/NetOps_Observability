@@ -8,6 +8,9 @@
 // the console read only the flat seam list, so the suggestion queue had no
 // surface and nothing could ever be confirmed from the product.
 //
+// WORD SWEEP (2026-09-06, tracker 270): what a group IS, and what confirming
+// one buys, moved into ai/skills/explain/seam.group*.md behind the `(i)`.
+//
 // HONESTY RULES:
 //   · A SUGGESTION is labelled as one, with what suggested it and how confident
 //     it is. It is never rendered as a settled fact.
@@ -27,6 +30,7 @@ import { api, SeamGroup } from "../../services/api";
 import { Panel } from "../../components/board/panels";
 import { fmtDateTime } from "../../lib/time";
 import { httpFailure, operatorError } from "../../lib/errors";
+import AskIris from "../../components/AskIris";
 
 /** The closed state vocabulary the server validates the filter against. */
 const STATES = ["suggested", "confirmed", "active", "rejected", "retired"] as const;
@@ -98,8 +102,8 @@ export default function SeamGroups({ canWrite = false }: { canWrite?: boolean })
     return (
       <Panel title="Seam groups">
         <div className="empty">
-          The seam registry is not available on this deployment, so seams are neither grouped nor tracked
-          here. That is not the same as an estate with no redundant seams.
+          The seam registry is not available here.
+          <AskIris topic="seam.registry-unavailable" label="the seam registry" />
         </div>
       </Panel>
     );
@@ -118,12 +122,11 @@ export default function SeamGroups({ canWrite = false }: { canWrite?: boolean })
   const groups = load.groups;
   return (
     <Panel title="Seam groups" action={filter}>
-      {note && <p className="mini-meta" role="status">{note}</p>}
+      {note && <p className="sec-line" role="status">{note}</p>}
       {groups.length === 0 ? (
         <div className="empty">
-          {state
-            ? `No seam group is ${state}.`
-            : "No seam group has been recorded. Grouping is proposed from evidence that two seams carry the same traffic; nothing has met that bar yet."}
+          {state ? `No seam group is ${state}.` : "No seam group recorded yet."}
+          <AskIris topic="seam.group" label="a seam group" />
         </div>
       ) : (
         <table className="ds-table" aria-label="Seam groups">
@@ -146,7 +149,10 @@ export default function SeamGroups({ canWrite = false }: { canWrite?: boolean })
                 <th scope="row" style={{ fontWeight: 500, textAlign: "left" }}>
                   {g.display_name || g.group_id}
                   {g.state === "suggested" && (
-                    <span className="mini-meta" style={{ display: "block" }}>proposed grouping, not confirmed</span>
+                    <span className="sec-line" style={{ display: "block" }}>
+                      proposed, not confirmed
+                      <AskIris topic="seam.group-suggested" label="a proposed grouping" />
+                    </span>
                   )}
                 </th>
                 <td>{g.seam_type || "not stated"}</td>
@@ -178,11 +184,6 @@ export default function SeamGroups({ canWrite = false }: { canWrite?: boolean })
           </tbody>
         </table>
       )}
-      <p className="mini-meta" style={{ marginBottom: 0 }}>
-        A group is the set of seams that carry the same traffic redundantly, so a fault on one member is
-        not the same event as a fault on the group. Confirming a proposed grouping is what lets the engine
-        say &quot;the pair is degraded&quot; instead of reporting two unrelated seam faults.
-      </p>
     </Panel>
   );
 }

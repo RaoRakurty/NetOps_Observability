@@ -10,6 +10,10 @@ import { fmtDateTime } from "../../lib/time";
 import { FindingDetail, SeverityBadge } from "./parts";
 import { THREAT_EVIDENCE_CLASS, severityRank, subjectLine } from "./model";
 import { operatorError } from "../../lib/errors";
+import AskIris from "../../components/AskIris";
+// WORD SWEEP (2026-09-06, tracker 270): what the two sub-views look at, and why
+// a detection is not a verdict, are ai/skills/explain/threats.*.md.
+//
 // Threat Detection — two sub-views over the same question ("is something acting
 // on this estate?"), kept side by side because they answer it from different
 // evidence:
@@ -108,26 +112,26 @@ export default function ThreatDetectionView({ sinceSeconds }: { sinceSeconds?: n
           ]}
           ariaLabel="Threat detection view"
         />
-        <span className="mini-meta" role="status" aria-live="polite">
+        <span className="sec-line" role="status" aria-live="polite">
           {tab === "detections"
-            ? (loaded ? `${total.toLocaleString()} current device-log detection${total === 1 ? "" : "s"}` : "Loading…")
-            : "Flow-derived behavior, computed from records already collected — no new collection."}
+            ? (loaded ? `${total.toLocaleString()} current detection${total === 1 ? "" : "s"}` : "Loading…")
+            : "Flow-derived behavior"}
+          <AskIris topic="threats.what-we-detect" label="Threat detection" />
         </span>
       </div>
 
       {tab === "behavior" ? (
         <ThreatDetection sinceSeconds={sinceSeconds} />
       ) : (
-        <Group title="Device-log detections" hue="#e11d48">
+        <Group title="Detections" hue="#e11d48">
           {err ? (
             <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{err}</div>
           ) : !loaded ? (
             <div className="empty" role="status">Loading…</div>
           ) : rows.length === 0 ? (
             <div className="empty">
-              No device-log detection has fired for this tenant. That means no rule matched what was
-              ingested — it does not mean the estate is clean. Check Network Behavior for flow-derived
-              activity, and the Rules page for which detections are enabled.
+              No detection fired in this window.
+              <AskIris topic="threats.none-matched" label="an empty detections list" />
             </div>
           ) : (
             <DataTable
@@ -144,9 +148,9 @@ export default function ThreatDetectionView({ sinceSeconds }: { sinceSeconds?: n
               ariaLabel="Device-log detections"
             />
           )}
-          <p className="mini-meta" style={{ margin: 0 }}>
-            A detection is evidence, not a verdict. Detections ground into the correlation engine and
-            surface as Exposure Stories when they land on the same entity and seam as other telemetry.
+          <p className="sec-line" style={{ margin: 0 }}>
+            Evidence, not a verdict.
+            <AskIris topic="threats.detection-not-verdict" label="a detection" />
           </p>
         </Group>
       )}

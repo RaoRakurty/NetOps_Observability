@@ -9,6 +9,7 @@ import { Segmented } from "../../components/ui";
 import ComplianceFrameworks from "./ComplianceFrameworks";
 import { unassessedReasons } from "./model";
 import { operatorError } from "../../lib/errors";
+import AskIris from "../../components/AskIris";
 // Compliance — two sub-views:
 //
 //  · Frameworks — WHICH frameworks this tenant is assessed against, and the
@@ -136,13 +137,13 @@ export default function SecurityCompliance() {
             saveNote={saveNote}
           />
 
-          <Group title="Controls that reached no verdict, and why" hue="#8b5cf6">
-            <Panel title="Unassessed controls">
+          <Group title="Unassessed controls" hue="#8b5cf6">
+            <Panel title="Why no verdict">
               {unassessedErr ? (
                 <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{unassessedErr}</div>
               ) : reasons.length === 0 ? (
                 <div className="empty" role="status">
-                  No control reached this scan without a verdict.
+                  Every control reached a verdict.
                 </div>
               ) : (
                 <>
@@ -162,8 +163,9 @@ export default function SecurityCompliance() {
                       </li>
                     ))}
                   </ul>
-                  <p className="mini-meta" style={{ marginBottom: 0 }} role="status">
-                    These are counted in no passing share: an unassessed control is UNKNOWN, not compliant.
+                  <p className="sec-line" style={{ marginBottom: 0 }} role="status">
+                    Counted in no passing share.
+                    <AskIris topic="compliance.unassessed-control" label="an unassessed control" />
                   </p>
                 </>
               )}

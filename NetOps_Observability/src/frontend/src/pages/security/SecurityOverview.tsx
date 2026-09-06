@@ -10,10 +10,11 @@ import { operatorError } from "../../lib/errors";
 import {
   CoverageCard, CtemFunnel, EvidenceLane, FindingRow, SeamStrip,
 } from "./parts";
+import AskIris from "../../components/AskIris";
 import LaneHealth from "./LaneHealth";
 import SeamGroups from "./SeamGroups";
 import {
-  coverageOf, evidenceClassLabel, facetTotal, funnelStages, isThreatLane,
+  coverageOf, facetTotal, funnelStages, isThreatLane,
   mapFacetRows, seamCards, storyConfidence, storyList, topExposures, trendPoints,
 } from "./model";
 
@@ -22,6 +23,11 @@ import {
 // them: how much of the estate did we actually assess · what is the pipeline
 // doing · what is the ONE story that matters right now · where does the estate
 // meet untrusted networks.
+//
+// WORD SWEEP (2026-09-06, tracker 270). The page states the numbers and the
+// verdicts; every sentence that explained WHAT a lane, a seam or a coverage gap
+// IS moved verbatim into ai/skills/explain/ and is one click away on the `(i)`.
+// The claims did not change — only where the words live.
 //
 // Honesty rules (enforced in model.ts, rendered here):
 //  · Coverage leads. An unassessed asset is UNKNOWN — the page says so in words
@@ -46,18 +52,19 @@ function StoryHero({ story, events, onOpen }: {
   const chain = events.slice(0, 6);
   return (
     <section className="sec-hero" aria-labelledby="sec-hero-h">
-      <div className="sec-eyebrow">Exposure story · flagship</div>
+      <div className="sec-eyebrow">Flagship story</div>
       <h3 id="sec-hero-h">{story.top_hypothesis || "Correlated exposure"}</h3>
-      <p className="sec-sub">
-        One narrative, not four alerts — the engine folded {Number(story.signal_count) || 0} observation
-        {Number(story.signal_count) === 1 ? "" : "s"} across {Number(story.node_count) || 0} entit
-        {Number(story.node_count) === 1 ? "y" : "ies"} into a single seam-owned story.
+      <p className="sec-line">
+        {Number(story.signal_count) || 0} observation{Number(story.signal_count) === 1 ? "" : "s"}
+        {" · "}{Number(story.node_count) || 0} entit{Number(story.node_count) === 1 ? "y" : "ies"}
+        <AskIris topic="story.one-narrative" label="Exposure story" />
       </p>
       <div className="sec-hero-grid">
         <div className="sec-hero-col sec-hero-chain">
           {chain.length === 0 ? (
-            <p className="mini-meta" style={{ margin: 0 }}>
-              The chronology for this story has not loaded — open the full story for its causality path.
+            <p className="sec-line" style={{ margin: 0 }}>
+              Chronology not loaded.
+              <AskIris topic="story.chronology-missing" label="a missing chronology" />
             </p>
           ) : (
             <ol className="sec-chain" aria-label="Causality chain">
@@ -202,10 +209,10 @@ export default function SecurityOverview() {
           <CoverageCard coverage={coverage} />
           <CtemFunnel stages={stages} />
         </div>
-        <p className="mini-meta" style={{ margin: 0 }} role="status">
+        <p className="sec-line" style={{ margin: 0 }} role="status">
           {posture?.last_scan?.time
             ? <>Last assessment {fmtDateTime(posture.last_scan.time)} · scan {posture.last_scan.scan_id || "—"}</>
-            : <>No assessment has run yet — every stage below counts zero because nothing was measured, not because the estate is clear.</>}
+            : <>No assessment has run yet.<AskIris topic="sec.no-assessment" label="an empty pipeline" /></>}
         </p>
         {/* The producer behind every number above: is it running, when did it
             last run, and did what it produced reach the engine. Rendered here
@@ -221,13 +228,13 @@ export default function SecurityOverview() {
       ) : (
         <Group title="Exposure story" hue="#0ea5e9">
           <div className="empty">
-            No security-lane correlation has been grounded yet. Stories appear once security evidence
-            lands on the same entity and seam as other telemetry inside one window.
+            No story grounded yet.
+            <AskIris topic="sec.no-stories" label="an empty story list" />
           </div>
         </Group>
       )}
 
-      <Group title="Evidence, by class" hue="#8b5cf6">
+      <Group title="Evidence by class" hue="#8b5cf6">
         <div className="sec-lanes">
           {laneFindings.map((l) => (
             <EvidenceLane
@@ -235,7 +242,8 @@ export default function SecurityOverview() {
               title={l.title}
               count={`${(facets?.evidence_class?.[l.key] ?? (l.key === "threat" ? facets?.evidence_class?.signal : undefined) ?? 0).toLocaleString()} current`}
               tone={l.rows.length > 0 ? "bad" : ""}
-              empty={`No ${evidenceClassLabel(l.key).toLowerCase()} verdicts yet — this lane has no producer reporting.`}
+              topic="sec.lane-no-producer"
+              empty="No verdicts yet."
             >
               {l.rows.length > 0
                 ? l.rows.map((f) => <FindingRow key={f.id} finding={f} />)
@@ -245,20 +253,18 @@ export default function SecurityOverview() {
           <EvidenceLane
             title="Standards coverage"
             count={`${frameworks.length} tagged`}
-            empty="No finding carries a standards tag yet — nothing can be reported against a control set."
+            topic="sec.standards-untagged"
+            empty="No standards tags yet."
           >
             {frameworks.length > 0 ? (
               <div>
                 {frameworks.slice(0, 6).map((f) => (
                   <div key={f.key} className="sec-row" style={{ cursor: "default" }}>
                     <span className="sec-stripe" aria-hidden="true" />
-                    <span className="sec-main"><b>{f.label}</b><span className="sub">tagged hardening findings</span></span>
+                    <span className="sec-main"><b>{f.label}</b></span>
                     <span className="fix">{f.count.toLocaleString()}</span>
                   </div>
                 ))}
-                <p className="mini-meta" style={{ margin: "8px 0 0" }}>
-                  Counts of hardening findings on the tagged control set — not a framework compliance verdict.
-                </p>
               </div>
             ) : undefined}
           </EvidenceLane>
@@ -267,9 +273,9 @@ export default function SecurityOverview() {
 
       <Group title="Exposure by seam" hue="#f59e0b">
         <SeamStrip cards={seamStrip} />
-        <p className="mini-meta" style={{ margin: 0 }}>
-          Where the estate meets untrusted networks, and who owns each boundary. A seam with no
-          assessment shows <span className="sec-unassessed">—</span>, never a zero.
+        <p className="sec-line" style={{ margin: 0 }}>
+          Unassessed seams show <span className="sec-unassessed">—</span>
+          <AskIris topic="seam.exposure" label="exposure by seam" />
         </p>
         {/* The redundancy roll-up over the same seams: which of them carry the
             same traffic as a pair, and which pairings are still only proposed. */}
@@ -277,10 +283,11 @@ export default function SecurityOverview() {
       </Group>
 
       <Group title="Verdict trend" hue="#14b8a6">
-        <Panel title="Fail / warning / pass per day">
+        <Panel title="Verdicts per day">
           {points.length === 0 ? (
             <div className="empty">
-              No assessment history in range — a trend needs at least one completed scan.
+              No assessment history in range.
+              <AskIris topic="sec.trend-no-history" label="the verdict trend" />
             </div>
           ) : (
             <table className="ds-table" aria-label="Verdict trend by day">
@@ -301,7 +308,7 @@ export default function SecurityOverview() {
             </table>
           )}
         </Panel>
-        <p className="mini-meta" style={{ margin: 0 }}>
+        <p className="sec-line" style={{ margin: 0 }}>
           {facetTotal(facets?.severity)} current findings across {facetTotal(facets?.seam) || 0} scored seams.
         </p>
       </Group>

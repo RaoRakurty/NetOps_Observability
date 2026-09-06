@@ -52,7 +52,8 @@ describe("Exposure Stories", () => {
   it("an empty list says nothing correlated, not that nothing is wrong", async () => {
     securityExposureStories.mockResolvedValue([]);
     render(<ExposureStories />);
-    expect(await screen.findByText(/means nothing correlated, not that nothing is wrong/i)).toBeTruthy();
+    expect(await screen.findByText(/No exposure story grounded yet/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about an empty story list/i })).toBeTruthy();
   });
 
   it("opening a story reuses the existing RCA workspace", async () => {
@@ -96,7 +97,7 @@ describe("Exposure Stories", () => {
     securityExposureStory.mockRejectedValue(new Error("404 Not Found"));
     window.location.hash = "#/security/stories/somebody-elses";
     render(<ExposureStories />);
-    expect(await screen.findByRole("alert")).toHaveTextContent(/not available to you: 404 Not Found/);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Not available to you: 404 Not Found/);
     expect(screen.queryByText(/RCA workspace/)).toBeNull();
   });
 });

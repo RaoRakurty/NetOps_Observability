@@ -13,7 +13,24 @@
 /* `.mini-meta` is the app's small-print convention but carries no base rule of
    its own; scope one here so the section's captions are legible and muted
    rather than inheriting body size. */
-.sec .mini-meta { color: var(--fg-muted); font-size: 11.5px; line-height: 1.6; }
+.sec .mini-meta { color: var(--fg-muted); font-size: 12.5px; line-height: 1.6; }
+/* `.sec-line` is a STATED FACT — a count, a timestamp, a state — not an
+   explanation. The word-budget guard (src/wordBudget.test.ts) counts
+   `mini-meta`/`*-note`/`*-sub` as explanatory notes and allows one per card;
+   a fact is neither, so it gets its own class. Nothing that TEACHES belongs
+   here: that text lives in ai/skills/explain/ behind an <AskIris/>. */
+.sec-line { color: var(--fg-muted); font-size: 12.5px; line-height: 1.6; }
+.sec-line code { font-size: inherit; }
+
+/* Badges and chips read as SENTENCES here, never Title Case and never shouted
+   (owner, 2026-09-06: NOC-admin plain language, nothing below 12.5px). The
+   global `.badge` capitalizes EVERY word, which turns a two-word state into
+   "Internet-Facing Seam"; ::first-letter is sentence case for a value the
+   server spells in lowercase. Scoped to `.sec` on purpose — a page a later
+   sweep has not reached may still depend on capitalize to make a raw enum
+   readable. */
+.sec .badge, .sec .chip { text-transform: none; font-size: 12.5px; }
+.sec .badge::first-letter, .sec .chip::first-letter { text-transform: uppercase; }
 
 /* ── CTEM band ─────────────────────────────────────────────────────────── */
 .sec-band { display: grid; grid-template-columns: minmax(190px, 250px) 1fr; gap: 12px; }
@@ -50,18 +67,18 @@
 }
 .sec-stage:last-child { border-right: 0; }
 .sec-stage .k {
-  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  font-size: 12.5px; letter-spacing: .06em;
   color: var(--fg-subtle); font-weight: 600;
 }
 .sec-stage .v { font-size: 24px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
-.sec-stage .d { color: var(--fg-muted); font-size: 11.5px; }
-.sec-stage .r { color: var(--fg-subtle); font-size: 11px; font-variant-numeric: tabular-nums; }
+.sec-stage .d { color: var(--fg-muted); font-size: 12.5px; }
+.sec-stage .r { color: var(--fg-subtle); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .sec-stage.is-validate { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .sec-stage.is-validate .v { color: var(--accent); }
 .sec-stage .tag {
-  position: absolute; top: 9px; right: 10px; font-size: 10px; letter-spacing: .04em;
+  position: absolute; top: 9px; right: 10px; font-size: 12.5px; letter-spacing: .04em;
   color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  border-radius: 5px; padding: 1px 5px; text-transform: uppercase; font-weight: 600;
+  border-radius: 5px; padding: 1px 5px; font-weight: 600;
 }
 
 /* ── Exposure Story hero ───────────────────────────────────────────────── */
@@ -70,7 +87,7 @@
   background: var(--surface-2); padding: 18px 20px;
 }
 .sec-eyebrow {
-  font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  font-size: 12.5px; letter-spacing: .1em;
   color: var(--fg-subtle); font-weight: 600;
 }
 /* A correlation headline carries device / interface / prefix identifiers that
@@ -119,7 +136,7 @@
 .sec-node .body b { display: block; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .sec-node .body p { margin: 2px 0 0; color: var(--fg-muted); font-size: 12.5px; overflow-wrap: anywhere; }
 .sec-node .meta {
-  display: block; font-size: 11px; color: var(--fg-subtle); margin-top: 3px;
+  display: block; font-size: 12.5px; color: var(--fg-subtle); margin-top: 3px;
   font-family: var(--font-mono); overflow-wrap: anywhere;
 }
 
@@ -129,10 +146,10 @@
 }
 .sec-owner .seam-name { font-weight: 700; font-size: 17px; margin: 5px 0 2px; overflow-wrap: anywhere; }
 .sec-owner .who { color: var(--fg-muted); font-size: 12.5px; }
-.sec-owner .conf { margin-top: 10px; font-size: 12px; color: var(--fg-muted); }
+.sec-owner .conf { margin-top: 10px; font-size: 12.5px; color: var(--fg-muted); }
 .sec-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
 .sec-chip {
-  font-size: 11px; border-radius: 5px; padding: 2px 7px; font-family: var(--font-mono);
+  font-size: 12.5px; border-radius: 5px; padding: 2px 7px; font-family: var(--font-mono);
   background: var(--surface-2); color: var(--fg-muted); border: 1px solid var(--border);
   max-width: 100%; overflow-wrap: anywhere;
 }
@@ -167,10 +184,10 @@
    inline box, so as a span this line ignored its own ellipsis and ran out of
    the cell across the observation count on the right. */
 .sec-row .sec-main .sub {
-  display: block; color: var(--fg-muted); font-size: 11.5px;
+  display: block; color: var(--fg-muted); font-size: 12.5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.sec-row .fix { color: var(--accent); font-size: 11px; font-family: var(--font-mono); white-space: nowrap; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; }
+.sec-row .fix { color: var(--accent); font-size: 12.5px; font-family: var(--font-mono); white-space: nowrap; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── framework rings (Compliance) ──────────────────────────────────────── */
 .sec-rings { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; text-align: center; }
@@ -184,8 +201,8 @@
 .sec-ring .g.t-bad { color: var(--crit); box-shadow: inset 0 0 0 4px var(--surface-2), inset 0 0 0 5px var(--crit); }
 .sec-ring .g.t-warn { color: var(--warn); box-shadow: inset 0 0 0 4px var(--surface-2), inset 0 0 0 5px var(--warn); }
 .sec-ring .g.t-good { color: var(--ok); box-shadow: inset 0 0 0 4px var(--surface-2), inset 0 0 0 5px var(--ok); }
-.sec-ring .cap { font-size: 11.5px; color: var(--fg-muted); margin-top: 6px; font-weight: 500; }
-.sec-ring .st { font-size: 10.5px; color: var(--fg-subtle); }
+.sec-ring .cap { font-size: 12.5px; color: var(--fg-muted); margin-top: 6px; font-weight: 500; }
+.sec-ring .st { font-size: 12.5px; color: var(--fg-subtle); }
 
 /* ── seam map ──────────────────────────────────────────────────────────── */
 .sec-seams { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 9px; }
@@ -195,7 +212,7 @@
 }
 .sec-seam .nm { font-weight: 600; font-size: 12.5px; }
 .sec-seam .ct { font-weight: 700; font-size: 21px; margin-top: 5px; font-variant-numeric: tabular-nums; }
-.sec-seam .ow { font-size: 11px; color: var(--fg-muted); margin-top: 2px; }
+.sec-seam .ow { font-size: 12.5px; color: var(--fg-muted); margin-top: 2px; }
 .sec-seam .edge { position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 3px; background: var(--fg-subtle); }
 .sec-seam .edge.t-bad { background: var(--crit); }
 .sec-seam .edge.t-warn { background: var(--warn); }
@@ -209,7 +226,7 @@
 @media (max-width: 900px) { .sec-work { grid-template-columns: 1fr; } }
 .sec-facets { display: flex; flex-direction: column; gap: 14px; }
 .sec-facet-h {
-  font-size: 11px; letter-spacing: .07em; text-transform: uppercase;
+  font-size: 12.5px; letter-spacing: .07em;
   color: var(--fg-subtle); font-weight: 600; margin: 0 0 5px;
 }
 .sec-facet-btn {
@@ -219,7 +236,7 @@
 }
 .sec-facet-btn:hover { background: var(--hover, var(--surface-2)); }
 .sec-facet-btn[aria-pressed="true"] { background: var(--accent-soft, var(--surface-2)); border-color: var(--accent); color: var(--accent); }
-.sec-facet-btn .n { font-variant-numeric: tabular-nums; color: var(--fg-muted); font-size: 11.5px; }
+.sec-facet-btn .n { font-variant-numeric: tabular-nums; color: var(--fg-muted); font-size: 12.5px; }
 .sec-facet-btn[aria-pressed="true"] .n { color: var(--accent); }
 .sec-facet-btn:disabled { opacity: .55; cursor: default; }
 
@@ -236,9 +253,9 @@
 .sec-oi { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
 @media (max-width: 620px) { .sec-oi { grid-template-columns: 1fr; } }
 .sec-oi > div { border: 1px solid var(--border); border-radius: var(--radius-sm, 4px); padding: 9px 10px; background: var(--surface-2); }
-.sec-oi h4 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-subtle); }
+.sec-oi h4 { margin: 0 0 4px; font-size: 12.5px; letter-spacing: .06em; color: var(--fg-subtle); }
 .sec-oi p { margin: 0; font-size: 12.5px; overflow-wrap: anywhere; }
-.sec-mono { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.sec-mono { font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
 
 /* The "why unassessed" block. Deliberately in the NEUTRAL ramp with a plain
    left rule: a non-verdict must read as unresolved, not as a warning (amber

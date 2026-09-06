@@ -350,7 +350,11 @@ describe("coverage matrix", () => {
       }),
     });
     render(<DataProtection />);
-    expect(await screen.findByText(/External, not governed here — a host cron runs scripts\/backup.sh/)).toBeTruthy();
+    // The 2026-09-06 word sweep moved "not governed here" into
+    // ai/skills/explain/backup.external-job.md: the row still names the job as
+    // External and still carries the source's own detail, with the `(i)` beside it.
+    expect(await screen.findByText(/External — a host cron runs scripts\/backup.sh/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about External/i })).toBeTruthy();
   });
 
   it("says so when the platform lists no engines at all", async () => {
@@ -706,7 +710,8 @@ describe("platform-admin gating", () => {
   it("hides every mutating control from a tenant admin and says why", async () => {
     setup({ platformAdmin: false });
     render(<DataProtection />);
-    expect(await screen.findByText("You are seeing this posture read-only.")).toBeTruthy();
+    expect(await screen.findByText("This posture is read-only for you.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about This posture is read-only for you/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Take restore point now" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Restore…" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete…" })).toBeNull();
@@ -721,7 +726,7 @@ describe("platform-admin gating", () => {
     render(<DataProtection />);
     expect(await screen.findByRole("button", { name: "Take restore point now" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Run restore drill" })).toBeTruthy();
-    expect(screen.queryByText("You are seeing this posture read-only.")).toBeNull();
+    expect(screen.queryByText("This posture is read-only for you.")).toBeNull();
   });
 });
 
@@ -858,7 +863,10 @@ describe("activity and drills", () => {
     setup({ ops: { capacity: 50, operations: [] } });
     render(<DataProtection />);
     expect(await screen.findByText("No restore has ever been proved.")).toBeTruthy();
-    expect(screen.getByText(/compares document counts against the live source/)).toBeTruthy();
+    // What a drill DOES is ai/skills/explain/backup.proven-restore.md now; the
+    // screen keeps the verdict and the action.
+    expect(screen.getByText(/Run a restore drill/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about No restore has ever been proved/i })).toBeTruthy();
   });
 
   it("the restore drill probes the newest good copy — no snapshot named", async () => {
@@ -893,7 +901,7 @@ describe("activity and drills", () => {
   it("says what the bounded trail cannot show", async () => {
     setup();
     render(<DataProtection />);
-    expect(await screen.findByText("The platform keeps the newest 50 operations")).toBeTruthy();
+    expect(await screen.findByText("Newest 50 operations")).toBeTruthy();
   });
 
   it("caps the trail and offers the rest behind one control", async () => {
@@ -969,7 +977,7 @@ describe("accessibility", () => {
     setup();
     render(<DataProtection />);
     for (const name of [
-      "Protection health", "Coverage", "Bytes on disk (measured)",
+      "Protection health", "Coverage", "Bytes on disk",
       "Restore points", "Policies", "Activity and drills",
     ]) {
       expect(await screen.findByRole("region", { name })).toBeTruthy();

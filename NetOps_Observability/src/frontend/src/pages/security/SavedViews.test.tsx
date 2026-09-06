@@ -85,6 +85,9 @@ describe("Saved views", () => {
   it("an empty list explains that a view stores a filter, not rows", async () => {
     securityViews.mockResolvedValue([]);
     render(<SavedViews />);
-    expect(await screen.findByText(/stores a filter, not rows/i)).toBeTruthy();
+    // The sentence is ai/skills/explain/views.saved-view.md since the 2026-09-06
+    // word sweep; the empty state keeps the fact and the `(i)`.
+    expect(await screen.findByText(/No saved view yet/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about a saved view/i })).toBeTruthy();
   });
 });

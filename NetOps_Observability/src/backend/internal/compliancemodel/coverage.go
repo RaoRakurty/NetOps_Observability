@@ -9,7 +9,12 @@ import (
 // standardCaption is the §5d defensible-claim caption attached to every
 // per-framework view: Correlix reports control EVIDENCE for the technical slice a
 // config audit can reach, NEVER "certified" framework compliance.
-const standardCaption = "Audit-ready control evidence mapped to framework controls — not certified compliance. Coverage reflects the technical controls a configuration audit can evidence."
+//
+// The 2026-09-06 word sweep (tracker 270) cut it to the claim itself; the two
+// sentences that explained the claim are ai/skills/explain/compliance.not-certified.md,
+// reachable from the `(i)` beside the score. The CLAIM is unchanged — a screen
+// states it, and Iris explains it when asked.
+const standardCaption = "Evidence, not certification."
 
 // ControlResult is one canonical control's outcome WITHIN a single framework
 // projection: whether Correlix has a check for it (coverage), the worst verdict

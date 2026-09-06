@@ -5,6 +5,10 @@ import DataTable, { Column } from "../../components/DataTable";
 import { Group } from "../../components/board/panels";
 import { fidelityTone, mitreList, rulesPutPayload } from "./model";
 import { operatorError } from "../../lib/errors";
+import AskIris from "../../components/AskIris";
+// WORD SWEEP (2026-09-06, tracker 270): what fidelity means, and what disabling
+// a rule costs, are ai/skills/explain/rules.*.md behind the `(i)`.
+//
 // Rules — the detection / hardening rule inventory, with enable-disable.
 //
 // The client sends ONLY `{rule_id, enabled}` for the rules that actually
@@ -71,7 +75,11 @@ export default function SecurityRules() {
     { key: "rule", header: "Rule", sortable: true, text: (r) => r.rule_id, render: (r) => <span className="sec-mono">{r.rule_id}</span> },
     { key: "family", header: "Family", width: 150, sortable: true, text: (r) => r.family, render: (r) => r.family || "—" },
     {
-      key: "fidelity", header: "Fidelity", width: 110, sortable: true, text: (r) => r.fidelity,
+      key: "fidelity", width: 110, sortable: true, text: (r) => r.fidelity,
+      // The definition ("the author's confidence in a match, not the severity of
+      // what it finds") is ai/skills/explain/rules.fidelity.md — the `(i)` in the
+      // header is where it used to be a paragraph under the table.
+      header: <>Fidelity<AskIris topic="rules.fidelity" label="Fidelity" /></>,
       render: (r) => (r.fidelity
         ? <span className={`badge ${fidelityTone(r.fidelity)}`}>{r.fidelity}</span>
         : <span className="sec-unassessed">unrated</span>),
@@ -107,7 +115,7 @@ export default function SecurityRules() {
           <button className="btn" type="button" disabled={payload.length === 0 || busy} onClick={() => setPending({})}>
             Discard changes
           </button>
-          <span className="mini-meta" role="status" aria-live="polite">
+          <span className="sec-line" role="status" aria-live="polite">
             {err ? "" : note ?? `${rules.filter((r) => enabledOf(r)).length} of ${rules.length} rules enabled`}
           </span>
         </div>
@@ -118,8 +126,8 @@ export default function SecurityRules() {
           <div className="empty" role="status">Loading…</div>
         ) : rules.length === 0 ? (
           <div className="empty">
-            No rules are registered. With no rule enabled, nothing is being evaluated — an empty
-            detections list would mean "not looked at", not "nothing found".
+            No rules are registered.
+            <AskIris topic="rules.disabled" label="a disabled rule" />
           </div>
         ) : (
           <DataTable
@@ -131,8 +139,8 @@ export default function SecurityRules() {
           />
         )}
         <p className="mini-meta" style={{ margin: 0 }}>
-          Fidelity is the rule author's confidence in a match, not the severity of what it finds.
-          Disabling a rule silences its evidence everywhere — including the Exposure Stories it grounds.
+          Disabling a rule silences its evidence everywhere.
+          <AskIris topic="rules.disabled" label="disabling a rule" />
         </p>
       </Group>
     </div>

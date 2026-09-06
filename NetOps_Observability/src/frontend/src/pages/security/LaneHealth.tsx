@@ -8,6 +8,10 @@
 // engine consumed nothing for three hours). A page that renders a funnel out of
 // a lane it cannot see is reporting a measurement it has no evidence for.
 //
+// WORD SWEEP (2026-09-06, tracker 270): the honesty rules below did not change,
+// but the sentences that STATED them on screen now live in ai/skills/explain/
+// (lane.*.md) behind the `(i)`. The screen keeps the fact and the action.
+//
 // HONESTY RULES, in the order they bite:
 //   · 404 means the lane is NOT ENABLED on this deployment. It is not an idle
 //     lane and not an empty result — the routes are not registered at all while
@@ -30,6 +34,7 @@ import { api, SecLaneScanStatus, SecLaneStatus } from "../../services/api";
 import { Panel } from "../../components/board/panels";
 import { fmtDateTime } from "../../lib/time";
 import { httpFailure, operatorError } from "../../lib/errors";
+import AskIris from "../../components/AskIris";
 
 /** How the lane read ended. `off` is a deployment fact, not a failure. */
 type LoadState =
@@ -57,14 +62,14 @@ const OUTCOME_TONE: Record<string, string> = {
 /** The counters an operator reads to judge whether evidence reached the engine. */
 const COUNTERS: { key: string; label: string; bad?: boolean }[] = [
   { key: "scan_runs_total", label: "Scan runs" },
-  { key: "emitted_posture", label: "Hardening evidence published" },
-  { key: "emitted_exposure", label: "Exposure evidence published" },
-  { key: "emitted_signal", label: "Threat evidence published" },
+  { key: "emitted_posture", label: "Hardening published" },
+  { key: "emitted_exposure", label: "Exposure published" },
+  { key: "emitted_signal", label: "Threat published" },
   { key: "ungroundable_total", label: "Refused grounding", bad: true },
-  { key: "findings_truncated_total", label: "Dropped by the per-run cap", bad: true },
-  { key: "emit_failures_total", label: "Publish attempts exhausted", bad: true },
-  { key: "dead_lettered_total", label: "Held in the dead-letter lane", bad: true },
-  { key: "lost_total", label: "No durable copy anywhere", bad: true },
+  { key: "findings_truncated_total", label: "Over the cap", bad: true },
+  { key: "emit_failures_total", label: "Publish failed", bad: true },
+  { key: "dead_lettered_total", label: "Dead-lettered", bad: true },
+  { key: "lost_total", label: "No durable copy", bad: true },
 ];
 
 function secs(n: number): string {
@@ -80,7 +85,7 @@ function TenantRow({ row }: { row: SecLaneScanStatus }) {
       <th scope="row" style={{ fontWeight: 500, textAlign: "left" }}>{row.tenant_seg || row.tenant_id}</th>
       <td>
         <span className={`chip ${OUTCOME_TONE[row.outcome] ?? ""}`}>{row.outcome || "not stated"}</span>
-        {skipped && <span className="mini-meta"> · a run was already in flight, so this row still carries the last real result</span>}
+        {skipped && <AskIris topic="lane.skipped-run" label="a skipped run" />}
       </td>
       <td>{row.trigger || "not stated"}</td>
       <td>{row.last_scan_at ? fmtDateTime(row.last_scan_at) : "never"}</td>
@@ -88,7 +93,7 @@ function TenantRow({ row }: { row: SecLaneScanStatus }) {
       <td>{row.devices_assessed.toLocaleString()}</td>
       <td>
         {row.findings_emitted.toLocaleString()}
-        {row.findings_truncated > 0 && <span className="mini-meta"> · {row.findings_truncated.toLocaleString()} over the cap</span>}
+        {row.findings_truncated > 0 && <span className="sec-line"> · {row.findings_truncated.toLocaleString()} over the cap</span>}
       </td>
     </tr>
   );
@@ -155,7 +160,7 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
     } catch (e) {
       const f = httpFailure(e);
       if (f?.status === 429) {
-        setScan({ kind: "refused", message: "A scan is already queued or running for this tenant. Its result appears on the row below when it finishes." });
+        setScan({ kind: "refused", message: "A scan is already queued or running for this tenant." });
       } else if (f?.status === 400) {
         setScan({ kind: "refused", message: operatorError(e, "A scan writes tenant-attributed evidence — select a tenant before starting one.") });
       } else {
@@ -173,9 +178,8 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
     return (
       <Panel title="Security lane">
         <div className="empty">
-          The security lane is not enabled on this deployment, so nothing assesses this estate on a
-          schedule and no scan can be started here. Everything above was produced by other sources.
-          The lane is switched on with <code>FEATURE_SECURITY_LANE</code>.
+          The security lane is not enabled here — <code>FEATURE_SECURITY_LANE</code>
+          <AskIris topic="lane.not-enabled" label="the security lane" />
         </div>
       </Panel>
     );
@@ -183,7 +187,7 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
   if (load.kind === "denied") {
     return (
       <Panel title="Security lane">
-        <div className="empty">Reading the lane status needs administration access — the same permission that enables a detection rule.</div>
+        <div className="empty">Reading the lane status needs administration access.</div>
       </Panel>
     );
   }
@@ -211,39 +215,39 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
 
   return (
     <Panel title="Security lane" action={scanAction}>
-      <p className="mini-meta" style={{ marginTop: 0 }}>
-        The lane assesses every device in scope every {secs(st.interval_seconds)} and publishes what it
-        finds onto <code>{st.topic}</code>, up to {st.max_findings_per_tenant.toLocaleString()} findings
-        per tenant per run. A scan you start here assesses your own tenant now instead of waiting.
+      <p className="sec-line" style={{ marginTop: 0 }}>
+        Every {secs(st.interval_seconds)} · <code>{st.topic}</code> ·{" "}
+        {st.max_findings_per_tenant.toLocaleString()} findings per run
+        <AskIris topic="lane.security-lane" label="the security lane" />
       </p>
 
       {scan.kind === "refused" && (
-        <p className="mini-meta" role="alert" style={{ color: "var(--bad)" }}>{scan.message}</p>
+        <p className="sec-line" role="alert" style={{ color: "var(--bad)" }}>{scan.message}</p>
       )}
       {scan.kind === "queued" && (
-        <p className="mini-meta" role="status">
-          Scan queued for {scan.seg}. Waiting for the run to be recorded — the row below updates when it is.
+        <p className="sec-line" role="status">
+          Scan queued for {scan.seg}. The row below updates when it finishes.
         </p>
       )}
       {scan.kind === "pending" && (
-        <p className="mini-meta" role="status">
-          The scan was accepted for {scan.seg} but no completed run has been recorded yet. It has not
-          failed; the result has not arrived. Read the row below again in a moment.
+        <p className="sec-line" role="status">
+          Scan accepted for {scan.seg}; no completed run recorded yet.
+          <AskIris topic="lane.scan-pending" label="a pending scan" />
         </p>
       )}
       {scan.kind === "done" && (
-        <p className="mini-meta" role="status">
+        <p className="sec-line" role="status">
           Scan finished {scan.row.outcome === "ok" ? "cleanly" : `with outcome ${scan.row.outcome}`} —{" "}
           {scan.row.findings_emitted.toLocaleString()} finding{scan.row.findings_emitted === 1 ? "" : "s"} published
           from {scan.row.devices_assessed.toLocaleString()} device{scan.row.devices_assessed === 1 ? "" : "s"} assessed.
-          {scan.row.devices_assessed === 0 && " A scan that assessed no device measured nothing — this is not a clear estate."}
+          {scan.row.devices_assessed === 0 && <AskIris topic="lane.assessed-nothing" label="a scan that assessed nothing" />}
         </p>
       )}
 
       {st.tenants.length === 0 ? (
         <div className="empty">
-          The lane is enabled but has recorded no run yet. Nothing has been assessed — that is different
-          from having been assessed and found clean.
+          The lane has recorded no run yet.
+          <AskIris topic="lane.no-run-yet" label="a lane that has never run" />
         </div>
       ) : (
         <table className="ds-table" aria-label="Security lane, last run per tenant">
@@ -267,8 +271,9 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
       {st.tenants.some((t) => (t.errors?.length ?? 0) > 0) && (
         <div style={{ marginTop: "var(--sp-2)" }}>
           {st.tenants.filter((t) => (t.errors?.length ?? 0) > 0).map((t) => (
-            <div key={`err-${t.tenant_id || t.tenant_seg}`} className="mini-meta">
-              <b>{t.tenant_seg || t.tenant_id}</b> — the checks below reported UNASSESSED rather than clear:
+            <div key={`err-${t.tenant_id || t.tenant_seg}`} className="sec-line">
+              <b>{t.tenant_seg || t.tenant_id}</b> — reported unassessed, not clear
+              <AskIris topic="lane.errors-unassessed" label="checks that reported unassessed" />
               <ul>{(t.errors ?? []).map((e, i) => <li key={i}>{e}</li>)}</ul>
             </div>
           ))}
@@ -292,9 +297,8 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
         </tbody>
       </table>
       <p className="mini-meta" style={{ marginBottom: 0 }}>
-        Counters are totals for this process since it started, not for the last run. Anything counted on
-        the last five rows is evidence that never reached the engine, so a story that would have used it
-        was never built.
+        Totals since this process started, not the last run.
+        <AskIris topic="lane.counters" label="the lane counters" />
       </p>
     </Panel>
   );

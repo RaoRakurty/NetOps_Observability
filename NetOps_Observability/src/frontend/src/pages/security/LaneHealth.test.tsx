@@ -79,14 +79,18 @@ describe("LaneHealth — reading the lane", () => {
     const counters = await screen.findByRole("table", { name: /lane counters/i });
     const refused = within(counters).getByText("Refused grounding").closest("tr")!;
     expect(within(refused).getByText("4")).toBeTruthy();
-    const lost = within(counters).getByText("No durable copy anywhere").closest("tr")!;
+    const lost = within(counters).getByText("No durable copy").closest("tr")!;
     expect(within(lost).getByText("1")).toBeTruthy();
   });
 
   it("a 404 says the lane is NOT ENABLED — never an idle or empty lane", async () => {
     securityLaneStatus.mockRejectedValue(new Error("404 Not Found: "));
     render(<LaneHealth />);
-    expect(await screen.findByText(/not enabled on this deployment/i)).toBeTruthy();
+    // The 2026-09-06 word sweep moved WHY a disabled lane is not an empty
+    // result into ai/skills/explain/lane.not-enabled.md. The claim is still on
+    // screen; the reasoning is one click away, and BOTH are pinned here.
+    expect(await screen.findByText(/not enabled here/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about the security lane/i })).toBeTruthy();
     expect(screen.getByText(/FEATURE_SECURITY_LANE/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /scan now/i })).toBeNull();
   });
@@ -107,7 +111,7 @@ describe("LaneHealth — reading the lane", () => {
     securityLaneStatus.mockResolvedValue({ ...STATUS, tenants: [] });
     render(<LaneHealth />);
     expect(await screen.findByText(/recorded no run yet/i)).toBeTruthy();
-    expect(screen.getByText(/different\s+from having been assessed and found clean/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about a lane that has never run/i })).toBeTruthy();
   });
 
   it("a degraded run lists what reported UNASSESSED rather than clear", async () => {
@@ -116,14 +120,16 @@ describe("LaneHealth — reading the lane", () => {
       tenants: [{ ...ROW, outcome: "partial", errors: ["advisory-feed: feed unavailable"] }],
     });
     render(<LaneHealth />);
-    expect(await screen.findByText(/reported UNASSESSED rather than clear/i)).toBeTruthy();
+    expect(await screen.findByText(/reported unassessed, not clear/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Ask Iris about checks that reported unassessed/i })).toBeTruthy();
     expect(screen.getByText("advisory-feed: feed unavailable")).toBeTruthy();
   });
 
   it("a skipped run says the row still carries the last real result", async () => {
     securityLaneStatus.mockResolvedValue({ ...STATUS, tenants: [{ ...ROW, outcome: "skipped" }] });
     render(<LaneHealth />);
-    expect(await screen.findByText(/still carries the last real result/i)).toBeTruthy();
+    expect(await screen.findByText("skipped")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /Ask Iris about a skipped run/i })).toBeTruthy();
   });
 });
 
@@ -153,7 +159,7 @@ describe("LaneHealth — Scan now", () => {
 
     render(<LaneHealth />);
     fireEvent.click(await screen.findByRole("button", { name: /scan now/i }));
-    expect(await screen.findByText(/measured nothing — this is not a clear estate/i)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /Ask Iris about a scan that assessed nothing/i })).toBeTruthy();
   });
 
   it("a scan whose result has not landed reads as QUEUED, never as finished", async () => {

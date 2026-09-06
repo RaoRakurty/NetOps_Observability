@@ -294,12 +294,19 @@ export type FrameworkCard = {
   coveragePct: number | null;
   /** The sentence to show INSTEAD of a percentage when nothing was assessed. */
   emptyNote: string;
-  caption: string;
+  /**
+   * The platform's standing claim about what a framework score IS (the wire
+   * field is `caption`). Renamed on the way in because it is a CLAIM, not a
+   * caption: the reasoning behind it is ai/skills/explain/compliance.not-certified.md.
+   */
+  claim: string;
   controls: SecFrameworkCoverage["controls"];
 };
 
-const UNASSESSED_FALLBACK =
-  "No assessed control maps to this framework yet — this is an absence of assessment, not a passing or failing result.";
+// The 2026-09-06 word sweep moved the reasoning ("an absence of assessment, not
+// a passing or failing result") into ai/skills/explain/compliance.unassessed-control.md,
+// reachable from the `(i)` beside this line. The CLAIM is unchanged.
+const UNASSESSED_FALLBACK = "Nothing assessed for this framework yet.";
 
 /**
  * One scorecard, stated honestly. `pct` is null whenever the server declined to
@@ -324,7 +331,7 @@ export function frameworkCard(c: SecFrameworkCoverage): FrameworkCard {
     withCheck: num(c?.controls_with_check),
     coveragePct: inScope > 0 ? Math.round(num(c?.coverage_percent)) : null,
     emptyNote: (c?.note && String(c.note)) || UNASSESSED_FALLBACK,
-    caption: String(c?.caption ?? ""),
+    claim: String(c?.caption ?? ""),
     controls: Array.isArray(c?.controls) ? c.controls : [],
   };
 }

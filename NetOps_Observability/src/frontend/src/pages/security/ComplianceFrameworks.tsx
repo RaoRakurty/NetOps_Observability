@@ -6,6 +6,7 @@ import {
   benchmarkChipsByControl, controlVerdict, FrameworkCard, frameworkCards,
   FrameworkRow, frameworkRows, frameworksPutPayload, VERDICT_LABEL, verdictTone,
 } from "./model";
+import AskIris from "../../components/AskIris";
 
 // ComplianceFrameworks — WHICH frameworks this tenant is assessed against, and
 // the score for each.
@@ -15,6 +16,11 @@ import {
 // derived its framework list from the distinct standards TAGS on findings, so
 // every invented `CIS-NET-x.y` benchmark section rendered as its own framework —
 // and HIPAA, which is a projection rather than a tag, could never appear at all.
+//
+// WORD SWEEP (2026-09-06, tracker 270): the per-customer scoping rule and the
+// "a benchmark is a citation, not a framework" rule are now
+// ai/skills/explain/compliance.*.md behind the `(i)`; the rules themselves are
+// unchanged and still enforced here.
 //
 // Three rules this file exists to keep:
 //
@@ -59,13 +65,13 @@ function ScoreCard({ card, selected, onSelect }: {
       </div>
       <div className="ow">
         {card.pct === null
-          ? `${card.inScope} controls in scope`
-          : `${card.passed} of ${card.passed + card.warned + card.failed} assessed controls passing`}
+          ? `${card.inScope} in scope`
+          : `${card.passed}/${card.passed + card.warned + card.failed} passing`}
       </div>
       <div className="ow">
         {card.coveragePct === null
-          ? "No control in scope yet"
-          : `${card.withCheck} of ${card.inScope} controls this platform can evidence (${card.coveragePct}%)`}
+          ? "Nothing in scope"
+          : `${card.withCheck}/${card.inScope} with a check`}
       </div>
     </button>
   );
@@ -90,14 +96,11 @@ export default function ComplianceFrameworks({
 
   return (
     <>
-      <Group title="Frameworks this tenant is assessed against" hue="#8b5cf6">
+      <Group title="Frameworks in use" hue="#8b5cf6">
         <Panel title="Selection">
-          <p className="mini-meta" style={{ marginTop: 0 }}>
-            Compliance is scoped per customer. A framework is scored only while it is turned on here;
-            nothing else is assessed on this tenant's behalf.
-            {catalog && !catalog.configured
-              ? " No selection has been saved yet, so the shipped default set is shown."
-              : ""}
+          <p className="sec-line" style={{ marginTop: 0 }}>
+            {catalog && !catalog.configured ? "Shipped default set." : "Scored while turned on."}
+            <AskIris topic="compliance.framework-scope" label="framework selection" />
           </p>
           <ul
             aria-label="Frameworks in use"
@@ -169,16 +172,15 @@ export default function ComplianceFrameworks({
               {saveError ? <span className="mini-meta" role="alert" style={{ color: "var(--bad)" }}>{saveError}</span> : null}
             </div>
           ) : (
-            <p className="mini-meta">
-              Changing the selection needs an administrator.
-            </p>
+            <p className="sec-line">Changing the selection needs an administrator.</p>
           )}
         </Panel>
 
         <Panel title="Score by framework">
           {cards.length === 0 ? (
             <div className="empty">
-              No framework is turned on for this tenant, so nothing is scored.
+              No framework is turned on.
+              <AskIris topic="compliance.framework-scope" label="framework selection" />
             </div>
           ) : (
             <>
@@ -192,8 +194,9 @@ export default function ComplianceFrameworks({
                   />
                 ))}
               </div>
-              <p className="mini-meta" style={{ marginBottom: 0 }}>
-                {cards[0]?.caption}
+              <p className="sec-line" style={{ marginBottom: 0 }}>
+                {cards[0]?.claim}
+                <AskIris topic="compliance.not-certified" label="a framework score" />
               </p>
             </>
           )}
@@ -201,9 +204,12 @@ export default function ComplianceFrameworks({
       </Group>
 
       {active ? (
-        <Group title={`${active.framework} — controls in scope`} hue="#8b5cf6">
+        <Group title={active.framework} hue="#8b5cf6">
           {active.pct === null ? (
-            <div className="empty" role="status">{active.emptyNote}</div>
+            <div className="empty" role="status">
+              {active.emptyNote}
+              <AskIris topic="compliance.unassessed-control" label="an unassessed control" />
+            </div>
           ) : null}
           <table className="ds-table" aria-label={`${active.framework} controls`}>
             <thead>
@@ -225,7 +231,10 @@ export default function ComplianceFrameworks({
                       {c.control_id}
                       {c.title ? <div className="sub">{c.title}</div> : null}
                       {!c.has_check ? (
-                        <div className="sub sec-unassessed">This platform has no check for this control.</div>
+                        <div className="sec-line sec-unassessed">
+                          No check
+                          <AskIris topic="compliance.no-check" label="a control with no check" />
+                        </div>
                       ) : null}
                     </th>
                     <td>
@@ -241,7 +250,7 @@ export default function ComplianceFrameworks({
                     <td>{c.findings.toLocaleString()}</td>
                     <td>
                       {(chips[c.control_id] ?? []).length === 0 ? (
-                        <span className="sec-unassessed">No published benchmark section</span>
+                        <span className="sec-unassessed">None published</span>
                       ) : (
                         <div className="sec-chips" style={{ marginTop: 0 }}>
                           {(chips[c.control_id] ?? []).map((label) => (
@@ -255,12 +264,10 @@ export default function ComplianceFrameworks({
               })}
             </tbody>
           </table>
-          <p className="mini-meta" style={{ margin: 0 }} role="status">
-            {active.assessed.toLocaleString()} of {active.inScope.toLocaleString()} controls in this
-            framework's scope were assessed{active.unassessed > 0
-              ? `; ${active.unassessed.toLocaleString()} this platform can evidence were not looked at in this window (unknown, not clear)`
-              : ""}.
-            A benchmark section is a citation on the check, not a framework of its own.
+          <p className="sec-line" style={{ margin: 0 }} role="status">
+            {active.assessed.toLocaleString()} of {active.inScope.toLocaleString()} in scope assessed
+            {active.unassessed > 0 ? `, ${active.unassessed.toLocaleString()} not looked at` : ""}
+            <AskIris topic="compliance.benchmark-citation" label="Benchmark reference" />
           </p>
         </Group>
       ) : null}

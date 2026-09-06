@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ComplianceResponse, ComplianceFinding, ComplianceCheck, ComplianceGap } from "../services/api";
-import { StatStrip, Stat, InfoTip } from "../components/ui";
+import { StatStrip, Stat } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import { Group, Panel } from "../components/board/panels";
+import AskIris from "../components/AskIris";
 
+// WORD SWEEP (2026-09-06, tracker 270): the "inactive means cannot assess" and
+// "no Source of Truth" paragraphs are ai/skills/explain/compliance.*.md now.
+//
 // Compliance Monitoring (build-order #14) — drift between the active Source of
 // Truth (the internal inventory by default, or an external CMDB when connected)
 // and the observed inventory, plus management-plane policy baselines (SNMP
@@ -68,13 +72,13 @@ export default function ComplianceMonitoring() {
     { key: "device", header: "Device", width: "150px", sortable: true, text: (f) => f.device_name, render: (f) => f.device_name },
     {
       key: "observed", header: "Observed", width: "200px", sortable: false,
-      render: (f) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }} title={f.observed}>{f.observed || "—"}</span>,
+      render: (f) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }} title={f.observed}>{f.observed || "—"}</span>,
     },
     {
       key: "intended", header: "Intended", width: "200px", sortable: false,
-      render: (f) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }} title={f.intended}>{f.intended || "—"}</span>,
+      render: (f) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }} title={f.intended}>{f.intended || "—"}</span>,
     },
-    { key: "framework", header: "Framework", sortable: true, text: (f) => f.framework, render: (f) => <span className="mini-meta">{f.framework}</span> },
+    { key: "framework", header: "Framework", sortable: true, text: (f) => f.framework, render: (f) => <span className="sec-line">{f.framework}</span> },
   ], []);
 
   const checkCols = useMemo<Column<ComplianceCheck>[]>(() => [
@@ -87,16 +91,16 @@ export default function ComplianceMonitoring() {
     },
     { key: "title", header: "Check", width: "270px", sortable: true, text: (c) => c.title, render: (c) => c.title },
     { key: "class", header: "Class", width: "72px", sortable: true, text: (c) => c.class, render: (c) => <span className="badge">{c.class}</span> },
-    { key: "framework", header: "Framework", width: "190px", sortable: true, text: (c) => c.framework, render: (c) => <span className="mini-meta">{c.framework}</span> },
+    { key: "framework", header: "Framework", width: "190px", sortable: true, text: (c) => c.framework, render: (c) => <span className="sec-line">{c.framework}</span> },
     {
       key: "reason", header: "Why inactive", sortable: false,
-      render: (c) => (c.active ? "" : <span className="mini-meta">{c.reason}</span>),
+      render: (c) => (c.active ? "" : <span className="sec-line">{c.reason}</span>),
     },
   ], []);
 
   const gapCols = useMemo<Column<ComplianceGap>[]>(() => [
     { key: "device", header: "Device", width: "180px", sortable: true, text: (g) => g.device_name, render: (g) => g.device_name },
-    { key: "reason", header: "Checks that had to be skipped", sortable: false, render: (g) => g.reason },
+    { key: "reason", header: "Checks skipped", sortable: false, render: (g) => g.reason },
   ], []);
 
   if (err) {
@@ -111,15 +115,12 @@ export default function ComplianceMonitoring() {
     return (
       <div className="dm-board">
         <Group title="Compliance Monitoring" hue="#8B5CF6">
-          <Panel title="Add devices to assess">
+          <Panel title="Add devices">
             <div className="empty board-empty" style={{ alignItems: "flex-start", textAlign: "left" }}>
               <div className="board-empty-msg">No devices in the inventory yet.</div>
               <div className="board-empty-hint">
-                Compliance compares what's running against what's intended. Onboard devices first —
-                add them under Infrastructure → Devices, point a static inventory file at the stack,
-                or connect the Source of Truth under Automation → Source of Truth. Drift checks light
-                up once the Source of Truth is connected; policy baselines (SNMP security, golden OS
-                version) run on the inventory alone.
+                Onboard devices under Infrastructure.
+                <AskIris topic="compliance.nothing-to-assess" label="an empty inventory" />
               </div>
             </div>
           </Panel>
@@ -143,12 +144,9 @@ export default function ComplianceMonitoring() {
           <Stat label="Checks active" value={`${s.checks_active}/${s.checks_total}`} tone={s.checks_active < s.checks_total ? "warn" : "good"} />
         </StatStrip>
         {!resp.sot?.configured && (
-          <p className="mini-meta" style={{ margin: 0 }}>
-            No external declared inventory to compare against — intent-drift checks are inactive
-            {resp.sot?.provider === "internal" ? " (the internal inventory is itself the Source of Truth)" : ""}.{" "}
-            <InfoTip label="?">Connect an external Source of Truth under Automation → Source of Truth, in
-            read or two-way mode, to compare the observed inventory against declared intent (registration,
-            name, management IP, serial, platform). Policy checks below run regardless.</InfoTip>
+          <p className="sec-line" style={{ margin: 0 }}>
+            Drift checks inactive: no declared inventory.
+            <AskIris topic="compliance.no-source-of-truth" label="drift checks" />
           </p>
         )}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -160,8 +158,7 @@ export default function ComplianceMonitoring() {
         {findings.length === 0 ? (
           <Panel title="Findings">
             <div className="empty">
-              No drift or policy violations across {s.devices} device{s.devices === 1 ? "" : "s"} on the
-              active checks ({s.checks_active} of {s.checks_total} running).
+              No violations on {s.checks_active} of {s.checks_total} active checks.
             </div>
           </Panel>
         ) : (
@@ -177,19 +174,18 @@ export default function ComplianceMonitoring() {
       </Group>
 
       <Group title="Checks" hue="#3B82F6">
-        <Panel title={`What is being checked (${s.checks_active} of ${s.checks_total} active)`}>
+        <Panel title={`Active: ${s.checks_active} of ${s.checks_total}`}>
           <DataTable rows={resp.checks ?? []} columns={checkCols} rowKey={(c) => c.id} height={300} ariaLabel="Compliance checks" />
         </Panel>
         <p className="mini-meta" style={{ margin: 0 }}>
-          An inactive check means its data source isn't connected — that's "cannot assess", not "compliant".
-          Drift checks need the Source of Truth; SNMP checks need credential profiles assigned to devices;
-          the known-exploited check needs the vulnerability feed.
+          Inactive means cannot assess, not compliant.
+          <AskIris topic="compliance.inactive-check" label="an inactive check" />
         </p>
       </Group>
 
       {(resp.gaps?.length ?? 0) > 0 && (
         <Group title="Coverage gaps" hue="#F59E0B">
-          <Panel title={`Devices with skipped checks (${resp.gaps!.length})`}>
+          <Panel title={`Skipped checks (${resp.gaps!.length})`}>
             <DataTable rows={resp.gaps!} columns={gapCols} rowKey={(g) => g.device_id} height={220} ariaLabel="Compliance coverage gaps" />
           </Panel>
         </Group>

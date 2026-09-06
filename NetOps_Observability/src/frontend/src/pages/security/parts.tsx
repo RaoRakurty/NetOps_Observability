@@ -1,5 +1,9 @@
 // parts.tsx — the shared presentation pieces of the Security (CTEM) section.
 //
+// WORD SWEEP (2026-09-06, tracker 270). These pieces state facts; the sentences
+// that TAUGHT what a coverage gap, an empty lane or a missing evidence pointer
+// means now live in ai/skills/explain/ behind the `(i)` beside them.
+//
 // PURE PRESENTATION. Every one of these renders data the adapters in model.ts
 // already computed; none of them fetches, and none decides a verdict. Model
 // output is rendered as ESCAPED React text throughout — no dangerouslySetInnerHTML
@@ -13,6 +17,7 @@ import {
   unassessedReasonText, verdictOf, verdictTone,
 } from "./model";
 import { fmtDateTime } from "../../lib/time";
+import AskIris from "../../components/AskIris";
 
 const toneClass = (t: Tone): string => (t === "bad" ? "t-bad" : t === "warn" ? "t-warn" : t === "good" ? "t-good" : "");
 
@@ -70,9 +75,9 @@ export function CoverageCard({ coverage }: { coverage: Coverage }) {
         <div className="sec-cov-bar"><i style={{ width: `${coverage.pct}%` }} /></div>
       )}
       {coverage.hasGap && (
-        <p className="mini-meta" style={{ margin: "8px 0 0" }}>
-          {coverage.unassessed.toLocaleString()} asset{coverage.unassessed === 1 ? "" : "s"} were never
-          assessed. Absence of a finding on them means <span className="sec-unassessed">unknown</span>, not safe.
+        <p className="sec-line" style={{ margin: "8px 0 0" }}>
+          {coverage.unassessed.toLocaleString()} never assessed
+          <AskIris topic="sec.coverage" label="assessment coverage" />
         </p>
       )}
     </section>
@@ -102,12 +107,20 @@ export function FindingRow({ finding, onOpen }: { finding: SecFindingLike; onOpe
 
 /** An evidence-lane card: heading, count pill, then rows (or an honest empty). */
 export function EvidenceLane({
-  title, count, tone = "", empty, children,
-}: { title: string; count?: ReactNode; tone?: Tone; empty?: ReactNode; children?: ReactNode }) {
+  title, count, tone = "", empty, topic, children,
+}: {
+  title: string; count?: ReactNode; tone?: Tone; empty?: ReactNode;
+  /** The authored explanation for what this lane IS (ai/skills/explain/<topic>.md). */
+  topic?: string;
+  children?: ReactNode;
+}) {
   return (
     <section className="sec-card" aria-label={title}>
       <div className="sec-lane-h">
-        <h3 className="t" style={{ margin: 0 }}>{title}</h3>
+        <h3 className="t" style={{ margin: 0 }}>
+          {title}
+          {topic && <AskIris topic={topic} label={title} />}
+        </h3>
         {count !== undefined && <span className={`badge ${tone}`}>{count}</span>}
       </div>
       {children ?? <div className="empty">{empty ?? "Nothing assessed in this lane yet."}</div>}
@@ -118,7 +131,12 @@ export function EvidenceLane({
 /** The "exposure by seam" strip. An unscored seam renders "—", never 0. */
 export function SeamStrip({ cards }: { cards: SeamCard[] }) {
   if (cards.length === 0) {
-    return <div className="empty">No seams are known yet — the seam inventory has nothing to attribute exposure to.</div>;
+    return (
+      <div className="empty">
+        No seams known yet.
+        <AskIris topic="seam.exposure" label="exposure by seam" />
+      </div>
+    );
   }
   return (
     <div className="sec-seams">
@@ -149,29 +167,38 @@ export function SeamStrip({ cards }: { cards: SeamCard[] }) {
  * nothing is a lie about what the screen is showing.
  */
 export function FacetGroup({
-  title, rows, onToggle, note,
-}: { title: string; rows: FacetRow[]; onToggle?: (key: string) => void; note?: string }) {
+  title, rows, onToggle, topic,
+}: {
+  title: string; rows: FacetRow[]; onToggle?: (key: string) => void;
+  /** Set when the group is NOT a control and the reason needs saying (ai/skills/explain/). */
+  topic?: string;
+}) {
   if (!onToggle) {
     return (
       <div>
-        <h3 className="sec-facet-h">{title}</h3>
+        <h3 className="sec-facet-h">
+          {title}
+          {topic && <AskIris topic={topic} label={title} />}
+        </h3>
         {rows.length === 0
-          ? <div className="mini-meta">No values in range.</div>
+          ? <div className="sec-line">No values in range.</div>
           : rows.map((r) => (
             <div key={r.key} className="sec-facet-btn" style={{ cursor: "default" }}>
               <span>{r.label}</span>
               <span className="n">{r.count.toLocaleString()}</span>
             </div>
           ))}
-        {note && <p className="mini-meta" style={{ margin: "4px 0 0" }}>{note}</p>}
       </div>
     );
   }
   return (
     <div>
-      <h3 className="sec-facet-h">{title}</h3>
+      <h3 className="sec-facet-h">
+        {title}
+        {topic && <AskIris topic={topic} label={title} />}
+      </h3>
       {rows.length === 0
-        ? <div className="mini-meta">No values in range.</div>
+        ? <div className="sec-line">No values in range.</div>
         : rows.map((r) => (
           <button
             key={r.key}
@@ -185,7 +212,6 @@ export function FacetGroup({
             <span className="n">{r.count.toLocaleString()}</span>
           </button>
         ))}
-      {note && <p className="mini-meta" style={{ margin: "4px 0 0" }}>{note}</p>}
     </div>
   );
 }
@@ -208,7 +234,7 @@ export function FindingDetail({ finding }: { finding: SecFindingLike }) {
         {finding.seam?.internet_facing && <span className="badge bad">internet-facing seam</span>}
       </div>
 
-      <h3 style={{ margin: 0, fontSize: 15 }}>
+      <h3 style={{ margin: 0, fontSize: 14 }}>
         {finding.control_title || finding.control || finding.raw_rule_id || "Untitled check"}
       </h3>
 
@@ -217,7 +243,10 @@ export function FindingDetail({ finding }: { finding: SecFindingLike }) {
         // is a grey chip an operator can only read as "probably fine". The
         // reason is provider-authored text, rendered as escaped React text.
         <div className="sec-why">
-          <h4 className="sec-facet-h">Why unassessed</h4>
+          <h4 className="sec-facet-h">
+            Why unassessed
+            <AskIris topic="sec.unassessed" label="Unassessed" />
+          </h4>
           <p
             className={unassessedReason(finding) ? undefined : "sec-unassessed"}
             style={{ margin: 0, fontSize: 12.5 }}
@@ -265,8 +294,9 @@ export function FindingDetail({ finding }: { finding: SecFindingLike }) {
             {ref.digest && <><dt>Digest</dt><dd className="sec-mono">{ref.digest}</dd></>}
           </dl>
         ) : (
-          <p className="mini-meta" style={{ margin: 0 }}>
-            This verdict carries no evidence pointer — it cannot be replayed against the raw artifact.
+          <p className="sec-line" style={{ margin: 0 }}>
+            No evidence pointer.
+            <AskIris topic="finding.no-evidence-ref" label="an evidence pointer" />
           </p>
         )}
       </div>

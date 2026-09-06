@@ -497,6 +497,7 @@ describe("framework scorecards", () => {
   it("a framework with nothing assessed reports NULL and a sentence, never 0% or 100%", () => {
     const cis = frameworkCards(COMPLIANCE)[1];
     expect(cis.pct).toBeNull();
+    // The SERVER's own note wins when it sends one (this fixture mirrors it).
     expect(cis.emptyNote).toMatch(/absence of assessment/i);
   });
 
@@ -509,7 +510,10 @@ describe("framework scorecards", () => {
       verdict_id: 0, verdict: "Unknown", score_percent: 100, controls: [], caption: "c",
     });
     expect(card.pct).toBeNull();
-    expect(card.emptyNote).toMatch(/absence of assessment/i);
+    // With no server note the FALLBACK is used, and the 2026-09-06 word sweep
+    // cut it to the fact: the reasoning is now
+    // ai/skills/explain/compliance.unassessed-control.md, behind the `(i)`.
+    expect(card.emptyNote).toMatch(/nothing assessed/i);
   });
 
   it("states no coverage percentage when the framework has no control in scope", () => {

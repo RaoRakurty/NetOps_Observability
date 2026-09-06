@@ -68,19 +68,48 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
             />
           </div>
           <p
-            class="mini-meta"
+            class="sec-line"
             style="margin: 8px 0px 0px;"
           >
             647
-             asset
-            s
-             were never assessed. Absence of a finding on them means 
-            <span
-              class="sec-unassessed"
+             never assessed
+            <button
+              aria-label="Ask Iris about assessment coverage"
+              class="ask-iris"
+              data-topic="sec.coverage"
+              title="Ask Iris about assessment coverage"
+              type="button"
             >
-              unknown
-            </span>
-            , not safe.
+              <svg
+                aria-hidden="true"
+                fill="none"
+                height="16"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.75"
+                viewBox="0 0 24 24"
+                width="16"
+              >
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="10"
+                />
+                <line
+                  x1="12"
+                  x2="12"
+                  y1="16"
+                  y2="11"
+                />
+                <line
+                  x1="12"
+                  x2="12.01"
+                  y1="8"
+                  y2="8"
+                />
+              </svg>
+            </button>
           </p>
         </section>
         <ol
@@ -215,7 +244,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
         </ol>
       </div>
       <p
-        class="mini-meta"
+        class="sec-line"
         role="status"
         style="margin: 0px;"
       >
@@ -292,7 +321,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
         <div
           class="sec-eyebrow"
         >
-          Exposure story · flagship
+          Flagship story
         </div>
         <h3
           id="sec-hero-h"
@@ -300,17 +329,52 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
           core-01's management plane is reachable from the ISP seam
         </h3>
         <p
-          class="sec-sub"
+          class="sec-line"
         >
-          One narrative, not four alerts — the engine folded 
           14
            observation
           s
-           across 
+           · 
           3
            entit
           ies
-           into a single seam-owned story.
+          <button
+            aria-label="Ask Iris about Exposure story"
+            class="ask-iris"
+            data-topic="story.one-narrative"
+            title="Ask Iris about Exposure story"
+            type="button"
+          >
+            <svg
+              aria-hidden="true"
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.75"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <circle
+                cx="12"
+                cy="12"
+                r="10"
+              />
+              <line
+                x1="12"
+                x2="12"
+                y1="16"
+                y2="11"
+              />
+              <line
+                x1="12"
+                x2="12.01"
+                y1="8"
+                y2="8"
+              />
+            </svg>
+          </button>
         </p>
         <div
           class="sec-hero-grid"
@@ -319,10 +383,47 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
             class="sec-hero-col sec-hero-chain"
           >
             <p
-              class="mini-meta"
+              class="sec-line"
               style="margin: 0px;"
             >
-              The chronology for this story has not loaded — open the full story for its causality path.
+              Chronology not loaded.
+              <button
+                aria-label="Ask Iris about a missing chronology"
+                class="ask-iris"
+                data-topic="story.chronology-missing"
+                title="Ask Iris about a missing chronology"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <line
+                    x1="12"
+                    x2="12"
+                    y1="16"
+                    y2="11"
+                  />
+                  <line
+                    x1="12"
+                    x2="12.01"
+                    y1="8"
+                    y2="8"
+                  />
+                </svg>
+              </button>
             </p>
           </div>
           <div
@@ -414,7 +515,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
         />
       </svg>
       <span>
-        Evidence, by class
+        Evidence by class
       </span>
     </summary>
     <div
@@ -435,6 +536,43 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
               style="margin: 0px;"
             >
               Hardening & posture
+              <button
+                aria-label="Ask Iris about Hardening & posture"
+                class="ask-iris"
+                data-topic="sec.lane-no-producer"
+                title="Ask Iris about Hardening & posture"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <line
+                    x1="12"
+                    x2="12"
+                    y1="16"
+                    y2="11"
+                  />
+                  <line
+                    x1="12"
+                    x2="12.01"
+                    y1="8"
+                    y2="8"
+                  />
+                </svg>
+              </button>
             </h3>
             <span
               class="badge bad"
@@ -508,6 +646,43 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
               style="margin: 0px;"
             >
               Seam exposure
+              <button
+                aria-label="Ask Iris about Seam exposure"
+                class="ask-iris"
+                data-topic="sec.lane-no-producer"
+                title="Ask Iris about Seam exposure"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <line
+                    x1="12"
+                    x2="12"
+                    y1="16"
+                    y2="11"
+                  />
+                  <line
+                    x1="12"
+                    x2="12.01"
+                    y1="8"
+                    y2="8"
+                  />
+                </svg>
+              </button>
             </h3>
             <span
               class="badge bad"
@@ -555,6 +730,43 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
               style="margin: 0px;"
             >
               Threat detections
+              <button
+                aria-label="Ask Iris about Threat detections"
+                class="ask-iris"
+                data-topic="sec.lane-no-producer"
+                title="Ask Iris about Threat detections"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <line
+                    x1="12"
+                    x2="12"
+                    y1="16"
+                    y2="11"
+                  />
+                  <line
+                    x1="12"
+                    x2="12.01"
+                    y1="8"
+                    y2="8"
+                  />
+                </svg>
+              </button>
             </h3>
             <span
               class="badge bad"
@@ -602,6 +814,43 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
               style="margin: 0px;"
             >
               Standards coverage
+              <button
+                aria-label="Ask Iris about Standards coverage"
+                class="ask-iris"
+                data-topic="sec.standards-untagged"
+                title="Ask Iris about Standards coverage"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <line
+                    x1="12"
+                    x2="12"
+                    y1="16"
+                    y2="11"
+                  />
+                  <line
+                    x1="12"
+                    x2="12.01"
+                    y1="8"
+                    y2="8"
+                  />
+                </svg>
+              </button>
             </h3>
             <span
               class="badge "
@@ -624,11 +873,6 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
                 <b>
                   CIS
                 </b>
-                <span
-                  class="sub"
-                >
-                  tagged hardening findings
-                </span>
               </span>
               <span
                 class="fix"
@@ -650,11 +894,6 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
                 <b>
                   NIST-CSF
                 </b>
-                <span
-                  class="sub"
-                >
-                  tagged hardening findings
-                </span>
               </span>
               <span
                 class="fix"
@@ -676,11 +915,6 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
                 <b>
                   PCI-DSS
                 </b>
-                <span
-                  class="sub"
-                >
-                  tagged hardening findings
-                </span>
               </span>
               <span
                 class="fix"
@@ -688,12 +922,6 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
                 1
               </span>
             </div>
-            <p
-              class="mini-meta"
-              style="margin: 8px 0px 0px;"
-            >
-              Counts of hardening findings on the tagged control set — not a framework compliance verdict.
-            </p>
           </div>
         </section>
       </div>
@@ -804,16 +1032,52 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
         </div>
       </div>
       <p
-        class="mini-meta"
+        class="sec-line"
         style="margin: 0px;"
       >
-        Where the estate meets untrusted networks, and who owns each boundary. A seam with no assessment shows 
+        Unassessed seams show 
         <span
           class="sec-unassessed"
         >
           —
         </span>
-        , never a zero.
+        <button
+          aria-label="Ask Iris about exposure by seam"
+          class="ask-iris"
+          data-topic="seam.exposure"
+          title="Ask Iris about exposure by seam"
+          type="button"
+        >
+          <svg
+            aria-hidden="true"
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.75"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <line
+              x1="12"
+              x2="12"
+              y1="16"
+              y2="11"
+            />
+            <line
+              x1="12"
+              x2="12.01"
+              y1="8"
+              y2="8"
+            />
+          </svg>
+        </button>
       </p>
       <div
         class="panel"
@@ -928,10 +1192,10 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
             class="panel-zoomable"
             title="Enlarge"
           >
-            Fail / warning / pass per day
+            Verdicts per day
           </h3>
           <button
-            aria-label="Enlarge Fail / warning / pass per day"
+            aria-label="Enlarge Verdicts per day"
             class="panel-zoom-btn"
             title="Enlarge"
           >
@@ -1036,7 +1300,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
         </table>
       </div>
       <p
-        class="mini-meta"
+        class="sec-line"
         style="margin: 0px;"
       >
         5
