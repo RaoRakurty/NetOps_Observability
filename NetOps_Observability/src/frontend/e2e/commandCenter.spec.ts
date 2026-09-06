@@ -112,7 +112,7 @@ test("expanding an incident reveals its evidence ledger", async ({ page }) => {
   // (scope to the panel's section headings, not the table column header).
   await expect(page.locator(".cc-eh", { hasText: "Evidence" })).toBeVisible();
   await expect(page.getByText(/correlated signal/)).toBeVisible();
-  await expect(page.locator(".cc-eh", { hasText: "Recommended next action" })).toBeVisible();
+  await expect(page.locator(".cc-eh", { hasText: "Next action" })).toBeVisible();
 });
 
 test("the filter bar narrows the queue without a refetch", async ({ page }) => {
@@ -128,7 +128,7 @@ test("the filter bar narrows the queue without a refetch", async ({ page }) => {
     .locator("select")
     .selectOption("SD-WAN");
   await expect(queueRows(page)).toHaveCount(0);
-  await expect(page.getByText(/No incidents match the current filters/)).toBeVisible();
+  await expect(page.getByText(/No match for these filters/)).toBeVisible();
   // Clearing brings it back.
   await page.getByRole("button", { name: /Clear/ }).first().click();
   await expect(queueRows(page)).toHaveCount(1);

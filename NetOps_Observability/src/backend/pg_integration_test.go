@@ -298,7 +298,7 @@ func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
 	seed(3, old, "old")
 	seed(2, fresh, "fresh")
 
-	removed, err := audit.SweepRetention(ctx, db, 30)
+	removed, err := audit.SweepRetention(ctx, db, 30, 0)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
 		t.Errorf("%d rows remain, want 2 (the fresh ones survived)", remaining)
 	}
 	// Idempotent: a second sweep removes nothing.
-	if removed2, _ := audit.SweepRetention(ctx, db, 30); removed2 != 0 {
+	if removed2, _ := audit.SweepRetention(ctx, db, 30, 0); removed2 != 0 {
 		t.Errorf("second sweep removed %d, want 0", removed2)
 	}
 }
