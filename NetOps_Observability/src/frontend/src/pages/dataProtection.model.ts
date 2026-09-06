@@ -136,6 +136,78 @@ export function engineLabel(engine: { id: string; name?: string }): string {
   return ENGINE_LABELS[engine.id] ?? (engine.name || engine.id);
 }
 
+// ── bytes on disk (measured) ────────────────────────────────────────────────
+//
+// The same vocabulary rule as above, applied to the six stores the platform can
+// weigh: a row is named for the DATA it holds. Four of the six already have a
+// name in ENGINE_LABELS and reuse it verbatim — the coverage matrix and the
+// footprint table must never call the same data two different things.
+
+/** The scope of a reading that belongs to the installation, not to a tenant. */
+export const SCOPE_PLATFORM = "__platform__";
+/** Real bytes ingest could not attribute to a tenant. Never folded into one. */
+export const SCOPE_UNTAGGED = "untagged";
+
+/** The two stores the coverage matrix has no row for, in the operator's words. */
+const STORE_LABELS: Record<string, string> = {
+  filestore: "Files kept on the platform host",
+  kafka: "Events queued on the bus",
+};
+
+/** The operator's name for a weighed store, shared with the coverage matrix. */
+export function storeLabel(store: string): string {
+  return STORE_LABELS[store] ?? ENGINE_LABELS[store] ?? store;
+}
+
+/** Platform, the shared untagged bucket, or the tenant the bytes belong to. */
+export function scopeLabel(scope: string): string {
+  if (scope === SCOPE_PLATFORM) return "Platform";
+  if (scope === SCOPE_UNTAGGED) return "Untagged (shared)";
+  return scope.trim() || "Scope not reported";
+}
+
+/**
+ * The sentence beside a byte count nobody took.
+ *
+ * The server already writes it in this page's voice ("not measured — <why>"),
+ * so it is rendered verbatim; the prefix is only supplied for a reading that
+ * arrives without one, and never doubled onto a reading that has it.
+ */
+export function unmeasuredBytesText(detail: string | null | undefined): string {
+  const d = (detail ?? "").trim();
+  if (!d) return notMeasuredText(NOT_MEASURED_FALLBACK);
+  return /^not measured\b/i.test(d) ? d : notMeasuredText(d);
+}
+
+/**
+ * Uncompressed ÷ on-disk for one component, or null when the store reports no
+ * uncompressed size. NULL, never 1.0 — a ratio of one is the claim "this data
+ * does not compress", which is a measurement we did not make.
+ */
+export function compressionRatio(c: {
+  bytes_on_disk: number;
+  uncompressed_bytes: number | null | undefined;
+}): number | null {
+  const u = c.uncompressed_bytes;
+  if (u === null || u === undefined) return null;
+  if (!(c.bytes_on_disk > 0) || !(u > 0)) return null;
+  return u / c.bytes_on_disk;
+}
+
+/** A measured ratio on screen: "4.9×". Only ever called on a real ratio. */
+export function fmtRatio(r: number): string {
+  return `${r.toFixed(1)}×`;
+}
+
+/**
+ * What the total is allowed to call itself. While any store contributes
+ * nothing, the sum is a floor and says so — an operator who reads a partial
+ * sum as the footprint will size the disk for it.
+ */
+export function measuredTotalLabel(unmeasuredStores: readonly string[]): string {
+  return unmeasuredStores.length > 0 ? "measured total (lower bound)" : "measured total";
+}
+
 /** What each destination class actually protects against. */
 export function targetMeaning(kind: CoverageTargetKind): string {
   switch (kind) {

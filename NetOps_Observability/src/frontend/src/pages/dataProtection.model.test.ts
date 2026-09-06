@@ -16,7 +16,10 @@ import {
   BACKUP_DOC,
   DEFAULT_RESTORE_PREFIX,
   NOT_MEASURED_FALLBACK,
+  SCOPE_PLATFORM,
+  SCOPE_UNTAGGED,
   ageSeconds,
+  compressionRatio,
   confirmMatches,
   coverageLabel,
   coverageRank,
@@ -26,12 +29,14 @@ import {
   fmtBytes,
   fmtDuration,
   fmtHours,
+  fmtRatio,
   fmtUntil,
   isDrill,
   isExternal,
   isRestorable,
   lastProvenRestore,
   measured,
+  measuredTotalLabel,
   notMeasuredText,
   operationLabel,
   operationTone,
@@ -45,11 +50,14 @@ import {
   restorableVerdict,
   restorePreview,
   rpoVerdict,
+  scopeLabel,
   shardSummary,
   snapshotStateLabel,
   snapshotTone,
   sortedEngines,
+  storeLabel,
   targetMeaning,
+  unmeasuredBytesText,
   verifyEvidence,
 } from "./dataProtection.model";
 
@@ -188,6 +196,75 @@ describe("vocabulary — rows are named for the data, not the engine", () => {
     expect(isExternal(engine({ schedule: { enabled: true, governed_by_gui: false, detail: "a host cron runs it" } }))).toBe(true);
     // No schedule at all is not the same as an external one.
     expect(isExternal(engine({ schedule: null }))).toBe(false);
+  });
+});
+
+describe("bytes on disk — a figure nobody took never becomes a zero", () => {
+  it("names a weighed store with the coverage matrix's own vocabulary", () => {
+    expect([
+      storeLabel("opensearch"), storeLabel("clickhouse"),
+      storeLabel("victoriametrics"), storeLabel("postgres"),
+    ]).toEqual([
+      "Log & event search", "Flows & correlation history",
+      "Metrics history", "Application state",
+    ]);
+    // The two stores the coverage matrix has no row for get their own names…
+    expect(storeLabel("filestore")).toBe("Files kept on the platform host");
+    expect(storeLabel("kafka")).toBe("Events queued on the bus");
+    // …and an id we do not know appears under its own id rather than vanishing.
+    expect(storeLabel("future_store")).toBe("future_store");
+  });
+
+  it("labels the platform scope, the shared untagged bucket and a tenant", () => {
+    expect(scopeLabel(SCOPE_PLATFORM)).toBe("Platform");
+    expect(scopeLabel(SCOPE_UNTAGGED)).toBe("Untagged (shared)");
+    expect(scopeLabel("acme")).toBe("acme");
+    expect(scopeLabel("  ")).toBe("Scope not reported");
+  });
+
+  it("a null byte count renders the server's reason, never 0 B and never a blank", () => {
+    const detail = "not measured — the event bus does not expose its log directory to this service";
+    const m = measured<number>(null, detail);
+    expect(m.measured).toBe(false);
+    const text = unmeasuredBytesText(detail);
+    expect(text).toBe(detail);                       // verbatim, not doubled
+    expect(text).not.toContain("0 B");
+    expect(text.trim()).not.toBe("");
+  });
+
+  it("supplies the prefix for a reason that arrives without one, and never doubles it", () => {
+    expect(unmeasuredBytesText("the search tier refused the size query: 403"))
+      .toBe("not measured — the search tier refused the size query: 403");
+    expect(unmeasuredBytesText("not measured — the probe deadline passed"))
+      .toBe("not measured — the probe deadline passed");
+    expect(unmeasuredBytesText("")).toBe(notMeasuredText(NOT_MEASURED_FALLBACK));
+    expect(unmeasuredBytesText(null)).toBe(notMeasuredText(NOT_MEASURED_FALLBACK));
+  });
+
+  it("zero bytes IS a measurement and renders as 0 B", () => {
+    const m = measured<number>(0, "read back from the store, which holds nothing yet");
+    expect(m).toEqual({ measured: true, value: 0 });
+    expect(fmtBytes(0)).toBe("0 B");
+  });
+
+  it("compression is null when the store reports no uncompressed size — never 1.0", () => {
+    expect(compressionRatio({ bytes_on_disk: 1024, uncompressed_bytes: null })).toBeNull();
+    expect(compressionRatio({ bytes_on_disk: 1024, uncompressed_bytes: undefined })).toBeNull();
+    // A store that reports zero on either side has not measured a ratio either.
+    expect(compressionRatio({ bytes_on_disk: 0, uncompressed_bytes: 4096 })).toBeNull();
+    expect(compressionRatio({ bytes_on_disk: 1024, uncompressed_bytes: 0 })).toBeNull();
+  });
+
+  it("reports the measured ratio where both halves exist", () => {
+    const r = compressionRatio({ bytes_on_disk: 1000, uncompressed_bytes: 4900 });
+    expect(r).toBeCloseTo(4.9, 5);
+    expect(fmtRatio(r as number)).toBe("4.9×");
+  });
+
+  it("calls the total a lower bound while any store contributes nothing", () => {
+    expect(measuredTotalLabel(["kafka"])).toBe("measured total (lower bound)");
+    expect(measuredTotalLabel(["kafka", "postgres"])).toBe("measured total (lower bound)");
+    expect(measuredTotalLabel([])).toBe("measured total");
   });
 });
 

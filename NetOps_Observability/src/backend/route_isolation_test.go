@@ -699,24 +699,43 @@ var routeIsolationLedger = map[string]string{
 	// metering_isolation_test.go.
 	"/api/system/licence/usage":        "scoped",
 	"/api/system/licence/usage/report": "scoped",
-	"/api/system/network/test":         "platform",
-	"/api/automation/netbox":           "platform",
-	"/api/automation/netbox/sync":      "platform",
-	"/api/discovery/config":            "platform", // subnet-scan scope: directs the platform prober (#91)
-	"/api/notify/smtp":                 "platform",
-	"/api/notify/smtp/test":            "platform",
-	"/api/notify/slack":                "platform",
-	"/api/notify/slack/test":           "platform",
-	"/api/notify/twilio":               "platform",
-	"/api/notify/twilio/test":          "platform",
-	"/api/notify/ntfy":                 "platform",
-	"/api/notify/ntfy/test":            "platform",
-	"/api/notify/pagerduty":            "platform",
-	"/api/notify/pagerduty/test":       "platform",
-	"/api/notify/teams":                "platform",
-	"/api/notify/teams/test":           "platform",
-	"/api/notify/sns":                  "platform",
-	"/api/notify/sns/test":             "platform",
+	// MEASURED bytes on disk per store (tracker 204, internal/storagemeter).
+	// scoped, not platform: a tenant admin may see ITS OWN bytes — how much
+	// storage a tenant's own telemetry occupies is that tenant's data — and the
+	// cross-tenant grant is what widens the view to every tenant. Volume is
+	// business intelligence, so another tenant's bytes are exactly the kind of
+	// thing §3a keeps in its own lane.
+	//
+	// The scope comes from the TOKEN and from nowhere else: the handler reads no
+	// tenant selector at all (no `?tenant=`, no `as_tenant`), so there is
+	// nothing for a scoped caller to widen itself with. The narrowing is applied
+	// at the STORAGE layer for both tenant-partitioned stores — the OpenSearch
+	// `_cat` pattern is oslog.TenantCatPattern (the same derivation log search
+	// uses) and the ClickHouse read carries a partition-prefix WHERE clause —
+	// and the readings are filtered AGAIN on the way out (§3a.4 defense in
+	// depth). The four stores that are not tenant-partitioned on disk
+	// (VictoriaMetrics, PostgreSQL, the api file store, Kafka) return a scoped
+	// caller a NIL and the reason, never a pro-rata share. Cross-org isolation
+	// proven by storage_measured_isolation_test.go.
+	"/api/system/storage/measured": "scoped",
+	"/api/system/network/test":     "platform",
+	"/api/automation/netbox":       "platform",
+	"/api/automation/netbox/sync":  "platform",
+	"/api/discovery/config":        "platform", // subnet-scan scope: directs the platform prober (#91)
+	"/api/notify/smtp":             "platform",
+	"/api/notify/smtp/test":        "platform",
+	"/api/notify/slack":            "platform",
+	"/api/notify/slack/test":       "platform",
+	"/api/notify/twilio":           "platform",
+	"/api/notify/twilio/test":      "platform",
+	"/api/notify/ntfy":             "platform",
+	"/api/notify/ntfy/test":        "platform",
+	"/api/notify/pagerduty":        "platform",
+	"/api/notify/pagerduty/test":   "platform",
+	"/api/notify/teams":            "platform",
+	"/api/notify/teams/test":       "platform",
+	"/api/notify/sns":              "platform",
+	"/api/notify/sns/test":         "platform",
 	// The channel enumeration is over the SAME platform-global notify integrations
 	// as /api/notify/* — a tenant admin must not enumerate operator channel names
 	// (requirePlatformAdmin; report_scheduler.go handleReportChannels).

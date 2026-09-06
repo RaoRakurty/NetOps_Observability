@@ -85,6 +85,27 @@ netops_api:
         - "indices:admin/mappings/get"
         - "indices:admin/get"
         - "indices:monitor/settings/get"
+        # MEASURED bytes on disk (tracker 204, 2026-09-06). `_cat/indices` — the
+        # only per-index size source OpenSearch offers — needs this one action,
+        # and without it the api 403s: `no permissions for
+        # [indices:monitor/stats]`. That is not a hypothetical; it is what the
+        # live TLS install returned when the storage meter was first pointed at
+        # it, which is also why /api/logs/indices had nothing to enumerate.
+        #
+        # It is a READ of aggregate per-index STATISTICS (doc count, store size,
+        # segment counts) on indices this role can already read in full. It
+        # exposes no document, no field and no tenant data beyond what `read`
+        # already grants, and it is write-nothing. The narrower alternative —
+        # the node-level `indices.store.size_in_bytes` this role can already
+        # reach — yields a PLATFORM TOTAL with no per-tenant attribution, which
+        # is exactly the number tracker 204 says must not be presented as a
+        # tenant's storage. The api keeps that as an explicitly-labelled
+        # fallback for installations whose security config predates this line.
+        #
+        # THIS CHANGE TAKES EFFECT ONLY AFTER THE opensearch-security-init
+        # CONTAINER RE-RUNS securityadmin. Editing this file alone changes
+        # nothing in a running cluster.
+        - "indices:monitor/stats"
         # The MINIMUM an in_place restore needs on the live lanes, and nothing
         # more (2026-09-03). OpenSearch refuses to restore over an OPEN index,
         # so the api closes the targets, restores, and reopens them; the delete

@@ -195,8 +195,16 @@ Read this section. It is the honest state of the product, and none of it is hidd
   completion time, losslessness, memory caps, accuracy ≥ 93 %, SLO under overload — were measured on
   specific rig legs. No pull request can be blocked by them today. Treat them as evidence about a
   build, not a guarantee about all builds.
-- **Storage sizing is derived, never measured.** Every bytes/day, retention and capacity figure in the
-  documentation is a calculation. Validate against your own traffic before committing to disk.
+- **Storage SIZING is derived; the storage FOOTPRINT is now measured.** Every bytes/day, retention and
+  capacity figure in the documentation is still a calculation — a rate times an assumed bytes-per-row —
+  and none of it has been validated against a rig leg that instrumented disk. What a running
+  installation now has is its OWN measured footprint: `GET /api/system/storage/measured` and the
+  `netops_storage_bytes_measured{store,tenant}` series read bytes back from each store that owns them
+  (OpenSearch per index and therefore per tenant, ClickHouse per table and partition and therefore per
+  tenant with a measured compression ratio, VictoriaMetrics' own storage metric, `pg_database_size()`,
+  and the api's data directory). Kafka's log-directory size is NOT measurable from the api and reports
+  "not measured" with the reason rather than a zero. Use the measured surface to validate the derived
+  model against your own traffic before committing to disk.
 - **The headline time-to-root-cause number does not exist.** In the qualification corpus,
   `time_to_useful` is censored on all 345 cases. We are not quoting a number we have not measured.
 - **The storm benchmark has no flap or recovery dynamics** — zero state transitions, one vantage

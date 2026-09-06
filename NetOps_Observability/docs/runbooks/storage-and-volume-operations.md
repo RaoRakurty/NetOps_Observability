@@ -216,6 +216,22 @@ Trend bytes/day per store against retention: `daily_rate × retention_days ×
 1.3 (merge/replica headroom)` must fit the volume. If it doesn't, shorten TTL,
 add a codec/rollup, or tier to object storage — in that order of effort.
 
+**That formula is an ESTIMATE. For the MEASURED footprint, ask the platform**
+(tracker 204): `GET /api/system/storage/measured` as a platform admin returns
+bytes on disk per store — and per tenant for OpenSearch (the index name carries
+the tenant) and ClickHouse (every table is partitioned by tenant_id first) —
+each with the query it came from and when it was sampled. The same numbers are
+on `/metrics` as `netops_storage_bytes_measured{store,tenant}`, with
+`netops_storage_measured{store}` saying which stores could be measured at all
+and `netops_storage_measurement_age_seconds` saying how old the reading is
+(**-1 means never sampled**, which is not the same as fresh). A store that could
+not be measured reports the reason and emits NO bytes series — Kafka's
+log-directory size is the standing example: the api has no Kafka client,
+kafka-exporter publishes lag rather than log-dir bytes, and the api container
+does not mount the broker volume, so the only figure for Kafka is the CONFIGURED
+`KAFKA_LOG_RETENTION_BYTES` ceiling. Never substitute the derived estimate for a
+missing store without relabelling it as one.
+
 ---
 
 ## Managing snapshots

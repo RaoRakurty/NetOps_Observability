@@ -626,7 +626,7 @@ At the ceiling (2,500 devices, 1,000 eps), **per device**:
 | sustained event rate | **0.4 eps** | ratified `t-nominal-2.5k` envelope; met exactly at 2,500 on all three counts — offered, absorbed, evaluated |
 | carrier memory, working set | **0.32–0.43 MiB** | carrier end rss 1,059–1,065 MiB ÷ 2,500 storm (`storm-s05`/`s06` memflat); **0.322 MiB** nominal on the shipped image (805.2 MiB ÷ 2,500, `ladder-n2k5-08311437`) — size on the storm end |
 | carrier memory, provisioned | **0.51 MiB** | the 1,280 MiB replica cap ÷ 2,500 — the number to size a host with |
-| storage / day | **n/a — NOT MEASURED** | no run instruments bytes on disk; see below |
+| storage / day | **n/a — NOT MEASURED ON THIS RUN** | no mini-ladder phase instrumented bytes on disk; see below, and see the 2026-09-06 note for where a MEASURED footprint now comes from |
 
 **And the device count stretches when the per-device rate falls.** The second
 point of §1's envelope is the same box carrying **3,500 devices at 0.286
@@ -654,6 +654,27 @@ thinner fleet is cheaper per device on memory as well. The **provisioned** figur
 is what a host is sized on and it falls the same way — **0.37 MiB/device**
 (1,280 MiB ÷ 3,500) against 0.51 at 2,500. Both are single-leg readings and carry
 the same one-leg caveat as the row above.
+
+> **2026-09-06 — tracker 204 (this run's finding is unchanged; the platform now
+> measures).** The paragraph below stands as the record of what THIS run knew:
+> the mini-ladder did not instrument disk, and every bytes/day figure in it is
+> arithmetic on measured ratios. What has changed since is that the running
+> platform now has a MEASURED footprint of its own —
+> `GET /api/system/storage/measured` and the `netops_storage_bytes_measured
+> {store,tenant}` series (`src/backend/internal/storagemeter`) read bytes back
+> from each store that owns them: OpenSearch `_cat/indices` store.size per index
+> (per tenant, because the index name carries the tenant segment), ClickHouse
+> `system.parts.bytes_on_disk` per table and partition (per tenant, because
+> every netops table is partitioned by tenant_id first) with
+> `data_uncompressed_bytes` beside it for a MEASURED compression ratio,
+> VictoriaMetrics' own `vm_data_size_bytes`, `pg_database_size()`, and a walk of
+> the api's data directory. Kafka's log directory is still not measurable from
+> the api and says so rather than reporting a zero.
+>
+> A future rung SHOULD sample that surface at the start and end of a leg — the
+> difference is a measured bytes/day for that workload, which is the number this
+> paragraph says does not exist. Until a rung does, everything below stays
+> DERIVED and must keep its label.
 
 **Storage/day is honestly n/a.** No mini-ladder phase records on-disk volume;
 `report.json` carries memory bytes only. What *is* measured, per 900,001-event

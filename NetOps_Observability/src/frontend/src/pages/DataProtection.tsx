@@ -53,6 +53,8 @@ import {
   type SnapshotRestoreRequest,
   type SnapshotView,
   type SnapshotPolicy,
+  type StorageMeasuredReport,
+  type StorageReading,
 } from "../services/api";
 import { useAuth } from "../hooks/useAuth";
 import Icon from "../components/Icon";
@@ -64,18 +66,21 @@ import {
   BACKUP_DOC,
   DEFAULT_RESTORE_PREFIX,
   confirmMatches,
+  compressionRatio,
   coverageLabel,
   coverageTone,
   engineLabel,
   fmtAgo,
   fmtBytes,
   fmtDuration,
+  fmtRatio,
   fmtUntil,
   isDrill,
   isExternal,
   isRestorable,
   lastProvenRestore,
   measured,
+  measuredTotalLabel,
   notMeasuredText,
   operationLabel,
   operationTone,
@@ -88,11 +93,14 @@ import {
   restorableVerdict,
   restorePreview,
   rpoVerdict,
+  scopeLabel,
   shardSummary,
   snapshotStateLabel,
   snapshotTone,
   sortedEngines,
+  storeLabel,
   targetMeaning,
+  unmeasuredBytesText,
   verifyEvidence,
   type Measured,
   type RepositoryState,
@@ -496,6 +504,138 @@ function CoverageMatrix({ engines, now }: { engines: readonly EngineCoverage[]; 
   );
 }
 
+// ── 2b · bytes on disk, measured ────────────────────────────────────────────
+//
+// Every storage number this platform has published until now was DERIVED — a
+// row rate times an assumed bytes-per-row. This table is the other kind: each
+// figure was read back from the store that owns the bytes, and each row carries
+// the query it came from and the moment it was taken, so a stale number reads
+// as stale rather than as current. A store nobody could weigh keeps the same
+// contract as the rest of this page: the reason, in words, never a zero.
+
+/** One store's size, or the sentence explaining why there is not one. */
+function ReadingSize({ r }: { r: StorageReading }) {
+  const m = measured(r.bytes_on_disk, r.detail);
+  if (!m.measured) return <span className="dp-unmeasured">{unmeasuredBytesText(r.detail)}</span>;
+  return <span className="mono">{fmtBytes(m.value)}</span>;
+}
+
+/** Where the bytes are inside one store, with the MEASURED ratio where it exists. */
+function ComponentBreakdown({ r }: { r: StorageReading }) {
+  const comps = r.components ?? [];
+  if (comps.length === 0) return null;
+  return (
+    <details className="dp-details">
+      <summary>Where the bytes are · {comps.length} largest</summary>
+      <ul className="dp-parts">
+        {comps.map((c) => {
+          const ratio = compressionRatio(c);
+          return (
+            <li key={c.name} className="dp-part">
+              <span className="dp-part-n mono">{c.name}</span>
+              <span className="mono">{fmtBytes(c.bytes_on_disk)}</span>
+              {c.rows !== null && <span className="dp-sub">{c.rows} rows</span>}
+              {ratio !== null && <span className="dp-sub">{fmtRatio(ratio)} (measured)</span>}
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+}
+
+function StorageRow({ r, now }: { r: StorageReading; now: number }) {
+  const taken = fmtAgo(r.sampled_at, now) ?? r.sampled_at;
+  const isMeasured = r.bytes_on_disk !== null && r.bytes_on_disk !== undefined;
+  return (
+    <>
+      <tr>
+        <th scope="row">{storeLabel(r.store)}</th>
+        <td>{scopeLabel(r.scope)}</td>
+        <td className="num"><ReadingSize r={r} /></td>
+        <td>
+          <span className="mono">{taken}</span>
+          {isMeasured && r.detail ? <span className="dp-sub dp-block">{r.detail}</span> : null}
+        </td>
+        <td>
+          {r.source
+            ? <span className="dp-audit">{r.source}</span>
+            : <span className="dp-unmeasured">{notMeasuredText("nothing was read, so there is no query to name")}</span>}
+        </td>
+      </tr>
+      {(r.components ?? []).length > 0 && (
+        <tr className="dp-parts-row">
+          <td colSpan={5}><ComponentBreakdown r={r} /></td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function StorageMeasured({ report, now }: { report: StorageMeasuredReport; now: number }) {
+  const partial = report.unmeasured_stores.length > 0;
+  const readings = report.readings ?? [];
+  return (
+    <>
+      <dl className="dp-stats">
+        <div className="dp-stat">
+          <dt>{measuredTotalLabel(report.unmeasured_stores)}</dt>
+          <dd>
+            <span className="mono">{fmtBytes(report.total_measured_bytes)}</span>
+            <span className="dp-sub dp-block">
+              {scopeLabel(report.scope)}
+              {report.cross_tenant ? " · every tenant" : ""}
+              {" · taken "}
+              {fmtAgo(report.generated_at, now) ?? report.generated_at}
+            </span>
+          </dd>
+        </div>
+        <div className="dp-stat">
+          <dt>Stores contributing nothing</dt>
+          <dd>
+            {partial ? (
+              <span className="dp-badges">
+                {report.unmeasured_stores.map((s) => (
+                  <Pill key={s} tone="warn">{storeLabel(s)}</Pill>
+                ))}
+              </span>
+            ) : (
+              <Pill tone="good">Every store was weighed</Pill>
+            )}
+          </dd>
+        </div>
+      </dl>
+
+      <p className="dp-msg">{report.measurement_note}</p>
+
+      {readings.length === 0 ? (
+        <HonestState
+          tone="warn"
+          headline="Nothing was weighed for this scope."
+          remedy={report.measurement_note}
+        />
+      ) : (
+        <div className="dp-tblwrap">
+          <table className="dp-tbl" aria-label="Bytes on disk by store">
+            <thead>
+              <tr>
+                <th scope="col">Store</th>
+                <th scope="col">Scope</th>
+                <th scope="col" className="num">Bytes on disk</th>
+                <th scope="col">Taken</th>
+                <th scope="col">Read from</th>
+              </tr>
+            </thead>
+            <tbody>
+              {readings.map((r) => <StorageRow key={`${r.store}:${r.scope}`} r={r} now={now} />)}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── 3 · restore points ──────────────────────────────────────────────────────
 
 /** The live state of one long-running action, polled until it settles. */
@@ -750,6 +890,10 @@ export default function DataProtection() {
     "The restore points could not be read.",
     String(withSizes),
   );
+  const [storage, reloadStorage] = usePanel<StorageMeasuredReport>(
+    () => api.storageMeasured(),
+    "The measured bytes on disk could not be read.",
+  );
   const [policy, reloadPolicy] = usePanel<SnapshotPolicy>(
     () => api.snapshotPolicy(),
     "The recovery-point policy could not be read.",
@@ -774,7 +918,8 @@ export default function DataProtection() {
     reloadCoverage();
     reloadList();
     reloadOps();
-  }, [reloadCoverage, reloadList, reloadOps]);
+    reloadStorage();
+  }, [reloadCoverage, reloadList, reloadOps, reloadStorage]);
 
   // Poll one operation to completion. The first read happens immediately so the
   // operator sees the action was accepted, not a silent pause.
@@ -966,6 +1111,21 @@ export default function DataProtection() {
           </>
         ) : (
           <Loading what="the coverage matrix" />
+        )}
+      </Section>
+
+      {/* ── 2b · bytes on disk ── */}
+      <Section
+        id="bytes-on-disk"
+        title="Bytes on disk (measured)"
+        note="Read back from each store — never derived from a rate"
+      >
+        {storage.error ? (
+          <PanelError text={storage.error} onRetry={reloadStorage} />
+        ) : storage.data ? (
+          <StorageMeasured report={storage.data} now={now} />
+        ) : (
+          <Loading what="the measured bytes on disk" />
         )}
       </Section>
 

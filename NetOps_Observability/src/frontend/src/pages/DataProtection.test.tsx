@@ -28,6 +28,7 @@ import { scanForEngineVocabulary } from "../components/rca/vocabulary.test";
 import type {
   BackupCoverageView, BackupOperation, EngineCoverage, OperationListView,
   SnapshotListView, SnapshotRepositoryView, SnapshotPolicy, SnapshotView,
+  StorageMeasuredReport, StorageReading,
 } from "../services/api";
 
 const mockApi = vi.hoisted(() => ({
@@ -38,6 +39,7 @@ const mockApi = vi.hoisted(() => ({
   backupConfig: vi.fn(),
   setBackupConfig: vi.fn(),
   backupOperations: vi.fn(),
+  storageMeasured: vi.fn(),
   backupOperation: vi.fn(),
   createSnapshot: vi.fn(),
   deleteSnapshot: vi.fn(),
@@ -125,11 +127,35 @@ const OPS: OperationListView = {
   ],
 };
 
+function reading(over: Partial<StorageReading> = {}): StorageReading {
+  return {
+    store: "opensearch", scope: "__platform__",
+    bytes_on_disk: 3221225472,
+    detail: "read back from the search tier's own index stats",
+    source: "_cat/indices?bytes=b store.size",
+    sampled_at: "2026-09-04T11:59:30Z",
+    ...over,
+  };
+}
+
+function storage(over: Partial<StorageMeasuredReport> = {}): StorageMeasuredReport {
+  return {
+    scope: "__platform__", cross_tenant: true,
+    generated_at: "2026-09-04T11:59:30Z",
+    readings: [reading()],
+    total_measured_bytes: 3221225472,
+    unmeasured_stores: [],
+    measurement_note: "Every number here was MEASURED: read back from the store that owns the bytes.",
+    ...over,
+  };
+}
+
 function setup(over: {
   coverage?: BackupCoverageView | Error;
   list?: SnapshotListView | Error;
   policy?: SnapshotPolicy;
   ops?: OperationListView;
+  storage?: StorageMeasuredReport | Error;
   platformAdmin?: boolean;
 } = {}) {
   const resolve = <T,>(v: T | Error) => (v instanceof Error ? Promise.reject(v) : Promise.resolve(v));
@@ -141,6 +167,7 @@ function setup(over: {
     status: {},
   });
   mockApi.backupOperations.mockResolvedValue(over.ops ?? OPS);
+  mockApi.storageMeasured.mockReturnValue(resolve(over.storage ?? storage()));
   mockUseAuth.mockReturnValue({
     user: { username: "root", platform_admin: over.platformAdmin ?? true },
     loading: false,
@@ -337,6 +364,124 @@ describe("coverage matrix", () => {
     render(<DataProtection />);
     expect(await screen.findByText("The coverage table is incomplete.")).toBeTruthy();
     expect(screen.getByText("the flow store did not answer within the read budget")).toBeTruthy();
+  });
+});
+
+// ── 2b · bytes on disk (measured) ───────────────────────────────────────────
+
+describe("bytes on disk (measured)", () => {
+  it("renders one row per store under the data's name, with the query behind it", async () => {
+    setup({
+      storage: storage({
+        readings: [
+          reading({ store: "clickhouse", scope: "acme", bytes_on_disk: 1073741824, source: "system.parts bytes_on_disk" }),
+          reading({ store: "victoriametrics", scope: "__platform__", bytes_on_disk: 536870912, source: "vm_data_size_bytes" }),
+        ],
+        total_measured_bytes: 1610612736,
+      }),
+    });
+    render(<DataProtection />);
+    const table = await screen.findByRole("table", { name: "Bytes on disk by store" });
+    expect(within(table).getByText("Flows & correlation history")).toBeTruthy();
+    expect(within(table).getByText("Metrics history")).toBeTruthy();
+    expect(within(table).getByText("acme")).toBeTruthy();
+    expect(within(table).getByText("Platform")).toBeTruthy();
+    expect(within(table).getByText("1.0 GiB")).toBeTruthy();
+    expect(within(table).getByText("system.parts bytes_on_disk")).toBeTruthy();
+  });
+
+  it("a store nobody could weigh states the reason and never renders 0 B", async () => {
+    setup({
+      storage: storage({
+        readings: [reading({
+          store: "kafka", bytes_on_disk: null, source: "",
+          detail: "not measured — the event bus does not expose its log directory to this service",
+        })],
+        total_measured_bytes: 0,
+        unmeasured_stores: ["kafka"],
+        measurement_note: "PARTIAL. `total_measured_bytes` is a LOWER BOUND.",
+      }),
+    });
+    render(<DataProtection />);
+    const table = await screen.findByRole("table", { name: "Bytes on disk by store" });
+    expect(within(table).getByText(
+      "not measured — the event bus does not expose its log directory to this service",
+    )).toBeTruthy();
+    expect(within(table).queryByText("0 B")).toBeNull();
+    // Nothing was read, so there is no query to name — and it says that.
+    expect(within(table).getByText("not measured — nothing was read, so there is no query to name")).toBeTruthy();
+  });
+
+  it("zero bytes IS a measurement and renders as 0 B", async () => {
+    setup({
+      storage: storage({
+        readings: [reading({ store: "filestore", bytes_on_disk: 0, detail: "a walk of the platform's own data directory", source: "statfs" })],
+        total_measured_bytes: 0,
+      }),
+    });
+    render(<DataProtection />);
+    const table = await screen.findByRole("table", { name: "Bytes on disk by store" });
+    expect(within(table).getByText("0 B")).toBeTruthy();
+    expect(within(table).getByText("Files kept on the platform host")).toBeTruthy();
+  });
+
+  it("calls the total a lower bound while a store contributes nothing, and prints the note verbatim", async () => {
+    setup({
+      storage: storage({
+        readings: [reading(), reading({ store: "kafka", bytes_on_disk: null, source: "", detail: "not measured — the log directory is not visible here" })],
+        unmeasured_stores: ["kafka"],
+        measurement_note: "PARTIAL. `total_measured_bytes` is a LOWER BOUND: it sums only the stores that could be measured.",
+      }),
+    });
+    render(<DataProtection />);
+    expect(await screen.findByText("measured total (lower bound)")).toBeTruthy();
+    expect(screen.getByText("PARTIAL. `total_measured_bytes` is a LOWER BOUND: it sums only the stores that could be measured.")).toBeTruthy();
+    // Named twice on purpose: once as the store that contributes nothing to the
+    // header total, once as the row carrying its own reason.
+    expect(screen.getAllByText("Events queued on the bus")).toHaveLength(2);
+  });
+
+  it("a complete read calls the total what it is, with every store weighed", async () => {
+    setup();
+    render(<DataProtection />);
+    expect(await screen.findByText("measured total")).toBeTruthy();
+    expect(screen.getByText("Every store was weighed")).toBeTruthy();
+    expect(screen.queryByText("measured total (lower bound)")).toBeNull();
+  });
+
+  it("shows when each reading was taken, so a stale number reads as stale", async () => {
+    setup({ storage: storage({ readings: [reading({ sampled_at: "2026-09-04T09:00:00Z" })] }) });
+    render(<DataProtection />);
+    const table = await screen.findByRole("table", { name: "Bytes on disk by store" });
+    expect(within(table).getByText("3h 00m ago")).toBeTruthy();
+  });
+
+  it("puts the breakdown behind a disclosure, with the measured ratio only where it exists", async () => {
+    setup({
+      storage: storage({
+        readings: [reading({
+          components: [
+            { name: "netops-syslog-acme-2026.09.04", bytes_on_disk: 2147483648, rows: 1200000, uncompressed_bytes: null },
+            { name: "netops-flows-acme", bytes_on_disk: 1000, rows: 10, uncompressed_bytes: 4900 },
+          ],
+        })],
+      }),
+    });
+    render(<DataProtection />);
+    expect(await screen.findByText("Where the bytes are · 2 largest")).toBeTruthy();
+    expect(screen.getByText("netops-syslog-acme-2026.09.04")).toBeTruthy();
+    // Only the component whose store reports an uncompressed size carries a ratio.
+    expect(screen.getAllByText(/× \(measured\)/)).toHaveLength(1);
+    expect(screen.getByText("4.9× (measured)")).toBeTruthy();
+  });
+
+  it("a dead read shows the panel error and never a byte count", async () => {
+    setup({ storage: new Error("500 Internal Server Error: {}") });
+    render(<DataProtection />);
+    expect(await screen.findByText("Protected")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "Bytes on disk by store" })).toBeNull();
+    expect(screen.queryByText("measured total")).toBeNull();
+    expect(screen.queryByText("0 B")).toBeNull();
   });
 });
 
@@ -823,7 +968,10 @@ describe("accessibility", () => {
   it("every part of the console is a named landmark", async () => {
     setup();
     render(<DataProtection />);
-    for (const name of ["Protection health", "Coverage", "Restore points", "Policies", "Activity and drills"]) {
+    for (const name of [
+      "Protection health", "Coverage", "Bytes on disk (measured)",
+      "Restore points", "Policies", "Activity and drills",
+    ]) {
       expect(await screen.findByRole("region", { name })).toBeTruthy();
     }
   });

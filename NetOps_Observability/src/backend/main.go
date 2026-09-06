@@ -116,6 +116,7 @@ import (
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
 	"netops/backend/internal/ssoidp"
+	"netops/backend/internal/storagemeter"
 	"netops/backend/internal/tenant"
 	"netops/backend/internal/ticketing"
 	"netops/backend/internal/tlsprobe"
@@ -287,6 +288,14 @@ type server struct {
 	// /metrics delegation — no domain logic (§2).
 	dataProtect *dataprotect.Service
 	// DATA-PROTECTION-END
+	// STORAGE-MEASUREMENT-BEGIN — MEASURED bytes on disk per store
+	// (internal/storagemeter, tracker 204). Every storage and retention-pricing
+	// number this platform published before it was DERIVED — a row rate times an
+	// assumed bytes-per-row — and the owner directive was: measure it, or say you
+	// did not. main.go keeps only this field, the Deps assembly, the route
+	// registration, the sampler worker and the /metrics delegation (§2).
+	storageMeter *storagemeter.Meter
+	// STORAGE-MEASUREMENT-END
 	// LICENCE-BEGIN — the licence mechanism. `entitlements` is the CENTRAL
 	// entitlement service every commercial gate asks (entitlement.Service);
 	// `licenceStore` owns the signed document at /data/api/licence.json;
@@ -1025,6 +1034,12 @@ func newServer() *server {
 	// *server (the platform-admin gate, the audit sink, the OpenSearch caller).
 	srv.dataProtect = dataprotect.New(srv.dataProtectDeps(backupCfg))
 	// DATA-PROTECTION-END
+	// STORAGE-MEASUREMENT-BEGIN — built here for the same reason: every seam it
+	// takes (the OpenSearch caller, the ClickHouse worker lane, the VM query, the
+	// admin gate) is a method on *server, and every env switch it reads is
+	// resolved ONCE below and travels in Deps as a value.
+	srv.storageMeter = storagemeter.New(srv.storageMeterDeps())
+	// STORAGE-MEASUREMENT-END
 	// LICENCE-BEGIN — built here, after srv exists, because the gate, the audit
 	// sink and the usage counters are all methods on *server.
 	//
@@ -2328,6 +2343,11 @@ func Run() {
 	// killable with SNAPSHOT_PROBE_ENABLED=false (in which case the metric says
 	// so rather than reporting a fake pass).
 	workers.start("snapshot-restorability-probe", func() { srv.dataProtect.StartRestorabilityProbe(ctx) })
+	// STORAGE-MEASUREMENT-BEGIN — the sampler. The /metrics scrape formats this
+	// worker's CACHE and never probes a store itself: a scrape that runs
+	// `system.parts` is a scrape that times out under load.
+	workers.start("storage-measurement-sampler", func() { srv.storageMeter.RunSampler(ctx) })
+	// STORAGE-MEASUREMENT-END
 	// METERING-BEGIN — the hourly usage snapshot (tracker 258). It takes one
 	// reading immediately and then every hour: immediately, because otherwise
 	// the staleness rule spends its first hour unable to tell "just booted" from
@@ -3196,6 +3216,17 @@ func (s *server) routes(mux *http.ServeMux) {
 	// match, so the #150 policy GET/PUT is untouched.
 	mux.HandleFunc("/api/system/backup/coverage", s.dataProtect.HandleCoverage)
 	mux.HandleFunc("/api/system/backup/snapshots/", s.dataProtect.HandleSnapshotOps)
+	// STORAGE-MEASUREMENT-BEGIN — the literal path, so the route-isolation ledger
+	// and the coverage guard can both see it (they scan this file's source).
+	// Registered as a CLOSURE, not as the method value `s.storageMeter.
+	// HandleMeasured`: a method value binds the receiver at REGISTRATION time,
+	// so a meter rebuilt or replaced after the router is assembled (which is
+	// exactly what the isolation test does, and what a future re-wire would do)
+	// would be silently ignored while the route still answered.
+	mux.HandleFunc("/api/system/storage/measured", func(w http.ResponseWriter, r *http.Request) {
+		s.storageMeter.HandleMeasured(w, r)
+	})
+	// STORAGE-MEASUREMENT-END
 	mux.HandleFunc("/api/system/backup/operations", s.dataProtect.HandleOperations)
 	mux.HandleFunc("/api/system/backup/operations/", s.dataProtect.HandleOperationByID)
 	// DATA-PROTECTION-END
@@ -4039,6 +4070,13 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// is the whole lesson of 2026-08-27.
 	s.dataProtect.Metrics().Write(w)
 	// SNAPSHOT-RESTORABILITY-END
+	// STORAGE-MEASUREMENT-BEGIN — netops_storage_bytes_measured{store,tenant},
+	// the per-store measured/not-measured gauge and the staleness gauge, all
+	// rendered from the sampler's cache. A store that was NOT measured emits no
+	// bytes series at all: a zero-byte gauge and an unmeasured store must not
+	// look the same, which is the presentation bug this was filed about.
+	s.storageMeter.Metrics().Write(w)
+	// STORAGE-MEASUREMENT-END
 	// SECURITY-LANE-BEGIN
 	if s.securityLane != nil {
 		s.securityLane.Metrics().Write(w)
@@ -5331,6 +5369,159 @@ func (s *server) dataProtectDeps(cfg dataprotect.ConfigStore) dataprotect.Deps {
 		ProbeInterval: snapshotProbeInterval(),
 	}
 }
+
+// storageMeterDatabase is the ClickHouse database whose `system.parts` rows are
+// measured. The literal 'netops' is what every other SQL string in this
+// codebase already names (internal/chschema); it is a const here so the size
+// query and the schema queries cannot drift apart silently.
+const storageMeterDatabase = "netops"
+
+// storageMeterLog adapts the package's variadic key/value logger onto this
+// platform's structured logger. Odd trailing keys are kept (as a key with an
+// empty value) rather than dropped — a log line that silently loses a field is
+// the observability failure §10 forbids.
+func storageMeterLog(msg string, kv ...any) {
+	fields := make(map[string]any, len(kv)/2+1)
+	for i := 0; i < len(kv); i += 2 {
+		key := fmt.Sprint(kv[i])
+		if i+1 < len(kv) {
+			fields[key] = kv[i+1]
+		} else {
+			fields[key] = ""
+		}
+	}
+	logInfo("storage.measure", msg, fields)
+}
+
+// STORAGE-MEASUREMENT-BEGIN — the Deps assembly for internal/storagemeter
+// (tracker 204). Every seam is bound to the client the rest of the api ALREADY
+// uses, never a second one: the package holds no URL, no credential and no TLS
+// config, and it reads no environment at all. Each env switch below is resolved
+// here, once, and travels as a value.
+func (s *server) storageMeterDeps() storagemeter.Deps {
+	return storagemeter.Deps{
+		Now:  func() time.Time { return time.Now().UTC() },
+		Log:  storageMeterLog,
+		Gate: s.storageMeterGate,
+
+		// The SAME OpenSearch request path the log search and Data Protection
+		// use (backend_client.go), so a transport or credential change lands in
+		// one place. `_cat/indices` needs `indices:monitor/stats`, which the
+		// api's service role gained with this change — an installation whose
+		// security config has not been re-applied gets the node-level fallback
+		// and is TOLD that it did.
+		OpenSearch: func(ctx context.Context, path string, out any) error {
+			return s.osDo(ctx, http.MethodGet, path, nil, out, 20*time.Second)
+		},
+		// The SAME index-pattern algebra the log search uses (§3a.4: one
+		// derivation of what a caller may name, not two).
+		CatPattern:  oslog.TenantCatPattern,
+		IndexTenant: indexTenantSegment,
+
+		// The cross-tenant WORKER lane: system.parts is cluster metadata with no
+		// tenant column, so no row policy can scope it and the narrowing lives
+		// in the SQL storagemeter builds (and is pinned by its own test).
+		ClickHouse: func(ctx context.Context, sql string) ([]map[string]any, error) {
+			return chWorkerQueryTuned(ctx, chWorkerRead{SQL: sql, Tag: "worker:storage-measure"})
+		},
+		Database: storageMeterDatabase,
+
+		// UNSCOPED on purpose: vm_data_size_bytes is VictoriaMetrics' own
+		// self-metric and carries no tenant label. storagemeter calls this only
+		// on the platform path and refuses to derive a per-tenant share.
+		Victoria: func(ctx context.Context, promql string) ([]storagemeter.VMSample, error) {
+			samples, err := s.vmInstant(ctx, promql)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]storagemeter.VMSample, 0, len(samples))
+			for _, sm := range samples {
+				out = append(out, storagemeter.VMSample{Labels: sm.Labels, Value: sm.Value})
+			}
+			return out, nil
+		},
+
+		Postgres: storageMeterPGSize,
+
+		Dir:      storagemeter.WalkDir,
+		DataRoot: envOr("DATA_DIR", "/data"),
+	}
+}
+
+// storageMeterGate binds the READ gate (§3a rule 1 — scope by the principal,
+// default-closed). Deliberately requireAdmin + principalTenant rather than
+// requirePlatformAdmin: a tenant admin may see ITS OWN bytes (that is its own
+// data), and the cross-tenant grant is what widens the view to every tenant.
+// The tenant is taken from the token and from nowhere else — this route reads
+// no tenant selector at all, so there is no `as_tenant` to ignore.
+func (s *server) storageMeterGate(w http.ResponseWriter, r *http.Request) (storagemeter.Principal, bool) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return storagemeter.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	if cross {
+		// The platform owner's tenant is the GLOBAL pseudo-tenant, which is not
+		// a storage scope. A cross-tenant read carries no tenant at all, so the
+		// value can never be mistaken for a narrowing.
+		tenant = ""
+	}
+	return storagemeter.Principal{Subject: claims.Sub, Tenant: tenant, CrossTenant: cross}, true
+}
+
+// indexTenantSegment recovers the tenant segment from a per-tenant OpenSearch
+// index name. It is the INVERSE of the naming vector-router writes and
+// oslog.TenantIndexPattern reads: netops-<signal>-<tenant>-<date>. A name that
+// does not match is reported as platform-owned rather than attributed to a
+// guess — bytes belonging to nobody is a fact; bytes attributed to the wrong
+// tenant is a §3a leak.
+func indexTenantSegment(index string) (string, bool) {
+	rest, ok := strings.CutPrefix(index, "netops-")
+	if !ok {
+		return "", false
+	}
+	// <signal>-<tenant>-<date>: the date is the last segment, the signal the
+	// first, and everything between them is the tenant segment (which may
+	// itself contain hyphens, since IndexTenantSeg maps illegal characters to
+	// "-").
+	parts := strings.Split(rest, "-")
+	if len(parts) < 3 {
+		return "", false
+	}
+	seg := strings.Join(parts[1:len(parts)-1], "-")
+	if seg == "" {
+		return "", false
+	}
+	return seg, true
+}
+
+// storageMeterPGSize measures the application database, or says why it cannot.
+// "This installation runs the file backend" is a DEPLOYMENT FACT, not a
+// failure, and the two must not render alike.
+func storageMeterPGSize(ctx context.Context) (int64, []storagemeter.Component, bool, string, error) {
+	ps, active := platformdb.ActivePG()
+	if !active {
+		return 0, nil, false,
+			"this installation does not use the PostgreSQL app-state backend (STORE_BACKEND is not `postgres`), so there is no application database to size",
+			nil
+	}
+	total, rels, err := ps.DB().DatabaseSize(ctx)
+	if err != nil {
+		if errors.Is(err, platformdb.ErrNoPool) {
+			return 0, nil, false,
+				"the PostgreSQL backend is selected but no pool is open, so no size could be read",
+				nil
+		}
+		return 0, nil, false, "", err
+	}
+	comps := make([]storagemeter.Component, 0, len(rels))
+	for _, r := range rels {
+		comps = append(comps, storagemeter.Component{Name: r.Name, BytesOnDisk: r.Bytes})
+	}
+	return total, comps, true, "", nil
+}
+
+// STORAGE-MEASUREMENT-END
 
 // snapshotProbeInterval is the minimum spacing between restorability probes.
 // An unparseable value falls back to the shipped 24h and SAYS SO — a silently

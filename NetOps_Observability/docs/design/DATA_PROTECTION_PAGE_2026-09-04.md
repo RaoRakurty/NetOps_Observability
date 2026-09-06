@@ -115,6 +115,32 @@ neither. This is pinned by `dataProtection.model.test.ts` and by assertions in
 `DataProtection.test.tsx` that the fabricated value is *absent* from the DOM
 (`queryByText("0% free")`, `queryByText("0 B")`).
 
+**Measured means measured** (added 2026-09-06, tracker 204). The
+"Bytes on disk (measured)" section renders `GET /api/system/storage/measured`,
+and every number in it was read back from the store that OWNS the bytes by the
+query named beside it — OpenSearch `_cat/indices` store.size per index (per
+tenant, because the index name carries the tenant segment; the shared `untagged`
+lane is its own row and is deliberately not folded into anybody's total),
+ClickHouse `system.parts.bytes_on_disk` per table and partition (per tenant,
+because every netops table is partitioned by `tenant_id` first) with
+`data_uncompressed_bytes` beside it so the compression ratio shown is MEASURED
+rather than the constant the sizing model assumes, VictoriaMetrics' own
+`vm_data_size_bytes`, `pg_database_size()`, and a walk of the api's data
+directory. Nothing on this section is a rate multiplied by an assumed
+bytes-per-row; the derived model lives in `scripts/resource_planner.py` and is
+labelled an estimate there.
+
+The section obeys the same three-state rule as the rest of the page, and adds
+two of its own. `total_measured_bytes` is labelled a **lower bound** whenever any
+store is unmeasured, because summing what you could measure and calling it the
+footprint is the same lie in a smaller font. And a store that cannot be measured
+per TENANT (VictoriaMetrics, the app database, the api file store, Kafka — none
+is partitioned by tenant on disk) returns a scoped caller a `null` with that
+reason rather than a pro-rata share: a division is not a measurement. Kafka is
+the standing example of a store that cannot be measured at all — the api ships
+no Kafka client, kafka-exporter publishes lag rather than log-dir bytes, and the
+api container does not mount the broker volume.
+
 **Absence is styled as absence.** `.dp-unmeasured` is muted and italic, never
 red. "Nobody measured this" is a different fact from "this is broken", and
 colouring them alike trains an operator to ignore both.

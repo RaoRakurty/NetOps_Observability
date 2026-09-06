@@ -1601,6 +1601,56 @@ export type BackupCoverageView = {
   detail?: string;
 };
 
+// ── measured bytes on disk (tracker 204) ────────────────────────────────────
+// Contract: src/backend/internal/storagemeter (storagemeter.go + http.go).
+// THE SHAPE IS THE HONESTY GUARANTEE: `bytes_on_disk` is null wherever nothing
+// was measured, and `detail` then says why. A null is never a zero, and
+// `total_measured_bytes` is a LOWER BOUND while `unmeasured_stores` is
+// non-empty.
+
+/** The closed set of stores the platform can weigh. */
+export type StorageStore =
+  | "opensearch" | "clickhouse" | "victoriametrics" | "postgres" | "filestore" | "kafka";
+
+/** One addressable piece inside a store — an index, a table, a directory. */
+export type StorageComponent = {
+  name: string;
+  bytes_on_disk: number;
+  /** Row/document count where the store reports one; null where it does not. */
+  rows: number | null;
+  /** Pre-compression size where the store reports it. null is NOT zero. */
+  uncompressed_bytes: number | null;
+};
+
+/** One store's bytes for one scope, measured or explicitly not. */
+export type StorageReading = {
+  store: StorageStore;
+  /** "__platform__" (ScopePlatform), "untagged" (ScopeUntagged), or a tenant id. */
+  scope: string;
+  /** null = NOT MEASURED. Read `detail`; never render it as a zero. */
+  bytes_on_disk: number | null;
+  /** Measured: how the number was taken. Unmeasured: "not measured — <why>". */
+  detail: string;
+  /** The exact query/API/syscall behind the number; empty when nothing was read. */
+  source: string;
+  sampled_at: string;
+  components?: StorageComponent[];
+};
+
+/** GET /api/system/storage/measured */
+export type StorageMeasuredReport = {
+  /** "__platform__" for a cross-tenant caller, else the caller's tenant. */
+  scope: string;
+  cross_tenant: boolean;
+  generated_at: string;
+  readings: StorageReading[];
+  /** Sums ONLY measured readings — a lower bound while `unmeasured_stores` is non-empty. */
+  total_measured_bytes: number;
+  unmeasured_stores: string[];
+  /** Always set; starts with "PARTIAL." when the total is incomplete. */
+  measurement_note: string;
+};
+
 /** POST /api/system/backup/snapshots/restore. `renamed` is the safe default. */
 export type SnapshotRestoreRequest = {
   snapshot: string;
@@ -4748,6 +4798,10 @@ export const api = {
 
   // contract: openapi.go GET /api/system/backup/coverage
   backupCoverage: () => request<BackupCoverageView>(`/api/system/backup/coverage`),
+
+  // contract: openapi.go GET /api/system/storage/measured
+  // Scoped by the TOKEN alone — there is no tenant selector to pass.
+  storageMeasured: () => request<StorageMeasuredReport>(`/api/system/storage/measured`),
 
   // contract: openapi.go GET /api/system/backup/snapshots/list
   // `sizes` costs one _status call per snapshot against the repository, so it is

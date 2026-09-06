@@ -407,6 +407,16 @@ with actual commands (rule 9).
 - M1: true cause of the CH 4.19 GiB transients (timing-correlated with #101,
   unproven).
 - Real bytes/flow-record and bytes/log-event after compression (lab-measurable).
+  **Partly answered 2026-09-06 (tracker 204):** the platform now measures bytes
+  on disk per store — and per tenant for the two stores partitioned that way —
+  through `GET /api/system/storage/measured` /
+  `netops_storage_bytes_measured{store,tenant}`
+  (`src/backend/internal/storagemeter`). ClickHouse readings carry
+  `data_uncompressed_bytes` beside `bytes_on_disk`, so the compression ratio in
+  the model can be replaced with a MEASURED one per table. What is still missing
+  is the DIVISOR: bytes per record needs a leg that samples the surface before
+  and after a known event count. Everything the planner emits stays an ESTIMATE
+  with its formula named until that leg runs.
 - VM series count & churn at customer scale; CH merge temp-space factor at
   flow-heavy scale; Vector/Kafka behavior under sustained downstream outage
   (B10); Go 1.25 GOMAXPROCS cgroup behavior (P3 verification); CH cgroup
