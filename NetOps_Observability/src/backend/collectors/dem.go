@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"net"
 	"net/http"
 	"sort"
@@ -62,6 +63,13 @@ const (
 	// Declared here (rather than taken from a target) because a synthetic
 	// prober can only ever produce synthetic evidence.
 	demSourceSynthetic = dem.SourceSynthetic
+	// demRunBuffer bounds the rolling per-RUN record buffer this prober
+	// republishes each tick (tracker 253). It is sized so the api's 30 s drain
+	// always overlaps the previous publication — a run is never visible for
+	// less than one drain — while staying a fixed, small allocation on a
+	// 128 MiB container. At the 15 s tick and the default 60 s target interval
+	// it covers roughly the last hour across 500 targets' worth of checks.
+	demRunBuffer = 2000
 )
 
 // demTargetFetcher is the work-queue seam. Overridden in tests; in production
@@ -81,9 +89,18 @@ type demRunner struct {
 	// resolver is used for the `dns` kind; nil means the system resolver.
 	resolver demResolver
 
+	// publishRuns is the run-record channel seam. Overridden in tests; in
+	// production it writes this prober's rolling buffer to the shared
+	// key-value channel.
+	publishRuns func(ctx context.Context, runs []dem.WireRun) error
+
 	mu      sync.RWMutex
 	status  Status
 	lastRun map[string]time.Time
+	// runs is the rolling per-RUN record buffer, oldest first. Bounded by
+	// demRunBuffer: the OLDEST records are dropped, which is the right end —
+	// reliability is a question about the recent past.
+	runs []dem.WireRun
 }
 
 // NewDEM builds the Digital Experience runner. It is registered in the pool and
@@ -91,11 +108,12 @@ type demRunner struct {
 // says so (0 targets), which is a different status from "unhealthy".
 func NewDEM() Collector {
 	return &demRunner{
-		timeout: envDuration("DEM_TIMEOUT", demDefaultTimeout),
-		fetch:   fetchDEMWork,
-		checks:  &synthetics{timeout: envDuration("DEM_TIMEOUT", demDefaultTimeout)},
-		status:  Status{Name: "dem", Healthy: true, Kind: "metrics"},
-		lastRun: map[string]time.Time{},
+		timeout:     envDuration("DEM_TIMEOUT", demDefaultTimeout),
+		fetch:       fetchDEMWork,
+		publishRuns: PublishDEMRuns,
+		checks:      &synthetics{timeout: envDuration("DEM_TIMEOUT", demDefaultTimeout)},
+		status:      Status{Name: "dem", Healthy: true, Kind: "metrics"},
+		lastRun:     map[string]time.Time{},
 	}
 }
 
@@ -397,6 +415,7 @@ func (d *demRunner) publish(ctx context.Context, work []dem.WireTarget, outcomes
 
 	var lines []string
 	var events []ProbeEvent
+	var runs []dem.WireRun
 	ran, up := 0, 0
 
 	for _, o := range outcomes {
@@ -442,6 +461,7 @@ func (d *demRunner) publish(ctx context.Context, work []dem.WireTarget, outcomes
 			lines = append(lines, fmt.Sprintf(`%s{%s} %.3f %d`, dem.MetricLatencyBudgetMs, lb, t.LatencyBudgetMs, nowMs))
 		}
 		events = append(events, demEvent(t, o, prober, decl, ts, loss))
+		runs = append(runs, demRun(t, o, prober, now))
 		d.mu.Lock()
 		d.lastRun[t.ID] = now
 		d.mu.Unlock()
@@ -463,6 +483,7 @@ func (d *demRunner) publish(ctx context.Context, work []dem.WireTarget, outcomes
 		emitMetrics(ctx, strings.Join(lines, "\n"))
 	}
 	forwardProbeEvents(ctx, events)
+	d.publishRunRecords(ctx, runs)
 
 	d.mu.Lock()
 	d.status.LastTick = now
@@ -478,6 +499,79 @@ func (d *demRunner) publish(ctx context.Context, work []dem.WireTarget, outcomes
 		d.status.LastError = cycleError(ran, up, "")
 	}
 	d.mu.Unlock()
+}
+
+// publishRunRecords appends this cycle's immutable run records to the rolling
+// buffer and republishes the whole buffer.
+//
+// The WHOLE buffer, not the delta: the channel is a TTL'd key, not a queue, so
+// a republication is how a record stays visible across the api's next drain.
+// The api dedupes by run id, so re-publishing costs nothing but bytes.
+//
+// A failed publication is counted and reported by the shared publish path; it
+// is NEVER fatal to the cycle — the measurements and their series have already
+// been emitted, and losing a reliability sample must not cost a measurement.
+func (d *demRunner) publishRunRecords(ctx context.Context, fresh []dem.WireRun) {
+	d.mu.Lock()
+	if len(fresh) > 0 {
+		d.runs = append(d.runs, fresh...)
+		if len(d.runs) > demRunBuffer {
+			d.runs = append([]dem.WireRun(nil), d.runs[len(d.runs)-demRunBuffer:]...)
+		}
+	}
+	buf := append([]dem.WireRun(nil), d.runs...)
+	d.mu.Unlock()
+	if len(buf) == 0 || d.publishRuns == nil {
+		return
+	}
+	if err := d.publishRuns(ctx, buf); err != nil && ctx.Err() == nil {
+		// §16.1/§10: never swallowed. Without run records every check grades
+		// `unknown`, and an ungraded check is one the incident detector will
+		// not let raise a high-severity incident — a silent loss of severity.
+		log.Printf("dem: the per-run records could not be published; check reliability will read as ungraded: %v", err)
+	}
+}
+
+// demRun shapes one immutable per-RUN record for the reliability grader.
+//
+// It carries an OUTCOME, not a score: `error` means this prober's own machinery
+// failed, and grading that as a target failure is exactly the confusion the
+// reliability model exists to prevent. Today's runner never retries in-tick
+// (the next tick is the retry), so Retries is 0 and honestly so.
+func demRun(t dem.WireTarget, o demOutcome, prober string, now time.Time) dem.WireRun {
+	r := dem.WireRun{
+		ID:         newExecutionID(),
+		Tenant:     t.Tenant,
+		TargetID:   t.ID,
+		Kind:       t.Kind,
+		Vantage:    prober,
+		StartedAt:  now,
+		EndedAt:    now,
+		Outcome:    dem.RunFailure,
+		FailReason: o.res.failClass,
+		DurationMs: o.res.totalMs,
+		TTFBMs:     o.res.ttfbMs,
+		StatusCode: o.res.statusCode,
+	}
+	switch {
+	case o.res.up:
+		r.Outcome, r.FailReason = dem.RunSuccess, ""
+	case o.res.failClass == "unknown":
+		// The check function itself could not produce a verdict (a panic caught
+		// by safego, or an unreachable kind). That is a RUNNER fault.
+		r.Outcome = dem.RunError
+	case o.res.failClass == "" && o.res.statusCode > 0:
+		// The request completed and the SERVER answered something the operator
+		// did not want. The transport classes leave failClass empty for that
+		// case; naming it here keeps "the service answered 500" separable from
+		// "we never reached the service", which is the difference between an
+		// application fault and a path fault.
+		r.FailReason = "status"
+	}
+	if r.DurationMs == 0 && o.res.rttMs > 0 {
+		r.DurationMs = o.res.rttMs
+	}
+	return r
 }
 
 // demLabels renders the series labels. Every value is %q-quoted, so no label

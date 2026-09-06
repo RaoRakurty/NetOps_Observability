@@ -223,6 +223,12 @@ type server struct {
 	demAPI       *dem.API
 	demMetrics   *dem.Metrics
 	demProjector *dem.Projector
+	// demRuns holds the prober's immutable per-RUN records (tracker 253) and
+	// demRunIntake drains them. Bounded, in-memory, tenant-keyed: reliability
+	// is graded over a short recent window, and a restarted api grades
+	// `unknown` until the rings refill rather than grading from stale history.
+	demRuns      *dem.RunStore
+	demRunIntake *dem.RunIntake
 	// The causality layer above the catalogue (internal/dem/experience):
 	// journeys, changes, evidence, hypotheses, derived experience incidents and
 	// the published score. Built unconditionally for the same reason the
@@ -1273,6 +1279,7 @@ func newServer() *server {
 	// never silently dormant, because a nil API answers 404 and a 404 on the
 	// experience page is indistinguishable from "nothing is wrong".
 	srv.demMetrics = dem.NewMetrics()
+	srv.demRuns = dem.NewRunStore()
 	srv.demTargets = newDEMStore()
 	if api, err := srv.buildDEMAPI(srv.demTargets); err != nil {
 		logError("dem", "the Digital Experience routes could not be wired — they will answer 404 and no experience score will be served", errf(err))
@@ -1293,6 +1300,13 @@ func newServer() *server {
 			logError("dem", "the experience work-queue projector could not be built — the prober will receive NO targets and measure nothing", errf(err))
 		} else {
 			srv.demProjector = pr
+		}
+		if ri, err := dem.NewRunIntake(demRunFetcher{}, srv.demRuns,
+			dem.DefaultRunIntakeInterval, srv.demMetrics,
+			func(m string, f map[string]any) { logWarn("dem", m, f) }); err != nil {
+			logError("dem", "the experience run-record intake could not be built — every check will grade as ungraded and no experience incident will reach a high severity", errf(err))
+		} else {
+			srv.demRunIntake = ri
 		}
 	}
 	// DEM-END
@@ -2370,6 +2384,12 @@ func Run() {
 	// list rather than measuring deleted targets forever.
 	if srv.demProjector != nil {
 		workers.start("dem-target-projector", func() { srv.demProjector.Run(ctx) })
+	}
+	// …and drain the run records the prober publishes back on the same channel
+	// (tracker 253). Without this every check grades `unknown`, and an ungraded
+	// check can never raise a high-severity experience incident.
+	if srv.demRunIntake != nil {
+		workers.start("dem-run-intake", func() { srv.demRunIntake.Run(ctx) })
 	}
 	// DEM-END
 	// SNAPSHOT-RESTORABILITY-END

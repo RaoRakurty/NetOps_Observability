@@ -383,6 +383,53 @@ func (demPublisher) Publish(ctx context.Context, targets []dem.WireTarget, ttlSe
 	return collectors.PublishDEMTargets(ctx, targets, ttlSec)
 }
 
+// demRunFetcher is the OPPOSITE direction on the same channel (tracker 253):
+// the prober's immutable per-run records, drained by the api into the bounded
+// run store the reliability grade is computed from.
+type demRunFetcher struct{}
+
+func (demRunFetcher) FetchRuns(ctx context.Context) ([]dem.WireRun, error) {
+	return collectors.FetchDEMRuns(ctx)
+}
+
+// demRunSource adapts the run store onto the experience module's RunSource seam.
+//
+// The conversion is where the WIRE record (what a prober can honestly say)
+// becomes the DOMAIN record (what the grader reads). Fields the prober cannot
+// fill — journey/step bindings, artifacts, session refs, selector stability —
+// are deliberately left empty rather than invented: a run record that claimed a
+// browser artifact nobody captured would be a lie the grader could not detect.
+type demRunSource struct{ store *dem.RunStore }
+
+func (s demRunSource) Runs(_ context.Context, tenant string) (map[string][]experience.SyntheticRun, error) {
+	out := map[string][]experience.SyntheticRun{}
+	if s.store == nil {
+		return out, nil
+	}
+	// The store's read is tenant-keyed and refuses "" / "*", so a scopeless
+	// caller gets an empty map here rather than the fleet's runs (§3a).
+	for defID, ring := range s.store.RunsForTenant(tenant) {
+		list := make([]experience.SyntheticRun, 0, len(ring))
+		for _, r := range ring {
+			list = append(list, experience.SyntheticRun{
+				ID: r.ID, TenantID: r.Tenant, DefinitionID: r.TargetID, DefinitionVersion: 1,
+				VantageID: r.Vantage, StartedAt: r.StartedAt, EndedAt: r.EndedAt,
+				Outcome: r.Outcome, FailReason: r.FailReason,
+				DurationMs: r.DurationMs, TTFBMs: r.TTFBMs, StatusCode: r.StatusCode,
+				Retries: r.Retries, RunnerVersion: r.RunnerVersion,
+				Provenance: experience.Provenance{
+					Source: experience.SourceSynthetic, SourceObject: r.TargetID,
+					Producer: r.Vantage, EventAt: r.StartedAt, ObservedAt: r.StartedAt,
+					Observation: experience.ObservationObserved,
+					DataClass:   experience.DataClassCustomerMetadata,
+				},
+			})
+		}
+		out[defID] = list
+	}
+	return out, nil
+}
+
 // The three DEM route entry points. They resolve s.demAPI at REQUEST time (a
 // bound method value would capture a nil surface at registration time), and the
 // module's handlers nil-check their receiver, so an unbuilt surface answers 404
@@ -484,7 +531,12 @@ func (s *server) buildExperienceAPI(store experience.Store, cat dem.Catalogue) (
 		// verdict instead of stopping at suspected. Wired unconditionally —
 		// with ClickHouse unreachable the source reports misconfigured with its
 		// reason, which is what an operator needs to see.
-		Flows:   demFlowQuerier{s: s},
+		Flows: demFlowQuerier{s: s},
+		// The per-run record lane (tracker 253). Wired unconditionally: with no
+		// prober publishing, the store is simply empty and every check grades
+		// ungraded — which the coverage surface states, rather than calling an
+		// ungraded check trustworthy.
+		Runs:    demRunSource{store: s.demRuns},
 		Policy:  experienceScorePolicy(),
 		Enabled: envBool(dem.EnvFeatureFlag),
 		// The AI investigator needs BOTH the platform copilot and its own

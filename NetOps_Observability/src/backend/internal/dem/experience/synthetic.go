@@ -20,6 +20,7 @@ package experience
 // about the capability.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -395,10 +396,15 @@ func BuildCoverage(window string, journeys []JourneyDefinition,
 				if len(d.Vantages) == 0 {
 					vantages["default"] = true
 				}
+				// An UNGRADED check counts as `unknown`, never as `solid`.
+				// The map is keyed by definition id and a definition with no
+				// run history is simply absent from it; folding that absence
+				// into the best possible grade is exactly the "a check nobody
+				// graded is a check that passed" lie this model exists to
+				// refuse (tracker 253).
+				grade := ReliabilityUnknown
 				if r, ok := reliability[d.ID]; ok {
-					if reliabilityRank(r.Grade) > reliabilityRank(worst) {
-						worst = r.Grade
-					}
+					grade = r.Grade
 					if r.Trustworthy() {
 						anyTrustworthy = true
 					}
@@ -408,6 +414,9 @@ func BuildCoverage(window string, journeys []JourneyDefinition,
 					if r.Grade == ReliabilityBroken {
 						rep.Broken++
 					}
+				}
+				if reliabilityRank(grade) > reliabilityRank(worst) {
+					worst = grade
 				}
 				if ts, ok := lastSuccess[d.ID]; ok {
 					if a.LastSuccess == nil || ts.After(*a.LastSuccess) {
@@ -498,4 +507,60 @@ func coverageRank(s string) int {
 	default:
 		return 0
 	}
+}
+
+// ── the run source seam and the fleet grade (tracker 253) ───────────────────
+
+// RunSource supplies the immutable per-RUN records a reliability grade is
+// computed from. It is a SEAM, not a store: this package never learns where the
+// runs came from (a prober's key-value channel today, a browser runner's
+// results tomorrow), only that they arrive already scoped to one tenant.
+//
+// nil is a legal wiring and is HONEST: with no run source every check grades
+// `unknown` and the coverage surface says why, rather than calling an ungraded
+// check trustworthy.
+type RunSource interface {
+	// Runs returns ONE tenant's recent runs keyed by definition id, oldest
+	// first. There is no cross-tenant read on this seam at all (§3a rule 4):
+	// a caller with no concrete tenant gets nothing, never everything.
+	Runs(ctx context.Context, tenant string) (map[string][]SyntheticRun, error)
+}
+
+// GradeAll grades every definition that has runs. PURE.
+//
+// A definition with an EMPTY history is left out of the result entirely rather
+// than mapped to an `unknown` grade — see the note at its only caller: absent
+// and untrustworthy are treated identically by everything downstream, and
+// absent is the shape that cannot be misread as "we looked and found nothing
+// wrong".
+func GradeAll(runs map[string][]SyntheticRun) map[string]SyntheticReliability {
+	out := make(map[string]SyntheticReliability, len(runs))
+	for defID, list := range runs {
+		if len(list) == 0 {
+			continue
+		}
+		out[defID] = GradeReliability(defID, list)
+	}
+	return out
+}
+
+// CoverageReliabilityNote is the sentence the coverage surface prints about the
+// grades it is showing. It is derived from the SAME facts the grades are, so
+// the note cannot claim a state the numbers contradict.
+func CoverageReliabilityNote(configured bool, graded, ungraded int, err error) string {
+	switch {
+	case err != nil:
+		return "Per-check reliability could not be read, so every check below is ungraded. An ungraded check is not a check that passed."
+	case !configured:
+		return "No source of per-run records is wired, so every check below is ungraded. An ungraded check is not a check that passed."
+	case graded == 0 && ungraded == 0:
+		return "No check is declared, so there is nothing to grade."
+	case graded == 0:
+		return "No check has recorded enough runs to be graded yet (" +
+			plural(MinRunsForReliability, "run is", "runs are") + " needed). An ungraded check is not a check that passed."
+	case ungraded > 0:
+		return plural(graded, "check is", "checks are") + " graded from their run history; " +
+			plural(ungraded, "is", "are") + " still ungraded. An ungraded check is not a check that passed."
+	}
+	return plural(graded, "check is", "checks are") + " graded from their own run history."
 }

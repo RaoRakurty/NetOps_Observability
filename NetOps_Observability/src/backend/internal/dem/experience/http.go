@@ -76,6 +76,12 @@ type Deps struct {
 	// which is a different sentence from "the wire saw nothing", and
 	// `can_confirm` stays false with that reason attached.
 	Flows FlowQuerier
+	// Runs supplies the immutable per-RUN synthetic records the reliability
+	// grade is computed from (tracker 253). nil is legal and HONEST: every
+	// check then grades `unknown`, the coverage surface says a run source is
+	// not wired, and the incident detector keeps refusing to raise a
+	// high-severity incident on an ungraded check.
+	Runs RunSource
 	// Policy is the versioned score policy. Required.
 	Policy ScorePolicy
 	// Enabled reports whether experience collection is on.
@@ -219,6 +225,24 @@ func (a *API) assemble(r *http.Request, tenant, window string) (Assembly, error)
 		} else {
 			in.FlowsAvailable = true
 			in.Flows = stats
+		}
+	}
+
+	// The per-run record lane (tracker 253). Wired or not, the fact is carried
+	// into the assembly so the coverage surface can tell "nobody is collecting
+	// runs" apart from "this check has not run often enough yet".
+	in.RunsConfigured = a.deps.Runs != nil
+	if a.deps.Runs != nil {
+		runs, rerr := a.deps.Runs.Runs(r.Context(), tenant)
+		if rerr != nil {
+			// §10: reported, never swallowed. Unread runs mean ungraded checks,
+			// and an ungraded check silently loses an incident a severity band.
+			a.deps.Counters.QueryErrors.Add(1)
+			a.deps.LogWarn("the synthetic run history could not be read — every check will grade as ungraded",
+				map[string]any{"err": rerr.Error(), "window": label})
+			in.RunError = rerr
+		} else {
+			in.Runs = runs
 		}
 	}
 
@@ -968,10 +992,26 @@ func (a *API) HandleCoverage(w http.ResponseWriter, r *http.Request) {
 			lastSuccess[res.Subject] = res.LastProbe.UTC()
 		}
 	}
-	rep := BuildCoverage(asm.Window, asm.Bundle.Journeys, defs, map[string]SyntheticReliability{}, lastSuccess)
+	// Reliability comes from the SAME grades the incident detector's severity
+	// cap consults (asm.Reliability), so the coverage screen can never call a
+	// check trustworthy that the detector is refusing to trust.
+	graded, ungraded := 0, 0
+	for _, list := range defs {
+		for _, d := range list {
+			if _, ok := asm.Reliability[d.ID]; ok {
+				graded++
+			} else {
+				ungraded++
+			}
+		}
+	}
+	rep := BuildCoverage(asm.Window, asm.Bundle.Journeys, defs, asm.Reliability, lastSuccess)
 	a.deps.WriteJSON(w, http.StatusOK, map[string]any{
 		"window": asm.Window, "coverage": rep,
-		"reliability_note": "Per-check reliability needs per-RUN records; the prober publishes aggregate series today, so every check's reliability reads as unknown rather than as trustworthy. A check nobody has graded is not a check that passed.",
+		"runs_configured":  asm.RunsConfigured,
+		"graded_checks":    graded,
+		"ungraded_checks":  ungraded,
+		"reliability_note": CoverageReliabilityNote(asm.RunsConfigured, graded, ungraded, asm.RunError),
 	})
 }
 

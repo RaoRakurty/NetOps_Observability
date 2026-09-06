@@ -573,3 +573,102 @@ func FetchDEMTargets(ctx context.Context) ([]dem.WireTarget, error) {
 	}
 	return out, nil
 }
+
+// ── DEM per-run records (tracker 253) ────────────────────────────────────────
+//
+// The work queue flows api → prober on netops:dem:targets. Run records flow the
+// OTHER way on these keys, and they use the PER-VANTAGE pattern the probe paths
+// already use rather than one shared key: two probers measuring the same target
+// are two distinct vantages whose runs must both survive, and a single key would
+// let whichever wrote last erase the other's evidence — the exact defect
+// probePathsKey was split to fix.
+//
+// TTL, not a queue: a prober that loses the api stops contributing runs instead
+// of accumulating them, and the api's ring ages out on its own. That is why an
+// absent key is an empty batch and never an error.
+const (
+	demRunsPrefix     = "netops:dem:runs:"
+	demRunVantagesKey = "netops:dem:run-vantages"
+	// demRunsTTL is ~4 drains at the default 30 s intake, so one missed drain
+	// never loses a run and a dead prober's records disappear within minutes.
+	demRunsTTL = 120
+)
+
+func demRunsKeyFor(vantage string) string {
+	if vantage == "" {
+		vantage = ProberID()
+	}
+	return demRunsPrefix + vantage
+}
+
+// PublishDEMRuns writes this prober's recent run records. No-op when the
+// key-value channel isn't configured — the api then grades nothing and SAYS so,
+// which is the honest state, rather than reading runs from an unknown source.
+func PublishDEMRuns(ctx context.Context, runs []dem.WireRun) error {
+	if RedisAddr() == "" {
+		return nil
+	}
+	body, err := json.Marshal(runs)
+	if err != nil {
+		return err
+	}
+	if err := redisSetEX(ctx, demRunsKeyFor(ProberID()), string(body), demRunsTTL); err != nil {
+		return err
+	}
+	return redisRegisterDEMRunVantage(ctx, ProberID())
+}
+
+// redisRegisterDEMRunVantage records that this prober publishes runs, so the api
+// enumerates vantages without a keyspace scan (no KEYS in production). The set's
+// own TTL is far longer than the per-key one: a vantage that stops publishing
+// simply has no runs to read, and eventually drops out of the set too.
+func redisRegisterDEMRunVantage(ctx context.Context, vantage string) error {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if _, err := redisCmd(c, "SADD", demRunVantagesKey, vantage); err != nil {
+		return err
+	}
+	_, err = redisCmd(c, "EXPIRE", demRunVantagesKey, strconv.Itoa(demRunsTTL*12))
+	return err
+}
+
+// FetchDEMRuns merges the run records published by EVERY vantage. An absent key
+// is an empty batch (a prober may simply not have published yet); a MALFORMED
+// payload for one vantage costs that vantage's batch and is reported, never the
+// whole drain — one broken prober must not blind the api to every other one.
+func FetchDEMRuns(ctx context.Context) ([]dem.WireRun, error) {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	vantages, err := redisMembers(c, demRunVantagesKey)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dem.WireRun, 0, 64)
+	var bad []string
+	for _, v := range vantages {
+		raw, gerr := redisCmd(c, "GET", demRunsKeyFor(v))
+		if gerr != nil || raw == "" {
+			continue // an expired vantage key is not an error
+		}
+		var batch []dem.WireRun
+		if jerr := json.Unmarshal([]byte(raw), &batch); jerr != nil {
+			bad = append(bad, v)
+			continue
+		}
+		out = append(out, batch...)
+		if len(out) >= dem.MaxRunsPerIntake {
+			out = out[:dem.MaxRunsPerIntake]
+			break
+		}
+	}
+	if len(bad) > 0 {
+		return out, fmt.Errorf("dem runs: %d vantage batch(es) were unreadable (%s)", len(bad), strings.Join(bad, ","))
+	}
+	return out, nil
+}

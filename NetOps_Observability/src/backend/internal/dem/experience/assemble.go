@@ -66,6 +66,20 @@ type AssembleInput struct {
 	// the denominator of flow coverage, present even when nothing was seen.
 	FlowSubjects []FlowSubject
 	Flows        []FlowStats
+
+	// ── per-RUN synthetic records (tracker 253) ──
+	// RunsConfigured reports whether a run source is WIRED at all. It is a
+	// different fact from "no run has been recorded yet", and the coverage
+	// surface says which of the two happened: an ungraded check because nobody
+	// is collecting runs is a wiring problem, an ungraded check because the
+	// prober has run it three times is patience.
+	RunsConfigured bool
+	RunError       error
+	// Runs is the recent immutable run history per DEFINITION (= catalogue
+	// target) id, oldest first. It is what turns `unknown` reliability into a
+	// real grade, which is what lets the incident detector's flaky-check rule
+	// actually bite.
+	Runs map[string][]SyntheticRun
 }
 
 // Assembly is everything the API's surfaces render.
@@ -79,8 +93,18 @@ type Assembly struct {
 	Results       []dem.Result
 	JourneyHealth []JourneyHealth
 	DataHealth    DataHealth
-	Score         ExperienceScore
-	Incidents     []ExperienceIncident
+	// Reliability is the per-definition grade computed from the run history,
+	// keyed by definition (= catalogue target) id. Shared by the incident
+	// detector's severity cap and the coverage surface, so the two can never
+	// disagree about whether a check can be trusted.
+	Reliability map[string]SyntheticReliability
+	// RunsConfigured / RunError carry the run lane's own honesty into every
+	// surface: "no run source is wired" and "the run source did not answer"
+	// are different sentences, and neither of them is "this check is fine".
+	RunsConfigured bool
+	RunError       error
+	Score          ExperienceScore
+	Incidents      []ExperienceIncident
 	// Measured / Reason / Detail are the whole-view honesty flags, mirroring
 	// internal/dem's ExperienceResponse so both surfaces agree on the sentence.
 	Measured bool
@@ -130,11 +154,20 @@ func Assemble(in AssembleInput, policy ScorePolicy) Assembly {
 	// it stamped that way to scope an incident to one journey.
 	evidence = append(evidence, journeyEvidence(in, a.JourneyHealth, targetByID)...)
 
+	// Reliability grades. A definition with NO runs is deliberately absent from
+	// the map rather than present as `unknown`: severityFor treats a missing
+	// entry and an untrustworthy one identically (both refuse to raise a
+	// high-severity incident), and an absent key is the honest shape for "we
+	// have not graded this", where a present-but-unknown row invites a reader
+	// to think a grade was computed.
+	a.Reliability = GradeAll(in.Runs)
+	a.RunsConfigured, a.RunError = in.RunsConfigured, in.RunError
+
 	a.Bundle = Bundle{
 		TenantID: in.TenantID, Window: win, Now: in.Now.UTC(),
 		Journeys: in.Journeys, JourneyHealth: a.JourneyHealth,
 		Evidence: evidence, Missing: health.MissingFrom(), Changes: in.Changes,
-		Reliability: map[string]SyntheticReliability{},
+		Reliability: a.Reliability,
 	}
 	a.Incidents = Detect(a.Bundle)
 	a.Score = tenantScore(in, policy, a.JourneyHealth, resultByID)

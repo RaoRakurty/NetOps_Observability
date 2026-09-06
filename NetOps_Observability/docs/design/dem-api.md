@@ -417,17 +417,30 @@ Query: `window`.
     "coverage_pct": 66.67,
     "detail": "2 actions are protected out of 3 declared actions."
   },
-  "reliability_note": "Per-check reliability needs per-RUN records; the prober publishes aggregate series today, so every check's reliability reads as unknown rather than as trustworthy. A check nobody has graded is not a check that passed."
+  "runs_configured": true,
+  "graded_checks": 2,
+  "ungraded_checks": 1,
+  "reliability_note": "2 checks are graded from their run history; 1 is still ungraded. An ungraded check is not a check that passed."
 }
 ```
 
-Two honest shapes matter here:
+Three honest shapes matter here:
 
 - **`coverage_pct` is absent when nothing is declared**, and `detail` reads
   "No journey step is declared, so there is nothing to have coverage of. This is
   not 100% coverage."
-- **Every `reliability_grade` is `unknown` today**, and `reliability_note` says
-  why in the response body rather than in a footnote somewhere else.
+- **`reliability_grade` is real** (tracker 253): the prober publishes one
+  immutable `WireRun` per check on the same key-value channel that carries its
+  work queue, the api drains them into a bounded per-definition ring, and
+  `GradeReliability` folds the ring into `solid` / `noisy` / `flaky` / `broken`.
+  These are the SAME grades `severityFor` consults, so the screen can never call
+  a check trustworthy that the incident detector is refusing to trust.
+- **An UNGRADED check reads `unknown`, never `solid`.** A definition with no run
+  history is absent from the grade map, and absence is rendered as unknown.
+  `runs_configured` / `graded_checks` / `ungraded_checks` say which of the three
+  reasons applies — no run source wired, the source did not answer, or fewer
+  than `MinRunsForReliability` (10) runs recorded — and `reliability_note` says
+  it in a sentence in the response body rather than in a footnote elsewhere.
 
 The definitions are built from the catalogue: each journey step's bound target
 becomes one `SyntheticDefinition` with the vantage `prober@<site>`. There is no
@@ -622,7 +635,7 @@ oversight.
 | `GET /api/dem/journeys/{id}/observations` | `JourneyObservation` is a contract only. A per-traversal record needs either per-run synthetic records (`SyntheticRun`, which nothing writes) or first-party RUM. `ComputeJourneyHealth` gives real, honest journey health today from the bound targets' measured windows; a traversal list would have to be fabricated. (Assessment §3 G6.) |
 | `POST /api/dem/events` | The RUM ingest lane. Wiring it end to end needs a Kafka topic, a Vector route, a ClickHouse table in **two** places and a row policy — and no producer exists. Phase P is explicit that infrastructure is added when there is a requirement, not before. The shapes, their validation, the pseudonymous-user discipline and the `EventSink` seam ship now so the lane can be added without changing them. (Assessment §6.2; the exact cost is in [`dem-architecture.md`](dem-architecture.md) §5.3.) |
 | `POST /api/dem/business-events` | Same lane, same reason. `BusinessEvent` is validated and ready; nothing emits one. |
-| `POST /api/dem/synthetic-runs` | `SyntheticRun` needs a runner that records per-run outcomes. The prober publishes aggregate series. Accepting runs from an unauthenticated or unmodelled producer would let a caller manufacture the reliability grade that gates incident severity. (Assessment §3 G6.) |
+| `POST /api/dem/synthetic-runs` | Still not built, and now for a better reason: per-run records EXIST (tracker 253) but they arrive from the prober over the internal key-value channel, which no external caller can reach. An HTTP ingest route would let an authenticated tenant manufacture the reliability grade that gates incident severity — the grade must be a measurement, never a claim. |
 | `POST /api/dem/ai/investigate` | The owner's own instruction is that this route is added **only after the evidence contract exists**. It now does, and `BuildPacket` / `ValidateInvestigation` are the two halves of the contract on either side of the provider call — but the provider call itself lives in `ai/*` and was not built in this slice. (Assessment §3 G7.) |
 | `GET /api/dem/synthetics` (the bare list) | The catalogue already serves it as `GET /api/dem/targets`. A second list route over the same rows would be two names for one thing, and the coverage model — not a list of tests — is what Phase H actually asks for. |
 
