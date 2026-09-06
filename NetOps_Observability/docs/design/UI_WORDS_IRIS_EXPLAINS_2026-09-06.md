@@ -70,3 +70,24 @@ ui:check drift list). Runs in `frontend-ci`.
 Each sweep: apply the budgets, move explanations into `skills/explain/`, add
 `AskIris` where a definition was removed, update tests, keep `copyVoice` and
 `ui:check` clean. Done = the page renders under budget with no allowlist entry.
+
+## Vendor observation — what sweep 1 actually matched (2026-09-06)
+
+Written from working knowledge of these consoles, not from a fetch.
+
+- **Datadog** — a tile is a number, a two-to-three-word name and nothing else;
+  the definition sits behind a hover `(i)`. Matched: KPI captions deleted, one
+  `AskIris topic=` per tile that had one.
+- **Kentik** — status words are outcomes ("Healthy", "Degraded"), never a
+  metric restated in a sentence, and a caveat is stated once per view rather
+  than per row. Matched: the repeated Command Center summary sentence removed;
+  the DEM honesty caveats cut to one short line each.
+- **ThousandEyes** — a path shows one status word per hop and puts the protocol
+  vocabulary in the tooltip. Matched: chips are `Watch` / `Critical 0` /
+  `Blocked 83`, with the NOC term ("NOC pressure", "RCA blocked on missing
+  evidence") moved into `title=`.
+- **Meraki** — sentence case everywhere, never SHOUTED state, and column
+  headers of one or two words. Matched: `.cc-badge` uppercase dropped on swept
+  boards, headers cut ("Incident / correlation group" → "Incident").
+- **All four** — none explains a protocol on the page. That is the rule the
+  `skills/explain/` corpus now carries instead.
