@@ -42,14 +42,17 @@ misconfigurations:
   - id: DS-0002
     paths:
       - "NetOps_Observability/scripts/lab/twin/docker/Dockerfile"
-vulnerabilities:
-  # GHSA-5c6j-r48x-rmvq — serialize-javascript RCE via RegExp.flags/toISOString.
-  # Transitive dev-dependency of the DOCS PORTAL's Docusaurus/webpack build chain
-  # (copy-webpack-plugin / css-minimizer-webpack-plugin). It runs only at docs
-  # BUILD time on our own trusted markdown — never in the product runtime or on
-  # user input. The fixed major (v7) requires Node ≥20 and breaks the Docusaurus
-  # chain on the supported Node 18 toolchain; revisit when the docs toolchain
-  # moves to Node 20+.
-  - id: GHSA-5c6j-r48x-rmvq
-    paths:
-      - "NetOps_Observability/docs-portal/package-lock.json"
+# vulnerabilities: (none)
+#
+# GHSA-5c6j-r48x-rmvq — serialize-javascript RCE — was excepted here from
+# 2026-08 until 2026-09-06 on the grounds that "the fixed major (v7) requires
+# Node ≥20 and breaks the Docusaurus chain on the supported Node 18 toolchain".
+# That premise expired: the docs portal builds on Node 20 in CI and Node 22 on
+# the lab host, so tracker 123 pinned `serialize-javascript` to 7.1.1 through a
+# package.json `overrides` entry and the portal builds clean. The advisory is
+# FIXED, not deferred, so the exception is deleted rather than re-justified — an
+# ignore that outlives its reason silently suppresses a real finding the day the
+# dependency regresses. The residue that could NOT be fixed is written up in
+# docs/security/DOCS_PORTAL_ADVISORY_TRIAGE_2026-09-06.md; none of it is
+# Trivy-visible under `ignore-unfixed: true` (no fix exists upstream), so none of
+# it belongs here either.
