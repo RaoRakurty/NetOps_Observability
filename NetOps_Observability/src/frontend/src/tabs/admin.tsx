@@ -1881,7 +1881,7 @@ export const SCOPE_OPTIONS: ScopeOption[] = [
   { id: "write:alerts", kind: "write", what: "Create, edit and toggle alert rules." },
   { id: "write:devices", kind: "write", what: "Add, edit, monitor and scan devices." },
   { id: "write:*", kind: "write", what: "Operator authority: every write above." },
-  { id: "ingest:cloud", kind: "service", what: "Cloud-ingest poller service credential (platform realm only)." },
+  { id: "ingest:cloud", kind: "service", what: "Service credential for collecting cloud telemetry (platform realm only)." },
   { id: "admin:*", kind: "admin", what: "Administer the tenant: tenants, users, devices, rules, scans." },
 ];
 
