@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Correlations promoted badge/filter logic (#113) — the candidates page keeps
 // showing EVERYTHING (don't-hide); the library set only decorates rows and
 // powers an optional client-side narrowing. Pure-function tests: membership is

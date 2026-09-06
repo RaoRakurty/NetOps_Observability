@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // EvidencePanel — lists the evidence behind a node or edge. Enforces the
 // "every link explainable / missing evidence explicit" rule (PDF §3, rule 6):
 // every row shows its source, summary, confidence and observation time, and we

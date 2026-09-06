@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // NetworkPathView — the DEDICATED source→destination path view (#77 design doc:
 // "NetworkPathView (L→R src→dst)"). Where the generic TopologyCanvas drops the
 // operator into the FULL topology with the path merely highlighted (noisy), this

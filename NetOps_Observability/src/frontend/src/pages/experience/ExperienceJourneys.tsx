@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExperienceJourneys.tsx — the Journeys tab.
 //
 // A journey is the only thing on this surface a person declares by hand, and it

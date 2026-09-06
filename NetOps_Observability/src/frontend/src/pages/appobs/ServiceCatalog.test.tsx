@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ServiceCatalog.test.tsx — the catalog CRUD surface: renders ONLY what the
 // tenant-scoped API returns, creates/edits through the real endpoints with the
 // client-side bounds mirror, deletes only after a confirm that discloses the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaPathCausality.test.tsx — the path-first RCA render (design §5/§5a, reworked
 // per the owner directive 2026-07-18). Asserts: ONE clean left-to-right chain of
 // small nodes; the attributed cause is the RED hero ("Break here" / "Possible

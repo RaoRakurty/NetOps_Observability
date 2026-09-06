@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // PathTraceWorkflow — Phase 1 (implemented).
 //
 // Follows a traced A→B path. Opens on the path topology and pre-spotlights the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TenantGate contract (owner 2026-07-21 — "cross-tenant reach is not
 // cross-tenant display"):
 //  · a single-tenant principal is NEVER gated (they are already one tenant)

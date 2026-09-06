@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DataTable.test.tsx — the shared table primitive powers the Cloud Service View
 // UX fixes (2026-07): every data column is click-to-sort with a visible arrow
 // (defect #2), the column-resize handle now renders a VISIBLE, focusable grip

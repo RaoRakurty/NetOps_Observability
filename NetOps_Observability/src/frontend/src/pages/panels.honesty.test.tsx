@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // panels.honesty.test.tsx — the registry panels must never report an API FAILURE
 // as GOOD NEWS. The class of defect: `catch {}` turned a rejected fetch into an
 // empty array, which rendered as "All clear — no active alerts." and as five

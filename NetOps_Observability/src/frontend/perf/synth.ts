@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // perf/synth.ts — synthetic high-EPS payload generators for the render budget.
 //
 // These build the SHAPES the real endpoints return, at the volumes a busy

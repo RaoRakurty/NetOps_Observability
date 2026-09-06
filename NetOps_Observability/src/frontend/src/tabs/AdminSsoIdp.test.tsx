@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // AdminSsoIdp — the group→role mapping table (ordering is the contract: the
 // backend applies rows first-match-wins, so the UI must preserve and expose
 // order), the pinned amber default-role row, the SP-value derivation, and the

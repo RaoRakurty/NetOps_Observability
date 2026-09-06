@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaCaseHeader.test.tsx — the RCA "six-question" case header, lifted out of
 // RcaWorkspace so the Troubleshooting investigation surface can show the SAME
 // verdict for the same object instead of growing a second vocabulary.

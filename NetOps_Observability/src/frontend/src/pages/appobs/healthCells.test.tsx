@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // healthCells.test.tsx — the owner's finding: a CRITICAL Azure
 // cloud_resource_health "down" row rendered EMPTY metric / baseline / current.
 //

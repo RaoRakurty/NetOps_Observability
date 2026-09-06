@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TicketDelivery.test.tsx — the ITSM delivery outbox + audit trail.
 //
 // What has to hold: the controls call the routes they claim to, a failed read

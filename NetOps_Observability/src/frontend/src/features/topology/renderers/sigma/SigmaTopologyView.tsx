@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SigmaTopologyView — the Phase 4 enterprise-overview renderer (WebGL via
 // Sigma.js). Mounts a deterministically laid-out graphology graph onto a GPU
 // canvas so a graph too large for React Flow (hundreds–thousands of nodes) stays

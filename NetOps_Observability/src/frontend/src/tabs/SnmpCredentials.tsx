@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SNMP Credentials — manage v1/v2c community strings and full SNMPv3 USM
 // profiles, assignable to devices via their credential_ref. Secrets are
 // write-only (sent on save, never returned). Backed by /api/snmp/credentials.

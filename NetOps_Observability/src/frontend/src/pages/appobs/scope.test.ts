@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // scope.test.ts — how the global scope filters apply per surface (Wave 2 #5).
 //
 // Acceptance: OR within a dimension, AND across; filters only ever NARROW the

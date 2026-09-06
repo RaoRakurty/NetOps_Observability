@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // bgpAlerts.model.ts — the PURE model behind the Prefixes, Peers and Bogons
 // views. No React, no fetch: everything here is a function of the wire shape,
 // which is why it is the part that carries the tests.

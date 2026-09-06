@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CloudResourceNode.test.tsx — the cloud resource card wears the ORIGINAL
 // provider-tagged cloud glyph (licence audit D5, 2026-09-04: the providers'
 // official trademark icons were removed, so the card no longer renders an

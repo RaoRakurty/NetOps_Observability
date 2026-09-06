@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyHealth.ts — the single source of truth for how health, confidence,
 // status and source map to visual treatment. Nodes, edges, legend, drawer and
 // overlays import from here so the design system stays consistent.

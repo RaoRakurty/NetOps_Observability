@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SloCard — target vs actual vs budget remaining for one app (Wave 5 #14
 // slice 2). Actuals are MEASURED from the provider status-check lane; an SLO
 // whose data is absent says "not measurable" with the exact reason — never a

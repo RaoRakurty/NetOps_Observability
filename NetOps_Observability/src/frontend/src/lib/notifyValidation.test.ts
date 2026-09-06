@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Unit cover for the client-side mirrors of the API's channel validators.
 // These exist to keep the two implementations in step: each case here is a case
 // the Go validator (src/backend/notify/channel_config.go) also rejects/accepts,

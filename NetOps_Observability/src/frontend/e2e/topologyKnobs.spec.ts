@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Topology canvas KNOBS verification — every toolbar control must produce a
 // VISIBLE, design-matching change (the "Exec vs Operator showed the same" + greyed
 // dead-tab defects). Backend mocked with a fixture that has metrics + a trouble node

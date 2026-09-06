@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ServiceMap.tsx — the OBSERVED cloud service dependency canvas (Wave 3 #9
 // carried, tracker #110). Renders GET /api/cloud/service-map: volume-weighted
 // talks_to edges from cloud flow-pair telemetry, REJECT evidence as a distinct

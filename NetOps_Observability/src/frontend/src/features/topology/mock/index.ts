@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // index.ts — barrel re-export of the mock TopologyView datasets.
 //
 // These are fixtures for building & demoing the topology renderers against the

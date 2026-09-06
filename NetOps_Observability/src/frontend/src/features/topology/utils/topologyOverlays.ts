@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyOverlays.ts — overlay catalogue + availability derivation. An overlay is
 // descriptive metadata (PDF §16); the overlay renderer turns graph attributes into
 // visual state WITHOUT mutating the domain graph. Here we only describe overlays and

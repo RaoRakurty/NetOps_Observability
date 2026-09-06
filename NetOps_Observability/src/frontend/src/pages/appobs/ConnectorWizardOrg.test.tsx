@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ConnectorWizardOrg.test.tsx — Wave 5 #17 slice 2: the "Organization
 // (multi-account)" wizard mode. Asserts the toggle renders from the provider
 // descriptor's orgScopes, the org anchor POST carries type/ref/role_template

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaTicketCard.test.tsx — the live external-ticket card (#78): honest empty
 // state (no ticket), an open ticket's number → deep link, the Create vs Sync
 // action by state, and the permission gate (no buttons without write).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Event-timeline episode model for the Cloud Service View (2026-07 UX pass).
 //
 // The raw health + change feeds arrive as one row PER observation, so a resource

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ReliabilityScorecard.test.tsx — the NOC Recovery Scorecard: readiness badge,
 // evidence-coverage strip, NOC labels, muted unavailable recovery/closure cards,
 // "No valid sample" (not 0 ms), object-aware actions, and an honest summary that

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // signalPage — pure helpers for the Wave 3 #10 scale-out of the cloud signal
 // tables: the `sq` (signal search) hash param, and named saved views.
 //

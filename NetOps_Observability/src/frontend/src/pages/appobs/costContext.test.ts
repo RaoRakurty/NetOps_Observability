@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // costContext.test.ts (Wave 5 #18 slice 3) — the pure cost-context math:
 // scope derivation, window anchoring, honest aggregation (no fabricated
 // figures, currencies never mixed, unbilled days never read as 0).

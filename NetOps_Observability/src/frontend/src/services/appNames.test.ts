@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // appNames helper — the client-side batch enrichment primitive (#81 P3G):
 // one debounced POST for all visible IPs, module-level TTL cache (positive AND
 // negative), non-IP keys never leave the browser, and a failing backend is

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // dataProtection.model.ts — the pure half of the Data Protection console.
 //
 // Everything here is a total function over the wire contract in

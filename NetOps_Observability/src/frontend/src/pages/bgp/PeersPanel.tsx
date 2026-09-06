@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // PeersPanel — "Sessions down or flapping" (BGP ops tracker #4): the BGP
 // neighbours on the operator's OWN routers, and who carries their traffic.
 //

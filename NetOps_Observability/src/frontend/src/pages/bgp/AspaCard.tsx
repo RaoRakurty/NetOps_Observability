@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // AspaCard — ASPA (AS Provider Authorization).
 //
 // THE HONEST CARD. There is no public per-ASN ASPA API: RIPEstat has no ASPA

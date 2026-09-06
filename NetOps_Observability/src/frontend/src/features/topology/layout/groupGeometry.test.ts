@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // groupGeometry.test.ts — the single-source rule.
 //
 // The group box was once produced by three systems that disagreed: ELK reserved

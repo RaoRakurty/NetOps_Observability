@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DigitalExperience.tsx — Digital Experience Monitoring.
 //
 // The design of record is ratified and the screen is LIVE. This file is the

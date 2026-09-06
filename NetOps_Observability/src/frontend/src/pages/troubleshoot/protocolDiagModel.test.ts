@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // protocolDiagModel.test.ts — the pure half of Protocol diagnostics.
 //
 // What is pinned here:

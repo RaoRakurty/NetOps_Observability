@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // excludeInternalNodes — decision #76: the customer topology canvas must not show the
 // platform's own stack (api/correlation/prober). Drops internal nodes + their edges,
 // keeps real customer devices.

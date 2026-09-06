@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // bgpDepth.model.test.ts — the pure model behind the BGP depth panels. These
 // are the assertions that keep the panels HONEST: an unavailable RPKI lookup
 // must never present as a verdict, a capped graph must never draw a dangling

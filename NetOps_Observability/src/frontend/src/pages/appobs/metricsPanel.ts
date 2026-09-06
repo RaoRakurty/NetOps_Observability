@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // metricsPanel.ts — pure logic for the cloud metric charts (Wave 5 #14 slice 1).
 // Everything here is view-model math (no fetch, no React) so it unit-tests
 // directly: window choices, value formatting by unit, and the mapping from the

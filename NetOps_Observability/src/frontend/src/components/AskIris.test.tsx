@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // AskIris.test.tsx — the affordance that carries the words a screen gave up.
 //
 // docs/design/UI_WORDS_IRIS_EXPLAINS_2026-09-06.md. The contract is small and

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ProviderMark.tsx — the cloud mark for a topology node.
 //
 // Licence audit D5 (2026-09-04): this used to render the providers' OFFICIAL

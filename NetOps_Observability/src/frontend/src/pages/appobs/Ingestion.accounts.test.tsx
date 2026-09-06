@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Ingestion.accounts.test.tsx — Wave 2 #4: the Accounts sub-tab is CONNECTOR-
 // first. A configured account with no telemetry renders as a red attention row
 // stating exactly that (never dropped, never green), identity and telemetry are

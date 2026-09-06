@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyDomains.test.ts — the domain classifier + filter. LAN is the identity
 // (default unchanged); SD-WAN/DC slice; cloud nodes route to the cloud domain.
 

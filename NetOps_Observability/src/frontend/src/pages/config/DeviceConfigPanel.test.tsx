@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DeviceConfigPanel.test.tsx — the device Configuration panel.
 //
 // What is pinned here:

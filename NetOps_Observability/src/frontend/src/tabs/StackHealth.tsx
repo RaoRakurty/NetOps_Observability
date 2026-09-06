@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useEffect, useState } from "react";
 import { api, StackHealth as StackHealthData, StackComponent } from "../services/api";
 import Icon from "../components/Icon";

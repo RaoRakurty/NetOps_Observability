@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // omniSearch — the ONE search-first entry point behind the topbar box and the
 // ⌘K palette (Wave 6 #20). Merges the typed, tenant-scoped unified search
 // (/api/search: devices · resources · services · accounts · cases, each with

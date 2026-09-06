@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // pathFormat — shared value formatters for the path surfaces (NetworkPathView
 // ribbon + PathAnalysisPanel hop ladder), so both rails render the same number the
 // same way. Pure functions, no UI.

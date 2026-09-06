@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // physicalTopology.ts — mock TopologyView for the "explore" workflow.
 //
 // A calm, healthy Clos fabric (2 spines, 4 leaves, 2 border leaves) plus a couple

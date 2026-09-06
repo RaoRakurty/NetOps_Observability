@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // text.ts — small display-only string helpers.
 //
 // capitalize is for the RENDER layer only: it upper-cases the first character

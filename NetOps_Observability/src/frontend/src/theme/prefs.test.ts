@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Binary appearance knob (2026-07-10): the 6-way Theme picker + Accent picker
 // were retired for one Dark/Light knob (Dark = Indigo Causal), synced with the
 // login pill through netops.theme. These tests pin the migration contract so

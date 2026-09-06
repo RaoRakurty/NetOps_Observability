@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import React, { lazy } from "react";
 import { SectionCtx } from "./context/shell";
 import { AI_NAME } from "./brand";

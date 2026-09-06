@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useCallback, useDeferredValue, useMemo, useState } from "react";
 import type { TopologyView, TopologyNode, TopologySelection } from "../api/topologyTypes";
 import { HEALTH_COLOR, HEALTH_LABEL } from "../utils/topologyHealth";

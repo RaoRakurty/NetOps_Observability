@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — shell data hook (#81 P3F+1).
 //
 // Loads the live cloud inventory ONCE and derives the global scope + data mode +

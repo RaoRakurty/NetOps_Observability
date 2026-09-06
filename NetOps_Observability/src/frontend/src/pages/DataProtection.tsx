@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DataProtection.tsx — the Correlix backup & recovery console.
 //
 // WHAT CHANGED AND WHY. This surface used to be two forms and a status card: it

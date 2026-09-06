@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Flows.xss.test.tsx — stored-XSS regression for the TopNView BAR tooltip
 // (H15a, wave-3 second pass). The first XSS sweep tested escapeHtml in
 // isolation (panels.xss.test.ts) and missed this sink entirely — the TopNView

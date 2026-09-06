@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // traffic.ts — per-service traffic telemetry from the cloud load-balancer plane.
 //
 // WHAT IS ACTUALLY INGESTED — and therefore the only thing this panel may claim.

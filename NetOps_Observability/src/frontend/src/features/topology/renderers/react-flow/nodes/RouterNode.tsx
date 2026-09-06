@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RouterNode.tsx — router card. Vendor-neutral icon: a circle with four
 // directional arrows (the classic routing glyph). Reuses <NodeCard>.
 

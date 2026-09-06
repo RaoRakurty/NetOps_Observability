@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ConnectorLogos.test.tsx — licence audit D5 (2026-09-04) guard.
 //
 // The three CLOUD-provider tiles (AWS / Azure / GCP) used to inline the

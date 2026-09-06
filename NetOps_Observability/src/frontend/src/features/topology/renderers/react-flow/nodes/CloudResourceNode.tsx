@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CloudResourceNode.tsx — a CLOUD NETWORK resource card (VPC gateway / NVA /
 // subnet / endpoint …). Distinct from CloudNode (the generic cloud/WAN glyph):
 // this one wears the provider-tagged cloud glyph — ORIGINAL Correlix artwork

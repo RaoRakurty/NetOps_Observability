@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // providers.tsx — the ONE frontend cloud-provider descriptor module
 // (backlog Wave 5 #17: extensibility). Labels, icons, blurbs, console names,
 // wizard scope fields and per-method auth-field sets all live HERE, keyed by

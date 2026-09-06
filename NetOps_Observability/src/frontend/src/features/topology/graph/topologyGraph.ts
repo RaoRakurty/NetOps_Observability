@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyGraph.ts — a thin, render-agnostic wrapper over a TopologyView that
 // precomputes id-maps and adjacency for O(1) lookups. No rendering, no React.
 // Components and algorithms ask this object questions about structure; it never

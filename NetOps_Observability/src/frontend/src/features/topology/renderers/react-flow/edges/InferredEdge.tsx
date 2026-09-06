@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // InferredEdge.tsx — dashed/dotted, low-opacity slate edge for inferred /
 // dependency / flow relationships. It must visibly read as "derived, not directly
 // observed" so an operator never mistakes it for a confirmed L2 link. Honesty

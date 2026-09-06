@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Cloud Connector onboarding — pure logic for the wizard (backlog Wave 1 #3).
 //
 // Everything here is provider/API-shaped and side-effect-free so the wizard's

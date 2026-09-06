@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Section — the one-page BGP outage view's structural primitive.
 //
 // The BGP page used to be three tabs of cards; during an outage that meant an

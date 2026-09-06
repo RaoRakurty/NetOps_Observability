@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // cloudMerge.test.ts — #131. The cloud projection joins the fabric on ONE canvas.
 // The rules that matter are the ones that keep the merge from being a lie: the
 // on-prem inventory wins every identity collision, no edge is drawn to a node

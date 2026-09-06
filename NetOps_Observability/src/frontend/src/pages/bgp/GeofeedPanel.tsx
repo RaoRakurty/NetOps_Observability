@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // GeofeedPanel — RFC 8805 self-published geolocation, discovered per RFC 9092
 // from the registry object (a "geofeed:" attribute or a "Geofeed <url>" remark).
 //

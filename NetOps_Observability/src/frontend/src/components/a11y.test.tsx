@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // a11y.test.tsx — Wave 6 #19 keyboard + WCAG 2.2 AA pass: pins the accessible
 // semantics of the shared primitives so regressions surface in CI.
 //  · Modal        — dialog role, Escape close, Tab focus containment

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaReports.test — the management library page (#113). Pins: promoted rows
 // render with their report identity, at-a-glance line and AUTO/MANUAL basis
 // badge; the honest empty state points back to Correlations (candidates live

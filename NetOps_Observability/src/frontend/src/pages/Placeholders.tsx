@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Dashboard List — the curated directory of live boards. (This file once held
 // the IA's "coming soon" stub pages; every stub has graduated to a real page,
 // so only the directory remains. New IA slots get their own page files.)

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // investigationUrl — pure helpers for the `inv` hash param that keeps the
 // embedded investigation drawer shareable/refresh-safe (#7 Wave 2): the open
 // object's id lives in the URL, so a refresh or a pasted link reopens the same

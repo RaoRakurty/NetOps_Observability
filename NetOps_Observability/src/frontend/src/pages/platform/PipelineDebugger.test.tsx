@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // PipelineDebugger.test.tsx — the guarantees this screen must not lose.
 //
 // The list is short on purpose, and every item is something an operator would

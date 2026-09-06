@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — ingestion model (#81 P3F+1 Phase 2).
 //
 // Turns the live cloud inventory into the per-account and per-(account×region)

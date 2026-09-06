@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Cross-tenant UI guard E2E (gap-report #2, the most important SaaS/security
 // promise): one tenant must NEVER see another tenant's objects, evidence, blast
 // radius, incidents or ledger details. The mock backend models a CORRECTLY isolated

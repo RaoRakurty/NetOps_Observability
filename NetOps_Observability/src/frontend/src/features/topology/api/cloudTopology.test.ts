@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // cloudTopology.test.ts — the real-data path of the Cloud tab's topology client.
 // Asserts fetchCloudTopology serves the live API view when it has content, and
 // returns an HONEST empty view (status "empty" | "error") otherwise — never a

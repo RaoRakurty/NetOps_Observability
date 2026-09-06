@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // GUI-configurable SSO — the "Identity Providers" panel inside the SSO tile
 // modal (Administration → Authentication → Single Sign-On). Lists the Keycloak-
 // brokered upstream IdPs, and edits one at a time: SAML (metadata URL / pasted

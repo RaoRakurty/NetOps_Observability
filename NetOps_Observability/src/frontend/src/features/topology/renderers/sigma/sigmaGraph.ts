@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // sigmaGraph.ts — build a laid-out graphology Graph from a TopologyView, ready
 // for Sigma's WebGL renderer. Phase 4.
 //

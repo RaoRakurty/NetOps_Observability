@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Resolve a CSS design token to its concrete value for consumers that can't
 // use `var()` strings (ECharts canvas renderer, SVG attribute math, etc.).
 // Reads the live cascade, so [data-theme]/[data-chrome] swaps are honored at

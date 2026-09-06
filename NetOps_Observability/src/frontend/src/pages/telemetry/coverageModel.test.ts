@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // coverageModel.test.ts — the honesty rules of the Telemetry coverage adapters.
 // The wording assertions are deliberate: "No lines yet" and "0.0%" are
 // different facts, and a 403 on the platform stats endpoint is an ANSWER.

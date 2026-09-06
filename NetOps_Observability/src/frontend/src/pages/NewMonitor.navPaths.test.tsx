@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // NewMonitor navigation-pointer contract. This page ENDS in an instruction —
 // "your monitor is live, now go and look at it over there" — and an instruction
 // that names a screen which no longer exists is worse than no instruction: the

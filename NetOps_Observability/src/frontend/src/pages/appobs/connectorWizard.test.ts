@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // connectorWizard.test.ts — the pure logic behind the Cloud Connector onboarding
 // wizard (backlog Wave 1 #3). The load-bearing guarantees:
 //  • per-provider × method identity fields match the backend validator's required

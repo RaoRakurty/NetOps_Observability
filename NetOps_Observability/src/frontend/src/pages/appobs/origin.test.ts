@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // origin.test.ts — Origin (which cloud) + Service identity for an investigation
 // (2026-07 owner review #5 + #1).
 //

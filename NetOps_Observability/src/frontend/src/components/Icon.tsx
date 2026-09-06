@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Modern stroke icon set, inlined so there's no icon-font or external
 // dependency. Icons inherit color via stroke="currentColor" and the size via
 // the `size` prop, so they adapt to light/dark themes automatically.

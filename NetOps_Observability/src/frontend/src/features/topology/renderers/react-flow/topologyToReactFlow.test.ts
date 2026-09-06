@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Pins the "hover shake" fix: a passing hover (SOFT spotlight) must lift only the
 // focus set and leave every other card at its NORMAL weight — never dim the whole
 // canvas. A deliberate click (HARD spotlight) still dims the out-of-focus cards.

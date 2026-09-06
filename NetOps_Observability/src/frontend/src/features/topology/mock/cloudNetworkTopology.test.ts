@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // cloudNetworkTopology.test.ts — structural guards on the cloud-NETWORK fixture.
 // These assert the contract the renderer + skill require (every edge has
 // evidence, groups reference real nodes) AND the scope rule (NO workloads).

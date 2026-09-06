@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Flows conversations — app-name enrichment (#81 P3G): after the top-talkers
 // table loads, the visible endpoint IPs go to /api/appid/resolve/batch ONCE and
 // resolved IPs gain a secondary app-name line with a provenance tooltip;

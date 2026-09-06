@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App-ID coverage + override editor: pure-helper contracts.
 //
 // The load-bearing one is readCount/unavailableReason: -1 is the engine's

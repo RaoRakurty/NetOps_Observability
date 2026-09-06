@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Investigate / RCA-pin flow E2E (gap #2, operator workflow). Proves the anti-
 // black-box RCA narrative renders end-to-end on the real canvas: entering
 // Investigate auto-pins the most-actionable incident, fetches its RCA fault-path

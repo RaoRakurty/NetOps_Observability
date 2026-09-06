@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TopologyToolbar — the top control bar. Left slot (children) carries the
 // workflow + overlay selectors from the canvas; right slot holds the density
 // control, labels toggle and zoom/fit actions. Calm, compact, icon-driven.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // licence.model.test.ts — the rules of the Licence page, tested as rules.
 //
 // The model is where every claim the page makes is decided, so the three things

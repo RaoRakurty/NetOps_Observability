@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExposureStories.test.tsx — the hero list and its reuse of the RCA workspace.
 // A story id that is not this tenant's must read as "not available", never as
 // an empty workspace that implies the story exists.

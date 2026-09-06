@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // PathHighlightEdge.tsx — the thick accent edge for a traced path / RCA causal
 // chain. Always reads as 'strong': accent stroke, soft glow underlay, and a
 // subtle animated dash that flows source→target to convey traffic direction.

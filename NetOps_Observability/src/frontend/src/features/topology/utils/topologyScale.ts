@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyScale.ts — the interactive-canvas scale policy, as PURE functions.
 //
 // The React Flow canvas draws every node as a live HTML card, so past a ceiling

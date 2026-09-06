@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — typed model (#81 P3F/P3H UI).
 //
 // These types are the CONTRACT the cloud endpoints return. Every one of them is

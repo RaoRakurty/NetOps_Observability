@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaVerdictFeedback — the operator VERDICT control for one RCA case (Project 2
 // P7). It asks the only question that measures the engine honestly: "was this
 // verdict right?" — and, when it was not, WHICH of the five claims the case

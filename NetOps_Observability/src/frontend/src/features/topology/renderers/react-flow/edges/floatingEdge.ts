@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // floatingEdge.ts — geometry for "floating" edges: instead of anchoring every link
 // to a node's fixed centre handle (which stacks all of a node's links at one point
 // and makes the graph look hand-placed), each link anchors to the point on the

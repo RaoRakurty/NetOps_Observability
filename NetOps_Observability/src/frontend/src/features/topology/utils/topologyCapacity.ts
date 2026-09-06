@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyCapacity.ts — PURE capacity analytics over a TopologyView (PDF §9
 // "Capacity" workflow: hot links, ECMP imbalance, errors/saturation). No React,
 // no renderer types — just the domain graph in, ranked facts out, so the logic

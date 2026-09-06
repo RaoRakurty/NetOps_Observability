@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // panels.test.tsx — the RENDER STATES of the BGP depth panels.
 //
 // Each of these locks in an honesty contract, not a layout:

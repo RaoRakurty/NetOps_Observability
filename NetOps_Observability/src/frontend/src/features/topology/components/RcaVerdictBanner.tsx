@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaVerdictBanner — the anti-black-box narrative for a pinned incident (#77).
 //
 // When Investigate mode pins a real correlation object, the canvas renders its

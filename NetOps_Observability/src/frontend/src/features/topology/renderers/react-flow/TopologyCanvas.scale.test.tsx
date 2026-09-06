@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TopologyCanvas.scale.test.tsx — the two connected scale/load defects.
 //
 //  1. LOAD FLASH. On mount the canvas rendered `fetched ?? workflow?.view`, so the

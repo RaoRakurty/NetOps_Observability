@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // graphAlgorithms.ts — pure graph traversals over the domain TopologyView. No
 // renderer, no React. These power neighbour-spotlight, path edges and blast radius.
 // (PDF §13: graph algorithms live OUTSIDE React node components.)

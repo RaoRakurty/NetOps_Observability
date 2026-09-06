@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // FirewallNode.tsx — firewall card. Vendor-neutral icon: a brick wall. The red
 // accent is the LEFT bar only — the card is never filled red (PDF §11).
 

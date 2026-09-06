@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // experience.test.tsx — the Digital Experience surface.
 //
 // WHAT THESE TESTS ARE FOR. This screen's whole reason to exist is that an

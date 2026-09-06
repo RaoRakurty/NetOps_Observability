@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // IP protocol number → name. Single source of truth shared by the Flows tab
 // and the Overview "Traffic by protocol" panel so the two never drift.
 export const PROTO_NAMES: Record<number, string> = {

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // protocolDiagModel — the pure half of the Protocol diagnostics panel
 // (Troubleshooting, item 7; backend internal/protocoldiag + the three
 // /api/troubleshoot/protocol-diagnostics/* endpoints).

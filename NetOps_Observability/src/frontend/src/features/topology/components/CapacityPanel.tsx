@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CapacityPanel — the docked read-out for the Capacity workflow. Ranks the
 // busiest measured links (utilization bar + endpoints + error/saturation badges)
 // and lists ECMP sibling sets whose load has drifted out of balance. Pure

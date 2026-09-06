@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // LogsExplore — Explore → Logs (2026-08 nav redesign, owner tree). The old
 // top-level Logs section's Log Search + Cloud Logs planes in ONE leaf, with the
 // active plane carried in the route's third segment so both stay deep-linkable:

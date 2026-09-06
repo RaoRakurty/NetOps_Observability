@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // model.test.ts — the Security section's data adapters. These are the numbers
 // an operator makes a remediation decision on, so every honesty rule the design
 // of record demands is pinned here rather than trusted to a component.

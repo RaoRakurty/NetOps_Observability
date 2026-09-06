@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // WirelessRemediation — the guarded wireless approval queue, rendered on
 // Operations → Action Queue beneath the incident queue.
 //

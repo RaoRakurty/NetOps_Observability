@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // wanCircuits.model.ts — the rules behind the WAN Paths page's three derived
 // surfaces (endpoint registry, circuit list, measurement policy).
 //

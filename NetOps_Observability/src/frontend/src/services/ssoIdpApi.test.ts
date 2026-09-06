@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SSO IdP admin API methods — wire shapes for the Keycloak-automation contract:
 //   GET    /api/auth/sso/idp                     → { idps, keycloak }
 //   PUT    /api/auth/sso/idp/{alias}             → { idp, applied, warnings }

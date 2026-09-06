@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CapacityWorkflow — Phase 2 (implemented).
 //
 // The capacity-planning view (PDF §9). Opens on a routed leaf-spine fabric and,

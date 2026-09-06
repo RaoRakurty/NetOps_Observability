@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useEffect, useMemo, useState } from "react";
 import { api, SnmpProfile, SnmpMetric } from "../services/api";
 import { capitalize } from "../lib/text";

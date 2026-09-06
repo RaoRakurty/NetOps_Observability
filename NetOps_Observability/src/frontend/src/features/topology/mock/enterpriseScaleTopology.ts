@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // enterpriseScaleTopology.ts — a LARGE, deterministically-generated TopologyView
 // (~400 nodes) for the Phase 4 Sigma/WebGL overview renderer. This is the dataset
 // that proves the point of Phase 4: a graph React Flow should never try to draw

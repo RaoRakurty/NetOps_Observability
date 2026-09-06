@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SensitiveDataAccess.test.tsx — the compliance surface for sealed fields, and
 // the operator-facing key rotation beside it (#129).
 //

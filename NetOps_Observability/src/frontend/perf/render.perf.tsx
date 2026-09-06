@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // perf/render.perf.tsx — the render-budget suite (`npm run perf:budget`).
 //
 // One scenario per heavy operator surface, each fed the volume a busy network

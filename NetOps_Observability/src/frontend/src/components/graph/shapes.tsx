@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useId } from "react";
 import { CloudGlyphShape, cloudTag } from "../CloudGlyph";
 

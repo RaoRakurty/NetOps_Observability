@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Command Center operator-flow E2E (gap-report #2). Proves the decision system
 // actually works end-to-end in a browser: an authenticated operator loads the
 // Command Center, sees ONLY actionable customer-network incidents (single-signal

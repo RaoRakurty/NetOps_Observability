@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // InvestigationDrawer (#7 Wave 2) — the correlation object embedded INSIDE
 // Service View: the full RCA Inspector componentry (CorrelationDetail — reused,
 // not re-implemented) topped by the close/verification loop. Everything shown is

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CostContext.test.tsx (Wave 5 #18 slice 3) — the cost-context card renders
 // only provider-billed figures with the honesty label, and every empty state
 // says exactly what is missing / what to connect.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // rcaExport.test.ts — the operator-verdict line in the exported RCA document
 // (Project 2 P7). The printed report must carry the latest human judgement of
 // the case when one exists, and print NOTHING when nobody has judged it — an

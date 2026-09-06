@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useDeferredValue, useEffect, useMemo, useState, startTransition } from "react";
 import { api } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";

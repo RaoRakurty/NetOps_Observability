@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // rfTypes.ts — the contract BETWEEN the React Flow adapter and the custom
 // node/edge components. This is the only place renderer-specific `data` shapes
 // live. Domain types (TopologyNode/Edge) flow IN; @xyflow/react flows OUT.

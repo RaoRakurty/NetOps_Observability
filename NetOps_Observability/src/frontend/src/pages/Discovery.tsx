@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Discovery — Infrastructure → Discovery & NMS (2026-08 nav redesign, owner
 // tree). One entry for "how do devices get INTO the inventory": subnet
 // discovery (the platform-operated SNMP sweep) and the NMS vendor-controller

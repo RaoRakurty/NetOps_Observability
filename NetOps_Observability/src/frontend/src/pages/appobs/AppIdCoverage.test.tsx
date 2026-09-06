@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // AppIdCoverage.test.tsx — the two Settings cards over the App-ID engine.
 //
 // What these assert: every control hits the real route helper with the real

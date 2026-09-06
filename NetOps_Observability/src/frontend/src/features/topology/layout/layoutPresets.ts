@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // layoutPresets.ts — map each layout_type to ELK tuning. Deterministic layered
 // layouts only; NEVER force layout for physical/routed topology (PDF §12).
 

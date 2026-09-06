@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Overview impact strip (Wave 3 #8 / product-review rev #22) — pure logic that
 // turns the window's health signals + live app health + inventory + the service
 // catalog into the worst-first "degraded services" rows: name, duration,

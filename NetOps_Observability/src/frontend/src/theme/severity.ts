@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Canonical severity model shared by Logs, Alerts, and Findings so the same
 // level is always the same color everywhere. Accepts syslog words, numeric
 // syslog severities (0–7), and common app log levels.

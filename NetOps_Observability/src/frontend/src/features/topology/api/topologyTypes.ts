@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyTypes.ts — the CANONICAL, renderer-agnostic topology contract.
 //
 // SINGLE SOURCE OF TRUTH = the skill contract (.claude/skills/topology-ui/

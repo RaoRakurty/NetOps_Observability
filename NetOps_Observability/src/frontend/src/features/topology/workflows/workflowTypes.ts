@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // workflowTypes.ts — a workflow is a thin DESCRIPTOR that configures the one
 // React Flow canvas: which mock/view to load, and how to compute the spotlight set
 // from the current selection. The canvas is the renderer; workflows steer it.

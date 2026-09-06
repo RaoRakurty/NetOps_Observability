@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaVerifyPanel — the "Verify now" card for the RCA workspace (Active
 // Verification, RCA spec item 8). When a case sits at SUSPECTED, the engine
 // can interrogate the implicated devices with a bounded READ-ONLY check

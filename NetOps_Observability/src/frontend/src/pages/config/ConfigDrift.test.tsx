@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ConfigDrift.test.tsx — the fleet Config drift list.
 //
 // Pinned: honest per-device states (including "Unknown" and "Never captured"),

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // normalizeView — the ONE place a renderer-bound TopologyView is made safe.
 //
 // The rule these tests pin: after normalizeView, the type's promises are TRUE.

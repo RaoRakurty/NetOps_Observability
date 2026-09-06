@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SecurityOverview.test.tsx — the CTEM command centre. The assertions that
 // matter are the honesty ones: an unassessed estate must never render as clear,
 // an unscored seam must never render as a zero, and a stage with no honest

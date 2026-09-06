@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — App Detail drill-in (#81 P3F/P3H).
 // The six-part story for one app: Identity → Health → Change → Traffic → Dependencies
 // → Underlay → Evidence, with an RCA summary that always shows confidence + evidence.

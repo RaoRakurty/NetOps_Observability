@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // bgpDepth.model.ts — the PURE model behind the BGP depth panels. No React, no
 // fetch, no React Flow types: everything here is a function of the wire shape,
 // which is why it is the part that carries the tests.

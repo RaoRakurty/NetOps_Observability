@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Flows.appViews.test.tsx — the APP and SERVICE views of the flow plane, at the
 // screen. flowsAppViews.test.ts pins the maths; this pins what an operator
 // actually reads:

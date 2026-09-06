@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CloudLogs.test.tsx — the unified Cloud Logs view: a lane per cloud log family,
 // each wired to a real tenant-scoped source (Inventory + Change to the cloud
 // surfaces, the raw families to the tagged /api/logs/search?signal=cloud index).

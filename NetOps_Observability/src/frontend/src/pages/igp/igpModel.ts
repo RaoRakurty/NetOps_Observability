@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // igpModel.ts — the PURE model behind the OSPF / IS-IS adjacency view.
 //
 // Everything a reader's verdict depends on is decided here and unit-tested,

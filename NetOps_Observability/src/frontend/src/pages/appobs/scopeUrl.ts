@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // scopeUrl — the Service View's global scope + time-range as URL state
 // (Wave 2 #5). The interactive scope bar's selections live in the hash query
 // (`#/operations/services?provider=aws,azure&region=us-east-1&range=7d`), so a

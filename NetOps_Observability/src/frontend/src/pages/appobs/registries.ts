@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // registries.ts — pure logic behind the Registries sub-tab (the operator-authored
 // service catalog + the application registry). Rendering lives in Registries.tsx.
 //

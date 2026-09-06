@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // igpModel tests — the pure half of the OSPF / IS-IS view. These lock in the
 // one property the panel exists for: a source that was never collected must
 // never be presentable as a zero, and "wired but quiet" must never be

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaFeedbackTile — "Verdict feedback (30 d)": how often operators told us the
 // engine was right (Project 2 P7). This is the ONLY honest measurement of RCA
 // quality we have — the engine's own confidence tier is its opinion of itself.

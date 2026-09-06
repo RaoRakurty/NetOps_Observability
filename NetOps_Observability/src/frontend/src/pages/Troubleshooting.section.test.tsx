@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Troubleshooting.section.test.tsx — the TWO-section Troubleshooting page.
 //
 // What is pinned here:

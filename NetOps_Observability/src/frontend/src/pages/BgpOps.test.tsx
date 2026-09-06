@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // BgpOps helper tests (item 10, 2026-08-25): the verdict/visibility/path/churn
 // logic is pure and carries the page's correctness — the panels only render
 // what these produce.

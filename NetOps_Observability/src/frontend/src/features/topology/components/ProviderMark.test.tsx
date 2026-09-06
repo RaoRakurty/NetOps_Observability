@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ProviderMark.test.tsx — the cloud mark is provider-parametric, degrades
 // honestly, and carries NO provider trademark.
 //

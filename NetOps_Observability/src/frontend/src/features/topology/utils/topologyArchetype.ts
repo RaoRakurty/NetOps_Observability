@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyArchetype.ts — PURE topology-archetype detection + analytic layouts.
 //
 // Operators name networks by SHAPE — ring, star, bus, mesh, leaf-spine — and the

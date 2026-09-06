@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // cloudNetworkTopology.ts — mock TopologyView for the CLOUD NETWORK tab.
 //
 // This is the cloud *network* topology (VPCs/VNets → subnets → gateways/NVAs →

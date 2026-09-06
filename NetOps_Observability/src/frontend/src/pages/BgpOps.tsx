@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // BgpOps — the consolidated BGP operations page (product wave item 10,
 // 2026-08-25), rebuilt as a SINGLE-SCREEN outage view (owner, 2026-09-03:
 // "put all the data into one page so that a NOC admin gets a single view during

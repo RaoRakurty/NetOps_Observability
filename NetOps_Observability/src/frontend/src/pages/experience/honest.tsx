@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // honest.tsx — the small shared primitives of the Digital Experience surface.
 //
 // THE ONE RULE THIS FILE EXISTS FOR: an absent measurement is never rendered as

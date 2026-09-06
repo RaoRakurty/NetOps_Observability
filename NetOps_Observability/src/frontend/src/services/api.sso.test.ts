@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // api.sso.test.ts — login-CSRF / session-fixation regression for the SSO
 // fragment capture (M20, wave-3 second pass). captureSSORedirect used to
 // accept ANY `#token=…` fragment unconditionally: a page that navigated the

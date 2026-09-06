@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // groupGeometry.ts — THE container geometry constants, in one place.
 //
 // This module exists because the group box was previously produced by THREE

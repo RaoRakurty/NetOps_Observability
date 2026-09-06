@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyApi.ts — the topology API client.
 //
 // The real backend is a Go graph-projection service that resolves identities,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // AppIdCoverage.tsx — the two Settings cards over the App-ID engine:
 //
 //   AppIdCoverageCard   GET /api/appid/status   — what the engine can see, and

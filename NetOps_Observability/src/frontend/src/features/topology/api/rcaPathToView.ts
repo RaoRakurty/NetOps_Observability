@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // rcaPathToView.ts — convert an RCA path-overlay (GET /api/correlations/{id}/
 // rca-path-view) into the canonical TopologyView the operating canvas renders
 // (#77, design doc "RCA overlay"). This lets Investigate mode show a REAL

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TEMPORARY dev-only harness (rca-preview.html) — mounts the Correlations RCA
 // detail against a fetch mock for layout screenshots. Not part of the app build
 // (no import from the app entry); deleted when review is done.

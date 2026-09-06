@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { ReactNode, useState } from "react";
 
 // Wizard — the shared guided-setup primitive. Every multi-field setup flow

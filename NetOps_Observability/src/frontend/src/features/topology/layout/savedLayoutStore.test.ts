@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // savedLayoutStore tests — born with the Reset-button fix (2026-08-25).
 import { beforeEach, describe, expect, it } from "vitest";
 import { clearSavedLayout, clearSavedLayoutsMatching } from "./savedLayoutStore";

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // AsPathGraphPanel — the flagship of the BGP visualization design
 // (docs/design/research/BGP_OPS_CONSOLIDATION_RESEARCH_2026-08-25.md): the
 // wall of AS-path pills becomes a node-link graph, vantage points on the left

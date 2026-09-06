@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Dashboard.liveness.test.tsx — the board header's liveness indicator must be a
 // statement about DATA, not about time passing. It used to be a pulsing "Live"
 // dot beside an "as of HH:MM" clock driven by a local setInterval that never

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TopologyCanvas.behaviour.test.tsx — #133c. The canvas holds the most behaviour
 // in the feature (fetch state machine, Investigate auto-pin, 60s background
 // refresh, the guided Path-Trace states) and none of it was covered; the two

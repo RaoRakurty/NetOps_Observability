@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Service catalog (Wave 3 #8) — pure logic behind the catalog CRUD surface and
 // the catalog↔derived-apps join. The catalog is the operator-authored registry
 // (name/criticality/owner/description over /api/cloud/business-services); the

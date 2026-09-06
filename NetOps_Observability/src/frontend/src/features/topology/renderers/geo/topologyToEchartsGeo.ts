@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyToEchartsGeo.ts — the pure, renderer-agnostic adapter for the Phase-5
 // geographic renderer. TopologyView in → the minimal geo series data an ECharts
 // world map needs (site bubbles + WAN-circuit lines). Nothing here imports

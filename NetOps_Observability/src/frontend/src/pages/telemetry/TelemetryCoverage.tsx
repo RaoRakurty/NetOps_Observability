@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Telemetry coverage (Administration → Data Collection) — parser programme A6.
 //
 // Two honest questions, answered side by side:

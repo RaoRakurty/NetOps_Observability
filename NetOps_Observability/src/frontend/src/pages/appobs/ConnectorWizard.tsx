@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Cloud Connector onboarding wizard (backlog Wave 1 #3).
 //
 // A guided, multi-step flow over the DONE 7-step connector API (the domain model,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import ReactECharts from "../components/EChart";
 import { api } from "../services/api";

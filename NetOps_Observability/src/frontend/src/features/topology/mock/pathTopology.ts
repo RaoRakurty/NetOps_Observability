@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // pathTopology.ts — mock TopologyView for the "path_trace" workflow.
 //
 // A clean A→B traced path (server → leaf → spine → border → wan-r1 → wan-r2),

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RpkiPanel — "Prefix origin problems": is the AS announcing each of the
 // tenant's prefixes actually authorised to?
 //

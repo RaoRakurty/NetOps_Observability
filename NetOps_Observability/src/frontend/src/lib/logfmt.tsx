@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // logfmt — shared, reusable log-field renderers (the "extensible objects": Time,
 // Source, Level, Message). One token vocabulary, used identically in the Logs
 // table, the Events table, and the detail/inspector — so a field looks the same

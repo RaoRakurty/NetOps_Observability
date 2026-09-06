@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // API-key scope wizard (tracker 226) — the UI can now mint WRITE and
 // ADMINISTRATIVE keys, and offers each caller only what the API will actually
 // let it mint.

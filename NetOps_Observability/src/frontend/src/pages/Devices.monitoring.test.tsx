@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Devices.monitoring.test.tsx — the inventory page's half of the C4 rule.
 //
 // The product decision this page has to carry is one sentence: DISCOVERED IS

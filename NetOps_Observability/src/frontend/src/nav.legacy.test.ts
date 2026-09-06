@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // nav.legacy.test.ts — the RATCHET for the 2026-08 nav redesign (owner tree).
 //
 // Every pre-redesign hash — all leaves of the old 11-section tree, the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // reliabilityMeta.ts — pure presentation helpers for the NOC Recovery Scorecard:
 // duration formatting, NOC-friendly delay labels, owner-domain styling, and chronic-
 // offender display-name enrichment + recommended actions. No fabricated site/owner

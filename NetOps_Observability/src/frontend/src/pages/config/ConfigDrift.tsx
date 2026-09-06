@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ConfigDrift — the fleet-wide "Config drift" list (Infrastructure section).
 //
 // One row per device: its configuration state, when it was last captured, the

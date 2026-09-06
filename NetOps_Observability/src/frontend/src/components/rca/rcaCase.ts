@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { CorrTimeline, CorrObject, CorrSignal, Seam, VerificationRun } from "../../services/api";
 import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel, nocVerdictReason, evidenceSourceLabel, isSecurityModality, securityClassTitle, securityProvider, seamTypeLabel, SECURITY_MODALITY, SECURITY_SOURCE_LABEL } from "./labels";
 import { weakestFidelity } from "../../lib/fidelity";

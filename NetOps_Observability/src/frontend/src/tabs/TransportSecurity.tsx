@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Transport Security (SEC-021.1) — the read-only posture inventory: every
 // internal transport path (edge), its declared vs target TLS tier, live probe
 // observations and owner-accepted exceptions. The platform owner sees the full

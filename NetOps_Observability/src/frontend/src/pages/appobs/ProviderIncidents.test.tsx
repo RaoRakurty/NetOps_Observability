@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ProviderIncidents.test.tsx (Wave 5 #16) — the provider-incident lane and the
 // seam health strip render ONLY measured data, with honest empty states: no
 // events names the support-plan requirement, no seam signals says "awaiting

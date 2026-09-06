@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaTimeImpact — the "Time Impact" card for the RCA detail window (RCA Time
 // Intelligence). It breaks one incident's clock apart in two zones: what Correlix has
 // PROVEN/inferred (detect → correlate → root/seam ISOLATION (MTTI, the hero) → owner →

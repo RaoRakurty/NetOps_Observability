@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Product brand — single source of truth so a rename is one line.
 //
 // "Correlix" evokes correlation (the platform's core: correlating telemetry,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // appIdCoverage.ts — pure logic behind the App-ID coverage panel and the
 // operator override editor (Settings tab). Rendering lives in AppIdCoverage.tsx.
 //

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // timeline.test.ts — the event-timeline episode model (2026-07 UX defect #1).
 // Acceptance: a repeated identical event collapses into ONE episode with a count
 // and a first→last span; genuinely-distinct signals never merge; empty provider

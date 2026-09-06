@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TopologySearch — fuzzy locate across the view. Matching is inline (no util
 // import): label/id/ip/vendor/model/site/role/owner/health/zone, plus interface
 // names from edges mapped back to their nodes. Emits the matching node-id set as

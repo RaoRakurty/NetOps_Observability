@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { fmtDate, fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import { api, CollectorStatus, DiscoveryConfig, DiscoveryConfigEnvelope } from "../services/api";

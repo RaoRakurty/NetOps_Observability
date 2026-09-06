@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExperiencePage.tsx — the Digital Experience surface's container.
 //
 // Seven tabs, in the order an operator works: Experience (what is the state) →

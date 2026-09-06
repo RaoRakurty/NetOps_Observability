@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — shared UI primitives (#81 P3F).
 //
 // Every component here is built on the EXISTING design system — the `Chip` from

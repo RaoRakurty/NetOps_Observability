@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { ReactNode, Suspense, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";

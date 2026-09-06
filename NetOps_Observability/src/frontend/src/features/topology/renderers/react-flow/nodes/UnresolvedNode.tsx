@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // UnresolvedNode.tsx — a MUTED placeholder for an unresolved remote neighbour
 // (we saw the adjacency but couldn't identify the far-end device). Dashed
 // border, permanently reduced opacity, a "?" icon and an UNRESOLVED tag. Still

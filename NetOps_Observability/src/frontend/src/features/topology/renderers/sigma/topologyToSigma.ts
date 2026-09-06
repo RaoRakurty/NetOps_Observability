@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Sigma adapter — maps a renderer-agnostic TopologyView into the node/edge shape
 // a graphology graph (and therefore Sigma's WebGL renderer) consumes. Phase 4.
 //

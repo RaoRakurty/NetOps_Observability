@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DigitalExperience.test.tsx — the route target.
 //
 // This file used to pin a deliberate stub in place. The design of record is now

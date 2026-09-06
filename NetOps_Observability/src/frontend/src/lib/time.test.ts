@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // time.test.ts — parse-path table tests for the shared time authority.
 // The defect class under test: zone-less ClickHouse strings were parsed as
 // browser-local by `new Date(...)`, shifting every CH-backed view by the

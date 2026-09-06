@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import type { RcaCase, RcaPill, KV, Tone, CaseEvent } from "./rcaCase";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
 import type { TopoGraph, TopoGraphNode, EdgeState } from "./topoGraph";

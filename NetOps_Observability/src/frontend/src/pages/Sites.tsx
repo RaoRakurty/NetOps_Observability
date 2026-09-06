@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Sites — Infrastructure → Sites (2026-08 nav redesign, owner tree). Before
 // this page, "Sites" existed only as columns, the SitesManager buried inside
 // the Device Geomap, and a broken dashboard drill. The owner tree has no

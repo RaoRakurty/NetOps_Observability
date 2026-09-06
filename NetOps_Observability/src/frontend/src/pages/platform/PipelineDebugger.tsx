@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // PipelineDebugger.tsx — Administration → Platform → Tools → Pipeline Debugger.
 //
 // WHAT THIS SCREEN IS FOR. One record is sent through the stack's own ingress

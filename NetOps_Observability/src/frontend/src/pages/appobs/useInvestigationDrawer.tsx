@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // useInvestigationDrawer (#7 Wave 2) — open a correlation object INSIDE Service
 // View with no context-losing navigation. Under shell-v2 it docks into the
 // shared workspace Inspector (the same right pane the RCA candidate list uses:

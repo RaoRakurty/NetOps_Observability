@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { api, Incident, CorrObject } from "../services/api";
 import { signatureNocTitle, entityLabel, friendlyProblemId } from "../components/rca/labels";

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // drill.ts — one-shot cross-page "drilldown intent". The Overview sets a filter
 // (e.g. show only down devices) that the destination page consumes once on
 // mount. Kept out of the hash router so deep-links don't complicate route

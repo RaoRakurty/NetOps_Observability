@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // protocolDiagCollection.test.ts — D-4 (QA run 2026-09-03).
 //
 // A live capture on the lab spines had every one of 7 read-only commands

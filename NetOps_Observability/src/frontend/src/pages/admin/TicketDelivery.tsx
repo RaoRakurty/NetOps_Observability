@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TicketDelivery — Administration → Incident Response → Ticket Delivery.
 //
 // WHY THIS EXISTS. RCA auto-ticketing has a reliable outbox: a policy decides a

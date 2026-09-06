@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // pipelineDebugger.model.ts — the pure half of the pipeline debugger screen.
 //
 // Everything here is a function of data the api returned: the stage order, the

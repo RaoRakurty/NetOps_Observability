@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ChangeReviewWorkflow — PLACEHOLDER (Phase 6).
 //
 // Will diff a before/after window and overlay a golden-path delta so operators

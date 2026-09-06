@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // routes.test.ts — the Security section's route surface. The CTEM leaves are
 // new; the three pre-existing ids must keep resolving so every bookmark, saved
 // landing and panel drill into the old Security section still lands.

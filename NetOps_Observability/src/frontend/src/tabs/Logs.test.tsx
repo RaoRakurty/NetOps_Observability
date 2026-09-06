@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Logs.test.tsx — sample honesty for the flows signal (finder 2026-08-14).
 //
 // netops-flows-* holds the router's 1:50 OpenSearch sample (ClickHouse keeps

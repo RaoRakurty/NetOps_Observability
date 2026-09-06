@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — Ingestion / Connections (#81 P3F+1 Phase 2).
 //
 // The trust gate: before any page claims app health/RCA, prove the cloud data is

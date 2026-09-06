@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyGraph.test.ts — the persistent-graph read (GET /api/topology/graph).
 // Asserts fetchTopologyGraph serves the live reconciled view when it has content
 // and returns an HONEST empty view (status "empty" | "error") otherwise — never

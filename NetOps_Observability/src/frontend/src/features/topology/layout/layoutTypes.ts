@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // layoutTypes.ts — layout vocabulary shared by the ELK service, presets and the
 // saved-layout store. Layout is computed from view.layout_type; operators may pin
 // positions, but pins live OUTSIDE the domain graph (PDF §12 "saved layout rule").

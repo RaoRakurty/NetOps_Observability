@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // rcaOverlay.ts — the single source of truth for how an RCA Layer-3 overlay state
 // (RcaOverlayState) maps to visual treatment on the canvas. Parallel to
 // topologyHealth.ts's HEALTH_* maps, but for the engine's *grounded verdict* —

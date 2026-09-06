@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TwoFactorCard.test.tsx — self-service two-factor enrolment.
 //
 // WHAT IS ACTUALLY AT RISK HERE, and therefore what these tests assert:

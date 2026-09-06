@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // qr.test.ts — the QR encoder is proved, not eyeballed.
 //
 // WHY THIS FILE IS LONG. A QR code is the one artefact in this product whose

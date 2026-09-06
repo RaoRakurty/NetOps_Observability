@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyMapper.ts — projection + defensive normalization for the resolved
 // TopologyView. These are PURE functions over the domain contract; no renderer,
 // no React.

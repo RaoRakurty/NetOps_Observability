@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // PrefixesPanel — "Prefixes you're watching" (BGP ops tracker #5).
 //
 // This IS the watchlist view, extended with the incident class and its

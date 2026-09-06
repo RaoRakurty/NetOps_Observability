@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // IrisLane.test.tsx — the IRIS co-pilot lane of the investigation surface.
 //
 // Two contracts are pinned here.

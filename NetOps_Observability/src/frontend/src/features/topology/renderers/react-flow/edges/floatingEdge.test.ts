@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // floatingEdge.test.ts — the pure border-anchor geometry. Guards that links anchor
 // to the side facing the neighbour (so they fan out, not stack), independent of
 // React Flow. "no bugs at ground level": exercises the four sides + degenerate cases.

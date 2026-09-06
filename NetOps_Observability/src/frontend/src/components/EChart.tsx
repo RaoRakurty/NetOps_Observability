@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // EChart — the app's single ECharts host, built on the tree-shakeable
 // `echarts/core` path (same pattern GeoTopologyMap.tsx already used for
 // registerMap). Replaces the class-based `echarts-for-react` default wrapper,

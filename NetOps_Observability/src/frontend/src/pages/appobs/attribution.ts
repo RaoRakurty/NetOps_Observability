@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — attribution analytics (#81 P3F+1 gap close).
 //
 // Pure, testable helpers over the LIVE cloud inventory (no telemetry needed):

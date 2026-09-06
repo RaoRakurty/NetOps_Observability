@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "../components/EChart";
 import { api, FlowFilters, FlowAppRow, FlowAppsResp, FlowServiceRow } from "../services/api";

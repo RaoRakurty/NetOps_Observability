@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaOverlayEdge.tsx — a link carrying an RCA Layer-3 verdict (edge.rca_status).
 // This is the edge counterpart to the node RcaMarker: it renders the engine's
 // grounded state with a DISTINCT treatment so "suspected" never looks like

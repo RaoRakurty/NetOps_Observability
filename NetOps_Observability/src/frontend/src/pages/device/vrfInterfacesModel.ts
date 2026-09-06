@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // vrfInterfacesModel — the pure model behind the device page's "Interfaces by
 // routing instance" tab (frontend-wave item 4).
 //

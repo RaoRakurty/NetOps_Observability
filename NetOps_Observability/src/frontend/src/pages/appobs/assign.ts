@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — bulk service-assignment helpers (2026-07 review, imp #5).
 //
 // Pure, unit-tested core for the "assign resources to a service" workflow: the

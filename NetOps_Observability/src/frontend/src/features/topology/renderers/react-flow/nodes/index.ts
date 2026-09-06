@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // index.ts — the React Flow nodeTypes registry. Keys MUST match
 // NODE_TYPE_FOR_KIND in ../rfTypes.ts.
 

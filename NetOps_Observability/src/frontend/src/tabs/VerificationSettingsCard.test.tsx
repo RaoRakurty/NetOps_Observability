@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // VerificationSettingsCard.test.tsx — Administration → Settings → Active verification.
 //
 // The four things that can go wrong on a settings card holding a credential,

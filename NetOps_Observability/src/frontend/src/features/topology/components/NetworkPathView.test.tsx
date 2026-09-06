@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // NetworkPathView.test.tsx — the dedicated src→dst path ribbon (#77). Proves the
 // PIXELS that matter: hops render in forwarding order, endpoints are marked, a
 // COMPUTED path is never sold as a live trace (honesty guard, parallel to

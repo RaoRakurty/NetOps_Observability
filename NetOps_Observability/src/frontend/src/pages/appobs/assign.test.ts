@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // assign.test.ts — the pure core of the bulk service-assignment workflow
 // (2026-07 review imp #5). Validation must mirror the backend bounds
 // (business_service_handlers.go): 1..5000 ids, exactly one target, name ≤128

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // EvidencePopover.test.tsx — the hover peek shows WHY a node/edge is here: its
 // state, the driving issue, and the top evidence rows (source · summary · conf),
 // without a click. Proves the pixels + that it renders nothing for an unknown id.

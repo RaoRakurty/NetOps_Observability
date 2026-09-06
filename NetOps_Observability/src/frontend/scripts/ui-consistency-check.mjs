@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ui-consistency-check.mjs — enterprise design-consistency linter for the Correlix
 // SPA. Flags hardcoded design values that should come from the theme tokens, so
 // colors/fonts/sizes stay uniform across the app (per the standing consistency

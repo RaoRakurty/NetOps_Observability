@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { fmtDateTime, parseTs } from "../lib/time";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, OSHit, CloudResourceRow, CloudChangeRow } from "../services/api";

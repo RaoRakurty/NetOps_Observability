@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // semanticZoom.ts — map a React Flow zoom factor to a semantic level of detail.
 // Pure. Drives label density and which strata of objects are emphasised as the
 // operator zooms (PDF §10 "Semantic zoom" table).

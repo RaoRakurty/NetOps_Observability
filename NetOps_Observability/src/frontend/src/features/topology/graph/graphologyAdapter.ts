@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // graphologyAdapter.ts — bridge the domain TopologyView into a graphology Graph for
 // graph-theoretic analysis (centrality, clustering, community detection). This is
 // deliberately INDEPENDENT of React Flow: graphology is an analysis substrate, not a

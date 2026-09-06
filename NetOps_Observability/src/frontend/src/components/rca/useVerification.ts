@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // useVerification — data hook for the Active Verification panel (RCA spec
 // item 8). Loads the latest run for a case, polls while a run is in flight,
 // and exposes the manual "Verify now" trigger. Honesty rules: a 404 (feature

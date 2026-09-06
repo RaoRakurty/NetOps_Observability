@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // pcapModel.test.ts — the guardrails that stand between an operator and a
 // packet engine pointed at production traffic.
 //

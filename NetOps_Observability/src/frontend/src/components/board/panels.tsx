@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Board framework — reusable dashboard primitives shared by the device-monitoring
 // suite (Device Monitoring, Interface Performance, BGP/OSPF, Troubleshooting).
 // Panels are query-string based: callers compose PromQL from the current scope

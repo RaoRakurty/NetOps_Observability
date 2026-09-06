@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Shared design-system primitives for the dense admin surfaces.
 // Extracted from the Security Policy page so every Administration view shares
 // one dense, status-coded, accessible visual language instead of re-rolling it.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // InvestigationDrawer.test — the close/verification loop renders ONLY what the
 // engine's recovery assessment earned: verified-clear enables a plain close; any
 // weaker state demands an explicit, labeled override; absent recovery data says

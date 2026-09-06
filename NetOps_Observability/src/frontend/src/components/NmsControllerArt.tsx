@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // NmsControllerArt.tsx — how Correlix identifies an NMS / CONTROLLER platform.
 //
 // TRACKER 251 (2026-09-05). This file replaces the retired per-vendor art

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ThreatDetectionView.test.tsx — the two sub-views. The existing flow panels
 // are REUSED as "Network Behavior"; the detections list is the threat evidence
 // lane of the findings store.

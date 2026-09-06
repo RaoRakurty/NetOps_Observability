@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaVerdictBanner.test.tsx — render-level regression for the evidence ledger (gap
 // step 2). The banner is the anti-black-box surface: it renders the engine's verdict
 // with role-grouped evidence. These pin the PIXELS + the honesty rules:

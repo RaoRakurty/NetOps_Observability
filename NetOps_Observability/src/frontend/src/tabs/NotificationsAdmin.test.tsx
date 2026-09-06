@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // NotificationsAdmin audience contract. The seven delivery channels (SMTP,
 // Twilio SMS, ntfy push, Slack, PagerDuty, Teams, SNS) are PLATFORM-global plumbing —
 // every config endpoint behind their tiles is platform-gated, so a tenant

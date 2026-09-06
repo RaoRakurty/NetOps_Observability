@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ResolutionActions (Wave 4 #12 — detection→resolution, slice 2) — the action
 // row on an open cloud investigation. Three per-service resolution actions,
 // every one backed by data that EXISTS (never a fabricated link):

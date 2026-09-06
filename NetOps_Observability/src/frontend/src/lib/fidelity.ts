@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // fidelity.ts — the ONE parser-evidence fidelity vocabulary (parser programme
 // W1b/A3). Every classified signal carries `attrs.fidelity`, and two surfaces
 // now render it: the Telemetry Coverage rules table and the RCA evidence rows.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Icon.geometry.test.ts — geometric guard for the left navigation rail glyphs.
 //
 // WHY: the rail (`.shell-v2 .rail`) centres a 34px key on the pane and a

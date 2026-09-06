@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SeamGroups — the redundancy roll-up over the seam list, on Security Overview.
 //
 // WHY THIS EXISTS. A seam is one ownership handoff. A seam GROUP is the set of

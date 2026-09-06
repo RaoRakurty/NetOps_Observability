@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // alertPanels.test.tsx — the RENDER STATES of the Prefixes, Peers and Bogons
 // views. Each case locks in an honesty contract, not a layout:
 //   * with the evaluator off, the Prefixes view SAYS so — an empty alert list

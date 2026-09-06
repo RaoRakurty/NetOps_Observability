@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // commandCenter.model.test.ts — regression for the Command Center's PRODUCT decision
 // logic (gap-report step 2: the operator decision surface was untested). Pins the
 // non-negotiables: the single-stream confirm guard, internal-stack exclusion (#76),

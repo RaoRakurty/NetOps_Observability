@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useEffect, useState } from "react";
 import { api, ProbePath } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";

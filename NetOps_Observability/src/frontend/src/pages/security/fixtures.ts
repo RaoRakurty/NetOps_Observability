@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // fixtures.ts — the typed Security fixture set the section's tests render.
 //
 // No MSW: the repo's pattern is `vi.mock("../services/api")` with typed

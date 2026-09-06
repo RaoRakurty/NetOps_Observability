@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // parts.tsx — the shared presentation pieces of the Security (CTEM) section.
 //
 // WORD SWEEP (2026-09-06, tracker 270). These pieces state facts; the sentences

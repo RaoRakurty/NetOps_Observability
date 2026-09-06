@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExperienceDataHealth.tsx — the Data Health tab.
 //
 // This is the tab that says whether the other six are worth reading.

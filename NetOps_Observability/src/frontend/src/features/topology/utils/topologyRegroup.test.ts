@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyRegroup.test.ts — the group-by lens, and #131b's two new dimensions.
 //
 // Region and VPC bucket from the FACTS the cloud projection stamps on each node

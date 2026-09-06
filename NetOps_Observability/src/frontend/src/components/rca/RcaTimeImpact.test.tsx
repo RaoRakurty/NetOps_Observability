@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaTimeImpact.test.tsx — the Time Impact card: measurement-gap vs bottleneck,
 // "Not measured" (not "Workflow required") downstream, the two zones, a data-driven
 // outcome line that never claims recovery timing when it's not measured, and the

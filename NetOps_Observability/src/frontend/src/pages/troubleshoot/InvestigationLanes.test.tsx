@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // InvestigationLanes.test.tsx — the parallel evidence lanes.
 //
 // Every lane must render FIVE honest states — loading, error, not_connected,

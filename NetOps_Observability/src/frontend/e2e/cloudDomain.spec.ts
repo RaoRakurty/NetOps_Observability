@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Cloud domain END-TO-END — "the Cloud page is not loading".
 //
 // The Cloud tab has now failed twice for reasons no unit test could see: first an

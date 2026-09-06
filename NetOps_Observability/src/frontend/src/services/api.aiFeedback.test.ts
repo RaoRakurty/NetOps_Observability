@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // api.aiFeedback.test.ts — IRIS Phase B: a thumbs rating must name the answer
 // it judges. POST /api/ai/feedback accepts an optional `answer_id`; when it is
 // absent the server falls back to "this principal's most recent conclusion".

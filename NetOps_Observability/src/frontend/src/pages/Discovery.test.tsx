@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Discovery audience contract. The Subnet Discovery pane has two honest
 // states — the platform operator's config card, and the tenant explanation —
 // and which one renders is decided by WHO is looking. That decision must wait

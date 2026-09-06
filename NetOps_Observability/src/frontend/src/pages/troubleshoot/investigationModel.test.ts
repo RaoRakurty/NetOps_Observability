@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // investigationModel.test.ts — the pure model behind the symptom-first
 // Troubleshooting investigation surface (Project 4 §A).
 //

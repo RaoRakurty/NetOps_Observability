@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // sortRanks.test.ts — semantic ordering for the Cloud Service View tables
 // (2026-07 UX defect #2). Ascending sort must surface the most urgent / strongest
 // row first, not alphabetical noise.

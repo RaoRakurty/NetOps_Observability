@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Alerts.test.tsx — the Active Alerts page grouped by EPISODE: repeated
 // firings render as one row with a count badge, first/last seen, a flap chip
 // and an HONEST suppressed state (muted episodes stay visible), plus the

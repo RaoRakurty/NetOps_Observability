@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { describe, expect, it } from "vitest";
 import { mergeCorrPages } from "./Correlations";
 import type { CorrObject } from "../services/api";

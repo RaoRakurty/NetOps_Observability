@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ConnectorWizard.test.tsx — the onboarding wizard drives the DONE 7-step API in
 // order and, critically, NEVER lets a connector activate until the BACKEND
 // validation passed (honesty-first). We mock services/api so the flow is

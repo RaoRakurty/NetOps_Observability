@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Cloud Connections list (backlog Wave 1 #3 — the wizard's companion surface).
 //
 // Renders the tenant's connectors EXACTLY as the connector API returns them

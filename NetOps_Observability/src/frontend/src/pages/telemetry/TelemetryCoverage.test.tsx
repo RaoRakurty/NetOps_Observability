@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TelemetryCoverage.test.tsx — the Administration → Data Collection coverage
 // page. What is asserted here is the product contract, not the layout:
 //   · the header stats read the parser rev / rules hash / promotion rate, and a

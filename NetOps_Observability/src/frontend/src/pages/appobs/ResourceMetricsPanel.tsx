@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ResourceMetricsPanel — the cloud metric charts (Wave 5 #14 slice 1).
 // Renders provider metric-lane time series (CloudWatch / Azure Monitor / GCP
 // Monitoring → VictoriaMetrics) for one resource (drawer) or an app's

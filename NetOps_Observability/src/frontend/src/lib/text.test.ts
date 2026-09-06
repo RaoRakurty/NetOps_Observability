@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // text.test.ts — display helpers. capitalize touches only the first character
 // and leaves the rest (and empty input) untouched, so it is safe as a pure
 // render-layer transform over vendor ids.

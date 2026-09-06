@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // notifyValidation.ts — client-side mirrors of the notification-channel
 // validators the API enforces (src/backend/notify/channel_config.go:
 // ValidateWebhookURL / ValidateAWSRegion / ValidateSNSTopicARN / ValidateE164 /

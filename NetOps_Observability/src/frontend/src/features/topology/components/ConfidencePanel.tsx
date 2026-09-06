@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ConfidencePanel — a calm, honest read on how sure we are about the selected
 // object. Band + bar colored by tone, percent, and a short line derived from the
 // supporting evidence (no overclaiming — PDF §8).

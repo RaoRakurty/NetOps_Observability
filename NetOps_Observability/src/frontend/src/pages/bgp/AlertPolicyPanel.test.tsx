@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // AlertPolicyPanel.test.tsx — the render states of the BGP alert policy editor.
 //
 // Each case locks in an honesty contract, not a layout:

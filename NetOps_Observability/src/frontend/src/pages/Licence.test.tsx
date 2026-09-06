@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Licence.test.tsx — the platform Licence page.
 //
 // WHAT THESE TESTS ARE FOR. A licence screen is read by two people: an operator

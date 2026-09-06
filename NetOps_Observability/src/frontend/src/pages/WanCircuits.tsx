@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, WanCircuit, WanEndpoint, WanInterfaceRow, WanMeasurementPolicy } from "../services/api";
 import DataTable, { Column, Sev } from "../components/DataTable";

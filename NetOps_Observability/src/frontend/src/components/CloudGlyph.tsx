@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CloudGlyph.tsx — the ORIGINAL Correlix cloud-glyph family.
 //
 // Licence audit D5 (2026-09-04): the official AWS Architecture Icons "AWS Cloud

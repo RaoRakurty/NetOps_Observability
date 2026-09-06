@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TopologySideDrawer — the inspector. Answers the operator's five questions about
 // the selected node/edge: what is it, is it healthy, what changed, what evidence,
 // who owns it. Presentational only — selection + close are driven from above.

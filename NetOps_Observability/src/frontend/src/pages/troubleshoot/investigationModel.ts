@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // investigationModel — the pure model behind the symptom-first Troubleshooting
 // investigation surface (Project 4 §A; design of record
 // docs/design/research/TROUBLESHOOTING_PAGE_RESEARCH_2026-08-25.md).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // UpgradeCard.tsx — what a 402 looks like, everywhere in the product.
 //
 // WHY THIS IS ONE COMPONENT AND NOT TWENTY. Every licence gate on the server

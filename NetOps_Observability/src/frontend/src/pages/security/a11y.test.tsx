@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // a11y.test.tsx — the Security section's accessible semantics, pinned the way
 // the RCA workspace's are: a real heading structure, named landmarks, live
 // regions for the counts that change under the operator, toggle semantics on

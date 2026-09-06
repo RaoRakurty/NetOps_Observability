@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // EvidencePopover — a hover peek (design doc component list) at WHY a node/edge is
 // on the canvas: its health/RCA verdict, the issue(s) driving it, and the top
 // evidence rows — without a click into the side drawer. Read-only and

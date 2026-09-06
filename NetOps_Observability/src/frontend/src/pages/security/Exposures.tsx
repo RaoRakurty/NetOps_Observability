@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./Security.css";
 import { api, SecFacets, SecFinding, SecFindingQuery, SecSavedView } from "../../services/api";

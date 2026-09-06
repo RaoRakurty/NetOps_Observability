@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // bgpAlerts.model.test.ts — the PURE model behind the Prefixes, Peers and
 // Bogons views. Each case locks in an honesty contract, not a layout.
 

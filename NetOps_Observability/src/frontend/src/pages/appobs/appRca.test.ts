@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // #81 P3G — loadAppRca maps the /api/cloud/app-rca ClickHouse response into the

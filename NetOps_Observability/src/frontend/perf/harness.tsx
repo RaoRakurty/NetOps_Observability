@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // perf/harness.tsx — the measurement rig behind `npm run perf:budget`.
 //
 // WHAT IT MEASURES. Each scenario renders one real page/component with a

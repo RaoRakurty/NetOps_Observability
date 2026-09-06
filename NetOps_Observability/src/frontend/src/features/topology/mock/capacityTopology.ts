@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // capacityTopology.ts — mock TopologyView for the "capacity" workflow (PDF §9).
 //
 // A routed leaf-spine fabric carrying DELIBERATELY uneven load so the utilization

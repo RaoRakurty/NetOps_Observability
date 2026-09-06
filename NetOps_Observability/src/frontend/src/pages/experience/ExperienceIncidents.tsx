@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExperienceIncidents.tsx — the Incidents tab.
 //
 // The same table the overview shows, with the server's own filters in front of

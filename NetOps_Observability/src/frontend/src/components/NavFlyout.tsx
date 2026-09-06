@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavSection, routeFor } from "../nav";
 

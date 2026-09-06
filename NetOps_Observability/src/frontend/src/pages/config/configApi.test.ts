@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // configApi.test.ts — the WIRE contract of the config-backup client methods.
 //
 // The component tests mock services/api, so they cannot catch a wrong verb,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Registries.test.tsx — the operator-authored service catalog + application
 // registry sub-tab.
 //

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // #81 P3H — the Health / Changes / Evidence tabs render ONLY real cloud telemetry.

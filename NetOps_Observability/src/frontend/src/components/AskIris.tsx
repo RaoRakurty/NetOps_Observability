@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // AskIris — the 16 px `(i)` that replaced an on-screen explanation.
 //
 // Programme: docs/design/UI_WORDS_IRIS_EXPLAINS_2026-09-06.md (tracker 270).

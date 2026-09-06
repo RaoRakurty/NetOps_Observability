@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExperienceIncidentView.tsx — one experience incident.
 //
 // The owner's Phase F information architecture, in this exact order:

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // InvestigateWorkflow — Phase 1 (implemented).
 //
 // The intense, incident-driven mode. Opens on the incident topology and

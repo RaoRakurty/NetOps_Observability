@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TopologyCanvas.domain.test.tsx — the domain selector must actually switch.
 //
 // This exists because the canvas shipped with `domain` prop-only (default

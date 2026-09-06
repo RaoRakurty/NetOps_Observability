@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { CorrTimeline, CorrSignal, Seam } from "../../services/api";
 import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, seamOwnerColor, isInternalEntity } from "./labels";
 import { kindForRole, type ShapeKind } from "../graph/shapes";

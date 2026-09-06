@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DegradedEdge.tsx — an unhealthy link (warning/critical). Uses HEALTH_COLOR for
 // the edge status, a dashed-dotted pattern so degradation reads without relying on
 // color alone (accessibility, PDF §11), and a warning glyph at mid-path.

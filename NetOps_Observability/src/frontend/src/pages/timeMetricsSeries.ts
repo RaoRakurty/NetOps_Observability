@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // timeMetricsSeries.ts — pure logic behind the Recovery Scorecard's detection /
 // repair trend (GET /api/reliability/time-metrics, the PERSISTED per-incident
 // phase-metric snapshots).

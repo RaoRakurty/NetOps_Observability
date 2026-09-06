@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { describe, it, expect } from "vitest";
 import { buildRcaCase, buildCaseEvents, EXAMPLE_CASE } from "./rcaCase";
 import { signal, timeline, corrObject } from "../../test/factories";

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useEffect, useState } from "react";
 
 // prefs.ts — user-facing display preferences (theme + table density + chrome

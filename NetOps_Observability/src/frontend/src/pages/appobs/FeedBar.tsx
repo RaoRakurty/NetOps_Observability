@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // FeedBar — the honesty header for a live cloud signal feed (owner review #2).
 //
 // Answers, in one strip, the three questions every cloud table used to leave

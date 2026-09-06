@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExperienceChanges.tsx — the Changes tab.
 //
 // One normalized feed of everything that was done to the estate: deployments,

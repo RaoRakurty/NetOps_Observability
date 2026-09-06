@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // index.ts — the React Flow `edgeTypes` registry. Keys MUST match
 // EDGE_TYPE_FOR_VARIANT in ../rfTypes.ts (adapter ↔ renderer contract).
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // carrierOverlay.test.ts — the cross-cutting carrier overlay is pure, idempotent
 // and evidence-backed.
 

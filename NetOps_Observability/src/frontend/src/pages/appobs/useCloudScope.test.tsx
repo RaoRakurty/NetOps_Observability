@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // useCloudScope.test — the URL IS the scope state (Wave 2 #5): mutations write
 // the hash, hashchange folds it back, refresh/back/pasted links reproduce the
 // exact view, and the drawer's ?inv= param survives every scope mutation.

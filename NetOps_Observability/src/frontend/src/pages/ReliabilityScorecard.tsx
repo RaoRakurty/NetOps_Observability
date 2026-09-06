@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ReliabilityScorecard — the enterprise "NOC Recovery Scorecard" for RCA Time
 // Intelligence (#84). Answers, for a NOC manager: where is incident time lost, which
 // owner domain owns the pain, what evidence is missing, what keeps recurring, and what

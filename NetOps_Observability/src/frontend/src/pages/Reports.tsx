@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { fmtDateTime, fmtTime } from "../lib/time";
 import { Fragment, useEffect, useState } from "react";
 import {

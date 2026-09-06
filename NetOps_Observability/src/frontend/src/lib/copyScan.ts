@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // copyScan.ts — the machinery behind the UI-copy guard tests.
 //
 // Two guards use it:

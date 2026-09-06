@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import React from "react";
 import ReactDOM from "react-dom/client";
 // Fonts are NOT imported here any more. Importing @fontsource CSS from TS made

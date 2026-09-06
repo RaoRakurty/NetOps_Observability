@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // appNames — client-side app-name enrichment over POST /api/appid/resolve/batch
 // (#81 P3G). List views (top talkers, scan fan-out, tunnels) collect their
 // visible IPs and get names in ONE debounced call; results live in a

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // OverlaySelector — compact segmented control over the overlays that ACTUALLY
 // apply to the current view. Only AVAILABLE overlays are shown — a permanently
 // greyed, do-nothing overlay (config-drift/syslog/golden-path/routing-changes have

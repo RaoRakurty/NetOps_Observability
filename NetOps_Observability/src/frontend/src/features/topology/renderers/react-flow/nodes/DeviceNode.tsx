@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DeviceNode.tsx — the BASE topology card + the reusable <NodeCard> shell that
 // every other device node (switch/router/firewall/cloud) composes. Calm by
 // default (PDF §11): health is a small ring/badge top-right, never a full fill;

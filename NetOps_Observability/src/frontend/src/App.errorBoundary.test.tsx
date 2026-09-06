@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App.errorBoundary.test.tsx — the shell never white-screens.
 //
 // The regression this pins actually happened: a contract slip in

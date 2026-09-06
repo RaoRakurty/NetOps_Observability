@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // graphAlgorithms.test.ts — the pure traversals every canvas workflow's spotlight
 // and blast-radius expansion stands on (firstDegree / nHop / pathEdgeIds /
 // edgesWithin) were untested. Pins: undirected adjacency, cycle termination,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Shared ECharts theming so every graph in the app reads as one product —
 // a vivid, modern categorical palette tuned for the LIGHT canvas (saturated
 // enough to feel alive on white, still AA-legible), in the spirit of

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useState } from "react";
 import { api, AiAnswer } from "../../services/api";
 import Icon from "../Icon";

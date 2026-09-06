@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // flowsAppViews — the pure logic behind Explore → Flows' APP and SERVICE views.
 //
 // WHY IT IS SEPARATE. Both views exist to make an *honest* statement about

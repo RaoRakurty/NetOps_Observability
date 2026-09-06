@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Human-readable labels for the operator-facing RCA story. The engine speaks in
 // signature ids and signal kinds; operators need plain language. These maps turn
 // `sig.ent.middle-mile.dia-egress-latency` → "ISP / DIA egress latency" and

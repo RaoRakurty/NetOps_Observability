@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Licence.tsx — the platform Licence page.
 //
 // WHAT THIS PAGE IS FOR. An operator opens it to answer four questions, and it

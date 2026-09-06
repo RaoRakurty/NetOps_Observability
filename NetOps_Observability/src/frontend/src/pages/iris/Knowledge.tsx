@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Iris → Knowledge — what Correlix actually knows, per vendor dialect.
 //
 // This is the other half of the TAC escalation pack

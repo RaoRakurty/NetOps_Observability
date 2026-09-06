@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ErrorBoundary.tsx — the shell's last line of defence against a white screen.
 //
 // WHY THIS EXISTS. React unmounts the whole tree when a render throws and

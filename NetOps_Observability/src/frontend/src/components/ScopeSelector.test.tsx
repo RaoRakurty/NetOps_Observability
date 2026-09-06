@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ScopeSelector contract — the top-bar control exists to state WHICH door is
 // open. Two truthfulness rules ratcheted here:
 //  · when TenantGate (or anything else) opens a tenant and dispatches

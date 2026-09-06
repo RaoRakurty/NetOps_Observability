@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Provider incidents + seam health strip (Wave 5 #16) — two small Overview
 // lanes over the new tenant-scoped reads:
 //

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // semanticZoom.test.ts — the ONE zoom ladder.
 //
 // This file exists because the canvas, the adapter and the node renderer once

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { defineConfig, devices } from "@playwright/test";
 
 // E2E config — drives the real SPA in a headless browser against the Vite dev

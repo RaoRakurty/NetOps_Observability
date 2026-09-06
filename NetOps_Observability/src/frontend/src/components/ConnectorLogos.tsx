@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ConnectorLogos.tsx — the cloud-provider marks for the Integrations gallery.
 //
 // NOTHING IN THIS FILE IS A VENDOR'S ARTWORK, and nothing in it may become

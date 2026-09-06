@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // serviceMap.test.ts — the pure API-shape → view-model transform behind the
 // observed Service Map (tracker #110). Asserts the honesty contract: node
 // classification never promotes an unresolved endpoint, edge weight comes from

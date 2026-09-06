@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Dependency map flow E2E (gap #2, last user-reachable canvas mode). Switching to
 // Dependency requests the flow-derived service-dependency projection and renders it
 // on the real React Flow canvas — this is also the only E2E that exercises the graph

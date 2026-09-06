@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // verificationSettings.ts — the pure half of the Active Verification settings
 // card (Administration → Settings). It builds the PATCH the card PUTs to
 // /api/settings/verification and decides what the operator is allowed to do.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // scope.ts — how the global scope bar's provider/account/region/env filters
 // actually apply to each Service View surface (Wave 2 #5). Pure + unit-tested
 // (scope.test.ts).

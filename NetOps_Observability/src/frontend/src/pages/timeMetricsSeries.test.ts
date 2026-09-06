@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // timeMetricsSeries.test.ts — the honesty rules of the detection/repair trend.
 //
 // Every assertion here exists because the alternative would be a lie on a NOC

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // badges.test.tsx — the evidence-category ledger badge renders every category
 // with a human label (#81 P3F+1 Phase 4). The categories are the anti-black-box
 // vocabulary: grounded / contradicting / discriminating / missing / recovery.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { describe, expect, it } from "vitest";
 import { fromLegacy, mergeHits, groupHits, OMNI_KIND_ORDER, OmniHit } from "./omniSearch";
 import { GlobalResult, SearchHit } from "../services/api";

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useState } from "react";
 import { fmtTime } from "../lib/time";
 import { PANELS, useBoardHealth } from "./panels";

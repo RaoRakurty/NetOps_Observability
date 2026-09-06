@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // errors.ts — turn a thrown value into something a NOC operator can act on.
 //
 // WHY THIS EXISTS. `services/api.ts` throws `new Error(\`${status} ${statusText}: ${body}\`)`.

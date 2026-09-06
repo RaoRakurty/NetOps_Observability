@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TacEscalationPanel.test.tsx — the TAC escalation flow on the Investigate page.
 //
 // Every step of the flow is covered, and for each one the HONEST state is

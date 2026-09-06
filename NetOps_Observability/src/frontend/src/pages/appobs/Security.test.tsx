@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Security.test.tsx (Wave 5 #16) — the security surface renders ONLY what the
 // tenant-scoped API returned, labels each finding with its lane + provider, and
 // its empty states are HONEST: "lanes not configured" is a different truth from

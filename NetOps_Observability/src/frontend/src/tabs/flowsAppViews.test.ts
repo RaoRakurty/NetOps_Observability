@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // flowsAppViews.test.ts — the honesty rules of Explore → Flows' APP and SERVICE
 // views, tested where they live (pure functions), not through the DOM.
 //

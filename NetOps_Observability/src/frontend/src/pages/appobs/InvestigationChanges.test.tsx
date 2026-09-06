@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // InvestigationChanges.test.tsx (Wave 4 #12 slice 3) — the change→incident
 // card renders only recorded changes with exact onset-relative wording, and
 // every empty state says WHY there is nothing to show.

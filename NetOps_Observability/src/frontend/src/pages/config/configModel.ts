@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // configModel.ts — the PURE adapters behind the configuration-backup surfaces
 // (the device Configuration panel and the fleet Config drift list).
 //

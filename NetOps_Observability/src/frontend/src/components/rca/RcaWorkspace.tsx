@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useState, ReactNode } from "react";
 import "./RcaWorkspace.css";
 import { api } from "../../services/api";

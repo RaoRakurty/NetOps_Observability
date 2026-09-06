@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // FidelityBadge — the ONE rendering of a parser-rule evidence tier (W1b/A3).
 // Shared by the Telemetry Coverage rules table and the RCA evidence rows so both
 // surfaces grade the same rule with the same word and the same colour.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Knowledge.test.tsx — Iris → Knowledge, the per-vendor coverage page.
 //
 // The page exists to be HONEST about coverage, so that is what is pinned:

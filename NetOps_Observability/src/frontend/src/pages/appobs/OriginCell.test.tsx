@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // OriginCell.test.tsx — the "Origin" column on Open Investigations (owner review
 // #5: "where does this issue come from?"), and the FeedBar that discloses the
 // window/count/liveness of a signal feed (review #2).

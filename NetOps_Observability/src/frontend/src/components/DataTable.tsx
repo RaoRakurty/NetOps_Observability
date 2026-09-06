@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DataTable — the #45 phase-2 telemetry table primitive (spec §20.2).
 //
 // A dense, virtualized, keyboard-navigable table built on the semantic token

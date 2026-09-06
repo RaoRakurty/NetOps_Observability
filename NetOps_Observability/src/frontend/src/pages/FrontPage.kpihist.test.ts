@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // FrontPage.kpihist.test.ts — KPI-history key isolation (M21, wave-3 second
 // pass). kpiHistKey() fell back to the BARE prefix for every non-cross user
 // (getActiveScope() is only set by the platform owner's scope selector), so

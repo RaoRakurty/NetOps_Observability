@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CommandCenter.test.tsx — the Action Queue's OPERATOR AFFORDANCES (owner live
 // review, 2026-07): the queue used to hand-roll its own <table>, so it never
 // inherited the shared DataTable's visible resize grip or sortable headers.

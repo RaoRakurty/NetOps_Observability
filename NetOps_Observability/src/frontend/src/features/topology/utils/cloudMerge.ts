@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // cloudMerge.ts — put the discovered CLOUD network onto the SAME canvas as the
 // on-prem fabric (#131).
 //

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // time.ts — the ONE time authority for the SPA (docs/design/log-time-standard.md).
 //
 // Rules this module enforces:

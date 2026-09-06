@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Path Trace honesty E2E (gap #8, end-to-end). The #8 guard says an IGP-computed
 // shortest path must NEVER be presented to the operator as a live trace. These drive
 // the REAL topology canvas — switch to Path Trace, pick src+dst — and assert the

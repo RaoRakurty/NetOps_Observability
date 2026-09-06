@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaVerdictFeedback.test.tsx — the operator verdict control (Project 2 P7).
 //
 // What is pinned here is the honesty contract, not the styling: the three

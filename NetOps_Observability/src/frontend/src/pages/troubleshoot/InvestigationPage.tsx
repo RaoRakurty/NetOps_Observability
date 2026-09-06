@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // InvestigationPage — the symptom-first Troubleshooting surface (Project 4 §A).
 //
 // THE GOAL OF THIS PAGE, in the order an operator works it (owner, 2026-09-06:

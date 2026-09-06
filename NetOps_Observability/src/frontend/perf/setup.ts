@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import "@testing-library/jest-dom";
 
 // React 18 needs this flag to treat act() as the test-environment batching hook;

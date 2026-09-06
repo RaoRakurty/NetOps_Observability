@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SecurityRules.test.tsx — the rule editor. The load-bearing assertion is the
 // PUT body: enablement only, changed rules only, no server-owned field.
 

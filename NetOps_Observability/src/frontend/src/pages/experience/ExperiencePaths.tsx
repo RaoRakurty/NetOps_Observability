@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExperiencePaths.tsx — the Service Paths tab.
 //
 // WHAT THIS TAB DELIBERATELY DOES NOT DO: draw a path.

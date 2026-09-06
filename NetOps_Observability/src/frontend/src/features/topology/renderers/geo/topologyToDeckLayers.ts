@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Placeholder. MapLibre GL JS + deck.gl geo/WAN renderer is Phase 5; adapter
 // boundary only.
 //

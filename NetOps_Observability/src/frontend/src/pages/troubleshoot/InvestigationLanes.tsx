@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // InvestigationLanes — the parallel evidence lanes of the symptom-first
 // Troubleshooting surface. One card per lane, each fed by an ALREADY-DEPLOYED
 // API, each carrying its own honest empty and not-connected states.

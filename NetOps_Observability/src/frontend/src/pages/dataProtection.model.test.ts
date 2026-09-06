@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // dataProtection.model.test.ts — the RULES behind the Data Protection console.
 //
 // The rule this file exists to hold down is the honest-empty-state rule: an

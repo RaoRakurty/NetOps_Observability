@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // scopeUrl.test.ts — the scope bar's URL state (Wave 2 #5).
 //
 // Acceptance: a scope round-trips through the hash losslessly; links/refresh

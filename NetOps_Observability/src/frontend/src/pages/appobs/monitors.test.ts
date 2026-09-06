@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { describe, it, expect } from "vitest";
 import {
   EMPTY_MONITOR_DRAFT, describeMonitor, draftToInput, monitorStateLabel,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // carrierOverlay.ts — the cross-cutting CARRIER / PROVIDER-network overlay.
 //
 // A carrier network is the thing that ties LAN, SD-WAN, DC and Cloud together,

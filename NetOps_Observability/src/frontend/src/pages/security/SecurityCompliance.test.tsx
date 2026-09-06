@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SecurityCompliance.test.tsx — the Frameworks view. The vocabulary is the
 // point: this page reports which frameworks THIS TENANT is assessed against and
 // the control evidence behind each, and it must never claim certified

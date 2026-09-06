@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // WirelessRemediation.test.tsx — the guarded wireless approval queue.
 //
 // The assertions that matter: a dormant feature renders NOTHING (an empty

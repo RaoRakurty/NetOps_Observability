@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // InvestigationChanges (Wave 4 #12 slice 3) — the change→incident correlation
 // card MADE REAL: for one open cloud investigation, the provider change events
 // (cloud_change / cloud_audit) recorded in the onset-anchored window on the

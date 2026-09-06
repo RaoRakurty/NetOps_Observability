@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { usePrefs } from "../theme/prefs";
 
 // AppearanceControls — the per-user display preferences in the account menu.

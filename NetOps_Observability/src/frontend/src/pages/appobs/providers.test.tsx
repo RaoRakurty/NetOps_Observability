@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // providers.test.tsx — Wave 5 #17 slice 1: the frontend provider registry is
 // the ONE provider descriptor module. The success criterion under test:
 // REGISTERING A 4TH PROVIDER REQUIRES ZERO UI FILE EDITS — the wizard tile,

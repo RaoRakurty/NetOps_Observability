@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DataProtection.test.tsx — the backup & recovery console.
 //
 // WHAT THESE TESTS ARE FOR. A backup screen is the one screen an operator reads

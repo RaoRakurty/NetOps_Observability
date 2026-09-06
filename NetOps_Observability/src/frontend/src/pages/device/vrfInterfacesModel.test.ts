@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // vrfInterfacesModel — the pure model. Every assertion here is about the ONE
 // thing this panel can get catastrophically wrong: presenting an absence as a
 // fact (a fabricated "default" instance, a null counter rendered as zero, a

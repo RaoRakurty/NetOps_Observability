@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // rcaPathToView.test.ts — the pure RCA-path → TopologyView adapter (#77). Asserts
 // the kind/health/status mapping, annotation-override authority, and that the
 // fault path is carried as an ordered node-id list for the canvas to spotlight.

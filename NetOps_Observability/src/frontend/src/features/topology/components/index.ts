@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Barrel for the presentational topology canvas components.
 export { default as EvidencePanel } from "./EvidencePanel";
 export { default as ConfidencePanel } from "./ConfidencePanel";

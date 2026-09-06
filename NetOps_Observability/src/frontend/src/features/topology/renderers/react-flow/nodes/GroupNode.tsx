@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // GroupNode.tsx — a group rendered two ways (Phase 2):
 //   • EXPANDED  → a translucent rounded backdrop behind its devices, with a label
 //     chip (name · worst-health dot · counts) and a collapse chevron.

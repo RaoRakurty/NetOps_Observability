@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // UpgradeCard.test.tsx — the one card every 402 in the product renders.
 //
 // WHAT THESE TESTS ARE FOR. A commercial limit reaching an operator as a fault

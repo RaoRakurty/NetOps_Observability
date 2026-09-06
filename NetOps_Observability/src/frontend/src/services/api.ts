@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Minimal typed API client. Paths are relative — nginx (or Vite dev
 // proxy) routes /api and /admin to the Go backend.
 

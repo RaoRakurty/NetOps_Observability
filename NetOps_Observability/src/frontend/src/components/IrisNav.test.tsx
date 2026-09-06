@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // IrisNav — the one section that BOTH acts and routes.
 //
 // Iris is pinned to the foot as an ACTION: clicking it opens the ask slide-over

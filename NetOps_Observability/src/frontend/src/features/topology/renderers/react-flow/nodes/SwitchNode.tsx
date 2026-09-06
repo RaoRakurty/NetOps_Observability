@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SwitchNode.tsx — switch card. Vendor-neutral icon: a body with stacked
 // horizontal port rows. Reuses the shared <NodeCard> shell.
 

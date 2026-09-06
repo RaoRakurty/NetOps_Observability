@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // configModel.test.ts — the honesty rules of the configuration-backup surfaces,
 // pinned as unit tests so no component can quietly re-invent them:
 //  · an unrecognised or missing state collapses to "unknown", never to a pass

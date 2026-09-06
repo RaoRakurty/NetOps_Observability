@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // GeoTopologyMap — Phase 5 geographic / WAN renderer.
 //
 // A real ECharts world map (Natural Earth 110m basemap, the same public-domain

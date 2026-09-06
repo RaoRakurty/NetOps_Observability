@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // monitors.ts — pure logic for the cloud Monitors editor (Wave 5 #14 slice 3).
 // Validation mirrors the backend's closed vocabularies so a refused save is
 // caught before the round-trip; description/state helpers keep the card's

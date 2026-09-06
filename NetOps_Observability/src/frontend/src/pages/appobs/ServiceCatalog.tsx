@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Service catalog (Wave 3 #8 / product-review rev #12) — the operator-authored
 // registry over /api/cloud/business-services, finally with a UI: list, create,
 // edit, delete. Criticality and owner entered here light up the Services join

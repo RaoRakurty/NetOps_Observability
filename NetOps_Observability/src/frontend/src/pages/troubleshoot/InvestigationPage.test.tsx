@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // InvestigationPage.test.tsx — the guided Troubleshooting surface.
 //
 // The shape under test (owner, 2026-09-06 — "this page doesn't make sense,

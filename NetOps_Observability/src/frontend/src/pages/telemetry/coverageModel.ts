@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // coverageModel — the pure adapter layer behind the Telemetry coverage page
 // (parser programme A6, UI half).
 //

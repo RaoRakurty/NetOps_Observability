@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DeviceNode.test.tsx — render-level guard for the RCA marker visual contract on
 // the device card. The adapter/variant tests prove the DATA is right; these prove
 // the PIXELS are right: the right glyph shows, suspected ≠ confirmed on screen,

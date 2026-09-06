@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // serviceMap.ts — the observed cloud service dependency map (Wave 3 #9 carried,
 // tracker #110): the pure transform from the GET /api/cloud/service-map wire
 // shape to the view model the Service Map canvas renders.

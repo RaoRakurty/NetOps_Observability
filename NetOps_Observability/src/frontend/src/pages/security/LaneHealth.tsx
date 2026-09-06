@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // LaneHealth — the security PRODUCER lane's own health, on Security Overview.
 //
 // WHY THIS EXISTS. Every number on this page is downstream of one process: the

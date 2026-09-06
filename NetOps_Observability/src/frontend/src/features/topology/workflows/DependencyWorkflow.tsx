@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DependencyWorkflow — Phase 1 (implemented).
 //
 // The app/service dependency map. Opens on the cloud topology and stays calm

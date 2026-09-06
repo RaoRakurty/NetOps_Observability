@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TopologyLegend — the canvas grammar as a key, not a lesson: health rings
 // (always glyph-paired), edge styles, and the unresolved-node treatment.
 //

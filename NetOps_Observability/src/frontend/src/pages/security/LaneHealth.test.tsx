@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // LaneHealth.test.tsx — the producer lane's health strip on Security Overview.
 //
 // The assertions that matter are the ones that keep the panel from lying about

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // WindowedList — the list counterpart to components/DataTable's windowing.
 //
 // DataTable already keeps big TABLES flat by rendering only the rows in view.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyToReactFlow.ts — THE adapter. Maps the renderer-agnostic TopologyView +
 // a computed layout + transient UI state into @xyflow/react nodes & edges. This is
 // the ONLY file that knows both the domain contract and React Flow. Sigma/deck get

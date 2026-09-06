@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // MapWorkflowSelector — segmented control over operator workflows (PDF §9).
 // Implemented workflows are clickable; not-yet-built ones stay visible but muted
 // with a "soon" tag and the blurb on hover, so the roadmap is honest.

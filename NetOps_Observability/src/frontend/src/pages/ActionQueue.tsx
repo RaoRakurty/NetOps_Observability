@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ActionQueue — Operations → Action Queue (2026-08 nav redesign). The Command
 // Center's triage queue promoted to a first-class routed page: before this, the
 // queue was a panel inside the Command Center with NO route of its own, so it

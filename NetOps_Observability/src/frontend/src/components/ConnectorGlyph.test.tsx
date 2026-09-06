@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ConnectorGlyph.test.tsx — tracker 239 guard.
 //
 // Correlix identifies a third-party connector by a GENERIC FUNCTIONAL glyph

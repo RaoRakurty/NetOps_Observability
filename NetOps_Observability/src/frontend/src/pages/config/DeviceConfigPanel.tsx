@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DeviceConfigPanel — the "Configuration" tab of the device detail page.
 //
 // What it gives an operator, in one place: the current drift verdict (four

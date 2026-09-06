@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // incidentTopology.ts — mock TopologyView for the "investigate" (RCA) workflow.
 //
 // Root cause: leaf3 has an optical/CRC fault on Eth1/49 → spine1. The degraded

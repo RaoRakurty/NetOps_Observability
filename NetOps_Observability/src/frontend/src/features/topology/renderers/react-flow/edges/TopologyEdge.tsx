@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TopologyEdge.tsx — the base, calm-by-default edge, plus the shared `EdgeBody`
 // helper every other edge variant reuses so the path math, label card and overlay
 // treatments live in exactly one place (DRY, PDF §11).

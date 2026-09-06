@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaFeedbackTile.test.tsx — "Verdict feedback (30 d)" on the NOC scorecard.
 // The tile exists to report ONE number honestly, so that is what is pinned:
 // an empty sample has no false-positive rate ("Not enough feedback yet"), never

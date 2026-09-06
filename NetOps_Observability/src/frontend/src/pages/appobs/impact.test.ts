@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // impact.ts — the degraded-services strip logic: duration from the FIRST
 // degraded signal, worst-first ordering (down → criticality → longest), blast
 // radius counted from the signals, and honest "unknown" when nothing measured it.

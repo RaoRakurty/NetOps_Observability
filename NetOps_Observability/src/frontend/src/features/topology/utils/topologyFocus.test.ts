@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyFocus.test.ts — the escape hatch the >1000-node card advertises.
 
 import { describe, it, expect } from "vitest";

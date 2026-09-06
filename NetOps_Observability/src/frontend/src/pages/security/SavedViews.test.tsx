@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SavedViews.test.tsx — saved-view CRUD. A view stores a FILTER, never rows.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";

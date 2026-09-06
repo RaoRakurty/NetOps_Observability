@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // PathAnalysisPanel.test.tsx — HONESTY guard (gap-report #8 / non-negotiable): an
 // IGP-computed shortest path must NEVER be presented to the operator as a live trace.
 // These prove the PIXELS: a measured path reads "Measured", a computed path reads

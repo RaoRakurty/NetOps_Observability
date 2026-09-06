@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import type { TopologyView } from "../api/topologyTypes";
 
 // topologyFocus — narrow the canvas to a subset the operator chose.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // model.ts — the PURE data adapters behind the Security (CTEM) section.
 //
 // Every number an operator reads on a security screen is computed here, never

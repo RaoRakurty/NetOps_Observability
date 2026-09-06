@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — global shell primitives (#81 P3F+1).
 //
 // The trust chrome that wraps every Cloud App Observability page: scope + freshness

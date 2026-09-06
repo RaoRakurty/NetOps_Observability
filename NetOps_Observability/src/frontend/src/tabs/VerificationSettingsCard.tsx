@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // VerificationSettingsCard — Administration → Settings.
 //
 // Active verification is the platform logging in to a device to CHECK a

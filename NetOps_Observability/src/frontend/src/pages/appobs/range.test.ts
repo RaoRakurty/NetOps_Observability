@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // range.test.ts — the time window the cloud views show, and the honesty of what
 // they say about it (2026-07 owner review #2).
 //

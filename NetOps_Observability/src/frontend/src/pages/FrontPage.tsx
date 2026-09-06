@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { CSSProperties, ReactNode, useEffect, useState } from "react";
 import { api, CorrObject, FeedItem, CorrTimeline, getActiveScope, sessionTenantKey } from "../services/api";
 import { useShell } from "../context/shell";

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // AlertPolicyPanel — the BGP alert policy, on the one-page outage screen.
 //
 // WHY IT SITS HERE. Everything the Incidents section above shows is a VERDICT

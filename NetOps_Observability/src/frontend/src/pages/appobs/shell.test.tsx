@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // shell.test.tsx — the trust chrome renders honest scope, freshness, data mode,
 // and source status (#81 P3F+1). Acceptance: the header/strip never says "mock",
 // scope shows tenant/provider/account/region/env, and unmeasured values render as

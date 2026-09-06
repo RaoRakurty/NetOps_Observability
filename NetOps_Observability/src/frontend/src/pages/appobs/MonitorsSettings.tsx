@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // MonitorsSettings — the cloud monitor authoring card (Wave 5 #14 slice 3),
 // following the Wave 4 #11 Settings-card pattern (GovernanceSettings): load →
 // list → inline create/toggle/delete, every failure shown, no fake saves.

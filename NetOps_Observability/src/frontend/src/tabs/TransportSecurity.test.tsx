@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TransportSecurity.test.tsx — the SEC-021.1 read-only posture view: the
 // platform owner sees the full path inventory (drift disclosed, export
 // offered); a tenant admin sees only its device lanes (no export); a 503

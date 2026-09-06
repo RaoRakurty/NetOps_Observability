@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // api.debug.ts — the client for the pipeline debugger's platform routes.
 //
 // WHY IT IS ITS OWN MODULE. Every route below is platform-global and

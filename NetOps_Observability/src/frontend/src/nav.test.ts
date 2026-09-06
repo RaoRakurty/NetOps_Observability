@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // landingResolves — guards the admin-configurable default landing: a configured
 // route is only applied if it resolves to a REAL, ACCESSIBLE leaf in the principal's
 // (already-filtered) nav. A stale or forbidden route must fall back to the built-in

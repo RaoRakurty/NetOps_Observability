@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // index.ts — the ordered registry of topology workflows.
 //
 // Display order is deliberate: the three Phase-1 implemented modes first, then

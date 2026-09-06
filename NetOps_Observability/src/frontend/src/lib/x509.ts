@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Minimal X.509 helpers for the SSO admin UI: extract a certificate's NotAfter
 // client-side (so the cert-expiry banner works the moment a PEM is pasted or
 // uploaded, before any round-trip) and classify how close to expiry it is.

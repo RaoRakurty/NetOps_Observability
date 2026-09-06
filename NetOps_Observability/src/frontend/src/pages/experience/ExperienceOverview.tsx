@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExperienceOverview.tsx — the Experience tab.
 //
 // The order is the owner's Phase E layout and it is not arbitrary: five

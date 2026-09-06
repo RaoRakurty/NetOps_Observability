@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyRegroup.ts — PURE client-side regrouping of a TopologyView by any node
 // dimension (site / role / vendor / owner), or none. Borrows the "regroup by any
 // tag dimension" idea (Datadog) so the operator isn't locked to the backend's fixed

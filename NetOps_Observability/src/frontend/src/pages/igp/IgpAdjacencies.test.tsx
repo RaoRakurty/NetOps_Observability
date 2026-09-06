@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // IgpAdjacencies render tests — the five honest states, and the one thing the
 // PromQL board above this panel cannot do: tell "0 adjacencies down" apart from
 // "nothing is watching this protocol". If a future edit ever makes an

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // geoWanTopology.ts — sample TopologyView for the "executive_geo" / wan_geo mode.
 //
 // ~6 site nodes pinned to REAL geographic coordinates { x: longitude, y: latitude }

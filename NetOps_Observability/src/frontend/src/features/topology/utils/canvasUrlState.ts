@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // canvasUrlState.ts — the topology canvas's shareable STATE, serialized into the
 // route's query string.
 //

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // edgeBundling.ts — collapse parallel links between the same node pair into a
 // single bundled edge (2×100G / LAG-N). Pure: returns a NEW view; single edges are
 // returned untouched. Bundling is a view transform, not a graph mutation — the

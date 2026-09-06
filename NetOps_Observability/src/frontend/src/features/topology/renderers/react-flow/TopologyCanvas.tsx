@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TopologyCanvas.tsx — the Phase-1 React Flow operator canvas. It is the ONLY
 // renderer wired in Phase 1; it consumes a renderer-agnostic TopologyView, lays it
 // out with ELK, and maps it through topologyToReactFlow. Sigma/geo adapters exist

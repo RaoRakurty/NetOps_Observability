@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // TacEscalationPanel — the TAC escalation flow, one panel, incident-first.
 //
 // Design of record: docs/design/TAC_ESCALATION_2026-09-05.md §1. It replaces the

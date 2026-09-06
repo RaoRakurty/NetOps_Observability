@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExperienceSynthetics.tsx — the Synthetics tab.
 //
 // Three reads, and all three are load-bearing:

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Security (Wave 5 #16) — the security-findings view over the ALREADY-ingested
 // log-fidelity rollup lanes: WAF blocks, LB-plane 5xx and DNS resolution
 // failures. Nothing here is inferred: every row is a rollup the correlation

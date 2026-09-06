@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // vendorTerms — vendor-dialect display vocabulary (item 4, 2026-08-25).
 // Mirrors backend internal/netconcepts: Correlix READS every dialect as one
 // canonical concept, but SHOWS each device's own dialect to its operator.

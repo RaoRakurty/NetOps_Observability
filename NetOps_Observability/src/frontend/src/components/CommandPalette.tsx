@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShell } from "../context/shell";
 import { usePrefs } from "../theme/prefs";

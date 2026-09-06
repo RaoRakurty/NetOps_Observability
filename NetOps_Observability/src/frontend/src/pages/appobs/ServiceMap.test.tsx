@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ServiceMap.test.tsx — mount smoke + honest-state contract for the observed
 // Service Map (tracker #110). Full React Flow measurement is unreliable under
 // happy-dom (same caveat as CloudTopologyView.test.tsx), so the canvas cases

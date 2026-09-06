@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // traffic.test.ts — per-service app-edge traffic from the cloud LB plane.
 //
 // Acceptance: the gateway-5xx count is real and complete (every ELB-side 5xx is

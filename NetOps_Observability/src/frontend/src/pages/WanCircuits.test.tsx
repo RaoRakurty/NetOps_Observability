@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // WanCircuits.test.tsx — the three derived WAN surfaces and the one thing that
 // is actually stored.
 //

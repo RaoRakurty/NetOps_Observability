@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CloudNode.tsx — cloud / WAN card. Vendor-neutral cloud icon. Used for both the
 // "cloud" and "wan" kinds (rfTypes maps both to cloudNode). Reuses <NodeCard>.
 

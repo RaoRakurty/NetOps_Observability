@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ErrorBoundary.test.tsx — the white-screen guard.
 //
 // What is pinned here is the contract an operator depends on when a route

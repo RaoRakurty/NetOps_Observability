@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // tacModel — the pure model behind the TAC escalation panel.
 //
 // Design of record: docs/design/TAC_ESCALATION_2026-09-05.md. Everything that

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ai.tsx — the AI investigator panel, in both of its states.
 //
 // The panel is NEVER hidden. A feature that disappears when it is switched off

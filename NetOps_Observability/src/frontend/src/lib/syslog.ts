@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // syslog.ts — turn raw vendor syslog into operator-friendly text for display.
 // Many devices emit STRUCTURED logs the operator shouldn't have to decode, e.g.
 // SR Linux / Nokia:  "debug|4236|4236|302146|TR||W: common  grpc_server_instance.cc:1965

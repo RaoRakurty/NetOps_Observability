@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CloudGlyph.test.tsx — the ORIGINAL cloud-glyph family (licence audit D5).
 //
 // This is the anti-regression guard for the whole family: one silhouette, four

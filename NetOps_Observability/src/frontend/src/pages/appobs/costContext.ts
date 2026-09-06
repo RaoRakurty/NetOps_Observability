@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // costContext (Wave 5 #18 slice 3) — the data layer + pure math for the
 // "cost context" block on the cloud investigation drawer.
 //

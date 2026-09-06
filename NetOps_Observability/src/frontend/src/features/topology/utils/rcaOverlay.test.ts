@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // rcaOverlay.test.ts — the raw-status → canonical RcaOverlayState normaliser and
 // the visual-map invariants. Guards the honesty contract: suspected ≠ confirmed,
 // missing_evidence is hollow, internal_only is customer-hidden, unknown strings

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Wireless.test.tsx — the wireless inventory, focused on the BSSID sub-table
 // added beneath the access points.
 //

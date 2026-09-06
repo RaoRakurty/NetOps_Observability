@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // routes.test.ts — where Telemetry coverage lives in the nav, and that it is
 // actually reachable. The placement is load-bearing: it belongs to the
 // Administration → Data sources group (beside the other ingest plumbing) and

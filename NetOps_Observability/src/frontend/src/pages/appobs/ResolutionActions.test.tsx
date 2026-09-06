@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ResolutionActions.test.tsx (Wave 4 #12 slice 2) — the action row derives
 // every action from data that exists: console pivots from THIS investigation's
 // evidence rows only, runbooks from the exact-name catalog join with the

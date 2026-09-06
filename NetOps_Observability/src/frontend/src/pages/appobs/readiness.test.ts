@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // readiness.test.ts — the honest data-readiness core (#81 P3F+1). Proves the
 // trust rules: only inventory is real today, missing sources are "off" not
 // healthy, missing values are "not measured" not 0, and no label ever says "mock".

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // attribution.test.ts — pure coverage/structure analytics over the live inventory
 // (#81 P3F+1 gap close). All derivable from identity alone, no telemetry.
 

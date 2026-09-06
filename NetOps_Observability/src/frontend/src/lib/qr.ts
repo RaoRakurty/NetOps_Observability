@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // qr.ts — a dependency-free QR Code encoder (ISO/IEC 18004), byte mode, EC level M,
 // versions 1–10.
 //

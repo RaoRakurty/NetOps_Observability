@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 /*
  * correlix-rum.js — Correlix first-party Real User Monitoring beacon.
  *

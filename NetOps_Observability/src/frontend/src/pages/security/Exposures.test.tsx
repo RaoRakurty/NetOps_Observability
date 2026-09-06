@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Exposures.test.tsx — the findings workbench: facet counts, the explicit
 // current/history choice, full-text search, cursor pagination, and the Finding
 // detail (observed vs intended, evidence ref, remediation, standards chips).

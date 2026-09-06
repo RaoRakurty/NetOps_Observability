@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Quarantine — Platform → Tools → Quarantine.
 //
 // WHY THIS EXISTS. When a device-lane event's identity is a registry MISS, the

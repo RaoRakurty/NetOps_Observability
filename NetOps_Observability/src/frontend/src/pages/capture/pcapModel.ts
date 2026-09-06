@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // pcapModel.ts — the PURE adapters and guardrails behind the device
 // "Packet capture" panel.
 //

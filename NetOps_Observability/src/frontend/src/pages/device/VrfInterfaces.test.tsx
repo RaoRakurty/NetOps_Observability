@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // VrfInterfaces render contract. The panel exists to be HONEST as much as
 // useful, so these tests assert what it must NEVER show as much as what it does:
 // no fabricated "default" instance, no zero where nothing was measured, no

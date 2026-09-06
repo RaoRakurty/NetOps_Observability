@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Typed fixtures for the Telemetry coverage surface. They exist so the tests
 // (and any future storybook-style harness) exercise the EXACT contract shape —
 // if the backend contract drifts, tsc breaks here first.

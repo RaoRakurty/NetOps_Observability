@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Quarantine.test.tsx — the sealed-quarantine viewer.
 //
 // The assertions that matter are the ones that keep three different "nothing

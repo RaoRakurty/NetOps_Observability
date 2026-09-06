@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // RcaTicketCard — the live external-ticket card for the RCA detail window (#78).
 // It shows whether THIS correlation object has a ServiceNow incident (status,
 // number → deep link, last sync + verdict), the action audit trail, and gives

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // gen-licenses.mjs — assemble the third-party notices the frontend image ships.
 //
 // WHY THIS EXISTS

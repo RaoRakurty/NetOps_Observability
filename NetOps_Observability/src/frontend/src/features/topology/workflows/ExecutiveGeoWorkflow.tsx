@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExecutiveGeoWorkflow — the executive geo / WAN view.
 //
 // The geographic map is a RENDERER, not a node-link layout: it lives behind the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // BogonsPanel — "Addresses that should never be routed" (BGP ops tracker #1).
 //
 // The heading is the NOC admin's sentence; the word "bogon" survives in the

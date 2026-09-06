@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // catalog.ts — the pure logic behind the Service Catalog UI: criticality
 // ranking, mapping counts, the name-keyed join, and the client-side mirror of
 // the backend form bounds.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // range.ts — the time window the cloud signal views are showing, and how honest
 // they are about it (2026-07 owner review #2).
 //

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — data-readiness model (#81 P3F+1 Trust & Data Readiness Pass).
 //
 // The product principle: show WHY Correlix is allowed to claim app health/RCA —

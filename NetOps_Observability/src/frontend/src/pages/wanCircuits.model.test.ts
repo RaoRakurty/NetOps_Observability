@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // wanCircuits.model.test.ts — the derivation and intent rules of WAN Paths.
 //
 // Two things are pinned here that a screenshot would never catch:

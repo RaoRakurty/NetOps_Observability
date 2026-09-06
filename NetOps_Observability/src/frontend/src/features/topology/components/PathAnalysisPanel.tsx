@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // PathAnalysisPanel — renders an A→B path as an instrumented hop ladder. The path
 // may be MEASURED (traceroute ground truth) or COMPUTED (an IGP shortest-path
 // inference); a provenance chip states which so a computed proxy is never read as a

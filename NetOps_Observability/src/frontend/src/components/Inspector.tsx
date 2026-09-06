@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useEffect, useRef } from "react";
 import { useWorkspace, INS_MIN } from "../context/workspace";
 import Icon from "./Icon";

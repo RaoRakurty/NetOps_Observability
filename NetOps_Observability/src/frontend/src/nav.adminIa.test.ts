@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // nav.adminIa.test.ts — the ratchet for the Administration / Platform split
 // (owner IA, 2026-09-05; design note: docs/design/ADMIN_IA_2026-09-05.md).
 //

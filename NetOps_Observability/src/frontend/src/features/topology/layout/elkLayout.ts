@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // elkLayout.ts — deterministic layout via the Eclipse Layout Kernel (elkjs).
 //
 // Performance rule (PDF §13): compute layout only when the graph/view changes, and

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // licence.model.ts — the pure half of the platform Licence page.
 //
 // Everything here is a total function over the wire contract in

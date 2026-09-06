@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Administration — Identity, Access, API and ITSM. All sections are LIVE against
 // the Go API:
 //   - Users · Roles · Tenants · API Access  → file-backed identity stores

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // x509 helpers — client-side NotAfter extraction (drives the SSO cert-expiry
 // banner the moment a PEM is pasted) and the §6 threshold classification
 // (>30d none · ≤30d warn · ≤7d/expired crit). Fixture certs generated with

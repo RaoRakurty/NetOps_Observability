@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // G10 — Microsoft Teams + Amazon SNS channel cards in the Notifications admin.
 //
 // Both are platform-GLOBAL plumbing behind requirePlatformAdmin, so they get

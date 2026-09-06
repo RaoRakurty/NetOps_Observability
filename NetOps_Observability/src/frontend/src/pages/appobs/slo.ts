@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // slo.ts — pure view logic for the SLO / error-budget card (Wave 5 #14 slice 2).
 // No fetch, no React — unit-testable math and list edits only.
 

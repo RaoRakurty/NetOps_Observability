@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // panels.tsx — the modular Overview panel library. Each panel is a small,
 // self-contained component that fetches its own data on an interval and binds
 // to the real backend APIs (metrics over VictoriaMetrics, alerts, flows,

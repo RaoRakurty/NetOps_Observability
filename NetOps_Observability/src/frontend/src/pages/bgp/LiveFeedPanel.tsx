@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // LiveFeedPanel — the near-live BGP update feed.
 //
 // NEAR-live, and the panel says so. RIPE's RIS Live is WebSocket-only and no

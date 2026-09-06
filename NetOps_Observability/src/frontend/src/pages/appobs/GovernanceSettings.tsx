@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // GovernanceSettings — the REAL per-tenant Settings editors (Wave 4 #11).
 //
 // Each card edits one persisted, audited, admin-gated tenant setting via

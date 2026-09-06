@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Registries.tsx — the two operator-authored registries that had no screen:
 //
 //   /api/services      the SERVICE CATALOG (+ versioned selectors, + bindings)

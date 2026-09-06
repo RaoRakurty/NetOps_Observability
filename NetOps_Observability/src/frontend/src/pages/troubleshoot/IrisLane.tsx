@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // IrisLane — the IRIS co-pilot lane of the investigation surface.
 //
 // It asks the SAME grounded endpoint the rest of the product asks

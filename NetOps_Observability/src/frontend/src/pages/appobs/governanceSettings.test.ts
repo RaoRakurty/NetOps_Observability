@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Wave 4 #11 — governance Settings editors: pure-helper contracts.
 import { describe, expect, it } from "vitest";
 import { describeGovernanceChange, moveItem, normalizeTagKey } from "./GovernanceSettings";

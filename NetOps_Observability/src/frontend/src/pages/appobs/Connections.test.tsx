@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Connections.test.tsx — the connector list renders ONLY what the tenant-scoped
 // API returns, with honest lifecycle states (no green the backend didn't earn),
 // a resume action for incomplete connectors, and the API's REAL error message on

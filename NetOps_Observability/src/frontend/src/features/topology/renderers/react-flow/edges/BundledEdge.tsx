@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // BundledEdge.tsx — a collapsed parallel-link bundle (LAG / 2×100G). Drawn as a
 // DOUBLE stroke (a wider track with a thin inner line) so it visibly reads as
 // "more than one physical member", with a small count chip at mid-path.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ingestion.test.ts — the ingestion model groups the live inventory by account
 // and account×region, and reports readiness HONESTLY: inventory flows where
 // resources exist, every other source is "off". (#81 P3F+1 Phase 2)

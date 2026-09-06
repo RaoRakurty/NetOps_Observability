@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { createContext, useContext } from "react";
 
 // Shell-wide state shared by the top bar, sidebar, and every section.

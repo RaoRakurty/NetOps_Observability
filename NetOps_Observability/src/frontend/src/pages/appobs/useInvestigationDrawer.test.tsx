@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // useInvestigationDrawer.test — drawer open/close/URL behavior against the REAL
 // workspace Inspector pane: open docks the investigation (no navigation), the
 // URL mirrors the open object (?inv=<id>), ESC/X closes and clears the param,

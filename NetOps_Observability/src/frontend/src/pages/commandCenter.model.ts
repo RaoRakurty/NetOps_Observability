@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // commandCenter.model.ts — the PURE decision logic behind the Command Center NOC
 // view (extracted from CommandCenter.tsx so the product's triage rules are unit-
 // testable, not buried in JSX). Mirrors the rcaCase.ts ↔ RcaWorkspace.tsx split.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // routes.test.ts — where the fleet Config drift list lives in the nav, and that
 // it is actually reachable. Placement is load-bearing: it sits in Infrastructure
 // beside Devices (each row deep-links into a device's Configuration panel), and

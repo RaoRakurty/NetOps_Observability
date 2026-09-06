@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ribbon.tsx — the seam ribbon.
 //
 // Device → LAN → WAN / SASE → ISP → DNS / CDN → cloud edge → app tier, with the

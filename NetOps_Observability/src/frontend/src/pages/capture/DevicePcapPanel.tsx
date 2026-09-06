@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DevicePcapPanel — the "Packet capture" tab of the device detail page.
 //
 // What it gives an operator, in one place: a bounded on-demand packet capture

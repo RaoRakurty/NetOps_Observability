@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // DeviceGeomap.xss.test.tsx — stored-XSS regression for the geomap site
 // tooltip (H15b, wave-3 second pass). The MapPanel tooltip formatter
 // interpolated `s.name` (a Source-of-Truth site name — editor- or

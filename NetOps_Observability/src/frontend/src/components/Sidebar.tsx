@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { Fragment, useState } from "react";
 import { NavLeaf, NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // healthCells.tsx — how ONE health row renders, wherever it is shown.
 //
 // Owner review: a CRITICAL Azure cloud_resource_health "down" row rendered empty

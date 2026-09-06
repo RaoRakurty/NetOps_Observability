@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // origin.ts — where an investigation actually comes from (2026-07 owner review #5)
 // and who it is about (#1). Both are DERIVED from the object's own evidence, so
 // the answer is only ever something the engine really grounded.

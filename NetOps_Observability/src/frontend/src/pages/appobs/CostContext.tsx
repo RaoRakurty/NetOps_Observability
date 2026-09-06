@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // CostContext (Wave 5 #18 slice 3) — the "cost context" block on the cloud
 // investigation drawer: what the affected account's services COST around the
 // incident (onset ± 7 days), read from /api/cloud/costs (tenant-scoped).

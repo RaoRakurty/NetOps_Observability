@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // SeamGroups.test.tsx — the redundancy roll-up over the seam list.
 //
 // What has to hold: a suggested grouping is labelled as a proposal and never as

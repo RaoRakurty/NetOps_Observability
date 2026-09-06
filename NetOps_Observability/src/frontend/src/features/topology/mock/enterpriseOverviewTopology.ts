@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // enterpriseOverviewTopology.ts — PLACEHOLDER mock TopologyView ("explore"/campus).
 //
 // A small multi-site rollup: ~8 site nodes (kind "site") with health rollups,

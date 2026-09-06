@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — Assign-to-service drawer (2026-07 review, imp #5).
 //
 // The in-product close of the attribution loop: pick an existing business

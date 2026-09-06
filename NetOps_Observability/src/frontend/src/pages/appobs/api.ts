@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability — live data layer (#81 P3A wiring).
 //
 // Maps the backend cloud.* shapes (api.cloudApps/cloudResources/cloudCoverage)

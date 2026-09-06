@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // tacModel.test.ts — the pure model behind the TAC escalation panel.
 //
 // The properties pinned here are the ones the honesty of the whole surface rests

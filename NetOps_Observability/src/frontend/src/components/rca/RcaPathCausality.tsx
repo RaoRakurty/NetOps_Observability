@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import { useMemo } from "react";
 import type { CorrTimeline, RcaPathAttribution, RcaTypedSegment, RcaPathKeyDevice } from "../../services/api";
 import {

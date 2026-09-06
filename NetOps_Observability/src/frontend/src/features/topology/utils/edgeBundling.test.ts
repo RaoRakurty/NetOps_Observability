@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // edgeBundling.test.ts — #133b. `bundleParallelEdges` shipped fully built and
 // called by NOTHING, so a 4-member port-channel drew as four stacked parallel
 // curves the operator had to count by eye. It is now wired into the canvas view

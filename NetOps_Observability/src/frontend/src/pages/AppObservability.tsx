@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // App Observability (#81 P3F/P3H) — the cloud-native app-to-underlay story under Monitor.
 // Identity → Health → Change → Cloud Network → Underlay → RCA, every claim with
 // confidence + evidence, unknown first-class. Built entirely on the existing design

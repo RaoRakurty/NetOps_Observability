@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // IgpAdjacencies — the OSPF / IS-IS adjacency view (Project 4 D item 11).
 //
 // It reads /api/protocols/{proto}/{adjacencies,summary,health} and renders

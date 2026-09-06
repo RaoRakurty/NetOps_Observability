@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ConnectorGlyph.tsx — how Correlix identifies a THIRD-PARTY SERVICE CONNECTOR.
 //
 // TRACKER 239 (2026-09-05). Until this file existed, six connectors were drawn

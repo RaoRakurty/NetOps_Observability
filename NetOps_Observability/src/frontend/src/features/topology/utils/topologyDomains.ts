@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyDomains.ts — the NETWORK-DOMAIN model for the topology tabs.
 //
 // Domains are a dimension ORTHOGONAL to the workflow selector: workflow = "what

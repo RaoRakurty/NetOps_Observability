@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // Semantic sort ranks for the Cloud Service View tables (2026-07 UX pass).
 //
 // DataTable sorts a column by its `sortValue` accessor. For status/severity/

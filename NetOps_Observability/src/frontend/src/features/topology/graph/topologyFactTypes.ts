@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyFactTypes.ts — the RAW evidence layer of the Correlix topology contract.
 //
 // Architecture rule (skill: topology-fact-model.md): the frontend NEVER consumes raw

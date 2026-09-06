@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // useCloudScope — binds the Service View's global scope + range (scopeUrl.ts)
 // to location.hash (Wave 2 #5). The URL is the single source of truth: every
 // mutation writes the hash, and the hashchange listener folds it back into

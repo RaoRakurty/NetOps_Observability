@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // pathModel.test.ts — the canonical segment taxonomy + topological completeness
 // + boundary/seam derivation (owner directive 2026-07-19: between a site LAN and
 // cloud there is ALWAYS a WAN construct; visible boundaries between seams; the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 import type { ReactNode } from "react";
 import "./RcaWorkspace.css";
 import type { RcaCase, RcaPill } from "./rcaCase";

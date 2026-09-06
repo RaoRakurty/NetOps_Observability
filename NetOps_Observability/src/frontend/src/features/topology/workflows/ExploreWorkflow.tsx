@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // ExploreWorkflow — Phase 1 (implemented).
 //
 // The calm, day-to-day "look around the fabric" mode. Opens on the physical

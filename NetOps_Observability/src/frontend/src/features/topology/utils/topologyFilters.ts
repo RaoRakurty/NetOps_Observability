@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
 // topologyFilters.ts — pure faceted filtering over a TopologyView. Filtering is a
 // view operation: it returns a NEW view with non-matching nodes removed and edges
 // pruned to surviving nodes. It never mutates the input (PDF §16: filters are an
