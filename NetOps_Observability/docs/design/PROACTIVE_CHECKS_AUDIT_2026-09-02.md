@@ -148,7 +148,35 @@ silent is the same lie the gate exists to prevent.
 
 ## 3. The two contract pins, and why one of them blocked a design
 
-### 3.1 `rcaMetricFamilies` / the gnmic shaper — NOT widened
+### 3.1 `rcaMetricFamilies` / the gnmic shaper — NOT widened *then*; widened 2026-09-06 (tracker 222)
+
+> **RESOLVED 2026-09-06 — tracker 222.** Everything below is the audit's
+> statement of the gap as it stood on 2026-09-02 and is kept for the reasoning.
+> The change it specifies has since landed, with two deltas from the plan:
+>
+> * the identity `select` is **protocol-dependent** — the gNMI lane tags IS-IS
+>   with `isis_neighbor` while the SNMP OSPF lane uses `neighbor`, so the shaper
+>   normalises both onto one `neighbor` wire field, and `MetricEvent` gained a
+>   `Neighbor` field distinct from `Peer` (a system-id and a peer address are
+>   different name-spaces);
+> * `metric_identity`'s `igp` branch returns tokens `(device,)`, **not**
+>   `(device, nbr)`. Making the neighbour a grounding token is what needed the
+>   #99 R2 review; it is not needed for the check to work, and the tracker-168
+>   reasoning for the bare interface name applies verbatim — an IS-IS system-id
+>   is a fabric-internal label no other lane can resolve to an entity, so
+>   grounding on it would invent joins. It stays in the `entity_id`
+>   (`device:neighbour`), from which `Node.tokens()` derives the device part.
+>
+> Two mirrors the five-item list did not name also had to move:
+> `telemetry-catalog/coverage_matrix.py` (`METRIC_BUCKET` + `EPISODE_KIND`, and
+> the generated `docs/design/telemetry-coverage-matrix.md`) and
+> `producers.EMITTED_KINDS` + `coverage.INTENTIONAL_BLIND` — `igp_state_anomaly`
+> is emitted but no signature REQUIRES it yet, because widening the
+> `ospf_adjacency_change` / `isis_adjacency_change` clauses is a catalog edit and
+> would move the V1 replay pin. The reference to
+> `docs/design/correlation-data-contract.md` in item 5 below is wrong: that doc
+> carries no family table; the generated
+> `docs/design/telemetry-coverage-matrix.md` is the table of record.
 
 `src/backend/collectors/metric_events.go:72` and its pinned mirror in
 `deployment/docker/gnmic/gnmic-correlation.yaml:593` (`corr-rca-shape`) are the

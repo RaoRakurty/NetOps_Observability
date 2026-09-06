@@ -323,7 +323,7 @@ outputs:
     # MetricEvent struct (collectors/metric_events.go) so the two producers put
     # the same bytes on the same topic. `value` is unquoted on purpose: it comes
     # from corr-rca-shape, which admits it only after `type == "number"`.
-    msg-template: '{"observer_type":"device","modality_class":"device_telemetry","collection_path":"gnmi_subscribe","device":{{ index .tags "device" | fromJSON }}{{ with index .tags "vendor" }},"vendor":{{ . | fromJSON }}{{ end }}{{ with index .tags "ifName" }},"if_name":{{ . | fromJSON }}{{ end }}{{ with index .tags "peer" }},"peer":{{ . | fromJSON }}{{ end }},"signal_family":{{ index .tags "signal_family" | fromJSON }},"metric":{{ index .tags "metric" | fromJSON }},"value":{{ index .tags "mvalue" }},"unit":{{ index .tags "unit" | fromJSON }},"ts":{{ index .tags "ts" | fromJSON }}}'
+    msg-template: '{"observer_type":"device","modality_class":"device_telemetry","collection_path":"gnmi_subscribe","device":{{ index .tags "device" | fromJSON }}{{ with index .tags "vendor" }},"vendor":{{ . | fromJSON }}{{ end }}{{ with index .tags "ifName" }},"if_name":{{ . | fromJSON }}{{ end }}{{ with index .tags "peer" }},"peer":{{ . | fromJSON }}{{ end }}{{ with index .tags "neighbor" }},"neighbor":{{ . | fromJSON }}{{ end }},"signal_family":{{ index .tags "signal_family" | fromJSON }},"metric":{{ index .tags "metric" | fromJSON }},"value":{{ index .tags "mvalue" }},"unit":{{ index .tags "unit" | fromJSON }},"ts":{{ index .tags "ts" | fromJSON }}}'
     # Partition key = ${source}_${subscription-name}: a device's series stay
     # ordered on one partition. See the tenant-key gap above.
     insert-key: true
@@ -653,13 +653,20 @@ processors:
   #   1. EXPLODES one gnmic event carrying N values into N single-value events,
   #      so `split-events` yields one MetricEvent per Kafka message.
   #   2. ALLOWLISTS: a metric absent from the table is dropped (fail-closed —
-  #      device_isis_adj_state and device_bgp_pfx_in are mapped canonically for
-  #      VictoriaMetrics but are NOT RCA families, so they stop here).
+  #      device_bgp_pfx_in is mapped canonically for VictoriaMetrics but is NOT
+  #      an RCA family, so it stops here; so do the four IS-IS DEPTH families
+  #      (LSP count, SPF runs, area, adjacency hold), which are monitoring
+  #      series. device_isis_adj_state WAS held back here too and was admitted
+  #      by tracker 222 — the `igp` family — together with its Go counterpart.
   #   3. VALIDATES (zero trust, §3): the value must be a number, the device tag
-  #      must be present, an `interface` sample must carry ifName and a `bgp`
-  #      sample must carry peer — the identities handle_metric needs to ground a
-  #      signal (metric_identity in src/correlation/main.py). Evidence that
-  #      cannot be grounded is refused HERE, not counted as a drop on the bus.
+  #      must be present, an `interface` sample must carry ifName, a `bgp` sample
+  #      must carry peer and an `igp` sample must carry a neighbour — the
+  #      identities handle_metric needs to ground a signal (metric_identity in
+  #      src/correlation/main.py). Evidence that cannot be grounded is refused
+  #      HERE, not counted as a drop on the bus. The IGP neighbour tag is
+  #      protocol-dependent on the wire (IS-IS carries `isis_neighbor`, the SNMP
+  #      OSPF lane carries `neighbor`), so the shaper normalises both onto the
+  #      single `neighbor` wire field the Go producer marshals.
   #   4. Stamps the wire fields the msg-template renders: metric, mvalue,
   #      signal_family, unit, and ts as RFC3339Nano (the Go collector's
   #      time.RFC3339Nano). Tags are strings, which is why the numeric value
@@ -680,6 +687,8 @@ processors:
           "device_if_speed":            {"f":"interface","u":"mbps"},
           "device_bgp_peer_state":      {"f":"bgp","u":"state"},
           "device_bgp_fsm_transitions": {"f":"bgp","u":"transitions"},
+          "device_ospf_nbr_state":      {"f":"igp","u":"state"},
+          "device_isis_adj_state":      {"f":"igp","u":"state"},
           "device_cpu_percent":         {"f":"device_resource","u":"percent"},
           "device_mem_percent":         {"f":"device_resource","u":"percent"},
           "device_temp_celsius":        {"f":"device_resource","u":"celsius"}
@@ -693,9 +702,13 @@ processors:
             | select((($e.tags.device // "") | length) > 0)
             | select($rca[$v.key].f != "interface" or ((($e.tags.ifName // "") | length) > 0))
             | select($rca[$v.key].f != "bgp" or ((($e.tags.peer // "") | length) > 0))
+            | ((($e.tags.isis_neighbor // $e.tags.neighbor) // "")) as $nbr
+            | select($rca[$v.key].f != "igp" or (($nbr | length) > 0))
             | { name: $e.name,
                 timestamp: $e.timestamp,
-                tags: (($e.tags // {}) + {
+                tags: (($e.tags // {})
+                  + (if $rca[$v.key].f == "igp" then {"neighbor": $nbr} else {} end)
+                  + {
                   "metric": $v.key,
                   "mvalue": ($v.value | tostring),
                   "signal_family": $rca[$v.key].f,

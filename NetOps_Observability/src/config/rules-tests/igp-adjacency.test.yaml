@@ -1,0 +1,140 @@
+# promtool unit tests for the four IGP adjacency alerts in rules.yaml
+# (OSPFAdjacencyDown/Flapping, ISISAdjacencyDown/Flapping).
+#
+# Filed with tracker 222, which put `device_ospf_nbr_state` /
+# `device_isis_adj_state` on the correlation METRIC path. Those four rules had
+# existed on the VictoriaMetrics side since long before and had NO promtool
+# coverage at all: `scripts/preflight-configs.sh` only runs the `*.test.yaml`
+# files that exist, so an IGP rule could have been broken by an edit to the
+# canonical enum vocabulary and nothing would have said so.
+#
+# Acceptance criterion, same as the sibling files: each rule FIRES on the
+# synthetic fault AND stays SILENT on the all-clear. The specific silences
+# bought here are the two that would make an operator ignore the alerts:
+#   * a healthy adjacency (ospfNbrState full(8) / isisISAdjState up(3)) must
+#     never alert — the enum is the contract, `!= 8` / `!= 3` is not "any
+#     non-zero value";
+#   * a single bounce inside the `for` window must not raise the DOWN alert,
+#     and a slow re-adjacency must not look like a flap.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) OSPFAdjacencyDown — neighbour stuck at exstart(4), never reaches full(8).
+  - interval: 1m
+    input_series:
+      - series: 'device_ospf_nbr_state{device="core-1",neighbor="10.0.0.9",vendor="cisco"}'
+        values: "4x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OSPFAdjacencyDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              device: "core-1"
+              neighbor: "10.0.0.9"
+              vendor: "cisco"
+            exp_annotations:
+              summary: "core-1 OSPF neighbor 10.0.0.9 not full"
+
+  # 1a) A HEALTHY adjacency must never alert. full(8) is the only good value;
+  #     the rule is an enum comparison, not a truthiness test.
+  - interval: 1m
+    input_series:
+      - series: 'device_ospf_nbr_state{device="core-1",neighbor="10.0.0.9"}'
+        values: "8x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OSPFAdjacencyDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: OSPFAdjacencyFlapping
+        exp_alerts: []
+
+  # 1b) A single bounce that re-forms inside the 2m `for` must not fire DOWN.
+  - interval: 1m
+    input_series:
+      - series: 'device_ospf_nbr_state{device="core-1",neighbor="10.0.0.9"}'
+        values: "8x5 4 8x24"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: OSPFAdjacencyDown
+        exp_alerts: []
+
+  # 2) OSPFAdjacencyFlapping — four or more transitions inside 15m.
+  - interval: 1m
+    input_series:
+      - series: 'device_ospf_nbr_state{device="core-1",neighbor="10.0.0.9"}'
+        values: "8 4 8 4 8 4 8 4 8x21"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OSPFAdjacencyFlapping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: "core-1"
+              neighbor: "10.0.0.9"
+            exp_annotations:
+              summary: "core-1 OSPF neighbor 10.0.0.9 flapping"
+
+  # 3) ISISAdjacencyDown — SRL adjacency stuck at initializing(2).
+  - interval: 1m
+    input_series:
+      - series: 'device_isis_adj_state{device="spine1",ifName="ethernet-1/1.0",isis_level="L2",isis_neighbor="0100.0000.0011"}'
+        values: "2x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ISISAdjacencyDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              device: "spine1"
+              ifName: "ethernet-1/1.0"
+              isis_level: "L2"
+              isis_neighbor: "0100.0000.0011"
+            exp_annotations:
+              summary: "spine1 IS-IS adjacency to 0100.0000.0011 on ethernet-1/1.0 not up"
+
+  # 3a) up(3) is silent on both IS-IS rules.
+  - interval: 1m
+    input_series:
+      - series: 'device_isis_adj_state{device="spine1",ifName="ethernet-1/1.0",isis_level="L2",isis_neighbor="0100.0000.0011"}'
+        values: "3x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ISISAdjacencyDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ISISAdjacencyFlapping
+        exp_alerts: []
+
+  # 3b) A slow re-adjacency (down once, back up, then steady) is NOT a flap:
+  #     two transitions in the window, below the >= 4 threshold.
+  - interval: 1m
+    input_series:
+      - series: 'device_isis_adj_state{device="spine1",ifName="ethernet-1/1.0",isis_level="L2",isis_neighbor="0100.0000.0011"}'
+        values: "3x4 2x3 3x23"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ISISAdjacencyFlapping
+        exp_alerts: []
+
+  # 4) ISISAdjacencyFlapping — four or more transitions inside 15m.
+  - interval: 1m
+    input_series:
+      - series: 'device_isis_adj_state{device="spine1",ifName="ethernet-1/1.0",isis_level="L2",isis_neighbor="0100.0000.0011"}'
+        values: "3 2 3 2 3 2 3 2 3x21"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ISISAdjacencyFlapping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: "spine1"
+              ifName: "ethernet-1/1.0"
+              isis_level: "L2"
+              isis_neighbor: "0100.0000.0011"
+            exp_annotations:
+              summary: "spine1 IS-IS adjacency to 0100.0000.0011 flapping"

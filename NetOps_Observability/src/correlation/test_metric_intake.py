@@ -82,6 +82,34 @@ class MetricIdentityTest(unittest.TestCase):
         self.assertEqual(out[0], "leaf2:10.0.0.5")
         self.assertEqual(out[1], EntityType.DEVICE)
 
+    def test_igp_identity_maps_to_neighbour(self):
+        """tracker 222: the `igp` family. Identity is (device, neighbour) — a
+        third name-space, distinct from ifName and from a BGP peer address."""
+        out = main.metric_identity(
+            {"device": "spine1", "signal_family": "igp",
+             "neighbor": "0000.0000.0001",
+             "metric": "device_isis_adj_state", "value": 3})
+        self.assertEqual(out[0], "spine1:0000.0000.0001")
+        self.assertEqual(out[1], EntityType.DEVICE)
+        self.assertEqual(out[2], "igp_state_anomaly")
+        # The neighbour is NOT a grounding token (same reasoning as tracker 168
+        # for the bare interface name): an IS-IS system-id is a fabric-internal
+        # label no other lane can resolve to an entity.
+        self.assertEqual(out[3], ("spine1",))
+
+    def test_igp_identity_falls_back_to_index(self):
+        """The SNMP OSPF lane carries the ospfNbrTable row index; the Go
+        producer stamps it as `neighbor`, but `index` is the same value."""
+        out = main.metric_identity(
+            {"device": "core-1", "signal_family": "igp", "index": "10.0.0.9",
+             "metric": "device_ospf_nbr_state", "value": 2})
+        self.assertEqual(out[0], "core-1:10.0.0.9")
+
+    def test_igp_without_a_neighbour_is_dropped_not_guessed(self):
+        self.assertIsNone(main.metric_identity(
+            {"device": "spine1", "signal_family": "igp",
+             "metric": "device_isis_adj_state", "value": 3}))
+
     def test_resource_identity_is_device(self):
         out = main.metric_identity(
             {"device": "wan-r2", "signal_family": "device_resource",

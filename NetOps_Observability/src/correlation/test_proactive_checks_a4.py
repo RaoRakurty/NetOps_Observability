@@ -320,6 +320,62 @@ def test_sustained_resource_pressure_fires_and_a_spike_does_not(promote,
     assert quiet == []
 
 
+@pytest.mark.parametrize("check_id,kind,metric,good,bad", [
+    ("proactive.ospf.nbr_state_not_full", "ospf_adjacency_not_full",
+     "device_ospf_nbr_state", float(P.OSPF_NBR_STATE_FULL),
+     float(P.OSPF_NBR_STATE_FULL) - 1.0),
+    ("proactive.isis.adj_state_not_up", "isis_adjacency_not_up",
+     "device_isis_adj_state", float(P.ISIS_ADJ_STATE_UP),
+     float(P.ISIS_ADJ_STATE_UP) - 1.0),
+])
+def test_igp_metric_lane_fires_from_the_polled_state_without_a_recovery_line(
+        promote, check_id, kind, metric, good, bad):
+    """Tracker 222: the metric path the signal lane could not have.
+
+    The point of the polled lane is that it answers "is it STILL bad?" from the
+    CURRENT sample. So the fire must come from the samples themselves — no
+    sweep is called anywhere in this test — and the healthy value must close
+    the watch even though no recovery LINE was ever received."""
+    promote(check_id)
+    mon = P.ProactiveMonitor()
+
+    def poll(t, value):
+        return list(mon.observe_metric(
+            tenant="t1", entity_id="spine1:0000.0000.0001", metric=metric,
+            value=value, ts=_at(t), observer_id="spine1",
+            tokens=("spine1",)))
+
+    fired, t = [], 0
+    while t <= DWELL:
+        fired += poll(t, bad)
+        t += 60
+    assert [e.phase for e in fired] == ["onset"], \
+        "the polled lane must fire on its own samples, with no sweep"
+    assert fired[0].kind == kind
+    assert fired[0].metric_name == metric
+    assert fired[0].entity_id == "spine1:0000.0000.0001", (
+        "the metric lane's entity is (device, neighbour) — the identity "
+        "metric_identity builds for the `igp` family")
+
+    # Healthy again: the watch closes off the SERIES, not off a recovery line.
+    clear = poll(t + 60, good)
+    assert [e.phase for e in clear] == ["clear"]
+    assert mon.open_watches() == 0
+
+
+@pytest.mark.parametrize("metric", ["device_ospf_nbr_state",
+                                    "device_isis_adj_state"])
+def test_igp_metric_lane_is_gated_on_the_series_actually_arriving(metric):
+    """The presence gate, stated as a test. On an estate that does not poll the
+    IGP adjacency series `observe_metric` is never called with it, so the check
+    holds no state and cannot fire — the signal lane stays the only lane, which
+    is exactly the pre-222 behaviour."""
+    mon = P.ProactiveMonitor()
+    assert metric in P.CHECKS_BY_TRIGGER, \
+        "the metric-path check must be registered on its canonical metric name"
+    assert len(mon) == 0 and mon.open_watches() == 0
+
+
 def test_an_unwatched_metric_costs_one_dict_lookup_and_opens_no_watch():
     """The hot-path guarantee. handle_metric calls this for EVERY admitted
     sample, so a metric the plane does not watch must not allocate state."""

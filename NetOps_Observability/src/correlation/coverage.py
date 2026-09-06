@@ -69,6 +69,21 @@ INTENTIONAL_BLIND: dict[str, dict] = {
         "reason": "generic fallback for an unscoped ADJCHANGE",
         "owner": "correlix", "date_added": "2026-06-20",
     },
+    "igp_state_anomaly": {
+        "reason": "tracker 222 — the POLLED IGP adjacency lane "
+                  "(device_ospf_nbr_state / device_isis_adj_state, the `igp` "
+                  "signal family). It grounds and co-locates today: it attaches "
+                  "to the device object and carries its evidence into the log, "
+                  "and proactive.py's two metric-lane heartbeat checks read it. "
+                  "No signature REQUIRES it yet, on purpose: the natural home is "
+                  "the existing ospf_adjacency_change / isis_adjacency_change "
+                  "clauses gaining |igp_state_anomaly, which is a CATALOG edit "
+                  "and therefore moves catalog_version and the V1 replay pin "
+                  "(FIXTURE_GOLDEN). The contract change is deliberately "
+                  "golden-neutral; the clause widening is its own change with "
+                  "its own re-freeze proof.",
+        "owner": "correlix", "date_added": "2026-09-06",
+    },
     "bgp_route_churn": {
         "reason": "tracker 184 — %BGP-5-NBR_RESET / %BGP-4-MAXPFX: the session "
                   "is resetting or the prefix table is under pressure, which is "

@@ -246,6 +246,10 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "device_alarm",
     # metric episodes (main.py metric_identity + C6 flow)
     "if_metric_anomaly", "bgp_state_anomaly", "device_resource_anomaly",
+    # IGP adjacency state off the POLLED series (tracker 222). The signal-lane
+    # twin is ospf_adjacency_change / isis_adjacency_change above; this is the
+    # metric lane, which answers "is it still bad?" without a recovery line.
+    "igp_state_anomaly",
     # cloud provider metrics (CloudWatch / Azure Monitor → canonical metric lane)
     "cloud_resource_anomaly",
     "flow_volume_anomaly",

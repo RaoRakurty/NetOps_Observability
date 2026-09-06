@@ -192,16 +192,27 @@ class ProactiveCheck:
 
 #: The heartbeat list, in the order the audit doc states it.
 #:
-#: OSPF and IS-IS are driven from the ADJACENCY-CHANGE SIGNAL, not from
-#: `device_ospf_nbr_state` / `device_isis_adj_state`. That is not a design
-#: preference — those two series are canonically mapped for VictoriaMetrics but
-#: are explicitly NOT RCA families: the gnmic shaper's `corr-rca-shape`
-#: allowlist drops them, and `rcaMetricFamilies` in
-#: src/backend/collectors/metric_events.go (its pinned mirror) does not carry
-#: them either. Widening that pin is a contract change with its own test and
-#: docs; the audit doc records the exact change required. The adjacency signal
-#: carries the same state in `attrs.state` and already reaches the engine, so
-#: the check is built on evidence we actually receive.
+#: OSPF and IS-IS carry TWO lanes each, on purpose (tracker 222).
+#:
+#:  * the ADJACENCY-CHANGE SIGNAL (`lane="adjacency"`), which works on
+#:    syslog-only and trap-only estates and needs no polled series at all; and
+#:  * the POLLED SERIES (`lane="metric"`, `device_ospf_nbr_state` /
+#:    `device_isis_adj_state`), admitted onto the correlation bus as the `igp`
+#:    family by tracker 222 — `rcaMetricFamilies` in
+#:    src/backend/collectors/metric_events.go and its pinned mirror, the gnmic
+#:    shaper's `corr-rca-shape` allowlist, changed together.
+#:
+#: The metric lane closes the signal lane's one weakness: it answers "is it
+#: STILL bad?" from the current sample instead of depending on receiving the
+#: recovery line. It is gated on PRESENCE by construction — `observe_metric` is
+#: only ever called with a sample that arrived, so on an estate that polls
+#: neither series the metric checks simply never open a watch, and on an estate
+#: that polls them the signal lane keeps working unchanged.
+#:
+#: Both lanes stay `shadow` until the ownership question in `PROMOTION` is
+#: settled: they emit the same `kind` on different entities (`device` vs
+#: `device:neighbour`), so promoting both without a dedup rule would count one
+#: stuck adjacency twice.
 CHECKS: tuple[ProactiveCheck, ...] = (
     ProactiveCheck(
         check_id="proactive.bgp.not_established",
@@ -267,6 +278,42 @@ CHECKS: tuple[ProactiveCheck, ...] = (
             "dropped and did not re-form. On a fabric that is a lost path, not a "
             "flap: check the level (L1/L2), the MTU and the area on both ends "
             "before looking further."),
+    ),
+    ProactiveCheck(
+        check_id="proactive.ospf.nbr_state_not_full",
+        kind="ospf_adjacency_not_full",
+        trigger="device_ospf_nbr_state",
+        lane="metric",
+        entity_type=EntityType.DEVICE,
+        modality=ModalityClass.DEVICE_TELEMETRY,
+        source=Source.METRIC,
+        severity=Severity.HIGH,
+        bad_when="below",
+        threshold=float(OSPF_NBR_STATE_FULL),
+        operator_phrase=(
+            "This OSPF neighbour has POLLED below FULL for the whole window — "
+            "the current state says so, not a log line we may have missed. An "
+            "adjacency stuck short of FULL is usually MTU, area/auth mismatch "
+            "or a one-way link; check ip mtu and the area/authentication "
+            "config on both ends."),
+    ),
+    ProactiveCheck(
+        check_id="proactive.isis.adj_state_not_up",
+        kind="isis_adjacency_not_up",
+        trigger="device_isis_adj_state",
+        lane="metric",
+        entity_type=EntityType.DEVICE,
+        modality=ModalityClass.DEVICE_TELEMETRY,
+        source=Source.METRIC,
+        severity=Severity.HIGH,
+        bad_when="below",
+        threshold=float(ISIS_ADJ_STATE_UP),
+        operator_phrase=(
+            "This IS-IS adjacency has POLLED below UP for the whole window — "
+            "the current state says so, not a log line we may have missed. On "
+            "a fabric that is a lost path, not a flap: check the level "
+            "(L1/L2), the MTU and the area on both ends before looking "
+            "further."),
     ),
     ProactiveCheck(
         check_id="proactive.device.cpu_sustained_high",
@@ -882,15 +929,31 @@ PROMOTION: Mapping[str, str] = {
         "double-counts one stuck peer as two pieces of evidence — decide which "
         "lane owns the kind before either goes live on a gNMI/SNMP estate.",
     "proactive.ospf.adjacency_not_full":
-        "Same dependency as the BGP adjacency check. Preferred promotion route "
-        "is the METRIC path (device_ospf_nbr_state), which needs the "
-        "rcaMetricFamilies/gnmic contract change recorded in the audit doc.",
+        "Same dependency as the BGP adjacency check: it needs the sweep AND the "
+        "recovery line. Superseded as the PREFERRED route by "
+        "proactive.ospf.nbr_state_not_full below, now that the metric path "
+        "exists (tracker 222); keep it as the lane that still works on a "
+        "syslog-only estate.",
+    "proactive.ospf.nbr_state_not_full":
+        "The metric path the audit doc named as preferred, unblocked by tracker "
+        "222 (`igp` is now an RCA family in BOTH producers). Polled, numeric "
+        "contract (ospfNbrState), and it does not depend on receiving the "
+        "recovery line. Promote FIRST of the OSPF pair, and only together with "
+        "a dedup rule: it emits the same kind as "
+        "proactive.ospf.adjacency_not_full on a different entity "
+        "(device:neighbour vs device), so promoting both un-deduped counts one "
+        "stuck adjacency twice.",
     "proactive.isis.adjacency_not_up":
-        "As above, via device_isis_adj_state. On a fabric the stakes are "
+        "As above, the syslog lane. On a fabric the stakes are "
         "different from the access edge: a lost adjacency is reduced "
         "capacity rather than an outage, so this check must be promoted "
         "with a severity that does not page for a spine link the fabric "
         "already routed around.",
+    "proactive.isis.adj_state_not_up":
+        "The IS-IS metric path (device_isis_adj_state, gNMI-owned), unblocked by "
+        "tracker 222. Same dedup precondition as the OSPF pair, and the same "
+        "fabric severity caveat: on a spine the fabric already routed around, a "
+        "lost adjacency is reduced capacity, not an outage.",
     "proactive.device.cpu_sustained_high":
         "Needs a per-platform floor before promotion: 90 % is normal for some "
         "control-plane-heavy platforms and alarming for others, and one global "

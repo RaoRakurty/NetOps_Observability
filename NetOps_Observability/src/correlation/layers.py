@@ -72,6 +72,7 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     "bgp_path_change": CausalLayer.NETWORK,
     "ospf_adjacency_change": CausalLayer.NETWORK,
     "isis_adjacency_change": CausalLayer.NETWORK,
+    "igp_state_anomaly": CausalLayer.NETWORK,   # tracker 222 (polled IGP adjacency)
     "vtep_state_change": CausalLayer.NETWORK,   # VXLAN VTEP/underlay reachability (L3)
     "route_withdrawal": CausalLayer.NETWORK,
     # FHRP (HSRP/VRRP) first-hop gateway redundancy — an L3 reachability event:

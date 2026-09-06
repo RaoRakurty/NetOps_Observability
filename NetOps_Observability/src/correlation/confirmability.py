@@ -160,6 +160,11 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     # device-telemetry lane (metric episodes; cloud health)
     "if_metric_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "bgp_state_anomaly": ModalityClass.DEVICE_TELEMETRY,
+    # Polled IGP adjacency state (tracker 222). Same class as the BGP metric
+    # episode and deliberately NOT control-plane: it is a device-telemetry
+    # OBSERVATION of the adjacency, independent of the syslog line that reports
+    # the same transition, so the two can co-confirm.
+    "igp_state_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "device_resource_anomaly": ModalityClass.DEVICE_TELEMETRY,
     # Provider-reported cloud resource health/utilization (CloudWatch / Azure
     # Monitor). DEVICE_TELEMETRY: an INDEPENDENT observer class from the active

@@ -67,6 +67,8 @@ METRIC_BUCKET: dict[str, str] = {
     "device_if_speed": "interface",
     "device_bgp_peer_state": "bgp",
     "device_bgp_fsm_transitions": "bgp",
+    "device_ospf_nbr_state": "igp",
+    "device_isis_adj_state": "igp",
     "device_cpu_percent": "device_resource",
     "device_mem_percent": "device_resource",
     "device_temp_celsius": "device_resource",
@@ -78,6 +80,7 @@ METRIC_BUCKET: dict[str, str] = {
 EPISODE_KIND: dict[str, str] = {
     "interface": "if_metric_anomaly",
     "bgp": "bgp_state_anomaly",
+    "igp": "igp_state_anomaly",
     "device_resource": "device_resource_anomaly",
     "cloud_resource": "cloud_resource_anomaly",
 }
@@ -318,9 +321,14 @@ def render(data: dict, rows: list[dict], families: dict, parser_rev: str) -> str
     w("")
     w("A metric family absent from this table never reaches the correlation bus")
     w("at all (the collector's RCA allowlist is the gate), so an event family")
-    w("that `correlates_with` one of those — `device_ospf_nbr_state`,")
-    w("`device_isis_adj_state`, `device_bgp_pfx_in` — has **no metric-episode")
-    w("lane**, which is exactly why its trap twin matters.")
+    w("that `correlates_with` one of those — `device_bgp_pfx_in`, the four")
+    w("IS-IS depth series — has **no metric-episode lane**, which is exactly")
+    w("why its trap twin matters. The IGP adjacency pair")
+    w("(`device_ospf_nbr_state`, `device_isis_adj_state`) was in that position")
+    w("until tracker 222 admitted it as the `igp` family: the adjacency-change")
+    w("SIGNAL and the polled series are now BOTH lanes for the same fault, and")
+    w("the metric lane is the one that answers \"is it still bad?\" without")
+    w("waiting for a recovery line.")
     w("")
     w("## The generic safety net (not coverage)")
     w("")

@@ -42,13 +42,13 @@ engine treats them as such. Fidelity is the catalog's ladder
 | `fec_corrected_rate_high` | `syslog.port.fec_corrected_rate_high` | — | — | `generic` | syslog: code |
 | **`fhrp_state_change`** | `syslog.fhrp.state_change` | `trap.fhrp.state_change` | — | `arista`, `cisco`, `juniper`, `standard` | syslog: code · trap: doc_claimed |
 | `hi_ber_indication` | `syslog.port.hi_ber_indication` | — | — | `generic` | syslog: code |
-| **`isis_adjacency_change`** | `syslog.isis.adjacency_change` | `trap.isis.adjacency_change` | — | `cisco`, `juniper`, `nokia`, `standard` | syslog: code · trap: doc_claimed |
+| **`isis_adjacency_change`** | `syslog.isis.adjacency_change` | `trap.isis.adjacency_change` | `igp_state_anomaly` | `cisco`, `juniper`, `nokia`, `standard` | syslog: code · trap: doc_claimed |
 | `link_down_no_light` | `syslog.port.link_down_no_light` | — | — | `generic` | syslog: code |
 | `link_flap_on_insert` | `syslog.port.link_flap_on_insert` | — | — | `generic` | syslog: code |
 | **`link_state_change`** | `syslog.link.state_change` | `trap.link.state_change`, `trap.link.state_change.event_type` | `if_metric_anomaly` | `any`, `arista`, `cisco`, `standard` | syslog: code · trap: code |
 | **`lldp_neighbor_change`** | `syslog.lldp.neighbor_change` | — | `if_metric_anomaly` | `arista`, `nokia` | syslog: code |
 | **`mac_flap`** | `syslog.mac.flap` | — | `if_metric_anomaly` | `arista`, `cisco` | syslog: doc_claimed |
-| **`ospf_adjacency_change`** | `syslog.ospf.adjacency_change` | `trap.ospf.adjacency_change` | — | `arista`, `cisco`, `juniper`, `standard` | syslog: code · trap: doc_claimed |
+| **`ospf_adjacency_change`** | `syslog.ospf.adjacency_change` | `trap.ospf.adjacency_change` | `igp_state_anomaly` | `arista`, `cisco`, `juniper`, `standard` | syslog: code · trap: doc_claimed |
 | `pcs_deskew_fault` | `syslog.port.pcs_deskew_fault` | — | — | `generic` | syslog: code |
 | `pcs_local_fault` | `syslog.port.pcs_local_fault` | — | — | `generic` | syslog: code |
 | `pcs_remote_fault` | `syslog.port.pcs_remote_fault` | — | — | `generic` | syslog: code |
@@ -87,14 +87,21 @@ only witness, so they are single-source by construction.
 | `device_if_out_errors` | `interface` | `if_metric_anomaly` |
 | `device_if_out_octets` | `interface` | `if_metric_anomaly` |
 | `device_if_speed` | `interface` | `if_metric_anomaly` |
+| `device_isis_adj_state` | `igp` | `igp_state_anomaly` |
 | `device_mem_percent` | `device_resource` | `device_resource_anomaly` |
+| `device_ospf_nbr_state` | `igp` | `igp_state_anomaly` |
 | `device_temp_celsius` | `device_resource` | `device_resource_anomaly` |
 
 A metric family absent from this table never reaches the correlation bus
 at all (the collector's RCA allowlist is the gate), so an event family
-that `correlates_with` one of those — `device_ospf_nbr_state`,
-`device_isis_adj_state`, `device_bgp_pfx_in` — has **no metric-episode
-lane**, which is exactly why its trap twin matters.
+that `correlates_with` one of those — `device_bgp_pfx_in`, the four
+IS-IS depth series — has **no metric-episode lane**, which is exactly
+why its trap twin matters. The IGP adjacency pair
+(`device_ospf_nbr_state`, `device_isis_adj_state`) was in that position
+until tracker 222 admitted it as the `igp` family: the adjacency-change
+SIGNAL and the polled series are now BOTH lanes for the same fault, and
+the metric lane is the one that answers "is it still bad?" without
+waiting for a recovery line.
 
 ## The generic safety net (not coverage)
 

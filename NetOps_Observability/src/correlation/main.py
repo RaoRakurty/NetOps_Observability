@@ -12245,6 +12245,19 @@ def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | 
             return None
         # BGP4-MIB has no VRF column; default network-instance is implicit.
         return f"{device}:{peer}", EntityType.DEVICE, "bgp_state_anomaly", (device, peer)
+    if family == "igp":
+        # tracker 222: OSPF/IS-IS adjacency state. Identity is (device,
+        # neighbour) — an ospfNbrTable row index (the neighbour's IP) or an
+        # IS-IS system-id, normalised onto `neighbor` by both producers.
+        nbr = str(ev.get("neighbor") or ev.get("index") or "")
+        if not nbr:
+            return None
+        # The neighbour is deliberately NOT a grounding token, unlike `bgp`'s
+        # peer address. Same reasoning as tracker 168 for the bare interface
+        # name: an IS-IS system-id is a fabric-internal label no other lane can
+        # resolve to an entity, so grounding on it would invent joins. It stays
+        # in the entity_id, from which Node.tokens() derives the device part.
+        return f"{device}:{nbr}", EntityType.DEVICE, "igp_state_anomaly", (device,)
     if family == "device_resource":
         return device, EntityType.DEVICE, "device_resource_anomaly", (device,)
     if family == "cloud_resource":
@@ -12263,7 +12276,7 @@ async def handle_metric(ev: dict) -> None:
     """Canonical MetricEvent (netops.metrics) → device_telemetry signal.
 
     Wire contract with collectors/metric_events.go: device, metric, value,
-    signal_family, if_name/peer/index, collection_path, ts, vendor. Legacy
+    signal_family, if_name/peer/neighbor/index, collection_path, ts, vendor. Legacy
     Telegraf-shaped events (hostname/name/first-numeric) are still tolerated for
     back-compat but carry no canonical identity."""
     global METRICS_RECEIVED, METRICS_ACCEPTED, METRICS_DROPPED

@@ -59,7 +59,8 @@ CANONICAL_CHAIN = [
 # gNMI source and are omitted, exactly as `omitempty` omits them in Go.
 CONTRACT_ORDER = [
     "observer_type", "modality_class", "collection_path", "device", "vendor",
-    "if_name", "peer", "signal_family", "metric", "value", "unit", "ts",
+    "if_name", "peer", "neighbor", "signal_family", "metric", "value", "unit",
+    "ts",
 ]
 
 
@@ -164,16 +165,20 @@ def test_shaper_allowlist_equals_rca_metric_families():
         f"  only in metric_events.go: {sorted(set(go) - set(jq))}\n"
         f"  only in the gnmic shaper: {sorted(set(jq) - set(go))}\n"
         f"  differing meta: {differing}")
-    assert len(go) == 15, "the allowlist changed size — update BOTH producers"
+    assert len(go) == 17, "the allowlist changed size — update BOTH producers"
 
 
 def test_canonically_mapped_non_rca_families_are_not_admitted():
-    """gnmic maps more canonical names than correlation admits (IS-IS adjacency
-    state, per-AFI BGP prefixes). Those are VictoriaMetrics-only; the shaper is
-    the gate that keeps them off the evidence bus."""
+    """gnmic maps more canonical names than correlation admits (per-AFI BGP
+    prefixes). Those are VictoriaMetrics-only; the shaper is the gate that keeps
+    them off the evidence bus.
+
+    device_isis_adj_state used to be in this tuple. Tracker 222 admitted it (and
+    its OSPF twin) as the `igp` family, in BOTH producers together; the guard
+    below now proves the remaining hold-back is still held back."""
     admitted = set(jq_rca_table())
     base_src = read("deployment", "docker", "gnmic", "gnmic.yaml")
-    for name in ("device_isis_adj_state", "device_bgp_pfx_in"):
+    for name in ("device_bgp_pfx_in",):
         assert name in base_src, \
             f"{name} is no longer a canonical gnmic name — refresh this guard"
         assert name not in admitted, \
@@ -340,7 +345,8 @@ RAW_FIXTURES = [
               "afi-safi_afi-safi-name": "IPV4_UNICAST"},
      "values": {"network-instances/network-instance/protocols/protocol/bgp/"
                 "neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received": 17}},
-    # Nokia SR Linux native — IS-IS adjacency: canonical, NOT an RCA family.
+    # Nokia SR Linux native — IS-IS adjacency: canonical AND an RCA family since
+    # tracker 222 (the `igp` family; identity = (device, neighbour)).
     {"name": "srl-isis", "timestamp": TS_NS,
      "tags": {"source": "spine1", "subscription-name": "srl-isis",
               "adjacency_neighbor-system-id": "0000.0000.0001",
@@ -395,13 +401,22 @@ def test_full_chain_admits_only_gnmi_owned_rca_families():
     assert got == {("leaf1", "device_bgp_peer_state"),
                    ("leaf1", "device_if_in_octets"),
                    ("leaf1", "device_if_oper_status"),
+                   ("spine1", "device_isis_adj_state"),
                    ("spine1", "device_mem_percent")}, (
         "the correlation lane must carry exactly the gNMI-OWNED RCA families. "
         "Interfaces joined that set with tracker 230 (the ownership gate no "
         "longer withholds them and the SNMP profiles mark them Owner \"gnmi\"), "
-        "so they must reach the bus for a gNMI-only device. IS-IS adjacency and "
-        "per-AFI prefixes are still held back by the RCA allowlist, not by "
-        f"ownership. got: {sorted(got)}")
+        "so they must reach the bus for a gNMI-only device. IS-IS adjacency "
+        "joined it with tracker 222 (the `igp` family). Per-AFI prefixes and "
+        "the IS-IS depth series are still held back by the RCA allowlist, not "
+        f"by ownership. got: {sorted(got)}")
+    isis = next(e for e in out if e["tags"]["metric"] == "device_isis_adj_state")
+    assert isis["tags"]["signal_family"] == "igp"
+    assert isis["tags"]["unit"] == "state"
+    assert isis["tags"]["neighbor"] == "0000.0000.0001", (
+        "the shaper must normalise the protocol-dependent neighbour tag "
+        "(isis_neighbor here) onto the single `neighbor` wire field")
+    assert isis["tags"]["mvalue"] == "3", "SRL `up` → isisISAdjState up(3)"
     bgp = next(e for e in out if e["tags"]["metric"] == "device_bgp_peer_state")
     assert bgp["tags"]["signal_family"] == "bgp"
     assert bgp["tags"]["unit"] == "state"
@@ -514,6 +529,14 @@ def test_shaper_refuses_samples_that_cannot_ground_a_signal():
         # bgp family without peer
         {"name": "x", "timestamp": TS_NS, "tags": {"device": "d1"},
          "values": {"device_bgp_peer_state": 6}},
+        # igp family without any neighbour tag (tracker 222)
+        {"name": "x", "timestamp": TS_NS, "tags": {"device": "d1"},
+         "values": {"device_isis_adj_state": 3}},
+        {"name": "x", "timestamp": TS_NS,
+         "tags": {"device": "d1", "isis_neighbor": ""},
+         "values": {"device_isis_adj_state": 3}},
+        {"name": "x", "timestamp": TS_NS, "tags": {"device": "d1"},
+         "values": {"device_ospf_nbr_state": 8}},
         # non-numeric value (an unmapped enum that slipped the converter)
         {"name": "x", "timestamp": TS_NS, "tags": {"device": "d1"},
          "values": {"device_mem_percent": "NOT_A_NUMBER"}},
@@ -626,6 +649,13 @@ def test_msg_template_renders_the_metric_event_contract():
           "vendor": "arista", "peer": "10.0.0.1", "signal_family": "bgp",
           "metric": "device_bgp_peer_state", "value": 6, "unit": "state",
           "ts": TS_ISO}),
+        (shaped("device_isis_adj_state", "igp", "state", 3,
+                device="spine1", neighbor="0000.0000.0001", vendor="nokia"),
+         {"observer_type": "device", "modality_class": "device_telemetry",
+          "collection_path": "gnmi_subscribe", "device": "spine1",
+          "vendor": "nokia", "neighbor": "0000.0000.0001",
+          "signal_family": "igp", "metric": "device_isis_adj_state",
+          "value": 3, "unit": "state", "ts": TS_ISO}),
         (shaped("device_mem_percent", "device_resource", "percent", 73,
                 device="spine1", vendor="nokia"),
          {"observer_type": "device", "modality_class": "device_telemetry",

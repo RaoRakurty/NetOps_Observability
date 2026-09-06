@@ -371,7 +371,8 @@ shipped profile**. `deployment/docker/gnmic/gnmic-correlation.yaml` is
 `gnmic.yaml` plus one `correlation` output that produces canonical MetricEvents
 onto the same `netops.metrics` topic the Vector lane writes, in the same wire
 shape `handle_metric` reads (`observer_type`/`modality_class`/`collection_path`/
-`device`/`vendor`/`if_name`/`peer`/`signal_family`/`metric`/`value`/`unit`/`ts`,
+`device`/`vendor`/`if_name`/`peer`/`neighbor`/`signal_family`/`metric`/`value`/
+`unit`/`ts`,
 `collection_path = "gnmi_subscribe"`). It runs the SAME canonical chain as the
 VictoriaMetrics lane — **including the ownership gate**, so a `(device, family)`
 pair is still served by exactly one transport — and then one `event-jq` stage
@@ -379,9 +380,11 @@ that explodes multi-value events to one metric each, admits only the families in
 `rcaMetricFamilies` (`src/backend/collectors/metric_events.go` — a test asserts
 the two lists are identical), and refuses any sample that could not ground a
 signal. Today that leaves the gNMI-OWNED families: BGP session state and
-transitions, and Nokia SR Linux memory. Interfaces, CPU and temperature stay SNMP-
-owned; IS-IS adjacency and per-AFI BGP prefixes are canonical for VictoriaMetrics
-but are not RCA families, so they stop at the shaper.
+transitions, IS-IS adjacency state (the `igp` family, admitted by tracker 222
+together with its OSPF twin on the SNMP side), and Nokia SR Linux memory. CPU and
+temperature stay SNMP-owned; per-AFI BGP prefixes and the four IS-IS DEPTH series
+(LSP count, SPF runs, area, adjacency hold) are canonical for VictoriaMetrics but
+are not RCA families, so they stop at the shaper.
 
 Enable it with one line — `GNMIC_CONFIG_FILE=gnmic-correlation.yaml` — and read
 these constraints first:

@@ -337,12 +337,13 @@ discriminator is deliberate: a flap fires NOTHING and is left to the existing
 
 Two constraints shaped it, both recorded in the audit:
 
-- **`rcaMetricFamilies` was NOT widened.** CPU/memory were already RCA families,
-  so #4/#5 needed nothing. `device_ospf_nbr_state` / `device_isis_adj_state` are
-  explicitly NOT RCA families (the gnmic `corr-rca-shape` allowlist drops them),
-  so the IGP checks are built on the adjacency SIGNALS instead. The exact
-  five-part contract change the metric path would need is written down — tracker
-  222, not done here.
+- **`rcaMetricFamilies` was NOT widened *by this change*.** CPU/memory were
+  already RCA families, so #4/#5 needed nothing. `device_ospf_nbr_state` /
+  `device_isis_adj_state` were explicitly NOT RCA families at the time, so the
+  IGP checks were built on the adjacency SIGNALS instead. **Superseded 2026-09-06
+  (tracker 222):** both are now the `igp` family in both producers, and the IGP
+  checks carry a metric-lane twin beside the signal-lane one. The signal lane is
+  unchanged and is still the only lane on a syslog-only or trap-only estate.
 - **Every check ships SHADOW and the four signatures are NOT installed**, so the
   V1 goldens are byte-identical: no signal is emitted, `catalog_version` does not
   move, and no parser rule was added (`PARSER_REV` untouched), so unlike tracker

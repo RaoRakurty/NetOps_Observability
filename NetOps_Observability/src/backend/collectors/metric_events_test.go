@@ -23,6 +23,7 @@ func TestBuildMetricEvent_FilterAllowlist(t *testing.T) {
 		"device_if_in_discards", "device_if_out_discards", "device_if_speed",
 		"device_if_fcs_errors",
 		"device_bgp_peer_state", "device_bgp_fsm_transitions",
+		"device_ospf_nbr_state", "device_isis_adj_state",
 		"device_cpu_percent", "device_mem_percent", "device_temp_celsius",
 	}
 	for _, name := range forwarded {
@@ -79,6 +80,41 @@ func TestBuildMetricEvent_BGPPeerIdentity(t *testing.T) {
 	}
 	if ev.IfName != "" {
 		t.Errorf("bgp event must not carry an ifName: %q", ev.IfName)
+	}
+}
+
+// IGP families (tracker 222) map the table index to the ADJACENCY NEIGHBOUR —
+// a third identity name-space, deliberately not Peer: an IS-IS system-id and a
+// BGP peer address must not collide on one field.
+func TestBuildMetricEvent_IGPNeighbourIdentity(t *testing.T) {
+	ev, ok := buildMetricEvent("device_ospf_nbr_state", "core-1", "cisco", "10.0.0.9", "", "", 8, 1_700_000_000_000)
+	if !ok {
+		t.Fatal("expected igp event")
+	}
+	if ev.SignalFamily != "igp" || ev.Unit != "state" {
+		t.Errorf("bad igp event: %+v", ev)
+	}
+	if ev.Neighbor != "10.0.0.9" || ev.Index != "10.0.0.9" {
+		t.Errorf("ospfNbrTable index should map to the neighbour identity: %+v", ev)
+	}
+	if ev.Peer != "" || ev.IfName != "" {
+		t.Errorf("igp event must not carry peer/ifName identity: %+v", ev)
+	}
+	// The wire field is `neighbor`, and it is omitted for every other family.
+	blob, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(blob), `"neighbor":"10.0.0.9"`) {
+		t.Errorf("igp event must marshal a neighbor field: %s", blob)
+	}
+	bgp, _ := buildMetricEvent("device_bgp_peer_state", "leaf2", "arista", "10.0.0.5", "", "", 6, 1_700_000_000_000)
+	bgpBlob, err := json.Marshal(bgp)
+	if err != nil {
+		t.Fatalf("marshal bgp: %v", err)
+	}
+	if strings.Contains(string(bgpBlob), "neighbor") {
+		t.Errorf("neighbor must be omitted for a non-igp family: %s", bgpBlob)
 	}
 }
 

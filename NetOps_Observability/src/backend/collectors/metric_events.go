@@ -47,9 +47,14 @@ type MetricEvent struct {
 	IfAlias string `json:"if_alias,omitempty"` // operator circuit ID (ifAlias), if set
 	Index   string `json:"index,omitempty"`    // table row index (ifIndex / scalar)
 	Peer    string `json:"peer,omitempty"`     // BGP families: remote peer address
+	// Neighbor is the IGP adjacency identity: the ospfNbrTable row index (the
+	// neighbour's IP address) for OSPF, the IS-IS neighbour system-id for
+	// IS-IS. It is a SEPARATE field from Peer on purpose — a BGP peer address
+	// and an IS-IS system-id are different name-spaces and must not collide.
+	Neighbor string `json:"neighbor,omitempty"` // igp family: adjacency neighbour id
 
 	// Signal.
-	SignalFamily string  `json:"signal_family"` // interface | bgp | device_resource
+	SignalFamily string  `json:"signal_family"` // interface | bgp | igp | device_resource
 	Metric       string  `json:"metric"`        // canonical name, e.g. device_if_in_octets
 	Value        float64 `json:"value"`
 	Unit         string  `json:"unit,omitempty"`
@@ -84,6 +89,15 @@ var rcaMetricFamilies = map[string]metricMeta{
 	// BGP peer state (BGP4-MIB) — discrete control-plane RCA evidence.
 	"device_bgp_peer_state":      {"bgp", "state"},
 	"device_bgp_fsm_transitions": {"bgp", "transitions"},
+	// IGP adjacency state (tracker 222). A NEW family: the identity is
+	// (device, neighbour), which is neither `interface` (no ifName on the OSPF
+	// side) nor `bgp` (an IS-IS system-id is not a peer address). OSPF arrives
+	// on the SNMP lane (OSPF-MIB ospfNbrState, full(8)); IS-IS arrives on the
+	// gNMI lane (SRL adjacency/state, canonicalised to isisISAdjState up(3)).
+	// A polled series answers "is it still bad?" without waiting for a recovery
+	// line, which is the adjacency-SIGNAL lane's one weakness.
+	"device_ospf_nbr_state": {"igp", "state"},
+	"device_isis_adj_state": {"igp", "state"},
 	// Device resource health.
 	"device_cpu_percent":  {"device_resource", "percent"},
 	"device_mem_percent":  {"device_resource", "percent"},
@@ -118,6 +132,12 @@ func buildMetricEvent(metric, device, vendor, index, ifName, ifAlias string, val
 	case "bgp":
 		// BGP4-MIB tables are indexed by the remote peer address.
 		ev.Peer = index
+		ev.Index = index
+	case "igp":
+		// OSPF-MIB ospfNbrTable is indexed by the neighbour's IP address (the
+		// profile renames the index label to "neighbor"). IS-IS reaches the bus
+		// on the gNMI lane, not here, but the field is the same one.
+		ev.Neighbor = index
 		ev.Index = index
 	default:
 		ev.Index = index
