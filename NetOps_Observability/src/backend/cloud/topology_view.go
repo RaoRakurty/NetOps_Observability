@@ -192,7 +192,7 @@ func BuildTopologyViewWithStatus(topos []Topology, tenant string, now time.Time,
 			if s.CIDR != "" {
 				label = fmt.Sprintf("Subnet · %s · %s", name, s.CIDR)
 			}
-			view.Nodes = append(view.Nodes, cloudNode(s.ID, label, provider, "subnet", vpc,
+			view.Nodes = append(view.Nodes, cloudNode(s.ID, label, provider, "subnet", vpc, t.Region,
 				map[string]string{"cidr": s.CIDR}, fmt.Sprintf("subnet %s", s.ID)))
 			if vpc != "" {
 				groups[vpc].children = append(groups[vpc].children, s.ID)
@@ -251,7 +251,7 @@ func BuildTopologyViewWithStatus(topos []Topology, tenant string, now time.Time,
 				prefix = strings.ReplaceAll(g.kind, "_", " ")
 			}
 			label := fmt.Sprintf("%s · %s", prefix, g.name)
-			view.Nodes = append(view.Nodes, cloudNode(id, label, provider, g.kind, g.vpc,
+			view.Nodes = append(view.Nodes, cloudNode(id, label, provider, g.kind, g.vpc, t.Region,
 				map[string]string{}, fmt.Sprintf("%s %s", g.kind, id)))
 			if g.vpc != "" {
 				groups[g.vpc].children = append(groups[g.vpc].children, id)
@@ -353,9 +353,22 @@ func BuildTopologyViewWithStatus(topos []Topology, tenant string, now time.Time,
 
 // cloudNode builds one canonical cloud-resource node. Health is honestly
 // "unknown" (API-discovered, not health-monitored); tags carry the provider (for
-// the official mark) + role + any network context (CIDR).
-func cloudNode(id, label, provider, role, groupID string, extra map[string]string, evidenceDetail string) topology.Node {
+// the mark) + role + the NETWORK CONTEXT the resource was discovered in
+// (region, vpc, CIDR).
+//
+// region/vpc are on the node — not only on the containing groups — because the
+// unified canvas classifies and re-groups by FACT (#131d). The alternative,
+// widening the hostname regex in `domainOfNode`, is the one genuinely weak piece
+// of that classifier and must not spread to cloud: a VPC is not a naming
+// convention, it is a discovered field.
+func cloudNode(id, label, provider, role, groupID, region string, extra map[string]string, evidenceDetail string) topology.Node {
 	tags := map[string]string{"provider": provider, "role": role}
+	if r := strings.TrimSpace(region); r != "" {
+		tags["region"] = r
+	}
+	if groupID != "" {
+		tags["vpc"] = groupID
+	}
 	for k, v := range extra {
 		if v != "" {
 			tags[k] = v

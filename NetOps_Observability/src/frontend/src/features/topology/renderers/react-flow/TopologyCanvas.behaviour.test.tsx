@@ -270,3 +270,97 @@ describe("TopologyCanvas — shareable route", () => {
     expect(screen.queryByLabelText("Pin an incident's RCA path")).toBeNull();
   });
 });
+
+// ── #131: the cloud projection is ON this canvas, as a filter ─────────────────
+function cloudNetworkView(): TopologyView {
+  const ev = [{ source: "cloud_api", confidence: 0.9 }];
+  const tags = { provider: "aws", region: "us-west-2", vpc: "vpc-1" };
+  return {
+    view_id: "cloud-network",
+    mode: "explore",
+    layout_type: "cloud_grouped",
+    generated_at: "2026-08-02T00:00:00Z",
+    nodes: [
+      { id: "subnet-app", label: "Subnet · app-a", kind: "cloud", health: "unknown", confidence: 0.9, evidence: ev, tags, group_id: "vpc-1" },
+      { id: "igw-1", label: "IGW · prod-igw", kind: "cloud", health: "unknown", confidence: 0.9, evidence: ev, tags: { provider: "aws", region: "us-west-2" } },
+    ],
+    edges: [],
+    groups: [
+      { id: "region:aws:us-west-2", label: "aws · us-west-2", group_type: "region", children: [], health: "unknown", collapsed: false },
+      { id: "vpc-1", label: "VPC · prod", group_type: "vpc", parent_id: "region:aws:us-west-2", children: ["subnet-app"], health: "unknown", collapsed: false },
+    ],
+    overlays: ["health"],
+  } as unknown as TopologyView;
+}
+
+describe("TopologyCanvas — cloud on the one canvas", () => {
+  it("merges the discovered cloud network into the default canvas alongside the fabric", async () => {
+    const api = await topologyApi();
+    (api.fetchTopologyView as ReturnType<typeof vi.fn>).mockResolvedValue({ view: twoDeviceView(), status: "live" });
+    (api.fetchCloudTopology as ReturnType<typeof vi.fn>).mockResolvedValue({ view: cloudNetworkView(), live: true, status: "live" });
+
+    render(<TopologyCanvas />);
+
+    // On-prem and cloud are on the SAME canvas — that is what makes an
+    // on-prem↔cloud investigation possible without changing page.
+    expect(await screen.findByText("core-1")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("Subnet · app-a").length).toBeGreaterThan(0));
+  });
+
+  it("the Cloud domain FILTERS that canvas — on-prem drops out, the region container stays", async () => {
+    const api = await topologyApi();
+    (api.fetchTopologyView as ReturnType<typeof vi.fn>).mockResolvedValue({ view: twoDeviceView(), status: "live" });
+    (api.fetchCloudTopology as ReturnType<typeof vi.fn>).mockResolvedValue({ view: cloudNetworkView(), live: true, status: "live" });
+
+    render(<TopologyCanvas />);
+    await screen.findByText("Subnet · app-a");
+
+    fireEvent.change(screen.getByLabelText("Network domain"), { target: { value: "cloud" } });
+
+    await waitFor(() => expect(screen.queryByText("core-1")).toBeNull());
+    // The cloud half is still drawn (inventory row + the card on the stage).
+    expect(screen.getAllByText("Subnet · app-a").length).toBeGreaterThan(0);
+  });
+
+  it("does NOT offer cloud endpoints to the path tracer — the engine cannot resolve them yet (#130)", async () => {
+    const api = await topologyApi();
+    (api.fetchTopologyView as ReturnType<typeof vi.fn>).mockResolvedValue({ view: twoDeviceView(), status: "live" });
+    (api.fetchCloudTopology as ReturnType<typeof vi.fn>).mockResolvedValue({ view: cloudNetworkView(), live: true, status: "live" });
+    atRoute("?mode=path_trace");
+
+    render(<TopologyCanvas />);
+    const src = (await screen.findByLabelText("Path source device")) as HTMLSelectElement;
+    const options = [...src.options].map((o) => o.value);
+
+    // A control that always fails is the same defect as an empty tab promising a
+    // network: cloud ids are not vertices in the device-fabric graph the trace
+    // walks, so they stay out of the picker until the projection crosses the seam.
+    expect(options).toContain("core-1");
+    expect(options).not.toContain("subnet-app");
+    expect(options).not.toContain("igw-1");
+  });
+
+  it("an empty cloud read says nothing is discovered — never a blank Cloud canvas", async () => {
+    const api = await topologyApi();
+    (api.fetchTopologyView as ReturnType<typeof vi.fn>).mockResolvedValue({ view: twoDeviceView(), status: "live" });
+    (api.fetchCloudTopology as ReturnType<typeof vi.fn>).mockResolvedValue({ view: emptyView("c"), live: false, status: "empty" });
+    atRoute("?domain=cloud");
+
+    render(<TopologyCanvas />);
+
+    expect(await screen.findByText(/No cloud network discovered yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a FAILED cloud read is an alert — distinct from nothing discovered", async () => {
+    const api = await topologyApi();
+    (api.fetchTopologyView as ReturnType<typeof vi.fn>).mockResolvedValue({ view: twoDeviceView(), status: "live" });
+    (api.fetchCloudTopology as ReturnType<typeof vi.fn>).mockResolvedValue({ view: emptyView("c"), live: false, status: "error" });
+    atRoute("?domain=cloud");
+
+    render(<TopologyCanvas />);
+
+    expect(await screen.findByText(/Unable to load the cloud network/i)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+});

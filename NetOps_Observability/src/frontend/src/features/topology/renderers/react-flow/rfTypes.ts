@@ -79,6 +79,11 @@ export const NODE_TYPE_FOR_KIND: Record<string, string> = {
   unresolved: "unresolvedNode",
 };
 
+/** React Flow node `type` for a cloud resource that DECLARES its provider — the
+ *  provider-marked card. Chosen by FACT in the adapter (#131d), not by kind, so
+ *  the generic cloud/WAN glyph on the on-prem fabric is untouched. */
+export const CLOUD_RESOURCE_NODE_TYPE = "cloudResourceNode";
+
 /** Maps a domain EdgeVariant to the registered React Flow edge `type` key. */
 export const EDGE_TYPE_FOR_VARIANT: Record<string, string> = {
   topology: "topologyEdge",

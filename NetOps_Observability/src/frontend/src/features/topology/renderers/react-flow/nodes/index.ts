@@ -16,16 +16,13 @@ export const nodeTypes = {
   routerNode: RouterNode,
   firewallNode: FirewallNode,
   cloudNode: CloudNode,
+  // A cloud resource that DECLARES its provider gets the provider-marked card;
+  // the generic cloud/WAN glyph (`cloudNode`) still covers everything else. The
+  // adapter picks between them by FACT, so one registry serves the whole unified
+  // canvas — there is no separate cloud renderer to keep in sync any more (#131).
+  cloudResourceNode: CloudResourceNode,
   groupNode: GroupNode,
   unresolvedNode: UnresolvedNode,
-};
-
-// Cloud-tab node registry: the cloud NETWORK view swaps the generic cloud glyph
-// for the official-provider-mark card. Kept SEPARATE from `nodeTypes` so the
-// default canvas (and every non-cloud view) renders exactly as before.
-export const cloudNodeTypes = {
-  ...nodeTypes,
-  cloudNode: CloudResourceNode,
 };
 
 export { DeviceNode, NodeCard } from "./DeviceNode";

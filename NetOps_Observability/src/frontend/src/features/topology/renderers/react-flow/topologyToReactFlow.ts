@@ -13,7 +13,7 @@ import type { LayoutResult } from "../../layout/layoutTypes";
 import { GROUP_PAD, LABEL_BAND } from "../../layout/groupGeometry";
 import { NODE_SIZE } from "../../layout/layoutTypes";
 import type { RFNodeData, RFEdgeData, RFGroupData, NodeEmphasis, EdgeEmphasis } from "./rfTypes";
-import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT } from "./rfTypes";
+import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT, CLOUD_RESOURCE_NODE_TYPE } from "./rfTypes";
 import { edgeVariant, hasEvidence, rollupHealth } from "../../utils/topologyHealth";
 import { labelDensityForZoom, tierForZoom } from "../../utils/semanticZoom";
 import { CARD_W, CARD_H } from "./nodes/DeviceNode";
@@ -277,6 +277,10 @@ export function topologyToReactFlow(
         id: g.id,
         type: "groupNode",
         position: { x: cx - 104, y: cy - 44 },
+        // No declared size: the aggregate card's height is content-driven
+        // (GroupNode sets a min, not a fixed height), and declaring a guess would
+        // hand React Flow a box that is not the one on screen. The expanded
+        // container below CAN declare its size, because ELK solved it exactly.
         data: { group: g, collapsed: true, emphasis, counts, health: worst, onToggle: ui.onToggleGroup, depth: depthOf(g.id) },
         zIndex: 2,
         selectable: true,
@@ -312,6 +316,14 @@ export function topologyToReactFlow(
           depth: depthOf(g.id),
         },
         style: { width: rect.w, height: rect.h },
+        // DECLARE the container's size as well as styling it. Without this React
+        // Flow measures the box from the DOM a frame later, so fit-to-view (which
+        // runs 60ms after the layout lands) computed its bounds from placeholder
+        // sizes — the fitted canvas then no longer matched the drawn one and the
+        // network hung off the stage. This is the container half of the
+        // no-re-measure rule the device card already follows.
+        width: rect.w,
+        height: rect.h,
         zIndex: 0,
         selectable: true,
         draggable: false,
@@ -375,9 +387,18 @@ export function topologyToReactFlow(
       // too; wallboard clutter is kept off the executive view.
       const showMetrics = density === "engineer" || density === "incident";
 
+      // A cloud resource that DECLARES a provider renders as the provider-marked
+      // card; everything else keeps the type its KIND maps to. Decided by fact,
+      // in the one place that already knows both the domain and the renderer, so
+      // the unified canvas needs no second nodeTypes registry (#131d).
+      const type =
+        n.kind === "cloud" && n.tags?.provider
+          ? CLOUD_RESOURCE_NODE_TYPE
+          : NODE_TYPE_FOR_KIND[n.kind] ?? "deviceNode";
+
       return {
         id: n.id,
-        type: NODE_TYPE_FOR_KIND[n.kind] ?? "deviceNode",
+        type,
         position: positions[n.id] ?? { x: 0, y: 0 },
         // Declared dimensions = the card's FIXED size, so React Flow never
         // re-measures the node when the array is rebuilt on hover (the device

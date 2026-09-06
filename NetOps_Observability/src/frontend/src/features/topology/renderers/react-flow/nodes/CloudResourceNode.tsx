@@ -14,8 +14,9 @@
 // The specific network function (IGW/NAT/VGW/…) is carried in the node label
 // and tags (drawer/tooltip) — the card face stays uniform per the skill.
 //
-// Used ONLY inside the Cloud tab's own nodeTypes registry (CloudTopologyView),
-// so the default LAN canvas and every other view are untouched.
+// Registered as `cloudResourceNode` in the ONE shared registry; the adapter routes
+// a node here only when it DECLARES a provider (a discovered cloud resource), so
+// every on-prem cloud/WAN node keeps the generic glyph unchanged.
 
 import { type NodeProps } from "@xyflow/react";
 import { memo } from "react";

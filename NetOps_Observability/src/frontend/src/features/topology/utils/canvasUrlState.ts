@@ -54,7 +54,7 @@ const OVERLAYS: readonly OverlayKind[] = [
   "syslog", "flow", "rca_evidence", "golden_path_delta", "historical_diff",
 ];
 const DOMAINS_SET: readonly NetworkDomain[] = ["lan", "sdwan", "dc", "cloud"];
-const GROUP_DIMS: readonly GroupDimension[] = ["site", "zone", "role", "vendor", "owner", "none"];
+const GROUP_DIMS: readonly GroupDimension[] = ["site", "zone", "role", "vendor", "owner", "region", "vpc", "none"];
 // "irregular" is a DETECTION verdict, never an operator choice — the toolbar
 // offers ARCHETYPES only, so it is not accepted from a link either.
 const ARRANGEMENTS: readonly Arrangement[] = ["auto", "leaf_spine", "ring", "star", "bus", "mesh"];

@@ -302,3 +302,50 @@ func TestBuildTopologyViewGroupChildrenNeverNull(t *testing.T) {
 		t.Errorf(`serialized view contains "children":null — the Cloud tab crashes on it:\n%s`, b)
 	}
 }
+
+// #131(d): the unified topology canvas classifies and re-groups cloud entities by
+// FACT — the provider/region/vpc fields the discovery actually returned — and
+// explicitly NOT by widening the frontend's hostname regex, which is the one
+// genuinely weak piece of that classifier and must not spread to cloud. So every
+// projected node carries its network context on the node itself, not only on the
+// group that contains it.
+func TestBuildTopologyViewStampsNetworkContextFactsOnNodes(t *testing.T) {
+	v := BuildTopologyView([]Topology{sampleAWS()}, "t_acme", fixedNow())
+
+	byID := map[string]topology.Node{}
+	for _, n := range v.Nodes {
+		byID[n.ID] = n
+	}
+	if len(byID) == 0 {
+		t.Fatal("projection produced no nodes")
+	}
+
+	for id, n := range byID {
+		if n.Tags["provider"] != "aws" {
+			t.Fatalf("node %s: provider tag = %q, want aws", id, n.Tags["provider"])
+		}
+		if n.Tags["region"] != "us-west-2" {
+			t.Fatalf("node %s: region tag = %q, want us-west-2 — the canvas groups by this fact", id, n.Tags["region"])
+		}
+	}
+
+	// A resource that sits in a VPC names it; the VPC tag agrees with the group
+	// membership the same projection emitted, so the two can never drift.
+	for _, id := range []string{"subnet-pub", "subnet-app", "i-nva"} {
+		n, ok := byID[id]
+		if !ok {
+			t.Fatalf("missing node %s", id)
+		}
+		if n.Tags["vpc"] != "vpc-1" {
+			t.Fatalf("node %s: vpc tag = %q, want vpc-1", id, n.Tags["vpc"])
+		}
+		if n.GroupID != n.Tags["vpc"] {
+			t.Fatalf("node %s: group_id %q disagrees with the vpc tag %q", id, n.GroupID, n.Tags["vpc"])
+		}
+	}
+
+	// A gateway with no resolvable VPC must not invent one — absence stays absence.
+	if igw := byID["igw-1"]; igw.GroupID == "" && igw.Tags["vpc"] != "" {
+		t.Fatalf("igw-1 has no group but claims vpc %q", igw.Tags["vpc"])
+	}
+}

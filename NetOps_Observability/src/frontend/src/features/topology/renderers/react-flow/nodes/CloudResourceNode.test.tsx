@@ -8,7 +8,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { CloudResourceNode } from "./CloudResourceNode";
-import { nodeTypes, cloudNodeTypes, CloudNode } from "./index";
+import { nodeTypes, CloudNode } from "./index";
 import type { RFNodeData } from "../rfTypes";
 import type { TopologyNode } from "../../../api/topologyTypes";
 
@@ -68,12 +68,13 @@ describe("CloudResourceNode", () => {
     expect(container.querySelector("svg path")).toBeTruthy();
   });
 
-  it("cloud registry SWAPS cloudNode but leaves the default registry untouched", () => {
-    expect(cloudNodeTypes.cloudNode).toBe(CloudResourceNode);
+  // ONE registry serves the whole unified canvas now (#131): the separate
+  // cloud-tab registry is gone with the separate renderer, and the adapter picks
+  // the provider-marked card per NODE, by fact. The generic cloud/WAN glyph must
+  // stay exactly what it was for every on-prem node.
+  it("the shared registry offers BOTH cards — the generic glyph and the provider card", () => {
+    expect(nodeTypes.cloudResourceNode).toBe(CloudResourceNode);
     expect(nodeTypes.cloudNode).toBe(CloudNode);
-    expect(cloudNodeTypes.cloudNode).not.toBe(nodeTypes.cloudNode);
-    // every other node type is shared/unchanged
-    expect(cloudNodeTypes.switchNode).toBe(nodeTypes.switchNode);
-    expect(cloudNodeTypes.groupNode).toBe(nodeTypes.groupNode);
+    expect(nodeTypes.cloudResourceNode).not.toBe(nodeTypes.cloudNode);
   });
 });

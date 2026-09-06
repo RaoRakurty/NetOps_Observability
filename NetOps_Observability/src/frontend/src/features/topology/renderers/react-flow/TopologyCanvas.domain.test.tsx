@@ -40,15 +40,30 @@ describe("domain selector", () => {
     });
   });
 
-  it("requests the cloud topology once the cloud domain is selected", async () => {
+  // #131 changed the contract this case guards. Cloud is no longer a separate
+  // page reached by picking a domain — the cloud projection is MERGED onto the one
+  // canvas at mount, and the domain select filters that same graph. So the read
+  // must happen without anyone selecting anything (an on-prem↔cloud investigation
+  // needs both ends present before it starts), and picking Cloud must NOT swap in
+  // a different renderer.
+  it("reads the cloud topology on mount — it is part of the one canvas, not a separate page", async () => {
     const api = await import("../../api/topologyApi");
     render(<TopologyCanvas />);
-    const select = await screen.findByLabelText("Network domain");
+    await screen.findByLabelText("Network domain");
 
-    expect(api.fetchCloudTopology).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.fetchCloudTopology).toHaveBeenCalled());
+  });
+
+  it("selecting Cloud filters the SAME canvas — the toolbar and stage stay mounted", async () => {
+    render(<TopologyCanvas />);
+    const select = await screen.findByLabelText("Network domain");
+    // Controls that belong to the shared canvas, not to a cloud-only renderer.
+    expect(screen.getByLabelText("Group the canvas by")).toBeInTheDocument();
+
     fireEvent.change(select, { target: { value: "cloud" } });
 
-    // The whole point: selecting Cloud must actually reach the network.
-    await waitFor(() => expect(api.fetchCloudTopology).toHaveBeenCalled());
+    await waitFor(() => expect((select as HTMLSelectElement).value).toBe("cloud"));
+    expect(screen.getByLabelText("Group the canvas by")).toBeInTheDocument();
+    expect(screen.getByLabelText("Arrange by topology shape")).toBeInTheDocument();
   });
 });

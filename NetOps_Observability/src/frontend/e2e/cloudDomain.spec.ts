@@ -5,6 +5,12 @@
 // never mounted), then whatever this spec catches. Both were invisible to vitest
 // because they live in the wiring between the nav, the canvas and the network.
 //
+// 2026-09-06 (tracker #131): Cloud is no longer a separate renderer mounted by the
+// domain select. The cloud projection is MERGED onto the one canvas and the select
+// is a FILTER over it — cloud↔on-prem troubleshooting needs both ends on the same
+// canvas. Everything this spec asserts still holds; it just holds about the shared
+// canvas now, and `/api/topology/cloud` is read at mount rather than on selection.
+//
 // So this drives the REAL browser through the REAL user path — open the canvas the
 // way the nav mounts it, pick Cloud from the domain dropdown — against the EXACT
 // payload the deployed API served. `fixtures-cloud-topology.json` is not
@@ -56,16 +62,54 @@ async function openCanvas(page: Page): Promise<{ cloudCalls: () => number }> {
     return json({});
   });
   await page.goto("/#/investigate/topology");
-  await expect(page.getByTestId("rf__node-lan1")).toBeVisible(); // LAN canvas up first
+  // First navigation of a run pays the dev server's on-demand transform of the
+  // canvas chunk (React Flow + the topology feature), which can exceed the 5s
+  // default on a cold/loaded machine. This is a BOOT wait, not an assertion about
+  // the canvas — the real assertions all have the standard timeout.
+  await expect(page.getByTestId("rf__node-lan1")).toBeVisible({ timeout: 30_000 }); // LAN canvas up first
   return { cloudCalls: () => calls };
 }
 
-test("selecting Cloud mounts the cloud canvas and renders the real discovered network", async ({ page }) => {
+// Wait for the CANVAS to stop moving instead of guessing at a duration. The canvas
+// fits after a layout lands (60ms) and animates for 320ms, and the merged canvas
+// lays out twice — once for the fabric, once when the cloud half arrives on its own
+// read — so any fixed sleep is a race with the second layout+fit. The viewport
+// transform alone is not enough either: it is stable in the gap between the first
+// fit finishing and the second layout landing. Settled = the transform AND the
+// rendered node set AND their union box all unchanged across five samples.
+async function viewportSettled(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector(".react-flow__viewport") as HTMLElement | null;
+      if (!el) return false;
+      const nodes = Array.from(document.querySelectorAll(".react-flow__node"));
+      if (!nodes.length) return false;
+      let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+      for (const n of nodes) {
+        const b = n.getBoundingClientRect();
+        if (!b.width || !b.height) continue;
+        x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y);
+        x2 = Math.max(x2, b.x + b.width); y2 = Math.max(y2, b.y + b.height);
+      }
+      const sig = [el.style.transform, nodes.length, Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2)].join("|");
+      const w = window as unknown as { __vpT?: string; __vpN?: number };
+      if (w.__vpT === sig) w.__vpN = (w.__vpN ?? 0) + 1;
+      else { w.__vpT = sig; w.__vpN = 0; }
+      return (w.__vpN ?? 0) >= 5;
+    },
+    undefined,
+    { timeout: 15_000, polling: 100 },
+  );
+}
+
+test("selecting Cloud renders the real discovered network on the shared canvas", async ({ page }) => {
   const { cloudCalls } = await openCanvas(page);
 
   await page.getByLabel("Network domain").selectOption("cloud");
 
-  // 1. The selection actually reaches the network. (The first defect died here.)
+  // 1. The cloud topology actually reaches the network. (The first defect died
+  //    here.) It is now read at mount — the merged canvas needs both halves before
+  //    anyone picks a domain — so this only has to be true by the time Cloud is up.
   await expect.poll(cloudCalls, { message: "GET /api/topology/cloud was never requested" }).toBeGreaterThan(0);
 
   // 2. The honest non-live states must NOT be what the operator ends up looking at.
@@ -94,7 +138,7 @@ test("routes inside a VPC are visible, not buried under the group box", async ({
   await openCanvas(page);
   await page.getByLabel("Network domain").selectOption("cloud");
   await expect(page.getByTestId(`rf__node-${A_SUBNET}`)).toBeVisible();
-  await page.waitForTimeout(700); // fit animation
+  await viewportSettled(page);
 
   const probe = await page.evaluate(() => {
     const paths = Array.from(document.querySelectorAll(".react-flow__edge-path"));
@@ -121,13 +165,22 @@ test("the canvas fills the window, and the network fills the canvas", async ({ p
   await openCanvas(page);
   await page.getByLabel("Network domain").selectOption("cloud");
   await expect(page.getByTestId(`rf__node-${A_SUBNET}`)).toBeVisible();
-  await page.waitForTimeout(700); // let the fit animation settle
+  await viewportSettled(page);
 
   const vp = page.viewportSize();
   const stage = await page.locator(".topo-stage").first().boundingBox();
   expect(vp).not.toBeNull();
   expect(stage).not.toBeNull();
   if (!vp || !stage) return;
+
+  // The device inventory is DOCKED ON the canvas (an absolutely-positioned rail),
+  // and fit-to-view deliberately insets by its width — content fitted underneath it
+  // is the "group box going under the rail" defect, not a fuller canvas. So the
+  // network is measured against the area actually available to it. Zero when the
+  // rail is hidden (over-ceiling views suppress it), which keeps the whole stage as
+  // the yardstick in that case.
+  const rail = await page.locator(".topo-inventory").first().boundingBox();
+  const usableW = stage.width - (rail?.width ?? 0);
 
   // 1. THE STAGE FILLS THE WINDOW. Only the shell chrome above it and a small
   //    gutter may be spent — no dead band underneath (the old
@@ -155,6 +208,6 @@ test("the canvas fills the window, and the network fills the canvas", async ({ p
   });
   expect(content).not.toBeNull();
   if (!content) return;
-  expect(content.w / stage.width, "content width vs stage").toBeGreaterThan(0.7);
+  expect(content.w / usableW, "content width vs usable canvas").toBeGreaterThan(0.7);
   expect(content.h / stage.height, "content height vs stage").toBeGreaterThan(0.6);
 });

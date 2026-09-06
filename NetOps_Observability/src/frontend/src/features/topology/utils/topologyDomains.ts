@@ -4,9 +4,12 @@
 // task" (explore/investigate/trace); domain = "which network am I looking at"
 // (LAN / SD-WAN / DC / Cloud). See docs/design/topology-cloud-tabs.md.
 //
-// LAN is the DEFAULT and renders the current fabric view UNFILTERED (unchanged).
-// SD-WAN / DC are client-side filtered slices of the fabric until the backend
-// serves per-domain projections (?domain=). Cloud has its own renderer + data.
+// ONE CANVAS, FOUR FILTERS (#131). The default is the whole discovered estate —
+// the on-prem fabric with the cloud projection merged onto the SAME canvas — and
+// SD-WAN / DC / Cloud are client-side slices of it. Cloud used to be a separate
+// page with its own renderer; it is a filter now, because cloud↔on-prem
+// troubleshooting needs both ends on one canvas and a separate page can never
+// provide that.
 
 import type { TopologyView, TopologyNode } from "../api/topologyTypes";
 
@@ -19,7 +22,9 @@ export type DomainMeta = {
 };
 
 export const DOMAINS: DomainMeta[] = [
-  { id: "lan", label: "LAN", blurb: "The discovered on-prem campus/access fabric (the current canvas)." },
+  // The id stays "lan" (links, saved layouts and the route serialization carry
+  // it); the LABEL is honest about what the unfiltered canvas now holds.
+  { id: "lan", label: "All networks", blurb: "The whole discovered estate on one canvas — on-prem fabric plus the projected cloud network. The other options filter this same canvas." },
   { id: "sdwan", label: "SD-WAN", blurb: "WAN edge: SD-WAN gateways, tunnels/overlays and transport." },
   { id: "dc", label: "DC", blurb: "Data-center fabric: spine/leaf, ToR, compute/storage rows." },
   { id: "cloud", label: "Cloud", blurb: "Cloud network: VPCs/VNets, subnets, gateways, NVAs, seams." },
@@ -32,10 +37,31 @@ function hay(n: TopologyNode): string {
   return `${n.role ?? ""} ${n.kind} ${n.tags?.role ?? ""} ${n.tags?.tier ?? ""} ${n.label}`.toLowerCase();
 }
 
+/**
+ * Is this node a CLOUD entity? Answered from FACTS the discovery returned — the
+ * node kind, and the provider / region / vpc fields the cloud projection stamps
+ * on every resource (#131d) — never from its name.
+ *
+ * This is deliberately NOT a regex over the label. The regexes below are a
+ * best-effort classifier for on-prem roles that carry no better signal, and they
+ * are the weakest thing in this file: a cloud gateway's role ("vpn_gateway",
+ * "transit_gateway") matches the SD-WAN pattern, so a name-based rule would
+ * scatter one VPC's gateways across two domains. A VPC is not a naming
+ * convention; it is a field.
+ */
+export function isCloudNode(n: TopologyNode): boolean {
+  if (n.kind === "cloud") return true;
+  const t = n.tags;
+  if (!t) return false;
+  return !!(t.provider || t.vpc || t.region);
+}
+
 /** Which domain does a node belong to (best-effort classifier). LAN is the
  *  catch-all so a node is never dropped. */
 export function domainOfNode(n: TopologyNode): NetworkDomain {
-  if (n.kind === "cloud") return "cloud";
+  // Cloud is decided by fact and decided FIRST — a cloud transit/VPN gateway
+  // would otherwise match the SD-WAN pattern on its role.
+  if (isCloudNode(n)) return "cloud";
   const h = hay(n);
   if (SDWAN_RE.test(h)) return "sdwan";
   if (DC_RE.test(h)) return "dc";
@@ -73,7 +99,7 @@ export function zoneOfNode(n: TopologyNode): NetworkZone | "" {
   // Deterministic backbone seams first — a DX/ER edge device names its seam.
   if (DX_RE.test(h)) return "AWS Direct Connect";
   if (ER_RE.test(h)) return "Azure ExpressRoute";
-  if (n.kind === "cloud") return "Cloud";
+  if (isCloudNode(n)) return "Cloud";
   if (n.kind === "wan" || ISP_RE.test(h)) return "ISP";
   const d = domainOfNode(n);
   if (d === "cloud") return "Cloud";
@@ -83,18 +109,38 @@ export function zoneOfNode(n: TopologyNode): NetworkZone | "" {
 }
 
 /**
- * Filter a fabric view to one domain. LAN returns the view UNCHANGED (default,
- * additive). Cloud is handled by its own renderer, so this filter is only used
- * for SD-WAN / DC slices. Edges are kept only when BOTH endpoints survive; groups
- * are pruned to surviving children (empty groups dropped).
+ * Filter a fabric view to one domain. LAN returns the view UNCHANGED (it is the
+ * whole estate — the identity path, so the default canvas is untouched); SD-WAN,
+ * DC and Cloud are slices of that same canvas. Edges are kept only when BOTH
+ * endpoints survive.
+ *
+ * GROUPS ARE PRUNED BY DESCENDANT, not by direct child. A region declares no node
+ * children — its members are VPC groups nested via `parent_id` — so dropping
+ * "groups with no surviving children" deleted every region boundary from the
+ * cloud slice, the same defect #134 fixed in the renderer. A container survives
+ * when anything below it does.
  */
 export function filterViewByDomain(view: TopologyView, domain: NetworkDomain): TopologyView {
   if (domain === "lan") return view;
   const keep = new Set(view.nodes.filter((n) => domainOfNode(n) === domain).map((n) => n.id));
   const nodes = view.nodes.filter((n) => keep.has(n.id));
   const edges = view.edges.filter((e) => keep.has(e.source) && keep.has(e.target));
+
+  // Which groups keep at least one node, then propagate upward through parent_id.
+  const byId = new Map(view.groups.map((g) => [g.id, g]));
+  const survives = new Set<string>();
+  for (const g of view.groups) if (g.children.some((c) => keep.has(c))) survives.add(g.id);
+  for (const id of [...survives]) {
+    let parent = byId.get(id)?.parent_id;
+    let depth = 0;
+    while (parent && depth < 8 && !survives.has(parent)) {
+      survives.add(parent);
+      parent = byId.get(parent)?.parent_id;
+      depth++;
+    }
+  }
   const groups = view.groups
-    .map((g) => ({ ...g, children: g.children.filter((c) => keep.has(c)) }))
-    .filter((g) => g.children.length > 0);
+    .filter((g) => survives.has(g.id))
+    .map((g) => ({ ...g, children: g.children.filter((c) => keep.has(c)) }));
   return { ...view, nodes, edges, groups };
 }

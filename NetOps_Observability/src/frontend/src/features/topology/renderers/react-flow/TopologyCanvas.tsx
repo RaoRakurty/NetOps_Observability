@@ -28,7 +28,7 @@ import type { Padding, PaddingWithUnit } from "@xyflow/system";
 import "@xyflow/react/dist/style.css";
 
 import type { OverlayKind, TopologySelection, WorkflowMode, TopologyView } from "../../api/topologyTypes";
-import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, type TopologyCoverage, type TopologyGraphStatus, type TopologyViewStatus } from "../../api/topologyApi";
+import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, fetchCloudTopology, type TopologyCoverage, type TopologyGraphStatus, type TopologyViewStatus, type CloudTopologyStatus } from "../../api/topologyApi";
 import { api, type CorrObject } from "../../../../services/api";
 import { layoutView, viewSignature } from "../../layout/elkLayout";
 import { bucketForZoom } from "../../utils/semanticZoom";
@@ -91,9 +91,9 @@ import {
 import { renderedNodeCount, allGroupIds, canAggregateUnderCeiling, expansionWouldExceed } from "../../utils/topologyScale";
 import { focusSummary, focusView } from "../../utils/topologyFocus";
 import { excludeInternalNodes } from "../../utils/topologyFilters";
-import { filterViewByDomain, DOMAINS, type NetworkDomain } from "../../utils/topologyDomains";
+import { filterViewByDomain, isCloudNode, DOMAINS, type NetworkDomain } from "../../utils/topologyDomains";
+import { mergeCloudView } from "../../utils/cloudMerge";
 import { withCarrierOverlay } from "../../utils/carrierOverlay";
-import CloudTopologyView from "./CloudTopologyView";
 import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
 import {
   TopologyToolbar,
@@ -244,6 +244,14 @@ function CanvasInner({
   // the opposite long after the behaviour changed; corrected 2026-08-01.)
   const [source, setSource] = useState<"live" | "persisted">("live");
   const [fetched, setFetched] = useState<TopologyView | null>(null);
+  // The discovered CLOUD network, merged onto this same canvas (#131). It is a
+  // second authorized read (GET /api/topology/cloud is tenant-scoped and
+  // default-closed server-side), not a second page: cloud↔on-prem troubleshooting
+  // needs both ends on one canvas, and the Cloud domain is a FILTER over it.
+  // A tenant with no discovered cloud network merges nothing and the canvas is
+  // byte-for-byte what it was.
+  const [cloudView, setCloudView] = useState<TopologyView | null>(null);
+  const [cloudStatus, setCloudStatus] = useState<CloudTopologyStatus | "loading">("loading");
   // Load-flash guard: true until the FIRST fetch for the current request identity
   // (mode/source/incident/path — NOT a background refresh) resolves. While loading
   // the stage shows a placeholder, never the previous network or the bundled
@@ -362,6 +370,20 @@ function CanvasInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, source, incidentId, pathSrc, pathDst]);
 
+  // Cloud half of the canvas. Refetched on the same 60s tick as the fabric so one
+  // half can never be an hour older than the other.
+  useEffect(() => {
+    let alive = true;
+    fetchCloudTopology().then(({ view, status }) => {
+      if (!alive) return;
+      setCloudView(view);
+      setCloudStatus(status);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [refreshTick]);
+
   // Periodic refetch (audit S5). 60s matches the backend reconciler cadence;
   // paused while the tab is hidden so a background wallboard doesn't hammer the
   // API. Operator pins live in `positions`/savedLayout and survive a refetch,
@@ -397,7 +419,17 @@ function CanvasInner({
     // unchanged. SD-WAN / DC apply a client-side domain slice; the carrier overlay
     // (any tab) appends the shared transport node + uplinks.
     let out = excludeInternalNodes(v);
+    // ONE CANVAS: the cloud projection joins the fabric BEFORE the domain slice,
+    // so "Cloud" is a filter over the same graph rather than a different page,
+    // and an on-prem↔cloud investigation has both ends in one place.
+    out = mergeCloudView(out, cloudView);
     if (domain !== "lan") out = filterViewByDomain(out, domain);
+    // The CLOUD slice is a set of independent region/VPC blocks with no edges
+    // between them — a PACKING problem, not a layering one. `layered` has nothing
+    // to layer and puts them all in ONE ROW: the same 8:1 ribbon that made the
+    // separate cloud tab look empty (elkLayout's `packRoot` note). The merged view
+    // keeps the FABRIC's layout identity, so the slice has to declare its own.
+    if (domain === "cloud" && out.nodes.length > 0) out = { ...out, layout_type: "cloud_grouped" };
     if (carrier) out = withCarrierOverlay(out);
     // LAG / parallel links collapse into ONE bundled edge (#133b). `edgeBundling`
     // shipped fully built and called by nothing, so a 4-member port-channel drew
@@ -407,7 +439,7 @@ function CanvasInner({
     // RCA-flagged member, or links of different relationship classes).
     out = bundleParallelEdges(out);
     return out;
-  }, [fetched, domain, carrier]);
+  }, [fetched, cloudView, domain, carrier]);
   // Tag-dimension regrouping: re-bucket the canvas by site/role/vendor/owner (or none)
   // — the operator's lens, not just the backend's fixed site hierarchy.
   const groupedView = useMemo(
@@ -506,7 +538,14 @@ function CanvasInner({
       const pinCount = Object.keys(saved).length;
       setLayoutPinned(pinCount > 0);
       setPositions(pinCount > 0 ? { ...pos, ...saved } : pos);
-      setLaidOutKey(`${view.view_id}:${effectiveArchetype ?? "elk"}`);
+      // Key the "a fresh layout landed → re-fit" signal on the LAYOUT KEY, which is
+      // content-hashed. Keying it on view_id+archetype meant a canvas whose CONTENT
+      // changed without changing identity never re-fitted — which is exactly what
+      // happens now that the cloud half arrives on a second, later read (#131): the
+      // fabric fitted, the cloud landed, and the merged network hung off the stage
+      // at the old zoom. An unchanged graph still re-uses the cached layout and the
+      // same key, so a 60s background refresh does not yank a wallboard's viewport.
+      setLaidOutKey(layoutKey);
     };
     const analytic = effectiveArchetype ? archetypeLayout(view, effectiveArchetype) : null;
     if (analytic) {
@@ -574,10 +613,20 @@ function CanvasInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aggregateAtScale, view?.view_id, groupBy]);
 
-  // Endpoint options for the Path Trace picker: every node, by label, sorted.
+  // Endpoint options for the Path Trace picker: the nodes the path engine can
+  // actually RESOLVE, by label, sorted.
+  //
+  // Cloud entities are on this canvas now (#131) but are deliberately NOT offered
+  // here yet (#130): `/api/topology/view?mode=path_trace` resolves a path by
+  // Dijkstra over the discovered DEVICE fabric, and a cloud subnet's id is not a
+  // vertex in that graph — so every cloud endpoint would resolve to "no path" and
+  // the picker would be advertising a trace the backend cannot run. Offering a
+  // control that always fails is the same defect as an empty tab promising a
+  // network. They become selectable when the projection can cross the seam.
   const endpointOptions = useMemo(
     () =>
       (view?.nodes ?? [])
+        .filter((n) => !isCloudNode(n))
         .map((n) => ({ id: n.id, label: n.label || n.id }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     [view],
@@ -683,12 +732,22 @@ function CanvasInner({
   // fill the viewport.
   const fittedFor = useRef<string>("");
   useEffect(() => {
-    if (laidOutKey && laidOutKey !== fittedFor.current && rfNodes.length) {
+    if (!laidOutKey || laidOutKey === fittedFor.current || !rfNodes.length) return;
+    const t = setTimeout(() => {
+      // Claim the key only once the fit has actually RUN. Claiming it up front
+      // silently cancelled the fit: this effect re-runs whenever the node array
+      // changes, the cleanup cleared the pending timeout, and the re-run then saw
+      // `laidOutKey === fittedFor.current` and scheduled nothing — so the canvas
+      // kept whatever viewport it had. Harmless while the node array was settled
+      // before the layout landed; not harmless once container groups render (#134)
+      // and the cloud half arrives on a second read (#131), both of which change
+      // the array inside that 60ms window. The symptom was a network drawn 2.5×
+      // the size of the stage, hanging off it.
       fittedFor.current = laidOutKey;
-      const t = setTimeout(() => rf.fitView({ padding: fitPadding(showInventory), duration: 320, maxZoom: 1.15 }), 60);
-      return () => clearTimeout(t);
-    }
-  }, [laidOutKey, rfNodes.length, rf]);
+      rf.fitView({ padding: fitPadding(showInventory), duration: 320, maxZoom: 1.15 });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [laidOutKey, rfNodes.length, rf, showInventory]);
 
   // Fullscreen: toggle a class on the root and re-fit; Escape exits.
   useEffect(() => {
@@ -969,12 +1028,10 @@ function CanvasInner({
         </div>
       </TopologyToolbar>
 
-      {domain === "cloud" ? (
-        /* Cloud tab: the SAME toolbar above; only the stage content is the cloud
-           network canvas (own nodeTypes/official icons, but the shared ELK layout,
-           node-card shell, legend and drawer — so it looks and behaves natively). */
-        <CloudTopologyView carrier={carrier} />
-      ) : (
+      {/* ONE STAGE for every domain (#131). Cloud used to mount its own renderer
+          here; it is a filter over this canvas now, with the provider-marked card
+          chosen per node by fact, so an on-prem↔cloud investigation never has to
+          change page. */}
       <div className="topo-stage">
         <button
           className="topo-fs-btn"
@@ -1178,6 +1235,39 @@ function CanvasInner({
               // Audit S2: BOTH sources carry a status discriminator now — a
               // failed read must never render as "you have no devices".
               const readFailed = source === "persisted" ? graphStatus === "error" : viewStatus === "error";
+              // The CLOUD slice answers for itself: its emptiness is about the
+              // cloud read, not the fabric one, and "nothing discovered" must stay
+              // distinguishable from "the read failed" (#131 / the honesty rule
+              // the separate Cloud tab already carried — it moves here with it).
+              if (domain === "cloud" && !readFailed) {
+                const cloudFailed = cloudStatus === "error";
+                return (
+                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                    <div style={{ maxWidth: 460, textAlign: "center", padding: "18px 22px", border: `1px dashed ${cloudFailed ? "var(--bad)" : "var(--border)"}`, borderRadius: 10, background: "var(--panel)", pointerEvents: "auto" }}
+                      role={cloudFailed ? "alert" : undefined}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: cloudFailed ? "var(--bad)" : "var(--fg)", marginBottom: 6 }}>
+                        {cloudStatus === "loading"
+                          ? "Loading the cloud network…"
+                          : cloudFailed
+                            ? "Unable to load the cloud network"
+                            : "No cloud network discovered yet"}
+                      </div>
+                      <div style={{ fontSize: 12.5, color: "var(--fg-muted)", lineHeight: 1.5, marginBottom: 10 }}>
+                        {cloudStatus === "loading"
+                          ? "reading the discovered VPC/VNet → subnet → gateway topology"
+                          : cloudFailed
+                            ? "the topology read failed — retry, or check the cloud data sources"
+                            : "connect an AWS / Azure / GCP account and enable discovery — the VPC/VNet → subnet → route-table → gateway graph appears on this canvas as it is discovered"}
+                      </div>
+                      {cloudStatus !== "loading" && (
+                        <button className="btn btn-sm" onClick={() => { location.hash = "#/operations/services/datasources"; }}>
+                          Open Data sources
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
               return (
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <div style={{ maxWidth: 440, textAlign: "center", padding: "18px 22px", border: `1px dashed ${readFailed ? "var(--bad)" : "var(--border)"}`, borderRadius: 10, background: "var(--panel)", pointerEvents: "auto" }}
@@ -1239,7 +1329,6 @@ function CanvasInner({
           </>
         )}
       </div>
-      )}
     </div>
   );
 }

@@ -4,6 +4,17 @@ Status: **design + reviewable POC** (2026‑07‑15). Additive to the existing
 Phase‑1 React Flow + ELK operator canvas; the current canvas stays the default
 and visually unchanged.
 
+> **SUPERSEDED IN PART (2026‑09‑06, tracker #131).** §1.1's "Cloud is its own tab
+> with its own renderer" and §5's separate `CloudTopologyView.tsx` no longer hold.
+> The cloud projection is MERGED onto the one canvas (`utils/cloudMerge.ts`) and
+> the domain select is a FILTER over that single graph; `CloudTopologyView.tsx`
+> and the `cloudNodeTypes` registry are deleted, and the provider‑marked card is
+> chosen per node by FACT (`tags.provider`) inside the one adapter. The reason is
+> the one the tracker gives: cloud↔on‑prem troubleshooting needs both ends on the
+> same canvas, which a separate page can never provide. Everything else here —
+> the taxonomy (§2), the carrier overlay (§4) and the `/api/topology/cloud`
+> endpoint (§8) — is unchanged and still current.
+
 > Scope note (owner direction): this adds **cloud NETWORK topology** —
 > VPCs/VNets, subnets, gateways, NVAs, tunnels, Direct Connect / ExpressRoute /
 > Interconnect, transit gateways / cloud routers, NAT, load balancers — rendered

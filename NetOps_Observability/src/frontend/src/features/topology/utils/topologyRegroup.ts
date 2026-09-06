@@ -8,7 +8,7 @@
 import type { TopologyView, TopologyGroup, GroupType, Health, TopologyNode } from "../api/topologyTypes";
 import { zoneOfNode } from "./topologyDomains";
 
-export type GroupDimension = "site" | "zone" | "role" | "vendor" | "owner" | "none";
+export type GroupDimension = "site" | "zone" | "role" | "vendor" | "owner" | "region" | "vpc" | "none";
 
 export const GROUP_DIMENSIONS: { id: GroupDimension; label: string }[] = [
   { id: "site", label: "Site" },
@@ -19,6 +19,12 @@ export const GROUP_DIMENSIONS: { id: GroupDimension; label: string }[] = [
   { id: "role", label: "Role" },
   { id: "vendor", label: "Vendor" },
   { id: "owner", label: "Owner" },
+  // #131b: the cloud's OWN segregation axes, bucketed from the facts the cloud
+  // projection stamps on each node (tags.region / tags.vpc) — not from its name.
+  // A node without the field stays ungrouped, which is how an on-prem fabric
+  // behaves under these lenses: honestly outside them, never invented into one.
+  { id: "region", label: "Region" },
+  { id: "vpc", label: "VPC / VNet" },
   { id: "none", label: "None" },
 ];
 
@@ -26,7 +32,22 @@ export const GROUP_DIMENSIONS: { id: GroupDimension; label: string }[] = [
 // label carries the real value (e.g. "arista", "leaf"); the type only tints/rolls up.
 const TYPE_FOR_DIM: Record<Exclude<GroupDimension, "none">, GroupType> = {
   site: "site", zone: "zone", role: "cluster", vendor: "zone", owner: "app",
+  region: "region", vpc: "vpc",
 };
+
+/** Prefix a cloud bucket with its provider when every member agrees on one:
+ *  "us-east-1" exists in more than one provider's vocabulary, and two providers'
+ *  same-named regions are two different places. Mixed/absent → the bare key. */
+function labelWithProvider(key: string, members: TopologyNode[]): string {
+  let provider: string | undefined;
+  for (const m of members) {
+    const p = (m.tags?.provider ?? "").trim();
+    if (!p) return key;
+    if (provider === undefined) provider = p;
+    else if (provider !== p) return key;
+  }
+  return provider ? `${provider} · ${key}` : key;
+}
 
 const HEALTH_RANK: Record<Health, number> = {
   ok: 0, maintenance: 1, unknown: 2, warning: 3, critical: 4,
@@ -42,6 +63,8 @@ function keyOf(n: TopologyNode, dim: Exclude<GroupDimension, "none">): string {
     : dim === "zone" ? zoneOfNode(n)
     : dim === "role" ? n.role
     : dim === "vendor" ? n.vendor
+    : dim === "region" ? n.tags?.region
+    : dim === "vpc" ? n.tags?.vpc
     : n.owner;
   return (v ?? "").trim();
 }
@@ -69,7 +92,7 @@ export function regroupView(view: TopologyView, dim: GroupDimension): TopologyVi
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([label, members]) => ({
       id: `${dim}:${label}`,
-      label,
+      label: dim === "vpc" || dim === "region" ? labelWithProvider(label, members) : label,
       group_type: TYPE_FOR_DIM[dim],
       children: members.map((n) => n.id).sort(),
       health: members.reduce<Health>((h, n) => worse(h, (n.health as Health) ?? "unknown"), "ok"),
