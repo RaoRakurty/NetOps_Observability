@@ -76,7 +76,7 @@ no backup.
 | `BACKUP_VICTORIA` | `1` | `0` skips the time-series snapshot. |
 | `BACKUP_CH_MAX_TABLE_MB` | `512` | per-table ceiling on the ClickHouse `FORMAT Native` export. Larger tables ship as **schema only** and the component reports `partial`, never `pass`; their rows belong in the cold Parquet tier (`scripts/ch-cold-export.sh`). `0` disables the ceiling. |
 | `BACKUP_EXCLUDE` | unset | extra rsync excludes for the `data/` copy, space-separated and anchored at `data/` (e.g. `"/kafka /opensearch"`). Recorded in the MANIFEST **and** the run report, so a narrowed bundle can never be presented as a full one. |
-| `BACKUP_KEEP` | `7` | artifacts to keep. `0` disables pruning, loudly. |
+| `BACKUP_KEEP` | `7` | artifacts to keep. `0` disables pruning, loudly. **Set it from the GUI** (Platform → Data Protection → Full-bundle policy → *Copies kept*), which stores `retain_count` in `data/api/system_backup.json`; the host applier writes it here. A hand-edited `.env` value is overwritten the next time the applier runs. An unset `retain_count` leaves this default of 7 in force. |
 | `OPENSEARCH_ADMIN_CERT_DIR` | `data/tls/admin` | when `admin.crt`/`admin.key`/`ca.pem` are there, the OpenSearch snapshot call is made over the compose network with that client certificate — which is the only way it works on a stack with the security plugin enabled. |
 
 **Where the custody passphrase must NOT live:** on the backup host, next to the

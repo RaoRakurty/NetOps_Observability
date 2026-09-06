@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -597,4 +598,53 @@ func waitForOperation(t *testing.T, srv *httptest.Server, token, id string) data
 	}
 	t.Fatalf("operation %s never finished", id)
 	return dataprotect.Operation{}
+}
+
+// TestBackupRetentionIsPlatformOnlyAndDurable — the bundle retention is the one
+// control on this surface that DELETES copies, so it gets its own gate proof
+// rather than riding on the table above: a tenant admin is refused, and the
+// refusal must happen before the store is touched (a 403 that still wrote would
+// be a cross-scope write wearing an error code).
+//
+// It also pins the intent FILE, which is a Go↔bash contract: the host applier
+// (scripts/apply-backup-config.sh) parses this file and writes BACKUP_KEEP from
+// the `retain_count` key. If the api stops writing the key, the applier silently
+// installs its own fallback — the failure the parity pins in
+// tests/test_backup_ship.py exist to catch from the other side.
+func TestBackupRetentionIsPlatformOnlyAndDurable(t *testing.T) {
+	stub := newOSStub()
+	srv, _, dir := backupTestServer(t, stub)
+	admin := platformToken(t, srv)
+	tenantAdmin := tenantAdminToken(t, srv, admin, "A")
+
+	if st, b := do(t, srv, "PUT", "/api/system/backup", admin,
+		map[string]any{"remote_url": "/mnt/nas/x", "retain_count": 30}); st != 200 {
+		t.Fatalf("platform admin write: %d %s", st, b)
+	}
+
+	// A tenant admin cannot change it, and cannot change it by half either.
+	if st, _ := do(t, srv, "PUT", "/api/system/backup", tenantAdmin,
+		map[string]any{"remote_url": "/mnt/nas/x", "retain_count": 1}); st != 403 {
+		t.Errorf("tenant admin retention write: got %d, want 403", st)
+	}
+
+	// The stored intent is on disk, under the key the host applier reads.
+	raw, err := os.ReadFile(dir + "/system_backup.json")
+	if err != nil {
+		t.Fatalf("the intent file the host applier parses was not written: %v", err)
+	}
+	var stored map[string]any
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatalf("the intent file is not valid JSON — the applier refuses to apply garbage: %v", err)
+	}
+	got, ok := stored["retain_count"]
+	if !ok {
+		t.Fatal("retain_count is absent from the intent file — apply-backup-config.sh would fall back to its own default")
+	}
+	if n, isNum := got.(float64); !isNum || n != 30 {
+		t.Fatalf("retain_count on disk = %v, want 30", got)
+	}
+	if _, refused := stored["retain_count"]; refused && stored["remote_url"] != "/mnt/nas/x" {
+		t.Errorf("the refused tenant write changed the stored intent: %v", stored)
+	}
 }

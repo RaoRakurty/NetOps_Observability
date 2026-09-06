@@ -1362,6 +1362,13 @@ export type BackupConfig = {
   push_command?: string;
   schedule_enabled: boolean;
   schedule_cron?: string;
+  // How many bundle artifacts the host keeps (BACKUP_KEEP). THREE states, and
+  // they are not interchangeable: a number the operator chose, a deliberate 0
+  // (pruning off — every copy kept), and absent, which means nobody has chosen
+  // and the host applier's own fallback is in force. Omitting the key on a PUT
+  // leaves the stored value alone; it is never cleared by a partial write.
+  // contract: openapi.go PUT /api/system/backup
+  retain_count?: number | null;
   updated_by?: string;
   updated_at?: string;
 };

@@ -18,6 +18,7 @@ package dataprotect
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -555,5 +556,82 @@ func TestCoverageRPOTargetsComeFromRealSchedules(t *testing.T) {
 		if !strings.Contains(row.RPOTargetDetail, "no ") {
 			t.Errorf("%s rpo_target_detail must say why there is no target: %q", id, row.RPOTargetDetail)
 		}
+	}
+}
+
+// TestCoverageReportsBundleRetentionInForce — the bundle row must report the
+// retention that is ACTUALLY enforced, in the three states it can be in.
+//
+// Before retain_count existed on the config the row reported no count at all,
+// while backup.sh was pruning to one all along — so an operator had to go to
+// the host to read a number this GUI had set. The row states the POLICY and
+// says, in words, that it is not a count of artifacts on disk: the api cannot
+// see them, and a policy presented as an observation is the fabrication this
+// surface refuses everywhere else.
+func TestCoverageReportsBundleRetentionInForce(t *testing.T) {
+	bundleRow := func(t *testing.T, h *harness) EngineCoverage {
+		t.Helper()
+		st, b := h.do(t, "GET", "/api/system/backup/coverage", nil)
+		if st != 200 {
+			t.Fatalf("coverage: %d %s", st, b)
+		}
+		var view BackupCoverageView
+		if err := json.Unmarshal(b, &view); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		for _, r := range view.Engines {
+			if r.ID == "system_bundle" {
+				return r
+			}
+		}
+		t.Fatal("no system_bundle row in the coverage table")
+		return EngineCoverage{}
+	}
+
+	// 1 · nothing stored: the applier's fallback is in force, and is named as a
+	// default rather than published as a count somebody chose.
+	h := newHarness(t, newOSStub())
+	row := bundleRow(t, h)
+	if row.Retention == nil {
+		t.Fatal("the bundle row must always carry a retention object")
+	}
+	if row.Retention.MaxCount != nil {
+		t.Errorf("an unset retention must publish no count, got %d", *row.Retention.MaxCount)
+	}
+	if !strings.Contains(row.Retention.Detail, strconv.Itoa(BackupRetainApplierDefault)) ||
+		!strings.Contains(row.Retention.Detail, "default") {
+		t.Errorf("the detail must name the applier fallback AS a default: %q", row.Retention.Detail)
+	}
+
+	// 2 · a chosen count: published, with the "policy, not a file count" caveat.
+	if st, b := h.do(t, "PUT", "/api/system/backup", map[string]any{
+		"remote_url": "/mnt/nas/x", "retain_count": 30,
+	}); st != 200 {
+		t.Fatalf("set retention: %d %s", st, b)
+	}
+	row = bundleRow(t, h)
+	if row.Retention.MaxCount == nil || *row.Retention.MaxCount != 30 {
+		t.Fatalf("the chosen retention was not published: %v", row.Retention.MaxCount)
+	}
+	if !strings.Contains(row.Retention.Detail, "policy in force") {
+		t.Errorf("the detail must say this is a policy, not a count of artifacts: %q", row.Retention.Detail)
+	}
+	if row.Retention.MaxAgeDays != nil {
+		t.Errorf("the bundle has no age-based retention; publishing one would be invented: %v", *row.Retention.MaxAgeDays)
+	}
+
+	// 3 · a deliberate 0: pruning OFF. Publishing max_count 0 would read as
+	// "keep nothing" — the exact opposite of what the host does.
+	if st, b := h.do(t, "PUT", "/api/system/backup", map[string]any{
+		"remote_url": "/mnt/nas/x", "retain_count": 0,
+	}); st != 200 {
+		t.Fatalf("disable pruning: %d %s", st, b)
+	}
+	row = bundleRow(t, h)
+	if row.Retention.MaxCount != nil {
+		t.Errorf("retain_count 0 must not be published as a max_count of 0: %d", *row.Retention.MaxCount)
+	}
+	if !strings.Contains(row.Retention.Detail, "Pruning is off") {
+		t.Errorf("the detail must say pruning is off and what that costs: %q", row.Retention.Detail)
 	}
 }

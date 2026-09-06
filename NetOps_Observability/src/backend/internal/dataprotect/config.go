@@ -41,9 +41,32 @@ type Config struct {
 	// fills the very disk it needs (F-55).
 	ScheduleEnabled bool `json:"schedule_enabled"`
 	// ScheduleCron is the backup schedule (default "30 2 * * *" — 02:30 daily).
-	ScheduleCron string    `json:"schedule_cron,omitempty"`
-	UpdatedBy    string    `json:"updated_by,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+	ScheduleCron string `json:"schedule_cron,omitempty"`
+
+	// RetainCount is how many bundle ARTIFACTS the host keeps: the applier
+	// writes it to BACKUP_KEEP, and backup.sh keeps the N newest and prunes the
+	// rest (0 = pruning DISABLED, which backup.sh warns about rather than
+	// treating as a silent default).
+	//
+	// It is a POINTER because three states are genuinely different and must
+	// stay distinguishable: a count the operator chose, a deliberate 0, and
+	// "never set" — which the applier resolves to its own fallback of 7. A
+	// plain int would render "nobody chose" and "keep nothing" as the same
+	// zero, which is the fabricated-value failure this whole surface exists to
+	// refuse.
+	//
+	// THE DEFECT THIS CLOSES (2026-09-06). scripts/apply-backup-config.sh has
+	// read `retain_count` out of THIS file since 2026-07-27 and written it to
+	// BACKUP_KEEP — but the field did not exist on this struct. So the GUI
+	// could not set the bundle's retention at all (tracker 150(g) asks for
+	// exactly that, "tarball retention.max_count, default 7"), and worse, every
+	// GUI save marshalled this struct over the whole file and SILENTLY DELETED
+	// a retain_count an operator had set by hand. The applier then fell back to
+	// 7 with nothing anywhere saying the operator's decision had been dropped.
+	RetainCount *int `json:"retain_count,omitempty"`
+
+	UpdatedBy string    `json:"updated_by,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 
 	// ── the OpenSearch snapshot-schedule INTENT (2026-09-03) ────────────────
 	//
@@ -179,11 +202,35 @@ func sanitizeConfig(in Config) (Config, error) {
 	if out.ScheduleEnabled && out.RemoteURL == "" {
 		return out, errScheduleNeedsRemote
 	}
+	// Bundle retention. Bounded like the snapshot policy's own max_count, with
+	// 0 admitted because it is a real (and loud, host-side) choice: keep every
+	// artifact. The pointer is COPIED rather than aliased so nothing downstream
+	// can be mutated through the request's own memory.
+	if in.RetainCount != nil {
+		n := *in.RetainCount
+		if n < 0 || n > backupRetainMax {
+			return out, errBadRetainCount
+		}
+		out.RetainCount = &n
+	}
 	if out.ScheduleCron == "" {
 		out.ScheduleCron = "30 2 * * *"
 	}
 	return out, nil
 }
+
+// backupRetainMax bounds the stored bundle retention. It mirrors the snapshot
+// policy's own retention_max_count ceiling (365) so the two halves of the same
+// GUI cannot disagree about what a plausible number of copies is. The applier
+// re-validates independently — it accepts any non-negative integer and is the
+// security boundary — so this bound is a product decision, not the guard.
+const backupRetainMax = 365
+
+// BackupRetainApplierDefault is the count scripts/apply-backup-config.sh falls
+// back to when no retain_count is stored. It is named here so the GUI can SAY
+// which number is in force instead of leaving a blank field that reads as "no
+// retention at all", and so the parity test can pin the two against each other.
+const BackupRetainApplierDefault = 7
 
 // hasControlChar reports whether s contains any ASCII control character
 // (newline, CR, NUL, tab, …) — the primitive a value uses to break out of its
@@ -259,6 +306,7 @@ var (
 	errBackupControlChar   = jsonError("backup config fields must not contain control characters (newline/tab/etc.)")
 	errBadPushCommand      = jsonError("push_command must be an allowlisted transport (rsync, rclone, scp, aws, gsutil, b2, azcopy, cp, …) with bare flags only — no shell metacharacters")
 	errBadBackupCron       = jsonError("schedule_cron must be a 5-field cron expression using only digits and the operators * , - /")
+	errBadRetainCount      = jsonError("retain_count must be a whole number between 0 and 365 (0 keeps every bundle artifact — pruning off)")
 )
 
 func validBackupRemote(u string) bool {
@@ -433,4 +481,15 @@ func readReportFile(path string) ([]byte, error) {
 	// RESTORE_DRILL_REPORT) resolved once by the integrator; no request-supplied
 	// string reaches this function.
 	return os.ReadFile(path)
+}
+
+// auditRetain renders the stored bundle retention for the audit trail. A nil
+// count is "unset" in words, never a 0: in this vocabulary 0 means "pruning
+// off, keep everything", and an audit line that could not tell the two apart
+// would be evidence of the wrong decision.
+func auditRetain(n *int) any {
+	if n == nil {
+		return "unset"
+	}
+	return *n
 }

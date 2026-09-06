@@ -106,6 +106,16 @@ func (s *Service) HandleConfig(w http.ResponseWriter, r *http.Request) {
 		clean.SnapshotScheduleDisabledBy = prev.SnapshotScheduleDisabledBy
 		clean.SnapshotScheduleDisabledReason = prev.SnapshotScheduleDisabledReason
 		clean.SnapshotPolicyWrittenAt = prev.SnapshotPolicyWrittenAt
+		// An OMITTED retain_count means "leave the stored retention alone", not
+		// "clear it" — the same shape as the empty-secret PUT elsewhere in the
+		// platform. A client that predates the field (or one that only wants to
+		// change the destination) must not be able to silently drop an
+		// operator's retention decision and hand the host applier back its own
+		// fallback. Clearing is not an operation: 0 is a choice, and setting the
+		// fallback explicitly is how you ask for the fallback.
+		if clean.RetainCount == nil {
+			clean.RetainCount = prev.RetainCount
+		}
 		clean.UpdatedBy = caller.Subject
 		clean.UpdatedAt = s.now().UTC()
 		putErr := s.putConfig(clean)
@@ -124,6 +134,11 @@ func (s *Service) HandleConfig(w http.ResponseWriter, r *http.Request) {
 				"action":     "backup_config_update",
 				"enabled":    clean.ScheduleEnabled,
 				"remote_url": clean.RemoteURL,
+				// Retention is a DATA-LOSS control (it is what prunes copies),
+				// so the trail records the number, and records "unset" as the
+				// distinct state it is rather than as a zero that would read as
+				// "pruning off".
+				"retain_count": auditRetain(clean.RetainCount),
 			},
 		})
 		if putErr != nil {

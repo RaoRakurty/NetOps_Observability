@@ -40,6 +40,7 @@ import {
   notMeasuredText,
   operationLabel,
   operationTone,
+  parseRetention,
   posture,
   postureLabel,
   postureTone,
@@ -49,6 +50,8 @@ import {
   repositoryStateFrom,
   restorableVerdict,
   restorePreview,
+  retentionHint,
+  retentionSentence,
   rpoVerdict,
   scopeLabel,
   shardSummary,
@@ -539,5 +542,62 @@ describe("coverage ordering — gaps first, deliberate exclusions last", () => {
       "clickhouse", "postgres", "secrets_tls", "device_configs",
     ]);
     expect(input.map((e) => e.id)).toEqual(frozen);
+  });
+});
+
+// ── bundle retention (the one control on this page that deletes copies) ─────
+//
+// Three states, never two. A blank box, a deliberate 0 and a chosen count mean
+// three different things to the host, and the sentence under the field is the
+// only place an operator learns which one is in force.
+
+describe("retentionSentence", () => {
+  it("names the host's own fallback when nothing is stored", () => {
+    expect(retentionSentence(null)).toBe("Not set. The host keeps 7.");
+    expect(retentionSentence(undefined)).toBe("Not set. The host keeps 7.");
+  });
+
+  it("says what 0 costs rather than rendering it as 'keep nothing'", () => {
+    expect(retentionSentence(0)).toBe("Pruning off. Every copy kept.");
+  });
+
+  it("states the count for a chosen retention", () => {
+    expect(retentionSentence(1)).toBe("The host keeps the newest copy only.");
+    expect(retentionSentence(30)).toBe("The host keeps the 30 newest copies.");
+  });
+
+  it("never renders a stored 0 as unset, or unset as 0", () => {
+    expect(retentionSentence(0)).not.toBe(retentionSentence(null));
+  });
+});
+
+describe("parseRetention", () => {
+  it("reads an empty box as not-set, never as 0", () => {
+    expect(parseRetention("")).toEqual({ ok: true, value: null });
+    expect(parseRetention("   ")).toEqual({ ok: true, value: null });
+    expect(parseRetention("0")).toEqual({ ok: true, value: 0 });
+  });
+
+  it("accepts whole counts inside the server's range", () => {
+    expect(parseRetention("7")).toEqual({ ok: true, value: 7 });
+    expect(parseRetention("365")).toEqual({ ok: true, value: 365 });
+  });
+
+  it("rejects what the server would refuse, instead of sending it", () => {
+    for (const bad of ["-1", "1.5", "366", "seven", "7d", "1e3"]) {
+      expect(parseRetention(bad), bad).toEqual({ ok: false });
+    }
+  });
+});
+
+describe("retentionHint", () => {
+  it("says plainly that clearing a stored retention does nothing", () => {
+    expect(retentionHint(null, 21)).toBe("Clearing is not a change. Saving keeps 21.");
+    expect(retentionHint(undefined, 0)).toBe("Clearing is not a change. Saving keeps 0.");
+  });
+
+  it("falls through to the plain sentence when nothing is stored either", () => {
+    expect(retentionHint(null, null)).toBe("Not set. The host keeps 7.");
+    expect(retentionHint(30, 21)).toBe("The host keeps the 30 newest copies.");
   });
 });

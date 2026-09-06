@@ -833,6 +833,70 @@ describe("policies", () => {
       .toHaveBeenCalledWith(expect.objectContaining({ remote_url: "rsync://nas/correlix/" })));
   });
 
+  it("exposes the bundle retention and states which number is in force", async () => {
+    setup();
+    // Nothing stored: the box is empty and the screen names the HOST's fallback
+    // rather than leaving a blank that reads as "no retention at all". Before
+    // this control existed the GUI could not set retain_count, while
+    // apply-backup-config.sh had been reading it out of the intent file — and
+    // every save silently deleted a hand-set value.
+    mockApi.backupConfig.mockResolvedValue({
+      config: { remote_url: "rsync://nas/x/", schedule_enabled: false }, status: {},
+    });
+    render(<DataProtection />);
+    const box = await screen.findByLabelText("Bundle copies kept") as HTMLInputElement;
+    expect(box.value).toBe("");
+    expect(screen.getByText("Not set. The host keeps 7.")).toBeTruthy();
+    // Iris owns the definition; the screen keeps the fact and the control.
+    expect(screen.getByRole("button", { name: /Ask Iris about Copies kept/i })).toBeTruthy();
+
+    fireEvent.change(box, { target: { value: "30" } });
+    expect(screen.getByText("The host keeps the 30 newest copies.")).toBeTruthy();
+
+    mockApi.setBackupConfig.mockResolvedValue({
+      config: { remote_url: "rsync://nas/x/", schedule_enabled: false, retain_count: 30 }, status: {},
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save bundle policy" }));
+    await waitFor(() => expect(mockApi.setBackupConfig)
+      .toHaveBeenCalledWith(expect.objectContaining({ retain_count: 30 })));
+  });
+
+  it("never renders a deliberate 0 as unset, and says what it costs", async () => {
+    setup();
+    mockApi.backupConfig.mockResolvedValue({
+      config: { remote_url: "rsync://nas/x/", schedule_enabled: false, retain_count: 0 }, status: {},
+    });
+    render(<DataProtection />);
+    expect(await screen.findByText("Pruning off. Every copy kept.")).toBeTruthy();
+    expect(screen.queryByText("Not set. The host keeps 7.")).toBeNull();
+    expect((screen.getByLabelText("Bundle copies kept") as HTMLInputElement).value).toBe("0");
+  });
+
+  it("says that clearing a stored retention is not a change", async () => {
+    setup();
+    mockApi.backupConfig.mockResolvedValue({
+      config: { remote_url: "rsync://nas/x/", schedule_enabled: false, retain_count: 21 }, status: {},
+    });
+    render(<DataProtection />);
+    const box = await screen.findByLabelText("Bundle copies kept") as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "" } });
+    // The server has no "unset" operation — an omitted retain_count means
+    // "leave it alone", so an emptied box must not imply it was cleared.
+    expect(screen.getByText("Clearing is not a change. Saving keeps 21.")).toBeTruthy();
+  });
+
+  it("refuses a retention the server would reject rather than sending it", async () => {
+    setup();
+    mockApi.backupConfig.mockResolvedValue({
+      config: { remote_url: "rsync://nas/x/", schedule_enabled: false, retain_count: 7 }, status: {},
+    });
+    render(<DataProtection />);
+    const box = await screen.findByLabelText("Bundle copies kept") as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "366" } });
+    expect(box.value).toBe("7");
+    expect(screen.getByText("The host keeps the 7 newest copies.")).toBeTruthy();
+  });
+
   it("lists a host-owned mechanism as external, with its source", async () => {
     setup({
       coverage: coverage({

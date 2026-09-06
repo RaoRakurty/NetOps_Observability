@@ -61,6 +61,11 @@ BUNDLE_DRILL = SCRIPTS / "backup-drill.sh"
 # api's side of this parity lives.
 API_ENV_WIRING_GO = ROOT / "src" / "backend" / "main.go"
 SWTPM_GO = ROOT / "src" / "backend" / "internal" / "vault" / "secrets_swtpm.go"
+# The backup INTENT struct. It is the wire format of a Go↔bash contract: the api
+# marshals it to data/api/system_backup.json and apply-backup-config.sh parses
+# that file key by key, so a rename on either side is a silent behaviour change
+# (the applier reads an absent key as "not set" and installs its own fallback).
+DATAPROTECT_CONFIG_GO = ROOT / "src" / "backend" / "internal" / "dataprotect" / "config.go"
 COMPOSE = ROOT / "deployment" / "docker" / "docker-compose.yml"
 
 
@@ -1326,3 +1331,83 @@ def test_s4_bundle_drill_never_prints_the_custody_passphrase():
     for line in body.splitlines():
         if "$BACKUP_SEALED_PASSPHRASE" in line and ("echo" in line or "log " in line or "printf" in line):
             raise AssertionError(f"the custody passphrase must never be printed: {line.strip()}")
+
+
+# ---------------------------------------------------------------------------
+# intent-key parity: the api's JSON field names vs the applier's read_json keys
+#
+# THE DEFECT THIS CLOSES (2026-09-06). apply-backup-config.sh has read
+# `retain_count` out of the stored intent since 2026-07-27 and writes it to
+# BACKUP_KEEP — but the Go struct had no such field, so the GUI could not set
+# the bundle's retention at all, AND every GUI save marshalled the struct over
+# the whole file, silently deleting a retain_count an operator had set by hand.
+# Nothing failed; the applier just fell back to 7. These pins make the seam
+# mechanical: a rename or a removal on either side fails here.
+# ---------------------------------------------------------------------------
+
+def _go_json_tags() -> set:
+    """Every json tag on the dataprotect Config struct."""
+    body = DATAPROTECT_CONFIG_GO.read_text()
+    m = re.search(r"type Config struct \{(.*?)\n\}", body, re.S)
+    assert m, "internal/dataprotect/config.go no longer declares `type Config struct`"
+    return set(re.findall(r'json:"([A-Za-z0-9_]+)', m.group(1)))
+
+
+def _applier_read_keys() -> set:
+    """Every key apply-backup-config.sh pulls out of the intent file."""
+    # Command substitutions only — `$(read_json <key>)`. Comments in the script
+    # discuss read_json in prose, and prose is not a contract.
+    body = "\n".join(l for l in APPLY.read_text().splitlines() if not l.lstrip().startswith("#"))
+    keys = set(re.findall(r'\$\(read_json ([a-z_]+)\)', body))
+    assert keys, "apply-backup-config.sh no longer reads the intent file with read_json"
+    return keys
+
+
+def test_applier_intent_keys_exist_on_the_go_struct():
+    """Every key the host applier reads must be a field the api actually
+    writes. `keep_count` is the documented legacy alias the applier still
+    accepts and is exempt — it is a READ fallback, never something the api
+    emits."""
+    tags, keys = _go_json_tags(), _applier_read_keys()
+    missing = sorted(k for k in keys - tags if k != "keep_count")
+    assert not missing, (
+        f"apply-backup-config.sh reads {missing} out of data/api/system_backup.json, "
+        f"but internal/dataprotect Config has no such json tag — the api will never "
+        f"write those keys, so the applier silently uses its own defaults "
+        f"(the 2026-09-06 retain_count defect). Add the field or stop reading the key.")
+
+
+def test_bundle_retention_is_settable_and_its_default_agrees():
+    """retain_count specifically: the api must own it, and the fallback the api
+    NAMES in the GUI must be the number the applier actually installs."""
+    assert "retain_count" in _go_json_tags(), (
+        "internal/dataprotect Config lost retain_count — the GUI can no longer set "
+        "the bundle retention (tracker 150(g)) and a stored value would be wiped "
+        "on the next save")
+    go_default = re.search(r"BackupRetainApplierDefault = (\d+)",
+                           DATAPROTECT_CONFIG_GO.read_text())
+    assert go_default, "BackupRetainApplierDefault is gone from internal/dataprotect/config.go"
+    sh_default = re.search(r'if \[ -z "\$KEEP" \]; then KEEP=(\d+); fi', APPLY.read_text())
+    assert sh_default, "apply-backup-config.sh no longer has a literal retain_count fallback"
+    assert go_default.group(1) == sh_default.group(1), (
+        f"the api tells the operator the host keeps {go_default.group(1)} copies when "
+        f"nothing is stored, but apply-backup-config.sh installs "
+        f"{sh_default.group(1)} — the GUI would be stating a number that is not in force")
+
+
+def test_applier_installs_the_retention_the_api_stored(tmp_path):
+    """End-to-end through the real script: a retain_count in the intent file
+    lands in .env as BACKUP_KEEP, which is what backup.sh prunes to."""
+    r, env_file, _ = _apply_tree(tmp_path, dict(GOOD_CFG, retain_count=30))
+    assert r.returncode == 0, r.stderr
+    assert "BACKUP_KEEP=30" in env_file.read_text()
+
+
+def test_applier_falls_back_when_the_api_stored_no_retention(tmp_path):
+    """An intent file with no retain_count (the state every install was in
+    before the field existed) must still produce a bounded retention."""
+    cfg = dict(GOOD_CFG)
+    cfg.pop("retain_count")
+    r, env_file, _ = _apply_tree(tmp_path, cfg)
+    assert r.returncode == 0, r.stderr
+    assert "BACKUP_KEEP=7" in env_file.read_text()

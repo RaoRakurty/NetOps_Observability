@@ -659,3 +659,62 @@ export function coverageRank(e: EngineCoverage): number {
 export function sortedEngines(engines: readonly EngineCoverage[]): EngineCoverage[] {
   return [...engines].sort((a, b) => coverageRank(a) - coverageRank(b) || engineLabel(a).localeCompare(engineLabel(b)));
 }
+
+// ── bundle retention ────────────────────────────────────────────────────────
+
+/** The host applier's fallback when no count is stored (dataprotect.BackupRetainApplierDefault). */
+export const BUNDLE_RETAIN_DEFAULT = 7;
+
+/**
+ * What the stored bundle retention actually does, in one sentence.
+ *
+ * Three states, never two: a chosen count, a deliberate 0 (pruning off), and
+ * absent — where the host applier's own fallback is in force and the screen
+ * must say whose number it is. A blank field here would read as "no retention",
+ * which is the opposite of the truth.
+ */
+export function retentionSentence(n: number | null | undefined): string {
+  if (n === null || n === undefined) return `Not set. The host keeps ${BUNDLE_RETAIN_DEFAULT}.`;
+  if (n === 0) return "Pruning off. Every copy kept.";
+  if (n === 1) return "The host keeps the newest copy only.";
+  return `The host keeps the ${n} newest copies.`;
+}
+
+/** Upper bound, mirroring dataprotect.backupRetainMax. */
+export const BUNDLE_RETAIN_MAX = 365;
+
+/**
+ * Parse the retention field. An empty box is "not set" (null), NOT 0 — the two
+ * mean opposite things (the host's own fallback versus keep everything for
+ * ever), and an input that folded one into the other would let a cleared field
+ * disable pruning. A value the server would refuse is rejected here rather
+ * than sent, so the operator never has to read a 400 to learn the range.
+ */
+export function parseRetention(raw: string): { ok: true; value: number | null } | { ok: false } {
+  const s = raw.trim();
+  if (s === "") return { ok: true, value: null };
+  if (!/^\d+$/.test(s)) return { ok: false };
+  const n = Number(s);
+  if (n > BUNDLE_RETAIN_MAX) return { ok: false };
+  return { ok: true, value: n };
+}
+
+/**
+ * The sentence under the retention box, given what is TYPED and what is STORED.
+ *
+ * There is deliberately no "unset" operation on the server: an omitted (or
+ * null) retain_count means "leave the stored decision alone", so that a partial
+ * write from any client can never silently hand the host applier back its own
+ * fallback. Emptying the box therefore does nothing — and the screen says that
+ * plainly instead of letting the operator believe they cleared it.
+ */
+export function retentionHint(
+  typed: number | null | undefined,
+  stored: number | null | undefined,
+): string {
+  const cleared = typed === null || typed === undefined;
+  if (cleared && stored !== null && stored !== undefined) {
+    return `Clearing is not a change. Saving keeps ${stored}.`;
+  }
+  return retentionSentence(typed);
+}

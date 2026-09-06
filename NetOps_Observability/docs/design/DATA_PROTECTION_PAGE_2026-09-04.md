@@ -203,9 +203,17 @@ one-line change here.
 | `GET /api/system/backup/operations` | `OperationListView` — the audit trail, and the drill history is its `snapshot_verify` slice |
 | `GET /api/system/backup/operations/{id}` | The poll target for every 202 above |
 
-Unchanged and still used: `GET|PUT /api/system/backup` (the bundle destination
-and schedule) and `GET|PUT /api/system/backup/snapshots` (the recovery-point
-policy).
+Unchanged and still used: `GET|PUT /api/system/backup` (the bundle destination,
+schedule and — since 2026-09-06 — its retention: `retain_count`, the number of
+bundle artifacts the host keeps, which the applier writes to `BACKUP_KEEP`) and
+`GET|PUT /api/system/backup/snapshots` (the recovery-point policy).
+
+`retain_count` has three states and the page keeps them apart: a count somebody
+chose, a deliberate `0` (pruning off, every copy kept), and absent — where the
+host applier's own fallback of 7 is in force and the screen says whose number
+it is. There is no "unset" operation: an omitted `retain_count` on a PUT means
+"leave the stored decision alone", because a partial write from any client used
+to marshal the whole intent file and silently delete a hand-set retention.
 
 ### Derived in the frontend, not asked of the server
 

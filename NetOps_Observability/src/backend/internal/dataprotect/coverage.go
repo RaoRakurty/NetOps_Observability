@@ -339,6 +339,42 @@ func (s *Service) secondaryRepoSentence(ctx context.Context) string {
 	}
 }
 
+// bundleRetention reports the artifact retention that is actually IN FORCE for
+// the system bundle, which is a POLICY the api owns — not, and this is the
+// distinction the row makes in words, a count of files on the host.
+//
+// The api stores retain_count; the host applier writes it to BACKUP_KEEP and
+// backup.sh prunes to it. The api cannot see the artifacts themselves (they
+// live outside its mounts), so no age is reported and the count is never
+// presented as an observation. Before this, the row reported no count at all
+// while a real one was being enforced — which sent an operator to the host to
+// read a number the GUI had set.
+func bundleRetention(cfg Config) *CoverageRetention {
+	const cannotSee = " The api cannot read the host's backup directory, so this is the policy in force, not a count of artifacts on disk."
+	if cfg.RetainCount == nil {
+		return &CoverageRetention{
+			Detail: "No count is stored, so the host applier's own fallback of " +
+				strconv.Itoa(BackupRetainApplierDefault) + " artifacts is in force. That is a default, not " +
+				"an operator's decision, and is left unreported rather than shown as one." + cannotSee,
+		}
+	}
+	n := *cfg.RetainCount
+	if n == 0 {
+		// 0 is a real choice with a real consequence, and backup.sh warns about
+		// it host-side. Reporting it as a max_count of 0 would read as "keep
+		// nothing", which is the exact opposite of what it does.
+		return &CoverageRetention{
+			Detail: "Pruning is off (retain_count 0): every bundle artifact is kept until the volume fills." + cannotSee,
+		}
+	}
+	count := n
+	return &CoverageRetention{
+		MaxCount: &count,
+		Detail: "The host keeps the " + strconv.Itoa(n) + " newest bundle artifacts and prunes the rest " +
+			"(BACKUP_KEEP, written from the stored intent by the applier)." + cannotSee,
+	}
+}
+
 // enabledWord carries its own article so the sentence it lands in reads.
 func enabledWord(b bool) string {
 	if b {
@@ -362,12 +398,8 @@ func (s *Service) coverageSystemBundle(cfg Config, run *FullBackupRun, drill *Ba
 				"writes the actual root crontab entry — the api runs in a container and cannot write it itself, " +
 				"so an enabled toggle here is an intent, not a proof that cron is running it",
 		},
-		Target: bundleTarget(cfg),
-		Retention: &CoverageRetention{
-			Detail: "artifact retention is the HOST applier's (scripts/backup.sh keeps a bounded number of " +
-				"archives under the backup directory); the api cannot read the host filesystem outside its own " +
-				"mounts, so neither a count nor an age is reported here rather than guessed",
-		},
+		Target:    bundleTarget(cfg),
+		Retention: bundleRetention(cfg),
 	}
 	if cfg.ScheduleEnabled {
 		if hours, ok := cronCadenceHours(cfg.ScheduleCron); ok {

@@ -107,6 +107,8 @@ import {
   shardSummary,
   snapshotStateLabel,
   snapshotTone,
+  parseRetention,
+  retentionHint,
   sortedEngines,
   storeLabel,
   targetMeaning,
@@ -1574,14 +1576,32 @@ function BundlePolicyForm({ panel, onReload, canEdit }: {
         />
         Run the full bundle on a schedule
       </label>
-      <label className="dp-field">
-        <span>Schedule (cron)</span>
-        <input
-          className="dp-input mono" aria-label="Bundle schedule, cron" disabled={!canEdit}
-          placeholder="30 2 * * *  (02:30 daily)"
-          value={cfg.schedule_cron ?? ""} onChange={(e) => setCfg({ ...cfg, schedule_cron: e.target.value })}
-        />
-      </label>
+      <div className="dp-grid2">
+        <label className="dp-field">
+          <span>Schedule (cron)</span>
+          <input
+            className="dp-input mono" aria-label="Bundle schedule, cron" disabled={!canEdit}
+            placeholder="30 2 * * *  (02:30 daily)"
+            value={cfg.schedule_cron ?? ""} onChange={(e) => setCfg({ ...cfg, schedule_cron: e.target.value })}
+          />
+        </label>
+        <label className="dp-field">
+          <span>Copies kept<AskIris topic="backup.copies-kept" label="Copies kept" /></span>
+          <input
+            className="dp-input" type="number" min={0} max={365} step={1} inputMode="numeric"
+            aria-label="Bundle copies kept" disabled={!canEdit}
+            placeholder="unset"
+            value={cfg.retain_count ?? ""}
+            onChange={(e) => {
+              // An empty box is "not set", never 0 — see parseRetention. A
+              // value the server would refuse is simply not applied.
+              const r = parseRetention(e.target.value);
+              if (r.ok) setCfg({ ...cfg, retain_count: r.value });
+            }}
+          />
+        </label>
+      </div>
+      <p className="dp-fine">{retentionHint(cfg.retain_count, panel.data?.config.retain_count)}</p>
       {msg && <p className={`dp-msg dp-${msg.tone}`} role="status">{msg.text}</p>}
       {canEdit && (
         <div className="dp-actions">
