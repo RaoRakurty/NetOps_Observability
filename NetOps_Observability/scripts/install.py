@@ -61,6 +61,25 @@ from pathlib import Path
 # still be dropped from COMPOSE_PROFILES for footprint-constrained installs.
 DEFAULT_PROFILES = "embedded-bus,prober,osd,self-monitoring,sso"
 
+# ---- optional add-on packs --------------------------------------------------
+# Optional capability does NOT ship inside the base image archive. Each pack is
+# its own `correlix-addon-<name>-<version>.tar.zst` next to the installer, and
+# the compose profile that needs it is the key: activate the profile on an
+# offline install and the pack has to be loaded first, or `docker compose up`
+# reaches for a registry that an air-gapped appliance does not have.
+#
+# Keycloak joined this table on 2026-09-06. It used to be a base image ("sso"
+# default-on, owner decision 2026-08-04) and cost 235 MB in EVERY bundle for a
+# capability that docs/design/SSO_SAML_* records as DEFERRED. Keep this table
+# in sync with make-installer.sh's ADDONS and install-correlix.sh's addon_spec.
+#
+#   compose profile -> (pack name, what the customer asked for)
+ADDON_PACKS = {
+    "osd":             ("log-search-ui",   "the log-search UI (OpenSearch Dashboards)"),
+    "self-monitoring": ("self-monitoring", "Grafana + container/host metrics"),
+    "sso":             ("sso",             "single sign-on (Keycloak)"),
+}
+
 # ---- styling ----------------------------------------------------------------
 
 def info(msg: str) -> None:    print(f"[info ] {msg}")
@@ -95,7 +114,8 @@ PROGRESS_STAGES = (
     "prereq", "scaffold", "env", "sizing", "tls-env", "data-dirs",
     # bootstrap-appstate runs BEFORE the stack: on the postgres state backend
     # the api cannot start until its non-superuser role exists (tracker 245).
-    "bundle", "bootstrap-appstate", "up-a", "mint", "up-b", "kafka-acls",
+    "bundle", "addon-pack", "bootstrap-appstate", "up-a", "mint", "up-b",
+    "kafka-acls",
     "status", "bootstrap-os", "bootstrap-kc", "bootstrap-grafana",
 )
 
@@ -2311,6 +2331,37 @@ def load_bundle(bundle: Path) -> None:
     ok("images loaded")
 
 
+def load_addon_packs(bundle: Path, profiles: str) -> None:
+    """docker-load the add-on pack for every activated profile that has one.
+
+    WHY THIS REFUSES INSTEAD OF CONTINUING. On an offline install the images
+    are whatever the archives put in the daemon; compose is started with
+    --no-build and a pull it cannot perform. If the customer asks for `sso` on
+    a bundle that carries no sso pack, the honest outcome is a named refusal
+    HERE — naming the pack, the file, and the two ways forward — rather than
+    twenty minutes later as `keycloak: Error response from daemon: pull access
+    denied`, from a host with no route to a registry (scripts/CLAUDE.md 16.1:
+    a step that cannot do its job says so, by name).
+
+    Packs live next to the base archive, which is what --bundle points at.
+    """
+    active = {p.strip() for p in profiles.split(",") if p.strip()}
+    for prof in sorted(active & set(ADDON_PACKS)):
+        name, what = ADDON_PACKS[prof]
+        packs = sorted(bundle.parent.glob(f"correlix-addon-{name}-*.tar.zst"))
+        if not packs:
+            fail(f"the '{prof}' profile needs the {name!r} add-on pack, and this "
+                 f"bundle does not contain it.\n"
+                 f"       Looked for: {bundle.parent}/correlix-addon-{name}-*.tar.zst\n"
+                 f"       {what} ships as a SEPARATE download so the base "
+                 f"appliance stays small.\n"
+                 f"       Either copy correlix-addon-{name}-<version>.tar.zst next "
+                 f"to the installer and re-run, or install without it "
+                 f"(drop '{prof}' from --profiles).")
+        step(f"loading add-on pack {name}", stage="addon-pack")
+        load_bundle(packs[-1])
+
+
 def compose_status(compose_dir: Path) -> None:
     subprocess.run(["docker", "compose", "ps"], cwd=str(compose_dir), check=False)
 
@@ -2826,6 +2877,12 @@ def main() -> None:
                          "flag keep the declared-plaintext baseline.")
     ap.add_argument("--sizing-file", type=Path, default=None, metavar="YAML",
                     help="correlix-sizing.yaml workload inputs for --plan-resources.")
+    ap.add_argument("--bootstrap-sso", action="store_true",
+                    help="Create Keycloak's database against the running stack, "
+                         "then exit. The `sso` add-on can be enabled long after "
+                         "the install (./install-correlix.sh enable sso), and "
+                         "Keycloak crash-loops on `FATAL: database \"keycloak\" "
+                         "does not exist` until this has run. Idempotent.")
     ap.add_argument("--replan", action="store_true",
                     help="Only regenerate the resource-plan block in the existing "
                          ".env, then exit (run 'docker compose up -d' to apply).")
@@ -2915,6 +2972,18 @@ def main() -> None:
         ok(f"restored {', '.join(restored)} from .plan.bak backups — "
            "run 'docker compose up -d' to apply")
         return
+    # Standalone Keycloak-database bootstrap. `install.py` owns first-boot
+    # provisioning (bootstrap_keycloak_db), but the `sso` capability is now an
+    # add-on that can be enabled at ANY time — and the enable path must not have
+    # to re-run a whole install to get the one thing Keycloak cannot do for
+    # itself. install-correlix.sh's `enable sso` calls this.
+    if args.bootstrap_sso:
+        if not env_path.exists():
+            fail(".env not found — run a full install first")
+        step("bootstrap Keycloak database (profile sso)", stage="bootstrap-kc")
+        bootstrap_keycloak_db(compose_dir, _parse_env(env_path))
+        return
+
     if args.replan:
         if not env_path.exists():
             fail(".env not found — run a full install first")
@@ -3027,6 +3096,13 @@ def main() -> None:
     if args.bundle:
         step("loading image bundle", stage="bundle")
         load_bundle(args.bundle)
+        # Add-on packs ride next to the base archive and are loaded only for
+        # the profiles this install actually activates. Gate on the EFFECTIVE
+        # profiles from .env (what compose_up will start), not args.profiles —
+        # an existing install's .env wins, exactly as the Keycloak-database
+        # bootstrap below does.
+        load_addon_packs(args.bundle,
+                         _parse_env(env_path).get("COMPOSE_PROFILES", args.profiles))
 
     if args.offline:
         write_offline_override(compose_dir, env_path)

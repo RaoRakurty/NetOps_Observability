@@ -48,7 +48,11 @@ INSTALL_SH = SCRIPTS / "install-correlix.sh"
 # The authoritative stage-id list from the contract (scratchpad gui-contract.md
 # / design §6): install.py's stages in order, then the wrapper's three.
 CONTRACT_STAGES = ("prereq", "scaffold", "env", "sizing", "tls-env",
-                   "data-dirs", "bundle", "bootstrap-appstate",
+                   "data-dirs", "bundle",
+                   # 2026-09-06: optional capability ships as separate add-on
+                   # packs (log-search-ui / self-monitoring / sso), loaded right
+                   # after the base archive for the profiles that need them.
+                   "addon-pack", "bootstrap-appstate",
                    "up-a", "mint", "up-b",
                    "kafka-acls", "status",
                    "bootstrap-os", "bootstrap-kc", "bootstrap-grafana")

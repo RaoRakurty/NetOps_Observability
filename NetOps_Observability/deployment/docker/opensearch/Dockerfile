@@ -35,6 +35,41 @@ RUN bin/opensearch-plugin remove opensearch-skills && \
     bin/opensearch-plugin remove opensearch-cross-cluster-replication && \
     rm -rf /usr/share/opensearch/performance-analyzer-rca
 
+# Stage 1b: three more removals that are NOT plugins, so the plugin CLI cannot
+# do them. Same stage on purpose — stage 2 flattens, so anything deleted here
+# never reaches a shipped layer (see the FLATTEN note below).
+#
+#   modules/ingest-geoip  73.5 MB, and the reason is licence-first, not size.
+#     The module ships MaxMind's GeoLite2-City/ASN/Country .mmdb databases,
+#     which are NOT Apache-2.0: they carry MaxMind's own GeoLite2 End User
+#     Licence Agreement. Correlix ships no GeoIP data by policy — the product's
+#     only geo lookup is a ClickHouse dictionary over an OPERATOR-SUPPLIED CSV
+#     (`src/backend/internal/chschema/policies.go`, `scripts/geoip-prepare.py`),
+#     and `src/backend/flows.go` says so in as many words: "licensing forbids
+#     bundling GeoIP data". Every customer bundle up to and including
+#     2026.09.06 nevertheless carried those three databases, attributed
+#     nowhere in LICENSES.md or NOTICE. Nothing in this stack references a
+#     geoip ingest processor (repo-wide grep), so the module goes.
+#   jdk/jmods             85 MB of packaged JDK modules. `jmods/` exists for
+#     `jlink` — BUILDING a custom runtime image. A running JVM resolves classes
+#     from `lib/modules` (the jimage, kept), never from jmods.
+#   jdk/lib/ct.sym        10.7 MB symbol table for `javac --release N`. There
+#     is no compiler in the appliance; Painless compiles through its own ASM
+#     path, not javac.
+#
+# Each removal is again its own && link, and each target is asserted to exist
+# first: a silent no-op here would be a trim that stopped trimming when a base
+# bump moved a path (scripts/CLAUDE.md 16.1: fail closed, never pretend to
+# have worked).
+RUN set -eu; \
+    for d in modules/ingest-geoip jdk/jmods jdk/lib/ct.sym; do \
+      [ -e "/usr/share/opensearch/$d" ] \
+        || { echo "FATAL: /usr/share/opensearch/$d is gone: the base image moved it; re-audit this trim" >&2; exit 1; }; \
+    done; \
+    rm -rf /usr/share/opensearch/modules/ingest-geoip \
+           /usr/share/opensearch/jdk/jmods \
+           /usr/share/opensearch/jdk/lib/ct.sym
+
 # Stage 2: FLATTEN. Deleting files in a Docker layer only writes whiteouts on
 # top — `docker save` (the install bundle) still ships every base layer with
 # the plugins in it, so the trim above saves ZERO bundle bytes on its own

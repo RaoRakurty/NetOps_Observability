@@ -78,12 +78,22 @@ RUN sed -i "s|^https://|${APK_REPO_SCHEME}://|" /etc/apk/repositories \
     && apk add --no-cache gcc musl-dev zlib-dev
 WORKDIR /app
 COPY src/correlation/requirements.txt ./
+# THE TRAILING `rm -rf .../site-packages/pip`. pip installs a copy of ITSELF
+# into the very tree this stage exists to produce (11.2 MB), and the runtime
+# stage COPYs that whole tree onto a base image that already carries pip at the
+# identical path. The bundle is a `docker save`, so BOTH copies ship. Deleting
+# it here - in the same RUN, because a later delete would only write a whiteout
+# and save nothing - drops the duplicate. `pip` still resolves at run time from
+# the base layer, so no behaviour changes; nothing under src/correlation
+# imports pip, and this image carries no setuptools/pkg_resources to break.
 RUN pip install --no-cache-dir --root-user-action=ignore \
         --only-binary=:all: --no-binary=aiokafka \
         --trusted-host pypi.org \
         --trusted-host files.pythonhosted.org \
         --trusted-host pypi.python.org \
-        -r requirements.txt
+        -r requirements.txt \
+    && rm -rf /usr/local/lib/python3.12/site-packages/pip \
+              /usr/local/lib/python3.12/site-packages/pip-*.dist-info
 
 FROM python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a
 

@@ -32,7 +32,7 @@
 #     ./install-correlix.sh start
 #     ./install-correlix.sh uninstall [--purge]
 #     ./install-correlix.sh reset-demo-data
-#     ./install-correlix.sh enable  <add-on>    log-search-ui | self-monitoring
+#     ./install-correlix.sh enable  <add-on>    log-search-ui | self-monitoring | sso
 #     ./install-correlix.sh disable <add-on>
 #     ./install-correlix.sh support-bundle [--out DIR] [--since 24h] [--no-logs]
 #         Collect a REDACTED diagnostic bundle (compose state, container logs,
@@ -600,8 +600,7 @@ PYCFG
     local a spec prof
     for a in ${CFG_ADDONS//,/ }; do
       spec=$(addon_spec "$a")
-      [ -n "$spec" ] || die "Unknown add-on in config: '$a'" \
-        "Available add-ons: log-search-ui (log forensics UI), self-monitoring (Grafana + container/host metrics)"
+      [ -n "$spec" ] || die "Unknown add-on in config: '$a'" "$ADDON_HELP"
       prof="${spec%%|*}"
       case ",$CONFIG_ADDON_PROFILES," in
         *",$prof,"*) ;;
@@ -808,9 +807,17 @@ addon_spec() {
   case "$1" in
     log-search-ui)   echo "osd|opensearch-dashboards" ;;
     self-monitoring) echo "self-monitoring|grafana cadvisor node-exporter" ;;
+    # SSO (Keycloak) became a pack on 2026-09-06. It used to be a base image
+    # and cost 235 MB in every bundle for a capability whose design is
+    # DEFERRED; a default appliance no longer carries it.
+    sso)             echo "sso|keycloak" ;;
     *) echo "" ;;
   esac
 }
+
+# The one line that lists the add-ons for a human. Used by every refusal and by
+# the setup console, so a new pack is named in all of them or in none.
+ADDON_HELP="Available add-ons: log-search-ui (log forensics UI), self-monitoring (Grafana + container/host metrics), sso (single sign-on via Keycloak)"
 
 set_env_var() { # KEY VALUE — replace or append in .env
   if grep -q "^$1=" "$ENV_FILE"; then sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
@@ -820,19 +827,39 @@ set_env_var() { # KEY VALUE — replace or append in .env
 cmd_enable() {
   [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet." "Run: ./install-correlix.sh"
   local spec; spec=$(addon_spec "$ADDON_ARG")
-  [ -n "$spec" ] || die "Unknown add-on: '${ADDON_ARG:-}'" "Available add-ons: log-search-ui (log forensics UI), self-monitoring (Grafana + container/host metrics)"
+  [ -n "$spec" ] || die "Unknown add-on: '${ADDON_ARG:-}'" "$ADDON_HELP"
   local prof="${spec%%|*}"
-  # Load the add-on's image pack when installing from a bundle.
+  # Load the add-on's image pack when installing from a bundle. A MISSING pack
+  # is a refusal, not a shrug: on an appliance with no registry route the only
+  # other outcome is `docker compose up` failing on a pull minutes later, with
+  # a message that names Docker Hub instead of the file the customer needs
+  # (scripts/CLAUDE.md 16.1).
   if [ "$MODE" = "bundle" ]; then
     local pack; pack=$(compgen -G "$BUNDLE_DIR/correlix-addon-$ADDON_ARG-"*.tar.zst | head -1 || true)
-    if [ -n "$pack" ]; then
-      say "Loading $ADDON_ARG images..."
-      zstd -dc "$pack" | docker load >/dev/null
-    fi
+    [ -n "$pack" ] || die "The '$ADDON_ARG' add-on pack is not in this bundle." \
+      "Optional capability ships as a separate download so the base appliance stays small.
+Expected: $BUNDLE_DIR/correlix-addon-$ADDON_ARG-<version>.tar.zst
+Copy that file next to this script and run the same command again."
+    say "Loading $ADDON_ARG images..."
+    zstd -dc "$pack" | docker load >/dev/null
   fi
   local cur; cur=$(env_get COMPOSE_PROFILES)
   case ",$cur," in *",$prof,"*) ;; *) set_env_var COMPOSE_PROFILES "${cur:+$cur,}$prof" ;; esac
   [ "$ADDON_ARG" = "self-monitoring" ] && set_env_var GRAFANA_URL "http://grafana:3000"
+  # Keycloak does not create its own database and crash-loops on
+  # `FATAL: database "keycloak" does not exist` until something does (first real
+  # SSO bring-up, 2026-08-03 — docs/runbooks/okta-sso-setup.md §1). install.py
+  # owns that step at install time; enabling the pack afterwards has to run it
+  # too, or the add-on "works" by starting a container that never comes up.
+  # Idempotent (SELECT-then-CREATE), and it needs postgres already running.
+  if [ "$ADDON_ARG" = "sso" ]; then
+    say "Preparing the Keycloak database..."
+    python3 "$ROOT/scripts/install.py" --bootstrap-sso \
+      || die "Could not create Keycloak's database." \
+           "Keycloak will crash-loop until it exists. Create it by hand with:
+  cd $ROOT/deployment/docker && docker compose exec postgres createdb -U \$DB_USER keycloak
+then run: ./install-correlix.sh enable sso"
+  fi
   say "Starting $ADDON_ARG..."
   compose up -d
   # The api reads GRAFANA_URL at start — recreate so status reflects the add-on.
@@ -843,7 +870,7 @@ cmd_enable() {
 cmd_disable() {
   [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet."
   local spec; spec=$(addon_spec "$ADDON_ARG")
-  [ -n "$spec" ] || die "Unknown add-on: '${ADDON_ARG:-}'" "Available add-ons: log-search-ui, self-monitoring"
+  [ -n "$spec" ] || die "Unknown add-on: '${ADDON_ARG:-}'" "$ADDON_HELP"
   local prof="${spec%%|*}" svcs="${spec##*|}"
   local cur; cur=$(env_get COMPOSE_PROFILES)
   set_env_var COMPOSE_PROFILES "$(printf '%s' "$cur" | tr ',' '\n' | grep -vx "$prof" | paste -sd, -)"
@@ -893,9 +920,14 @@ pick_addon() { # sets PICKED or empty
   PICKED=""
   say ""; say "  1) log-search-ui     power-user log forensics UI"
   say "  2) self-monitoring   Grafana + container/host metrics"
-  printf '%s' "  Add-on [1-2, Enter to cancel]: "
+  say "  3) sso               single sign-on — broker SAML / LDAP / OIDC (Keycloak)"
+  printf '%s' "  Add-on [1-3, Enter to cancel]: "
   read -r a || true
-  case "${a:-}" in 1) PICKED="log-search-ui" ;; 2) PICKED="self-monitoring" ;; esac
+  case "${a:-}" in
+    1) PICKED="log-search-ui" ;;
+    2) PICKED="self-monitoring" ;;
+    3) PICKED="sso" ;;
+  esac
 }
 
 cmd_menu() {

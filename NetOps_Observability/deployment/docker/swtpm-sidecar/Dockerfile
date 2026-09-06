@@ -17,9 +17,24 @@ FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f206
 # scripts/licensing-gate.py check D and tests/test_licensing_consistency.py.
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
+# udev, in the SAME RUN so the bytes never reach a layer (a later `rm` only
+# writes whiteouts and `docker save` still ships the originals - the lesson
+# opensearch/Dockerfile learned the expensive way). `tpm-udev` arrives as a
+# hard Depends of libtss2-esys/tctildr, which pulls `udev`: 22 MB of
+# /usr/lib/udev (13 MB of it the generated hwdb.bin hardware database) plus
+# udevadm. This container runs a SOFTWARE TPM over a Unix socket - it owns no
+# device node, has no /run/udev and no privilege to talk to one, so nothing
+# here can ever execute a udev rule. The packages stay installed (their
+# corresponding-source obligation and their /usr/share/doc copyright files are
+# untouched); only the unreachable payload goes.
+#
+# /usr/share/doc is deliberately KEPT: those are the Debian copyright files,
+# i.e. the attribution we are obliged to ship with the binaries.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         swtpm swtpm-tools tpm2-tools socat coreutils ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && [ -d /usr/lib/udev ] || { echo "FATAL: /usr/lib/udev is gone - re-audit this trim" >&2; exit 1; } \
+    && rm -rf /usr/lib/udev /usr/bin/udevadm /usr/sbin/udevadm /var/cache/debconf/*
 
 COPY deployment/docker/swtpm-sidecar/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY deployment/docker/swtpm-sidecar/seal-handler.sh /usr/local/bin/seal-handler.sh

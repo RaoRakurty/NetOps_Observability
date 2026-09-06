@@ -117,8 +117,9 @@ mkdir -p "$BUNDLE_DIR"
 # images and ZERO of the libraries actually linked into our own artifacts (no
 # Go module, no npm package, no Python package — including elkjs (EPL-2.0),
 # four OFL-1.1 font families and certifi (MPL-2.0), all three carrying real
-# notice obligations), it omitted Keycloak (which SHIPS — `sso` is in
-# BASE_PROFILES), curl and kafka-exporter, and it misstated syslog-ng as
+# notice obligations), it omitted Keycloak (which SHIPS — since 2026-09-06 as
+# the `sso` ADD-ON PACK rather than a base image, but shipped either way),
+# curl and kafka-exporter, and it misstated syslog-ng as
 # GPL-3.0. syslog-ng OSE 4.7.1 is LGPL-2.1-or-later for the core and
 # GPL-2.0-or-later for modules/ and scl/ (verified against COPYING at tag
 # syslog-ng-4.7.1), with NO OpenSSL linking exception. See
@@ -448,16 +449,39 @@ if [ "${REBUILD_FRONTEND:-1}" != "0" ]; then
   (cd "$ROOT/src/frontend" && npm ci --silent && npm run build)
 fi
 
-# The customer BASE = the appliance every install gets (embedded Apache Kafka
-# bus + prober + all always-on services, including Keycloak — SSO is
-# default-on, owner decision 2026-08-04, GUI-configured; costs ~the Keycloak
-# image in bundle size, a known #148 counterweight). Optional capability ships
-# as ADD-ON PACKS — a small image archive per pack, enabled post-install with
-# `./install-correlix.sh enable <addon>` (which flips the compose profile).
-# Lab/dev profiles (mock-*, netbox, seal, flowgen) stay out of client
-# bundles by construction.
-BASE_PROFILES=(--profile embedded-bus --profile prober --profile sso)
-ADDONS="log-search-ui:osd self-monitoring:self-monitoring"   # name:profile
+# DETERMINISTIC COMPOSE RESOLUTION. Everything below asks `docker compose` what
+# the bundle contains, and docker compose reads deployment/docker/.env for
+# COMPOSE_FILE and COMPOSE_PROFILES — so on a developer or lab host the answer
+# silently depended on that host's install. This build host's .env, for example,
+# chains compose.tls.yml + compose.lab.yml + compose.mem125.yml, and
+# compose.tls.yml sets `secrets-seal: profiles: !override []`, which is the ONLY
+# reason netops-secrets-seal has ever reached a customer bundle. A CI runner,
+# which has no .env at all, would therefore have shipped a bundle whose `--tls`
+# install cannot start (its sealing sidecar image is simply absent). Pin both
+# variables here: the bundle's contents are a property of the tracked compose
+# file and the profile list below, never of the machine that cut it.
+export COMPOSE_FILE="docker-compose.yml"
+export COMPOSE_PROFILES=""
+
+# The customer BASE = the appliance every install gets: embedded Apache Kafka
+# bus, prober, the sealing sidecar (`seal` — declared explicitly, see above:
+# `install.py --tls` adds that profile on the customer's host, so its image has
+# to be IN the archive), and all always-on services.
+#
+# Optional capability ships as ADD-ON PACKS — a small image archive per pack,
+# enabled post-install with `./install-correlix.sh enable <addon>` (which flips
+# the compose profile) or chosen up-front in the graphical installer / a profile
+# config. Lab/dev profiles (mock-*, netbox, flowgen) stay out of client bundles
+# by construction.
+#
+# SSO (Keycloak) IS ONE OF THOSE PACKS as of 2026-09-06. It used to sit in
+# BASE_PROFILES ("default-on", owner decision 2026-08-04) and cost every
+# customer 235 MB — the second-largest image in the archive — for a capability
+# whose own design doc (docs/design/SSO_SAML_*) records it as DEFERRED until
+# SaaS. A default bundle therefore no longer carries it; a customer who wants
+# brokered SAML/LDAP/OIDC gets the pack alongside, exactly like the other two.
+BASE_PROFILES=(--profile embedded-bus --profile prober --profile seal)
+ADDONS="log-search-ui:osd self-monitoring:self-monitoring sso:sso"   # name:profile
 [ "$PROFILE" = "core" ] && ADDONS=""   # --core: base appliance only, no packs
 
 # 2. Build every application image at the pinned bases (all profiles, so
@@ -465,7 +489,7 @@ ADDONS="log-search-ui:osd self-monitoring:self-monitoring"   # name:profile
 echo "-- docker compose build"
 # A CI runner has no .env; compose interpolation needs the :?-guarded vars.
 export KAFKA_CLUSTER_ID="${KAFKA_CLUSTER_ID:-bundle-resolve-only-000000}"
-(cd "$COMPOSE_DIR" && docker compose "${BASE_PROFILES[@]}" --profile osd --profile self-monitoring build --quiet)
+(cd "$COMPOSE_DIR" && docker compose "${BASE_PROFILES[@]}" --profile osd --profile self-monitoring --profile sso build --quiet)
 
 # 3. Resolve the image sets. `config --images` honours pinned digests; an
 #    add-on pack's set = (base + its profile) minus base.
@@ -763,6 +787,14 @@ Optional add-ons (not started by default; enable any time):
 
     ./install-correlix.sh enable log-search-ui     power-user log forensics UI
     ./install-correlix.sh enable self-monitoring   Grafana + container/host metrics
+    ./install-correlix.sh enable sso               single sign-on (SAML/LDAP/OIDC)
+
+Each add-on has its own image file in this folder, named
+correlix-addon-<name>-$VERSION.tar.zst. They are separate downloads so the base
+appliance stays small: everything Correlix needs to watch your network is in
+the base install, and nothing you do not enable is ever loaded. If an add-on's
+file is not next to this script, "enable" says so by name instead of trying to
+reach the internet.
 
 Something not working? See TROUBLESHOOTING.md.
 Larger deployments and advanced configuration: ADVANCED.md.
@@ -1018,6 +1050,15 @@ DAY TO DAY
   ./install-correlix.sh stop | start    stop/start, your data is kept
   ./install-correlix.sh uninstall       remove (add --purge to delete data)
 
+OPTIONAL ADD-ONS - separate files, off unless you ask for them
+  ./install-correlix.sh enable log-search-ui     log forensics UI
+  ./install-correlix.sh enable self-monitoring   Grafana + host metrics
+  ./install-correlix.sh enable sso               single sign-on (Keycloak)
+
+  Each one is a correlix-addon-<name>-*.tar.zst in this folder. The base
+  install already watches your network; these are extras, so they are
+  downloaded and loaded separately. Missing file? enable says which.
+
 WHAT ELSE IS IN THIS FOLDER
   README.md            the same quickstart, formatted
   OPERATIONS.md        sizing, upgrade, rollback, backup, uninstall
@@ -1027,6 +1068,7 @@ WHAT ELSE IS IN THIS FOLDER
   RELEASE-NOTES.md     what changed in this version
   docs/index.html      the full product documentation, offline
   MANIFEST             exactly what this bundle contains
+  correlix-addon-*     optional add-on images (see OPTIONAL ADD-ONS above)
   CHECKSUMS.sha256     integrity manifest (the same file as SHA256SUMS)
   LICENSE LICENSING.md LICENSES/ LICENSES.md NOTICE
   source-offer/        source for the GPL/LGPL components we redistribute

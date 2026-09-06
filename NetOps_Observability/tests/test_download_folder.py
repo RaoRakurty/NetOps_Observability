@@ -210,6 +210,51 @@ def test_built_folder_carries_the_image_archives_the_manifest_promises(bundle, m
     assert src, "the source tarball is missing — the customer cannot install without it"
 
 
+def _declared_addons(script: str) -> dict:
+    """make-installer.sh's ADDONS list, as {pack name: compose profile}."""
+    m = re.search(r'^ADDONS="([^"]*)"', script, re.MULTILINE)
+    assert m, "make-installer.sh no longer declares an ADDONS list"
+    return dict(e.split(":", 1) for e in m.group(1).split() if e)
+
+
+def test_every_declared_add_on_pack_is_in_the_folder_and_in_the_manifest(
+        bundle, manifest, script):
+    """A pack the build declares but does not ship is one nobody can enable.
+
+    Tracker: 2026-09-06, when `sso` (Keycloak, 235 MB) left the base archive to
+    become the third pack. The MANIFEST is the customer's inventory of the
+    folder, so the file and its manifest line are asserted together — a folder
+    with a pack the MANIFEST omits is as broken as the reverse.
+    """
+    if manifest["fields"].get("profile") != "full":
+        pytest.skip("--core bundle: no add-on packs by construction")
+    text = read(os.path.join(bundle, "MANIFEST"))
+    present = os.listdir(bundle)
+    for name, profile in _declared_addons(script).items():
+        assert any(f.startswith(f"correlix-addon-{name}-") and f.endswith(".tar.zst")
+                   for f in present), f"add-on pack {name!r} was not built"
+        assert f"addon {name} (profile {profile}):" in text, (
+            f"MANIFEST does not list the {name!r} pack the folder contains")
+
+
+def test_optional_capability_is_not_hiding_inside_the_base_archive(bundle):
+    """The base image list must stop where the packs begin.
+
+    Keycloak sat in the base list until 2026-09-06 and cost every customer
+    235 MB for a capability whose design is deferred. This asserts the split is
+    real rather than cosmetic: an image that belongs to a pack must appear ONLY
+    under that pack's `addon ...:` heading.
+    """
+    text = read(os.path.join(bundle, "MANIFEST"))
+    base, _, addons = text.partition("\naddon ")
+    base_images = [ln[4:].strip() for ln in base.splitlines() if ln.startswith("  - ")]
+    for needle in ("keycloak", "opensearch-dashboards", "grafana"):
+        assert not any(needle in img for img in base_images), (
+            f"{needle} is in the BASE image list; it ships as an add-on pack")
+        assert needle in addons or not addons, (
+            f"{needle} is in neither the base list nor an add-on pack")
+
+
 def test_checksums_alias_resolves_to_the_manifest(bundle):
     alias = os.path.join(bundle, "CHECKSUMS.sha256")
     assert os.path.islink(alias), "CHECKSUMS.sha256 should be a symlink"

@@ -96,9 +96,40 @@ secret. Change it in Settings after your first sign-in.
 ./install-correlix.sh stop | start        stop/start, data kept
 ./install-correlix.sh enable log-search-ui        optional add-on
 ./install-correlix.sh enable self-monitoring      optional add-on
+./install-correlix.sh enable sso                  optional add-on
 ./install-correlix.sh support-bundle      redacted diagnostics for support
 ./install-correlix.sh uninstall           remove (--purge also deletes data)
 ```
+
+### Optional add-ons ship as separate files
+
+The bundle is deliberately split. The **base appliance** — discovery, every
+collector, the bus, all four stores, correlation, the API and the dashboard —
+is one archive, `correlix-images-core-<version>.tar.zst`, and it is everything
+Correlix needs to watch your network. Anything optional is its own file
+alongside it:
+
+| Add-on | File | What it adds |
+|---|---|---|
+| `log-search-ui` | `correlix-addon-log-search-ui-<version>.tar.zst` | OpenSearch Dashboards for power-user log forensics |
+| `self-monitoring` | `correlix-addon-self-monitoring-<version>.tar.zst` | Grafana + container/host metrics for the stack itself |
+| `sso` | `correlix-addon-sso-<version>.tar.zst` | Keycloak, brokering SAML / LDAP / OIDC identity providers |
+
+Nothing you do not enable is ever loaded, and no add-on starts by itself. You
+can choose them up front — the graphical installer's **Deployment** step and
+the terminal setup console both list all three — or run
+`./install-correlix.sh enable <name>` at any time afterwards.
+
+If you enable an add-on whose file is not next to the installer, the installer
+**names the missing pack and stops**. It never reaches for the internet: an
+appliance installs air-gapped, so a silent pull would only fail later and less
+clearly. Copy the pack next to `install-correlix.sh` and run the command again.
+
+> **SSO note.** `sso` is off by default and its file may not be in your
+> download. Correlix's own username/password and API tokens work without it;
+> Keycloak is only needed to broker an external identity provider.
+
+### Where the rest is documented
 
 Sizing, upgrade, rollback, backup and uninstall are in the bundle's
 `OPERATIONS.md`. Advanced settings — external Kafka, a different UI port, the

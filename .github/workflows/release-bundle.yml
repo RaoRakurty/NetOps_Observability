@@ -138,6 +138,16 @@ jobs:
           grep -q '^profile:  full$' MANIFEST
           ls correlix-addon-log-search-ui-*.tar.zst >/dev/null
           ls correlix-addon-self-monitoring-*.tar.zst >/dev/null
+          # sso (Keycloak) became the third pack on 2026-09-06: it was a BASE
+          # image costing 235 MB in every bundle for a capability that
+          # docs/design/SSO_SAML_* records as deferred. Assert both halves —
+          # the pack ships, and Keycloak is NOT in the base image list.
+          ls correlix-addon-sso-*.tar.zst >/dev/null
+          grep -q '^addon sso (profile sso):$' MANIFEST
+          if sed -n '/^images:/,/^addon /p' MANIFEST | grep -qi keycloak; then
+            echo "FATAL: keycloak is in the BASE image list; it ships as the sso add-on pack" >&2
+            exit 1
+          fi
 
           # Licensing/broker assertions (#97): the customer bundle ships
           # Apache Kafka + Valkey and must not contain Redpanda anywhere a
