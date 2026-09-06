@@ -81,6 +81,13 @@ const GeoTopologyMap = lazy(() => import("../geo/GeoTopologyMap"));
 import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
 import { regroupView, GROUP_DIMENSIONS, type GroupDimension } from "../../utils/topologyRegroup";
+import { bundleParallelEdges } from "../../utils/edgeBundling";
+import {
+  readCanvasUrlState,
+  writeCanvasUrlState,
+  CANVAS_URL_DEFAULTS,
+  type Arrangement,
+} from "../../utils/canvasUrlState";
 import { renderedNodeCount, allGroupIds, canAggregateUnderCeiling, expansionWouldExceed } from "../../utils/topologyScale";
 import { focusSummary, focusView } from "../../utils/topologyFocus";
 import { excludeInternalNodes } from "../../utils/topologyFilters";
@@ -148,6 +155,22 @@ function CanvasInner({
 }) {
   const rf = useReactFlow();
 
+  // Shareable canvas state (#133a). mode / overlay / domain / group-by /
+  // arrangement / selection are read from the ROUTE once at mount and written back
+  // on every change, so an investigation survives F5 and can be handed to a
+  // colleague as a link instead of a screenshot. Read once (a ref, not state):
+  // the canvas OWNS these values after mount, and re-reading the hash it just
+  // wrote would fight its own controls.
+  const urlState = useRef(readCanvasUrlState(typeof location !== "undefined" ? location.hash : "")).current;
+  // A selection from the link is applied only once the view has loaded AND it
+  // actually names something in it — an id from a stale/hand-edited link must not
+  // open an inspector on a node that is not there.
+  const pendingSelection = useRef(
+    urlState.nodeId || urlState.edgeId || urlState.groupId
+      ? { nodeId: urlState.nodeId, edgeId: urlState.edgeId, groupId: urlState.groupId }
+      : null,
+  );
+
   // CONTROLLED-OR-NOT. These were prop-only with a `"lan"` default and an
   // optional `onDomain?.()`. The canvas is mounted from the nav as
   // `<TopologyCanvas />` with NO props — so `onDomain` was undefined and every
@@ -158,7 +181,7 @@ function CanvasInner({
   // Nothing errored, which is why it survived — an optional callback that is
   // never supplied fails silently by design. Now the component owns the state
   // when it is not given any, and still defers to a parent that does control it.
-  const [domainSelf, setDomainSelf] = useState<NetworkDomain>("lan");
+  const [domainSelf, setDomainSelf] = useState<NetworkDomain>(urlState.domain ?? CANVAS_URL_DEFAULTS.domain);
   const [carrierSelf, setCarrierSelf] = useState(false);
   const domain = domainProp ?? domainSelf;
   const carrier = carrierProp ?? carrierSelf;
@@ -171,8 +194,8 @@ function CanvasInner({
     [onCarrier],
   );
 
-  const [mode, setMode] = useState<WorkflowMode>("explore");
-  const [overlay, setOverlay] = useState<OverlayKind>("health");
+  const [mode, setMode] = useState<WorkflowMode>(urlState.mode ?? CANVAS_URL_DEFAULTS.mode);
+  const [overlay, setOverlay] = useState<OverlayKind>(urlState.overlay ?? CANVAS_URL_DEFAULTS.overlay);
   const [selection, setSelection] = useState<TopologySelection>({});
   const [searchMatches, setSearchMatches] = useState<Set<string>>(new Set());
   // Focus NARROWS the canvas to the matches (plus a hop of context); search
@@ -207,7 +230,7 @@ function CanvasInner({
   // Orthogonal to the workflow mode.
   const [renderer, setRenderer] = useState<"canvas" | "overview" | "geo">("canvas");
   // Group-by lens for the canvas (site default = the backend's own grouping).
-  const [groupBy, setGroupBy] = useState<GroupDimension>("site");
+  const [groupBy, setGroupBy] = useState<GroupDimension>(urlState.groupBy ?? CANVAS_URL_DEFAULTS.groupBy);
 
   // Data source: "live" = the per-mode projection (GET /api/topology/view); other
   // value "persisted" = the reconciler-maintained graph with stable ids + stale +
@@ -376,6 +399,13 @@ function CanvasInner({
     let out = excludeInternalNodes(v);
     if (domain !== "lan") out = filterViewByDomain(out, domain);
     if (carrier) out = withCarrierOverlay(out);
+    // LAG / parallel links collapse into ONE bundled edge (#133b). `edgeBundling`
+    // shipped fully built and called by nothing, so a 4-member port-channel drew
+    // as four stacked parallel curves the operator had to count by eye. It is a
+    // pure view transform — the member links stay in the facts/evidence — and it
+    // refuses to merge anything whose difference is the answer (a degraded or
+    // RCA-flagged member, or links of different relationship classes).
+    out = bundleParallelEdges(out);
     return out;
   }, [fetched, domain, carrier]);
   // Tag-dimension regrouping: re-bucket the canvas by site/role/vendor/owner (or none)
@@ -394,13 +424,35 @@ function CanvasInner({
   // stale — clear it when the lens changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setCollapsedGroups(new Set()), [groupBy]);
+
+  // Apply a selection carried in the link, ONCE, and only if the loaded view really
+  // contains that id — a shared investigation opens on the object it named, and a
+  // stale link degrades to the plain canvas instead of an inspector on nothing.
+  useEffect(() => {
+    const want = pendingSelection.current;
+    if (!want || !view) return;
+    pendingSelection.current = null;
+    if (want.nodeId && view.nodes.some((n) => n.id === want.nodeId)) setSelection({ nodeId: want.nodeId });
+    else if (want.edgeId && view.edges.some((e) => e.id === want.edgeId)) setSelection({ edgeId: want.edgeId });
+    else if (want.groupId && view.groups.some((g) => g.id === want.groupId)) setSelection({ groupId: want.groupId });
+  }, [view]);
+
   const showAllLabels = labelsToggle || density === "engineer";
 
   // Owner Step 2 — topology ARCHETYPE: detect the network's textbook shape
   // (ring/star/bus/mesh/leaf-spine) and arrange it the way an engineer would
   // draw it. "auto" applies the detected shape only when the structure matches
   // cleanly (confidence ≥ 0.8); the operator can force any shape.
-  const [arrange, setArrange] = useState<"auto" | Archetype>("auto");
+  const [arrange, setArrange] = useState<Arrangement>(urlState.arrange ?? CANVAS_URL_DEFAULTS.arrange);
+
+  // Write the shareable state back onto the route (#133a). replaceState, so the
+  // back button is not filled with one entry per overlay flick.
+  useEffect(() => {
+    writeCanvasUrlState(
+      { mode, overlay, domain, groupBy, arrange, nodeId: selection.nodeId, edgeId: selection.edgeId, groupId: selection.groupId },
+      typeof location !== "undefined" ? location.hash : "",
+    );
+  }, [mode, overlay, domain, groupBy, arrange, selection]);
   // Scale policy. The ceiling that matters is NOT the raw node count but the
   // number of nodes React Flow RENDERS: when a large fabric is auto-collapsed to
   // its groups (below), the canvas draws a few dozen aggregate cards and is fully
@@ -894,7 +946,7 @@ function CanvasInner({
             title={detected ? `Detected: ${detected.archetype.replace("_", "-")} — ${detected.reason}` : "Arrange the canvas by topology shape"}
           >
             <span className="topo-incident-picker-label">Shape</span>
-            <select value={arrange} onChange={(e) => setArrange(e.target.value as "auto" | Archetype)} aria-label="Arrange by topology shape">
+            <select value={arrange} onChange={(e) => setArrange(e.target.value as Arrangement)} aria-label="Arrange by topology shape">
               <option value="auto">
                 Auto{detected && detected.archetype !== "irregular" && detected.confidence >= 0.8 ? ` (${ARCHETYPES.find((a) => a.id === detected.archetype)?.label ?? detected.archetype})` : ""}
               </option>
@@ -954,9 +1006,20 @@ function CanvasInner({
           // Load-flash guard: while the live view for this request is still
           // resolving, show a placeholder — NEVER the previous network or the
           // bundled workflow sample. (Matches the sigma/geo loading patterns.)
-          <div className="topo-canvas-loading" role="status" aria-live="polite">
-            Loading topology…
-          </div>
+          //
+          // A TRACE in flight gets the trace-specific wording. The generic gate
+          // used to win unconditionally, which made PathTraceResolving
+          // unreachable: `loading` is set by the same endpoint change that starts
+          // the trace, and by the time it clears the pair is already resolved. An
+          // operator who has just picked two devices is told what is being
+          // resolved, not merely that something is.
+          traceMode && traceKey && view ? (
+            <PathTraceResolving srcLabel={labelFor(pathSrc)} dstLabel={labelFor(pathDst)} />
+          ) : (
+            <div className="topo-canvas-loading" role="status" aria-live="polite">
+              Loading topology…
+            </div>
+          )
         ) : !view ? (
           <PlaceholderWorkflow blurb={workflow?.blurb ?? "This workflow arrives in a later phase."} label={workflow?.label ?? ""} />
         ) : mode === "path_trace" && !(pathSrc && pathDst) ? (
@@ -1338,7 +1401,11 @@ export default function TopologyCanvas() {
   // native segmented toggle as Data source / Renderer, so the cloud additions
   // read as one seamless canvas, not a bolted-on strip. LAN (default) +
   // carrier-off renders the existing canvas byte-for-byte unchanged.
-  const [domain, setDomain] = useState<NetworkDomain>("lan");
+  // Seeded from the route so a shared link opens on the domain it names (#133a);
+  // CanvasInner reads the same value and owns the write-back.
+  const [domain, setDomain] = useState<NetworkDomain>(
+    () => readCanvasUrlState(typeof location !== "undefined" ? location.hash : "").domain ?? CANVAS_URL_DEFAULTS.domain,
+  );
   const [carrier, setCarrier] = useState(false);
   return (
     <ReactFlowProvider>

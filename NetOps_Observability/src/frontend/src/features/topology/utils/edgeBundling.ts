@@ -25,8 +25,40 @@ function mergeEvidence(refs: EvidenceRef[]): EvidenceRef[] {
 }
 
 /**
- * Returns a new view where every group of ≥2 edges sharing a node pair is replaced
- * by one bundled edge:
+ * WHEN A BUNDLE IS REFUSED (the honesty rule).
+ *
+ * Collapsing parallel links is a LEGIBILITY device for a healthy LAG: four member
+ * curves the operator has to count by eye become one "×4". It must never collapse
+ * away the answer:
+ *
+ *   - a member with a DEGRADED/DOWN status — `edgeVariant` ranks `bundled` above
+ *     `degraded`, and BundledEdge carries no health colour, so bundling a 4×10G
+ *     with one member down would draw a calm bundle over a real fault. WHICH
+ *     member is broken is the whole question;
+ *   - a member carrying an `rca_status` — that is the engine's grounded verdict on
+ *     one specific link, and merging it into a sibling erases it;
+ *   - members of different RELATIONSHIP classes — an observed LLDP adjacency and
+ *     an inferred/dependency edge between the same pair are different claims, and
+ *     observed-vs-inferred must stay visually distinct.
+ *
+ * Any of those and the pair's edges pass through untouched, drawn individually.
+ */
+function bundlable(members: TopologyEdge[]): boolean {
+  if (members.length < 2) return false;
+  const rel = members[0].relationship;
+  for (const m of members) {
+    if (m.relationship !== rel) return false;
+    if (m.rca_status) return false;
+    const h = statusToHealth(m.status);
+    if (h === "critical" || h === "warning") return false;
+  }
+  return true;
+}
+
+/**
+ * Returns a new view where every group of ≥2 edges sharing a node pair AND a
+ * relationship class, none of which is degraded or RCA-flagged (see `bundlable`),
+ * is replaced by one bundled edge:
  *   - id           = first member's id,
  *   - bundle_id    = "×N",
  *   - bundle_count = N,
@@ -36,12 +68,16 @@ function mergeEvidence(refs: EvidenceRef[]): EvidenceRef[] {
  *   - status         = worst (by health band: critical > warning > maintenance >
  *                      unknown > ok),
  *   - direction      = "bi" if any member is bidirectional.
- * Single edges pass through unchanged (object identity preserved).
+ * Single edges — and every group the honesty rule refuses — pass through unchanged
+ * (object identity preserved).
  */
 export function bundleParallelEdges(view: TopologyView): TopologyView {
   const groups = new Map<string, TopologyEdge[]>();
   for (const e of view.edges) {
-    const k = pairKey(e);
+    // The relationship class is part of the key: an observed adjacency and an
+    // inferred edge between the same two devices are two different claims and are
+    // never candidates for the same bundle.
+    const k = `${pairKey(e)}|${e.relationship}`;
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k)!.push(e);
   }
@@ -60,8 +96,8 @@ export function bundleParallelEdges(view: TopologyView): TopologyView {
 
   const edges: TopologyEdge[] = [];
   for (const members of groups.values()) {
-    if (members.length === 1) {
-      edges.push(members[0]);
+    if (!bundlable(members)) {
+      for (const m of members) edges.push(m);
       continue;
     }
 
