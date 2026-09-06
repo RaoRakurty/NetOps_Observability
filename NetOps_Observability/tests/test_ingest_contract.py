@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
 """Ingest-tier contract guards (audit 2026-07-21, findings F-03/05/07/08/10/11/14/49).
 
 These are STATIC checks over the real config files, and they are written to
@@ -789,6 +792,43 @@ def test_every_field_the_pipeline_stamps_is_declared_or_deliberately_not():
         "proto", "tcp_flags", "flow_type",       # clickhouse flows columns (also declared)
         "kind", "metric_name", "value", "attrs", "entity_tokens", "app",
         "amount", "day",                         # netops.cloud / cloud_costs (ClickHouse)
+        # ── DEM experience lane (tracker 254) ──────────────────────────────
+        # ClickHouse-only, by design AND by wiring: `netops.experience` is read
+        # by the `experience_*` transforms and written ONLY to
+        # clickhouse_experience_events / clickhouse_business_events. No
+        # OpenSearch sink reads this lane, so there is no `dynamic: false`
+        # template for these fields to be missing from — and every one of them
+        # IS declared, as a column of netops.experience_events (30 d) or
+        # netops.business_events (400 d), in BOTH
+        # deployment/docker/clickhouse/init.sql and
+        # src/backend/internal/chschema/experience_schema.go.
+        # `test_experience_lane_fields_are_declared_clickhouse_columns` below
+        # pins that claim MECHANICALLY, so this entry is not prose standing in
+        # for a guard: stamping `.new_col` in an experience transform without
+        # the matching column fails there rather than being swallowed by the
+        # sinks' `skip_unknown_fields`.
+        #
+        # PII review (DEM_2026-09-05.md §M.8, dem-privacy.md §3, dem-api.md):
+        # none of these fields is a direct identifier. `cohort_*` are
+        # POPULATION dimensions (site · isp · region · device_type · browser ·
+        # app_version · network_type) — a per-user value there would destroy
+        # the cohort comparison they exist for — and correlix-rum.js derives
+        # them from a closed vocabulary (browser FAMILY, never the full
+        # user-agent; connection type), never from user data. The lane's two
+        # identifier-shaped fields, `user_ref` and `session_id`, are NOT in
+        # this list because the router never stamps them: they ride through
+        # untouched, and `user_ref`'s direct-identifier refusal lives at the
+        # api boundary (ExperienceEvent.Validate → requirePseudonymous, which
+        # REFUSES rather than silently hashing). `event_id` is a producer id
+        # for a record, not for a person. Both tables carry the STRICT tenant
+        # row policy, so an untagged row is platform-only, never universal.
+        "event_id", "producer", "observation", "data_class", "schema_name",
+        "event_at", "observed_at",               # provenance.* -> columns (ms epoch)
+        "cohort_site", "cohort_isp", "cohort_region", "cohort_device",
+        "cohort_browser", "cohort_version", "cohort_network",
+        "duration_ms", "status_code", "success",
+        "lcp_ms", "inp_ms", "cls", "ttfb_ms", "fcp_ms",   # web vitals (ms; cls unitless)
+        "quantity",                              # business_events only
         "parser_id", "parser_status",            # declared on syslog only; see below
         # W2 pipeline-debugger decision trace. DELIBERATELY UNDECLARED: it is
         # stamped ONLY on a record carrying the debugger's `cx_debug=<ulid>`
@@ -821,6 +861,117 @@ def test_every_field_the_pipeline_stamps_is_declared_or_deliberately_not():
         "Under `dynamic: false` those fields are stored and NOT searchable. "
         "Declare them in opensearch/index-templates.json, or add them to "
         "not_indexed above with a reason."
+    )
+
+
+# ── the DEM experience lane's fields are declared in ClickHouse ─────────────
+
+EXPERIENCE_TABLES = ("experience_events", "business_events")
+
+
+def _ch_columns(sql: str, table: str) -> set:
+    """Column names of the `CREATE TABLE ... netops.<table> ( ... )` block."""
+    m = re.search(
+        r"CREATE TABLE IF NOT EXISTS netops\." + re.escape(table) + r"\s*\(\n(.*?)\n\)",
+        sql, re.S)
+    assert m, (
+        f"netops.{table} is no longer created by a `CREATE TABLE IF NOT EXISTS` "
+        "block this parser can read — update _ch_columns() together with the DDL"
+    )
+    cols = set()
+    for line in m.group(1).splitlines():
+        c = re.match(r"\s+([a-z_][a-z0-9_]*)\s+[A-Za-z]", line)
+        if c:
+            cols.add(c.group(1))
+    assert cols, f"parsed no columns out of netops.{table}"
+    return cols
+
+
+def _experience_transforms() -> dict:
+    cfg = vector_cfg("router")
+    lane = {n: t for n, t in (cfg.get("transforms") or {}).items()
+            if n.startswith("experience_")}
+    assert lane, (
+        "vector-router has no `experience_*` transform: the DEM experience lane "
+        "(tracker 254) was removed or renamed. If it was renamed, rename its "
+        "entries in `not_indexed` with it — they are excused from the OpenSearch "
+        "templates ONLY because this lane is ClickHouse-only."
+    )
+    return lane
+
+
+def test_experience_lane_fields_are_declared_clickhouse_columns():
+    """The experience lane is the one lane excused from the index templates
+    (it never reaches OpenSearch), so `not_indexed` carries 23 of its fields.
+    That excuse is only honest while the fields really ARE declared somewhere,
+    and here that somewhere is ClickHouse — where an undeclared field is not
+    merely unsearchable but silently DISCARDED, because both sinks run with
+    `skip_unknown_fields: true`. Same defect class as F-05, different store: add
+    `.new_col = x` to an experience transform, ship it, and the value is dropped
+    at the sink with no error anywhere. This asserts the property over the whole
+    lane rather than over the fields that exist today."""
+    stamped = set()
+    for tr in _experience_transforms().values():
+        stamped |= set(re.findall(r"^\s*\.([a-zA-Z_][a-zA-Z0-9_]*)\s*=",
+                                  tr.get("source") or "", re.M))
+    assert stamped, "the experience transforms stamp nothing — the lane is inert"
+
+    init_sql = read("deployment", "docker", "clickhouse", "init.sql")
+    go_ddl = read("src", "backend", "internal", "chschema", "experience_schema.go")
+
+    for where, sql in (("clickhouse/init.sql", init_sql),
+                       ("chschema/experience_schema.go", go_ddl)):
+        cols = set()
+        for table in EXPERIENCE_TABLES:
+            cols |= _ch_columns(sql, table)
+        missing = sorted(stamped - cols)
+        assert not missing, (
+            f"the experience lane stamps {missing} but {where} declares no such "
+            f"column on netops.{' / netops.'.join(EXPERIENCE_TABLES)}. Both sinks set "
+            "`skip_unknown_fields: true`, so those values are DISCARDED on write. "
+            "Add the column (to BOTH DDLs), or stop stamping the field."
+        )
+
+    # A fresh install reads init.sql; an existing install converges on the Go
+    # DDL at api boot. If the two drift, which one you get depends on when you
+    # installed — the worst kind of storage bug to debug.
+    for table in EXPERIENCE_TABLES:
+        assert _ch_columns(init_sql, table) == _ch_columns(go_ddl, table), (
+            f"netops.{table} differs between clickhouse/init.sql and "
+            "chschema/experience_schema.go: "
+            f"{sorted(_ch_columns(init_sql, table) ^ _ch_columns(go_ddl, table))}. "
+            "The two are required to be identical (init.sql says so in a comment); "
+            "a fresh install and an upgraded one would otherwise get different tables."
+        )
+
+    # STRICT row policy on both tables: this lane carries per-tenant
+    # user-behaviour data, much of it classified `pseudonymous_user`, so an
+    # untagged row must be invisible rather than visible to every tenant.
+    for table in EXPERIENCE_TABLES:
+        assert re.search(r"CREATE ROW POLICY[^;]*ON netops\." + table, init_sql), (
+            f"netops.{table} has no row policy in init.sql — an untagged "
+            "experience row would be readable by every tenant"
+        )
+
+
+def test_the_experience_lane_never_reaches_an_opensearch_index():
+    """`not_indexed` excuses the experience fields on the grounds that nothing
+    indexes them. Wire an OpenSearch sink to this lane and that stops being
+    true instantly and silently: `dynamic: false` would store all 23 fields
+    unsearchable. The dead-letter path is deliberately exempt — it consumes the
+    `.dropped` outputs and replaces the event with its own flat shape."""
+    cfg = vector_cfg("router")
+    lane = set(_experience_transforms())
+    offenders = []
+    for name, sink in (cfg.get("sinks") or {}).items():
+        if sink.get("type") != "elasticsearch":
+            continue
+        if lane & set(sink.get("inputs") or []):
+            offenders.append(name)
+    assert not offenders, (
+        f"{offenders} index the DEM experience lane. Its fields are listed in "
+        "`not_indexed` precisely because no OpenSearch template declares them — "
+        "declare them in opensearch/index-templates.json first, or drop the sink."
     )
 
 
