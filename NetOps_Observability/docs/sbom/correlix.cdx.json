@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:fc37de0b-6b34-5f3b-88c2-65ccb1021913",
+  "serialNumber": "urn:uuid:b63d330d-5055-575f-aabd-8cc9b5df195d",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-05T10:06:22+00:00",
+    "timestamp": "2026-09-06T04:44:18+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.05-g5a3c9711#correlix",
+      "bom-ref": "correlix@2026.09.06-g52f415c8#correlix",
       "name": "correlix",
-      "version": "2026.09.05-g5a3c9711",
+      "version": "2026.09.06-g52f415c8",
       "description": "Correlix \u2014 correlix dependency inventory"
     },
     "properties": [
@@ -6611,10 +6611,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40fontsource-variable/manrope@5.2.8",
-      "name": "@fontsource-variable/manrope",
-      "version": "5.2.8",
-      "purl": "pkg:npm/%40fontsource-variable/manrope@5.2.8",
+      "bom-ref": "pkg:npm/%40fontsource-variable/inter@5.3.0",
+      "name": "@fontsource-variable/inter",
+      "version": "5.3.0",
+      "purl": "pkg:npm/%40fontsource-variable/inter@5.3.0",
       "scope": "required",
       "properties": [
         {
@@ -6626,19 +6626,26 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "OFL-1.1"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "9dcf653ae091cfbdd41e7a2f0c4d9bc1751d82113648439cec08a2d2a19edc22f2134dd6d5aed59d8e59e9eb9189aa6229b0a4192f9e5db637b3f92f59e19e4b"
+          "content": "3aea4be3cbdae093687dbf7bc3a358785f52ed6fe41cd28cd04afc0de9b99ea8b88de38bad5243a04f2d644a673099ad92f35b0751083cfc0771d905e9bd6850"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40fontsource/ibm-plex-mono@5.2.7",
-      "name": "@fontsource/ibm-plex-mono",
-      "version": "5.2.7",
-      "purl": "pkg:npm/%40fontsource/ibm-plex-mono@5.2.7",
+      "bom-ref": "pkg:npm/%40fontsource-variable/jetbrains-mono@5.3.0",
+      "name": "@fontsource-variable/jetbrains-mono",
+      "version": "5.3.0",
+      "purl": "pkg:npm/%40fontsource-variable/jetbrains-mono@5.3.0",
       "scope": "required",
       "properties": [
         {
@@ -6650,19 +6657,26 @@
           "value": "false"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "OFL-1.1"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "30a01bf2a57e09a88c427d81d1d222d4e577e7ae4d633a7758de5be284fa2d3924f85d2347a8f464dfb904a2622217df0c2debb4150bb18644eb9fb4d35f33f7"
+          "content": "177db1a52d8db06628422d800d290a4e0a498fba336a3b0680327cc284e7aa398807e7710c8a889a3978a57655104c6ef14159da7761997d7c1014bf85dcf72f"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40fontsource/inter@5.2.8",
-      "name": "@fontsource/inter",
-      "version": "5.2.8",
-      "purl": "pkg:npm/%40fontsource/inter@5.2.8",
+      "bom-ref": "pkg:npm/%40fontsource-variable/space-grotesk@5.3.0",
+      "name": "@fontsource-variable/space-grotesk",
+      "version": "5.3.0",
+      "purl": "pkg:npm/%40fontsource-variable/space-grotesk@5.3.0",
       "scope": "required",
       "properties": [
         {
@@ -6674,34 +6688,17 @@
           "value": "false"
         }
       ],
-      "hashes": [
+      "licenses": [
         {
-          "alg": "SHA-512",
-          "content": "3faaf95a72682a235557ecef5b6c4cd7780d74584012943d750247b779da2ef7e0f8b905da576048b885e13e3595fd5240233d42692a3d39f84c7e7af0845a82"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:npm/%40fontsource/space-grotesk@5.2.10",
-      "name": "@fontsource/space-grotesk",
-      "version": "5.2.10",
-      "purl": "pkg:npm/%40fontsource/space-grotesk@5.2.10",
-      "scope": "required",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "false"
+          "license": {
+            "id": "OFL-1.1"
+          }
         }
       ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "5cd5c46d3ef83882133eac361fa1d7c0f0e9f397f2e37bb17c1c054793d4fbdb0b9e3b8b8f5d8a96154cf6765537aaba7652a392e37c262b16fce071c318147b"
+          "content": "d88c66bdf074f22f6f9c6077626fc05ef85113ef173a358c5c8c83ba6d3773eb4fc07d0552830d41f1a953c3573f18dbc2cd15becb37007d19aade2824104077"
         }
       ]
     },
