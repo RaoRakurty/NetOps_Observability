@@ -235,6 +235,25 @@ jobs:
         working-directory: NetOps_Observability
         run: python3 scripts/oci-compliance.py --reviews
 
+      # THE CORRELIX-CONTROLLED ARCHIVE (tracker 262). This job keeps taking the
+      # RETAINED copies first — that is unchanged and is the reason it passes
+      # today with no AWS account. What is added is the git-side half of the
+      # archive: the index must be schema-valid on every commit, because
+      # `release-fetch` reads WHERE THE BYTES ARE out of it and a release that
+      # cannot resolve a record fails closed rather than reaching for upstream.
+      #
+      # The read role itself is NOT used here. supply-chain runs on every push,
+      # including from forks, which cannot reach the `release` environment the
+      # role's trust policy is scoped to. Proving the archive's live contents is
+      # the release job's business (publish-images.yml) and source-ingest.yml's.
+      - name: Corresponding-source archive index (schema, blocking)
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          python3 scripts/oci-compliance.py --validate-archive
+          python3 scripts/source-archive.py --selftest
+          python3 scripts/source-archive.py retention show
+
       - name: Regression suite (offline — fixtures, policy, fail-closed paths)
         working-directory: NetOps_Observability
         run: |
@@ -243,7 +262,11 @@ jobs:
           # test_oci_digest_lock.py is the base-image lock: a `FROM …@sha256:`
           # bump with no fresh compliance evaluation fails HERE, next to the
           # evaluation it invalidates, rather than only in the whole-tests/ run.
-          python3 -m pytest tests/test_oci_compliance.py tests/test_oci_digest_lock.py -v
+          # test_source_archive.py proves the release path survives every
+          # upstream URL being dead — with no AWS credential anywhere, because
+          # the object store and the upstream fetcher are both interfaces.
+          python3 -m pytest tests/test_oci_compliance.py tests/test_oci_digest_lock.py \
+                            tests/test_source_archive.py -v
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()

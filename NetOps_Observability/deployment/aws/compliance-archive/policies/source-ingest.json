@@ -1,0 +1,94 @@
+{
+  "_comment": [
+    "SOURCE-INGEST ROLE — the only role that may ADD to the archive.",
+    "",
+    "Ingest is rare and deliberate: a new source obligation appears, a human runs",
+    "`source-archive.py ingest`, and the artifact is written once with a retention",
+    "stamp. This role can do exactly that and read back what it wrote (verification",
+    "after upload is part of ingest — PutObject returning 200 proves nothing).",
+    "",
+    "It can EXTEND a retention period (s3:PutObjectRetention) because retention is",
+    "monotonic and extending is safe. It CANNOT shorten one under GOVERNANCE,",
+    "because shortening requires s3:BypassGovernanceRetention, which is",
+    "explicitly denied below and is held only by a human administrator. Under",
+    "COMPLIANCE mode no principal can shorten one at all.",
+    "",
+    "DELIBERATELY ABSENT, and asserted absent by tests/test_source_archive.py:",
+    "  s3:DeleteObject, s3:DeleteObjectVersion, s3:BypassGovernanceRetention,",
+    "  s3:PutBucketVersioning, s3:PutBucketObjectLockConfiguration,",
+    "  s3:PutLifecycleConfiguration, s3:PutBucketPolicy, s3:DeleteBucket,",
+    "  iam:*, kms:ScheduleKeyDeletion, and every action outside this one bucket.",
+    "",
+    "${bucket_arn} is substituted by Terraform (templatefile)."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteCorrespondingSourceUnderRetention",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectRetention",
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:GetObjectRetention",
+        "s3:GetObjectAttributes",
+        "s3:GetObjectVersionAttributes"
+      ],
+      "Resource": [
+        "${bucket_arn}/sources/*",
+        "${bucket_arn}/components/*",
+        "${bucket_arn}/releases/*"
+      ]
+    },
+    {
+      "Sid": "RequireObjectLockOnEveryWrite",
+      "_why": [
+        "An ingest that forgot the Object Lock headers would write an artifact with",
+        "no retention at all — a silent hole in the archive that looks exactly like",
+        "a good one. The condition makes the bucket refuse it rather than making the",
+        "tool responsible for never making the mistake.",
+        "",
+        "Written as a Deny on the absence of the header, because a Condition on an",
+        "Allow is satisfied by any OTHER Allow the principal might hold."
+      ],
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": "${bucket_arn}/sources/*",
+      "Condition": {
+        "Null": {
+          "s3:object-lock-mode": "true"
+        }
+      }
+    },
+    {
+      "Sid": "ListOnlyTheArchivePrefixes",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
+      "Resource": "${bucket_arn}",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["sources/*", "components/*", "releases/*"]
+        }
+      }
+    },
+    {
+      "Sid": "NoDeletionNoBypassNoAdministration",
+      "Effect": "Deny",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:BypassGovernanceRetention",
+        "s3:PutObjectLegalHold",
+        "s3:PutBucketVersioning",
+        "s3:PutBucketObjectLockConfiguration",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:DeleteBucket",
+        "s3:PutBucketPublicAccessBlock"
+      ],
+      "Resource": ["${bucket_arn}", "${bucket_arn}/*"]
+    }
+  ]
+}

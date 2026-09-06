@@ -15,9 +15,21 @@ hint, not an archive.
 
 **What is kept here and what is not.** Archives up to ~500 KB live in git — every Alpine packaging
 archive, the small Debian source packages, and three small upstream tarballs. Larger upstream
-tarballs are fetched by the release build from their pinned URL, verified against the same sha256,
-and shipped in every release bundle's `source-offer/`; a Correlix-controlled artifact store for
-those is tracker 261.
+tarballs belong to the **Correlix corresponding-source archive**: AWS S3 with Versioning and Object
+Lock, content-addressed by sha256, in a company-controlled account (owner decision 2026-09-05,
+tracker 262 — design in `docs/compliance/SOURCE_ARCHIVE.md`, tooling in
+`scripts/source-archive.py`, git-side record in `docs/compliance/source-archive-index.json`).
+
+Ingest is separate from release: an artifact is fetched from its pinned URL, verified, uploaded
+under an Object Lock retention stamp and **read back and re-hashed** once; every release afterwards
+reads it from the archive and never from upstream, and a missing artifact FAILS the release. Both
+locations are Correlix-controlled retention — git history for the small ones, Object Lock for the
+large ones — and neither is trusted without its checksum.
+
+**The archive is empty today.** The company AWS account, bucket and roles do not exist yet (tracker
+262 is blocked on the owner), so the table at the bottom of this file is still fetched per release
+from its pinned URL. That is exactly the gap the archive closes, and it is why nothing was moved
+out of this directory.
 
 ## Retained here (26 files, 1121 KB total)
 
@@ -50,7 +62,11 @@ those is tracker 261.
 | `pax-utils-1.3.8-r1-alpine-aports.tar.gz` | Alpine packaging of pax-utils 1.3.8-r1 at aports commit 398a5ae — APKBUILD + patches + build config | 1 KB | GPL-2.0-only |
 | `pax-utils-1.3.8.tar.xz` | upstream release of pax-utils 1.3.8 | 120 KB | GPL-2.0-only |
 
-## Pinned but NOT retained here — fetched per release from the URL in `scripts/source-mirror.json`
+## Pinned but NOT retained here — for the Correlix S3 archive (tracker 262)
+
+Until that archive exists these are fetched per release from the URL in `scripts/source-mirror.json`
+and checksum-verified. Once it does, `scripts/source-archive.py ingest --all` puts them there and
+the release reads them from it instead.
 
 | file | size |
 |---|---|

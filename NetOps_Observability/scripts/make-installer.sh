@@ -232,9 +232,38 @@ FTR
 # CORRELIX_SOURCE_MIRROR_DIR at a directory of pre-fetched tarballs; the checksum
 # gate applies to those exactly as it does to a download, so the offline path is
 # a convenience, never a bypass.
+#
+# THREE ACQUISITION MODES, in the order this function tries them:
+#
+#   1. RETAINED COPIES (CORRELIX_SOURCE_MIRROR_DIR) — everything in
+#      compliance/corresponding-sources/, taken from the repository itself.
+#   2. THE CORRELIX ARCHIVE (release mode only) — scripts/source-archive.py
+#      release-fetch, which reads the Correlix-controlled S3 store and NEVER
+#      touches upstream.
+#   3. THE PINNED UPSTREAM URL — development and daily CI only.
+#
+# CORRELIX_SOURCE_RELEASE_MODE=1 turns step 3 OFF. That is the point of tracker
+# 262: an upstream URL is provenance, not retention, and a production release
+# must not depend on ftp.gnu.org, gnupg.org, musl.libc.org, dev.gentoo.org or
+# deb.debian.org still serving those exact bytes. Two `base-files` versions
+# Correlix shipped had already left Debian's live pool by the time the
+# 2026-09-05 audit looked for them. In release mode an artifact that is neither
+# retained in git nor archived FAILS the build, loudly, with the ingest command
+# to run.
+#
+# Every path ends at the SAME sha256 gate below. Local provenance is not trusted
+# provenance, and neither is archived provenance.
 write_source_offer() {
   echo "-- mirroring GPL/LGPL corresponding source"
   local pins="${CORRELIX_SOURCE_PINS:-$ROOT/scripts/source-mirror.json}"
+  local release_mode="${CORRELIX_SOURCE_RELEASE_MODE:-0}"
+  if [ "$release_mode" = "1" ]; then
+    [ -n "${CORRELIX_SOURCE_ARCHIVE_BUCKET:-}" ] || {
+      echo "FATAL: CORRELIX_SOURCE_RELEASE_MODE=1 but no CORRELIX_SOURCE_ARCHIVE_BUCKET is configured. Release mode reads corresponding source from the Correlix archive and refuses to fall back to upstream; with no archive configured it can honour neither half of that. See docs/compliance/SOURCE_ARCHIVE.md." >&2
+      exit 1
+    }
+    echo "   release mode: retained copies + the Correlix archive only, NO upstream fetch (bucket $CORRELIX_SOURCE_ARCHIVE_BUCKET)"
+  fi
   [ -f "$pins" ] || { echo "FATAL: source-offer pin table not found at $pins — refusing to build a bundle whose GPL source offer cannot be honoured" >&2; exit 1; }
 
   local offer="$BUNDLE_DIR/source-offer"
@@ -338,6 +367,15 @@ OFFERFTR
       # same way. Local provenance is not trusted provenance.
       echo "   $name $version <- $CORRELIX_SOURCE_MIRROR_DIR/$file (local mirror)"
       cp "$CORRELIX_SOURCE_MIRROR_DIR/$file" "$dest"
+    elif [ "$release_mode" = "1" ]; then
+      # RELEASE: the Correlix-controlled archive, and nothing else. source-archive.py
+      # verifies the sha256 of what it places; the gate below verifies it again,
+      # because a release bundle's source offer is checked by the thing that ships
+      # it, not by the thing that fetched it.
+      echo "   $name $version <- Correlix source archive"
+      python3 "$ROOT/scripts/source-archive.py" release-fetch --quiet \
+              --pins "$pins" --file "$file" --dest "$offer" \
+        || { echo "FATAL: $name $version ($file) is not in the Correlix corresponding-source archive, and a release does not fall back to $url. Ingest it first: scripts/source-archive.py ingest --file $file  (see docs/compliance/SOURCE_ARCHIVE.md)" >&2; exit 1; }
     else
       echo "   $name $version <- $url"
       command -v curl >/dev/null || { echo "FATAL: curl is required to mirror $name's corresponding source (or set CORRELIX_SOURCE_MIRROR_DIR to a directory holding $file)" >&2; exit 1; }

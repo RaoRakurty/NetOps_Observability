@@ -270,11 +270,26 @@ history, and the obligation is to the *recipient of the binary*, so:
 | pin table, checksums, provenance, licence facts | `scripts/source-mirror.json` (git) | forever, in history |
 | compliance manifests + inventory | `docs/compliance/` (git) | forever, in history |
 | small source archives (≤ ~500 KB: every Alpine packaging archive, the small Debian source packages, three small upstream tarballs) | `compliance/corresponding-sources/` (git) — taken FIRST by the installer via `CORRELIX_SOURCE_MIRROR_DIR` and re-checksummed exactly as a download would be | forever, in history |
-| large upstream tarballs (gettext, libgcrypt, libgpg-error, libidn2, libunistring, musl, libseccomp's orig, busybox, syslog-ng) | fetched per release from the pinned URL, then the release bundle's `source-offer/`, covered by its `SHA256SUMS`, and uploaded as GitHub Release assets by `release-bundle.yml` | **as long as the release they support** (§8). A Correlix-controlled artifact store for these is tracker 261 |
+| large upstream tarballs (gettext, libgcrypt, libgpg-error, libidn2, libunistring, musl, libseccomp's orig, busybox, syslog-ng) | **the Correlix corresponding-source archive** — AWS S3, Versioning + Object Lock, content-addressed by sha256 (`docs/compliance/SOURCE_ARCHIVE.md`, tracker 262); then the release bundle's `source-offer/`, covered by its `SHA256SUMS`, and uploaded as GitHub Release assets by `release-bundle.yml` | the retention period in `scripts/source-retention-policy.json`, enforced by Object Lock, and never shorter than the release they support (§8) |
 
 An air-gapped build host sets `CORRELIX_SOURCE_MIRROR_DIR` to a directory of
 pre-fetched archives. The checksum gate applies there exactly as it does to a
 download: local provenance is not trusted provenance.
+
+**Upstream URLs are provenance, not retention** (owner decision 2026-09-05,
+tracker 262). Fetching a large tarball from `ftp.gnu.org` at release time is an
+acquisition; it becomes evidence only once the bytes are in a Correlix-controlled
+store. `scripts/source-archive.py` is that store's tooling and
+`docs/compliance/SOURCE_ARCHIVE.md` its design: INGEST (fetch → verify → upload →
+re-verify → record) is deliberately separate from RELEASE (archive lookup →
+verify → bundle), and in release mode a missing archived artifact **fails the
+build** rather than reaching for the internet. `--require-archive` makes this
+evaluation fail an obligation whose corresponding source verified against its pin
+but exists nowhere except an upstream URL.
+
+The archive is a durable home for the SAME artifacts this pin table already
+names — not a second inventory. `scripts/source-mirror.json` remains the one
+reviewed list.
 
 ### Source status
 
@@ -327,8 +342,10 @@ components the 2026-09-05 scan surfaced (`alpine-baselayout`(+`-data`),
 `libseccomp2`, `netbase` ×2), and `base-files` ×2. 57 rows remain
 recorded-and-unretained, essentially all of them the Debian surface of
 `netops-correlation`; retaining them is ~228 MB across 38 source packages, which
-is why the cheaper fix is to shrink that surface (tracker 260) rather than to
-ship the archive.
+is why the cheaper fix is to shrink that surface (tracker 263) rather than to
+ship the archive. Whatever is shipped is retained in the Correlix
+corresponding-source archive (tracker 262,
+`docs/compliance/SOURCE_ARCHIVE.md`).
 
 ---
 
@@ -391,9 +408,17 @@ Correlix release  →  image digest        (docs/compliance/oci-inventory.json,
                   →  licence obligation  (licence + confidence + policy reason)
                   →  source artifact     (file name + sha256 + upstream URL +
                                           distro build ref, scripts/source-mirror.json)
+                  →  the archived object (object key + object version +
+                                          verification + retain-until,
+                                          docs/compliance/source-archive-index.json)
                   →  the bytes           (source-offer/ in the release bundle,
-                                          covered by its SHA256SUMS)
+                                          covered by its SHA256SUMS; and the
+                                          object in the Correlix S3 archive)
 ```
+
+`scripts/source-archive.py audit <release>` walks that chain and prints it,
+including how each retention date was calculated (tracker 262,
+`docs/compliance/SOURCE_ARCHIVE.md`).
 
 **Retention rule: corresponding source is never removed earlier than the binary
 release it supports.** It is shipped *inside* the same bundle and published as
@@ -639,9 +664,12 @@ regenerate the notices (§10 step 6).
   recorded obligations are the Debian userland of `netops-correlation`
   (`python:3.12-slim`). Retaining their source is ~228 MB across 38 source
   packages, in every release bundle, forever. Moving that service to a
-  distroless or Alpine base removes most of them outright (tracker 260); a
-  Correlix-controlled artifact store is the alternative for what remains
-  (tracker 261).
+  distroless or Alpine base removes most of them outright (tracker 263); the
+  Correlix-controlled archive (tracker 262,
+  `docs/compliance/SOURCE_ARCHIVE.md`) is where whatever remains is RETAINED,
+  and `deferred_source_coordinates` already holds each one's exact source
+  package, version, URL and Debian-attested sha256, so ingesting them is
+  mechanical.
 * **The committed inventory is a snapshot.** `docs/compliance/oci-inventory.json`
   records the digests of images built on the machine that ran the scan. The
   authoritative evaluation for a release runs in `publish-images.yml` against the

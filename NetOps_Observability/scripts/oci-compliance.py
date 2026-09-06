@@ -113,6 +113,8 @@ LICENSE_FACTS = os.path.join(ROOT, "scripts", "license-data.json")
 REVIEW_TABLE = os.path.join(ROOT, "scripts", "source-review.json")
 GO_MOD = os.path.join(ROOT, "src", "backend", "go.mod")
 INVENTORY = os.path.join(ROOT, "docs", "compliance", "oci-inventory.json")
+ARCHIVE_INDEX = os.path.join(ROOT, "docs", "compliance", "source-archive-index.json")
+SOURCE_ARCHIVE_TOOL = os.path.join(ROOT, "scripts", "source-archive.py")
 
 SCHEMA_VERSION = 1
 
@@ -1127,15 +1129,93 @@ def verify_artifact(entry: dict, source_dir: str | None) -> tuple[str, str, str]
     return (STATUS_VERIFIED, path, got)
 
 
+# ── the Correlix-controlled archive (tracker 262) ────────────────────────────
+# A retained artifact answers "does Correlix hold these bytes TODAY?". The
+# archive answers "will Correlix still hold them in ten years, when the upstream
+# URL is gone?" — which is the question a corresponding-source obligation
+# actually asks. Two `base-files` versions Correlix shipped had already left
+# Debian's live pool by the time the 2026-09-05 audit looked for them.
+#
+# `docs/compliance/source-archive-index.json` is the git-side record of that
+# archive. This module reads it to ANNOTATE every obligation with where the
+# durable copy lives, and (under --require-archive) to FAIL a release whose
+# corresponding source exists only at an upstream URL.
+ARCHIVE_ARCHIVED = "archived"
+ARCHIVE_GIT_RETAINED = "git-retained"
+ARCHIVE_NOT_ARCHIVED = "not-archived"
+ARCHIVE_UNKNOWN = "archive-index-absent"
+
+
+def load_archive_index(path: str | None = None) -> dict:
+    """The committed archive index, or an empty one.
+
+    Validation is delegated to `scripts/source-archive.py`, which OWNS this
+    schema — one definition, one answer. Importing it by file path (the name has
+    a hyphen) keeps that single definition without giving this module a second
+    copy that can drift from it.
+    """
+    p = path or ARCHIVE_INDEX
+    if not os.path.exists(p):
+        return {"schema_version": 0, "artifacts": [], "releases": [],
+                "_absent": True}
+    doc = read_json(p, what="source archive index")
+    problems = validate_archive_index(doc, p)
+    if problems:
+        raise ComplianceError(
+            f"{p} is not a valid corresponding-source archive index:\n  "
+            + "\n  ".join(problems))
+    return doc
+
+
+def _source_archive_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "correlix_source_archive", SOURCE_ARCHIVE_TOOL)
+    if spec is None or spec.loader is None:
+        raise ComplianceError(
+            f"cannot load {SOURCE_ARCHIVE_TOOL}, which owns the archive-index "
+            f"schema; the index cannot be validated and this evaluation will "
+            f"not guess at it")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def validate_archive_index(doc: Any, path: str = ARCHIVE_INDEX) -> list[str]:
+    mod = _source_archive_module()
+    try:
+        return list(mod.validate_index(doc, path))
+    except mod.ArchiveError as exc:
+        raise ComplianceError(str(exc)) from exc
+
+
+def archive_status_for(entry: dict, archive: dict) -> tuple[str, str]:
+    """(status, where) for one retained-source pin entry."""
+    if archive.get("_absent"):
+        return (ARCHIVE_UNKNOWN, "")
+    by_sha = {a.get("sha256"): a for a in archive.get("artifacts", [])}
+    rec = by_sha.get(entry.get("sha256"))
+    if rec and (rec.get("verification") or {}).get("status") == "verified":
+        return (ARCHIVE_ARCHIVED, rec.get("object_key", ""))
+    if entry.get("retained_in_git"):
+        # Retained in this repository's history, which IS Correlix-controlled
+        # long-term retention — it simply is not the S3 archive.
+        return (ARCHIVE_GIT_RETAINED, entry["retained_in_git"])
+    return (ARCHIVE_NOT_ARCHIVED, "")
+
+
 # ── evaluation ───────────────────────────────────────────────────────────────
 def evaluate(components: list[dict], pins: dict, *, source_dir: str | None,
              facts: dict[str, dict[str, str]] | None = None,
              first_party: list[str] | None = None,
-             reviews: dict | None = None) -> list[dict]:
+             reviews: dict | None = None,
+             archive: dict | None = None) -> list[dict]:
     """Normalized components → compliance records."""
     facts = facts or {}
     first_party = first_party or []
     reviews = reviews or {}
+    archive = archive if archive is not None else {"_absent": True,
+                                                   "artifacts": []}
     records: list[dict] = []
     for c in components:
         licenses_raw = list(c["licenses_raw"])
@@ -1254,6 +1334,18 @@ def evaluate(components: list[dict], pins: dict, *, source_dir: str | None,
             rec["correspondence"] = corr
             rec["correspondence_detail"] = corr_detail
             rec["source_detail"] = "; ".join(r[2] for r in results)
+            # WHERE THE DURABLE COPY LIVES (tracker 262). Recorded for every
+            # obligation, on every run, whether or not it gates anything: an
+            # artifact whose only long-term home is an upstream URL is a
+            # compliance risk that must be visible before it is a failure.
+            arch_status, arch_where = archive_status_for(entries[0], archive)
+            rec["archive_status"] = arch_status
+            rec["archive_location"] = arch_where
+            rec["archive_statuses"] = [
+                {"file": e["file"], **dict(zip(("status", "location"),
+                                               archive_status_for(e, archive)))}
+                for e in entries
+            ]
             records.append(rec)
             continue
 
@@ -1282,7 +1374,8 @@ def evaluate(components: list[dict], pins: dict, *, source_dir: str | None,
     return records
 
 
-def violations(records: list[dict], *, release: bool) -> list[dict]:
+def violations(records: list[dict], *, release: bool,
+               require_archive: bool = False) -> list[dict]:
     """Violations, each as {kind, component, status, text}. Empty list = PASS.
 
     `missing` and `invalid` fail everywhere. A RECORDED posture (`deferred`) is
@@ -1324,6 +1417,24 @@ def violations(records: list[dict], *, release: bool) -> list[dict]:
             continue
         status = r["source_status"]
         if status in (STATUS_VERIFIED, STATUS_NOT_REQUIRED):
+            # Verified means the bytes in THIS build hash to the pin. Under
+            # --require-archive it must also mean Correlix holds those bytes
+            # somewhere that outlives the upstream URL (tracker 262): the S3
+            # archive, or this repository's own history for the small ones.
+            if require_archive and r.get("archive_status") in (
+                    ARCHIVE_NOT_ARCHIVED, ARCHIVE_UNKNOWN):
+                add(r, "source-not-archived",
+                    "The corresponding source for this component verified "
+                    "against its pin, but it is NOT recorded in the "
+                    "Correlix-controlled archive "
+                    "(docs/compliance/source-archive-index.json"
+                    + (" — which does not exist)"
+                       if r.get("archive_status") == ARCHIVE_UNKNOWN else ")")
+                    + ". Its only long-term home is an upstream URL, which is "
+                    "provenance, not retention: two `base-files` versions "
+                    "Correlix shipped had already left Debian's live pool. "
+                    "Ingest it: scripts/source-archive.py ingest --file "
+                    f"{os.path.basename(r.get('source_artifact', '') or '?')}")
             continue
         recorded = r.get("deferred")
         if status == STATUS_PINNED:
@@ -1403,6 +1514,13 @@ def build_manifest(image: str, digest: str, records: list[dict], *,
         "sbom_tools": sorted(set(tools)),
         "base_layers_known": base_layers is not None,
         "retained_source_dir": source_dir or "",
+        # Tracker 262: where the durable copies live, summarised, so a manifest
+        # states on its own whether the source it vouches for survives the
+        # disappearance of an upstream URL.
+        "archive_status_counts": dict(sorted(
+            {st: sum(1 for r in records if r.get("archive_status") == st)
+             for st in {r.get("archive_status") for r in records
+                        if r.get("archive_status")}}.items())),
         "component_count": len(records),
         "status_counts": dict(sorted(counts.items())),
         # The reviewed determinations this verdict rests on, copied in full so a
@@ -1811,6 +1929,64 @@ def selftest() -> int:
     check("a binNMU takes the SOURCE version as its build ref",
           deb2["distro_build_ref"], "2.3.2-2")
 
+    # ── the Correlix-controlled archive (tracker 262) ───────────────────────
+    sha_a = "a" * 64
+    archived = {
+        "schema_version": 1,
+        "artifacts": [{
+            "component": "busybox", "component_version": "1.37.0",
+            "source_package": "busybox", "source_version": "1.37.0",
+            "file": "busybox-1.37.0.tar.bz2", "sha256": sha_a, "size_bytes": 1,
+            "object_key": f"sources/sha256/aa/{sha_a}/busybox-1.37.0.tar.bz2",
+            "upstream_url": "https://busybox.net/x", "license": "GPL-2.0-only",
+            "correspondence": "upstream-release",
+            "verification": {"status": "verified", "method": "download+sha256",
+                             "verified_at": "2026-09-05T00:00:00+00:00",
+                             "measured_sha256": sha_a, "detail": "ok"},
+            "retention": {"retain_until": "2036-09-05", "mode": "GOVERNANCE",
+                          "calculation": "2026-09-05 + 10 year(s)"},
+        }],
+        "releases": [],
+    }
+    check("an archived artifact is reported as archived",
+          archive_status_for({"sha256": sha_a}, archived)[0], ARCHIVE_ARCHIVED)
+    check("the archive location is the object key",
+          archive_status_for({"sha256": sha_a}, archived)[1],
+          f"sources/sha256/aa/{sha_a}/busybox-1.37.0.tar.bz2")
+    check("an artifact retained in git is reported as such",
+          archive_status_for({"sha256": "b" * 64,
+                              "retained_in_git": "compliance/corresponding-sources/x"},
+                             archived)[0], ARCHIVE_GIT_RETAINED)
+    check("an artifact with neither home is not archived",
+          archive_status_for({"sha256": "c" * 64}, archived)[0],
+          ARCHIVE_NOT_ARCHIVED)
+    check("no index at all is never silently a pass",
+          archive_status_for({"sha256": sha_a}, {"_absent": True})[0],
+          ARCHIVE_UNKNOWN)
+    # An artifact that verified against its pin but lives only at an upstream
+    # URL passes today's gate and FAILS --require-archive. That difference is
+    # the whole of tracker 262.
+    unarchived_rec = dict(reviewed, source_required=True,
+                          source_status=STATUS_VERIFIED,
+                          source_artifact="source-offer/gettext-0.22.5.tar.xz",
+                          archive_status=ARCHIVE_NOT_ARCHIVED)
+    check("a verified-but-unarchived artifact passes the ordinary gate",
+          violations([unarchived_rec], release=False), [])
+    check("a verified-but-unarchived artifact fails --require-archive",
+          [v["kind"] for v in violations([unarchived_rec], release=False,
+                                         require_archive=True)],
+          ["source-not-archived"])
+    check("an archived artifact passes --require-archive",
+          violations([dict(unarchived_rec, archive_status=ARCHIVE_ARCHIVED)],
+                     release=False, require_archive=True), [])
+    check("git retention satisfies --require-archive",
+          violations([dict(unarchived_rec, archive_status=ARCHIVE_GIT_RETAINED)],
+                     release=False, require_archive=True), [])
+    check("the committed archive index validates",
+          validate_archive_index(read_json(ARCHIVE_INDEX,
+                                           what="source archive index"),
+                                 ARCHIVE_INDEX), [])
+
     if fails:
         for f in fails:
             print(f"selftest FAIL: {f}", file=sys.stderr)
@@ -1848,6 +2024,16 @@ def main(argv: list[str] | None = None) -> int:
                          "obligation FAILS")
     ap.add_argument("--record-deferred", action="store_true",
                     help="print register entries for obligations with no artifact")
+    ap.add_argument("--archive-index",
+                    help="the corresponding-source archive index "
+                         "(default docs/compliance/source-archive-index.json)")
+    ap.add_argument("--require-archive", action="store_true",
+                    help="tracker 262: an obligation whose corresponding source "
+                         "is not in the Correlix-controlled archive FAILS, even "
+                         "when the bytes verified against their pin. Upstream "
+                         "availability is provenance, not retention.")
+    ap.add_argument("--validate-archive", action="store_true",
+                    help="schema-check the archive index and exit")
     ap.add_argument("--emit-inventory", help="merge --manifest-in files into the "
                                              "committed OCI inventory")
     ap.add_argument("--manifest-in", action="append", default=[],
@@ -1858,6 +2044,25 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.selftest:
         return selftest()
+
+    if args.validate_archive:
+        path = args.archive_index or ARCHIVE_INDEX
+        try:
+            doc = read_json(path, what="source archive index")
+            problems = validate_archive_index(doc, path)
+        except ComplianceError as exc:
+            print(f"oci-compliance: CANNOT RUN: {exc}", file=sys.stderr)
+            return 2
+        if problems:
+            print(f"oci-compliance: {len(problems)} problem(s) in {path}:",
+                  file=sys.stderr)
+            for pr in problems:
+                print(f"  - {pr}", file=sys.stderr)
+            return 1
+        print(f"oci-compliance: {path} is a valid corresponding-source archive "
+              f"index ({len(doc.get('artifacts', []))} artifact(s), "
+              f"{len(doc.get('releases', []))} release(s))")
+        return 0
 
     if args.reviews:
         try:
@@ -1900,7 +2105,8 @@ def main(argv: list[str] | None = None) -> int:
         records = evaluate(norm, pins, source_dir=args.source_dir,
                            facts=load_license_facts(args.license_facts),
                            first_party=first_party_prefixes(args.first_party),
-                           reviews=load_reviews(args.review_table))
+                           reviews=load_reviews(args.review_table),
+                           archive=load_archive_index(args.archive_index))
     except ComplianceError as exc:
         print(f"oci-compliance: CANNOT RUN: {exc}", file=sys.stderr)
         return 2
@@ -1921,7 +2127,8 @@ def main(argv: list[str] | None = None) -> int:
         today = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
         print(json.dumps(propose_deferred(records, today), indent=2))
 
-    problems = violations(records, release=args.release)
+    problems = violations(records, release=args.release,
+                          require_archive=args.require_archive)
 
     if not args.quiet:
         counts = manifest["status_counts"]

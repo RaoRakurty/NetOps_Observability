@@ -158,6 +158,49 @@ jobs:
           test -s "$RUNNER_TEMP/base-layers-${{ matrix.name }}.txt"
           echo "layers=$RUNNER_TEMP/base-layers-${{ matrix.name }}.txt" >> "$GITHUB_OUTPUT"
 
+      # THE CORRELIX-CONTROLLED ARCHIVE (tracker 262). Read-only credentials,
+      # short-lived, from GitHub's OIDC token — there is no static AWS key in
+      # this repository. The step is a no-op until the company AWS account
+      # exists and the repository variables are set, so today's releases behave
+      # exactly as they did: retained copies first, pinned upstream after.
+      #
+      # `vars.*` are Actions VARIABLES, not secrets: a bucket name and a role
+      # ARN are useless without the trust relationship, which is scoped to this
+      # repository and the `release` environment.
+      - name: Assume the archive read role (OIDC, short-lived)
+        if: ${{ vars.AWS_SOURCE_ARCHIVE_READ_ROLE != '' }}
+        env:
+          ROLE_ARN: ${{ vars.AWS_SOURCE_ARCHIVE_READ_ROLE }}
+          AWS_REGION: ${{ vars.AWS_SOURCE_ARCHIVE_REGION }}
+        run: |
+          set -euo pipefail
+          token="$(curl -fsS --max-time 30 \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          [ -n "$token" ] || { echo "FATAL: GitHub returned no OIDC token" >&2; exit 1; }
+          echo "::add-mask::$token"
+          resp="$(curl -fsS --max-time 30 -H 'Accept: application/json' \
+            --data-urlencode "Action=AssumeRoleWithWebIdentity" \
+            --data-urlencode "Version=2011-06-15" \
+            --data-urlencode "RoleArn=${ROLE_ARN}" \
+            --data-urlencode "RoleSessionName=correlix-release-${GITHUB_RUN_ID}" \
+            --data-urlencode "DurationSeconds=3600" \
+            --data-urlencode "WebIdentityToken=${token}" \
+            "https://sts.${AWS_REGION}.amazonaws.com/")" \
+            || { echo "FATAL: STS refused the OIDC token; check the read role's trust policy." >&2; exit 1; }
+          python3 - "$resp" <<'PY' >> "$GITHUB_ENV"
+          import json, sys
+          creds = (json.loads(sys.argv[1])["AssumeRoleWithWebIdentityResponse"]
+                   ["AssumeRoleWithWebIdentityResult"]["Credentials"])
+          for gh, aws in (("AWS_ACCESS_KEY_ID", "AccessKeyId"),
+                          ("AWS_SECRET_ACCESS_KEY", "SecretAccessKey"),
+                          ("AWS_SESSION_TOKEN", "SessionToken")):
+              print(f"::add-mask::{creds[aws]}", file=sys.stderr)
+              print(f"{gh}={creds[aws]}")
+          PY
+          echo "read-only archive credentials assumed (expire in 1h)"
+
       # The retained corresponding source, produced by the same mechanism that
       # ships it in every release bundle. `--release` verifies the BYTES, so the
       # artifacts have to exist here, not merely be pinned.
@@ -173,6 +216,13 @@ jobs:
         # upstream reachability to prove it ships the source it says it does.
         env:
           CORRELIX_SOURCE_MIRROR_DIR: ${{ github.workspace }}/NetOps_Observability/compliance/corresponding-sources
+          # Tracker 262. With the archive configured this becomes ARCHIVE-ONLY:
+          # anything not retained in git is read from the Correlix-controlled S3
+          # store and a miss FAILS the release — no upstream fallback. Empty
+          # until the account exists, which keeps today's behaviour.
+          CORRELIX_SOURCE_RELEASE_MODE: ${{ vars.AWS_SOURCE_ARCHIVE_BUCKET != '' && '1' || '0' }}
+          CORRELIX_SOURCE_ARCHIVE_BUCKET: ${{ vars.AWS_SOURCE_ARCHIVE_BUCKET }}
+          CORRELIX_SOURCE_ARCHIVE_REGION: ${{ vars.AWS_SOURCE_ARCHIVE_REGION }}
         run: |
           set -euo pipefail
           bash scripts/make-installer.sh --source-offer-only
@@ -190,13 +240,20 @@ jobs:
           if [ -n "${{ steps.base.outputs.layers }}" ]; then
             base_args=(--base-layers "${{ steps.base.outputs.layers }}")
           fi
+          # Tracker 262: once the archive exists, corresponding source that
+          # verifies against its pin but lives ONLY at an upstream URL also
+          # fails the release. Provenance is not retention.
+          archive_args=()
+          if [ -n "${{ vars.AWS_SOURCE_ARCHIVE_BUCKET }}" ]; then
+            archive_args=(--require-archive)
+          fi
           python3 scripts/oci-compliance.py \
             --sbom "$GITHUB_WORKSPACE/sbom-${{ matrix.name }}.cdx.json" \
             --image "${{ steps.img.outputs.ref }}" \
             --digest "${{ steps.build.outputs.digest }}" \
             --source-dir "$OFFER" \
             --manifest "$GITHUB_WORKSPACE/compliance-${{ matrix.name }}.json" \
-            --release "${base_args[@]}"
+            --release "${base_args[@]}" "${archive_args[@]}"
 
       - name: Upload the compliance manifest
         if: always()

@@ -1,0 +1,126 @@
+{
+  "_README": [
+    "source-retention-policy.json — HOW LONG Correlix keeps a corresponding-source",
+    "artifact, and WHO decided that. Read by scripts/source-archive.py to compute the",
+    "S3 Object Lock `retain_until` stamped on every archived artifact, and by",
+    "`source-archive.py retention show` to explain each stamped date.",
+    "",
+    "WHY THIS IS A FILE AND NOT A CONSTANT IN THE CODE",
+    "The retention period is a LEGAL question, not an engineering one. GPL-2.0 §3(b)",
+    "names three years for a written offer; GPL-3.0 §6(b) names three years or the",
+    "life of the product's support, whichever is longer; LGPL inherits both; and none",
+    "of that answers what a court in a given jurisdiction expects of a company that",
+    "shipped the binary. Hard-coding `end_of_support + 3y` in a script would be this",
+    "project asserting a legal conclusion it is not qualified to reach. So the number",
+    "lives here, in one owner-owned field, with the reasoning written beside it, and",
+    "the tooling only ARITHMETIC — it never invents a rule.",
+    "",
+    "FAIL-CLOSED AND MONOTONIC",
+    "  * Retention is only ever EXTENDED. `source-archive.py` refuses to write a",
+    "    retain_until earlier than one already stamped on an object or recorded in",
+    "    docs/compliance/source-archive-index.json; shortening is an Object Lock",
+    "    administrative action a human performs deliberately, never a side effect of",
+    "    a CI run. Ordinary CI holds no permission to do it at all (the read role has",
+    "    no PutObjectRetention and no BypassGovernanceRetention).",
+    "  * Editing `owner_decision.retention_years` DOWN changes nothing about already",
+    "    archived objects. It changes only what future ingests stamp.",
+    "  * `counsel_confirmed: false` is the honest state today. The tooling still",
+    "    works — it stamps the conservative default and says so in every trace —",
+    "    but no document generated from this file may claim the period is a legal",
+    "    determination until that flag is true and `counsel_confirmed_by` names a",
+    "    real reviewer. Never invent one."
+  ],
+
+  "schema_version": 1,
+  "policy_version": 1,
+  "recorded": "2026-09-05",
+  "tracker": 262,
+
+  "owner_decision": {
+    "_field_owner": "owner",
+    "_why": [
+      "The single field a human owns. Everything else in this file is either a",
+      "derivation of it or an explanation of it.",
+      "",
+      "10 years is chosen as a DELIBERATELY CONSERVATIVE default: it is longer than",
+      "GPL-2.0 §3(b)'s three years, longer than any support window Correlix has",
+      "committed to, and long enough that no ordinary release ages out of it before",
+      "counsel has looked at the question. Over-retaining source costs storage.",
+      "Under-retaining it is a licence violation that cannot be repaired after the",
+      "fact, because the bytes are gone. The asymmetry decides the default."
+    ],
+    "retention_years": 10,
+    "counsel_confirmed": false,
+    "counsel_confirmed_by": "",
+    "counsel_confirmed_date": "",
+    "review_due": "2027-09-05",
+    "note": "Conservative engineering default pending counsel. NOT a legal determination."
+  },
+
+  "calculation": {
+    "_why": [
+      "How `retain_until` is derived, recorded per artifact so an auditor can",
+      "reproduce the date rather than trust it. The base date is the LATEST of the",
+      "inputs available at ingest time, so a later release of the same artifact can",
+      "only push the date out, never pull it in."
+    ],
+    "rule": "retain_until = base_date + owner_decision.retention_years",
+    "base_date": "the latest of: the ingest date, and the distribution end date of every Correlix release that references the artifact (when known)",
+    "base_date_fallback": "ingest-date",
+    "base_date_fallback_reason": "Correlix has published no end-of-distribution dates yet, so the ingest date is used and recorded as such. When a release records an end-of-distribution date, re-running `source-archive.py ingest --extend-retention` recomputes from it and can only extend.",
+    "monotonic": true,
+    "monotonic_note": "A computed date earlier than one already stamped is DISCARDED and the existing date kept; the run reports it."
+  },
+
+  "object_lock": {
+    "_why": [
+      "Object Lock mode. GOVERNANCE while the process is being validated, so an",
+      "administrator holding s3:BypassGovernanceRetention can correct a mistake made",
+      "while the tooling is new. COMPLIANCE afterwards.",
+      "",
+      "COMPLIANCE MODE IS INTENTIONALLY IMPOSSIBLE TO OVERRIDE. Under COMPLIANCE, no",
+      "principal — not the ingest role, not an administrator, not the AWS account",
+      "root user, not AWS Support — can shorten a retention period or delete a locked",
+      "object version before it expires. That is the entire point of the mode and it",
+      "is the reason the switch is a separate, deliberate, owner-authorised step",
+      "rather than a default: an object written with a wrong 10-year COMPLIANCE lock",
+      "occupies paid storage for 10 years and there is no appeal.",
+      "",
+      "Switching requires: (1) the ingest/verify/release path proven end to end",
+      "against the real bucket, (2) the retention arithmetic reviewed against a",
+      "counsel-confirmed period, (3) an owner decision recorded here."
+    ],
+    "mode": "GOVERNANCE",
+    "modes_allowed": ["GOVERNANCE", "COMPLIANCE"],
+    "compliance_mode_authorised": false,
+    "compliance_mode_preconditions": [
+      "the company AWS account, bucket and roles exist and the full ingest → verify → release-fetch path has run against them",
+      "owner_decision.counsel_confirmed is true",
+      "the owner records the switch in this file with a date"
+    ],
+    "legal_hold": {
+      "supported": true,
+      "note": "s3:PutObjectLegalHold is an administrator action, held by no CI role. A legal hold suspends expiry independently of retain_until and is released by a human."
+    }
+  },
+
+  "scope": {
+    "_why": [
+      "WHICH artifacts this policy governs. Small archives stay in git (they are",
+      "already retained, versioned and distributed with the repository); large ones",
+      "go to S3. The threshold is an operational one about git history size, not a",
+      "compliance one — both locations are Correlix-controlled retention."
+    ],
+    "git_retained": "compliance/corresponding-sources/ — artifacts small enough to live in git history forever",
+    "git_retention_threshold_bytes": 524288,
+    "archive_retained": "the S3 archive — everything else with a corresponding-source obligation",
+    "note": "An artifact may be in BOTH. Retention in git is unbounded (history); the S3 copy carries the Object Lock stamp."
+  },
+
+  "authority": {
+    "design": "docs/compliance/SOURCE_ARCHIVE.md",
+    "mechanism": "docs/compliance/OCI_SOURCE_COMPLIANCE.md",
+    "pin_table": "scripts/source-mirror.json",
+    "index": "docs/compliance/source-archive-index.json"
+  }
+}

@@ -1,0 +1,206 @@
+name: source-ingest
+
+# CORRESPONDING-SOURCE INGEST (tracker 262, owner decision 2026-09-05).
+#
+# The ONLY workflow that writes to the Correlix-controlled corresponding-source
+# archive. Ingest is deliberately separate from release:
+#
+#   INGEST (here, rare, manual, reviewer-gated, needs the network)
+#       pinned upstream URL → verify the pinned sha256 → PutObject under Object
+#       Lock → read the stored bytes back and hash them → record it in
+#       docs/compliance/source-archive-index.json.
+#
+#   RELEASE (publish-images.yml / release-bundle.yml, every release, read-only)
+#       archive → verify → the bundle's source-offer/. NEVER upstream.
+#
+# That separation is the point. Until it existed, a release depended on
+# ftp.gnu.org, gnupg.org, musl.libc.org, dev.gentoo.org and deb.debian.org still
+# serving exactly the bytes we pinned — and two `base-files` versions Correlix
+# had already shipped were gone from Debian's live pool by the time the
+# 2026-09-05 audit went looking for them.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# DISABLED. `if: false` on every job below.
+#
+# There is no Correlix company AWS account, no bucket and no roles yet: tracker
+# 262 is blocked on the owner for exactly those three things. This workflow is
+# complete and reviewed, and it is switched OFF rather than left to fail on a
+# missing secret, because a workflow that fails for a boring reason is a
+# workflow people learn to ignore.
+#
+# TO ENABLE, once deployment/aws/compliance-archive/ has been applied:
+#   1. set the repository Actions VARIABLES (not secrets — none of these is one):
+#        AWS_SOURCE_ARCHIVE_BUCKET       terraform output bucket_name
+#        AWS_SOURCE_ARCHIVE_REGION       terraform output region
+#        AWS_SOURCE_ARCHIVE_INGEST_ROLE  terraform output source_ingest_role_arn
+#   2. create the `source-ingest` GitHub Environment WITH REQUIRED REVIEWERS.
+#      The role's trust policy is scoped to that environment, so the review is
+#      not advisory: without it, STS refuses.
+#   3. delete the `if: false` lines below (they are marked ENABLE-ME).
+#   4. run it once with `dry_run: true` and read the plan.
+#
+# See docs/compliance/SOURCE_ARCHIVE.md.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      selector:
+        description: 'What to ingest: "--all", or one or more "--file <name>" / "--component <name>" arguments from scripts/source-mirror.json'
+        required: true
+        default: '--all'
+        type: string
+      dry_run:
+        description: 'Say what would be ingested and touch nothing'
+        required: false
+        default: true
+        type: boolean
+      release:
+        description: 'Optional release id to record as referencing these artifacts (e.g. v1.2.3)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  ingest:
+    name: Ingest corresponding source into the Correlix archive
+    # ENABLE-ME: delete the next line when the AWS account exists.
+    if: false
+    runs-on: ubuntu-latest
+    # The GitHub Environment the ingest role's trust policy names. Give it
+    # required reviewers: a write to the compliance archive waits for a human.
+    environment: source-ingest
+    permissions:
+      contents: read
+      id-token: write # OIDC only. No static AWS key exists in this repository.
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Refuse to run without the archive configured
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${{ vars.AWS_SOURCE_ARCHIVE_BUCKET }}" ] || missing+=(AWS_SOURCE_ARCHIVE_BUCKET)
+          [ -n "${{ vars.AWS_SOURCE_ARCHIVE_REGION }}" ] || missing+=(AWS_SOURCE_ARCHIVE_REGION)
+          [ -n "${{ vars.AWS_SOURCE_ARCHIVE_INGEST_ROLE }}" ] || missing+=(AWS_SOURCE_ARCHIVE_INGEST_ROLE)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "FATAL: the corresponding-source archive is not configured: ${missing[*]}" >&2
+            echo "See deployment/aws/compliance-archive/README.md." >&2
+            exit 1
+          fi
+
+      # Short-lived credentials from GitHub's OIDC token. Done with curl and
+      # python3 rather than a third-party action, for the same reason every
+      # other tool in this repository is pinned or stdlib: the step that mints
+      # AWS credentials for the compliance archive should be readable in full,
+      # here, by whoever reviews this file.
+      - name: Assume the source-ingest role (OIDC, short-lived)
+        env:
+          ROLE_ARN: ${{ vars.AWS_SOURCE_ARCHIVE_INGEST_ROLE }}
+          AWS_REGION: ${{ vars.AWS_SOURCE_ARCHIVE_REGION }}
+        run: |
+          set -euo pipefail
+          # 1. the OIDC token for this run, audience sts.amazonaws.com.
+          token="$(curl -fsS --max-time 30 \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          [ -n "$token" ] || { echo "FATAL: GitHub returned no OIDC token" >&2; exit 1; }
+          # The token is a bearer credential for one hour. Mask it before it can
+          # reach any log through an error message or a set -x.
+          echo "::add-mask::$token"
+
+          # 2. exchange it. AssumeRoleWithWebIdentity is itself unsigned — the
+          #    OIDC token IS the authentication — so no chicken-and-egg.
+          resp="$(curl -fsS --max-time 30 -H 'Accept: application/json' \
+            --data-urlencode "Action=AssumeRoleWithWebIdentity" \
+            --data-urlencode "Version=2011-06-15" \
+            --data-urlencode "RoleArn=${ROLE_ARN}" \
+            --data-urlencode "RoleSessionName=correlix-source-ingest-${GITHUB_RUN_ID}" \
+            --data-urlencode "DurationSeconds=3600" \
+            --data-urlencode "WebIdentityToken=${token}" \
+            "https://sts.${AWS_REGION}.amazonaws.com/")" \
+            || { echo "FATAL: STS refused the OIDC token. Check the role's trust policy: it is scoped to this repository, the \`source-ingest\` environment and this workflow file." >&2; exit 1; }
+
+          python3 - "$resp" <<'PY' >> "$GITHUB_ENV"
+          import json, sys
+          creds = (json.loads(sys.argv[1])["AssumeRoleWithWebIdentityResponse"]
+                   ["AssumeRoleWithWebIdentityResult"]["Credentials"])
+          for gh, aws in (("AWS_ACCESS_KEY_ID", "AccessKeyId"),
+                          ("AWS_SECRET_ACCESS_KEY", "SecretAccessKey"),
+                          ("AWS_SESSION_TOKEN", "SessionToken")):
+              value = creds[aws]
+              # Mask BEFORE the value is written to the environment file.
+              print(f"::add-mask::{value}", file=sys.stderr)
+              print(f"{gh}={value}")
+          PY
+          # The masks above went to stderr so they reach the runner's log
+          # processor without landing in $GITHUB_ENV.
+          echo "credentials assumed (expire in 1h)"
+
+      - name: Ingest
+        env:
+          CORRELIX_SOURCE_ARCHIVE_BUCKET: ${{ vars.AWS_SOURCE_ARCHIVE_BUCKET }}
+          CORRELIX_SOURCE_ARCHIVE_REGION: ${{ vars.AWS_SOURCE_ARCHIVE_REGION }}
+          SELECTOR: ${{ inputs.selector }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_ID: ${{ inputs.release }}
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          args=()
+          # The selector is workflow input, so it is INPUT: only the flags this
+          # workflow offers are accepted, and every value is passed as its own
+          # argv element — never interpolated into a shell command.
+          # shellcheck disable=SC2206
+          words=($SELECTOR)
+          i=0
+          while [ $i -lt ${#words[@]} ]; do
+            case "${words[$i]}" in
+              --all) args+=(--all); i=$((i + 1)) ;;
+              --file|--component)
+                [ $((i + 1)) -lt ${#words[@]} ] || { echo "FATAL: ${words[$i]} needs a value" >&2; exit 1; }
+                args+=("${words[$i]}" "${words[$((i + 1))]}"); i=$((i + 2)) ;;
+              *) echo "FATAL: unsupported selector token '${words[$i]}' — only --all, --file NAME and --component NAME are accepted" >&2; exit 1 ;;
+            esac
+          done
+          [ "$DRY_RUN" != "true" ] || args+=(--dry-run)
+          [ -z "$RELEASE_ID" ] || args+=(--release "$RELEASE_ID")
+          python3 scripts/source-archive.py ingest "${args[@]}"
+
+      - name: Verify everything the archive claims to hold
+        if: ${{ inputs.dry_run == false }}
+        env:
+          CORRELIX_SOURCE_ARCHIVE_BUCKET: ${{ vars.AWS_SOURCE_ARCHIVE_BUCKET }}
+          CORRELIX_SOURCE_ARCHIVE_REGION: ${{ vars.AWS_SOURCE_ARCHIVE_REGION }}
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          # Re-reads and re-hashes every archived object. This is the step that
+          # would catch a bucket someone had "tidied up".
+          python3 scripts/source-archive.py verify --all
+          python3 scripts/oci-compliance.py --validate-archive
+          python3 scripts/source-archive.py retention show
+
+      # The index is the GIT-SIDE half of the archive: without it, nothing can
+      # find or verify the objects. It is uploaded rather than pushed, because a
+      # workflow that writes to the default branch is a workflow that can be
+      # made to write anything to the default branch.
+      - name: Upload the updated archive index for review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source-archive-index
+          path: NetOps_Observability/docs/compliance/source-archive-index.json
+          if-no-files-found: error
+
+      - name: What to do next
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          echo "Download the source-archive-index artifact, commit it to the"
+          echo "repository, and open a PR. The archive is not usable by a release"
+          echo "until docs/compliance/source-archive-index.json records it."

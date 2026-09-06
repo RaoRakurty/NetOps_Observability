@@ -1,0 +1,65 @@
+{
+  "_comment": [
+    "BUCKET RESOURCE POLICY — the floor under every identity policy.",
+    "",
+    "An identity policy says what a role may do. This says what the BUCKET accepts,",
+    "whoever is asking. Both denials below apply to the account root user and to any",
+    "future role someone attaches in a hurry.",
+    "",
+    "${bucket_arn}, ${account_id} and ${admin_principals} are substituted by",
+    "Terraform (templatefile). admin_principals is a JSON array of the ARNs of the",
+    "authorised human administrators — AT LEAST TWO, named by the owner. This",
+    "repository does not name them: an invented administrator is worse than a",
+    "missing one, because it looks like a decision that was made."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyPlaintextTransport",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": ["${bucket_arn}", "${bucket_arn}/*"],
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    },
+    {
+      "Sid": "DenyUnencryptedObjectUploads",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "${bucket_arn}/*",
+      "Condition": {
+        "StringNotEquals": {
+          "s3:x-amz-server-side-encryption": ["AES256", "aws:kms"]
+        }
+      }
+    },
+    {
+      "Sid": "OnlyNamedAdministratorsMayBypassGovernanceRetention",
+      "_why": [
+        "GOVERNANCE mode exists so a mistake made while the process is new can be",
+        "corrected. That correction is an administrative act by a named human, never",
+        "something a workflow can reach. Under COMPLIANCE mode this statement is",
+        "moot — nobody can bypass, including these principals and the account root."
+      ],
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:BypassGovernanceRetention",
+        "s3:PutBucketObjectLockConfiguration",
+        "s3:PutBucketVersioning",
+        "s3:PutLifecycleConfiguration"
+      ],
+      "Resource": ["${bucket_arn}", "${bucket_arn}/*"],
+      "Condition": {
+        "ArnNotEquals": {
+          "aws:PrincipalArn": ${admin_principals}
+        }
+      }
+    }
+  ]
+}
