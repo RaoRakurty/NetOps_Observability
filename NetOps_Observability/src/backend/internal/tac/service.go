@@ -228,6 +228,30 @@ func (s *Service) Review(tenant, incident string, steps []ReviewedStep, ref Temp
 	return reviewed, res, nil
 }
 
+// ErrTemplateRefUnknown is a template/capture id the caller's own scope does not
+// resolve. It is DISTINCT from ErrTemplateInvalid because the answers differ: an
+// unknown id is a bad reference, an invalid list is a refused command.
+var ErrTemplateRefUnknown = errors.New("tac: unknown command template")
+
+// ApplyCapture resolves a capture's template id IN THE CALLER'S OWN SCOPE and
+// folds the untrusted command list into the escalation's plan.
+//
+// It exists so the HTTP adapter carries neither half of that decision. Both
+// halves matter and both are this package's: the provenance a bundle records is
+// SERVER-resolved (a MANIFEST can never name a template nobody can find), and
+// ONE refused line fails the WHOLE list (a collection that quietly dropped the
+// forbidden command and ran the rest would teach an operator that Correlix
+// silently edits their intent).
+func (s *Service) ApplyCapture(ctx context.Context, store TemplateStore, tenant, incident, templateID string,
+	steps []ReviewedStep) (*Plan, TemplateRef, ValidationResult, error) {
+	ref, rerr := ResolveTemplateRef(ctx, store, s.catalog, tenant, templateID)
+	if rerr != nil {
+		return nil, TemplateRef{}, ValidationResult{}, ErrTemplateRefUnknown
+	}
+	plan, res, err := s.Review(tenant, incident, steps, ref)
+	return plan, ref, res, err
+}
+
 // Catalog exposes the loaded taxonomy (the Knowledge page reads it).
 func (s *Service) Catalog() *Catalog { return s.catalog }
 
@@ -697,6 +721,18 @@ type StateView struct {
 	Case           *CaseResult     `json:"case,omitempty"`
 	Remembered     bool            `json:"remembered"`
 	UpdatedAt      time.Time       `json:"updated_at"`
+
+	// DefaultCapture is the vendor default derived from the plan — the command
+	// set Correlix will run unless the customer picks another. It is derived
+	// SILENTLY (docs/design/TAC_CAPTURES_2026-09-06.md): the customer is never
+	// asked to review a plan, so the derivation is on the wire and the plan
+	// table that used to carry it is behind a disclosure.
+	DefaultCapture *CommandCapture `json:"default_capture,omitempty"`
+	// Progress is the collection state of the capture that ran (or is running),
+	// read out of the same Job + Capture the panel already had. It carries ONLY
+	// the commands that FAILED: the successful output goes to the bundle and is
+	// never rendered.
+	Progress *CaptureProgress `json:"progress,omitempty"`
 }
 
 // View renders a state for the wire.
@@ -704,11 +740,18 @@ func (st *State) View() *StateView {
 	if st == nil {
 		return nil
 	}
-	return &StateView{
+	summary := st.Capture.Summary()
+	v := &StateView{
 		IncidentID: st.IncidentID, Classification: st.Classification, Plan: st.Plan,
-		Job: st.Job, Capture: st.Capture.Summary(), Bundles: st.Bundles,
+		Job: st.Job, Capture: summary, Bundles: st.Bundles,
 		Case: st.Case, Remembered: st.Remembered, UpdatedAt: st.UpdatedAt,
+		DefaultCapture: VendorDefaultCapture(st.Plan),
 	}
+	if st.Job != nil || summary != nil {
+		pr := CaptureProgressOf(VendorDefaultCaptureID, st.Job, summary)
+		v.Progress = &pr
+	}
+	return v
 }
 
 // copyState deep-copies the mutable parts of a state for serialisation.

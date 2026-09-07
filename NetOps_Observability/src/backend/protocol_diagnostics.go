@@ -1845,10 +1845,10 @@ func (s *server) tacTemplateAudit(r *http.Request, p tac.TemplatePrincipal, acti
 	})
 }
 
-// The three template route entry points. They resolve s.tacTemplates at REQUEST
-// time (a bound method value would capture a nil surface at registration time),
-// and the module's handlers nil-check their receiver, so an unbuilt surface
-// answers 404 rather than degrading into an unscoped read.
+// The template and capture route entry points. They resolve s.tacTemplates at
+// REQUEST time (a bound method value would capture a nil surface at
+// registration time), and the module's handlers nil-check their receiver, so an
+// unbuilt surface answers 404 rather than degrading into an unscoped read.
 func (s *server) handleTACTemplates(w http.ResponseWriter, r *http.Request) {
 	s.tacTemplates.HandleTemplates(w, r)
 }
@@ -1865,14 +1865,18 @@ func (s *server) handleTACTemplateValidate(w http.ResponseWriter, r *http.Reques
 	s.tacTemplates.HandleValidate(w, r)
 }
 
-// tacApplyReview folds the operator's REVIEWED command list into the escalation's
-// stored plan before the collection starts.
-//
-// Everything that matters happens in internal/tac: this resolves the template id
-// in the caller's own scope (so the MANIFEST's provenance is server-derived) and
-// renders the package's refusal. ONE bad line fails the WHOLE request, naming
-// it — a collection that silently dropped the forbidden command and ran the rest
-// would teach an operator that Correlix quietly edits their intent.
+func (s *server) handleTACCaptures(w http.ResponseWriter, r *http.Request) {
+	s.tacTemplates.HandleCaptures(w, r)
+}
+
+func (s *server) handleTACCaptureSubtree(w http.ResponseWriter, r *http.Request) {
+	s.tacTemplates.HandleCaptureSubtree(w, r)
+}
+
+// tacApplyReview folds the operator's chosen capture into the escalation's plan
+// before the collection starts. Everything that matters is internal/tac's:
+// ApplyCapture resolves the id in the caller's own scope (server-derived
+// provenance) and refuses the WHOLE list on one bad line. This renders it.
 func (s *server) tacApplyReview(w http.ResponseWriter, r *http.Request, claims jwtClaims, inc tacIncident, req tacCollectRequest) bool {
 	steps := make([]tac.ReviewedStep, 0, len(req.Steps))
 	for _, st := range req.Steps {
@@ -1881,13 +1885,8 @@ func (s *server) tacApplyReview(w http.ResponseWriter, r *http.Request, claims j
 			Note:    clampString(st.Note, 800),
 		})
 	}
-	ref, rerr := tac.ResolveTemplateRef(r.Context(), s.tacTemplateStore, s.tacSvc().Catalog(),
-		inc.Tenant, strings.TrimSpace(req.TemplateID))
-	if rerr != nil {
-		writeError(w, http.StatusBadRequest, errors.New("unknown command template"))
-		return false
-	}
-	plan, res, err := s.tacSvc().Review(inc.Tenant, inc.ID, steps, ref)
+	plan, ref, res, err := s.tacSvc().ApplyCapture(r.Context(), s.tacTemplateStore,
+		inc.Tenant, inc.ID, strings.TrimSpace(req.TemplateID), steps)
 	switch {
 	case errors.Is(err, tac.ErrTemplateInvalid):
 		writeJSON(w, http.StatusBadRequest, map[string]any{

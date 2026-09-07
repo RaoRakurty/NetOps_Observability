@@ -3385,6 +3385,94 @@ export type TacTemplateItemResponse = {
   diff_vs_default?: { kind: "added" | "removed" | "reordered"; command: string; intent?: string }[];
 };
 
+// ---------- TAC captures (docs/design/TAC_CAPTURES_2026-09-06.md) ------------
+//
+// A CAPTURE is a named list of commands. Correlix supplies the vendor default
+// (derived from the plan, bound steps only, silently); the customer's team may
+// save their own; and a file may be uploaded for one escalation. A saved capture
+// IS a command template server-side — the same store, the same per-tenant
+// isolation — so nothing here is a second ownership model.
+
+/** Where a capture's commands came from. Closed enum, mirroring internal/tac. */
+export type TacCaptureSource = "vendor-default" | "uploaded" | "template";
+
+/** One capture's — or one command's — collection state. */
+export type TacCaptureStatus = "queued" | "running" | "done" | "partial" | "failed";
+
+export type TacCaptureCommand = {
+  command: string;
+  note?: string;
+  /** The line in the UPLOADED FILE this command came from, 1-based. */
+  line?: number;
+};
+
+// NOTE the name: `TacCapture` already means "one collection's OUTPUT summary"
+// on this surface, and it still does. A TacCommandCapture is what will be RUN.
+export type TacCommandCapture = {
+  id: string;
+  name: string;
+  source: TacCaptureSource;
+  dialect: string;
+  commands: TacCaptureCommand[];
+  created_by?: string;
+  created_at?: string;
+};
+
+/** One command's row. Only FAILED commands are ever sent — successful output
+ *  goes to the bundle and is never rendered. */
+export type TacCommandStatus = {
+  command: string;
+  status: TacCaptureStatus;
+  reason?: string;
+};
+
+/** GET /api/incidents/{id}/tac → state.progress. */
+export type TacCaptureProgress = {
+  capture_id: string;
+  status: TacCaptureStatus;
+  total: number;
+  done: number;
+  failed: number;
+  commands: TacCommandStatus[];
+};
+
+/** One refused line of an upload: the line number IN THE UPLOADED FILE, and the
+ *  rule that refused it by name. One refusal refuses the whole file. */
+export type TacCaptureRefusal = {
+  line: number;
+  command: string;
+  family?: string;
+  rule?: string;
+  reason: string;
+};
+
+/** GET /api/tac/captures */
+export type TacCaptureListResponse = {
+  captures: TacCommandCapture[];
+  count: number;
+  limit: number;
+  formats: string[];
+  note: string;
+};
+
+/** POST /api/tac/captures/upload — the parsed, policy-checked capture. Nothing
+ *  is stored until it is saved. */
+export type TacCaptureUploadResponse = {
+  capture: TacCommandCapture;
+  validation?: TacValidation;
+  note?: string;
+};
+
+/** POST /api/tac/captures — the body carries NO tenant: ownership is stamped
+ *  from the token and a tenant on the wire is a 400. */
+export type TacCaptureWrite = {
+  dialect: string;
+  name: string;
+  commands: { command: string; note?: string }[];
+};
+
+export type TacCaptureResponse = { capture: TacCommandCapture; validation?: TacValidation };
+
 /** One difference between the plan Correlix proposed and the list a human
  *  approved. It is recorded in the bundle MANIFEST. */
 export type TacPlanEdit = {
@@ -3589,6 +3677,12 @@ export type TacState = {
   bundles: TacStoredBundle[];
   case?: TacCaseResult;
   updated_at: string;
+  /** The vendor default capture, derived from the plan's BOUND steps. Derived
+   *  silently: the customer is never asked to review a plan. */
+  default_capture?: TacCommandCapture;
+  /** The collection state of the capture that ran, carrying ONLY the commands
+   *  that failed. */
+  progress?: TacCaptureProgress;
 };
 
 /** GET /api/incidents/{id}/tac */
@@ -6211,6 +6305,36 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ dialect, commands }),
     }),
+
+  // ---------- TAC captures --------------------------------------------------
+  // A capture is a named list of commands. Saved ones are this tenant's own
+  // rows; the vendor default arrives with the escalation state and is never
+  // fetched. Same gates as the templates, because they are the same rows.
+  /** This tenant's saved captures, optionally for one dialect. */
+  tacCaptures: (dialect?: string) =>
+    request<TacCaptureListResponse>(
+      `/api/tac/captures${dialect ? `?dialect=${encodeURIComponent(dialect)}` : ""}`,
+    ),
+  /** One saved capture. A cross-tenant or unknown id answers the same 404. */
+  tacCapture: (id: string) =>
+    request<TacCaptureResponse>(`/api/tac/captures/${encodeURIComponent(id)}`),
+  /** Save a capture for this tenant. The owner is stamped from the token. */
+  tacCaptureSave: (body: TacCaptureWrite) =>
+    request<TacCaptureResponse>("/api/tac/captures", { method: "POST", body: JSON.stringify(body) }),
+  /**
+   * Upload a command list and get a capture back — it is NOT stored.
+   *
+   * The file's bytes ARE the body: the name rides on the query string, where the
+   * server uses it only to pick a parser. A multipart envelope would buy nothing
+   * and would put a boundary between the browser and a 1 MiB bound the server
+   * applies to the body itself.
+   */
+  tacCaptureUpload: (file: File, dialect: string) =>
+    request<TacCaptureUploadResponse>(
+      `/api/tac/captures/upload?filename=${encodeURIComponent(file.name)}` +
+      (dialect ? `&dialect=${encodeURIComponent(dialect)}` : ""),
+      { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } },
+    ),
 
   // ---------- TAC learning backlog (tracker 243) ---------------------------
   // Reads need infrastructure:read, writes infrastructure:write. Per-tenant

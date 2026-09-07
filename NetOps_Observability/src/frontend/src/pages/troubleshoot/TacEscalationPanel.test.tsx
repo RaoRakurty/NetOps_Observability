@@ -3,24 +3,27 @@
 
 // TacEscalationPanel.test.tsx — the TAC escalation flow on the Investigate page.
 //
-// Every step of the flow is covered, and for each one the HONEST state is
-// covered beside the happy path, because the honest state is the feature:
-//  · classify — a matched class with the exact evidence rows that scored it and
-//    the alternatives; and `classified:false`, which shows the server's own note
-//    and never invents a class
-//  · plan     — one table: step number, what it collects, the command, one
-//    chip; a `doc_claimed` command chipped "From vendor docs"; the checks this
-//    platform cannot do folded behind ONE line; `has_plan:false` rendered as
-//    the honest no-plan state. The rework (owner, 2026-09-06: "bunch of links
-//    … this page is unusable") is guarded here: a step carrying hundreds of
-//    citations may still render at most ONE reference link, and no intent id
-//    may reach the visible row.
-//  · collect  — a 503 rendering the server's own collect_note with the Start
-//    button disabled; live per-command progress; cancel; the paste fallback
-//  · bundle   — the download called with the profile and a safe file name
-//  · case     — an unconfigured connector greyed and unpressable, the pre-filled
-//    form with its required fields marked, and a submit that is never automatic
-//  · escaping — device output carrying markup renders as TEXT (§15)
+// Design of record for what the customer SEES:
+// docs/design/TAC_CAPTURES_2026-09-06.md (owner decision). The guard it asks for
+// is the spine of this file:
+//
+//   · no plan table, no intent id, no citation link, no verification chip in the
+//     escalation step — every one of them is behind "What Correlix is doing"
+//   · a capture row is a name, a count and a status; its commands are HIDDEN
+//     until the chevron is used
+//   · after a partial collection ONLY the failed commands are listed, each with
+//     its plain reason — the successful output is in the bundle and is never
+//     rendered
+//   · an upload round-trips for each format, and a refusal names the LINE in the
+//     operator's own file and the rule that refused it
+//   · the behind-the-scenes control is collapsed by default and, when opened,
+//     carries the class, the plan and the collection log
+//
+// And the honest states of every other step are covered beside their happy path,
+// because the honest state is the feature: `classified:false` shows the server's
+// own note and never an invented class; a 503 on collect renders the server's
+// own collect_note; a connector with no credentials is greyed and unpressable;
+// device output carrying markup renders as TEXT (§15).
 //
 // The honest-state sentences are asserted BY IMPORT from tacModel, never as
 // copy-pasted literals: a reworded state must be reworded in one place.
@@ -30,6 +33,7 @@ import { render, screen, cleanup, fireEvent, waitFor, within, act } from "@testi
 import type {
   TacCaseFormResponse,
   TacClassifyResponse,
+  TacCommandCapture,
   TacPlan,
   TacPlanResponse,
   TacState,
@@ -40,13 +44,16 @@ const mocks = vi.hoisted(() => ({
   tacState: vi.fn(), tacClassify: vi.fn(), tacPlan: vi.fn(), tacCollect: vi.fn(),
   tacCancelCollect: vi.fn(), tacDownloadBundle: vi.fn(), tacCaseForm: vi.fn(),
   tacCaseSubmit: vi.fn(), devices: vi.fn(),
-  // The command review (tracker 250).
-  tacTemplates: vi.fn(), tacTemplateValidate: vi.fn(), tacTemplateSave: vi.fn(),
+  // Captures (docs/design/TAC_CAPTURES_2026-09-06.md).
+  tacCaptures: vi.fn(), tacCaptureUpload: vi.fn(), tacCaptureSave: vi.fn(),
 }));
 vi.mock("../../services/api", () => ({ api: { ...mocks } }));
 
 import TacEscalationPanel from "./TacEscalationPanel";
 import {
+  BEHIND_LABEL,
+  CAPTURES_NEED_DEVICE,
+  CAPTURE_STATUS_LABEL,
   CONNECTOR_CHIP,
   CONNECTOR_NOT_CONFIGURED,
   NOTHING_SCORED_NOTE,
@@ -54,19 +61,14 @@ import {
   NO_CAPTURE_YET,
   NO_CASE_CONNECTOR,
   PASTE_INVITE,
-  PLAN_NEEDS_DEVICE,
-  PLAN_LEGEND,
   REDACTION_SHORT,
-  REVIEW_POLICY_NOTE,
-  REVIEW_REFUSED,
   STATE_READ_FAILED,
-  STATUS_CHIP,
+  UPLOAD_FORMATS_LINE,
   bundleFileName,
+  commandCountLine,
   connectorTopic,
   missingOutputsLine,
   showAllConnectorsLabel,
-  unavailableLine,
-  unboundReason,
 } from "./tacModel";
 
 const INC = "corr-abc1234567890";
@@ -159,10 +161,24 @@ const plan = (over: Partial<TacPlan> = {}): TacPlan => ({
   ...over,
 });
 
+/** The vendor default the SERVER derives from the plan's bound steps. */
+const defaultCapture = (over: Partial<TacCommandCapture> = {}): TacCommandCapture => ({
+  id: "capture:vendor-default",
+  name: "Cisco IOS-XE default",
+  source: "vendor-default",
+  dialect: "cisco-iosxe",
+  commands: [
+    { command: "show version", note: "Software version" },
+    { command: "show ip ospf neighbor detail", note: "OSPF neighbours, detailed" },
+  ],
+  ...over,
+});
+
 const stateWith = (over: Partial<TacState> = {}): TacState => ({
   incident_id: INC,
   classification: classification() as never,
   plan: plan(),
+  default_capture: defaultCapture(),
   bundles: [],
   updated_at: "2026-09-05T10:00:00Z",
   ...over,
@@ -194,10 +210,11 @@ const caseFormResponse = (over: Partial<TacCaseFormResponse> = {}): TacCaseFormR
   ...over,
 });
 
-/** Render and let the mount reads settle inside act(). */
+/** Render and let the mount reads AND the silent plan build settle inside act(). */
 async function show(res: TacStateResponse = stateResponse()) {
   mocks.tacState.mockResolvedValue(res);
   const utils = render(<TacEscalationPanel incidentId={INC} />);
+  await act(async () => { await Promise.resolve(); });
   await act(async () => { await Promise.resolve(); });
   return utils;
 }
@@ -206,17 +223,16 @@ const click = async (name: string | RegExp) => {
   await act(async () => { fireEvent.click(screen.getByRole("button", { name })); });
 };
 
-/** Every command accepted, labelled the way the server labels them. */
-const allOK = (commands: string[]) => ({
-  validation: {
-    dialect: "cisco-iosxe",
-    ok: true,
-    refused: 0,
-    lines: commands.map((command, index) => ({
-      index, command, ok: true, origin: "catalog" as const, title: command,
-    })),
-  },
-});
+/** Open the ONE "what is happening behind the scene" control. Its body is
+ *  mounted only while open, so everything it holds is absent until this runs. */
+const openBehind = async () => {
+  await act(async () => { fireEvent.click(screen.getByTestId("tac-behind-toggle")); });
+  return screen.getByTestId("tac-behind-body");
+};
+
+/** The escalation step as the customer sees it — everything except the one
+ *  disclosure. Assertions about "the visible step" read THIS. */
+const visibleStep = () => screen.getByTestId("tac-captures");
 
 beforeEach(() => {
   Object.values(mocks).forEach((m) => m.mockReset());
@@ -224,10 +240,11 @@ beforeEach(() => {
     { id: "leaf1", name: "leaf1", address: "10.0.0.1", source: "snmp", last_seen: "2026-09-05T09:00:00Z" },
     { id: "spine1", name: "spine1", address: "10.0.0.2", source: "snmp", last_seen: "2026-09-05T09:00:00Z" },
   ]);
-  mocks.tacTemplates.mockResolvedValue({
-    templates: [], defaults: [], count: 0, limit: 200, dialects: ["cisco-iosxe"], note: "",
+  mocks.tacPlan.mockResolvedValue(planResponse());
+  mocks.tacCaptures.mockResolvedValue({
+    captures: [], count: 0, limit: 200,
+    formats: ["txt", "csv", "json", "yaml", "docx"], note: "",
   });
-  mocks.tacTemplateValidate.mockImplementation(async (_d: string, commands: string[]) => allOK(commands));
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
@@ -248,43 +265,347 @@ describe("the escalation panel opens on one button", () => {
   });
 });
 
-// ── step 2: class + why ──────────────────────────────────────────────────────
+// ── the extraction is silent (owner, 2026-09-06) ─────────────────────────────
 
-describe("classify", () => {
-  it("shows the class, the evidence rows that scored it, and the alternatives", async () => {
-    await show();
-    mocks.tacClassify.mockResolvedValue(classifyResponse());
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith({ plan: undefined }) }));
-    await click("Escalate to TAC");
-
-    expect(mocks.tacClassify).toHaveBeenCalledWith(INC);
-    expect(screen.getByText("OSPF adjacency will not form or is stuck")).toBeInTheDocument();
-    expect(screen.getByText("signature ospf-exstart-mtu · weight 5")).toBeInTheDocument();
-    expect(screen.getByText("OSPF flapping link")).toBeInTheDocument();
-    expect(screen.getByText(/score 2/)).toBeInTheDocument();
-    expect(screen.getByText(/What TAC opens first:/)).toBeInTheDocument();
+describe("classification and command extraction happen without being asked", () => {
+  it("builds the plan for the incident's own device with no button press", async () => {
+    await show(stateResponse({ state: stateWith({ plan: undefined, default_capture: undefined }) }));
+    await waitFor(() => expect(mocks.tacPlan).toHaveBeenCalledWith(INC, {
+      device_id: "leaf1", include_optional: false, class_id: "ospf-adjacency",
+    }));
+    // And the step never offers "build the plan" — it is not the customer's step.
+    expect(screen.queryByRole("button", { name: /Build the command plan/ })).toBeNull();
   });
 
-  it("shows what it was classified ON and what it was classified WITHOUT", async () => {
-    await show();
-    mocks.tacClassify.mockResolvedValue(classifyResponse());
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith({ plan: undefined }) }));
-    await click("Escalate to TAC");
-
-    const ev = screen.getByTestId("tac-evidence");
-    expect(ev).toHaveTextContent("Classified on: correlation object · case timeline");
-    expect(ev).toHaveTextContent("Classified without: incident register (not readable for this id)");
+  it("shows no class, no intent id and no citation link in the escalation step", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    const step = visibleStep();
+    expect(step.textContent).not.toContain("ospf-adjacency");
+    expect(step.textContent).not.toContain("system.version");
+    expect(step.textContent).not.toContain("ospf.neighbors.detail");
+    expect(step.textContent).not.toContain("From vendor docs");
+    expect(step.querySelector("a")).toBeNull();
+    // The whole panel carries no plan table and no citation while the one
+    // disclosure is shut — this is mounting, not CSS.
+    expect(screen.queryByTestId("tac-plan-table")).toBeNull();
+    expect(screen.queryByTestId("tac-behind-body")).toBeNull();
   });
 
-  it("offers the FULL class list as an override", async () => {
+  it("asks for a device before there is anything to collect", async () => {
+    await show(stateResponse({
+      devices: [], state: stateWith({ plan: undefined, default_capture: undefined }),
+    }));
+    expect(screen.getByText(CAPTURES_NEED_DEVICE)).toBeInTheDocument();
+  });
+});
+
+// ── captures ─────────────────────────────────────────────────────────────────
+
+describe("captures", () => {
+  it("lists the vendor default with its count, and hides its commands", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    const row = screen.getByTestId("tac-capture-capture:vendor-default");
+    expect(row).toHaveTextContent("Cisco IOS-XE default");
+    expect(row).toHaveTextContent(commandCountLine(2));
+    // Collapsed by default: the commands are not in the document at all.
+    expect(screen.queryByTestId("tac-capture-cmds-capture:vendor-default")).toBeNull();
+    expect(row.textContent).not.toContain("show version");
+    expect(within(row).getByRole("button", { name: /Commands in Cisco IOS-XE default/ }))
+      .toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("reveals the commands when the chevron is used, and hides them again", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    await click(/Commands in Cisco IOS-XE default/);
+    const list = screen.getByTestId("tac-capture-cmds-capture:vendor-default");
+    expect(within(list).getByText("show version")).toBeInTheDocument();
+    expect(within(list).getByText("show ip ospf neighbor detail")).toBeInTheDocument();
+    await click(/Commands in Cisco IOS-XE default/);
+    expect(screen.queryByTestId("tac-capture-cmds-capture:vendor-default")).toBeNull();
+  });
+
+  it("reads Queued before anything has run", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    const row = screen.getByTestId("tac-capture-capture:vendor-default");
+    expect(within(row).getByText(CAPTURE_STATUS_LABEL.queued)).toBeInTheDocument();
+  });
+
+  it("shows Running while the collection is in flight", async () => {
+    await show(stateResponse({
+      state: stateWith({
+        job: { id: "j1", status: "running", started_at: "t", total: 2, done: 1, progress: [] },
+        progress: {
+          capture_id: "capture:vendor-default", status: "running",
+          total: 2, done: 1, failed: 0, commands: [],
+        },
+      }),
+    }));
+    const row = screen.getByTestId("tac-capture-capture:vendor-default");
+    expect(within(row).getByText(CAPTURE_STATUS_LABEL.running)).toBeInTheDocument();
+  });
+
+  it("lists ONLY the commands that failed after a partial collection", async () => {
+    await show(stateResponse({
+      state: stateWith({
+        job: { id: "j1", status: "done", started_at: "t", total: 2, done: 2, progress: [] },
+        progress: {
+          capture_id: "capture:vendor-default", status: "partial", total: 2, done: 1, failed: 1,
+          commands: [{ command: "show ip ospf neighbor detail", status: "failed", reason: "timed out" }],
+        },
+      }),
+    }));
+    const row = screen.getByTestId("tac-capture-capture:vendor-default");
+    expect(within(row).getByText(CAPTURE_STATUS_LABEL.partial)).toBeInTheDocument();
+    const fails = screen.getByTestId("tac-capture-failed-capture:vendor-default");
+    expect(fails).toHaveTextContent("show ip ospf neighbor detail — timed out");
+    // The command that WORKED is not rendered — its output is in the bundle.
+    expect(fails.textContent).not.toContain("show version");
+    expect(fails.querySelector(".tac-capture-fail")).not.toBeNull();
+  });
+
+  it("lists nothing under a clean collection", async () => {
+    await show(stateResponse({
+      state: stateWith({
+        job: { id: "j1", status: "done", started_at: "t", total: 2, done: 2, progress: [] },
+        progress: {
+          capture_id: "capture:vendor-default", status: "done",
+          total: 2, done: 2, failed: 0, commands: [],
+        },
+      }),
+    }));
+    const row = screen.getByTestId("tac-capture-capture:vendor-default");
+    expect(within(row).getByText(CAPTURE_STATUS_LABEL.done)).toBeInTheDocument();
+    expect(screen.queryByTestId("tac-capture-failed-capture:vendor-default")).toBeNull();
+  });
+
+  it("never borrows a verdict for a capture that did not run", async () => {
+    mocks.tacCaptures.mockResolvedValue({
+      captures: [{
+        id: "tpl-1", name: "ACME baseline", source: "template", dialect: "cisco-iosxe",
+        commands: [{ command: "show ip route summary" }],
+      }],
+      count: 1, limit: 200, formats: ["txt"], note: "",
+    });
+    await show(stateResponse({
+      state: stateWith({
+        progress: {
+          capture_id: "capture:vendor-default", status: "done",
+          total: 2, done: 2, failed: 0, commands: [],
+        },
+      }),
+    }));
+    const saved = await screen.findByTestId("tac-capture-tpl-1");
+    expect(within(saved).getByText(CAPTURE_STATUS_LABEL.queued)).toBeInTheDocument();
+    expect(mocks.tacCaptures).toHaveBeenCalledWith("cisco-iosxe");
+  });
+
+  it("collects Correlix's own capture without sending a command list", async () => {
+    mocks.tacCollect.mockResolvedValue({ job: { id: "j1", status: "running" }, state: stateWith() });
+    await show(stateResponse({ state: stateWith() }));
+    await click(/Start the collection/);
+    expect(mocks.tacCollect).toHaveBeenCalledWith(INC, {});
+  });
+
+  it("collects a saved capture as a template, by id", async () => {
+    mocks.tacCaptures.mockResolvedValue({
+      captures: [{
+        id: "tpl-1", name: "ACME baseline", source: "template", dialect: "cisco-iosxe",
+        commands: [{ command: "show ip route summary" }, { command: "show logging" }],
+      }],
+      count: 1, limit: 200, formats: ["txt"], note: "",
+    });
+    mocks.tacCollect.mockResolvedValue({ job: { id: "j1", status: "running" }, state: stateWith() });
+    await show(stateResponse({ state: stateWith() }));
+    const saved = await screen.findByTestId("tac-capture-tpl-1");
+    await act(async () => { fireEvent.click(within(saved).getByRole("radio")); });
+    await click(/Start the collection/);
+    expect(mocks.tacCollect).toHaveBeenCalledWith(INC, {
+      steps: [{ command: "show ip route summary" }, { command: "show logging" }],
+      template_id: "tpl-1",
+    });
+  });
+});
+
+// ── upload ───────────────────────────────────────────────────────────────────
+
+describe("upload your own command list", () => {
+  const file = (name: string, body = "show version\n") =>
+    new File([body], name, { type: "application/octet-stream" });
+
+  const drop = async (f: File) => {
+    const input = screen.getByTestId("tac-upload") as HTMLInputElement;
+    await act(async () => { fireEvent.change(input, { target: { files: [f] } }); });
+  };
+
+  it("names the formats it accepts", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    expect(screen.getByText(UPLOAD_FORMATS_LINE)).toBeInTheDocument();
+    expect((screen.getByTestId("tac-upload") as HTMLInputElement).accept).toContain(".docx");
+  });
+
+  it("adds the uploaded capture as a row and selects it, with its commands hidden", async () => {
+    mocks.tacCaptureUpload.mockResolvedValue({
+      capture: {
+        id: "upload:txt", name: "acme runbook", source: "uploaded", dialect: "cisco-iosxe",
+        commands: [{ command: "show version", line: 3 }, { command: "show logging", line: 4 }],
+      },
+    });
+    await show(stateResponse({ state: stateWith() }));
+    await drop(file("acme runbook.txt"));
+
+    expect(mocks.tacCaptureUpload).toHaveBeenCalledWith(expect.any(File), "cisco-iosxe");
+    const row = await screen.findByTestId("tac-capture-upload:txt");
+    expect(row).toHaveTextContent("acme runbook");
+    expect(row).toHaveTextContent(commandCountLine(2));
+    expect(screen.queryByTestId("tac-capture-cmds-upload:txt")).toBeNull();
+    expect(within(row).getByRole("radio")).toBeChecked();
+  });
+
+  it("refuses the WHOLE file by line and rule, and adds no row", async () => {
+    mocks.tacCaptureUpload.mockRejectedValue(new Error(
+      '400 Bad Request: {"error":"That file was not accepted: nothing in it will run until every line passes.",' +
+      '"refusals":[{"line":5,"command":"configure terminal","family":"config","rule":"configure",' +
+      '"reason":"refused by the output-only policy (config): it changes configuration"}]}',
+    ));
+    await show(stateResponse({ state: stateWith() }));
+    await drop(file("bad.txt"));
+
+    const refusals = await screen.findByTestId("tac-upload-refusals");
+    expect(refusals).toHaveTextContent("Line 5: configure terminal");
+    expect(refusals).toHaveTextContent("it changes configuration");
+    expect(refusals).toHaveTextContent("rule `configure`");
+    expect(screen.queryByTestId("tac-capture-upload:txt")).toBeNull();
+    // Nothing partial was accepted: the row list still holds only the default.
+    const rows = screen.getByTestId("tac-capture-rows").querySelectorAll("li.tac-capture-row");
+    expect(rows).toHaveLength(1);
+  });
+
+  it("says what did not happen when the file itself cannot be read", async () => {
+    mocks.tacCaptureUpload.mockRejectedValue(new Error("400 Bad Request: tac: that file type is not one Correlix reads"));
+    await show(stateResponse({ state: stateWith() }));
+    await drop(file("set.xlsx"));
+    expect(await screen.findByTestId("tac-upload-error")).toHaveTextContent(/not one Correlix reads/);
+  });
+
+  it("saves an uploaded capture as a template for this tenant", async () => {
+    mocks.tacCaptureUpload.mockResolvedValue({
+      capture: {
+        id: "upload:txt", name: "acme runbook", source: "uploaded", dialect: "cisco-iosxe",
+        commands: [{ command: "show version" }],
+      },
+    });
+    mocks.tacCaptureSave.mockResolvedValue({
+      capture: {
+        id: "tpl-9", name: "acme runbook", source: "template", dialect: "cisco-iosxe",
+        commands: [{ command: "show version" }],
+      },
+    });
+    await show(stateResponse({ state: stateWith() }));
+    await drop(file("acme runbook.txt"));
+    await screen.findByTestId("tac-capture-save");
+    await act(async () => { fireEvent.click(screen.getByTestId("tac-capture-save-btn")); });
+
+    expect(mocks.tacCaptureSave).toHaveBeenCalledWith({
+      dialect: "cisco-iosxe", name: "acme runbook",
+      commands: [{ command: "show version", note: undefined }],
+    });
+    await waitFor(() => expect(screen.getByTestId("tac-capture-save-note")).toHaveTextContent("Saved"));
+  });
+
+  it("offers no save control for Correlix's own capture", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    expect(screen.queryByTestId("tac-capture-save")).toBeNull();
+  });
+});
+
+// ── collect ──────────────────────────────────────────────────────────────────
+
+describe("collect", () => {
+  const unwired = () => stateResponse({
+    state: stateWith(), can_collect: false, collect_note: COLLECT_NOTE,
+  });
+
+  it("disables the start and shows the server's own note when collection is unwired", async () => {
+    await show(unwired());
+    expect(screen.getByTestId("tac-collect-note")).toHaveTextContent(COLLECT_NOTE);
+    expect(screen.getByRole("button", { name: /Start the collection/ })).toBeDisabled();
+  });
+
+  it("renders a 503 from the start as the server's own sentence", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    mocks.tacCollect.mockRejectedValue(new Error(`503 Service Unavailable: {"error":${JSON.stringify(COLLECT_NOTE)}}`));
+    await click(/Start the collection/);
+    expect(screen.getByTestId("tac-collect-error")).toHaveTextContent(COLLECT_NOTE);
+  });
+
+  it("cancels a running collection", async () => {
+    mocks.tacCancelCollect.mockResolvedValue({ cancelled: true });
+    await show(stateResponse({
+      state: stateWith({
+        job: { id: "j1", status: "running", started_at: "t", total: 2, done: 0, progress: [] },
+      }),
+    }));
+    await click("Stop");
+    expect(mocks.tacCancelCollect).toHaveBeenCalledWith(INC);
+  });
+
+  it("offers no paste wall when the gateway can collect and nothing has failed", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    expect(screen.queryByTestId("tac-paste")).toBeNull();
+  });
+
+  it("offers ONE control over the bound steps only, never an unbound intent", async () => {
+    await show(stateResponse({ state: stateWith(), can_collect: false, collect_note: COLLECT_NOTE }));
+    expect(screen.getByTestId("tac-paste")).toBeInTheDocument();
+    expect(screen.getByText(PASTE_INVITE)).toBeInTheDocument();
+    const picker = screen.getByTestId("tac-paste-picker") as HTMLSelectElement;
+    const options = Array.from(picker.options).map((o) => o.value);
+    expect(options).toEqual(["system.version", "ospf.neighbors.detail"]);
+    expect(options).not.toContain("ospf.database.router");
+    expect(screen.getByTestId("tac-paste-count")).toHaveTextContent(missingOutputsLine(2, 2));
+  });
+
+  it("files ONE pasted output for the step the operator picked", async () => {
+    mocks.tacCollect.mockResolvedValue({ job: { id: "j1", status: "done" }, state: stateWith() });
+    await show(stateResponse({ state: stateWith(), can_collect: false, collect_note: COLLECT_NOTE }));
+    fireEvent.change(screen.getByTestId("tac-paste-picker"), { target: { value: "ospf.neighbors.detail" } });
+    fireEvent.change(screen.getByLabelText("Pasted output"), { target: { value: "Neighbor 10.0.0.2 FULL" } });
+    await click("Add output");
+    expect(mocks.tacCollect).toHaveBeenCalledWith(INC, {
+      outputs: [{ intent: "ospf.neighbors.detail", command: "show ip ospf neighbor detail", output: "Neighbor 10.0.0.2 FULL" }],
+    });
+  });
+});
+
+// ── behind the scenes ────────────────────────────────────────────────────────
+
+describe("what Correlix is doing", () => {
+  it("is one control, collapsed, and mounts nothing until it is opened", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    const toggle = screen.getByTestId("tac-behind-toggle");
+    expect(toggle).toHaveTextContent(BEHIND_LABEL);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("tac-behind-body")).toBeNull();
+  });
+
+  it("shows the class it chose and the evidence rows that scored it", async () => {
     await show();
     mocks.tacClassify.mockResolvedValue(classifyResponse());
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith({ plan: undefined }) }));
+    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
     await click("Escalate to TAC");
+    const body = await openBehind();
 
-    const sel = screen.getByLabelText("Change the issue class") as HTMLSelectElement;
-    expect(Array.from(sel.options).map((o) => o.value))
-      .toEqual(["ospf-adjacency", "bgp-session", "generic"]);
+    expect(body).toHaveTextContent("OSPF adjacency will not form or is stuck");
+    expect(body).toHaveTextContent("signature ospf-exstart-mtu · weight 5");
+    expect(body).toHaveTextContent("OSPF flapping link");
+    expect(body).toHaveTextContent(/score 2/);
+    expect(body).toHaveTextContent(/What TAC opens first:/);
+    expect(screen.getByTestId("tac-evidence")).toHaveTextContent(
+      "Classified on: correlation object · case timeline",
+    );
+    expect(screen.getByTestId("tac-evidence")).toHaveTextContent(
+      "Classified without: incident register (not readable for this id)",
+    );
   });
 
   it("never invents a class when nothing scored", async () => {
@@ -295,9 +616,10 @@ describe("classify", () => {
     });
     mocks.tacClassify.mockResolvedValue(classifyResponse({ classification: unclassified as never }));
     mocks.tacState.mockResolvedValue(stateResponse({
-      state: stateWith({ classification: unclassified as never, plan: undefined }),
+      state: stateWith({ classification: unclassified as never }),
     }));
     await click("Escalate to TAC");
+    await openBehind();
 
     expect(screen.getByText("nothing scored")).toBeInTheDocument();
     expect(screen.getByText(NOTHING_SCORED_NOTE)).toBeInTheDocument();
@@ -306,354 +628,97 @@ describe("classify", () => {
     // (sweep 5, tracker 270) — they carry `fact-line`, and the guard counts notes.
     expect(screen.getByText("No evidence row scored this class.").className).toContain("fact-line");
   });
-});
 
-// ── step 3: plan preview ─────────────────────────────────────────────────────
-
-describe("plan preview", () => {
-  const openClassified = async (over: Partial<TacState> = {}) => {
+  it("offers the FULL class list as an override, and re-plans on it", async () => {
     await show();
     mocks.tacClassify.mockResolvedValue(classifyResponse());
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith({ plan: undefined, ...over }) }));
+    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
     await click("Escalate to TAC");
-  };
+    await openBehind();
 
-  it("asks for a device before anything is planned", async () => {
-    await openClassified();
-    expect(screen.getByText(PLAN_NEEDS_DEVICE)).toBeInTheDocument();
-    expect(screen.queryByTestId("tac-plan")).toBeNull();
+    const sel = screen.getByLabelText("Issue class") as HTMLSelectElement;
+    expect(Array.from(sel.options).map((o) => o.value))
+      .toEqual(["ospf-adjacency", "bgp-session", "generic"]);
+    await act(async () => { fireEvent.change(sel, { target: { value: "bgp-session" } }); });
+    await waitFor(() => expect(mocks.tacPlan).toHaveBeenCalledWith(INC, {
+      device_id: "leaf1", include_optional: false, class_id: "bgp-session",
+    }));
   });
 
-  it("sends the device, class, optional toggle and typed target", async () => {
-    await openClassified();
-    mocks.tacPlan.mockResolvedValue(planResponse());
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
+  it("carries the plan table with its sources and verification state", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    const body = await openBehind();
+    const table = within(body).getByTestId("tac-plan-table");
+    const rows = table.querySelectorAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("Software version");
+    expect(rows[0].textContent).toContain("show version");
+    expect(rows[1].textContent).toContain("From vendor docs");
+    expect(within(table).getByRole("link", { name: /Vendor page for OSPF neighbours/ }))
+      .toHaveAttribute("href", "https://example.invalid/ospf");
+    // The intent id stays on the row's tooltip for support, never in a cell.
+    expect(rows[0].getAttribute("title")).toContain("system.version");
+    expect(rows[0].textContent).not.toContain("system.version");
+  });
 
-    fireEvent.change(screen.getByLabelText("Interface (optional)"), { target: { value: "Gi0/1" } });
-    fireEvent.click(screen.getByLabelText(/Include the optional captures/));
-    await click("Build the command plan");
-
-    expect(mocks.tacPlan).toHaveBeenCalledWith(INC, {
-      device_id: "leaf1",
-      class_id: "ospf-adjacency",
-      include_optional: true,
+  it("sends the typed target on Rebuild", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    await openBehind();
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Interface"), { target: { value: "Gi0/1" } });
+      fireEvent.click(screen.getByLabelText(/Include the optional captures/));
+    });
+    await act(async () => { fireEvent.click(screen.getByTestId("tac-rebuild")); });
+    expect(mocks.tacPlan).toHaveBeenLastCalledWith(INC, {
+      device_id: "leaf1", include_optional: true, class_id: "ospf-adjacency",
       target: { interface: "Gi0/1" },
     });
   });
 
-  it("renders the plan as one numbered table: what it collects, the command, one chip", async () => {
-    await openClassified();
-    mocks.tacPlan.mockResolvedValue(planResponse());
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
-    await click("Build the command plan");
-
-    const table = within(screen.getByTestId("tac-plan-table"));
-    expect(table.getByText("show version")).toBeInTheDocument();
-    expect(table.getByText("show ip ospf neighbor detail")).toBeInTheDocument();
-    expect(table.getByText("Software version")).toBeInTheDocument();
-    // The numbers are the collection order, and they start at 1.
-    expect(table.getByText("1")).toBeInTheDocument();
-    expect(table.getByText("2")).toBeInTheDocument();
-    // One chip per row, and the legend explains all three exactly once.
-    expect(table.getByText(STATUS_CHIP.verified)).toBeInTheDocument();
-    expect(table.getByText(STATUS_CHIP["vendor-docs"])).toBeInTheDocument();
-    expect(screen.getAllByText(PLAN_LEGEND)).toHaveLength(1);
-  });
-
-  it("puts the class, the device, the CLI and the estimate on ONE header line", async () => {
-    await openClassified();
-    mocks.tacPlan.mockResolvedValue(planResponse());
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
-    await click("Build the command plan");
-
-    expect(
-      screen.getByText(
-        "OSPF adjacency will not form or is stuck on leaf1 · Cisco IOS-XE · 2.0 KB · about 45 s",
-      ),
-    ).toBeInTheDocument();
-    // The version strings are provenance, not copy: they live in the tooltip.
-    expect(screen.getByTitle(/correlix-tac-plan-cisco-iosxe-2026-09-05/)).toBeInTheDocument();
-  });
-
-  it("states the redaction promise once, as ONE line, with the server's own words on it", async () => {
-    await openClassified();
-    mocks.tacPlan.mockResolvedValue(planResponse());
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
-    await click("Build the command plan");
-
-    // NOT on the plan preview any more.
-    expect(within(screen.getByTestId("tac-plan")).queryByText(REDACTION_SHORT)).toBeNull();
-    const line = screen.getByTestId("tac-redaction");
-    expect(line).toHaveTextContent(REDACTION_SHORT);
-    // The server's own full promise is never paraphrased out of existence — it
-    // rides on the line, and the (i) answers what "redacted" means.
-    expect(line).toHaveAttribute(
-      "title",
-      "Secrets, community strings and keys are removed from the bundle; tenant ids are kept.",
-    );
-    expect(within(line).getByRole("button", { name: /Ask Iris/ })).toBeInTheDocument();
-  });
-
-  it("renders at most ONE reference link on a step, whatever the pack cites", async () => {
-    await openClassified();
-    const many = Array.from({ length: 400 }, (_, i) => ({
-      title: `SR Linux documentation portal ${i}`,
-      url: `https://example.invalid/doc-${i}`,
-    }));
-    const heavy = plan({
-      steps: [
-        {
-          intent: "ospf.neighbors.detail", title: "OSPF neighbours, detailed", section: "deep-dive",
-          bound: true, command: "show ip ospf neighbor detail", verified: "doc_claimed",
-          sources: many,
-        },
-      ],
-    });
-    mocks.tacPlan.mockResolvedValue(planResponse(heavy));
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith({ plan: heavy }) }));
-    await click("Build the command plan");
-
-    const table = screen.getByTestId("tac-plan-table");
-    expect(within(table).getAllByRole("link")).toHaveLength(1);
-    expect(within(table).getByRole("link")).toHaveAttribute("href", "https://example.invalid/doc-0");
-    // and not one of the 400 titles as inline text.
-    expect(within(table).queryByText("SR Linux documentation portal 0")).toBeNull();
-  });
-
-  it("shows no intent id in a visible row — it stays in the tooltip for support", async () => {
-    await openClassified();
-    mocks.tacPlan.mockResolvedValue(planResponse());
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
-    await click("Build the command plan");
-
-    const table = screen.getByTestId("tac-plan-table");
-    expect(table.textContent).not.toContain("ospf.neighbors.detail");
-    expect(table.textContent).not.toContain("system.version");
-    expect(within(table).getByTitle("ospf.neighbors.detail · this issue")).toBeInTheDocument();
-  });
-
-  it("folds the checks this platform cannot do behind one line, collapsed by default", async () => {
-    await openClassified();
-    mocks.tacPlan.mockResolvedValue(planResponse());
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
-    await click("Build the command plan");
-
-    const unbound = screen.getByTestId("tac-unbound") as HTMLDetailsElement;
-    expect(unbound.open).toBe(false);
-    expect(unbound).toHaveTextContent(unavailableLine(1, "Cisco IOS-XE"));
-    // The name is inside; the reason rides on the tooltip, not on a per-row note.
-    expect(within(unbound).getByTitle(/no binding on this dialect/)).toHaveTextContent("OSPF router LSA");
-    expect(unboundReason({ intent: "x", title: "x", section: "deep-dive", bound: false }))
-      .toBeTruthy();
-  });
-
-  it("says out loud when the platform has no authored command set", async () => {
-    await openClassified();
-    const noPlan = plan({
-      has_plan: false, steps: [], plan_version: undefined,
-      note: "There is no authored command set for Nokia SR Linux.",
-      unbound: [{ intent: "system.version", title: "Software version", section: "baseline", bound: false, note: "no plan for this dialect" }],
-    });
-    mocks.tacPlan.mockResolvedValue(planResponse(noPlan));
-    mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith({ plan: noPlan }) }));
-    await click("Build the command plan");
-
-    expect(screen.getByTestId("tac-no-plan"))
-      .toHaveTextContent("There is no authored command set for Nokia SR Linux.");
-    // And NO paste wall: a platform with no authored plan binds no command, so
-    // there is nothing the paste step could honestly name a target for.
-    expect(screen.queryByTestId("tac-paste")).toBeNull();
-  });
-
-  it("renders the plan failure as an operator sentence", async () => {
-    await openClassified();
-    mocks.tacPlan.mockRejectedValue(new Error("404 Not Found: "));
-    await click("Build the command plan");
-    expect(screen.getByRole("alert")).toHaveTextContent("That is not available.");
-  });
-});
-
-// ── step 4: collect ──────────────────────────────────────────────────────────
-
-describe("collect", () => {
-  const openPlanned = async (over: Partial<TacStateResponse> = {}) => {
-    await show(stateResponse({ state: stateWith(), ...over }));
-    mocks.tacClassify.mockResolvedValue(classifyResponse());
-    return undefined;
-  };
-
-  it("disables the start and shows the server's own note when collection is unwired", async () => {
-    await openPlanned({ can_collect: false, collect_note: COLLECT_NOTE });
-    expect(screen.getByTestId("tac-collect-note")).toHaveTextContent(COLLECT_NOTE);
-    expect(screen.getByRole("button", { name: "Start the collection" })).toBeDisabled();
-  });
-
-  it("renders a 503 from the start as the server's own sentence", async () => {
-    await openPlanned();
-    mocks.tacCollect.mockRejectedValue(new Error(`503 Service Unavailable: {"error":${JSON.stringify(COLLECT_NOTE)}}`));
-    await click("Start the collection");
-    expect(screen.getByTestId("tac-collect-error")).toHaveTextContent("Live collection is not wired on this deployment");
-  });
-
-  it("shows live per-command progress and stops reading once the job ends", async () => {
-    vi.useFakeTimers();
-    const running = stateResponse({
+  it("carries the collection log with the per-command progress", async () => {
+    await show(stateResponse({
       state: stateWith({
         job: {
-          id: "job-1", status: "running", started_at: "2026-09-05T10:00:00Z", total: 2, done: 1,
+          id: "j1", status: "done", started_at: "t", total: 2, done: 2,
           progress: [
             { index: 0, total: 2, intent: "system.version", command: "show version", phase: "done", bytes: 512 },
-            { index: 1, total: 2, intent: "ospf.neighbors.detail", command: "show ip ospf neighbor detail", phase: "start" },
+            { index: 1, total: 2, intent: "ospf.neighbors.detail", command: "show ip ospf neighbor detail", phase: "error", error: "timed out" },
           ],
         },
       }),
-    });
-    mocks.tacState.mockResolvedValue(running);
-    render(<TacEscalationPanel incidentId={INC} />);
-    await act(async () => { await Promise.resolve(); });
-
-    const job = screen.getByTestId("tac-job");
-    expect(job).toHaveTextContent("1 of 2 commands · running");
-    expect(job).toHaveTextContent("collected");
-    expect(job).toHaveTextContent("running");
-    expect(job).toHaveTextContent("512 B");
-
-    const before = mocks.tacState.mock.calls.length;
-    mocks.tacState.mockResolvedValue(stateResponse({
-      state: stateWith({
-        job: { id: "job-1", status: "done", started_at: "x", finished_at: "y", total: 2, done: 2, progress: [] },
-      }),
     }));
-    await act(async () => { vi.advanceTimersByTime(2000); await Promise.resolve(); });
-    expect(mocks.tacState.mock.calls.length).toBeGreaterThan(before);
-
-    // Now that the job is done the 2 s read must stop entirely.
-    const settled = mocks.tacState.mock.calls.length;
-    await act(async () => { vi.advanceTimersByTime(10_000); await Promise.resolve(); });
-    expect(mocks.tacState.mock.calls.length).toBe(settled);
+    const body = await openBehind();
+    const job = within(body).getByTestId("tac-job");
+    expect(job).toHaveTextContent("2 of 2 commands");
+    expect(job).toHaveTextContent("show version");
+    expect(job).toHaveTextContent("timed out");
   });
 
-  it("cancels a running collection", async () => {
-    mocks.tacState.mockResolvedValue(stateResponse({
-      state: stateWith({
-        job: { id: "job-1", status: "running", started_at: "x", total: 2, done: 0, progress: [] },
-      }),
-    }));
-    render(<TacEscalationPanel incidentId={INC} />);
-    await act(async () => { await Promise.resolve(); });
-    mocks.tacCancelCollect.mockResolvedValue({ cancelled: true, state: null });
-    await click("Stop");
-    expect(mocks.tacCancelCollect).toHaveBeenCalledWith(INC);
-  });
-
-  // ── the paste path (owner, 2026-09-06) ───────────────────────────────────
-  //
-  // It used to render one textarea per intent in the whole class — on a Nokia SR
-  // Linux escalation that is 23 bound steps and 72 UNBOUND ones, each labelled
-  // with a raw intent id and no command. These four tests are the regression.
-
-  it("offers no paste wall when the gateway can collect and nothing has failed", async () => {
-    await openPlanned();
-    expect(screen.queryByTestId("tac-paste")).toBeNull();
-  });
-
-  it("offers ONE control over the bound steps only, never an unbound intent", async () => {
-    const nokia = plan({
-      dialect: "nokia-srlinux", dialect_display: "Nokia SR Linux",
-      steps: Array.from({ length: 23 }, (_, i) => ({
-        intent: `srl.bound${i}`, title: `Bound check ${i}`, section: "deep-dive" as const,
-        bound: true, command: `show bound ${i}`,
-      })),
-      unbound: Array.from({ length: 72 }, (_, i) => ({
-        intent: `platform.unbound${i}`, title: `Unbound check ${i}`, section: "deep-dive" as const,
-        bound: false, note: "no binding on this dialect",
-      })),
-    });
+  it("renders captured device output as escaped text, never as markup", async () => {
     await show(stateResponse({
-      can_collect: false, collect_note: COLLECT_NOTE, state: stateWith({ plan: nokia }),
-    }));
-
-    const picker = screen.getByTestId("tac-paste-picker") as HTMLSelectElement;
-    expect(picker.options).toHaveLength(23);
-    // ONE textarea for the whole step, not 95.
-    expect(within(screen.getByTestId("tac-paste")).getAllByRole("textbox")).toHaveLength(1);
-    // No option is labelled with a raw intent id; the ids stay in the tooltip.
-    for (const opt of Array.from(picker.options)) {
-      expect(opt.textContent).not.toMatch(/srl\.bound|platform\.unbound/);
-      expect(opt.getAttribute("title")).toContain("srl.bound");
-    }
-    expect(screen.getByTestId("tac-paste-count")).toHaveTextContent(missingOutputsLine(23, 23));
-    expect(screen.getByTestId("tac-paste")).toHaveTextContent(PASTE_INVITE);
-  });
-
-  it("files ONE pasted output for the step the operator picked", async () => {
-    await show(stateResponse({
-      can_collect: false, collect_note: COLLECT_NOTE, state: stateWith(),
-    }));
-    mocks.tacCollect.mockResolvedValue({ job: {}, state: {} });
-
-    fireEvent.change(screen.getByTestId("tac-paste-picker"), { target: { value: "ospf.neighbors.detail" } });
-    fireEvent.change(screen.getByLabelText("Pasted output"), { target: { value: "  Neighbor 10.0.0.2  " } });
-    await click("Add output");
-
-    // Only the output travels: pasting is not a request to RUN anything.
-    expect(mocks.tacCollect).toHaveBeenCalledWith(INC, {
-      outputs: [{
-        intent: "ospf.neighbors.detail",
-        command: "show ip ospf neighbor detail",
-        output: "Neighbor 10.0.0.2",
-      }],
-    });
-  });
-
-  it("disappears once every bound step has output", async () => {
-    await show(stateResponse({
-      can_collect: false,
-      collect_note: COLLECT_NOTE,
       state: stateWith({
         capture: {
           incident_id: INC, plan_id: "plan-1", class_id: "ospf-adjacency", class_title: "x",
           device_id: "leaf1", hostname: "leaf1", platform: "p", dialect: "cisco-iosxe",
           dialect_display: "Cisco IOS-XE", has_plan: true, started_at: "x", finished_at: "y",
-          commands: [
-            { intent: "system.version", title: "Software version", section: "baseline", command: "show version", output: "IOS-XE", bytes: 6, started_at: "x", duration_ms: 1 },
-            { intent: "ospf.neighbors.detail", title: "OSPF neighbours", section: "deep-dive", command: "show ip ospf neighbor detail", output: "Neighbor", bytes: 8, started_at: "x", duration_ms: 1 },
-          ],
-          unbound: [], topology: [], target: {}, total_bytes: 14, redacted: true,
-          catalog_version: "v", engine_version: "e",
-        },
-      }),
-    }));
-    expect(screen.queryByTestId("tac-paste")).toBeNull();
-  });
-
-  it("renders captured device output as escaped text, never as markup", async () => {
-    const hostile = '<img src=x onerror="alert(1)">';
-    mocks.tacState.mockResolvedValue(stateResponse({
-      state: stateWith({
-        capture: {
-          incident_id: INC, plan_id: "plan-1", class_id: "ospf-adjacency", class_title: "x",
-          device_id: "leaf1", hostname: "leaf1", platform: "Cisco IOS-XE", dialect: "cisco-iosxe",
-          dialect_display: "Cisco IOS-XE", has_plan: true, started_at: "x", finished_at: "y",
           commands: [{
             intent: "system.version", title: "Software version", section: "baseline",
-            command: "show version", verified: "capture", output: hostile, bytes: 30,
-            started_at: "x", duration_ms: 10,
+            command: "show version", bytes: 40, started_at: "x", duration_ms: 5,
+            output: "<img src=x onerror=alert(1)>Version 17.9",
           }],
-          unbound: [], topology: [], target: {}, total_bytes: 30, redacted: false,
+          unbound: [], topology: [], target: {}, total_bytes: 40, redacted: true,
           catalog_version: "v", engine_version: "e",
         },
       }),
     }));
-    const { container } = render(<TacEscalationPanel incidentId={INC} />);
-    await act(async () => { await Promise.resolve(); });
-
-    expect(container.querySelector("img")).toBeNull();
-    expect(screen.getByText(hostile)).toBeInTheDocument();
+    const body = await openBehind();
+    const pre = within(body).getByText(/Version 17.9/);
+    expect(pre.querySelector("img")).toBeNull();
+    expect(pre.textContent).toContain("<img src=x onerror=alert(1)>");
   });
 });
 
-// ── step 5: bundle ───────────────────────────────────────────────────────────
+// ── bundle ───────────────────────────────────────────────────────────────────
 
 describe("bundle", () => {
   const captured = () => stateResponse({
@@ -677,6 +742,14 @@ describe("bundle", () => {
     expect(screen.getByText(NO_CAPTURE_YET)).toBeInTheDocument();
   });
 
+  it("states the redaction promise once, as ONE line, with the server's own words on it", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    const line = screen.getByTestId("tac-redaction");
+    expect(line).toHaveTextContent(REDACTION_SHORT);
+    expect(line).toHaveAttribute("title", plan().redaction_note);
+    expect(screen.getAllByTestId("tac-redaction")).toHaveLength(1);
+  });
+
   it("downloads the profile the operator picked, under a safe name", async () => {
     await show(captured());
     mocks.tacDownloadBundle.mockResolvedValue(undefined);
@@ -692,8 +765,6 @@ describe("bundle", () => {
     expect(screen.getByText(/4.0 KB · full profile/)).toBeInTheDocument();
   });
 
-  // words (sweep 5, tracker 270). The section is named in two words; the list
-  // under it still carries every fact it did.
   it("names the built-bundle list in three words or fewer", async () => {
     await show(captured());
     expect(screen.getByRole("heading", { name: "Built bundles" })).toBeInTheDocument();
@@ -706,9 +777,15 @@ describe("bundle", () => {
     await click("Download the redacted bundle");
     expect(screen.getByRole("alert")).toHaveTextContent("Collect the evidence first.");
   });
+
+  it("says 'No bundle yet' in one short line", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    expect(screen.getByText(NO_BUNDLE_YET)).toBeInTheDocument();
+    expect(NO_BUNDLE_YET.split(/\s+/)).toHaveLength(3);
+  });
 });
 
-// ── step 6: open the case ────────────────────────────────────────────────────
+// ── open the case ────────────────────────────────────────────────────────────
 
 describe("open the case", () => {
   const withConnectors = () => stateResponse({
@@ -754,15 +831,12 @@ describe("open the case", () => {
     await click("ServiceNow");
 
     expect(mocks.tacCaseForm).toHaveBeenCalledWith(INC, "servicenow");
-    const form = screen.getByTestId("tac-case-form");
-    expect(form).toBeInTheDocument();
+    expect(screen.getByTestId("tac-case-form")).toBeInTheDocument();
     expect((screen.getByLabelText(/^Title/) as HTMLInputElement).value).toBe("OSPF adjacency down on leaf1");
     expect(screen.getByLabelText(/Serial number — the vendor requires this/)).toBeRequired();
     expect((screen.getByLabelText("Case text") as HTMLTextAreaElement).value)
       .toBe("Problem statement for the vendor portal.");
     expect(screen.getByLabelText("Case text")).toHaveAttribute("readonly");
-    // words (sweep 5, tracker 270): the review heading keeps the connector and
-    // the "a person sends this" claim inside three words.
     expect(screen.getByRole("heading", { name: /ServiceNow — review before sending/ })).toBeInTheDocument();
   });
 
@@ -799,14 +873,9 @@ describe("open the case", () => {
       .toHaveTextContent("Collect the evidence before opening a case.");
   });
 
-  // The honesty state keeps its CLAIM after the words sweep (tracker 270): no
-  // connector here, and the operator opens the case themselves. Only the word
-  // count moved — what a case connector IS is behind the (i).
   it("does not offer a connector that this deployment does not carry", async () => {
     await show(stateResponse({ state: stateWith(), connectors: [] }));
     expect(screen.getByText(NO_CASE_CONNECTOR)).toBeInTheDocument();
-    // The CLAIM survives the word cut: the download path still works, and what a
-    // case connector IS is behind the (i).
     expect(NO_CASE_CONNECTOR).toMatch(/download the bundle/);
     expect(NO_CASE_CONNECTOR.split(/\s+/).length).toBeLessThanOrEqual(8);
     expect(screen.getByRole("button", { name: "Ask Iris about No case connector" })).toBeInTheDocument();
@@ -833,12 +902,6 @@ describe("an unconfigured connector never becomes a case", () => {
 });
 
 // ── the step reads like a study, not a menu (owner, 2026-09-06) ─────────────
-//
-// The owner pasted the escalation step for a NOKIA device and asked "what's all
-// this": it rendered ALL twelve connectors, each with its full research
-// paragraph (attachment ceilings, API caveats, "checked 2026-09-05", rate
-// limits), and each ending "connector configuration could not be read for this
-// tenant" on a deployment where nothing was wrong.
 
 describe("the Nokia escalation shows the paths this device can use", () => {
   const NOKIA_RESEARCH =
@@ -893,7 +956,6 @@ describe("the Nokia escalation shows the paths this device can use", () => {
     expect(step.textContent).not.toContain("checked 2026-09-05");
     expect(step.textContent).not.toContain("rate-limits 20 writes");
     expect(step.textContent).not.toContain("1 GB per attachment");
-    // The paragraph is one press away, keyed on the connector id.
     const nokiaRow = screen.getByTestId("tac-conn-portal-nokia");
     expect(within(nokiaRow).getByRole("button", { name: /Ask Iris/ }))
       .toHaveAttribute("data-topic", connectorTopic("portal-nokia"));
@@ -905,7 +967,6 @@ describe("the Nokia escalation shows the paths this device can use", () => {
     expect(rows.textContent).not.toContain("could not be read");
     expect(within(screen.getByTestId("tac-conn-jira")).getByText(CONNECTOR_CHIP.ready)).toBeInTheDocument();
     expect(within(screen.getByTestId("tac-conn-portal-nokia")).getByText(CONNECTOR_CHIP.ready)).toBeInTheDocument();
-    // One chip per row, not a stack of notes.
     for (const li of Array.from(rows.querySelectorAll("li"))) {
       expect(li.querySelectorAll(".tac-chip")).toHaveLength(1);
     }
@@ -918,8 +979,6 @@ describe("the Nokia escalation shows the paths this device can use", () => {
     expect(row).toHaveTextContent("Attaches to an existing case");
   });
 
-  // "could not be read" is an ERROR. It keeps a chip of its own, it names the
-  // cause the server gave, and it is announced — it is not a state.
   it("names the cause when a connector's configuration really cannot be read", async () => {
     await show(nokiaState({
       jira: { configured: false, unavailable: true, status_note: "the stored connector configuration could not be read: app_kv: connection refused" },
@@ -929,12 +988,11 @@ describe("the Nokia escalation shows the paths this device can use", () => {
     expect(within(row).getByRole("alert")).toHaveTextContent("app_kv: connection refused");
   });
 
-  // The ceiling is a small suffix, and only when the bundle would not fit.
   it("mentions an attachment ceiling only when the bundle exceeds it", async () => {
     await show(nokiaState({ "email-arista": { configured: true } }));
     expect(screen.getByTestId("tac-conn-others").textContent).not.toContain("13 MB");
 
-    await cleanup();
+    cleanup();
     await show(stateResponse({
       state: stateWith({
         plan: plan({ dialect: "arista-eos", dialect_display: "Arista EOS" }),
@@ -947,166 +1005,5 @@ describe("the Nokia escalation shows the paths this device can use", () => {
       connectors: twelve({ "email-arista": { configured: true } }),
     }));
     expect(screen.getByTestId("tac-conn-email-arista")).toHaveTextContent("over the 13 MB limit");
-  });
-});
-
-// ── the bundle step is one line, one select, one button ─────────────────────
-
-describe("the bundle step does not lecture", () => {
-  it("says 'No bundle yet' in one short line", async () => {
-    await show(stateResponse({ state: stateWith() }));
-    expect(screen.getByText(NO_BUNDLE_YET)).toBeInTheDocument();
-    expect(NO_BUNDLE_YET.split(/\s+/)).toHaveLength(3);
-  });
-});
-
-// ── step 3b: the command review (tracker 250) ────────────────────────────────
-//
-// The owner's requirement, as a test: the NOC admin sees the exact list before
-// submit, removes some, adds one, reorders — every line is checked live, a
-// forbidden line is refused inline WITH its family and the rule text, and the
-// set can be saved as a per-vendor template and loaded back.
-
-describe("the operator reviews the exact commands before anything runs", () => {
-  it("seeds the editable list from the plan and states the output-only rule", async () => {
-    await show(stateResponse({ state: stateWith() }));
-    const list = await screen.findByTestId("tac-review-list");
-    const inputs = within(list).getAllByRole("textbox") as HTMLInputElement[];
-    expect(inputs.map((i) => i.value)).toEqual(["show version", "show ip ospf neighbor detail"]);
-    expect(screen.getByTestId("tac-review-policy")).toHaveTextContent(REVIEW_POLICY_NOTE);
-  });
-
-  it("removes, adds and reorders, then collects EXACTLY the reviewed list", async () => {
-    mocks.tacCollect.mockResolvedValue({ job: { id: "j1", status: "running" }, state: stateWith() });
-    await show(stateResponse({ state: stateWith() }));
-    await screen.findByTestId("tac-review-list");
-
-    // Remove the first command.
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Remove command 1/ })); });
-    // Add one of our own.
-    await act(async () => { fireEvent.click(screen.getByTestId("tac-review-add")); });
-    const inputs = () => within(screen.getByTestId("tac-review-list")).getAllByRole("textbox") as HTMLInputElement[];
-    await act(async () => {
-      fireEvent.change(inputs()[1], { target: { value: "show ip nhrp brief" } });
-    });
-    // Reorder: move the new line up.
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Move command 2 up/ })); });
-    expect(inputs().map((i) => i.value)).toEqual(["show ip nhrp brief", "show ip ospf neighbor detail"]);
-
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Start the collection/ })); });
-    expect(mocks.tacCollect).toHaveBeenCalledWith(INC, {
-      steps: [{ command: "show ip nhrp brief" }, { command: "show ip ospf neighbor detail" }],
-    });
-  });
-
-  it("refuses a forbidden line inline, naming the family and the rule, and will not collect", async () => {
-    mocks.tacTemplateValidate.mockImplementation(async (_d: string, commands: string[]) => ({
-      validation: {
-        dialect: "cisco-iosxe",
-        ok: false,
-        refused: 1,
-        lines: commands.map((command, index) => (
-          command === "configure terminal"
-            ? {
-                index, command, ok: false, family: "config", rule: "configure",
-                reason: "refused by the output-only policy (config): it changes configuration or clears state — rule `configure`",
-              }
-            : { index, command, ok: true, origin: "catalog" as const, title: command }
-        )),
-      },
-    }));
-    await show(stateResponse({ state: stateWith() }));
-    await screen.findByTestId("tac-review-list");
-    const inputs = () => within(screen.getByTestId("tac-review-list")).getAllByRole("textbox") as HTMLInputElement[];
-    await act(async () => {
-      fireEvent.change(inputs()[0], { target: { value: "configure terminal" } });
-    });
-    await waitFor(() => expect(screen.getByTestId("tac-review-refused")).toHaveTextContent(REVIEW_REFUSED));
-    // The line itself carries the family and the rule text, not a bare "invalid".
-    const row = screen.getByTestId("tac-review-list").querySelector(".tac-review-row.bad");
-    expect(row).not.toBeNull();
-    expect(row!.textContent).toContain("config");
-    expect(row!.textContent).toContain("rule `configure`");
-    // And collect is refused outright — Correlix never runs part of a list.
-    expect(screen.getByRole("button", { name: /Start the collection/ })).toBeDisabled();
-    expect(mocks.tacCollect).not.toHaveBeenCalled();
-  });
-
-  it("labels a custom command as unverified rather than hiding the difference", async () => {
-    mocks.tacTemplateValidate.mockResolvedValue({
-      validation: {
-        dialect: "cisco-iosxe", ok: true, refused: 0,
-        lines: [
-          { index: 0, command: "show version", ok: true, origin: "catalog", title: "Software version" },
-          {
-            index: 1, command: "show ip ospf neighbor detail", ok: true, origin: "custom",
-            note: "written by your team; Correlix has never run it on this platform",
-          },
-        ],
-      },
-    });
-    await show(stateResponse({ state: stateWith() }));
-    const list = await screen.findByTestId("tac-review-list");
-    await waitFor(() => expect(list.textContent).toContain("your command"));
-    expect(list.textContent).toContain("never run it on this platform");
-    expect(list.textContent).toContain("Correlix command");
-  });
-
-  it("offers this dialect's templates, labels the defaults, and loads one", async () => {
-    mocks.tacTemplates.mockResolvedValue({
-      templates: [{
-        id: "tpl-1", dialect: "cisco-iosxe", name: "ACME IOS-XE baseline", source: "tenant",
-        steps: [{ title: "", command: "show ip route summary" }], version: 3,
-        created_by: "noc@acme", updated_at: "2026-09-05T09:00:00Z",
-      }],
-      defaults: [{
-        id: "correlix:cisco-iosxe:baseline", dialect: "cisco-iosxe",
-        name: "Cisco IOS-XE — TAC baseline", source: "correlix-default",
-        steps: [{ title: "", command: "show version" }], version: 1,
-      }],
-      count: 1, limit: 200, dialects: ["cisco-iosxe"], note: "",
-    });
-    await show(stateResponse({ state: stateWith() }));
-    const picker = (await screen.findByTestId("tac-template-picker")) as HTMLSelectElement;
-    const options = within(picker).getAllByRole("option").map((o) => o.textContent ?? "");
-    expect(options.some((o) => o.includes("Correlix default v1"))).toBe(true);
-    expect(options.some((o) => o.includes("saved by noc@acme") && o.includes("v3"))).toBe(true);
-    // The tenant's own dialect is what was asked for — never another vendor's.
-    expect(mocks.tacTemplates).toHaveBeenCalledWith("cisco-iosxe");
-
-    await act(async () => { fireEvent.change(picker, { target: { value: "tpl-1" } }); });
-    const inputs = within(screen.getByTestId("tac-review-list")).getAllByRole("textbox") as HTMLInputElement[];
-    expect(inputs.map((i) => i.value)).toEqual(["show ip route summary"]);
-  });
-
-  it("saves the reviewed set as a template for this dialect", async () => {
-    mocks.tacTemplateSave.mockResolvedValue({
-      template: {
-        id: "tpl-9", dialect: "cisco-iosxe", name: "ACME EOS baseline", source: "tenant",
-        steps: [], version: 1,
-      },
-    });
-    await show(stateResponse({ state: stateWith() }));
-    await screen.findByTestId("tac-review-list");
-    await act(async () => {
-      fireEvent.change(screen.getByTestId("tac-template-name"), { target: { value: "ACME EOS baseline" } });
-    });
-    await act(async () => { fireEvent.click(screen.getByTestId("tac-template-save")); });
-    expect(mocks.tacTemplateSave).toHaveBeenCalledWith({
-      dialect: "cisco-iosxe",
-      name: "ACME EOS baseline",
-      description: "",
-      based_on: "",
-      steps: [{ command: "show version" }, { command: "show ip ospf neighbor detail" }],
-    });
-    await waitFor(() => expect(screen.getByTestId("tac-template-note")).toHaveTextContent("Saved"));
-  });
-
-  it("collects the plan unchanged when nothing was edited", async () => {
-    mocks.tacCollect.mockResolvedValue({ job: { id: "j1", status: "running" }, state: stateWith() });
-    await show(stateResponse({ state: stateWith() }));
-    await screen.findByTestId("tac-review-list");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Start the collection/ })); });
-    expect(mocks.tacCollect).toHaveBeenCalledWith(INC, {});
   });
 });

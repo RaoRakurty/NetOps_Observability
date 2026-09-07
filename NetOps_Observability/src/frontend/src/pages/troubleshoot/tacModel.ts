@@ -33,6 +33,12 @@ import type {
   TacState,
   TacStep,
   TacTarget,
+  TacCaptureProgress,
+  TacCaptureRefusal,
+  TacCaptureSource,
+  TacCaptureStatus,
+  TacCommandCapture,
+  TacCommandStatus,
   TacTemplate,
   TacTemplateWrite,
   TacVerified,
@@ -754,6 +760,164 @@ export function editSummary(plan: TacPlan | undefined): string {
   if (counts.removed) parts.push(`${counts.removed} removed`);
   if (counts.reordered) parts.push("reordered");
   return parts.length ? `Recorded in the bundle: ${parts.join(" · ")}.` : "";
+}
+
+
+// ── captures (docs/design/TAC_CAPTURES_2026-09-06.md) ────────────────────────
+//
+// The owner's rule, verbatim: "Process of extracting the commands and building
+// default template even before case opening is your job. This process should be
+// not visible to customer." So the escalation step no longer shows a plan, an
+// intent id, a citation or a verification chip. It shows CAPTURES: a name, a
+// command count, a coloured status, and a chevron that reveals the commands.
+//
+// Everything that used to be inline is still reachable — behind one control —
+// and nothing was deleted from the product. What changed is what a person is
+// made to read before they can escalate.
+
+/** The heading of the one control that reveals the engine's own working. */
+export const BEHIND_LABEL = "What Correlix is doing";
+
+/** The upload control's own line: what it takes, in the formats' own names. */
+export const UPLOAD_FORMATS_LINE = "Accepts txt, csv, json, yaml and docx.";
+
+/** Nothing to run yet: the platform bound no command. Honest, not empty. */
+export const CAPTURES_NONE = "No commands for this platform yet.";
+
+/** Pick the device first — the capture is per platform. */
+export const CAPTURES_NEED_DEVICE = "Choose the device to collect from.";
+
+export const UPLOAD_FAILED = "That file could not be read.";
+export const CAPTURE_SAVE_FAILED = "The capture could not be saved.";
+export const CAPTURES_FAILED = "Your saved captures could not be read.";
+
+/** One word per status. Never a sentence, never SHOUTED. */
+export const CAPTURE_STATUS_LABEL: Record<TacCaptureStatus, string> = {
+  queued: "Queued",
+  running: "Running",
+  done: "Done",
+  partial: "Partial",
+  failed: "Failed",
+};
+
+/** Where a capture came from, in the customer's words rather than the enum's. */
+export const CAPTURE_SOURCE_LABEL: Record<TacCaptureSource, string> = {
+  "vendor-default": "Correlix",
+  uploaded: "Uploaded",
+  template: "Your team",
+};
+
+/** "12 commands" — a count, singular when it is one. */
+export function commandCountLine(n: number): string {
+  return n === 1 ? "1 command" : `${n} commands`;
+}
+
+/** The bar's width, as a percentage of the capture's own total. A capture with
+ *  no total reads as full: a bar that renders 0 % on a queued row would look
+ *  like a failure, and queued is not one. */
+export function captureBarPercent(p: TacCaptureProgress | undefined): number {
+  if (!p || p.total <= 0) return 100;
+  const finished = Math.min(p.total, p.done + p.failed);
+  return Math.round((finished / p.total) * 100);
+}
+
+/**
+ * The status of ONE row.
+ *
+ * Only the capture the collection actually ran carries a state; every other row
+ * is queued, because nothing has been asked of it. Inventing a "done" on a row
+ * that never ran would be the kind of filled-in-to-look-finished state this
+ * whole surface exists to avoid.
+ */
+export function captureRowStatus(
+  captureId: string,
+  activeId: string,
+  progress: TacCaptureProgress | undefined,
+): TacCaptureStatus {
+  if (!progress || captureId !== activeId) return "queued";
+  return progress.status;
+}
+
+/** The commands to list under a row: ONLY the ones that failed. A clean run
+ *  lists nothing — its output is in the bundle, and rendering it here is the
+ *  wall of text the redesign removed. */
+export function failedCommands(
+  captureId: string,
+  activeId: string,
+  progress: TacCaptureProgress | undefined,
+): TacCommandStatus[] {
+  if (!progress || captureId !== activeId) return [];
+  if (progress.status !== "partial" && progress.status !== "failed") return [];
+  return progress.commands ?? [];
+}
+
+/** One failed command's line: the command, then its plain reason. */
+export function failedCommandLine(c: TacCommandStatus): string {
+  const cmd = (c.command || "").trim();
+  const reason = (c.reason || "").trim() || "it did not run";
+  return cmd ? `${cmd} — ${reason}` : reason;
+}
+
+/** The captures offered for this escalation, in the order they are offered:
+ *  Correlix's own first (it is what runs unless somebody chooses otherwise),
+ *  then an upload if one is in hand, then this tenant's saved sets. */
+export function captureRows(
+  vendorDefault: TacCommandCapture | undefined,
+  uploaded: TacCommandCapture | null,
+  saved: TacCommandCapture[] | undefined,
+): TacCommandCapture[] {
+  const out: TacCommandCapture[] = [];
+  if (vendorDefault && vendorDefault.commands.length > 0) out.push(vendorDefault);
+  if (uploaded) out.push(uploaded);
+  for (const c of saved ?? []) out.push(c);
+  return out;
+}
+
+/** The capture the collection will run, given what the operator picked. It
+ *  falls back to the first row rather than to nothing: a selection that no
+ *  longer exists must never silently become "collect everything". */
+export function selectedCapture(
+  rows: TacCommandCapture[],
+  selectedId: string,
+): TacCommandCapture | undefined {
+  return rows.find((c) => c.id === selectedId) ?? rows[0];
+}
+
+/** The refused lines out of an upload's 400 body. The server reports them
+ *  against the line number IN THE UPLOADED FILE; this only reads them. */
+export function parseCaptureRefusals(e: unknown): TacCaptureRefusal[] {
+  const f = httpFailure(e);
+  if (!f || !f.body.startsWith("{")) return [];
+  try {
+    const parsed = JSON.parse(f.body) as { refusals?: TacCaptureRefusal[] };
+    return Array.isArray(parsed.refusals) ? parsed.refusals : [];
+  } catch {
+    return [];
+  }
+}
+
+/** One refusal, as the operator reads it: the line in THEIR file, the command,
+ *  the reason, and the rule that refused it by name. */
+export function refusalLine(r: TacCaptureRefusal): string {
+  const rule = (r.rule || "").trim();
+  const base = `Line ${r.line}: ${r.command} — ${r.reason}`;
+  return rule && !r.reason.includes(rule) ? `${base} (rule \`${rule}\`)` : base;
+}
+
+/** The body that saves an uploaded capture as one of this tenant's own. The
+ *  tenant is NOT a field — ownership is stamped from the token server-side. */
+export function buildCaptureWrite(
+  dialect: string,
+  name: string,
+  commands: TacCommandCapture["commands"],
+): { dialect: string; name: string; commands: { command: string; note?: string }[] } {
+  return {
+    dialect: dialect.trim(),
+    name: name.trim(),
+    commands: commands
+      .map((c) => ({ command: c.command.trim(), note: (c.note || "").trim() || undefined }))
+      .filter((c) => c.command !== ""),
+  };
 }
 
 // ── errors ──────────────────────────────────────────────────────────────────

@@ -304,6 +304,65 @@
 .tac-intent > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tac-intents { max-height: 320px; border: 1px solid var(--border); border-radius: 6px; }
 
+/* ── CAPTURES (docs/design/TAC_CAPTURES_2026-09-06.md) ──────────────────────
+   A capture is a named list of commands. The row is a name, a count and a
+   coloured status; the commands are hidden until the chevron is used, and only
+   the commands that FAILED are ever listed under it. Nothing here goes below
+   the 12.5px floor, and the row wraps rather than scrolling the panel sideways.
+   Colours come from the same tokens the rest of the panel uses, so the bar
+   reads the same in both themes. */
+.tac-captures { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tac-capture-row { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+.tac-capture-row.on { border-color: var(--accent); }
+.tac-capture-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
+.tac-capture-toggle {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px;
+}
+.tac-capture-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tac-capture-pick { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; min-width: 0; }
+.tac-capture-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.tac-capture-status { display: inline-flex; gap: 8px; align-items: center; margin-left: auto; }
+/* The bar is a TRACK plus a fill: the track carries the state colour, the fill
+   carries how far the collection got. A queued row is a full grey bar rather
+   than an empty one — an empty bar reads as a failure, and queued is not one. */
+.tac-capture-track {
+  display: inline-block; width: 84px; height: 6px; border-radius: 999px;
+  background: var(--border); overflow: hidden;
+}
+.tac-capture-bar { display: block; height: 100%; background: currentColor; }
+/* Queued shows the bare track: there is nothing to report yet, and a filled
+   bar would claim progress that has not happened. */
+.tac-capture-queued { color: var(--border); }
+.tac-capture-running { color: var(--accent, #3b82f6); }
+.tac-capture-done { color: var(--good, #16a34a); }
+.tac-capture-partial { color: var(--warn, #d97706); }
+.tac-capture-failed { color: var(--bad, #ef4444); }
+.tac-chip-queued { border-color: var(--border); color: var(--muted); }
+.tac-chip-running { border-color: var(--accent, #3b82f6); color: var(--accent, #3b82f6); }
+.tac-chip-done { border-color: var(--good, #16a34a); color: var(--good, #16a34a); }
+.tac-chip-partial { border-color: var(--warn, #d97706); color: var(--warn, #d97706); }
+.tac-chip-failed { border-color: var(--bad, #ef4444); color: var(--bad, #ef4444); }
+.tac-capture-cmds {
+  list-style: decimal; margin: 6px 0 0; padding-left: 24px;
+  font-size: 12.5px; color: var(--muted); max-height: 260px; overflow: auto;
+}
+/* The failures, in the error colour, each with its plain reason. */
+.tac-capture-fails { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tac-capture-fail { font-size: 12.5px; line-height: 1.5; color: var(--bad, #ef4444); }
+/* A refused upload: one line per refused line of the file. */
+.tac-refusals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tac-refusals li { font-size: 12.5px; line-height: 1.5; color: var(--bad, #ef4444); }
+
+/* The ONE "what is happening behind the scene" control. Its body is mounted
+   only while open, so this is presentation for the control alone. */
+.tac-behind-toggle {
+  align-self: flex-start; border: 0; background: transparent; color: var(--fg);
+  font-size: 13px; font-weight: 600; cursor: pointer; padding: 2px 0;
+}
+.tac-behind-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tac-behind-body { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+
 /* Command review + per-vendor templates (tracker 250). The list is an editable
    command set; a refused line is marked with the policy family that refused it,
    so the operator reads WHY rather than "invalid". */

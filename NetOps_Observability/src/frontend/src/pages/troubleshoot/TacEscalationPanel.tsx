@@ -3,58 +3,80 @@
 
 // TacEscalationPanel — the TAC escalation flow, one panel, incident-first.
 //
-// Design of record: docs/design/TAC_ESCALATION_2026-09-05.md §1. It replaces the
-// manual protocol-diagnostics bench: an operator no longer picks a protocol, an
-// issue and a device and presses "analyze". They press ONE button under the
-// verdict and Correlix does the legwork in six visible steps:
+// Design of record: docs/design/TAC_ESCALATION_2026-09-05.md for the engine,
+// docs/design/TAC_CAPTURES_2026-09-06.md for what the customer SEES — the owner
+// decision that replaced the plan → review → collect presentation:
 //
-//   1. verdict          — RcaCaseHeader, above this panel (not ours)
-//   2. class + why      — what Correlix thinks this is, the exact evidence rows
-//                         that scored it, the alternatives, and an override
-//   3. plan preview     — the commands, BEFORE anything runs, with the size/time
-//                         estimate and what will be redacted
-//   4. collect          — read-only over the SSH gateway, live per command; or
-//                         paste the output when the platform has no plan / the
-//                         deployment has no runner
-//   5. bundle           — the redacted zip the SERVER builds
-//   6. open case        — a pre-filled form a PERSON submits
+//   "Process of extracting the commands and building default template even
+//    before case opening is your job. This process should be not visible to
+//    customer … you can collapse all the commands … Review the commands not
+//    needed, instead give an option to upload their own list … When it's
+//    collecting it's good to see the status. Instead of showing all the command
+//    outputs, just display the ones that didn't work … Give an option to look
+//    what is happening behind the scene."
+//
+// So the visible escalation is four things:
+//
+//   1. a device                — where the outputs come from
+//   2. CAPTURES                — named command lists: Correlix's own (derived
+//                                from the plan, silently), this tenant's saved
+//                                sets, and one the customer uploads. A row is a
+//                                name, a count and a coloured status; the
+//                                commands are hidden until the chevron is used.
+//   3. the bundle              — the redacted zip the SERVER builds
+//   4. the case                — a pre-filled form a PERSON submits
+//
+// and ONE control, "What Correlix is doing", that reveals the class it chose,
+// the commands with their sources and verification state, and the collection
+// log. Nothing was deleted from the product; what changed is what a person is
+// made to read before they can escalate.
 //
 // HONESTY (the reason the feature exists). Nothing here is filled in to look
-// finished. `classified:false` shows the server's own note and never an invented
-// class. `has_plan:false` says this platform has no authored command set. An
-// unbound intent is counted and named, with its reason on its tooltip. A
-// `doc_claimed` command is chipped "From vendor docs". A 503 on collect renders the server's own
-// collect_note and leaves the paste path open. A connector with no credentials
-// is greyed with its own note and cannot be pressed into a case.
+// finished. A capture that never ran reads "Queued" rather than borrowing
+// another row's verdict. A partial collection lists ONLY the commands that
+// failed, each with its plain reason; the successful output is in the bundle and
+// is never rendered. A 503 on collect renders the server's own collect_note and
+// leaves the paste path open. An upload is refused WHOLE, by line number and by
+// the rule that refused it — Correlix never runs part of a list.
 //
-// SECURITY (§3 zero trust / §15 untrusted output). Command output, the problem
-// statement, connector notes and case text are all remote-authored. Every one of
-// them is rendered as an escaped React text node — there is no innerHTML and no
-// dangerouslySetInnerHTML in this file. The download name is built from a closed
+// SECURITY (§3 zero trust / §15 untrusted output). Command output, uploaded
+// command text, the problem statement, connector notes and case text are all
+// remote- or customer-authored. Every one of them is rendered as an escaped
+// React text node — there is no innerHTML and no dangerouslySetInnerHTML in this
+// file. The upload is parsed and policy-checked SERVER-side; the client refuses
+// nothing on its own authority. The download name is built from a closed
 // character set, so a remote string cannot steer a file path.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   type Device,
+  type TacCaptureRefusal,
+  type TacCaptureStatus,
   type TacCaseForm,
   type TacCaseResult,
   type TacClassifyResponse,
+  type TacCommandCapture,
+  type TacCommandStatus,
   type TacConnectorInfo,
   type TacCollectRequest,
-  type TacLineVerdict,
   type TacPlan,
   type TacState,
   type TacStateResponse,
   type TacStep,
   type TacTarget,
-  type TacTemplate,
 } from "../../services/api";
 import {
+  BEHIND_LABEL,
   BUNDLE_FAILED,
   BUNDLE_PROFILES,
   CANCEL_FAILED,
-  CUSTOM_COMMAND_NOTE,
+  CAPTURES_FAILED,
+  CAPTURES_NEED_DEVICE,
+  CAPTURES_NONE,
+  CAPTURE_SAVE_FAILED,
+  CAPTURE_SOURCE_LABEL,
+  CAPTURE_STATUS_LABEL,
   CASE_FORM_FAILED,
   CASE_HUMAN_APPROVED,
   CASE_SUBMIT_FAILED,
@@ -62,7 +84,6 @@ import {
   CONNECTOR_CHIP,
   DEVICES_FAILED,
   MAX_PASTE_CHARS,
-  MAX_REVIEW_COMMANDS,
   NOT_ESCALATED_NOTE,
   NO_AUTHORED_PLAN_NOTE,
   NO_BUNDLE_YET,
@@ -71,66 +92,61 @@ import {
   PASTE_INVITE,
   PLAN_FAILED,
   PLAN_LEGEND,
-  PLAN_NEEDS_DEVICE,
   REDACTION_SHORT,
-  REVIEW_EMPTY,
-  REVIEW_INTRO,
-  REVIEW_POLICY_NOTE,
-  REVIEW_REFUSED,
   ROW_RENDER_CAP,
   SECTION_ORDER,
   STATE_READ_FAILED,
   STATUS_CHIP,
-  TEMPLATES_FAILED,
   TEMPLATE_NEEDS_NAME,
-  TEMPLATE_SAVE_FAILED,
   TICKET_DELIVERY_LABEL,
   TICKET_DELIVERY_ROUTE,
-  VALIDATE_FAILED,
+  UPLOAD_FAILED,
+  UPLOAD_FORMATS_LINE,
   boundSteps,
+  buildCaptureWrite,
   buildPlanRequest,
-  buildReviewedSteps,
-  buildTemplateWrite,
   bundleFileName,
   cappedNote,
+  captureBarPercent,
+  captureRowStatus,
+  captureRows,
   ceilingSuffix,
   classificationNote,
   collectErrorMessage,
+  commandCountLine,
   connectorCapabilityLine,
   connectorState,
   connectorStatusNote,
   connectorTopic,
   dialectVendor,
-  editSummary,
   evidenceLine,
+  failedCommandLine,
+  failedCommands,
   hasCapability,
   humanBytes,
   isCollecting,
   isMissingField,
   missingOutputs,
   missingOutputsLine,
-  moveCommand,
   newestBundleBytes,
-  originLabel,
+  parseCaptureRefusals,
   pasteOffered,
   pasteOptionLabel,
   phaseLabel,
-  planCommands,
   planHeadline,
   planVersionTitle,
   reasonLine,
-  reviewChanged,
+  refusalLine,
+  selectedCapture,
   showAllConnectorsLabel,
   splitConnectors,
   stepReference,
   stepStatus,
   stepTooltip,
   tacError,
-  templateLabel,
   topologyLine,
   unavailableLine,
   unboundReason,
-  verdictLine,
   verifiedLabel,
 } from "./tacModel";
 import AskIris from "../../components/AskIris";
@@ -156,6 +172,9 @@ const CASE_FIELD_LABEL: { key: keyof CaseFields; label: string }[] = [
   { key: "contact_email", label: "Contact email" },
 ];
 
+/** The formats the file picker offers, from the parser's own list. */
+const UPLOAD_ACCEPT = ".txt,.text,.list,.csv,.json,.yaml,.yml,.docx";
+
 export default function TacEscalationPanel({ incidentId }: { incidentId: string }) {
   const [info, setInfo] = useState<TacStateResponse | null>(null);
   const [infoErr, setInfoErr] = useState("");
@@ -173,22 +192,27 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   const [planning, setPlanning] = useState(false);
   const [planErr, setPlanErr] = useState("");
 
-  // ── the command review (tracker 250) ──────────────────────────────────────
-  // reviewCmds is the operator's working list, seeded from the plan and edited
-  // freely. verdicts is what the SERVER said about it — the client renders that
-  // and decides nothing about what may run.
-  const [reviewCmds, setReviewCmds] = useState<string[]>([]);
-  const [verdicts, setVerdicts] = useState<TacLineVerdict[]>([]);
-  const [reviewErr, setReviewErr] = useState("");
-  const [checking, setChecking] = useState(false);
-  const [templates, setTemplates] = useState<TacTemplate[]>([]);
-  const [templatesErr, setTemplatesErr] = useState("");
-  const [templateId, setTemplateId] = useState("");
+  // ── captures (docs/design/TAC_CAPTURES_2026-09-06.md) ─────────────────────
+  // `saved` is this tenant's own sets; `uploaded` is a file in hand for THIS
+  // escalation (never stored until it is saved); `selectedId` is the one that
+  // will run; `expanded` is which rows have had their chevron used — nothing is
+  // expanded by default, which is the whole point of the row.
+  const [saved, setSaved] = useState<TacCommandCapture[]>([]);
+  const [savedErr, setSavedErr] = useState("");
+  const [uploaded, setUploaded] = useState<TacCommandCapture | null>(null);
+  const [uploadErr, setUploadErr] = useState("");
+  const [refusals, setRefusals] = useState<TacCaptureRefusal[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [selectedId, setSelectedId] = useState("");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [saveName, setSaveName] = useState("");
-  const [saveDesc, setSaveDesc] = useState("");
-  const [saveNote, setSaveNote] = useState("");
   const [saveErr, setSaveErr] = useState("");
+  const [saveNote, setSaveNote] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // The one disclosure. Its body is MOUNTED only while open, so what the step
+  // does not show is not merely hidden by CSS — it is not in the document.
+  const [behindOpen, setBehindOpen] = useState(false);
 
   const [collectBusy, setCollectBusy] = useState(false);
   const [collectErr, setCollectErr] = useState("");
@@ -218,6 +242,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   const state: TacState | null = info?.state ?? null;
   const plan: TacPlan | undefined = state?.plan;
   const capture = state?.capture;
+  const progress = state?.progress;
   const classification = classify?.classification ?? state?.classification;
 
   const readState = useCallback(async () => {
@@ -233,8 +258,8 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   useEffect(() => {
     setInfo(null); setInfoErr(""); setClassify(null); setClassErr("");
     setDeviceId(""); setPlanErr(""); setCollectErr(""); setPasteIntent(""); setPasteText("");
-    setReviewCmds([]); setVerdicts([]); setReviewErr(""); setTemplateId("");
-    setSaveName(""); setSaveDesc(""); setSaveNote(""); setSaveErr("");
+    setSaved([]); setSavedErr(""); setUploaded(null); setUploadErr(""); setRefusals([]);
+    setSelectedId(""); setExpanded({}); setSaveName(""); setSaveErr(""); setSaveNote("");
     setCaseForm(null); setCaseConnector(null); setCaseResult(null); setCaseErr("");
     void readState();
   }, [incidentId, readState]);
@@ -277,10 +302,9 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     }
   };
 
-  const runPlan = async () => {
-    setPlanErr("");
-    if (!deviceId.trim()) { setPlanErr(PLAN_NEEDS_DEVICE); return; }
-    setPlanning(true);
+  const runPlan = useCallback(async () => {
+    if (!deviceId.trim()) return;
+    setPlanErr(""); setPlanning(true);
     try {
       const classId = classOverride || classification?.class_id || "";
       await api.tacPlan(incidentId, buildPlanRequest(deviceId, classId, includeOptional, target));
@@ -290,92 +314,79 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     } finally {
       if (alive.current) setPlanning(false);
     }
-  };
+    // `target` is deliberately not a dependency: it is applied when the operator
+    // presses Rebuild, not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incidentId, deviceId, classOverride, classification?.class_id, includeOptional, readState]);
 
-  // ── the command review ────────────────────────────────────────────────────
-
-  // The working list is SEEDED from the plan the server built and re-seeded
-  // whenever that plan changes (a rebuild, a different device, a different
-  // class). An operator's in-progress edit is deliberately discarded then: it
-  // was a list for a plan that no longer exists.
-  const planKey = plan ? `${plan.id}:${plan.device_id}:${plan.class_id}` : "";
+  // THE EXTRACTION IS SILENT (owner, 2026-09-06). Once the class is known and a
+  // device is chosen, the plan is built without anybody pressing anything: the
+  // customer is never asked to review it, so asking them to trigger it would be
+  // asking them to think about a step that is not theirs.
+  const started = Boolean(classification);
+  const autoKey = `${deviceId}|${classOverride || classification?.class_id || ""}|${includeOptional}`;
+  const lastPlanned = useRef("");
   useEffect(() => {
-    if (!plan) { setReviewCmds([]); setVerdicts([]); return; }
-    setReviewCmds(planCommands(plan));
-    setSaveErr(""); setSaveNote("");
-  }, [planKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!started || !deviceId.trim() || lastPlanned.current === autoKey) return;
+    lastPlanned.current = autoKey;
+    void runPlan();
+  }, [started, deviceId, autoKey, runPlan]);
 
-  // The tenant's saved sets for THIS device's dialect, plus Correlix's own. A
-  // set written for another vendor is never offered: a list of EOS commands is
-  // meaningless at a Junos router.
+  // This tenant's saved captures for THIS device's dialect. A set written for
+  // another vendor is never offered: a list of EOS commands is meaningless at a
+  // Junos router.
   const dialect = plan?.dialect ?? "";
   useEffect(() => {
-    if (!dialect) { setTemplates([]); return; }
-    api.tacTemplates(dialect)
-      .then((r) => {
-        if (!alive.current) return;
-        setTemplates([...(r.defaults ?? []), ...(r.templates ?? [])]);
-        setTemplatesErr("");
-      })
+    if (!dialect) { setSaved([]); return; }
+    api.tacCaptures(dialect)
+      .then((r) => { if (alive.current) { setSaved(r.captures ?? []); setSavedErr(""); } })
       .catch((e: unknown) => {
-        if (alive.current) { setTemplates([]); setTemplatesErr(tacError(e, TEMPLATES_FAILED)); }
+        if (alive.current) { setSaved([]); setSavedErr(tacError(e, CAPTURES_FAILED)); }
       });
   }, [dialect]);
 
-  // Live per-line validation. It is DEBOUNCED and it is advisory: the server
-  // re-validates the same list at collect, so a check that failed to run can
-  // never let a refused command through — it only means the operator finds out
-  // one step later.
-  useEffect(() => {
-    if (!dialect || reviewCmds.length === 0) { setVerdicts([]); return; }
-    let cancelled = false;
-    const id = setTimeout(() => {
-      setChecking(true);
-      api.tacTemplateValidate(dialect, reviewCmds)
-        .then((r) => {
-          if (cancelled || !alive.current) return;
-          setVerdicts(r.validation?.lines ?? []);
-          setReviewErr("");
-        })
-        .catch((e: unknown) => {
-          if (cancelled || !alive.current) return;
-          setVerdicts([]);
-          setReviewErr(tacError(e, VALIDATE_FAILED));
-        })
-        .finally(() => { if (!cancelled && alive.current) setChecking(false); });
-    }, 400);
-    return () => { cancelled = true; clearTimeout(id); };
-  }, [dialect, reviewCmds]);
+  const rows = useMemo(
+    () => captureRows(state?.default_capture, uploaded, saved),
+    [state?.default_capture, uploaded, saved],
+  );
+  const selected = useMemo(() => selectedCapture(rows, selectedId), [rows, selectedId]);
 
-  const refused = verdicts.filter((v) => !v.ok).length;
-  const reviewEdited = reviewChanged(plan, reviewCmds);
-
-  const loadTemplate = (id: string) => {
-    setTemplateId(id);
-    if (!id) return;
-    const t = templates.find((x) => x.id === id);
-    if (!t) return;
-    setReviewCmds(t.steps.map((st) => st.command));
-    setSaveNote(`Loaded “${t.name}” — ${templateLabel(t)}.`);
+  /** Upload one file. Everything that decides whether it may run happens on the
+   *  server; this renders the answer, including the per-line refusal. */
+  const onUpload = async (file: File | undefined) => {
+    if (!file) return;
+    setUploadErr(""); setRefusals([]); setUploading(true);
+    try {
+      const r = await api.tacCaptureUpload(file, dialect);
+      if (!alive.current) return;
+      setUploaded(r.capture);
+      setSelectedId(r.capture.id);
+      setSaveName(r.capture.name || "");
+    } catch (e) {
+      if (!alive.current) return;
+      setUploaded(null);
+      const refused = parseCaptureRefusals(e);
+      setRefusals(refused);
+      setUploadErr(refused.length > 0 ? "" : tacError(e, UPLOAD_FAILED));
+    } finally {
+      if (alive.current) setUploading(false);
+    }
   };
 
-  const saveTemplate = async () => {
+  /** Save the uploaded capture as one of this tenant's own sets. */
+  const saveCapture = async () => {
+    if (!uploaded) return;
     setSaveErr(""); setSaveNote("");
     if (!saveName.trim()) { setSaveErr(TEMPLATE_NEEDS_NAME); return; }
-    if (reviewCmds.filter((c) => c.trim()).length === 0) { setSaveErr(REVIEW_EMPTY); return; }
     setSaving(true);
     try {
-      const basedOn = templateId.startsWith("correlix:") ? templateId : "";
-      const r = await api.tacTemplateSave(
-        buildTemplateWrite(dialect, saveName, saveDesc, basedOn, reviewCmds),
-      );
+      const r = await api.tacCaptureSave(buildCaptureWrite(dialect, saveName, uploaded.commands));
       if (!alive.current) return;
-      setSaveNote(`Saved “${r.template.name}” for ${dialect} — it will be offered on the next ${dialect} escalation.`);
-      setSaveName(""); setSaveDesc("");
-      const list = await api.tacTemplates(dialect);
-      if (alive.current) setTemplates([...(list.defaults ?? []), ...(list.templates ?? [])]);
+      setSaveNote(`Saved “${r.capture.name}”.`);
+      const list = await api.tacCaptures(dialect);
+      if (alive.current) setSaved(list.captures ?? []);
     } catch (e) {
-      if (alive.current) setSaveErr(tacError(e, TEMPLATE_SAVE_FAILED));
+      if (alive.current) setSaveErr(tacError(e, CAPTURE_SAVE_FAILED));
     } finally {
       if (alive.current) setSaving(false);
     }
@@ -399,12 +410,12 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     setCollectErr(""); setCollectBusy(true);
     try {
       const body: TacCollectRequest = {};
-      // The reviewed list travels ONLY when it differs from the plan or came
-      // from a template — otherwise the server runs the plan it already holds,
-      // and the bundle honestly records that nothing was edited.
-      if (reviewEdited || templateId) {
-        body.steps = buildReviewedSteps(reviewCmds);
-        if (templateId) body.template_id = templateId;
+      // The command list travels ONLY when the operator chose something other
+      // than Correlix's own capture — otherwise the server runs the plan it
+      // already holds, and the bundle honestly records that nothing was edited.
+      if (selected && selected.source !== "vendor-default") {
+        body.steps = selected.commands.map((c) => ({ command: c.command }));
+        if (selected.source === "template") body.template_id = selected.id;
       }
       await api.tacCollect(incidentId, body);
       if (alive.current) await readState();
@@ -415,7 +426,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     }
   };
 
-  /** File ONE pasted output for the selected step. The reviewed command list is
+  /** File ONE pasted output for the selected step. The capture's command list is
    *  deliberately NOT sent: pasting an output is not a request to run anything. */
   const addPastedOutput = async () => {
     const step = missing.find((s) => s.intent === pasteIntent);
@@ -513,7 +524,6 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     );
   }
 
-  const started = Boolean(classification);
   const evidence = evidenceLine(classify?.evidence_sources ?? [], classify?.evidence_missing ?? []);
   const planRows = orderedSteps(plan?.steps);
   const bundles = state?.bundles ?? [];
@@ -522,6 +532,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   // (owner, 2026-09-06); the rest now sit behind one disclosure.
   const caseRows = splitConnectors(info.connectors, dialectVendor(plan?.dialect ?? capture?.dialect ?? ""));
   const bundleBytes = newestBundleBytes(bundles);
+  const activeCaptureId = progress?.capture_id ?? "";
 
   return (
     <section className="tac-panel card" aria-label="Escalate to TAC">
@@ -541,504 +552,175 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
         </div>
       )}
 
-      {/* ── step 2: class + why ──────────────────────────────────────────── */}
-      {started && classification && (
-        <section className="tac-step" aria-labelledby="tac-class-h">
-          <h3 id="tac-class-h" className="tac-step-h">Issue class</h3>
-          <p className="tac-class-title">
-            <strong>{classification.title}</strong>{" "}
-            <code className="tac-id">{classification.class_id}</code>{" "}
-            <span className={`badge${classification.classified ? "" : " tac-unsure"}`}>
-              {classification.classified ? "matched the evidence" : "nothing scored"}
-            </span>
-          </p>
-          {classificationNote(classification) && (
-            <p className="mini-meta tac-note">{classificationNote(classification)}</p>
-          )}
-          {classification.tac_first_look && (
-            <p className="mini-meta tac-note">
-              <strong>What TAC opens first:</strong> {classification.tac_first_look}
-            </p>
-          )}
-
-          {classification.why.length > 0 ? (
-            <>
-              <p className="fact-line">The evidence that scored this class:</p>
-              <ul className="tac-why">
-                {classification.why.map((r) => (
-                  <li key={`${r.kind}-${r.ref}`}>{reasonLine(r)}</li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <p className="fact-line">No evidence row scored this class.</p>
-          )}
-
-          {classification.alternatives.length > 0 && (
-            <>
-              <p className="fact-line">Other classes that scored:</p>
-              <ul className="tac-alts">
-                {classification.alternatives.map((a) => (
-                  <li key={a.class_id}>
-                    <span className="tac-alt-t">{a.title}</span>{" "}
-                    <code className="tac-id">{a.class_id}</code>{" "}
-                    <span className="mini-meta">score {a.score}</span>
-                    {a.why.length > 0 && (
-                      <span className="mini-meta"> — {a.why.map(reasonLine).join(" · ")}</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-
-          {classify?.evidence_sources && (
-            <p className="mini-meta tac-note" data-testid="tac-evidence">
-              {evidence.on}
-              {evidence.without ? ` ${evidence.without}` : ""}
-            </p>
-          )}
+      {/* ── step 2: captures ─────────────────────────────────────────────── */}
+      {started && (
+        <section className="tac-step" aria-labelledby="tac-captures-h" data-testid="tac-captures">
+          <h3 id="tac-captures-h" className="tac-step-h">Captures</h3>
 
           <div className="tac-row">
-            {(classify?.classes?.length ?? 0) > 0 ? (
-              <div className="tac-field">
-                {/* The hint sits OUTSIDE the label: a label that wraps its own
-                    help text names the control after both, and the accessible
-                    name stops being the field's name. */}
-                <label>
-                  <span>Change the issue class</span>
-                  <select
-                    value={classOverride || classification.class_id}
-                    onChange={(e) => setClassOverride(e.target.value)}
-                  >
-                    {classify!.classes.map((c) => (
-                      <option key={c.id} value={c.id}>{c.title} — {c.id}</option>
-                    ))}
-                  </select>
-                </label>
-                <span className="mini-meta">Override the class if you know better.</span>
-              </div>
-            ) : (
-              <p className="fact-line">The class list arrives with a classification.</p>
-            )}
-            <button type="button" className="btn" onClick={() => { void runClassify(); }} disabled={classifying}>
-              {classifying ? "Classifying…" : "Classify again"}
-            </button>
-          </div>
-          {classErr && <p className="tac-bad" role="alert">{classErr}</p>}
-        </section>
-      )}
-
-      {/* ── step 3: plan preview ─────────────────────────────────────────── */}
-      {started && (
-        <section className="tac-step" aria-labelledby="tac-plan-h">
-          <h3 id="tac-plan-h" className="tac-step-h">Command plan</h3>
-          <div className="tac-form">
-            <div className="tac-field">
-              <label>
-                <span>Device</span>
-                <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
-                  <option value="">Choose the device…</option>
-                  {(info.devices ?? []).filter((d) => !devices.some((x) => x.id === d)).map((d) => (
-                    <option key={`aff-${d}`} value={d}>{d} — named by this incident</option>
-                  ))}
-                  {devices.map((d) => (
-                    <option key={d.id} value={d.id}>{d.name || d.id}{d.address ? ` — ${d.address}` : ""}</option>
-                  ))}
-                </select>
-              </label>
-              <span className="mini-meta">
-                {devicesErr || "The incident's own devices are listed first; any device you can see is selectable."}
-              </span>
-            </div>
-            {([
-              ["interface", "Interface"], ["peer", "Peer"], ["prefix", "Prefix"],
-              ["vrf", "VRF"], ["router_id", "Router id"], ["area", "Area"],
-            ] as [keyof TacTarget, string][]).map(([key, label]) => (
-              <label className="tac-field" key={key}>
-                <span>{label} (optional)</span>
-                <input
-                  type="text"
-                  maxLength={256}
-                  value={target[key] ?? ""}
-                  onChange={(e) => setTarget((t) => ({ ...t, [key]: e.target.value }))}
-                />
-              </label>
-            ))}
-            <label className="tac-check">
-              <input
-                type="checkbox"
-                checked={includeOptional}
-                onChange={(e) => setIncludeOptional(e.target.checked)}
-              />
-              <span>Include the optional captures (large and slow, off by default)</span>
+            <label className="tac-field">
+              <span>Device</span>
+              <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
+                <option value="">Choose the device…</option>
+                {(info.devices ?? []).filter((d) => !devices.some((x) => x.id === d)).map((d) => (
+                  <option key={`aff-${d}`} value={d}>{d}</option>
+                ))}
+                {devices.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name || d.id}{d.address ? ` — ${d.address}` : ""}</option>
+                ))}
+              </select>
             </label>
-            <div className="tac-actions">
-              <button type="button" className="btn accent" onClick={() => { void runPlan(); }} disabled={planning}>
-                {planning ? "Building the plan…" : plan ? "Rebuild the plan" : "Build the command plan"}
-              </button>
-            </div>
+            <span className="mini-meta" data-testid="tac-device-note">
+              {devicesErr || (planning ? "Reading this platform…" : plan?.dialect_display || plan?.dialect || "")}
+            </span>
           </div>
           {planErr && <p className="tac-bad" role="alert">{planErr}</p>}
 
           {!plan ? (
-            <p className="mini-meta tac-note" role="status">{PLAN_NEEDS_DEVICE}</p>
+            <p className="tac-empty" role="status">{CAPTURES_NEED_DEVICE}</p>
           ) : (
-            <div className="tac-plan" data-testid="tac-plan">
-              <p className="tac-plan-head" title={planVersionTitle(plan)}>{planHeadline(plan)}</p>
-              {!plan.has_plan && (
+            <>
+              {plan.has_plan === false && (
                 <p className="tac-bad" role="status" data-testid="tac-no-plan">
                   {plan.note || NO_AUTHORED_PLAN_NOTE}
                 </p>
               )}
-
-              {planRows.length > 0 && (
-                <>
-                  <div className="tac-plan-scroll">
-                    <table className="tac-plan-table" data-testid="tac-plan-table">
-                      <thead>
-                        <tr>
-                          <th scope="col" className="tac-col-n">#</th>
-                          <th scope="col">What it collects</th>
-                          <th scope="col">Command</th>
-                          <th scope="col">Status</th>
-                          <th scope="col" className="tac-col-ref"><span className="tac-sr">Reference</span></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {planRows.slice(0, ROW_RENDER_CAP).map((s, i) => (
-                          <PlanRow key={`${s.section}-${s.intent}`} step={s} n={i + 1} />
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {planRows.length > ROW_RENDER_CAP && (
-                    <p className="tac-plan-legend">{cappedNote(ROW_RENDER_CAP, planRows.length, "steps")}</p>
-                  )}
-                  <p className="tac-plan-legend" data-testid="tac-plan-legend">{PLAN_LEGEND}</p>
-                </>
-              )}
-
-              {plan.topology.length > 0 && (
-                <details className="tac-fold" data-testid="tac-topology">
-                  <summary>{topologyLine(plan.topology.length)}</summary>
-                  <ul className="tac-fold-list">
-                    {plan.topology.slice(0, ROW_RENDER_CAP).map((t, i) => (
-                      <li key={`${t.kind}-${t.ref}-${i}`} title={t.detail || t.kind}>{t.ref}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-
-              {plan.unbound.length > 0 && (
-                <details className="tac-fold" data-testid="tac-unbound">
-                  <summary>{unavailableLine(plan.unbound.length, plan.dialect_display || plan.dialect)}</summary>
-                  <ul className="tac-fold-list">
-                    {plan.unbound.slice(0, ROW_RENDER_CAP).map((s) => (
-                      <li key={`ub-${s.intent}`} title={`${stepTooltip(s)} · ${unboundReason(s)}`}>{s.title}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* ── step 3b: review the commands (tracker 250) ───────────────────── */}
-      {started && plan && (
-        <section className="tac-step" aria-labelledby="tac-review-h" data-testid="tac-review">
-          <h3 id="tac-review-h" className="tac-step-h">Review the commands</h3>
-          <p className="mini-meta tac-note">{REVIEW_INTRO}</p>
-          <p className="mini-meta tac-note" data-testid="tac-review-policy">{REVIEW_POLICY_NOTE}</p>
-
-          <div className="tac-row tac-tpl-row">
-            <div className="tac-field">
-              <label>
-                <span>Load a command template</span>
-                <select
-                  value={templateId}
-                  onChange={(e) => loadTemplate(e.target.value)}
-                  data-testid="tac-template-picker"
-                >
-                  <option value="">Correlix&apos;s plan for this incident</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name} — {templateLabel(t)}</option>
+              {rows.length === 0 ? (
+                <p className="tac-empty" role="status">{CAPTURES_NONE}</p>
+              ) : (
+                <ul className="tac-captures" data-testid="tac-capture-rows">
+                  {rows.map((c) => (
+                    <CaptureRow
+                      key={c.id}
+                      capture={c}
+                      selected={selected?.id === c.id}
+                      open={Boolean(expanded[c.id])}
+                      status={captureRowStatus(c.id, activeCaptureId, progress)}
+                      percent={c.id === activeCaptureId ? captureBarPercent(progress) : 100}
+                      failed={failedCommands(c.id, activeCaptureId, progress)}
+                      onPick={() => setSelectedId(c.id)}
+                      onToggle={() => setExpanded((m) => ({ ...m, [c.id]: !m[c.id] }))}
+                    />
                   ))}
-                </select>
-              </label>
-              <span className="mini-meta">
-                {templatesErr
-                  || (templates.length === 0
-                    ? `No saved set for ${plan.dialect_display || plan.dialect} yet — build one below.`
-                    : `Sets written for ${plan.dialect_display || plan.dialect}. Correlix's own are read-only; save a copy to make it yours.`)}
-              </span>
-            </div>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => { setReviewCmds(planCommands(plan)); setTemplateId(""); setSaveNote(""); }}
-              data-testid="tac-review-reset"
-            >
-              Reset to Correlix&apos;s plan
-            </button>
-          </div>
-
-          <ol className="tac-review-list" data-testid="tac-review-list">
-            {reviewCmds.map((cmd, i) => {
-              const v = verdicts[i];
-              const bad = v ? !v.ok : false;
-              return (
-                <li key={`rev-${i}`} className={`tac-review-row${bad ? " bad" : ""}`}>
-                  <input
-                    type="text"
-                    className="tac-review-cmd"
-                    aria-label={`Command ${i + 1}`}
-                    maxLength={512}
-                    value={cmd}
-                    onChange={(e) => setReviewCmds((list) => list.map((c, j) => (j === i ? e.target.value : c)))}
-                  />
-                  <span className="tac-review-actions">
-                    <button
-                      type="button"
-                      className="btn tiny"
-                      aria-label={`Move command ${i + 1} up`}
-                      disabled={i === 0}
-                      onClick={() => setReviewCmds((list) => moveCommand(list, i, i - 1))}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      className="btn tiny"
-                      aria-label={`Move command ${i + 1} down`}
-                      disabled={i === reviewCmds.length - 1}
-                      onClick={() => setReviewCmds((list) => moveCommand(list, i, i + 1))}
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      className="btn tiny"
-                      aria-label={`Remove command ${i + 1}`}
-                      onClick={() => setReviewCmds((list) => list.filter((_, j) => j !== i))}
-                    >
-                      Remove
-                    </button>
-                  </span>
-                  {v && (
-                    <span className={`mini-meta tac-verdict${bad ? " tac-bad" : ""}`} role={bad ? "alert" : undefined}>
-                      {bad && v.family ? <span className="badge tac-family">{v.family}</span> : null}
-                      {!bad ? <span className="badge">{originLabel(v)}</span> : null}{" "}
-                      {verdictLine(v) || (v.origin === "custom" ? CUSTOM_COMMAND_NOTE : "")}
-                    </span>
-                  )}
-                </li>
-              );
-            })}
-          </ol>
-
-          <div className="tac-actions">
-            <button
-              type="button"
-              className="btn"
-              disabled={reviewCmds.length >= MAX_REVIEW_COMMANDS}
-              onClick={() => setReviewCmds((list) => [...list, ""])}
-              data-testid="tac-review-add"
-            >
-              Add a command
-            </button>
-            <span className="mini-meta">
-              {reviewCmds.length} of {MAX_REVIEW_COMMANDS} commands
-              {checking ? " · checking…" : ""}
-            </span>
-          </div>
-
-          {refused > 0 && (
-            <p className="tac-bad" role="alert" data-testid="tac-review-refused">{REVIEW_REFUSED}</p>
-          )}
-          {reviewCmds.filter((c) => c.trim()).length === 0 && (
-            <p className="tac-bad" role="status">{REVIEW_EMPTY}</p>
-          )}
-          {reviewErr && <p className="mini-meta tac-note" role="status">{reviewErr}</p>}
-          {plan.reviewed && editSummary(plan) && (
-            <p className="mini-meta tac-note" data-testid="tac-review-edits">{editSummary(plan)}</p>
-          )}
-
-          <details className="tac-tpl-save">
-            <summary>Save this set as a template for {plan.dialect_display || plan.dialect}</summary>
-            <div className="tac-form">
-              <label className="tac-field">
-                <span>Template name</span>
-                <input
-                  type="text"
-                  maxLength={120}
-                  value={saveName}
-                  onChange={(e) => setSaveName(e.target.value)}
-                  data-testid="tac-template-name"
-                />
-              </label>
-              <label className="tac-field">
-                <span>What it is for (optional)</span>
-                <input
-                  type="text"
-                  maxLength={800}
-                  value={saveDesc}
-                  onChange={(e) => setSaveDesc(e.target.value)}
-                />
-              </label>
-              <div className="tac-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={saving || refused > 0}
-                  onClick={() => { void saveTemplate(); }}
-                  data-testid="tac-template-save"
-                >
-                  {saving ? "Saving…" : "Save as template"}
-                </button>
-                <span className="mini-meta">
-                  Saved for your tenant only, for {plan.dialect_display || plan.dialect}. Every command is checked
-                  again on the way in.
-                </span>
-              </div>
-              {saveErr && <p className="tac-bad" role="alert" data-testid="tac-template-error">{saveErr}</p>}
-              {saveNote && <p className="mini-meta tac-note" role="status" data-testid="tac-template-note">{saveNote}</p>}
-            </div>
-          </details>
-        </section>
-      )}
-
-      {/* ── step 4: collect ──────────────────────────────────────────────── */}
-      {started && plan && (
-        <section className="tac-step" aria-labelledby="tac-collect-h">
-          <h3 id="tac-collect-h" className="tac-step-h">Collect</h3>
-          {!info.can_collect && (
-            <p className="tac-bad" role="status" data-testid="tac-collect-note">{info.collect_note}</p>
-          )}
-          <div className="tac-actions">
-            <button
-              type="button"
-              className="btn accent"
-              onClick={() => { void runCollect(); }}
-              disabled={collectBusy || running || !info.can_collect || refused > 0}
-              title={info.can_collect ? undefined : info.collect_note}
-            >
-              {running ? "Collecting…" : "Start the collection"}
-            </button>
-            <button type="button" className="btn" onClick={() => { void runCancel(); }} disabled={!running}>
-              Stop
-            </button>
-          </div>
-          {collectErr && <p className="tac-bad" role="alert" data-testid="tac-collect-error">{collectErr}</p>}
-
-          {state?.job && (
-            <div className="tac-job" role="status" aria-live="polite" data-testid="tac-job">
-              <p className="mini-meta">
-                {state.job.done} of {state.job.total} commands · {state.job.status}
-                {state.job.error ? ` · ${state.job.error}` : ""}
-              </p>
-              <ul className="tac-progress">
-                {state.job.progress.slice(-ROW_RENDER_CAP).map((p, i) => (
-                  <li key={`${p.index}-${p.phase}-${i}`} className={`tac-prog ${p.phase}`}>
-                    <span className="tac-prog-i">{p.index + 1}/{p.total}</span>
-                    <code className="tac-id">{p.intent}</code>
-                    <code className="tac-cmd">{p.command}</code>
-                    <span className="tac-prog-p">{phaseLabel(p.phase)}</span>
-                    <span className="mini-meta">
-                      {p.error ? p.error : p.bytes != null ? humanBytes(p.bytes) : ""}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              {state.job.progress.length > ROW_RENDER_CAP && (
-                <p className="mini-meta tac-note">
-                  {cappedNote(ROW_RENDER_CAP, state.job.progress.length, "progress lines")}
-                </p>
+                </ul>
               )}
-            </div>
-          )}
 
-          {capture && (
-            <div className="tac-capture" data-testid="tac-capture">
-              <p className="mini-meta tac-note">
-                {capture.commands.length} command(s) · {humanBytes(capture.total_bytes)} from{" "}
-                {capture.hostname || capture.device_id}
-                {capture.stopped ? ` · stopped: ${capture.stopped}` : ""}
-              </p>
-              {capture.commands.slice(0, ROW_RENDER_CAP).map((c) => (
-                <details className="tac-out" key={`cap-${c.intent}`}>
-                  <summary>
-                    <code className="tac-cmd">{c.command || c.intent}</code>{" "}
-                    <span className="mini-meta">
-                      {c.error ? c.error : `${humanBytes(c.bytes)}`}
-                      {verifiedLabel(c.verified) ? ` · ${verifiedLabel(c.verified)}` : ""}
-                    </span>
-                  </summary>
-                  {c.output ? (
-                    <pre className="tac-pre">{c.output}</pre>
-                  ) : (
-                    <p className="mini-meta tac-note">
-                      {c.error || "The device returned nothing for this command."}
-                    </p>
-                  )}
-                </details>
-              ))}
-            </div>
-          )}
-
-          {/* The paste path, and ONLY where the gateway could not collect.
-              It used to render one textarea per intent in the whole class —
-              72 of them on a Nokia SR Linux plan, labelled with raw intent ids
-              for checks Correlix had already said it cannot run. It is now one
-              control over the bound steps that still lack output, and the count
-              says how much is left. */}
-          {showPaste && (
-            <div className="tac-paste" data-testid="tac-paste">
-              <h4 className="tac-section-h">Paste missing output</h4>
-              <p className="mini-meta tac-note">{PASTE_INVITE}</p>
               <div className="tac-row">
                 <label className="tac-field">
-                  <span>Output</span>
-                  <select
-                    value={pasteIntent}
-                    data-testid="tac-paste-picker"
-                    onChange={(e) => setPasteIntent(e.target.value)}
-                  >
-                    {missing.slice(0, ROW_RENDER_CAP).map((s) => (
-                      <option key={`p-${s.intent}`} value={s.intent} title={stepTooltip(s)}>
-                        {pasteOptionLabel(s)}
-                      </option>
-                    ))}
-                  </select>
+                  <span>Upload your own</span>
+                  <input
+                    type="file"
+                    accept={UPLOAD_ACCEPT}
+                    data-testid="tac-upload"
+                    onChange={(e) => { void onUpload(e.target.files?.[0]); }}
+                  />
                 </label>
-                <span className="mini-meta" data-testid="tac-paste-count">
-                  {missingOutputsLine(missing.length, boundTotal)}
-                </span>
+                <span className="mini-meta">{uploading ? "Reading the file…" : UPLOAD_FORMATS_LINE}</span>
               </div>
-              <textarea
-                rows={5}
-                maxLength={MAX_PASTE_CHARS}
-                value={pasteText}
-                aria-label="Pasted output"
-                onChange={(e) => setPasteText(e.target.value)}
-              />
+              {refusals.length > 0 && (
+                <ul className="tac-refusals" role="alert" data-testid="tac-upload-refusals">
+                  {refusals.slice(0, ROW_RENDER_CAP).map((r) => (
+                    <li key={`ref-${r.line}-${r.command}`}>{refusalLine(r)}</li>
+                  ))}
+                </ul>
+              )}
+              {uploadErr && <p className="tac-bad" role="alert" data-testid="tac-upload-error">{uploadErr}</p>}
+              {savedErr && <p className="tac-bad" role="alert">{savedErr}</p>}
+
+              {selected?.source === "uploaded" && (
+                <div className="tac-row" data-testid="tac-capture-save">
+                  <label className="tac-field">
+                    <span>Template name</span>
+                    <input
+                      type="text"
+                      maxLength={120}
+                      value={saveName}
+                      onChange={(e) => setSaveName(e.target.value)}
+                      data-testid="tac-capture-name"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={saving}
+                    onClick={() => { void saveCapture(); }}
+                    data-testid="tac-capture-save-btn"
+                  >
+                    {saving ? "Saving…" : "Save as template"}
+                  </button>
+                </div>
+              )}
+              {saveErr && <p className="tac-bad" role="alert" data-testid="tac-capture-save-error">{saveErr}</p>}
+              {saveNote && <p className="fact-line" role="status" data-testid="tac-capture-save-note">{saveNote}</p>}
+
               <div className="tac-actions">
                 <button
                   type="button"
-                  className="btn"
-                  disabled={collectBusy || pasteText.trim() === "" || pasteIntent === ""}
-                  onClick={() => { void addPastedOutput(); }}
+                  className="btn accent"
+                  onClick={() => { void runCollect(); }}
+                  disabled={collectBusy || running || !info.can_collect || rows.length === 0}
+                  title={info.can_collect ? undefined : info.collect_note}
                 >
-                  {collectBusy ? "Filing…" : "Add output"}
+                  {running ? "Collecting…" : "Start the collection"}
+                </button>
+                <button type="button" className="btn" onClick={() => { void runCancel(); }} disabled={!running}>
+                  Stop
                 </button>
               </div>
-            </div>
+              {!info.can_collect && (
+                <p className="tac-bad" role="status" data-testid="tac-collect-note">{info.collect_note}</p>
+              )}
+              {collectErr && <p className="tac-bad" role="alert" data-testid="tac-collect-error">{collectErr}</p>}
+
+              {/* The paste path, and ONLY where the gateway could not collect. */}
+              {showPaste && (
+                <div className="tac-paste" data-testid="tac-paste">
+                  <h4 className="tac-section-h">Paste missing output</h4>
+                  <p className="mini-meta tac-note">{PASTE_INVITE}</p>
+                  <div className="tac-row">
+                    <label className="tac-field">
+                      <span>Output</span>
+                      <select
+                        value={pasteIntent}
+                        data-testid="tac-paste-picker"
+                        onChange={(e) => setPasteIntent(e.target.value)}
+                      >
+                        {missing.slice(0, ROW_RENDER_CAP).map((s) => (
+                          <option key={`p-${s.intent}`} value={s.intent} title={stepTooltip(s)}>
+                            {pasteOptionLabel(s)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <span className="mini-meta" data-testid="tac-paste-count">
+                      {missingOutputsLine(missing.length, boundTotal)}
+                    </span>
+                  </div>
+                  <textarea
+                    rows={5}
+                    maxLength={MAX_PASTE_CHARS}
+                    value={pasteText}
+                    aria-label="Pasted output"
+                    onChange={(e) => setPasteText(e.target.value)}
+                  />
+                  <div className="tac-actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={collectBusy || pasteText.trim() === "" || pasteIntent === ""}
+                      onClick={() => { void addPastedOutput(); }}
+                    >
+                      {collectBusy ? "Filing…" : "Add output"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </section>
       )}
 
-      {/* ── step 5: bundle ───────────────────────────────────────────────── */}
+      {/* ── step 3: bundle ───────────────────────────────────────────────── */}
       {started && plan && (
         <section className="tac-step" aria-labelledby="tac-bundle-h">
           <h3 id="tac-bundle-h" className="tac-step-h">Bundle</h3>
@@ -1088,7 +770,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
         </section>
       )}
 
-      {/* ── step 6: open the case ────────────────────────────────────────── */}
+      {/* ── step 4: open the case ────────────────────────────────────────── */}
       {started && plan && (
         <section className="tac-step" aria-labelledby="tac-case-h">
           <h3 id="tac-case-h" className="tac-step-h">Open the case</h3>
@@ -1194,7 +876,310 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
           )}
         </section>
       )}
+
+      {/* ── behind the scenes ────────────────────────────────────────────────
+          ONE control (owner, 2026-09-06: "Give an option to look what is
+          happening behind the scene which you are showing it on screen now").
+          It carries what the panel used to print inline: the class it chose and
+          the evidence rows that scored it, the commands with their sources and
+          verification state, and the collection log. The body is MOUNTED only
+          while open — what the escalation step does not show is not in the
+          document at all, rather than hidden by a stylesheet. */}
+      {started && (
+        <section className="tac-step" data-testid="tac-behind">
+          <button
+            type="button"
+            className="tac-behind-toggle"
+            aria-expanded={behindOpen}
+            onClick={() => setBehindOpen((v) => !v)}
+            data-testid="tac-behind-toggle"
+          >
+            {behindOpen ? "▾ " : "▸ "}{BEHIND_LABEL}
+          </button>
+
+          {behindOpen && (
+            <div className="tac-behind-body" data-testid="tac-behind-body">
+              {classification && (
+                <>
+                  <h4 className="tac-section-h">Issue class</h4>
+                  <p className="tac-class-title">
+                    <strong>{classification.title}</strong>{" "}
+                    <code className="tac-id">{classification.class_id}</code>{" "}
+                    <span className={`badge${classification.classified ? "" : " tac-unsure"}`}>
+                      {classification.classified ? "matched the evidence" : "nothing scored"}
+                    </span>
+                  </p>
+                  {classificationNote(classification) && (
+                    <p className="mini-meta tac-note">{classificationNote(classification)}</p>
+                  )}
+                  {classification.tac_first_look && (
+                    <p className="mini-meta tac-note">
+                      <strong>What TAC opens first:</strong> {classification.tac_first_look}
+                    </p>
+                  )}
+                  {classification.why.length > 0 ? (
+                    <ul className="tac-why">
+                      {classification.why.map((r) => (
+                        <li key={`${r.kind}-${r.ref}`}>{reasonLine(r)}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="fact-line">No evidence row scored this class.</p>
+                  )}
+                  {classification.alternatives.length > 0 && (
+                    <ul className="tac-alts">
+                      {classification.alternatives.map((a) => (
+                        <li key={a.class_id}>
+                          <span className="tac-alt-t">{a.title}</span>{" "}
+                          <code className="tac-id">{a.class_id}</code>{" "}
+                          <span className="mini-meta">score {a.score}</span>
+                          {a.why.length > 0 && (
+                            <span className="mini-meta"> — {a.why.map(reasonLine).join(" · ")}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {classify?.evidence_sources && (
+                    <p className="fact-line" data-testid="tac-evidence">
+                      {evidence.on}
+                      {evidence.without ? ` ${evidence.without}` : ""}
+                    </p>
+                  )}
+                  <div className="tac-row">
+                    {(classify?.classes?.length ?? 0) > 0 && (
+                      <label className="tac-field">
+                        <span>Issue class</span>
+                        <select
+                          value={classOverride || classification.class_id}
+                          onChange={(e) => setClassOverride(e.target.value)}
+                        >
+                          {classify!.classes.map((c) => (
+                            <option key={c.id} value={c.id}>{c.title} — {c.id}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <button type="button" className="btn" onClick={() => { void runClassify(); }} disabled={classifying}>
+                      {classifying ? "Classifying…" : "Classify again"}
+                    </button>
+                  </div>
+                  {classErr && <p className="tac-bad" role="alert">{classErr}</p>}
+                </>
+              )}
+
+              <h4 className="tac-section-h">Commands</h4>
+              <div className="tac-form">
+                {([
+                  ["interface", "Interface"], ["peer", "Peer"], ["prefix", "Prefix"],
+                  ["vrf", "VRF"], ["router_id", "Router id"], ["area", "Area"],
+                ] as [keyof TacTarget, string][]).map(([key, label]) => (
+                  <label className="tac-field" key={key}>
+                    <span>{label}</span>
+                    <input
+                      type="text"
+                      maxLength={256}
+                      value={target[key] ?? ""}
+                      onChange={(e) => setTarget((t) => ({ ...t, [key]: e.target.value }))}
+                    />
+                  </label>
+                ))}
+                <label className="tac-check">
+                  <input
+                    type="checkbox"
+                    checked={includeOptional}
+                    onChange={(e) => setIncludeOptional(e.target.checked)}
+                  />
+                  <span>Include the optional captures</span>
+                </label>
+                <div className="tac-actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => { void runPlan(); }}
+                    disabled={planning || !deviceId.trim()}
+                    data-testid="tac-rebuild"
+                  >
+                    {planning ? "Rebuilding…" : "Rebuild"}
+                  </button>
+                </div>
+              </div>
+
+              {plan && (
+                <div className="tac-plan" data-testid="tac-plan">
+                  <p className="tac-plan-head" title={planVersionTitle(plan)}>{planHeadline(plan)}</p>
+                  {planRows.length > 0 && (
+                    <>
+                      <div className="tac-plan-scroll">
+                        <table className="tac-plan-table" data-testid="tac-plan-table">
+                          <thead>
+                            <tr>
+                              <th scope="col" className="tac-col-n">#</th>
+                              <th scope="col">What it collects</th>
+                              <th scope="col">Command</th>
+                              <th scope="col">Status</th>
+                              <th scope="col" className="tac-col-ref"><span className="tac-sr">Reference</span></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {planRows.slice(0, ROW_RENDER_CAP).map((s, i) => (
+                              <PlanRow key={`${s.section}-${s.intent}`} step={s} n={i + 1} />
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {planRows.length > ROW_RENDER_CAP && (
+                        <p className="tac-plan-legend">{cappedNote(ROW_RENDER_CAP, planRows.length, "steps")}</p>
+                      )}
+                      <p className="tac-plan-legend" data-testid="tac-plan-legend">{PLAN_LEGEND}</p>
+                    </>
+                  )}
+
+                  {plan.topology.length > 0 && (
+                    <details className="tac-fold" data-testid="tac-topology">
+                      <summary>{topologyLine(plan.topology.length)}</summary>
+                      <ul className="tac-fold-list">
+                        {plan.topology.slice(0, ROW_RENDER_CAP).map((t, i) => (
+                          <li key={`${t.kind}-${t.ref}-${i}`} title={t.detail || t.kind}>{t.ref}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+
+                  {plan.unbound.length > 0 && (
+                    <details className="tac-fold" data-testid="tac-unbound">
+                      <summary>{unavailableLine(plan.unbound.length, plan.dialect_display || plan.dialect)}</summary>
+                      <ul className="tac-fold-list">
+                        {plan.unbound.slice(0, ROW_RENDER_CAP).map((s) => (
+                          <li key={`ub-${s.intent}`} title={`${stepTooltip(s)} · ${unboundReason(s)}`}>{s.title}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              )}
+
+              <h4 className="tac-section-h">Collection log</h4>
+              {state?.job ? (
+                <div className="tac-job" data-testid="tac-job">
+                  <p className="fact-line">
+                    {state.job.done} of {state.job.total} commands · {state.job.status}
+                    {state.job.error ? ` · ${state.job.error}` : ""}
+                  </p>
+                  <ul className="tac-progress">
+                    {state.job.progress.slice(-ROW_RENDER_CAP).map((p, i) => (
+                      <li key={`${p.index}-${p.phase}-${i}`} className={`tac-prog ${p.phase}`}>
+                        <span className="tac-prog-i">{p.index + 1}/{p.total}</span>
+                        <code className="tac-id">{p.intent}</code>
+                        <code className="tac-cmd">{p.command}</code>
+                        <span className="tac-prog-p">{phaseLabel(p.phase)}</span>
+                        <span className="mini-meta">
+                          {p.error ? p.error : p.bytes != null ? humanBytes(p.bytes) : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="tac-empty">Nothing has been collected yet.</p>
+              )}
+
+              {capture && (
+                <div className="tac-capture" data-testid="tac-capture">
+                  <p className="fact-line">
+                    {capture.commands.length} command(s) · {humanBytes(capture.total_bytes)} from{" "}
+                    {capture.hostname || capture.device_id}
+                    {capture.stopped ? ` · stopped: ${capture.stopped}` : ""}
+                  </p>
+                  {capture.commands.slice(0, ROW_RENDER_CAP).map((c) => (
+                    <details className="tac-out" key={`cap-${c.intent}`}>
+                      <summary>
+                        <code className="tac-cmd">{c.command || c.intent}</code>{" "}
+                        <span className="mini-meta">
+                          {c.error ? c.error : `${humanBytes(c.bytes)}`}
+                          {verifiedLabel(c.verified) ? ` · ${verifiedLabel(c.verified)}` : ""}
+                        </span>
+                      </summary>
+                      {c.output ? (
+                        <pre className="tac-pre">{c.output}</pre>
+                      ) : (
+                        <p className="fact-line">
+                          {c.error || "The device returned nothing for this command."}
+                        </p>
+                      )}
+                    </details>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
     </section>
+  );
+}
+
+/**
+ * One capture, as one row (owner, 2026-09-06).
+ *
+ * Four things and nothing else: the name, how many commands it holds, a
+ * coloured status, and a chevron. The commands themselves are HIDDEN until the
+ * chevron is used — a customer choosing between three named sets does not need
+ * forty command lines on screen to do it.
+ *
+ * Under a partial or failed row: ONLY the commands that failed, in the error
+ * colour, each with its plain reason. What succeeded is in the bundle.
+ */
+function CaptureRow({ capture, selected, open, status, percent, failed, onPick, onToggle }: {
+  capture: TacCommandCapture;
+  selected: boolean;
+  open: boolean;
+  status: TacCaptureStatus;
+  percent: number;
+  failed: TacCommandStatus[];
+  onPick: () => void;
+  onToggle: () => void;
+}) {
+  return (
+    <li className={`tac-capture-row${selected ? " on" : ""}`} data-testid={`tac-capture-${capture.id}`}>
+      <div className="tac-capture-head">
+        <button
+          type="button"
+          className="tac-capture-toggle"
+          aria-expanded={open}
+          aria-label={`Commands in ${capture.name}`}
+          onClick={onToggle}
+        >
+          {open ? "▾" : "▸"}
+        </button>
+        <label className="tac-capture-pick">
+          <input type="radio" name="tac-capture" checked={selected} onChange={onPick} />
+          <span className="tac-capture-name">{capture.name}</span>
+        </label>
+        <span className="mini-meta">{CAPTURE_SOURCE_LABEL[capture.source]}</span>
+        <span className="fact-line">{commandCountLine(capture.commands.length)}</span>
+        <span className="tac-capture-status">
+          <span className={`tac-capture-track tac-capture-${status}`}>
+            <span className="tac-capture-bar" style={{ width: `${percent}%` }} />
+          </span>
+          <span className={`tac-chip tac-chip-${status}`}>{CAPTURE_STATUS_LABEL[status]}</span>
+        </span>
+      </div>
+      {open && (
+        <ol className="tac-capture-cmds" data-testid={`tac-capture-cmds-${capture.id}`}>
+          {capture.commands.slice(0, ROW_RENDER_CAP).map((c, i) => (
+            <li key={`${capture.id}-${i}`}><code className="tac-cmd">{c.command}</code></li>
+          ))}
+        </ol>
+      )}
+      {failed.length > 0 && (
+        <ul className="tac-capture-fails" data-testid={`tac-capture-failed-${capture.id}`}>
+          {failed.slice(0, ROW_RENDER_CAP).map((f, i) => (
+            <li key={`${capture.id}-f-${i}`} className="tac-capture-fail">{failedCommandLine(f)}</li>
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }
 
@@ -1264,12 +1249,10 @@ function ConnectorRow({ info, bundleBytes, busy, onOpen }: {
 /** One row of the command plan: the step number, what it collects in plain
  *  words, the command, one chip, and at most one reference.
  *
- *  What is NOT here is the point (owner, 2026-09-06). The intent id, the
- *  collection stage and the "documented, not verified" caveat used to be
- *  printed on every row; they now live in the row's tooltip and in the single
- *  legend line under the table. The citation list used to be printed in full —
- *  366 links per row on a Nokia SR Linux plan — and is now one small link to
- *  the first page, if the pack cites one at all. */
+ *  It lives BEHIND the "What Correlix is doing" control now
+ *  (docs/design/TAC_CAPTURES_2026-09-06.md): the escalation step shows captures,
+ *  and the intent ids, sources and verification state are the engine's working,
+ *  available on demand rather than in the customer's way. */
 function PlanRow({ step, n }: { step: TacStep; n: number }) {
   const status = stepStatus(step.verified);
   const ref = stepReference(step);

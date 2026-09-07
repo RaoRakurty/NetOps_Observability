@@ -130,6 +130,11 @@ func TestTACRoutesLiveInsideTheirMarkers(t *testing.T) {
 		// brought in Administration, long before anything is escalated.
 		"/api/tac/connectors/{id}":      false,
 		"/api/tac/connectors/{id}/test": false,
+		// The CAPTURES surface (docs/design/TAC_CAPTURES_2026-09-06.md). A
+		// capture belongs to a TENANT, like the templates it is stored as, and
+		// the subtree carries the upload verb as well as one capture by id.
+		"/api/tac/captures":  false,
+		"/api/tac/captures/": false,
 	}
 	for _, m := range tplRE.FindAllStringSubmatch(in, -1) {
 		if _, ok := wantTpl[m[1]]; !ok {
@@ -171,6 +176,8 @@ func TestTACAdapterLivesInsideItsMarkers(t *testing.T) {
 		"handleTACTemplateValidate", "tacTemplateAuthz", "tacApplyReview", "newTACTemplateStore",
 		// tracker 243 — the learning backlog wiring.
 		"handleTACLearning", "handleTACLearningSubtree", "newTACLearningStore",
+		// the Captures surface — two entry points, everything else internal/tac.
+		"handleTACCaptures", "handleTACCaptureSubtree",
 	} {
 		if !strings.Contains(in, "func (s *server) "+want) && !strings.Contains(in, "func "+want) {
 			t.Errorf("%s is not inside the TAC-ROUTES markers", want)

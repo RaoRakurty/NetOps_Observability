@@ -242,6 +242,14 @@ var routeIsolationLedger = map[string]string{
 	"/api/tac/templates/":           "scoped",
 	"/api/tac/templates/defaults":   "globalRef",
 	"/api/tac/templates/validate":   "globalRef",
+	// CAPTURES (docs/design/TAC_CAPTURES_2026-09-06.md). Per-tenant DATA: a
+	// saved capture IS a template row, so it is the same store, the same
+	// tenant-keyed bucket / FORCE-RLS policy and the same "another tenant's id
+	// is a 404" rule. The upload verb takes the same concrete scope even though
+	// it stores nothing — it is validated against this tenant's dialect and
+	// audited under this tenant's name.
+	"/api/tac/captures":  "scoped",
+	"/api/tac/captures/": "scoped",
 
 	// The TAC LEARNING BACKLOG (tracker 243). Per-tenant DATA in the strongest
 	// sense: a learning record holds redacted excerpts of THIS tenant's device

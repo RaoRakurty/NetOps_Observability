@@ -17,7 +17,9 @@
 //    on every row — 8,418 links — and was unusable)
 
 import { describe, it, expect } from "vitest";
-import type { TacPlan, TacState, TacStep, TacConnectorInfo } from "../../services/api";
+import type {
+  TacCaptureProgress, TacCommandCapture, TacConnectorInfo, TacPlan, TacState, TacStep,
+} from "../../services/api";
 import {
   COLLECT_FAILED,
   CONNECTOR_CHIP,
@@ -28,6 +30,16 @@ import {
   NOTHING_SCORED_NOTE,
   PLAN_LEGEND,
   SECTION_ORDER,
+  buildCaptureWrite,
+  captureBarPercent,
+  captureRowStatus,
+  captureRows,
+  commandCountLine,
+  failedCommandLine,
+  failedCommands,
+  parseCaptureRefusals,
+  refusalLine,
+  selectedCapture,
   STATUS_CHIP,
   UNBOUND_STEP_REASON,
   VERIFIED_LABEL,
@@ -637,5 +649,114 @@ describe("the bundle's edit record is summarised for the operator", () => {
   it("says nothing when nothing was edited — an empty edit list is a statement", () => {
     expect(editSummary(reviewPlan([{ command: "show version" }]))).toBe("");
     expect(editSummary(undefined)).toBe("");
+  });
+});
+
+
+// ── captures (docs/design/TAC_CAPTURES_2026-09-06.md) ────────────────────────
+
+describe("a capture row states its own state and nothing else", () => {
+  const cap = (id: string, source: TacCommandCapture["source"], n: number): TacCommandCapture => ({
+    id, name: id, source, dialect: "cisco-iosxe",
+    commands: Array.from({ length: n }, (_, i) => ({ command: `show ${i}` })),
+  });
+  const progress = (over: Partial<TacCaptureProgress> = {}): TacCaptureProgress => ({
+    capture_id: "capture:vendor-default", status: "done", total: 2, done: 2, failed: 0,
+    commands: [], ...over,
+  });
+
+  it("counts commands, singular when it is one", () => {
+    expect(commandCountLine(1)).toBe("1 command");
+    expect(commandCountLine(12)).toBe("12 commands");
+    expect(commandCountLine(0)).toBe("0 commands");
+  });
+
+  it("gives every row that did NOT run the queued state, never a borrowed verdict", () => {
+    const p = progress({ status: "done" });
+    expect(captureRowStatus("capture:vendor-default", "capture:vendor-default", p)).toBe("done");
+    expect(captureRowStatus("tpl-1", "capture:vendor-default", p)).toBe("queued");
+    expect(captureRowStatus("capture:vendor-default", "", undefined)).toBe("queued");
+  });
+
+  it("lists ONLY failures, and only on a partial or failed run", () => {
+    const fails = [{ command: "show logging", status: "failed" as const, reason: "timed out" }];
+    expect(failedCommands("c", "c", progress({ status: "done", commands: fails }))).toEqual([]);
+    expect(failedCommands("c", "c", progress({ status: "running", commands: fails }))).toEqual([]);
+    expect(failedCommands("c", "c", progress({ status: "partial", commands: fails }))).toEqual(fails);
+    expect(failedCommands("c", "c", progress({ status: "failed", commands: fails }))).toEqual(fails);
+    // Another row's failures are never shown under this one.
+    expect(failedCommands("other", "c", progress({ status: "failed", commands: fails }))).toEqual([]);
+  });
+
+  it("names the command and its plain reason, and never renders a blank reason", () => {
+    expect(failedCommandLine({ command: "show logging", status: "failed", reason: "timed out" }))
+      .toBe("show logging — timed out");
+    expect(failedCommandLine({ command: "show logging", status: "failed" }))
+      .toBe("show logging — it did not run");
+  });
+
+  it("fills the bar for a row with no total — an empty bar would read as failure", () => {
+    expect(captureBarPercent(undefined)).toBe(100);
+    expect(captureBarPercent(progress({ total: 0, done: 0 }))).toBe(100);
+    expect(captureBarPercent(progress({ total: 4, done: 1, failed: 1 }))).toBe(50);
+    expect(captureBarPercent(progress({ total: 2, done: 2 }))).toBe(100);
+  });
+
+  it("orders the rows Correlix · uploaded · this tenant's own", () => {
+    const rows = captureRows(
+      cap("capture:vendor-default", "vendor-default", 2),
+      cap("upload:txt", "uploaded", 3),
+      [cap("tpl-1", "template", 1)],
+    );
+    expect(rows.map((r) => r.id)).toEqual(["capture:vendor-default", "upload:txt", "tpl-1"]);
+    // A derived capture with no bound command is not a row: "none" is a state
+    // the step states, not an empty list it renders.
+    expect(captureRows(cap("capture:vendor-default", "vendor-default", 0), null, []).length).toBe(0);
+  });
+
+  it("falls back to the first row rather than to nothing", () => {
+    const rows = captureRows(cap("capture:vendor-default", "vendor-default", 2), null, [cap("tpl-1", "template", 1)]);
+    expect(selectedCapture(rows, "tpl-1")?.id).toBe("tpl-1");
+    expect(selectedCapture(rows, "gone")?.id).toBe("capture:vendor-default");
+    expect(selectedCapture([], "tpl-1")).toBeUndefined();
+  });
+});
+
+describe("an upload is refused whole, by line and by rule", () => {
+  const refusal = (body: string) => new Error(`400 Bad Request: ${body}`);
+
+  it("reads the server's per-line refusals out of the failure", () => {
+    const got = parseCaptureRefusals(refusal(JSON.stringify({
+      error: "no", refusals: [{ line: 5, command: "configure terminal", family: "config", rule: "configure", reason: "it changes configuration" }],
+    })));
+    expect(got).toHaveLength(1);
+    expect(got[0].line).toBe(5);
+  });
+
+  it("returns nothing rather than guessing when the body is not a refusal", () => {
+    expect(parseCaptureRefusals(refusal("plain text"))).toEqual([]);
+    expect(parseCaptureRefusals(refusal("{not json"))).toEqual([]);
+    expect(parseCaptureRefusals(new Error("TypeError: fetch failed"))).toEqual([]);
+  });
+
+  it("names the line in the operator's own file, the command and the rule", () => {
+    expect(refusalLine({ line: 5, command: "configure terminal", family: "config", rule: "configure", reason: "it changes configuration" }))
+      .toBe("Line 5: configure terminal — it changes configuration (rule `configure`)");
+    // The rule is not repeated when the server's reason already carries it.
+    expect(refusalLine({ line: 2, command: "reload", rule: "reload", reason: "rule `reload` refused it" }))
+      .toBe("Line 2: reload — rule `reload` refused it");
+  });
+});
+
+describe("saving an uploaded capture", () => {
+  it("trims, drops empties and sends NO tenant", () => {
+    const body = buildCaptureWrite(" cisco-iosxe ", "  ACME  ", [
+      { command: " show version " }, { command: "  " }, { command: "show logging", note: " why " },
+    ]);
+    expect(body).toEqual({
+      dialect: "cisco-iosxe", name: "ACME",
+      commands: [{ command: "show version", note: undefined }, { command: "show logging", note: "why" }],
+    });
+    expect(Object.keys(body)).not.toContain("tenant_id");
   });
 });

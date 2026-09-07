@@ -3022,6 +3022,13 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tac/templates/defaults", s.handleTACTemplateDefaults)
 	mux.HandleFunc("/api/tac/templates/validate", s.handleTACTemplateValidate)
 	mux.HandleFunc("/api/tac/templates/", s.handleTACTemplateItem) // GET|PUT|DELETE {id}
+	// CAPTURES (docs/design/TAC_CAPTURES_2026-09-06.md): a capture is a named
+	// list of commands, and a saved one IS a template — same store, same RLS
+	// policy, same isolation model. The subtree serves the `upload` verb and one
+	// capture by id; Go dispatches on the prefix, so the parser and the id read
+	// share one registration and one place a scoping bug could live.
+	mux.HandleFunc("/api/tac/captures", s.handleTACCaptures)
+	mux.HandleFunc("/api/tac/captures/", s.handleTACCaptureSubtree) // /upload · GET {id}
 	// The LEARNING BACKLOG (tracker 243). Per-tenant data, scoped like the
 	// templates: requirePerm(infrastructure) + the tenant filter, never
 	// platform admin. The subtree handler routes /candidates, /candidates/{id}
