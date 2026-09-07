@@ -70,6 +70,30 @@ AllowKey = tuple[str, str, str] | tuple[str, int]
 
 ALLOWLIST: dict[AllowKey, str] = {
     # ===================================================================
+    # 2026-09-07 — scripts/install.py, fresh-install acceptance fixes
+    # (docs/audit/FRESH_INSTALL_ACCEPTANCE_2026-09-06.md). Four reviewed
+    # sites; each returns an explicit "not known" that its caller handles,
+    # none continues as if the operation had succeeded:
+    ("install.py", "_route_source_address", "106586e5"):
+        "management-address DETECTION on a host with no default route: the "
+        "UDP connect raises, the function returns None, and the caller falls "
+        "through to _first_host_address and finally to asking the operator — "
+        "an absent route is a legitimate state, not a swallowed failure",
+    ("install.py", "_first_host_address", "4f8b5435"):
+        "the `hostname -I` fallback of the same ladder: an unrunnable or "
+        "timed-out probe returns None and the wizard asks the operator for the "
+        "address instead of guessing one",
+    ("install.py", "_image_present", "bc620d3b"):
+        "PRESENCE probe (`docker image inspect`, never pulls): an unreachable "
+        "daemon or a timeout reads as 'not present', which makes the caller "
+        "LOAD the image from the offline bundle — the safe direction; a real "
+        "daemon fault then fails loudly at that load",
+    ("install.py", "record_bus_authorization_time", "bebeeda6"):
+        "writes an advisory timestamp that deploy-qualify.sh's Q6 uses to floor "
+        "its log window; on failure it WARNS with the exact consequence (Q6 "
+        "falls back to its fixed window) and returns None — the ACLs were "
+        "already applied and verified before this record is written",
+    # ===================================================================
     # 2026-09-06 — scripts/source-archive.py (tracker 262, S3 corresponding-
     # source archive). Two reviewed sites, neither a warn-and-continue:
     ("source-archive.py", "S3ObjectStore._request", "71c2853a"):
