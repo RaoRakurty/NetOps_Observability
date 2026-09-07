@@ -1152,7 +1152,12 @@ def test_s4_sealed_material_is_encrypted_and_verifiable(tmp_path):
          "-pass", "env:BACKUP_SEALED_PASSPHRASE", "-in", str(enc)],
         env={**os.environ, "BACKUP_SEALED_PASSPHRASE": "not-the-passphrase"},
         capture_output=True, timeout=120)
-    assert wrong.returncode != 0, "the envelope decrypted under the WRONG passphrase"
+    # AES-CBC carries no authentication: a wrong key fails the padding check
+    # 255 times in 256 and otherwise yields garbage with a valid last byte, so
+    # `returncode != 0` alone is a 1-in-256 flake (seen in CI on 2026-09-07).
+    # The property that matters is that the custody bytes never come back.
+    assert wrong.returncode != 0 or b"KEK-MATERIAL" not in wrong.stdout, \
+        "the envelope decrypted under the WRONG passphrase"
 
     # The manifest that shipped beside it verifies the decrypted tree — this is
     # exactly what scripts/backup-drill.sh asserts, unattended.
