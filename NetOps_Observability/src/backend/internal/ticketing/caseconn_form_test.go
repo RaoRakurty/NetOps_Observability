@@ -8,6 +8,7 @@ package ticketing
 // update the HTTP layer relies on.
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -126,7 +127,7 @@ func TestUpdatingOneBlockLeavesTheOthersAlone(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("clear jira: %v", err)
 	}
-	if _, err := s.Get("acme", false, "acme"); err != ErrTenantNotFound {
+	if _, err := s.Get("acme", false, "acme"); !errors.Is(err, ErrTenantNotFound) {
 		t.Fatalf("an emptied record must leave no row, got %v", err)
 	}
 }
@@ -140,7 +141,7 @@ func TestARefusedSaveNamesTheFieldAndStoresNothing(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "host:port") {
 		t.Fatalf("refusal = %v, want the host:port field named", err)
 	}
-	if _, gerr := s.Get("acme", false, "acme"); gerr != ErrTenantNotFound {
+	if _, gerr := s.Get("acme", false, "acme"); !errors.Is(gerr, ErrTenantNotFound) {
 		t.Fatalf("a refused save stored a row: %v", gerr)
 	}
 

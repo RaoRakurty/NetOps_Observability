@@ -15,6 +15,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -166,7 +167,7 @@ func TestParseCaptureDOCXJoinsRuns(t *testing.T) {
 func TestParseCaptureBounds(t *testing.T) {
 	// Over the command ceiling → the WHOLE file is refused, never trimmed.
 	many := strings.Repeat("show version\n", MaxCaptureCommands+1)
-	if _, err := ParseCapture("big.txt", []byte(many)); err != ErrCaptureTooMany {
+	if _, err := ParseCapture("big.txt", []byte(many)); !errors.Is(err, ErrCaptureTooMany) {
 		t.Errorf("a file over the command ceiling: %v, want ErrCaptureTooMany", err)
 	}
 	// Exactly at the ceiling is accepted — the bound is a ceiling, not a fence.
@@ -177,14 +178,14 @@ func TestParseCaptureBounds(t *testing.T) {
 	// One over-long line refuses the file; it is never truncated into a
 	// different command.
 	long := "show " + strings.Repeat("x", MaxCaptureCommandBytes) + "\n"
-	if _, err := ParseCapture("long.txt", []byte(long)); err != ErrCaptureLineTooLong {
+	if _, err := ParseCapture("long.txt", []byte(long)); !errors.Is(err, ErrCaptureLineTooLong) {
 		t.Errorf("an over-long command: %v, want ErrCaptureLineTooLong", err)
 	}
 	// A file with nothing in it is an honest refusal, not an empty capture.
-	if _, err := ParseCapture("empty.txt", []byte("# only comments\n\n")); err != ErrCaptureEmpty {
+	if _, err := ParseCapture("empty.txt", []byte("# only comments\n\n")); !errors.Is(err, ErrCaptureEmpty) {
 		t.Errorf("an empty file: %v, want ErrCaptureEmpty", err)
 	}
-	if _, err := ParseCapture("set.xlsx", []byte("x")); err != ErrCaptureFormat {
+	if _, err := ParseCapture("set.xlsx", []byte("x")); !errors.Is(err, ErrCaptureFormat) {
 		t.Errorf("an unsupported format: %v, want ErrCaptureFormat", err)
 	}
 }

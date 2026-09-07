@@ -280,8 +280,7 @@ func (a *TemplateAPI) uploadCapture(w http.ResponseWriter, r *http.Request) {
 	}
 	// §9: bound the body BEFORE reading it. The reader is the bound; a
 	// Content-Length header is the client's claim and is not trusted.
-	r.Body = http.MaxBytesReader(w, r.Body, MaxCaptureUploadBytes)
-	data, rerr := io.ReadAll(r.Body)
+	data, rerr := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxCaptureUploadBytes))
 	if rerr != nil {
 		a.deps.WriteError(w, http.StatusRequestEntityTooLarge,
 			fmt.Errorf("that file is larger than the %d KiB Correlix reads", MaxCaptureUploadBytes>>10))

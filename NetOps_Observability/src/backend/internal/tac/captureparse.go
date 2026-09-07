@@ -237,7 +237,7 @@ func parseCaptureCSV(data []byte) ([]CaptureCommand, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrCaptureUnreadable, err)
+			return nil, fmt.Errorf("%w: %w", ErrCaptureUnreadable, err)
 		}
 		line, _ := r.FieldPos(0)
 		if len(rec) == 0 {
@@ -285,7 +285,7 @@ func parseCaptureJSON(data []byte) (string, []CaptureCommand, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		return "", nil, fmt.Errorf("%w: %v", ErrCaptureUnreadable, err)
+		return "", nil, fmt.Errorf("%w: %w", ErrCaptureUnreadable, err)
 	}
 	out := make([]CaptureCommand, 0, len(in.Commands))
 	for i, raw := range in.Commands {
@@ -321,17 +321,17 @@ func parseCaptureJSON(data []byte) (string, []CaptureCommand, error) {
 func parseCaptureYAML(data []byte) (string, []CaptureCommand, error) {
 	root, err := parseYAML(string(data))
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: %v", ErrCaptureUnreadable, err)
+		return "", nil, fmt.Errorf("%w: %w", ErrCaptureUnreadable, err)
 	}
 	if !root.isMap() {
 		return "", nil, fmt.Errorf("%w: the file must be a mapping with a `commands:` list", ErrCaptureUnreadable)
 	}
 	if err := yonly(root, "capture", "name", "commands"); err != nil {
-		return "", nil, fmt.Errorf("%w: %v", ErrCaptureUnreadable, err)
+		return "", nil, fmt.Errorf("%w: %w", ErrCaptureUnreadable, err)
 	}
 	name, err := ystr(root, "name")
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: %v", ErrCaptureUnreadable, err)
+		return "", nil, fmt.Errorf("%w: %w", ErrCaptureUnreadable, err)
 	}
 	// `commands:` may be a list of plain strings OR a list of {command, note}
 	// mappings — both are shapes people write, and ylist accepts only the
@@ -350,15 +350,15 @@ func parseCaptureYAML(data []byte) (string, []CaptureCommand, error) {
 			}
 		case it.isMap():
 			if err := yonly(it, "command", "command", "note"); err != nil {
-				return "", nil, fmt.Errorf("%w: %v", ErrCaptureUnreadable, err)
+				return "", nil, fmt.Errorf("%w: %w", ErrCaptureUnreadable, err)
 			}
 			cmd, cerr := ystr(it, "command")
 			if cerr != nil {
-				return "", nil, fmt.Errorf("%w: %v", ErrCaptureUnreadable, cerr)
+				return "", nil, fmt.Errorf("%w: %w", ErrCaptureUnreadable, cerr)
 			}
 			note, nerr := ystr(it, "note")
 			if nerr != nil {
-				return "", nil, fmt.Errorf("%w: %v", ErrCaptureUnreadable, nerr)
+				return "", nil, fmt.Errorf("%w: %w", ErrCaptureUnreadable, nerr)
 			}
 			if c := strings.TrimSpace(cmd); c != "" {
 				out = append(out, CaptureCommand{
@@ -410,7 +410,7 @@ func parseCaptureDOCX(data []byte) ([]CaptureCommand, error) {
 	}
 	rc, oerr := part.Open()
 	if oerr != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCaptureUnreadable, oerr)
+		return nil, fmt.Errorf("%w: %w", ErrCaptureUnreadable, oerr)
 	}
 	defer rc.Close()
 	return docxParagraphCommands(io.LimitReader(rc, maxDocxXMLBytes))
