@@ -473,8 +473,12 @@ docker image inspect nginx:1.27-alpine@sha256:6564… \
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   anchore/syft:v1.42.3 docker:netops-frontend:latest -o cyclonedx-json > fe.cdx.json
 
-# 3. materialise the retained source (the existing generic mechanism)
-bash scripts/make-installer.sh --source-offer-only
+# 3. materialise the source — retained copies first, network last, sha-verified
+#    (a retained component never touches the network; add --no-network to refuse
+#     upstream entirely, or --mirror-dir for an air-gapped host)
+python3 scripts/source-archive.py materialise --all --dest /tmp/source-mirror
+CORRELIX_SOURCE_MIRROR_DIR=/tmp/source-mirror \
+  bash scripts/make-installer.sh --source-offer-only
 
 # 4. evaluate
 python3 scripts/oci-compliance.py \

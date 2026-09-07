@@ -45,8 +45,22 @@ point:
       bundle's `source-offer/`. **No upstream fetch, ever.** A missing archived
       artifact FAILS the release; it does not fall back to the internet.
 
+  MATERIALISE (every CI run, needs no credential and often no network)
+      pin table → for each artifact: the copy RETAINED IN GIT, else a prepared
+      mirror directory, else the pinned URL and then the ALTERNATE MIRRORS the
+      pin table lists for it (retried with backoff + jitter, bounded) → verify
+      the pinned sha256 → place into a directory the installer is pointed at
+      with `CORRELIX_SOURCE_MIRROR_DIR`.
+
 So a normal release does not depend on upstream availability for an artifact
 Correlix has already ingested — the regression this file exists to prevent.
+
+`materialise` is the same principle applied to the merge gate. On 2026-09-07 the
+blocking `supply-chain` workflow went red because it fetched BusyBox from
+`busybox.net` on every run and that host stopped answering: CI was verifying
+what Correlix SHIPS against a third party's uptime. A gate must depend on what
+Correlix RETAINS and PINS, reach for the network only for what it does not yet
+retain, and have more than one host to ask when it does.
 
 STORAGE LAYOUT (content-addressed, deduplicated across releases)
     sources/sha256/<ab>/<full-sha256>/<sanitised-filename>
@@ -127,10 +141,12 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import re
 import shutil
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -176,9 +192,40 @@ MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 TIMEOUT_META = 30
 TIMEOUT_BYTES = 600
 
+# Upstream is the LAST resort and the least reliable one, so it is retried
+# (CLAUDE.md §9: every network call retries with backoff + jitter). Five
+# attempts per URL, exponential with jitter, capped — the same shape as
+# `curl --retry 5 --retry-all-errors` and bounded like it.
+FETCH_ATTEMPTS = 5
+FETCH_BACKOFF_BASE = 1.0
+FETCH_BACKOFF_CAP = 15.0
+
+# The per-socket-operation timeout for an acquisition. Deliberately SHORTER than
+# TIMEOUT_BYTES: this bounds the CONNECT to a host that is not answering (the
+# busybox.net failure mode) as well as each read, so five attempts against a
+# black hole cost minutes, not the better part of an hour, before the alternate
+# mirror is tried. A large tarball is unaffected — the bound is per read, not
+# per transfer.
+TIMEOUT_ACQUIRE = 60
+
+# The one deliberate difference from `--retry-all-errors`: an HTTP status that
+# means "this host does not serve this artifact" is not transient, and four more
+# attempts against it only delay the ALTERNATE MIRROR that does have the bytes.
+# These fail over immediately instead. Everything else — timeouts, resets, DNS,
+# 5xx, 429 — is retried.
+FETCH_PERMANENT_STATUSES = frozenset({400, 401, 403, 404, 405, 410, 451})
+
 
 class ArchiveError(Exception):
     """The operation could not be completed. Exit 2 — never a silent pass."""
+
+
+class FetchError(ArchiveError):
+    """One acquisition attempt failed. `permanent` = do not retry this URL."""
+
+    def __init__(self, message: str, *, permanent: bool = False) -> None:
+        super().__init__(message)
+        self.permanent = permanent
 
 
 class ComplianceFailure(Exception):
@@ -798,10 +845,43 @@ class Fetcher:
 
 
 class HttpsFetcher(Fetcher):
-    def __init__(self, timeout: int = TIMEOUT_BYTES) -> None:
+    """One URL, bounded, retried with exponential backoff + jitter.
+
+    The sleep is injected so a test can prove the retry policy without spending
+    the wall-clock it describes.
+    """
+
+    def __init__(self, timeout: int = TIMEOUT_BYTES,
+                 attempts: int = FETCH_ATTEMPTS,
+                 sleep: Callable[[float], None] = time.sleep,
+                 log: Callable[[str], None] | None = None) -> None:
         self.timeout = timeout
+        self.attempts = max(1, int(attempts))
+        self.sleep = sleep
+        self.log = log
 
     def fetch(self, url: str, dest_path: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> int:
+        last: BaseException | None = None
+        for attempt in range(1, self.attempts + 1):
+            try:
+                return self.fetch_once(url, dest_path, max_bytes=max_bytes)
+            except FetchError as exc:
+                last = exc
+                if exc.permanent or attempt == self.attempts:
+                    raise
+                # Exponential with full jitter, capped. A thundering herd is not
+                # a risk here (one build host), but an unbounded wait is.
+                delay = min(FETCH_BACKOFF_CAP, FETCH_BACKOFF_BASE * (2 ** (attempt - 1)))
+                # Jitter, not a secret: `random` is the right tool for a sleep.
+                delay = delay / 2 + random.random() * (delay / 2)
+                if self.log:
+                    self.log(f"     attempt {attempt}/{self.attempts} failed "
+                             f"({exc}); retrying in {delay:.1f}s")
+                self.sleep(delay)
+        raise last if last else FetchError(f"cannot fetch {url}")
+
+    def fetch_once(self, url: str, dest_path: str, *,
+                   max_bytes: int = MAX_ARTIFACT_BYTES) -> int:
         if not url.startswith("https://"):
             raise ArchiveError(
                 f"refusing to acquire corresponding source over a non-TLS URL: {url!r}")
@@ -827,17 +907,32 @@ class HttpsFetcher(Fetcher):
             if os.path.exists(dest_path):
                 os.unlink(dest_path)
             raise
+        except urllib.error.HTTPError as exc:
+            if os.path.exists(dest_path):
+                os.unlink(dest_path)
+            raise FetchError(f"cannot fetch {url}: HTTP {exc.code} {exc.reason}",
+                             permanent=exc.code in FETCH_PERMANENT_STATUSES) from exc
         except (urllib.error.URLError, OSError) as exc:
             if os.path.exists(dest_path):
                 os.unlink(dest_path)
-            raise ArchiveError(f"cannot fetch {url}: {exc}") from exc
+            raise FetchError(f"cannot fetch {url}: {exc}") from exc
         return total
 
 
 class NoFetcher(Fetcher):
-    """The release path's fetcher. Every call is a bug, and says which."""
+    """A fetcher that must never be reached. Every call is a bug, and says which.
+
+    The release path's fetcher by default; `reason` re-points the same
+    by-construction guarantee at another caller (the offline materialisation
+    path) without weakening it.
+    """
+
+    def __init__(self, reason: str = "") -> None:
+        self.reason = reason
 
     def fetch(self, url: str, dest_path: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> int:
+        if self.reason:
+            raise ComplianceFailure(f"{self.reason} (tried to fetch {url})")
         raise ComplianceFailure(
             f"the release path tried to fetch {url} from upstream. A production "
             f"release reads corresponding source from the Correlix archive and "
@@ -986,6 +1081,9 @@ def load_pins(path: str | None = None) -> dict:
             raise ArchiveError(
                 f"pin table component {c['name']} must be fetched over TLS, "
                 f"got {c['url']!r}")
+        # Alternate mirrors are input too, and they are fetched from: validate
+        # them at the boundary, not at the moment one is reached for.
+        acquisition_urls(c)
     return doc
 
 
@@ -1017,6 +1115,134 @@ def retained_copy(entry: dict) -> str | None:
         return None
     path = os.path.join(ROOT, rel)
     return path if os.path.isfile(path) else None
+
+
+def acquisition_urls(entry: dict) -> list[str]:
+    """The pinned URL first, then the alternate mirrors the pin table lists.
+
+    A mirror is a RETRIEVAL host, never an authority: the pinned sha256 decides
+    whether its bytes are the corresponding source, exactly as it does for the
+    upstream URL. That is what makes listing one safe — `busybox.net` timing out
+    (2026-09-07, from the lab and from GitHub-hosted runners) must not be able to
+    block a merge when the identical bytes are one host away.
+    """
+    urls: list[str] = [entry["url"]]
+    for mirror in entry.get("mirrors") or []:
+        url = mirror.get("url", "") if isinstance(mirror, dict) else mirror
+        if not isinstance(url, str) or not url.startswith("https://"):
+            raise ArchiveError(
+                f"pin table component {entry.get('name', '?')} lists a mirror "
+                f"that is not an https URL: {mirror!r}")
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def fetch_with_mirrors(fetcher: Fetcher, entry: dict, dest: str, *,
+                       log: Callable[[str], None] = print) -> str:
+    """Try every acquisition URL in order; return the one that produced bytes.
+
+    Fails with every host's error, not just the last: "could not fetch" with one
+    hostname in it hides the fact that three were tried (§16.1 — never report a
+    partial truth about a failure).
+    """
+    urls = acquisition_urls(entry)
+    size = entry.get("size_bytes") or 0
+    cap = min(MAX_ARTIFACT_BYTES, size * 2 if size else MAX_ARTIFACT_BYTES)
+    errors: list[str] = []
+    for url in urls:
+        try:
+            fetcher.fetch(url, dest, max_bytes=cap)
+            if errors:
+                log(f"     (alternate mirror used; {len(errors)} earlier host(s) failed)")
+            return url
+        except ComplianceFailure:
+            # A fetcher that must not be reached at all (release / offline
+            # materialisation). Not a mirror problem — do not paper over it by
+            # trying the next host.
+            raise
+        except ArchiveError as exc:
+            errors.append(str(exc))
+            log(f"     {exc}")
+    raise ArchiveError(
+        f"could not acquire {entry['file']} from any of {len(urls)} pinned "
+        f"location(s): " + " | ".join(errors))
+
+
+# ── materialisation: fill a mirror directory, cheapest trusted source first ──
+SOURCE_RETAINED = "git-retained"
+SOURCE_MIRROR_DIR = "local-mirror"
+SOURCE_PRESENT = "already-present"
+SOURCE_UPSTREAM = "upstream"
+
+
+def materialise(entries: list[dict], dest_dir: str, *, mirror_dir: str = "",
+                fetcher: Fetcher | None = None,
+                log: Callable[[str], None] = print) -> dict:
+    """Place every selected artifact in `dest_dir`, in a fixed preference order.
+
+        1. the copy RETAINED in this repository (compliance/corresponding-sources)
+        2. a prepared mirror directory (`CORRELIX_SOURCE_MIRROR_DIR`)
+        3. the pinned upstream URL, then the alternate mirrors the pin table
+           lists for that component, each retried with backoff + jitter
+
+    The ordering is the point, and it is a CI property before it is a
+    convenience: a component Correlix already retains must not touch the network
+    to be verified. Verification against a third-party host is the wrong
+    dependency direction — it makes a merge gate fail when someone else's server
+    is down, which is exactly how `busybox.net` turned a green branch red.
+
+    Every path ends at the SAME mandatory sha256 gate. A local copy, a prepared
+    mirror and a download are all UNTRUSTED bytes until they hash to the pin;
+    bad bytes are deleted rather than left for a later step to pick up.
+    """
+    os.makedirs(dest_dir, exist_ok=True)
+    results: list[dict] = []
+    for entry in entries:
+        name = f"{entry['name']} {entry['version']}"
+        sha = valid_sha256(entry["sha256"])
+        dest = os.path.join(dest_dir, safe_filename(entry["file"]))
+
+        source = ""
+        detail = ""
+        if os.path.isfile(dest) and sha256_file(dest) == sha:
+            # Idempotent (§16.3): a second run over a populated directory is a
+            # re-verification, not a re-download.
+            source, detail = SOURCE_PRESENT, os.path.relpath(dest, dest_dir)
+        else:
+            local = retained_copy(entry)
+            candidate = os.path.join(mirror_dir, entry["file"]) if mirror_dir else ""
+            if local:
+                shutil.copyfile(local, dest)
+                source, detail = SOURCE_RETAINED, os.path.relpath(local, ROOT)
+            elif candidate and os.path.isfile(candidate):
+                shutil.copyfile(candidate, dest)
+                source, detail = SOURCE_MIRROR_DIR, candidate
+            else:
+                used = fetch_with_mirrors(fetcher or NoFetcher(), entry, dest, log=log)
+                source, detail = SOURCE_UPSTREAM, used
+
+        got = sha256_file(dest)
+        if got != sha:
+            os.unlink(dest)
+            raise ComplianceFailure(
+                f"{name}: the bytes from {source} ({detail}) hash to {got}, but "
+                f"scripts/source-mirror.json pins {sha}. Nothing was placed. "
+                f"Local provenance is not trusted provenance, and neither is a "
+                f"mirror's; if upstream legitimately re-cut the release, "
+                f"re-measure and update the pin table deliberately — never "
+                f"adjust the checksum to match a download.")
+        log(f"   {name} <- {source} ({detail})")
+        log(f"     sha256 OK ({sha})")
+        results.append({"file": entry["file"], "name": entry["name"],
+                        "version": entry["version"], "source": source,
+                        "detail": detail, "sha256": sha})
+
+    counts = {s: sum(1 for r in results if r["source"] == s)
+              for s in (SOURCE_RETAINED, SOURCE_MIRROR_DIR, SOURCE_PRESENT,
+                        SOURCE_UPSTREAM)}
+    return {"dest": dest_dir, "placed": results, "counts": counts,
+            "network_used": counts[SOURCE_UPSTREAM]}
 
 
 # ── the archive ──────────────────────────────────────────────────────────────
@@ -1064,10 +1290,8 @@ class SourceArchive:
             raise ArchiveError(
                 f"{entry['file']} is pinned at {size} bytes, over the "
                 f"{MAX_ARTIFACT_BYTES} ceiling")
-        self.fetcher.fetch(entry["url"], dest,
-                           max_bytes=min(MAX_ARTIFACT_BYTES,
-                                         size * 2 if size else MAX_ARTIFACT_BYTES))
-        return dest, f"upstream {entry['url']}"
+        used = fetch_with_mirrors(self.fetcher, entry, dest, log=self.log)
+        return dest, f"upstream {used}"
 
     # -- ingest --------------------------------------------------------------
     def ingest(self, entries: list[dict], *, dry_run: bool = False,
@@ -1570,6 +1794,41 @@ def cmd_release_fetch(args) -> int:
     return 0
 
 
+def cmd_materialise(args) -> int:
+    """Fill a directory with every pinned artifact, retained copies first.
+
+    This is what CI runs before `make-installer.sh --source-offer-only`: the
+    installer then finds every file locally and re-checksums it, so the
+    compliance evaluation depends on what Correlix RETAINS, not on whether a
+    third-party host answers within twenty seconds.
+    """
+    pins = load_pins(args.pins)
+    entries = select_components(pins, files=args.file, names=args.component,
+                                everything=args.all)
+    mirror_dir = (args.mirror_dir if args.mirror_dir is not None
+                  else os.environ.get("CORRELIX_SOURCE_MIRROR_DIR", ""))
+    if mirror_dir and os.path.abspath(mirror_dir) == os.path.abspath(args.dest):
+        # Materialising a directory into itself: the already-present branch
+        # covers it, and shutil would refuse the copy.
+        mirror_dir = ""
+    fetcher: Fetcher = (
+        NoFetcher("--no-network was requested, so this run may use only the "
+                  "copies Correlix already holds; an artifact that is neither "
+                  "retained in git nor present in the mirror directory is a "
+                  "failure, not a reason to reach for upstream")
+        if args.no_network else
+        HttpsFetcher(timeout=args.timeout, attempts=args.attempts, log=print))
+    print(f"source-archive: materialise {len(entries)} artifact(s) into {args.dest}")
+    res = materialise(entries, args.dest, mirror_dir=mirror_dir, fetcher=fetcher)
+    c = res["counts"]
+    print(f"source-archive: PASS — {len(res['placed'])} artifact(s) in "
+          f"{args.dest}: {c[SOURCE_RETAINED]} retained in git, "
+          f"{c[SOURCE_MIRROR_DIR]} from the mirror directory, "
+          f"{c[SOURCE_PRESENT]} already present, {c[SOURCE_UPSTREAM]} fetched "
+          f"upstream (every one sha256-verified against scripts/source-mirror.json)")
+    return 0
+
+
 def cmd_release_manifest(args) -> int:
     pins = load_pins(args.pins)
     entries = select_components(pins, files=args.file, names=args.component,
@@ -1942,6 +2201,134 @@ def selftest() -> int:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    # -- materialisation: preference order, and no network when retained -----
+    def _quiet(_m: str) -> None:
+        return None
+
+    body = b"corresponding source, materialised\n"
+    body_sha = hashlib.sha256(body).hexdigest()
+    mat_entry = {
+        "name": "thing", "version": "1.0", "file": "thing-1.0.tar.gz",
+        "url": "https://upstream.invalid/thing-1.0.tar.gz", "sha256": body_sha,
+        "size_bytes": len(body), "license": "GPL-2.0-only",
+        "retained_in_git": "retained/thing-1.0.tar.gz",
+        "mirrors": [{"url": "https://mirror.invalid/thing-1.0.tar.gz"}],
+    }
+
+    class _MirrorOnlyFetcher(Fetcher):
+        """The pinned host is down; the alternate mirror has the same bytes."""
+
+        def __init__(self) -> None:
+            self.tried: list[str] = []
+
+        def fetch(self, url: str, dest_path: str, *,
+                  max_bytes: int = MAX_ARTIFACT_BYTES) -> int:
+            self.tried.append(url)
+            if "mirror.invalid" not in url:
+                raise FetchError(f"cannot fetch {url}: simulated connect timeout")
+            with open(dest_path, "wb") as fh:
+                fh.write(body)
+            return len(body)
+
+    class _WrongBytesFetcher(Fetcher):
+        def fetch(self, url: str, dest_path: str, *,
+                  max_bytes: int = MAX_ARTIFACT_BYTES) -> int:
+            with open(dest_path, "wb") as fh:
+                fh.write(b"these are not the pinned bytes")
+            return 30
+
+    class _FlakyThenFine(HttpsFetcher):
+        def __init__(self, permanent: bool) -> None:
+            super().__init__(attempts=3, sleep=lambda _d: None)
+            self.permanent = permanent
+            self.tries = 0
+
+        def fetch_once(self, url: str, dest_path: str, *,
+                       max_bytes: int = MAX_ARTIFACT_BYTES) -> int:
+            self.tries += 1
+            raise FetchError(f"cannot fetch {url}: simulated",
+                             permanent=self.permanent)
+
+    tmp = tempfile.mkdtemp(prefix="correlix-source-materialise-")
+    real_root = ROOT
+    try:
+        os.makedirs(os.path.join(tmp, "retained"))
+        with open(os.path.join(tmp, "retained", "thing-1.0.tar.gz"), "wb") as fh:
+            fh.write(body)
+        globals()["ROOT"] = tmp
+
+        res = materialise([mat_entry], os.path.join(tmp, "a"),
+                          fetcher=NoFetcher("the selftest holds no network"),
+                          log=_quiet)
+        check("a retained artifact is materialised without the network",
+              res["counts"][SOURCE_RETAINED] == 1 and res["network_used"] == 0,
+              str(res["counts"]))
+
+        # A prepared mirror directory beats upstream, and is still re-hashed.
+        os.makedirs(os.path.join(tmp, "prepared"))
+        with open(os.path.join(tmp, "prepared", "thing-1.0.tar.gz"), "wb") as fh:
+            fh.write(body)
+        unretained = dict(mat_entry, retained_in_git="")
+        res = materialise([unretained], os.path.join(tmp, "b"),
+                          mirror_dir=os.path.join(tmp, "prepared"),
+                          fetcher=NoFetcher("the selftest holds no network"),
+                          log=_quiet)
+        check("a prepared mirror directory is preferred over upstream",
+              res["counts"][SOURCE_MIRROR_DIR] == 1 and res["network_used"] == 0,
+              str(res["counts"]))
+
+        # Upstream last, and an alternate mirror when the pinned host is down.
+        mirror_fetcher = _MirrorOnlyFetcher()
+        res = materialise([unretained], os.path.join(tmp, "c"),
+                          fetcher=mirror_fetcher, log=_quiet)
+        check("an alternate mirror is used when the pinned URL is unreachable",
+              res["placed"][0]["detail"] == "https://mirror.invalid/thing-1.0.tar.gz",
+              str(res["placed"]))
+        check("the pinned URL is tried before the mirror",
+              mirror_fetcher.tried[0] == unretained["url"], str(mirror_fetcher.tried))
+
+        # A second run over a populated directory re-verifies, never re-fetches.
+        res = materialise([unretained], os.path.join(tmp, "c"),
+                          fetcher=NoFetcher("the selftest holds no network"),
+                          log=_quiet)
+        check("materialisation is idempotent and re-verifies in place",
+              res["counts"][SOURCE_PRESENT] == 1 and res["network_used"] == 0,
+              str(res["counts"]))
+
+        # The sha256 gate applies to the network path exactly as to a local copy.
+        try:
+            materialise([unretained], os.path.join(tmp, "d"),
+                        fetcher=_WrongBytesFetcher(), log=_quiet)
+            failures.append("materialisation accepted bytes that did not match the pin")
+        except ComplianceFailure as exc:
+            check("the mismatch names the pin table", "source-mirror.json" in str(exc))
+            check("bad bytes are not left behind",
+                  not os.path.exists(os.path.join(tmp, "d", "thing-1.0.tar.gz")))
+
+        # Retry policy: transient errors are retried, "not here" fails over now.
+        flaky = _FlakyThenFine(permanent=False)
+        try:
+            flaky.fetch("https://upstream.invalid/x", os.path.join(tmp, "x"))
+        except FetchError:
+            pass
+        check("a transient upstream error is retried", flaky.tries == 3, str(flaky.tries))
+        gone = _FlakyThenFine(permanent=True)
+        try:
+            gone.fetch("https://upstream.invalid/x", os.path.join(tmp, "x"))
+        except FetchError:
+            pass
+        check("a permanent upstream status fails over immediately, not after 5 waits",
+              gone.tries == 1, str(gone.tries))
+        try:
+            acquisition_urls({"name": "n", "url": "https://a/b",
+                              "mirrors": ["http://plaintext.invalid/x"]})
+            failures.append("a plaintext mirror was accepted")
+        except ArchiveError:
+            pass
+    finally:
+        globals()["ROOT"] = real_root
+        shutil.rmtree(tmp, ignore_errors=True)
+
     # -- the real policy and index in this repository ------------------------
     try:
         real = RetentionPolicy.load()
@@ -2038,6 +2425,27 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--quiet", action="store_true",
                    help="place the files without narrating; the caller reports")
     p.set_defaults(fn=cmd_release_fetch)
+
+    p = sub.add_parser("materialise", aliases=["materialize"],
+                       help="fill a directory with every pinned artifact: "
+                            "retained copies → mirror dir → upstream + alternates")
+    _add_selection(p)
+    p.add_argument("--dest", required=True,
+                   help="directory to fill (pass it to make-installer.sh as "
+                        "CORRELIX_SOURCE_MIRROR_DIR)")
+    p.add_argument("--mirror-dir", default=None,
+                   help="prepared mirror directory to prefer over the network "
+                        "(default $CORRELIX_SOURCE_MIRROR_DIR)")
+    p.add_argument("--no-network", action="store_true",
+                   help="use only what Correlix already holds; any upstream "
+                        "fetch is a failure")
+    p.add_argument("--attempts", type=int, default=FETCH_ATTEMPTS,
+                   help=f"upstream attempts per URL (default {FETCH_ATTEMPTS})")
+    p.add_argument("--timeout", type=int, default=TIMEOUT_ACQUIRE,
+                   help=f"per-socket-operation timeout in seconds "
+                        f"(default {TIMEOUT_ACQUIRE}); bounds a connect to a "
+                        f"host that is not answering")
+    p.set_defaults(fn=cmd_materialise)
 
     p = sub.add_parser("release-manifest", help="write the per-release source manifest")
     _add_selection(p)

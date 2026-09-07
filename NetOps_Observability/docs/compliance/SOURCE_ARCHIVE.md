@@ -327,6 +327,33 @@ AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
 same sha256 gate: local provenance is not trusted provenance, and neither is
 archived provenance.
 
+### Acquisition for CI — `source-archive.py materialise`
+
+Step 3 is the one that depends on somebody else's uptime, and on **2026-09-07**
+it cost us a red merge gate: the blocking `supply-chain` workflow fetched
+BusyBox from `busybox.net` on every run and that host stopped answering (curl
+28, 20 s). Verifying what Correlix ships against a third party's availability is
+the wrong dependency direction.
+
+CI now runs `python3 scripts/source-archive.py materialise --all --dest <dir>`
+**before** `make-installer.sh --source-offer-only`, and points
+`CORRELIX_SOURCE_MIRROR_DIR` at that directory. `materialise` tries, per
+component:
+
+1. the copy **retained in git** (`retained_in_git` in the pin table);
+2. a prepared **mirror directory** (`--mirror-dir` / `CORRELIX_SOURCE_MIRROR_DIR`);
+3. the **pinned URL**, then the **alternate mirrors** the pin table lists for
+   that component (`mirrors[]` — busybox and musl carry Alpine's own
+   `distfiles.alpinelinux.org`, verified byte-identical to the pin), each
+   attempt retried with backoff + jitter and bounded by a 60 s socket timeout.
+
+A component Correlix retains therefore **never touches the network** in CI, and
+one that is not retained has more than one host to ask. `--no-network` refuses
+step 3 outright. The sha256 gate is unchanged and mandatory on every path — a
+mirror is a retrieval host, never an authority. The installer then re-checksums
+each file again, because the thing that ships the bundle checks it, not the
+thing that fetched it.
+
 ---
 
 ## 9. For an auditor

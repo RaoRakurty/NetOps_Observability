@@ -352,7 +352,20 @@ matching its pinned sha256, so a mirror URL substituted for an unreachable
 upstream (musl from `distfiles.alpinelinux.org`) changes the retrieval path and
 not the bytes. The second build reused the FIRST bundle's `source-offer/`
 directory as that mirror — the same sha256-verified bytes, one build older.
-**Until tracker 262 lands, a release build needs that pre-fetch step.**
+
+**Updated 2026-09-07: the pre-fetch is now a tool, not a manual step.**
+`busybox.net` also took the blocking `supply-chain` workflow red (curl 28 after
+20 s), which made the manual recipe above a CI problem as well as a lab one. The
+alternate mirror that had been applied by hand for musl is now recorded in the
+pin table (`mirrors[]`, for busybox and musl, Alpine's own
+`distfiles.alpinelinux.org` — verified byte-identical to the existing pins), and
+`python3 scripts/source-archive.py materialise --all --dest <dir>` performs the
+whole acquisition in the documented order: retained copy → mirror directory →
+pinned URL → alternate mirrors, retried, every path sha256-gated. Point
+`CORRELIX_SOURCE_MIRROR_DIR` at its output and the installer resolves all 35
+artifacts locally. The lab needs no hand-assembled directory for these two any
+more; **until tracker 262 lands, the seven other unretained artifacts are still
+fetched from upstream per release.**
 
 ### 8.5 What a customer downloads by default
 

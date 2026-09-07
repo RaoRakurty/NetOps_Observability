@@ -114,6 +114,13 @@
       "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
       "file": "busybox-1.37.0.tar.bz2",
       "url": "https://busybox.net/downloads/busybox-1.37.0.tar.bz2",
+      "mirrors": [
+        {
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.21/busybox-1.37.0.tar.bz2",
+          "why": "Alpine's own distfiles mirror — the exact tarball Alpine builds the busybox apk from, which is the package that actually rides into our images. Fetched 2026-09-07 and it hashes to the pin below byte-for-byte."
+        }
+      ],
+      "mirrors_note": "busybox.net refused connections for 20s from both the lab and GitHub-hosted runners on 2026-09-07 and failed the supply-chain workflow. A mirror is a RETRIEVAL host, never an authority: whichever host answers, the bytes are accepted only if they hash to `sha256` below.",
       "sha256": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4",
       "size_bytes": 2565764,
       "verified_against": "upstream-published sha256 at https://busybox.net/downloads/busybox-1.37.0.tar.bz2.sha256 — fetched and matched byte-for-byte on 2026-09-05. Unlike syslog-ng this is a real upstream attestation, not a self-measurement.",
@@ -667,6 +674,13 @@
       "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
       "file": "musl-1.2.5.tar.gz",
       "url": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "mirrors": [
+        {
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.20/musl-1.2.5.tar.gz",
+          "why": "Alpine's own distfiles mirror — the exact tarball Alpine builds the musl apk from. Fetched 2026-09-07 and it hashes to the pin below byte-for-byte."
+        }
+      ],
+      "mirrors_note": "musl.libc.org answered on 2026-09-07, but it is one small host serving the C library of every Alpine image Correlix ships; it gets the same alternate as busybox for the same reason. The pinned sha256 below decides, whichever host answers.",
       "sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
       "size_bytes": 1080786,
       "retained_in_git": "",

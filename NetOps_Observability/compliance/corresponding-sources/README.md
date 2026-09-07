@@ -68,6 +68,25 @@ Until that archive exists these are fetched per release from the URL in `scripts
 and checksum-verified. Once it does, `scripts/source-archive.py ingest --all` puts them there and
 the release reads them from it instead.
 
+**Retention re-examined 2026-09-07 (busybox and musl), answer: still NO.** `busybox.net` stopped
+answering — 20 s connect timeout from the lab and from GitHub-hosted runners — and took the blocking
+`supply-chain` workflow red with it, which is a good argument for retaining the tarball here and a
+bad reason to ignore the rule that says where it goes. `scripts/source-retention-policy.json`
+(`scope.git_retention_threshold_bytes`) puts the git/S3 cut line at **524 288 bytes**:
+`busybox-1.37.0.tar.bz2` is 2 565 764 bytes (4.9×) and `musl-1.2.5.tar.gz` is 1 080 786 bytes (2.1×).
+Both belong to the S3 archive, and the threshold is an owner-owned field in a policy file — moving a
+cut line to make one CI failure go away is exactly the kind of quiet re-decision that file exists to
+prevent. So neither was committed here.
+
+What was done instead: `scripts/source-mirror.json` now lists an **alternate mirror** for each
+(Alpine's own `distfiles.alpinelinux.org` — the tarball Alpine actually builds the apk from, verified
+2026-09-07 to hash to the existing pin byte-for-byte), and
+`scripts/source-archive.py materialise` tries **retained copy → mirror directory → pinned URL →
+alternate mirrors**, with retries, before anything is placed. CI runs that first and hands the result
+to the installer, so a component retained here never touches the network and a component that is not
+retained has more than one host to ask. The sha256 gate is unchanged on every path. When the S3
+archive exists, `ingest --all` makes step 3 unnecessary for these nine artifacts entirely.
+
 | file | size |
 |---|---|
 | `busybox-1.37.0.tar.bz2` | 2.6 MB |

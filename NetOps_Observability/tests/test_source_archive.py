@@ -789,6 +789,247 @@ def test_the_audit_fails_on_a_release_it_cannot_trace(tmp_path, monkeypatch,
     assert "provides" in capsys.readouterr().err
 
 
+# ── 11. materialisation: the CI acquisition path ─────────────────────────────
+# 2026-09-07: the blocking `supply-chain` workflow went red because the source
+# offer was fetched from busybox.net on every run and that host stopped
+# answering (curl 28 after 20 s). The gate was verifying what Correlix SHIPS
+# against a third party's uptime. What is proven here is the corrected
+# dependency direction:
+#
+#     RETAINED COPY → PREPARED MIRROR DIR → PINNED URL → ALTERNATE MIRRORS,
+#     no network at all for anything retained, and the sha256 gate on EVERY path.
+class CountingFetcher(sa.Fetcher):
+    """Serves only the URLs it is told about; records every URL tried."""
+
+    def __init__(self, payload: bytes, serves: tuple[str, ...] = ()) -> None:
+        self.payload = payload
+        self.serves = serves
+        self.tried: list[str] = []
+
+    def fetch(self, url, dest_path, *, max_bytes=sa.MAX_ARTIFACT_BYTES):
+        self.tried.append(url)
+        if self.serves and not any(s in url for s in self.serves):
+            raise sa.FetchError(f"cannot fetch {url}: simulated connect timeout")
+        with open(dest_path, "wb") as fh:
+            fh.write(self.payload)
+        return len(self.payload)
+
+
+MIRROR_URL = "https://mirror.invalid/thing-1.0.tar.gz"
+
+
+def mirrored_entry(**over) -> dict:
+    return pin_entry(mirrors=[{"url": MIRROR_URL, "why": "the alternate host"}],
+                     **over)
+
+
+def test_a_retained_artifact_is_materialised_without_touching_the_network(
+        tmp_path, monkeypatch):
+    """The whole point of the fix. A component Correlix already holds must not
+    be able to fail CI because someone else's server is down — so the fetcher it
+    is handed is one whose every call raises."""
+    retained = tmp_path / "retained"
+    retained.mkdir()
+    (retained / "thing-1.0.tar.gz").write_bytes(BODY)
+    monkeypatch.setattr(sa, "ROOT", str(tmp_path))
+    fetcher = CountingFetcher(BODY)
+
+    res = sa.materialise([mirrored_entry(retained_in_git="retained/thing-1.0.tar.gz")],
+                         str(tmp_path / "offer"), fetcher=fetcher, log=lambda _m: None)
+
+    assert res["network_used"] == 0
+    assert fetcher.tried == [], "a retained artifact reached for the network"
+    assert res["placed"][0]["source"] == sa.SOURCE_RETAINED
+    placed = tmp_path / "offer" / "thing-1.0.tar.gz"
+    assert hashlib.sha256(placed.read_bytes()).hexdigest() == SHA
+
+
+def test_the_preference_order_is_retained_then_mirror_dir_then_upstream(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(sa, "ROOT", str(tmp_path))
+    prepared = tmp_path / "prepared"
+    prepared.mkdir()
+    (prepared / "thing-1.0.tar.gz").write_bytes(BODY)
+
+    # 2. no retained copy → the prepared mirror directory, still no network.
+    fetcher = CountingFetcher(BODY)
+    res = sa.materialise([mirrored_entry()], str(tmp_path / "b"),
+                         mirror_dir=str(prepared), fetcher=fetcher,
+                         log=lambda _m: None)
+    assert res["placed"][0]["source"] == sa.SOURCE_MIRROR_DIR
+    assert fetcher.tried == []
+
+    # 3. neither → upstream, and only then.
+    res = sa.materialise([mirrored_entry()], str(tmp_path / "c"),
+                         fetcher=fetcher, log=lambda _m: None)
+    assert res["placed"][0]["source"] == sa.SOURCE_UPSTREAM
+    assert fetcher.tried == [pin_entry()["url"]]
+
+
+def test_an_alternate_mirror_is_used_when_the_pinned_host_is_unreachable(tmp_path):
+    """busybox.net, exactly: the pinned URL times out and the identical bytes
+    are one host away. The pin still decides whether they are the right bytes."""
+    fetcher = CountingFetcher(BODY, serves=("mirror.invalid",))
+    res = sa.materialise([mirrored_entry()], str(tmp_path / "offer"),
+                         fetcher=fetcher, log=lambda _m: None)
+    assert fetcher.tried == [pin_entry()["url"], MIRROR_URL], (
+        "the pinned URL must be tried first and the mirror only as a fallback")
+    assert res["placed"][0]["detail"] == MIRROR_URL
+    assert res["placed"][0]["sha256"] == SHA
+
+
+def test_materialisation_fails_when_no_host_has_the_artifact(tmp_path):
+    fetcher = CountingFetcher(BODY, serves=("nowhere.invalid",))
+    with pytest.raises(sa.ArchiveError) as exc:
+        sa.materialise([mirrored_entry()], str(tmp_path / "offer"),
+                       fetcher=fetcher, log=lambda _m: None)
+    # Every host tried is named: "could not fetch <one hostname>" would hide
+    # that two were asked (§16.1 — a failure is reported in full).
+    assert "2 pinned location(s)" in str(exc.value)
+    assert MIRROR_URL in str(exc.value)
+    assert not (tmp_path / "offer" / "thing-1.0.tar.gz").exists()
+
+
+def test_a_mirror_that_serves_the_wrong_bytes_is_refused_and_left_nowhere(tmp_path):
+    """A mirror is a retrieval host, never an authority. Widening acquisition
+    must not widen trust."""
+    fetcher = CountingFetcher(b"these are not the pinned bytes")
+    with pytest.raises(sa.ComplianceFailure) as exc:
+        sa.materialise([mirrored_entry()], str(tmp_path / "offer"),
+                       fetcher=fetcher, log=lambda _m: None)
+    assert "source-mirror.json pins" in str(exc.value)
+    assert "never adjust the checksum to match a download" in str(exc.value)
+    assert not (tmp_path / "offer" / "thing-1.0.tar.gz").exists(), (
+        "unverified bytes were left for a later step to pick up")
+
+
+def test_a_retained_copy_that_no_longer_hashes_to_its_pin_is_refused(
+        tmp_path, monkeypatch):
+    retained = tmp_path / "retained"
+    retained.mkdir()
+    (retained / "thing-1.0.tar.gz").write_bytes(b"tampered in the working tree")
+    monkeypatch.setattr(sa, "ROOT", str(tmp_path))
+    with pytest.raises(sa.ComplianceFailure,
+                       match="Local provenance is not trusted provenance"):
+        sa.materialise([pin_entry(retained_in_git="retained/thing-1.0.tar.gz")],
+                       str(tmp_path / "offer"), fetcher=CountingFetcher(BODY),
+                       log=lambda _m: None)
+
+
+def test_materialisation_is_idempotent_and_re_verifies_in_place(tmp_path):
+    offer = tmp_path / "offer"
+    fetcher = CountingFetcher(BODY)
+    sa.materialise([pin_entry()], str(offer), fetcher=fetcher, log=lambda _m: None)
+    res = sa.materialise([pin_entry()], str(offer), fetcher=fetcher,
+                         log=lambda _m: None)
+    assert res["placed"][0]["source"] == sa.SOURCE_PRESENT
+    assert len(fetcher.tried) == 1, "a populated directory was re-downloaded"
+
+    (offer / "thing-1.0.tar.gz").write_bytes(b"corrupted between runs")
+    res = sa.materialise([pin_entry()], str(offer), fetcher=fetcher,
+                         log=lambda _m: None)
+    assert res["placed"][0]["source"] == sa.SOURCE_UPSTREAM, (
+        "a corrupted file already in the directory must be re-acquired, not trusted")
+
+
+def test_no_network_mode_refuses_to_reach_upstream_at_all(tmp_path):
+    with pytest.raises(sa.ComplianceFailure, match="--no-network"):
+        sa.materialise([pin_entry()], str(tmp_path / "offer"),
+                       fetcher=sa.NoFetcher("--no-network was requested"),
+                       log=lambda _m: None)
+
+
+def test_transient_errors_are_retried_and_not_here_fails_over_immediately():
+    """`curl --retry 5 --retry-all-errors`, with one deliberate difference: an
+    HTTP status meaning "this host does not have it" is not transient, and four
+    more waits only delay the mirror that does."""
+    class Flaky(sa.HttpsFetcher):
+        def __init__(self, permanent: bool) -> None:
+            super().__init__(attempts=5, sleep=lambda _d: None)
+            self.permanent = permanent
+            self.tries = 0
+
+        def fetch_once(self, url, dest_path, *, max_bytes=sa.MAX_ARTIFACT_BYTES):
+            self.tries += 1
+            raise sa.FetchError(f"cannot fetch {url}", permanent=self.permanent)
+
+    transient = Flaky(permanent=False)
+    with pytest.raises(sa.FetchError):
+        transient.fetch("https://upstream.invalid/x", "/dev/null")
+    assert transient.tries == 5
+
+    gone = Flaky(permanent=True)
+    with pytest.raises(sa.FetchError):
+        gone.fetch("https://upstream.invalid/x", "/dev/null")
+    assert gone.tries == 1
+
+    for code, permanent in ((404, True), (403, True), (500, False), (429, False)):
+        assert (code in sa.FETCH_PERMANENT_STATUSES) is permanent, code
+
+
+def test_a_mirror_must_be_https_and_the_pin_table_is_validated_at_load():
+    with pytest.raises(sa.ArchiveError, match="not an https URL"):
+        sa.acquisition_urls({"name": "thing", "url": "https://a.invalid/x",
+                             "mirrors": ["http://plaintext.invalid/x"]})
+    urls = sa.acquisition_urls(mirrored_entry())
+    assert urls == [pin_entry()["url"], MIRROR_URL]
+
+
+def test_the_busybox_and_musl_pins_carry_the_alternate_mirror_that_answers():
+    """The regression that closed the 2026-09-07 CI failure, asserted on the
+    committed pin table rather than remembered."""
+    with open(PINS, encoding="utf-8") as fh:
+        pins = json.load(fh)
+    for filename in ("busybox-1.37.0.tar.bz2", "musl-1.2.5.tar.gz"):
+        entry = next(c for c in pins["components"] if c["file"] == filename)
+        mirrors = [m["url"] for m in entry.get("mirrors", [])]
+        assert mirrors, f"{filename} has no alternate mirror; busybox.net was enough once"
+        assert any(u.startswith("https://distfiles.alpinelinux.org/distfiles/")
+                   for u in mirrors), mirrors
+        assert all(u.endswith(filename) for u in mirrors), (
+            f"a mirror for {filename} must name the same artifact")
+        assert entry.get("mirrors_note"), (
+            "an alternate host is a reviewed decision and says why it is trusted")
+
+
+def test_neither_busybox_nor_musl_may_be_quietly_retained_in_git():
+    """Retention was re-examined on 2026-09-07 and refused: both exceed the
+    owner-owned git/S3 cut line. Moving that line to make a CI failure go away
+    is the re-decision the policy file exists to prevent."""
+    with open(POLICY, encoding="utf-8") as fh:
+        policy = json.load(fh)
+    threshold = policy["scope"]["git_retention_threshold_bytes"]
+    assert threshold == 524288, (
+        "the git/S3 cut line changed; that is an owner decision and this test is "
+        "the reminder that CI convenience is not a reason to move it")
+    with open(PINS, encoding="utf-8") as fh:
+        pins = json.load(fh)
+    for filename in ("busybox-1.37.0.tar.bz2", "musl-1.2.5.tar.gz"):
+        entry = next(c for c in pins["components"] if c["file"] == filename)
+        assert entry["size_bytes"] > threshold
+        assert not entry["retained_in_git"]
+        assert not os.path.exists(
+            os.path.join(ROOT, "compliance", "corresponding-sources", filename))
+
+
+def test_ci_materialises_before_the_installer_and_the_installer_holds_no_url():
+    """The workflow wiring, read from the workflow itself: the acquisition step
+    runs first and the installer is pointed at its output, so `--source-offer-only`
+    resolves everything locally."""
+    wf = os.path.join(ROOT, "..", ".github", "workflows", "supply-chain.yml")
+    with open(wf, encoding="utf-8") as fh:
+        text = fh.read()
+    assert "source-archive.py materialise --all" in text
+    mat = text.index("source-archive.py materialise")
+    installer = text.index("make-installer.sh --source-offer-only")
+    assert mat < installer, (
+        "the source must be materialised BEFORE the installer builds the offer")
+    tail = text[mat:installer]
+    assert "CORRELIX_SOURCE_MIRROR_DIR: ${{ runner.temp }}/source-mirror" in tail, (
+        "the installer must be pointed at the materialised mirror, not at the "
+        "network")
+
+
 # ── the full loop against a real S3 implementation (opt-in) ─────────────────
 E2E = os.environ.get("CORRELIX_SOURCE_ARCHIVE_E2E") == "1"
 

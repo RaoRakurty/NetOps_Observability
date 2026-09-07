@@ -176,17 +176,36 @@ jobs:
       # every release bundle (owner decision 2026-09-04, licence audit D2). No
       # second source-archive architecture: BusyBox is one more entry in the same
       # pin table, and this step needed no change to mirror it.
-      - name: Materialise the retained corresponding source
+      - name: Materialise the corresponding source (retained first, network last)
         working-directory: NetOps_Observability
-        # The RETAINED copies live in the repository (compliance/corresponding-sources)
-        # and are taken first; the installer re-verifies their sha256 against the pin
-        # table exactly as it would a fresh download ("local provenance is not trusted
-        # provenance"). Only files not retained there are fetched from the pinned
-        # upstream URL. gitlab.alpinelinux.org answers GitHub-hosted runners with
-        # HTTP 418 (2026-09-05), which is one more reason retention must not depend
-        # on upstream reachability.
+        # PREFERENCE ORDER, and it is a gate property before it is a convenience:
+        #   1. the copy RETAINED in this repository (compliance/corresponding-sources)
+        #   2. a prepared mirror directory (CORRELIX_SOURCE_MIRROR_DIR)
+        #   3. the pinned upstream URL, then the alternate mirrors the pin table
+        #      lists for that component — each retried with backoff + jitter
+        # A component Correlix already retains NEVER touches the network here, and
+        # every path ends at the same mandatory sha256 gate ("local provenance is
+        # not trusted provenance", and neither is a mirror's).
+        #
+        # 2026-09-07: this job was red because the source offer was fetched from
+        # busybox.net on every run and that host stopped answering (curl 28, 20s
+        # timeout). Verifying what Correlix ships against a third-party host's
+        # uptime is the wrong dependency direction — a merge gate must depend on
+        # what WE retain and pin. gitlab.alpinelinux.org answering GitHub-hosted
+        # runners with HTTP 418 (2026-09-05) was the same lesson, once.
+        run: |
+          set -euo pipefail
+          python3 scripts/source-archive.py materialise --all \
+            --dest "$RUNNER_TEMP/source-mirror"
+
+      - name: Build the source offer from the materialised mirror
+        working-directory: NetOps_Observability
+        # The installer now finds every artifact locally and re-checksums each one
+        # against the pin table exactly as it would a fresh download. It reaches
+        # for no network at all: the acquisition happened, resiliently and once,
+        # in the step above.
         env:
-          CORRELIX_SOURCE_MIRROR_DIR: ${{ github.workspace }}/NetOps_Observability/compliance/corresponding-sources
+          CORRELIX_SOURCE_MIRROR_DIR: ${{ runner.temp }}/source-mirror
         run: |
           set -euo pipefail
           bash scripts/make-installer.sh --source-offer-only
