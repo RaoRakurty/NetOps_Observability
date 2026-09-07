@@ -876,7 +876,13 @@ cmd_reset_demo() {
 addon_spec() {
   case "$1" in
     log-search-ui)   echo "osd|opensearch-dashboards" ;;
-    self-monitoring) echo "self-monitoring|grafana cadvisor node-exporter" ;;
+    # EVERY service in the compose profile must be listed: `disable` stops
+    # exactly what is named here, so an omission leaves a container running
+    # on a customer who was told the add-on is off. kafka-exporter was
+    # missing and survived `disable self-monitoring` (fresh-install
+    # acceptance, 2026-09-06). Pinned by
+    # tests/test_install_addon_packs.py::test_addon_registry_lists_every_service_in_its_profile.
+    self-monitoring) echo "self-monitoring|grafana cadvisor node-exporter kafka-exporter" ;;
     # SSO (Keycloak) became a pack on 2026-09-06. It used to be a base image
     # and cost 235 MB in every bundle for a capability whose design is
     # DEFERRED; a default appliance no longer carries it.
@@ -944,11 +950,29 @@ cmd_disable() {
   local prof="${spec%%|*}" svcs="${spec##*|}"
   local cur; cur=$(env_get COMPOSE_PROFILES)
   set_env_var COMPOSE_PROFILES "$(printf '%s' "$cur" | tr ',' '\n' | grep -vx "$prof" | paste -sd, -)"
+  # Stopping a service that is already stopped is not an error, but a stop that
+  # genuinely FAILS must not be swallowed (§16.1) — the old
+  # `>/dev/null 2>&1 || true` here would have reported "disabled" over a
+  # container that was still running. Capture the output and only surface it if
+  # the verification below finds something left behind.
+  local out=""
   # shellcheck disable=SC2086
-  compose --profile "$prof" stop $svcs >/dev/null 2>&1 || true
+  out="$(compose --profile "$prof" stop $svcs 2>&1)" || true
   # shellcheck disable=SC2086
-  compose --profile "$prof" rm -f $svcs >/dev/null 2>&1 || true
+  out="$out$(compose --profile "$prof" rm -f $svcs 2>&1)" || true
   if [ "$ADDON_ARG" = "self-monitoring" ]; then set_env_var GRAFANA_URL ""; compose up -d api; fi
+  # Verify, do not assume: name anything from this add-on still running.
+  local still="" s
+  for s in $svcs; do
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "(^|[_-])${s}(-[0-9]+)?$" \
+      && still="$still $s"
+  done
+  if [ -n "$still" ]; then
+    say "$out"
+    die "$ADDON_ARG did not fully stop — still running:$still" \
+      "Stop them by hand and re-run:
+  docker compose --profile $prof stop$still"
+  fi
   ok "$ADDON_ARG disabled (its images and data were kept)."
 }
 

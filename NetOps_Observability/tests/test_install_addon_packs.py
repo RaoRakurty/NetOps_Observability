@@ -261,3 +261,77 @@ def test_one_add_on_list_is_shown_to_humans_not_three_copies() -> None:
     assert "sso (single sign-on via Keycloak)" in INSTALL_CORRELIX
     stale = re.findall(r'"Available add-ons: [^"]*"', INSTALL_CORRELIX)
     assert len(stale) == 1, f"a hand-copied add-on list is back: {stale}"
+
+
+# ── the add-on registry must name EVERY service in its compose profile ──────
+# Fresh-install acceptance, 2026-09-06: `./install-correlix.sh disable
+# self-monitoring` printed "self-monitoring disabled" and left
+# netops-kafka-exporter-1 running, because addon_spec() listed
+# "grafana cadvisor node-exporter" while the compose profile has four members.
+# cmd_disable stops exactly what the registry names, so an omission is a
+# container that survives on a customer who was told the add-on is off — and
+# the old `>/dev/null 2>&1 || true` on the stop meant nothing ever said so.
+
+def _compose_profile_members() -> dict[str, set[str]]:
+    """profile name -> set of compose services declaring it."""
+    lines = (ROOT / "deployment" / "docker" / "docker-compose.yml").read_text().splitlines()
+    out: dict[str, set[str]] = {}
+    svc = None
+    for line in lines:
+        m = re.match(r"^  ([a-z0-9-]+):\s*$", line)
+        if m:
+            svc = m.group(1)
+            continue
+        m = re.match(r"^    profiles:\s*\[(.*)\]", line)
+        if m and svc:
+            for prof in re.findall(r'"([a-z0-9-]+)"', m.group(1)):
+                out.setdefault(prof, set()).add(svc)
+    assert out, "parsed no profiles out of docker-compose.yml"
+    return out
+
+
+def _addon_spec_registry() -> dict[str, tuple[str, list[str]]]:
+    """add-on name -> (profile, [services]) as addon_spec() declares them."""
+    start = INSTALL_CORRELIX.index("addon_spec() {")
+    block = INSTALL_CORRELIX[start:start + INSTALL_CORRELIX[start:].index("\n}")]
+    out: dict[str, tuple[str, list[str]]] = {}
+    for m in re.finditer(r'^\s{4}([a-z0-9-]+)\)\s+echo\s+"([a-z0-9-]+)\|([^"]*)"',
+                         block, re.MULTILINE):
+        out[m.group(1)] = (m.group(2), m.group(3).split())
+    assert out, "parsed no add-ons out of addon_spec()"
+    return out
+
+
+def test_addon_registry_lists_every_service_in_its_profile() -> None:
+    members = _compose_profile_members()
+    for name, (profile, services) in _addon_spec_registry().items():
+        expected = members.get(profile)
+        if expected is None:
+            continue  # the profile carries no service in the base compose
+        missing = expected - set(services)
+        assert not missing, (
+            f"add-on '{name}' (profile '{profile}') does not list {sorted(missing)} — "
+            f"`disable {name}` stops only what addon_spec names, so those "
+            "containers keep running on a customer who was told the add-on is off")
+        stale = set(services) - expected
+        assert not stale, (
+            f"add-on '{name}' lists {sorted(stale)}, which is not in the "
+            f"'{profile}' compose profile")
+
+
+def test_addon_disable_verifies_instead_of_swallowing() -> None:
+    """The stop must not be `>/dev/null 2>&1 || true`, and the command must
+    CHECK that nothing from the add-on is still running before claiming
+    success (the cardinal never-swallow rule)."""
+    body = INSTALL_CORRELIX[INSTALL_CORRELIX.index("cmd_disable() {"):]
+    body = body[:body.index("\n}")]
+    # Drop comment lines: the fix's own explanation quotes the banned pattern.
+    code = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#"))
+    assert ">/dev/null 2>&1 || true" not in code, (
+        "cmd_disable swallows the stop/rm output again — that is how a still-"
+        "running add-on container reported itself as disabled")
+    assert "docker ps" in code, (
+        "cmd_disable must verify no add-on service is left running before it "
+        "prints success")
+    assert code.index("docker ps") < code.index('ok "$ADDON_ARG disabled'), (
+        "the verification must run BEFORE the success line")
