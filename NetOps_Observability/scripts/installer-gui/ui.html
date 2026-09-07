@@ -719,11 +719,35 @@ function validateDeploy() {
 /* ---------- 06 security / settings ---------- */
 /* The URL the operator will actually sign in at: this host, the chosen
    dashboard port, and the scheme the transport choice implies. */
-function refreshMgmtURL() {
+/* The dashboard URL the operator will actually sign in at.
+
+   Under TLS the ingress moves to 443 — the `port` field above is the PLAINTEXT
+   base port and does NOT carry the https listener. Saying "https://host:8000"
+   there sent the operator to a port that refuses TLS, and their likely next
+   move is http://host:8000, i.e. the admin password in the clear. Under TLS,
+   quote the default https port (no ":443" suffix) instead. */
+function mgmtURL(tls) {
   const port = parseInt($('port').value, 10);
-  const tls = document.querySelector('input[name=tls]:checked').value === 'yes';
   const host = location.hostname || 'this-host';
-  $('mgmt-url').textContent = (tls ? 'https://' : 'http://') + host + ':' + (port >= 1 && port <= 65535 ? port : 8000);
+  if (tls) return 'https://' + host + '/';
+  return 'http://' + host + ':' + (port >= 1 && port <= 65535 ? port : 8000);
+}
+/* Replace a loopback host in the installer's result URL with the address this
+   wizard was actually opened on. Anything unparseable is passed through
+   untouched — a wrong-looking URL beats a blank one. */
+function localizeURL(u) {
+  if (!u) return '';
+  try {
+    const parsed = new URL(u);
+    if (/^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|::1)$/.test(parsed.hostname) && location.hostname) {
+      parsed.hostname = location.hostname;
+    }
+    return parsed.toString();
+  } catch (e) { return u; }
+}
+function refreshMgmtURL() {
+  const tls = document.querySelector('input[name=tls]:checked').value === 'yes';
+  $('mgmt-url').textContent = mgmtURL(tls);
 }
 document.querySelectorAll('input[name=tls]').forEach(r => r.addEventListener('change', refreshMgmtURL));
 /* Mirrors adminUserRE in main.go — the server re-validates, this is only so the
@@ -899,7 +923,11 @@ async function onResult(d) {
   let st = {};
   try { st = await api('/api/state'); } catch {}
   const res = st.result || d;
-  $('done-url').textContent = res.url || '';
+  /* install.py has no idea which address the operator reached this host on,
+     so it prints localhost. On the graphical path we DO know — rewrite the
+     host so a remote operator is not told to open a URL that only resolves on
+     the server itself. Scheme and port come from the installer's own result. */
+  $('done-url').textContent = localizeURL(res.url || '');
   $('done-user').textContent = res.admin_user || 'admin';
   $('done-pass').textContent = res.admin_password || 'see deployment/docker/.env';
   $('done-checks').innerHTML =

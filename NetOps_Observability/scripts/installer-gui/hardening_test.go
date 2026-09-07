@@ -922,3 +922,70 @@ func TestWizardOffersOnlyImplementedAddons(t *testing.T) {
 		t.Error("ui.html still offers the NetBox add-on; customer bundles never ship it")
 	}
 }
+
+// TestWizardQuotesTheTLSPortNotTheBasePort pins the sign-in URL the wizard
+// promises. Under TLS the ingress moves to 443 — the Deployment step's `port`
+// field is the PLAINTEXT base port and carries no https listener — so the
+// Settings and Review screens used to promise "https://<host>:8000", which
+// refuses TLS outright. The operator's likely next move is http://<host>:8000,
+// which DOES answer, so the admin password would go over the wire in the clear
+// on an install that advertised a "full TLS/mTLS mesh" (fresh-install
+// acceptance, 2026-09-06: https://10.70.245.123:8000 dead,
+// http://10.70.245.123:8000 served the dashboard, https://10.70.245.123/ was
+// the real URL).
+func TestWizardQuotesTheTLSPortNotTheBasePort(t *testing.T) {
+	page, err := os.ReadFile("ui.html")
+	if err != nil {
+		t.Fatalf("ui.html: %v", err)
+	}
+	body := string(page)
+	start := strings.Index(body, "function mgmtURL(")
+	if start < 0 {
+		t.Fatal("mgmtURL() not found — the sign-in URL is built somewhere else now")
+	}
+	fn := body[start:]
+	if end := strings.Index(fn, "\n}"); end > 0 {
+		fn = fn[:end]
+	}
+	if !strings.Contains(fn, "'https://' + host + '/'") {
+		t.Error("the TLS branch must quote the default https port (no :8000): " +
+			"https://<host>:8000 refuses TLS, and the http fallback leaks the password")
+	}
+	// The plaintext branch still uses the chosen base port — that one is real.
+	if !strings.Contains(fn, "'http://' + host + ':'") {
+		t.Error("the plaintext branch must still quote the chosen base port")
+	}
+	// Review reads the same element, so both screens agree by construction.
+	if !strings.Contains(body, `esc($('mgmt-url').textContent)`) {
+		t.Error("the Review screen no longer reuses #mgmt-url — the two screens can now disagree")
+	}
+}
+
+// TestDoneScreenLocalizesTheInstallerURL: install.py cannot know which address
+// the operator reached the host on, so it prints localhost. The graphical path
+// does know. Telling a remote operator to open https://localhost/ hands them a
+// URL that only resolves on the server itself.
+func TestDoneScreenLocalizesTheInstallerURL(t *testing.T) {
+	page, err := os.ReadFile("ui.html")
+	if err != nil {
+		t.Fatalf("ui.html: %v", err)
+	}
+	body := string(page)
+	if !strings.Contains(body, "localizeURL(res.url") {
+		t.Error("the Done screen must rewrite a loopback host in the installer's " +
+			"result URL to the address the wizard was opened on")
+	}
+	if !strings.Contains(body, "function localizeURL(") {
+		t.Fatal("localizeURL() is referenced but not defined")
+	}
+	// It must be tolerant: an unparseable URL is passed through, never blanked.
+	start := strings.Index(body, "function localizeURL(")
+	fn := body[start:]
+	if end := strings.Index(fn, "\n}\n"); end > 0 {
+		fn = fn[:end]
+	}
+	if !strings.Contains(fn, "catch") || !strings.Contains(fn, "return u;") {
+		t.Error("localizeURL must pass an unparseable URL through — a wrong-looking " +
+			"URL beats a blank one on the success screen")
+	}
+}
