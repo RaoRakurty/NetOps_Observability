@@ -546,3 +546,66 @@ def test_first_attempt_success_does_not_sleep(tmp_path):
     sr = FakeRotation([(True, "already present")])
     ok, _msg, slept = _provision(sr, tmp_path)
     assert ok and sr.calls == 1 and slept == []
+
+
+# ── (h) data/tls/services must be the api's tree, never Docker's ────────────
+# Fresh-install acceptance, 2026-09-06. data/tls IS chowned recursively — but
+# on a FRESH install it is empty at that moment, so there is nothing under it
+# to repair. Docker then created data/tls/services (and services/vmauth, a
+# bind-mount source) as ROOT when the first TLS-fronted service started, and
+# the api's internal CA could no longer mint into it:
+#   "internal CA: tls ca: svid registry: api: mkdir /data/tls/services/api:
+#    permission denied"
+# TLS phase A then deadlocked and the install failed at 83%.
+# preflight-install.py had flagged exactly this as a WARNING whose comment
+# reads "docker auto-creates a missing bind-mount dir (as root), so this
+# doesn't hard-break a fresh install" — for data/tls/services it does.
+
+def test_tls_service_mount_dirs_are_derived_from_compose():
+    compose_dir = ROOT / "deployment" / "docker"
+    dirs = install.tls_service_mount_dirs(compose_dir)
+    assert dirs, "no data/tls/services/<name> bind mounts parsed out of compose"
+    assert all(d.startswith("tls/services/") for d in dirs)
+    # vmauth is the one that actually broke the install: it joined the default
+    # profile set (TLS_EXTRA_PROFILES) and mounts an SVID dir.
+    assert "tls/services/vmauth" in dirs, (
+        "the vmauth SVID mount is no longer parsed — the dir Docker would "
+        "create as root is exactly the one that deadlocked TLS phase A")
+
+
+def test_ensure_data_dirs_pre_creates_the_tls_service_root_and_children(
+        fake_root, monkeypatch):
+    """Every per-service SVID dir must exist, owned by the api uid, BEFORE
+    compose runs — otherwise Docker gets there first, as root."""
+    seen: dict[str, tuple[int, int]] = {}
+    monkeypatch.setattr(install, "chown_tree",
+                        lambda d, uid, gid, name: seen.__setitem__(name, (uid, gid)))
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.delenv("SUDO_GID", raising=False)
+    # give the fake root the real compose files so the derivation has input
+    compose_dir = fake_root / "deployment" / "docker"
+    for name in ("docker-compose.yml", "compose.tls.yml"):
+        src = ROOT / "deployment" / "docker" / name
+        if src.exists():
+            (compose_dir / name).write_text(src.read_text())
+
+    install.ensure_data_dirs(fake_root)
+
+    api_ug = (os.getuid(), os.getgid())
+    assert seen["data/tls/services"] == api_ug, (
+        "data/tls/services must be pre-created and owned by the api runtime "
+        "uid, or Docker creates it as root and the api can never mint")
+    assert (fake_root / "data" / "tls" / "services").is_dir()
+    for rel in install.tls_service_mount_dirs(compose_dir):
+        assert seen[f"data/{rel}"] == api_ug, f"data/{rel} not owned by the api uid"
+        assert (fake_root / "data" / rel).is_dir(), f"data/{rel} was not created"
+
+
+def test_tls_services_is_created_before_any_compose_up():
+    """Source-order guard: ensure_data_dirs must run before compose_up, or the
+    pre-creation is pointless — Docker would already have won the race."""
+    src = (SCRIPTS / "install.py").read_text()
+    main_src = src[src.index("def main("):]
+    dirs = main_src.index("ensure_data_dirs(root)")
+    up = main_src.index("compose_up(compose_dir")
+    assert dirs < up, "ensure_data_dirs must precede the first compose_up"

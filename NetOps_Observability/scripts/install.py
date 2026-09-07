@@ -1717,6 +1717,32 @@ def chown_tree(d: Path, uid: int, gid: int, name: str) -> None:
     )
 
 
+def tls_service_mount_dirs(compose_dir: Path) -> list[str]:
+    """Every `data/tls/services/<name>` a compose file bind-mounts.
+
+    Docker creates a missing bind-mount SOURCE as **root** the moment the
+    service starts. The api is user-mapped with cap_drop:ALL, so once Docker
+    has created data/tls/services (and a sibling inside it) as root, the api's
+    internal CA can no longer mint: "mkdir /data/tls/services/api: permission
+    denied", and TLS phase A deadlocks. That is not hypothetical — it is how a
+    fresh install failed once vmauth (which mounts one of these) joined the
+    default profile set (acceptance, 2026-09-06).
+
+    Derived from the compose files rather than listed here, so a new
+    TLS-fronted service needs no edit in two places. Returns paths relative to
+    data/, e.g. "tls/services/vmauth".
+    """
+    out: set[str] = set()
+    for name in ("docker-compose.yml", "compose.tls.yml"):
+        f = compose_dir / name
+        if not f.exists():
+            continue
+        for m in re.finditer(r"\.\./\.\./data/(tls/services/[A-Za-z0-9_.-]+)",
+                             f.read_text()):
+            out.add(m.group(1).rstrip("/"))
+    return sorted(out)
+
+
 def ensure_data_dirs(root: Path) -> None:
     """Create per-service subdirectories under data/ and (where we know
     the container runs as a non-root user) chown them to that UID/GID.
@@ -1767,6 +1793,13 @@ def ensure_data_dirs(root: Path) -> None:
         # stale root-owned data/tls/services deadlocked the TLS phase-A
         # bootstrap (api: "mkdir /data/tls/services/api: permission denied").
         "tls": (api_uid, api_gid),
+        # ...and the SVID root itself. data/tls is chowned recursively, but on a
+        # FRESH install it is empty at that moment, so there is nothing under it
+        # to repair; Docker then creates data/tls/services (and a per-service dir
+        # inside it) as ROOT when the first TLS-fronted service starts, and the
+        # api can never mint. Pre-creating the root — and each mounted child, see
+        # tls_service_mount_dirs below — is what keeps it the api's tree.
+        "tls/services": (api_uid, api_gid),
         # Sealed device-configuration blobs (FEATURE_CONFIG_BACKUP,
         # internal/configstore). Same class as data/tls: a bind-mount source
         # Docker would otherwise auto-create as ROOT, into which the api
@@ -1781,6 +1814,9 @@ def ensure_data_dirs(root: Path) -> None:
         # contain payload bytes, so the directory is owner-only.
         "pcap": (api_uid, api_gid),
     }
+    for rel in tls_service_mount_dirs(root / "deployment" / "docker"):
+        owners.setdefault(rel, (api_uid, api_gid))
+
     # Directories whose MODE is part of the contract, not just their owner.
     private_modes: dict[str, int] = {"config-backups": 0o700, "pcap": 0o700}
     for name, uid_gid in owners.items():
