@@ -599,7 +599,14 @@ type Sizing struct {
 var (
 	retentionProfiles = map[string]bool{"lab": true, "demo": true, "production": true, "extended": true}
 	sizingProfiles    = map[string]bool{"auto": true, "demo": true, "small": true, "medium": true, "large": true}
-	knownAddons       = map[string]bool{"log-search-ui": true, "self-monitoring": true, "netbox": true, "sso": true}
+	// The add-on registry MUST stay identical to addon_spec() in
+	// install-correlix.sh: a name this map accepts but that registry does not
+	// know is a dead end — the wizard writes it into the profile and the
+	// installer then dies with "Unknown add-on in config". NetBox used to be
+	// listed here, but make-installer.sh excludes it from customer bundles by
+	// construction, so ticking it guaranteed a failed install.
+	// Pinned by TestKnownAddonsMatchInstallerRegistry.
+	knownAddons = map[string]bool{"log-search-ui": true, "self-monitoring": true, "sso": true}
 	// The application-state backend. PostgreSQL is the default for every fresh
 	// install (tracker 245); "file" is the explicit compatibility choice. There
 	// is deliberately no "memory" option here — it is never a shipped install.

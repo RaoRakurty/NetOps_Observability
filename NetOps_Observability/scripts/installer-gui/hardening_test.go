@@ -850,3 +850,75 @@ func TestWriteSecretZeroesEvenOnWriteError(t *testing.T) {
 		}
 	}
 }
+
+// TestKnownAddonsMatchInstallerRegistry pins the wizard's add-on list to the
+// registry the installer actually implements. The two drifted: the Deployment
+// screen offered "NetBox (bundled)" and knownAddons accepted it, but
+// addon_spec() in install-correlix.sh has no netbox case and make-installer.sh
+// excludes netbox from customer bundles by construction — so ticking that box
+// wrote a profile the installer then rejected with "Unknown add-on in config",
+// a guaranteed failed install reachable from a single click (fresh-install
+// acceptance, 2026-09-06). Read the shell registry rather than restating it,
+// so adding a pack in one place and not the other fails here.
+func TestKnownAddonsMatchInstallerRegistry(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "install-correlix.sh"))
+	if err != nil {
+		t.Skipf("install-correlix.sh not readable: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "addon_spec() {")
+	if start < 0 {
+		t.Fatal("addon_spec() not found in install-correlix.sh")
+	}
+	end := strings.Index(body[start:], "\n}")
+	if end < 0 {
+		t.Fatal("addon_spec() has no closing brace")
+	}
+	// Each implemented add-on is a `  name)   echo "profile|services" ;;` case.
+	caseRE := regexp.MustCompile(`(?m)^\s{4}([a-z0-9-]+)\)\s+echo\s+"`)
+	shell := map[string]bool{}
+	for _, m := range caseRE.FindAllStringSubmatch(body[start:start+end], -1) {
+		shell[m[1]] = true
+	}
+	if len(shell) == 0 {
+		t.Fatal("parsed no add-ons out of addon_spec() — the parser has drifted")
+	}
+	for name := range knownAddons {
+		if !shell[name] {
+			t.Errorf("the wizard accepts add-on %q but addon_spec() in "+
+				"install-correlix.sh does not implement it — the install would "+
+				"die with \"Unknown add-on in config: '%s'\"", name, name)
+		}
+	}
+	for name := range shell {
+		if !knownAddons[name] {
+			t.Errorf("install-correlix.sh implements add-on %q but the wizard "+
+				"cannot offer it (missing from knownAddons)", name)
+		}
+	}
+}
+
+// TestWizardOffersOnlyImplementedAddons is the other half: the served HTML
+// must not carry a checkbox for an add-on the profile validator rejects.
+func TestWizardOffersOnlyImplementedAddons(t *testing.T) {
+	page, err := os.ReadFile("ui.html")
+	if err != nil {
+		t.Fatalf("ui.html: %v", err)
+	}
+	pushRE := regexp.MustCompile(`addons\.push\('([a-z0-9-]+)'\)`)
+	found := map[string]bool{}
+	for _, m := range pushRE.FindAllStringSubmatch(string(page), -1) {
+		found[m[1]] = true
+	}
+	if len(found) == 0 {
+		t.Fatal("ui.html pushes no add-ons — the parser has drifted")
+	}
+	for name := range found {
+		if !knownAddons[name] {
+			t.Errorf("ui.html offers add-on %q which knownAddons rejects", name)
+		}
+	}
+	if strings.Contains(string(page), "ad-netbox") {
+		t.Error("ui.html still offers the NetBox add-on; customer bundles never ship it")
+	}
+}

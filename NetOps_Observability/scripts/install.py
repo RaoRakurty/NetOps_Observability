@@ -1610,6 +1610,37 @@ def api_runtime_uid(root: Path) -> tuple[int, int]:
 # the host anyway, so the fallback introduces no new image and no unpinned pull.
 CHOWN_HELPER_IMAGE = ("postgres:16-alpine@sha256:"
                       "16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229")
+# ...but ONLY on an ONLINE install. `docker load` restores an image by TAG;
+# a registry digest is pull-time metadata the archive does not carry (the same
+# lesson write_offline_override() encodes for compose, and cmd_uninstall for
+# `docker rmi`). So on an air-gapped bundle install the digest ref above is
+# "not found locally" and docker reaches for the registry — which is both a
+# broken air-gap promise and a hard install failure on a host with no egress
+# (fresh-install acceptance, 2026-09-06: every non-root TLS install died here).
+# Resolve against what is actually on the host, preferring the digest.
+CHOWN_HELPER_IMAGE_TAG = "postgres:16-alpine"
+
+
+def _image_present(ref: str) -> bool:
+    """True when `ref` already resolves on this host (never pulls)."""
+    try:
+        res = subprocess.run(["docker", "image", "inspect", ref],
+                             capture_output=True, text=True, timeout=30,
+                             check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return res.returncode == 0
+
+
+def _chown_helper_ref() -> str:
+    """Pick the helper ref: the digest-pinned one when it is local (online
+    install / already pulled), the tag when only the docker-load'ed tag is
+    (offline bundle), else the digest so an online host pulls a pinned image
+    rather than a floating tag."""
+    for ref in (CHOWN_HELPER_IMAGE, CHOWN_HELPER_IMAGE_TAG):
+        if _image_present(ref):
+            return ref
+    return CHOWN_HELPER_IMAGE
 
 
 def _docker_chown(d: Path, uid: int, gid: int) -> tuple[bool, str]:
@@ -1623,7 +1654,7 @@ def _docker_chown(d: Path, uid: int, gid: int) -> tuple[bool, str]:
     cmd = ["docker", "run", "--rm", "--network", "none",
            "--entrypoint", "/bin/chown",
            "-v", f"{d}:/target",
-           CHOWN_HELPER_IMAGE,
+           _chown_helper_ref(),
            "-R", "-h", f"{uid}:{gid}", "/target"]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True,
@@ -2638,6 +2669,59 @@ def _split_app_dsn(dsn: str) -> tuple[str, str, str, str]:
             parts.hostname or "", (parts.path or "/").lstrip("/"))
 
 
+# Postgres first-boot states that are NOT a failure, only "not yet". The
+# official entrypoint runs initdb, brings up a TEMPORARY server on the unix
+# socket to run its init scripts, SHUTS THAT DOWN, and only then starts the
+# real one. `pg_isready` answers "yes" against the temporary server, so a
+# readiness probe alone lands the very next psql in the shutdown window and
+# the install dies on "FATAL: the database system is shutting down" — which is
+# exactly what a fresh install did (fresh-install acceptance, 2026-09-06).
+# Retrying through the window is the fix (§9: bounded retry with backoff).
+_PG_TRANSIENT = re.compile(
+    r"the database system is (shutting down|starting up|not yet accepting"
+    r" connections)|could not connect to server|Connection refused|"
+    r"No such file or directory.*PGSQL|server closed the connection unexpectedly",
+    re.IGNORECASE)
+
+
+def _provision_app_state_role_with_retry(sr, compose_dir: Path, *, db_user: str,
+                                         db_name: str, app_user: str,
+                                         app_password: str,
+                                         deadline_s: float = 180.0,
+                                         sleep=time.sleep) -> tuple[bool, str]:
+    """provision_app_state_role, retried across the first-boot restart.
+
+    Returns the LAST (ok, message) pair. A non-transient failure (bad
+    credentials, a syntax error, a genuinely broken database) is returned
+    immediately — retrying those would only delay a real error by three
+    minutes. Bounded (§16.3): the loop always ends.
+    """
+    started = time.monotonic()
+    attempt, backoff, last = 0, 1.0, (False, "not attempted")
+    while True:
+        attempt += 1
+        last = sr.provision_app_state_role(
+            ComposeRunner(compose_dir), db_user=db_user, db_name=db_name,
+            app_user=app_user, app_password=app_password)
+        if last[0]:
+            if attempt > 1:
+                info(f"app-state role provisioned on attempt {attempt} "
+                     f"(postgres was still completing its first boot)")
+            return last
+        if not _PG_TRANSIENT.search(last[1] or ""):
+            return last                      # a real error: surface it now
+        if time.monotonic() - started >= deadline_s:
+            waited = int(time.monotonic() - started)
+            detail = (f"{last[1]} (still transient after {waited}s "
+                      f"and {attempt} attempts)")
+            return (False, detail)
+        if attempt == 1:
+            info("postgres is still completing its first boot — retrying the "
+                 "app-state role provisioning")
+        sleep(backoff)
+        backoff = min(backoff * 2, 10.0)
+
+
 def bootstrap_app_state_role(compose_dir: Path, env: dict) -> None:
     """Provision the Postgres role the api's registry storage connects as
     (tracker 245).
@@ -2704,8 +2788,8 @@ def bootstrap_app_state_role(compose_dir: Path, env: dict) -> None:
         return
 
     sr = _rotation_module()
-    done, msg = sr.provision_app_state_role(
-        ComposeRunner(compose_dir), db_user=db_user, db_name=dbname,
+    done, msg = _provision_app_state_role_with_retry(
+        sr, compose_dir, db_user=db_user, db_name=dbname,
         app_user=app_user, app_password=app_pw)
     if not done:
         fail(f"the app-state role could not be provisioned: {msg}. The api needs "
@@ -3067,6 +3151,18 @@ def main() -> None:
         step("planning resources (#102)", stage="sizing")
         run_resource_plan(env_path, args.plan_resources, args.sizing_file)
 
+    # Load the image archive BEFORE the first step that may need the chown
+    # helper container. Both ensure_ingress_cert() (uid 101 ingress key) and
+    # ensure_data_dirs() (per-service uids) fall back to a root helper
+    # container when the installer is not root — the documented, recommended
+    # way to install — and on a virgin air-gapped host NO image exists until
+    # this runs, so the fallback had nothing to run and the install died at
+    # the TLS stage 100% of the time (fresh-install acceptance, 2026-09-06).
+    # load_bundle() depends on nothing above it but the extracted tree.
+    if args.bundle:
+        step("loading image bundle", stage="bundle")
+        load_bundle(args.bundle)
+
     # The one transport-security question (tracker #151 delivery shape).
     # Resolved AFTER .env exists so both fresh and existing installs converge
     # through the same line-surgery path; the actual activation is two-phase
@@ -3094,8 +3190,6 @@ def main() -> None:
         return
 
     if args.bundle:
-        step("loading image bundle", stage="bundle")
-        load_bundle(args.bundle)
         # Add-on packs ride next to the base archive and are loaded only for
         # the profiles this install actually activates. Gate on the EFFECTIVE
         # profiles from .env (what compose_up will start), not args.profiles —

@@ -165,6 +165,67 @@ done
 # ---------- preflight checks (install only) ----------------------------------
 port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3>&-; return 0; } || return 1; }
 
+# Device-facing host ports published by docker-compose.yml, as
+# "port/proto[:ENV_VAR]" — the env var (where one exists) is what moves the
+# port, and is quoted back to the customer in the failure. Keep in sync with
+# the `ports:` blocks of syslog-ng, goflow2 and api; pinned by
+# tests/test_ingest_contract.py::test_installer_checks_every_published_port.
+STACK_INGEST_PORTS="514/tcp 514/udp 5514/tcp:SYSLOG_PORT 5514/udp:SYSLOG_PORT \
+2055/udp:NETFLOW_PORT 4739/udp:IPFIX_PORT 6343/udp:SFLOW_PORT \
+162/udp:SNMP_TRAP_PORT 11019/tcp:BMP_PORT"
+
+# Report each STACK_INGEST_PORTS entry already bound on this host, and stop the
+# install naming them. UDP cannot be probed by connecting, so this reads the
+# kernel's listening table via `ss` (iproute2). No `ss` -> say so and continue
+# rather than pretend the ports were checked (§16.1: never a silent skip).
+check_ingest_ports() {
+  if ! command -v ss >/dev/null 2>&1; then
+    warn "'ss' (iproute2) is not installed — cannot verify the device-facing ports are free."
+    warn "If a collector fails to start, check for another service on 514/5514, 2055/4739/6343, 162 or 11019."
+    return 0
+  fi
+  local listening busy="" entry port proto var
+  # -H no header, -l listening, -n numeric, -t tcp, -u udp. Fold every local
+  # address down to "proto:port" so 0.0.0.0:514, [::]:514 and 127.0.0.1:514
+  # all match. A non-zero ss here is a real failure, not noise.
+  if ! listening=$(ss -Hlntu 2>&1); then
+    warn "could not read the listening-socket table (ss: $listening) — skipping the port check."
+    return 0
+  fi
+  listening=$(printf '%s\n' "$listening" \
+    | awk '{ n=$1; a=$5; sub(/.*:/, "", a); if (a ~ /^[0-9]+$/) print n ":" a }' \
+    | sort -u)
+  for entry in $STACK_INGEST_PORTS; do
+    var="${entry#*:}"; [ "$var" = "$entry" ] && var=""
+    entry="${entry%%:*}"
+    port="${entry%%/*}"; proto="${entry##*/}"
+    if printf '%s\n' "$listening" | grep -qx "$proto:$port"; then
+      busy="$busy
+  $port/$proto — $(port_purpose "$port")$([ -n "$var" ] && printf ' (move it with %s=<port> in the environment)' "$var")"
+    fi
+  done
+  [ -n "$busy" ] || return 0
+  die "Another service already listens on port(s) Correlix must publish:$busy" \
+    "Docker would fail to bind them part-way through the install. Stop the
+service holding each port (find it with 'sudo ss -lntup'), or set the
+environment variable listed above to a free port, then re-run the
+installer — it is idempotent."
+}
+
+# Plain-language purpose per published port, so the failure says what the port
+# is FOR rather than making the customer look it up.
+port_purpose() {
+  case "$1" in
+    514|5514)   echo "syslog from your devices" ;;
+    2055)       echo "NetFlow" ;;
+    4739)       echo "IPFIX" ;;
+    6343)       echo "sFlow" ;;
+    162)        echo "SNMP traps" ;;
+    11019)      echo "BGP Monitoring Protocol (BMP)" ;;
+    *)          echo "device telemetry" ;;
+  esac
+}
+
 preflight() {
   say "${BOLD}Checking this host...${RST}"
 
@@ -244,6 +305,15 @@ preflight() {
       "Either stop the service using it, or install on another port:
   ./install-correlix.sh install --ui-port 9443"
   fi
+
+  # ...and every OTHER host port the stack publishes. Only the UI port used to
+  # be checked, so a busy device-facing port (a host rsyslog on 514, an
+  # snmptrapd on 162, another collector on 2055) surfaced ten minutes into the
+  # install as docker's "Bind for 0.0.0.0:514 failed: port is already
+  # allocated" — precisely the late, confusing failure this gate exists to
+  # prevent (fresh-install acceptance, 2026-09-06). Fresh installs only: an
+  # existing install's OWN listeners are not a conflict.
+  [ -f "$ENV_FILE" ] || check_ingest_ports
 
   # OpenSearch (the log-search store) needs this kernel setting; without it
   # the store crash-loops after an otherwise clean install. Self-heal when we

@@ -329,8 +329,6 @@
           <span><b>Log search UI</b><span class="why">OpenSearch Dashboards behind the ingress.</span></span></label>
         <label class="opt"><input type="checkbox" id="ad-sso">
           <span><b>Single sign-on</b><span class="why">Keycloak — broker SAML / LDAP / OIDC identity providers.</span></span></label>
-        <label class="opt"><input type="checkbox" id="ad-netbox">
-          <span><b>NetBox (bundled)</b><span class="why">Source-of-truth inventory, embedded.</span></span></label>
       </div>
       <div class="sect"><div class="cap">BASICS</div>
         <div class="facts">
@@ -776,7 +774,6 @@ function buildProfile() {
   if ($('ad-logui').checked)   addons.push('log-search-ui');
   if ($('ad-selfmon').checked) addons.push('self-monitoring');
   if ($('ad-sso').checked)     addons.push('sso');
-  if ($('ad-netbox').checked)  addons.push('netbox');
   return {
     version: 1,
     port: parseInt($('port').value, 10),

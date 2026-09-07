@@ -1226,3 +1226,64 @@ def test_flood_stage_block_is_alerted_and_pinned_to_the_sink_buffer():
     assert "vector_http_client_requests_sent_total" in storm and \
            "vector_component_sent_events_total" in storm, \
         "VectorOpenSearchRetryStorm must compare requests ISSUED against events DELIVERED"
+
+
+# ── the installer must check EVERY host port the stack publishes ────────────
+# Fresh-install acceptance, 2026-09-06: preflight() checked only the UI port,
+# so a busy device-facing port surfaced ten minutes into the install as
+# docker's "Bind for 0.0.0.0:514 failed: port is already allocated". These two
+# tests pin the fix from both ends — the registry covers what compose actually
+# publishes, and the gate is actually wired into preflight().
+
+def _published_host_ports() -> set[str]:
+    """Every "port/proto" docker-compose.yml binds on the HOST, resolved
+    through each `${VAR:-default}` to its default."""
+    compose = os.path.join(ROOT, "deployment", "docker", "docker-compose.yml")
+    with open(compose, encoding="utf-8") as fh:
+        text = fh.read()
+    ports: set[str] = set()
+    # - "${SYSLOG_PORT:-5514}:514/udp"  |  - "514:514/tcp"  |  - "${BASE_PORT:-8000}:8080"
+    pat = re.compile(
+        r'^\s+-\s+"(?:\$\{[A-Z_]+:-(?P<d>\d+)\}|(?P<lit>\d+)):\d+(?:/(?P<proto>tcp|udp))?"\s*$',
+        re.MULTILINE)
+    for m in pat.finditer(text):
+        ports.add(f"{m.group('d') or m.group('lit')}/{m.group('proto') or 'tcp'}")
+    assert ports, "parsed no published ports out of docker-compose.yml"
+    return ports
+
+
+def test_installer_checks_every_published_port():
+    installer = os.path.join(ROOT, "scripts", "install-correlix.sh")
+    with open(installer, encoding="utf-8") as fh:
+        src = fh.read()
+    m = re.search(r'STACK_INGEST_PORTS="(.*?)"', src, re.DOTALL)
+    assert m, "STACK_INGEST_PORTS registry not found in install-correlix.sh"
+    checked = {e.split(":")[0]
+               for e in m.group(1).replace("\\\n", " ").split()}
+    # The UI port has its own dedicated check (with the --ui-port remedy).
+    ui_port = "8000/tcp"
+    assert "port_in_use \"$UI_PORT\"" in src
+    missing = _published_host_ports() - checked - {ui_port}
+    assert not missing, (
+        f"docker-compose.yml publishes {sorted(missing)} on the host but the "
+        "installer never checks whether they are free — docker will fail to "
+        "bind them part-way through the install")
+    stale = checked - _published_host_ports()
+    assert not stale, (
+        f"the installer checks {sorted(stale)}, which compose no longer "
+        "publishes — a stale entry can block an install for no reason")
+
+
+def test_port_check_is_wired_into_preflight_and_is_fresh_install_only():
+    installer = os.path.join(ROOT, "scripts", "install-correlix.sh")
+    with open(installer, encoding="utf-8") as fh:
+        src = fh.read()
+    body = src[src.index("preflight() {"):src.index("\n# Release-signature check")]
+    assert "check_ingest_ports" in body, \
+        "check_ingest_ports is defined but never called from preflight()"
+    # Guarded on a fresh install: a running Correlix's OWN listeners must not
+    # be reported as a conflict on a re-run (the installer is idempotent).
+    assert re.search(r'\[ -f "\$ENV_FILE" \] \|\| check_ingest_ports', body), \
+        "the port check must be skipped when this host already has an install"
+    # Never a silent skip when `ss` is missing (§16.1).
+    assert "command -v ss" in src and "cannot verify the device-facing ports" in src

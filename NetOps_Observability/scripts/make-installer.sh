@@ -480,7 +480,14 @@ export COMPOSE_PROFILES=""
 # whose own design doc (docs/design/SSO_SAML_*) records it as DEFERRED until
 # SaaS. A default bundle therefore no longer carries it; a customer who wants
 # brokered SAML/LDAP/OIDC gets the pack alongside, exactly like the other two.
-BASE_PROFILES=(--profile embedded-bus --profile prober --profile seal)
+# `security` and `vmauth` are here because install.py's TLS_EXTRA_PROFILES
+# turns them on for EVERY default install (TLS/mTLS is the default posture).
+# They were missing, so the base archive never carried
+# victoriametrics/vmauth — and an air-gapped install reached for Docker Hub
+# mid-bring-up and failed (fresh-install acceptance, 2026-09-06). Anything a
+# DEFAULT install starts must be in the base archive; pinned by
+# tests/test_download_folder.py::test_base_profiles_cover_a_default_tls_install.
+BASE_PROFILES=(--profile embedded-bus --profile prober --profile seal --profile security --profile vmauth)
 ADDONS="log-search-ui:osd self-monitoring:self-monitoring sso:sso"   # name:profile
 [ "$PROFILE" = "core" ] && ADDONS=""   # --core: base appliance only, no packs
 

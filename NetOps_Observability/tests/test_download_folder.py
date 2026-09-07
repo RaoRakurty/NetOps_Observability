@@ -351,3 +351,57 @@ def test_bundle_is_not_stale_against_head(bundle):
                        capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 0, (
         f"the newest bundle lags HEAD — rebuild it:\n{r.stdout}\n{r.stderr}")
+
+
+# ── the base archive must carry everything a DEFAULT install starts ─────────
+# Fresh-install acceptance, 2026-09-06: TLS/mTLS is the default posture, and
+# install.py's TLS_EXTRA_PROFILES turns on `seal`, `security` and `vmauth` for
+# every default install — but make-installer.sh's BASE_PROFILES named only
+# `seal`. victoriametrics/vmauth therefore never entered the base archive, and
+# the air-gapped install reached registry-1.docker.io mid-bring-up and failed
+# with "docker compose up did not converge after 3 attempts".
+
+def _install_py_profiles() -> tuple[set[str], set[str]]:
+    with open(os.path.join(ROOT, "scripts", "install.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    m = re.search(r'DEFAULT_PROFILES\s*=\s*"([^"]*)"', src)
+    assert m, "DEFAULT_PROFILES not found in install.py"
+    default = {p.strip() for p in m.group(1).split(",") if p.strip()}
+    m = re.search(r"TLS_EXTRA_PROFILES\s*=\s*\(([^)]*)\)", src)
+    assert m, "TLS_EXTRA_PROFILES not found in install.py"
+    tls = set(re.findall(r'"([a-z0-9-]+)"', m.group(1)))
+    assert tls, "TLS_EXTRA_PROFILES parsed empty"
+    return default, tls
+
+
+def test_base_profiles_cover_a_default_tls_install(script):
+    """Every compose profile a DEFAULT install activates must contribute its
+    images to the BASE archive — anything else is a mid-install pull on a host
+    that has no internet by design."""
+    m = re.search(r"BASE_PROFILES=\((.*?)\)", script, re.DOTALL)
+    assert m, "BASE_PROFILES not found in make-installer.sh"
+    base = set(re.findall(r"--profile\s+([a-z0-9-]+)", m.group(1)))
+    assert base, "BASE_PROFILES parsed empty"
+
+    _default, tls = _install_py_profiles()
+    missing = tls - base
+    assert not missing, (
+        f"install.py turns on {sorted(tls)} for every default (TLS) install, "
+        f"but make-installer.sh's BASE_PROFILES omits {sorted(missing)} — any "
+        "image unique to those profiles is left out of the base archive and "
+        "the air-gapped install will try to pull it")
+
+
+def test_addon_profiles_are_never_also_base_profiles(script):
+    """A profile cannot be both 'always shipped' and 'optional pack': the pack
+    resolves its image set as (base + profile) minus base, so an overlap makes
+    the pack empty and the build fails late instead of here."""
+    m = re.search(r"BASE_PROFILES=\((.*?)\)", script, re.DOTALL)
+    base = set(re.findall(r"--profile\s+([a-z0-9-]+)", m.group(1)))
+    m = re.search(r'ADDONS="([^"]*)"', script)
+    assert m, "ADDONS registry not found in make-installer.sh"
+    addon_profiles = {e.split(":")[1] for e in m.group(1).split() if ":" in e}
+    overlap = base & addon_profiles
+    assert not overlap, (
+        f"profile(s) {sorted(overlap)} are in BASE_PROFILES and also sold as an "
+        "add-on pack — the pack would resolve to no images")
