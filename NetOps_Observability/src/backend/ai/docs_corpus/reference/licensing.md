@@ -66,12 +66,16 @@ whatever a draft tiering document proposes.
 | `siem_export` | Enterprise | Export of findings and evidence to an external SIEM. |
 | `msp_management` | Enterprise | MSP and organisation-hierarchy management of many tenants. |
 | `saml` | Enterprise | SAML single sign-on. |
-| `scim` | Enterprise | SCIM user and group provisioning. |
+| `scim` | Enterprise | SCIM user and group provisioning. **Planned, not shipped:** the entitlement name exists, and no SCIM route is served behind it. See [Identity provisioning](/administration/identity-provisioning). |
 | `ldap` | Enterprise | LDAP and Active Directory authentication. |
 
 `docs/design/TIERING_PLAN_2026-09-03.md` in the source tree records the ceilings
 each tier carries, and [Pricing](/reference/pricing) records what each tier
 costs.
+
+An entitlement name is a commercial vocabulary entry. It is not by itself proof
+that a route exists behind it. One entry in the table above, `scim`, names a
+capability that is planned rather than built, and it is marked as such.
 
 ### A licence carries no price
 

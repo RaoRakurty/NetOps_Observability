@@ -44,6 +44,8 @@ Organization isolation is derived from tenant isolation: an organization is its 
 | [Create tenants and organizations](/administration/tenants-orgs) | Create the isolation units and the account layer above them, suspend and delete. |
 | [Configure authentication](/administration/authentication) | Local accounts, password and lockout policy, MFA, OIDC single sign-on, LDAP and TACACS+. |
 | [Connect Okta as an identity provider](/administration/okta-sso) | The worked Okta bring-up through the bundled Keycloak broker. |
+| [Identity provisioning](/administration/identity-provisioning) | What just-in-time provisioning creates and refreshes, how a binding is bounded, and where SCIM stands. |
+| [Security and identity FAQ](/administration/identity-faq) | Short answers to the identity, claim-handling, token-lifetime and audit questions a security review asks. |
 | [Mint an API key](/administration/api-access) | Machine credentials, token policy and the generated REST reference. |
 | [Read the audit log](/administration/audit-log) | Who changed what, who was refused, and how to filter it. |
 | [Set a data-residency region](/administration/regions) | Record where a tenant's data is meant to live. |

@@ -10,6 +10,8 @@ sidebar_position: 4
 
 Correlix authenticates locally and against your existing identity infrastructure at the same time. Local accounts are always available, so an outage at an identity provider cannot lock every administrator out. This page sets the policy that governs local accounts, then connects an external provider.
 
+A federated account is created by its first successful sign-in, with no import step and no SCIM endpoint. [Identity provisioning](/administration/identity-provisioning) covers what that first sign-in writes, what later sign-ins refresh, and what deprovisioning means today.
+
 ## Before you begin
 
 - **Permission, provider configuration:** platform administrator. Authentication providers are platform-global plumbing. `GET` and `PUT` on `/api/auth/oidc/config`, `/api/auth/ldap/config`, `/api/auth/tacacs/config` and `/api/auth/token-policy` all call `requirePlatformAdmin`, and for the same reason the console puts the page under Platform, a section a tenant administrator does not see.
@@ -149,6 +151,8 @@ The tile shows **Enabled**, and for single sign-on also **Ready**. `GET /api/aut
 ## Related
 
 - [Connect Okta as an identity provider](/administration/okta-sso) for the end-to-end broker setup.
+- [Identity provisioning](/administration/identity-provisioning) for what a federated account's first sign-in creates, and how to deprovision.
+- [Security and identity FAQ](/administration/identity-faq) for the questions a security review asks.
 - [Add users and grant access](/administration/identity-access) for accounts and roles.
 - [Mint an API key](/administration/api-access) for unattended clients, which skip passwords and MFA entirely.
 - [Troubleshooting](/reference/troubleshooting#sign-in-problems) for sign-in symptoms.

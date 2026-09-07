@@ -251,6 +251,8 @@ const sidebars = {
         'administration/tenants-orgs',
         'administration/authentication',
         'administration/okta-sso',
+        'administration/identity-provisioning',
+        'administration/identity-faq',
         'administration/api-access',
         'administration/audit-log',
         'administration/regions',
