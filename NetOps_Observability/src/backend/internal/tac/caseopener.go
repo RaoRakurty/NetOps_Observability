@@ -139,6 +139,17 @@ type ConnectorInfo struct {
 	// invitation to bring credentials; a validation refusal carries the
 	// connector's own sentence; an unreadable configuration carries the cause.
 	StatusNote string `json:"status_note,omitempty"`
+	// ConfigSection names the SETTINGS BLOCK that configures this connector
+	// ("servicenow", "jira", "email", "cisco", "juniper"), or is empty when the
+	// connector holds no settings at all.
+	//
+	// It exists so a settings screen can offer the right form — and, more
+	// importantly, so it can tell "bring credentials here" apart from "there is
+	// nothing to bring". A portal-only vendor publishes no API; showing it a
+	// Configure button would promise a screen that could only ever refuse.
+	// Twelve connectors share five blocks, so the mapping is the server's to
+	// state, never the client's to guess.
+	ConfigSection string `json:"config_section,omitempty"`
 	// Unavailable reports that this tenant's stored configuration could not be
 	// READ — a storage failure, not a state.
 	//

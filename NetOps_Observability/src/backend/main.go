@@ -264,6 +264,10 @@ type server struct {
 	// BYO case-connector credentials (write-only, sealed by the store).
 	tacBundles    *tac.Store
 	tacConnectors *ticketing.TACConnectorStore
+	// tacConnectorAPI is the settings surface over that store (PUT/DELETE/test).
+	// Nil when its wiring was refused; the module's handlers nil-check their
+	// receiver, so the routes answer 404 rather than reading unscoped.
+	tacConnectorAPI *ticketing.TACConnectorAPI
 	// tacTemplates is the per-tenant COMMAND TEMPLATE surface (tracker 250) and
 	// tacTemplateStore its backing store. Both are built unconditionally: an
 	// operator must be able to review and edit the command list on any
@@ -2936,6 +2940,77 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Administration → Ticket delivery reads this to show what each vendor path
 	// can do and what it still needs.
 	mux.HandleFunc("/api/tac/connectors", s.handleTACConnectors)
+	// And the SETTINGS behind that list: the four routes a customer brings its
+	// own Jira / ServiceNow / Cisco / Juniper / SMTP credentials through
+	// (internal/ticketing/caseconn_http.go). Until they existed the store had a
+	// reader and no writer, so every connector read "Not configured" forever.
+	//
+	// The adapter is wired HERE, beside the registration, for the same reason
+	// the pipeline debugger's UI host is (package_growth_guard_test.go): the
+	// escalation adapter block in protocol_diagnostics.go is at its ceiling, and
+	// the decisions this surface makes — the per-connector form, the write-only
+	// secret merge, the read-only probe — are all in internal/ticketing where
+	// they belong. What is left is the gate mapping and the response writers.
+	//
+	// The gate is the TEMPLATE gate: connector credentials are the same class of
+	// per-tenant operator data, so there is one mapping and not two. A TEST is a
+	// WRITE gate — it spends the tenant's credential against a vendor.
+	if connAPI, cerr := ticketing.NewTACConnectorAPI(ticketing.TACConnectorAPIDeps{
+		Authz: func(w http.ResponseWriter, r *http.Request, gate ticketing.ConnectorGate) (ticketing.ConnectorPrincipal, bool) {
+			tgate := tac.TemplateGateRead
+			if gate == ticketing.ConnectorGateWrite {
+				tgate = tac.TemplateGateWrite
+			}
+			p, ok := s.tacTemplateAuthz(w, r, tgate)
+			return ticketing.ConnectorPrincipal{Tenant: p.Tenant, Cross: p.Cross, Subject: p.Subject}, ok
+		},
+		Store:    func() *ticketing.TACConnectorStore { return s.tacConnectors },
+		Registry: ticketing.DefaultCaseConnectorRegistry(),
+		Resolve:  s.tacConnectorConfig,
+		// Both trails: the package's own structured line (§10) and the platform
+		// audit ledger an admin actually reads. A credential change is recorded
+		// whether it landed or was refused.
+		Audit: ticketing.CaseAuditSinkFunc(func(e ticketing.CaseAuditEvent) {
+			ticketing.DefaultCaseAuditSink().RecordCaseAction(e)
+			if s.audit == nil {
+				return
+			}
+			// A PROBE always answers, whatever the vendor said: its outcome
+			// belongs in the detail, not in an HTTP status the request never
+			// carried. Only a refused WRITE is a denial.
+			probe := strings.HasPrefix(e.Detail, "test")
+			method := http.MethodPut
+			switch {
+			case e.Detail == "remove":
+				method = http.MethodDelete
+			case probe:
+				method = http.MethodPost
+			}
+			status, decision := http.StatusOK, "allow"
+			if e.Result != "ok" && !probe {
+				status, decision = http.StatusBadRequest, "deny"
+			}
+			detail := map[string]any{"action": "tac_connector_" + e.Detail, "sensitive": true,
+				"connector": e.Connector, "vendor": e.Vendor, "result": e.Result}
+			if e.Error != "" {
+				detail["error"] = e.Error
+			}
+			s.audit.Record(AuditEvent{
+				Actor: e.Actor, Tenant: e.TenantID, Method: method,
+				Path: "/api/tac/connectors/" + e.Connector, Status: status, Decision: decision,
+				Detail: detail,
+			})
+		}),
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		Now:        func() time.Time { return time.Now().UTC() },
+	}); cerr != nil {
+		logError("tac", "the case-connector settings surface could not be wired — the routes will answer 404", errf(cerr))
+	} else {
+		s.tacConnectorAPI = connAPI
+	}
+	mux.HandleFunc("/api/tac/connectors/{id}", s.tacConnectorAPI.HandleConnectorItem)
+	mux.HandleFunc("/api/tac/connectors/{id}/test", s.tacConnectorAPI.HandleConnectorTest)
 	// The per-tenant COMMAND TEMPLATES (tracker 250): the sets a NOC admin saves
 	// per vendor dialect and loads into the review step. Registered as LITERALS,
 	// not as the tac.*Path constants, because the route-isolation ledger's

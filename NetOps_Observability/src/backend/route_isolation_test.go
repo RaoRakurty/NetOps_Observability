@@ -224,11 +224,24 @@ var routeIsolationLedger = map[string]string{
 	// — a store call that refuses another tenant's key outright. The tenant comes
 	// from the token and the route accepts no selector, so there is nothing to
 	// widen. Classified scoped because a per-tenant field crosses it at all.
-	"/api/tac/connectors":         "scoped",
-	"/api/tac/templates":          "scoped",
-	"/api/tac/templates/":         "scoped",
-	"/api/tac/templates/defaults": "globalRef",
-	"/api/tac/templates/validate": "globalRef",
+	"/api/tac/connectors": "scoped",
+	// The SETTINGS behind that list (the four routes a customer brings its own
+	// vendor/ITSM credentials through). Per-tenant DATA in the strongest sense:
+	// the row IS the customer's credentials. The subtree accepts no tenant
+	// selector at all — not a query parameter, not a body field, since the forms
+	// reject unknown fields — so the only tenant it can act on is the one the
+	// token resolved to, and every store call passes cross=false with that
+	// tenant as the target, so even a platform owner acts as exactly one tenant
+	// (and must scope into one first: cross with no tenant is refused). Secrets
+	// are write-only: a stored one is never serialized out, only its presence.
+	// Both writes and the read-only probe are audited on both outcomes.
+	// Cross-org isolation proven by tac_connector_config_isolation_test.go.
+	"/api/tac/connectors/{id}":      "scoped",
+	"/api/tac/connectors/{id}/test": "scoped",
+	"/api/tac/templates":            "scoped",
+	"/api/tac/templates/":           "scoped",
+	"/api/tac/templates/defaults":   "globalRef",
+	"/api/tac/templates/validate":   "globalRef",
 
 	// The TAC LEARNING BACKLOG (tracker 243). Per-tenant DATA in the strongest
 	// sense: a learning record holds redacted excerpts of THIS tenant's device

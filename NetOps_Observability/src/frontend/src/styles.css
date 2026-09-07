@@ -2892,6 +2892,20 @@ body.dtv-resizing { cursor: col-resize !important; user-select: none !important;
 .tdc-fold > summary { cursor: pointer; color: var(--fg); padding: 3px 0; }
 .tdc-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tdc-fold-text { margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+/* The Configure form. 14px body with a 12.5px floor on the quiet parts, and
+   every colour a theme token, so it reads the same in both themes. */
+.tdc-form { margin: 6px 0 2px; padding: 8px 10px; font-size: 14px;
+  border: 1px solid var(--panel-border, var(--border)); border-radius: 6px;
+  background: var(--panel-2, var(--panel)); display: flex; flex-direction: column; gap: 6px; }
+.tdc-field { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
+.tdc-field > label { min-width: 260px; color: var(--fg); }
+.tdc-field input[type="text"], .tdc-field input[type="password"],
+.tdc-field input[type="number"], .tdc-field select, .tdc-field textarea {
+  font-size: 14px; min-width: 280px; }
+.tdc-field textarea { font-family: inherit; min-height: 72px; }
+.tdc-field-actions { display: inline-flex; gap: 6px; }
+.tdc-secret { font-size: 12.5px; color: var(--muted); min-width: 120px; }
+.tdc-form-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 2px; }
 .adm .sync-block > summary::before { font-size: 12.5px; }
 
 /* A subtle accent-tinted banner marking a not-yet-wired feature. */

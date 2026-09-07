@@ -479,6 +479,58 @@ func (s *TACConnectorStore) Set(tenant string, cross bool, target string, in TAC
 	return nil
 }
 
+// Update applies mutate to the tenant's record ATOMICALLY — read, change,
+// validate and persist under one lock — and returns what was stored.
+//
+// It exists because the record is edited ONE CONNECTOR AT A TIME. A read-then-Set
+// from the HTTP layer would lose a concurrent save to a different connector's
+// block: two admins saving Jira and the SMTP relay at the same moment would each
+// write a record built from the state they read, and the later write would carry
+// the earlier one's block back to its old value. The mutation runs inside the
+// lock so there is no window to lose.
+//
+// Unlike Set it does NOT merge blank secrets: mutate has already resolved every
+// secret explicitly (keep / clear / replace), and re-merging here would make an
+// operator's deliberate removal silently un-happen.
+//
+// A record that ends up holding nothing is REMOVED rather than stored as a
+// shell, so a tenant that clears its last connector reads exactly like a tenant
+// that never configured one.
+func (s *TACConnectorStore) Update(tenant string, cross bool, target string, mutate func(TACConnectorConfig) (TACConnectorConfig, error)) (TACConnectorConfig, error) {
+	key, err := s.scope(tenant, cross, target)
+	if err != nil {
+		return TACConnectorConfig{}, err
+	}
+	if mutate == nil {
+		return TACConnectorConfig{}, errors.New("tac connector config: no change was supplied")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev, had := s.cfgs[key]
+	next, err := mutate(prev)
+	if err != nil {
+		return TACConnectorConfig{}, err
+	}
+	next.ITSM = SystemConfig{} // never persisted: resolved at call time
+	if err := ValidateTACConnectorConfig(next); err != nil {
+		return TACConnectorConfig{}, err
+	}
+	if next.IsEmpty() {
+		delete(s.cfgs, key)
+	} else {
+		s.cfgs[key] = next
+	}
+	if err := s.persist(); err != nil {
+		if had {
+			s.cfgs[key] = prev // keep memory and storage consistent
+		} else {
+			delete(s.cfgs, key)
+		}
+		return TACConnectorConfig{}, err
+	}
+	return next, nil
+}
+
 // Delete removes one tenant's config. Cross-tenant delete is refused the same
 // way a read is: ErrTenantNotFound.
 func (s *TACConnectorStore) Delete(tenant string, cross bool, target string) error {

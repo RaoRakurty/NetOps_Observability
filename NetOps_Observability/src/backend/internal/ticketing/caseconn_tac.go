@@ -139,6 +139,8 @@ func (o *TACOpener) Info(ctx context.Context, tenantID string) tac.ConnectorInfo
 		Capabilities:       tacCapabilities(caps),
 		MaxAttachmentBytes: tacMaxAttachment(caps),
 		Note:               caps.Notes,
+		// Which settings form brings credentials for this path, if any.
+		ConfigSection: string(SectionForConnector(o.Connector.Name())),
 	}
 	info.Profile = tac.ProfileForConnector(info)
 

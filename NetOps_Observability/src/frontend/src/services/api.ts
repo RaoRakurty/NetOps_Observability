@@ -3501,6 +3501,51 @@ export type TacConnectorInfo = {
   /** The stored configuration could not be READ — an error with a cause, never
    *  the ordinary "this tenant has brought no credentials" state. */
   unavailable?: boolean;
+  /** Which settings form brings credentials for this path ("servicenow",
+   *  "jira", "email", "cisco", "juniper"), or absent when the connector holds
+   *  no settings at all — a portal-only vendor has no API to hold one for. */
+  config_section?: string;
+};
+
+/** One connector's stored settings, as Administration renders them. Exactly one
+ *  block is present — the one `section` names — and every secret has been
+ *  removed from it: `secrets` reports only which of them are stored. */
+export type TacConnectorConfigView = {
+  id: string;
+  display: string;
+  vendor?: string;
+  section?: string;
+  /** False for the portal-only paths: there is no form, and saying so is the
+   *  honest state rather than an empty card. */
+  editable: boolean;
+  configured: boolean;
+  status_note?: string;
+  secrets: Record<string, boolean>;
+  servicenow?: { enabled: boolean; max_attach_bytes?: number };
+  jira?: { enabled: boolean; deployment?: string; max_attach_bytes?: number };
+  email?: {
+    enabled: boolean; host: string; from: string; user?: string;
+    tls_on_connect?: boolean; reply_to?: string;
+  };
+  cisco?: {
+    enabled: boolean; cco_id?: string; customer_source_id?: string;
+    smart_bonding_enabled?: boolean; staging_host?: string; client_id?: string;
+    token_url?: string; field_map?: Record<string, string>;
+  };
+  juniper?: {
+    enabled: boolean; app_id?: string; customer_source_id?: string; user_id?: string;
+    account_id?: string; default_contact_email?: string; auth_mode?: string; client_id?: string;
+  };
+};
+
+/** The read-only connection test's answer. `outcome` is a closed set, so the
+ *  page renders a sentence per state rather than a raw error. */
+export type TacConnectorProbe = {
+  connector_id: string;
+  outcome: "ok" | "not_configured" | "refused" | "unreachable" | "timed_out" | "unsupported";
+  note: string;
+  checked_at: string;
+  elapsed_ms: number;
 };
 
 /** The pre-filled case form. `missing_fields` names what the vendor requires and
@@ -6103,6 +6148,31 @@ export const api = {
    *  it still needs. `configured` is the only per-tenant field. */
   tacConnectors: () =>
     request<{ connectors: TacConnectorInfo[] }>("/api/tac/connectors"),
+  /** One connector's stored settings for this tenant. Secrets never come back —
+   *  only whether one is stored. */
+  tacConnectorConfig: (id: string) =>
+    request<TacConnectorConfigView>(`/api/tac/connectors/${encodeURIComponent(id)}`),
+  /** Saves this tenant's credentials for one connector. The body carries only
+   *  that connector's own fields and NEVER a tenant — the server stamps the
+   *  owner from the token. A secret left out keeps the stored one; an empty
+   *  string clears it. */
+  tacConnectorSave: (id: string, body: Record<string, unknown>) =>
+    request<TacConnectorConfigView>(`/api/tac/connectors/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  /** Removes this tenant's settings for one connector. Other connectors keep
+   *  theirs. */
+  tacConnectorRemove: (id: string) =>
+    request<TacConnectorConfigView>(`/api/tac/connectors/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  /** Asks the vendor one READ-ONLY question with the stored credentials. It
+   *  opens, updates and attaches nothing. */
+  tacConnectorTest: (id: string) =>
+    request<TacConnectorProbe>(`/api/tac/connectors/${encodeURIComponent(id)}/test`, {
+      method: "POST",
+    }),
 
   // ---------- TAC command templates (tracker 250) --------------------------
   // The command sets a NOC admin saves per vendor dialect and loads into the

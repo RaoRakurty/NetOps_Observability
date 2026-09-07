@@ -36,6 +36,7 @@ import { fmtDateTime } from "../../lib/time";
 import { httpFailure, operatorError } from "../../lib/errors";
 import { Stat, StatStrip } from "../../components/ui";
 import AskIris from "../../components/AskIris";
+import ConnectorSettings from "./ConnectorSettings";
 import {
   CONNECTOR_CHIP,
   connectorCapabilityLine,
@@ -110,6 +111,9 @@ export default function TicketDelivery() {
   // paragraphs, and the paragraph is behind its own disclosure here.
   const [connectors, setConnectors] = useState<TacConnectorInfo[] | null>(null);
   const [connErr, setConnErr] = useState<string | null>(null);
+  // Which connector's settings are open. One at a time: a page of twelve open
+  // credential forms is the wall of words this programme took off the screen.
+  const [openConn, setOpenConn] = useState<string | null>(null);
 
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string | null>(null);
@@ -431,6 +435,23 @@ export default function TicketDelivery() {
                     <summary>What this vendor path needs</summary>
                     <p className="tdc-fold-text">{c.note}</p>
                   </details>
+                )}
+                {/* Configure appears only where there is something to configure:
+                    a portal-only vendor publishes no API, so it carries no
+                    settings block and gets no button that could only refuse. */}
+                {c.config_section && (
+                  <button
+                    type="button"
+                    className="btn"
+                    aria-expanded={openConn === c.id}
+                    data-testid={`ticket-conn-configure-${c.id}`}
+                    onClick={() => setOpenConn(openConn === c.id ? null : c.id)}
+                  >
+                    {openConn === c.id ? "Close" : "Configure"}
+                  </button>
+                )}
+                {c.config_section && openConn === c.id && (
+                  <ConnectorSettings id={c.id} onChanged={() => void loadConnectors()} />
                 )}
               </li>
             );

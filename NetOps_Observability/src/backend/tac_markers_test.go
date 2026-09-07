@@ -124,6 +124,12 @@ func TestTACRoutesLiveInsideTheirMarkers(t *testing.T) {
 		// NOT under an incident id: Administration → Ticket delivery asks the
 		// question without one.
 		"/api/tac/connectors": false,
+		// And the settings behind it: the routes a customer brings its own
+		// vendor/ITSM credentials through. Per-TENANT for the whole row, not
+		// just a flag, and still not under an incident id — credentials are
+		// brought in Administration, long before anything is escalated.
+		"/api/tac/connectors/{id}":      false,
+		"/api/tac/connectors/{id}/test": false,
 	}
 	for _, m := range tplRE.FindAllStringSubmatch(in, -1) {
 		if _, ok := wantTpl[m[1]]; !ok {

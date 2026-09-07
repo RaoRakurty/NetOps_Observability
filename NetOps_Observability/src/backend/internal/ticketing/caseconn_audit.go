@@ -26,12 +26,17 @@ import (
 
 // CaseAuditEvent is one auditable TAC connector action.
 type CaseAuditEvent struct {
-	At        time.Time `json:"at"`
-	TenantID  string    `json:"tenant_id"`
-	Actor     string    `json:"actor"`     // user:<id> — never "system" for a create
-	Action    string    `json:"action"`    // create|attach|poll|note|config_change
-	Connector string    `json:"connector"` // registry id
-	Vendor    string    `json:"vendor"`
+	At       time.Time `json:"at"`
+	TenantID string    `json:"tenant_id"`
+	Actor    string    `json:"actor"`  // user:<id> — never "system" for a create
+	Action   string    `json:"action"` // create|attach|poll|note|config_change
+	// Detail names the specific act inside a broad Action — "save", "remove",
+	// "test:<outcome>" for a config_change. Without it every credential change
+	// would audit as the same word, and an operator reading the trail could not
+	// tell a rotation from a removal.
+	Detail    string `json:"detail,omitempty"`
+	Connector string `json:"connector"` // registry id
+	Vendor    string `json:"vendor"`
 	// IncidentID / DeviceID tie the case back to what caused it.
 	IncidentID string `json:"incident_id,omitempty"`
 	DeviceID   string `json:"device_id,omitempty"`
@@ -54,6 +59,14 @@ type CaseAuditSink interface {
 	RecordCaseAction(e CaseAuditEvent)
 }
 
+// CaseAuditSinkFunc adapts a plain function to CaseAuditSink, so an integrator
+// can fan one event into both the package's structured line and the platform's
+// own audit ledger without declaring a type for it.
+type CaseAuditSinkFunc func(e CaseAuditEvent)
+
+// RecordCaseAction calls f.
+func (f CaseAuditSinkFunc) RecordCaseAction(e CaseAuditEvent) { f(e) }
+
 // applogCaseAudit is the default sink: one structured line per action.
 type applogCaseAudit struct{}
 
@@ -66,6 +79,7 @@ func (applogCaseAudit) RecordCaseAction(e CaseAuditEvent) {
 		"connector": e.Connector, "vendor": e.Vendor, "result": e.Result,
 	}
 	for k, v := range map[string]string{
+		"detail":   e.Detail,
 		"incident": e.IncidentID, "device": e.DeviceID, "case_id": e.CaseID,
 		"case_number": e.CaseNumber, "bundle_sha256": e.BundleSHA256,
 		"transport": e.Transport, "approved_by": e.ApprovedBy,

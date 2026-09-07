@@ -198,7 +198,11 @@ func sanitizeHeaderValue(s string) string {
 type EmailCaseConnector struct {
 	vendor EmailVendor
 	sendFn func(ctx context.Context, cfg EmailConnectorConfig, to string, msg []byte) error
-	retry  RetryPolicy
+	// probeFn is the READ-ONLY connection test (caseconn_probe.go): connect,
+	// EHLO, TLS, quit. Separate from sendFn on purpose — a test must not be able
+	// to reach the code path that puts a message in front of a vendor.
+	probeFn func(ctx context.Context, cfg EmailConnectorConfig) error
+	retry   RetryPolicy
 }
 
 // NewEmailCaseConnector builds the connector for one closed-table vendor.
@@ -208,6 +212,17 @@ func NewEmailCaseConnector(vendorID string) (*EmailCaseConnector, error) {
 		return nil, fmt.Errorf("email connector: %q is not in the closed vendor mailbox table", vendorID)
 	}
 	return &EmailCaseConnector{vendor: v, retry: DefaultCaseRetry()}, nil
+}
+
+// NewEmailCaseConnectorWithProbe injects the connection test (tests drive a
+// fake relay with it; production uses probeSMTP).
+func NewEmailCaseConnectorWithProbe(vendorID string, probe func(ctx context.Context, cfg EmailConnectorConfig) error) (*EmailCaseConnector, error) {
+	c, err := NewEmailCaseConnector(vendorID)
+	if err != nil {
+		return nil, err
+	}
+	c.probeFn = probe
+	return c, nil
 }
 
 // NewEmailCaseConnectorWithSender injects the transport (tests).

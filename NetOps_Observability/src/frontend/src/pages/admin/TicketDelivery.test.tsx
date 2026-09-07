@@ -16,6 +16,10 @@ const ticketsAudit = vi.fn();
 const integrationsReconcile = vi.fn();
 const correlationTicketSync = vi.fn();
 const tacConnectors = vi.fn();
+const tacConnectorConfig = vi.fn();
+const tacConnectorSave = vi.fn();
+const tacConnectorRemove = vi.fn();
+const tacConnectorTest = vi.fn();
 
 vi.mock("../../services/api", () => ({
   api: {
@@ -24,6 +28,10 @@ vi.mock("../../services/api", () => ({
     integrationsReconcile: (...a: unknown[]) => integrationsReconcile(...a),
     correlationTicketSync: (...a: unknown[]) => correlationTicketSync(...a),
     tacConnectors: (...a: unknown[]) => tacConnectors(...a),
+    tacConnectorConfig: (...a: unknown[]) => tacConnectorConfig(...a),
+    tacConnectorSave: (...a: unknown[]) => tacConnectorSave(...a),
+    tacConnectorRemove: (...a: unknown[]) => tacConnectorRemove(...a),
+    tacConnectorTest: (...a: unknown[]) => tacConnectorTest(...a),
   },
 }));
 
@@ -79,6 +87,13 @@ const CONNECTORS = [
     id: "jira", display: "Jira issue", vendor: "jira",
     capabilities: ["create", "attach", "poll_status", "link"],
     max_attachment_bytes: 1_073_741_824, profile: "full", configured: true, note: JIRA_RESEARCH,
+    config_section: "jira",
+  },
+  {
+    id: "email-arista", display: "Arista support email", vendor: "arista",
+    capabilities: ["attach"], max_attachment_bytes: 14_000_000, profile: "email",
+    configured: false, status_note: "No credentials for this tenant yet — bring your own to use it.",
+    config_section: "email",
   },
   {
     id: "portal-nokia", display: "Nokia portal (copy & paste)", vendor: "nokia",
@@ -88,12 +103,37 @@ const CONNECTORS = [
     id: "juniper", display: "Juniper Service Case", vendor: "juniper",
     capabilities: ["create", "attach"], max_attachment_bytes: 8_589_934_592, profile: "full",
     configured: false, status_note: "No credentials for this tenant yet — bring your own to use it.",
+    config_section: "juniper",
   },
 ];
 
+/** One connector's stored settings, as the server sends them: the block, the
+ *  presence of each secret, and NEVER a secret's value. */
+const EMAIL_CONFIG = {
+  id: "email-arista",
+  display: "Arista support email",
+  vendor: "arista",
+  section: "email",
+  editable: true,
+  configured: true,
+  secrets: { password: true },
+  email: {
+    enabled: true, host: "smtp.acme.example:587", from: "noc@acme.example",
+    user: "acme-relay", tls_on_connect: false, reply_to: "jane.doe@acme.example",
+  },
+};
+
 afterEach(cleanup);
 beforeEach(() => {
-  for (const m of [ticketsOutbox, ticketsAudit, integrationsReconcile, correlationTicketSync, tacConnectors]) m.mockReset();
+  for (const m of [ticketsOutbox, ticketsAudit, integrationsReconcile, correlationTicketSync, tacConnectors,
+    tacConnectorConfig, tacConnectorSave, tacConnectorRemove, tacConnectorTest]) m.mockReset();
+  tacConnectorConfig.mockResolvedValue(EMAIL_CONFIG);
+  tacConnectorSave.mockResolvedValue(EMAIL_CONFIG);
+  tacConnectorRemove.mockResolvedValue({ ...EMAIL_CONFIG, configured: false, secrets: {}, email: undefined });
+  tacConnectorTest.mockResolvedValue({
+    connector_id: "email-arista", outcome: "ok", note: "The vendor answered and accepted the stored credential.",
+    checked_at: "2026-09-07T00:00:00Z", elapsed_ms: 42,
+  });
   tacConnectors.mockResolvedValue({ connectors: CONNECTORS });
   ticketsOutbox.mockResolvedValue({ outbox: [FAILED, PENDING, SENT], total: 3, limit: 50, offset: 0, has_more: false });
   ticketsAudit.mockResolvedValue({ audit: [AUDIT], total: 1, limit: 50, offset: 0, has_more: false });
@@ -266,5 +306,114 @@ describe("TicketDelivery — case connectors", () => {
     render(<TicketDelivery />);
     expect(await screen.findByText(/case connectors could not be read/i)).toBeTruthy();
     expect(screen.queryByTestId("ticket-connectors")).toBeNull();
+  });
+
+  it("offers Configure only where there is something to configure", async () => {
+    render(<TicketDelivery />);
+    const list = await screen.findByTestId("ticket-connectors");
+    expect(within(list).getByTestId("ticket-conn-configure-jira")).toBeTruthy();
+    expect(within(list).getByTestId("ticket-conn-configure-email-arista")).toBeTruthy();
+    // A portal-only vendor publishes no API, so it gets no button that could
+    // only ever refuse.
+    expect(screen.queryByTestId("ticket-conn-configure-portal-nokia")).toBeNull();
+  });
+});
+
+// ── the settings form (the missing half: nothing could WRITE these) ──────────
+
+describe("TicketDelivery — bringing your own credentials", () => {
+  const openEmailForm = async () => {
+    render(<TicketDelivery />);
+    const list = await screen.findByTestId("ticket-connectors");
+    fireEvent.click(within(list).getByTestId("ticket-conn-configure-email-arista"));
+    return await screen.findByTestId("ticket-conn-form-email-arista");
+  };
+
+  it("opens on the stored settings and shows the secret as stored, never as a value", async () => {
+    const form = await openEmailForm();
+    expect(tacConnectorConfig).toHaveBeenCalledWith("email-arista");
+    expect((within(form).getByLabelText(/Mail relay/i) as HTMLInputElement).value)
+      .toBe("smtp.acme.example:587");
+    expect(within(form).getByTestId("ticket-conn-secret-email-arista-password")).toHaveTextContent("stored");
+    // The password never arrives, so there is no box holding one to leak.
+    expect(form.querySelector('input[type="password"]')).toBeNull();
+  });
+
+  it("a save that did not touch the secret sends nothing for it", async () => {
+    const form = await openEmailForm();
+    fireEvent.change(within(form).getByLabelText(/Mail relay/i), {
+      target: { value: "smtp.acme.example:465" },
+    });
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(tacConnectorSave).toHaveBeenCalled());
+    const [id, body] = tacConnectorSave.mock.calls[0] as [string, Record<string, unknown>];
+    expect(id).toBe("email-arista");
+    expect(body.host).toBe("smtp.acme.example:465");
+    expect(body).not.toHaveProperty("password");
+    expect(Object.keys(body).some((k) => /tenant/i.test(k))).toBe(false);
+  });
+
+  it("Replace opens a password box and sends the new value", async () => {
+    const form = await openEmailForm();
+    fireEvent.click(within(form).getByRole("button", { name: "Replace" }));
+    const box = form.querySelector('input[type="password"]') as HTMLInputElement;
+    expect(box).toBeTruthy();
+    fireEvent.change(box, { target: { value: "rotated" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(tacConnectorSave).toHaveBeenCalled());
+    expect((tacConnectorSave.mock.calls[0] as [string, Record<string, unknown>])[1].password).toBe("rotated");
+  });
+
+  it("Remove on the secret says what will happen, and sends the empty string", async () => {
+    const form = await openEmailForm();
+    fireEvent.click(within(form).getAllByRole("button", { name: "Remove" })[0]);
+    expect(within(form).getByTestId("ticket-conn-secret-email-arista-password"))
+      .toHaveTextContent("will be removed");
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(tacConnectorSave).toHaveBeenCalled());
+    expect((tacConnectorSave.mock.calls[0] as [string, Record<string, unknown>])[1].password).toBe("");
+  });
+
+  it("Test reports the vendor's own outcome and opens no case", async () => {
+    const form = await openEmailForm();
+    fireEvent.click(within(form).getByRole("button", { name: "Test" }));
+    const result = await screen.findByTestId("ticket-conn-probe-email-arista");
+    expect(result).toHaveTextContent("ok");
+    expect(result).toHaveTextContent("The vendor answered.");
+    expect(tacConnectorTest).toHaveBeenCalledWith("email-arista");
+  });
+
+  it("a refused test is reported as a refusal, in the vendor's own words", async () => {
+    tacConnectorTest.mockResolvedValue({
+      connector_id: "email-arista", outcome: "refused",
+      note: "smtp: the relay rejected the stored credentials",
+      checked_at: "2026-09-07T00:00:00Z", elapsed_ms: 12,
+    });
+    const form = await openEmailForm();
+    fireEvent.click(within(form).getByRole("button", { name: "Test" }));
+    const result = await screen.findByTestId("ticket-conn-probe-email-arista");
+    expect(result).toHaveTextContent("The vendor refused these credentials.");
+    expect(result).toHaveTextContent("rejected the stored credentials");
+  });
+
+  it("removing the settings states its one consequence before it happens", async () => {
+    const form = await openEmailForm();
+    // The row's own Remove is the LAST one: the secret's comes first.
+    const removes = within(form).getAllByRole("button", { name: "Remove" });
+    fireEvent.click(removes[removes.length - 1]);
+    expect(within(form).getByText("Escalations stop offering this path.")).toBeTruthy();
+    expect(tacConnectorRemove).not.toHaveBeenCalled();
+    fireEvent.click(within(form).getByRole("button", { name: "Remove for good" }));
+    await waitFor(() => expect(tacConnectorRemove).toHaveBeenCalledWith("email-arista"));
+    // The list re-reads, so the row's chip cannot go stale.
+    await waitFor(() => expect(tacConnectors.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("a refused save keeps the form open and says why", async () => {
+    tacConnectorSave.mockRejectedValue(new Error("email: SMTP host must be host:port"));
+    const form = await openEmailForm();
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    expect(await within(form).findByText(/host must be host:port/i)).toBeTruthy();
+    expect(screen.getByTestId("ticket-conn-form-email-arista")).toBeTruthy();
   });
 });
