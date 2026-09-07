@@ -7,7 +7,7 @@ sidebar_position: 3
 
 # Search logs
 
-**Explore → Logs** is full-text search over the records devices actually sent. It is the only explore plane that returns raw documents, one per row, with the whole document behind each. A **Cloud Logs** sub-tab covers the cloud plane.
+**Explore → Logs** is full-text search over the records devices actually sent. It is the only explore plane that returns raw documents, one per row, with the whole document behind each. A **Cloud Logs** sub-tab covers the cloud plane; its nav entry sits under **Operations → Cloud** and opens the same view.
 
 ## Before you begin
 

@@ -7,7 +7,7 @@ sidebar_position: 5
 
 # Configure application attribution
 
-A flow record carries addresses, ports and counters. It does not carry a name. Correlix supplies the name from an ordered set of sources, and it groups traffic into services from a rule you write. Both are configured on **Operations → Services**: the identification order and its coverage, the overrides you declare on top of it, and the two registries that name what the traffic belongs to.
+A flow record carries addresses, ports and counters. It does not carry a name. Correlix supplies the name from an ordered set of sources, and it groups traffic into services from a rule you write. Both are configured across two places: **Operations → Cloud → Settings** carries the identification order, its coverage and the overrides you declare on top of it, and **Infrastructure → Applications → Registries** holds the two registries that name what the traffic belongs to.
 
 ## Before you begin
 
@@ -19,7 +19,7 @@ A flow record carries addresses, ports and counters. It does not carry a name. C
 
 ### Read the identification coverage
 
-**Operations → Services → Settings** carries **Identification Coverage**. It reports the order the engine trusts its sources in and how much each layer holds.
+**Operations → Cloud → Settings** carries **Identification Coverage**. It reports the order the engine trusts its sources in and how much each layer holds.
 
 1. Read the numbered order. Your own overrides sit at the top of it.
 2. Read the four shared counts: **Vendor prefixes**, **Vendor domains**, **Firewall attributions** and **Cloud attributions**. Those four layers are platform-wide.
@@ -46,13 +46,13 @@ Rows belong to this tenant. They are stamped from your sign-in, and no other ten
 
 ### Keep the two registries
 
-**Operations → Services → Registries** holds the two operator-authored registries, with a panel at the top naming which registry drives what.
+**Infrastructure → Applications → Registries** holds the two operator-authored registries, with a panel at the top naming which registry drives what.
 
 | Registry | What it is for |
 | --- | --- |
 | **Service catalog** | An operable unit of traffic. Its selector is what makes per-service flow totals add up. |
 | **Application registry** | The business application and the team accountable for it. It names ownership and does not group traffic. |
-| **Cloud business services** | The cloud-side registry behind resource assignment and the criticality-aware impact view. It lives on the **Catalog** view. |
+| **Cloud business services** | The cloud-side registry behind resource assignment and the criticality-aware impact view. It lives on **Infrastructure → Applications → Business services**. |
 
 The service catalog and the application registry are separate lists today. A service cannot be attached to an application in the product, so treat a shared name as a convention you keep rather than a link the platform enforces.
 
@@ -60,7 +60,7 @@ The service catalog and the application registry are separate lists today. A ser
 
 A service with no usable selector is carried with nothing attributed to it. That is what the **Not measured** rows in the flow **Services** section mean.
 
-1. Open **Operations → Services → Registries**.
+1. Open **Infrastructure → Applications → Registries**.
 2. Under **Service catalog**, add the service with its name and criticality.
 3. Open the service and add a grouping rule. A rule matches on destination ports, destination prefixes, protocols, or a combination.
 4. A rule that matches on none of those attributes attributes nothing. The panel says so before you save it.

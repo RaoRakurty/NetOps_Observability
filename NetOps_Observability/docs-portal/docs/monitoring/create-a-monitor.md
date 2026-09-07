@@ -120,7 +120,7 @@ object as the wizard, without the template list or the live preview.
 
 :::note
 Cloud monitors are a separate object with a separate lane. They live on
-**Operations → Services → Settings** under **Cloud monitors**, run on the cloud
+**Operations → Cloud → Settings** under **Cloud monitors**, run on the cloud
 metric catalog, evaluate once a minute, and emit at `warning` severity. They do
 not appear in Active Alerts, do not fold into episodes, and are not suppressed by
 episode mute or maintenance windows.
