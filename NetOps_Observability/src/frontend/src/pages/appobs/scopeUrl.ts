@@ -3,7 +3,7 @@
 
 // scopeUrl — the Service View's global scope + time-range as URL state
 // (Wave 2 #5). The interactive scope bar's selections live in the hash query
-// (`#/operations/services?provider=aws,azure&region=us-east-1&range=7d`), so a
+// (`#/operations/cloud?provider=aws,azure&region=us-east-1&range=7d`), so a
 // refresh or a pasted link reopens the exact same view. Coexists with the
 // investigation drawer's `inv` param (investigationUrl.ts) — both codecs
 // preserve every param they do not own.
@@ -55,7 +55,7 @@ function splitValues(raw: string | null): string[] {
   return [...new Set(raw.split(",").map((v) => v.trim()).filter(Boolean))];
 }
 
-/** The scope encoded in a hash like `#/operations/services?provider=aws&range=7d`.
+/** The scope encoded in a hash like `#/operations/cloud?provider=aws&range=7d`.
  *  Junk degrades safely: an unknown range label falls back to the default —
  *  the label must never claim a window the reads won't honor. */
 export function scopeFromHash(hash: string): CloudScopeState {

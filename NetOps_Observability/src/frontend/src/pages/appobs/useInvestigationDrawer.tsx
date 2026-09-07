@@ -38,7 +38,7 @@ export function useInvestigationDrawer(): InvestigationDrawerApi {
       openedRef.current = true;
       ws.openInspector(<InvestigationDrawer id={id} />, {
         title: `Investigation · ${friendlyProblemId(id)}`,
-        subtitle: "Service View",
+        subtitle: "Cloud",
       });
     } else {
       setInlineId(id);

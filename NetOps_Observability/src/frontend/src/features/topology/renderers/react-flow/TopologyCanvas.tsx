@@ -1273,7 +1273,7 @@ function CanvasInner({
                         {cloudStatus !== "loading" && <AskIris topic="topo.cloud-empty" label="No cloud network discovered yet" />}
                       </div>
                       {cloudStatus !== "loading" && (
-                        <button className="btn btn-sm" onClick={() => { location.hash = "#/operations/services/datasources"; }}>
+                        <button className="btn btn-sm" onClick={() => { location.hash = "#/operations/cloud/datasources"; }}>
                           Open Data sources
                         </button>
                       )}

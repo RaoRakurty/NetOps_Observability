@@ -31,7 +31,12 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   Events: () => import("./pages/Events"),
   Correlations: () => import("./tabs/Correlations"),
   RcaReports: () => import("./pages/RcaReports"),
-  AppObservability: () => import("./pages/AppObservability"),
+  // Owner IA (2026-09-07): the old "Services" leaf split by what feeds it —
+  // Cloud (what cloud connectors feed) and Applications (the provider-neutral
+  // application layer). Two thin shells over the same tab bodies, so the two
+  // entries share one route chunk — the one the single leaf already fetched.
+  CloudObservability: () => import("./pages/CloudObservability"),
+  ApplicationsObservability: () => import("./pages/ApplicationsObservability"),
   ReliabilityScorecard: () => import("./pages/ReliabilityScorecard"),
   Quality: () => import("./pages/Quality"),
   DataSources: () => import("./pages/DataSources"),
@@ -106,7 +111,8 @@ const Troubleshooting = lazy(ROUTE_CHUNKS["Troubleshooting"] as () => Promise<{ 
 const Events = lazy(ROUTE_CHUNKS["Events"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Correlations = lazy(ROUTE_CHUNKS["Correlations"] as () => Promise<{ default: React.ComponentType<any> }>);
 const RcaReports = lazy(ROUTE_CHUNKS["RcaReports"] as () => Promise<{ default: React.ComponentType<any> }>);
-const AppObservability = lazy(ROUTE_CHUNKS["AppObservability"] as () => Promise<{ default: React.ComponentType<any> }>);
+const CloudObservability = lazy(ROUTE_CHUNKS["CloudObservability"] as () => Promise<{ default: React.ComponentType<any> }>);
+const ApplicationsObservability = lazy(ROUTE_CHUNKS["ApplicationsObservability"] as () => Promise<{ default: React.ComponentType<any> }>);
 const ReliabilityScorecard = lazy(ROUTE_CHUNKS["ReliabilityScorecard"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Quality = lazy(ROUTE_CHUNKS["Quality"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DataSources = lazy(ROUTE_CHUNKS["DataSources"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -258,11 +264,15 @@ export const NAV: NavSection[] = [
         { id: "synthetics", label: "Synthetics" }, { id: "changes", label: "Changes" },
         { id: "data-health", label: "Data Health" },
       ] },
-      // Sub-items mirror the page's REAL 5-tab IA (2026-07 review).
-      { id: "services", label: "Services", render: () => <AppObservability />, subItems: [
-        { id: "overview", label: "Overview" }, { id: "services", label: "Services" },
-        { id: "investigations", label: "Investigations" }, { id: "resources", label: "Resources" },
-        { id: "datasources", label: "Data Sources" },
+      // Cloud (owner IA, 2026-09-07) — what the cloud connectors feed, and only
+      // that. The application layer left for Infrastructure → Applications, so
+      // the old "Services → Services" repetition is gone. Cloud Logs moved in
+      // from Explore → Logs and deep-links to the log plane it still renders on.
+      { id: "cloud", label: "Cloud", render: () => <CloudObservability />, subItems: [
+        { id: "overview", label: "Overview" }, { id: "resources", label: "Resources" },
+        { id: "logs", label: "Cloud Logs", route: "explore/logs/cloud" },
+        { id: "datasources", label: "Data Sources" }, { id: "security", label: "Security" },
+        { id: "investigations", label: "Investigations" }, { id: "settings", label: "Settings" },
       ] },
       { id: "network-health", label: "Network Health", render: (c) => <Quality rangeMinutes={c.rangeMinutes} /> },
       { id: "rules", label: "Monitor Rules", group: "Monitors", render: () => <Rules /> },
@@ -301,6 +311,13 @@ export const NAV: NavSection[] = [
     icon: "infrastructure",
     children: [
       { id: "devices", label: "Devices", render: () => <Devices /> },
+      // Applications (owner IA, 2026-09-07) — the provider-neutral application
+      // layer the identity engine and the catalogues fill, sitting beside the
+      // device inventory because it answers the same question: what do I own.
+      { id: "applications", label: "Applications", render: () => <ApplicationsObservability />, subItems: [
+        { id: "catalog", label: "Catalog" }, { id: "appmap", label: "Application Map" },
+        { id: "registries", label: "Registries" }, { id: "business", label: "Business Services" },
+      ] },
       // Port Intelligence workbench (#94) — fleet interfaces/ports/optics/DDM.
       { id: "interfaces", label: "Interfaces & Optics", render: () => <PortsWorkbench /> },
       // Sites — the promoted sites surface; the Device Geomap is folded in as
@@ -335,10 +352,9 @@ export const NAV: NavSection[] = [
     children: [
       { id: "metrics", label: "Metrics", render: (c) => <MetricsExplorer rangeMinutes={c.rangeMinutes} /> },
       // Log Search + Cloud Logs in one leaf; #/explore/logs/cloud deep-links the
-      // cloud plane (see pages/LogsExplore.tsx).
-      { id: "logs", label: "Logs", render: (c) => <LogsExplore initialQuery={c.query} rangeMinutes={c.rangeMinutes} />, subItems: [
-        { id: "cloud", label: "Cloud Logs" },
-      ] },
+      // cloud plane (see pages/LogsExplore.tsx). The Cloud Logs NAV entry moved
+      // to Operations → Cloud (owner IA, 2026-09-07) and routes back here.
+      { id: "logs", label: "Logs", render: (c) => <LogsExplore initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
       { id: "flows", label: "Flows", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
       { id: "events", label: "Events", render: (c) => <Events sinceSeconds={c.rangeMinutes * 60} /> },
       { id: "saved", label: "Saved Searches", render: () => <SavedSearches /> },
@@ -635,7 +651,7 @@ export function filteredNav(platformAdmin: boolean, grafanaEnabled = true): NavS
 //     one-segment ghost keys) → the new route, which may carry its own
 //     sub-item suffix (e.g. logs/cloud → explore/logs/cloud). Any further
 //     original segments are appended, so in-page suffixes survive
-//     (monitoring/appobs/investigations → operations/services/investigations).
+//     (monitoring/appobs/investigations → operations/cloud/investigations).
 //  2. LEGACY_SECTION_ALIAS, leaf-preserving section renames for leaves not in
 //     table 1 (stack/graphql → admin/graphql; leaf ids were preserved there).
 const LEGACY_ROUTE_ALIAS: Record<string, string> = {
@@ -658,8 +674,31 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "monitoring/anomalies": "investigate/findings",
   "monitoring/correlations": "investigate/rca",
   "monitoring/rca-reports": "analytics/rca-reports",
-  "monitoring/appobs": "operations/services",
+  // The pre-redesign Service View. Its cloud half is now Operations → Cloud;
+  // its application half moved to Infrastructure → Applications, so the four
+  // application sub-views need three-segment entries of their own (tried first
+  // by aliasSegs) or they would follow the section rewrite to the wrong page.
+  "monitoring/appobs": "operations/cloud",
+  "monitoring/appobs/services": "infrastructure/applications/catalog",
+  "monitoring/appobs/applications": "infrastructure/applications/catalog",
+  "monitoring/appobs/catalog": "infrastructure/applications/business",
+  "monitoring/appobs/registries": "infrastructure/applications/registries",
+  "monitoring/appobs/map": "infrastructure/applications/appmap",
+  "monitoring/appobs/appmap": "infrastructure/applications/appmap",
   "monitoring/reliability": "analytics/scorecard",
+  // ── Services → Cloud + Applications (owner IA, 2026-09-07) ───────────────
+  // The 2026-08 leaf "operations/services" carried BOTH halves. Its cloud tabs
+  // keep their ids under the renamed leaf (the two-segment entry appends any
+  // suffix), while the four application sub-views get explicit three-segment
+  // entries — including the one id that CHANGED MEANING: the old "catalog" was
+  // the business-service catalog, and the new "catalog" is the application list.
+  "operations/services": "operations/cloud",
+  "operations/services/services": "infrastructure/applications/catalog",
+  "operations/services/applications": "infrastructure/applications/catalog",
+  "operations/services/catalog": "infrastructure/applications/business",
+  "operations/services/registries": "infrastructure/applications/registries",
+  "operations/services/map": "infrastructure/applications/appmap",
+  "operations/services/appmap": "infrastructure/applications/appmap",
   // Incident Response section → Overview / Administration
   "incident": "overview/home",
   "incident/overview": "overview/home",

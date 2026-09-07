@@ -26,7 +26,7 @@ import ResourceMetricsPanel from "./appobs/ResourceMetricsPanel";
 // cross-tenant or unknown id renders the SAME honest not-found view (the
 // backend answers an indistinguishable 404 — existence is never leaked).
 //
-// Identity header + tabbed panels, REUSING the Service View's building blocks
+// Identity header + tabbed panels, REUSING the Cloud view's building blocks
 // (ResourceMetricsPanel, badges) by import — never a re-implementation. Every
 // tab has an honest empty state: absence of telemetry is shown as absence.
 
@@ -94,7 +94,7 @@ export default function ResourceDetail({ kind, id }: { kind: string; id: string 
           title="Resource not found"
           hint="This resource doesn't exist, is no longer in the inventory, or you don't have access to it."
           action={
-            <a className="ao-console-link" href="#/operations/services/resources">
+            <a className="ao-console-link" href="#/operations/cloud/resources">
               Browse resources
             </a>
           }
@@ -354,8 +354,8 @@ function ServiceTab({ r }: { r: CloudResourceRow }) {
         title="Not attributed to a service"
         hint="No evidence links this resource to a service yet. Attribution comes from tags, the cloud graph, the operator catalog or traffic identity — never a guess."
         action={
-          <a className="ao-console-link" href="#/operations/services/resources">
-            Review attribution in Service View
+          <a className="ao-console-link" href="#/operations/cloud/resources">
+            Review attribution in Cloud
           </a>
         }
       />
@@ -373,8 +373,8 @@ function ServiceTab({ r }: { r: CloudResourceRow }) {
             <Row k="Attribution" v={`${r.source} · ${r.confidence}`} />
           </tbody>
         </table>
-        <a className="ao-console-link" href="#/operations/services/services">
-          Open in Service View
+        <a className="ao-console-link" href="#/infrastructure/applications/catalog">
+          Open in Cloud
         </a>
       </div>
     </div>

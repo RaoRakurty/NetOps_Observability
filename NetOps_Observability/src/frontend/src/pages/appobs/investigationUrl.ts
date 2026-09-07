@@ -6,7 +6,7 @@
 // object's id lives in the URL, so a refresh or a pasted link reopens the same
 // investigation over the same tab — no context-losing jump to another page.
 
-/** The open investigation id from a hash like `#/operations/services?inv=<id>`. */
+/** The open investigation id from a hash like `#/operations/cloud?inv=<id>`. */
 export function invFromHash(hash: string): string {
   const q = hash.split("?")[1] ?? "";
   return new URLSearchParams(q).get("inv") ?? "";

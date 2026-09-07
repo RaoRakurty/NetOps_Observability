@@ -43,7 +43,11 @@ const LEGACY: [string, string, string][] = [
   ["#/monitoring/anomalies", "investigate", "findings"],
   ["#/monitoring/correlations", "investigate", "rca"],
   ["#/monitoring/rca-reports", "analytics", "rca-reports"],
-  ["#/monitoring/appobs", "operations", "services"],
+  // The pre-redesign Service View. Its cloud half is Operations → Cloud; its
+  // application half is Infrastructure → Applications (owner IA, 2026-09-07).
+  ["#/monitoring/appobs", "operations", "cloud"],
+  ["#/monitoring/appobs/services", "infrastructure", "applications"],
+  ["#/monitoring/appobs/catalog", "infrastructure", "applications"],
   ["#/monitoring/reliability", "analytics", "scorecard"],
   // Incident Response (old section)
   ["#/incident", "overview", "home"],
@@ -75,6 +79,23 @@ const LEGACY: [string, string, string][] = [
   ["#/security/vuln", "security", "vuln"],
   ["#/security/threat", "security", "threat"],
   ["#/security/compliance", "security", "compliance"],
+  // ── Services → Cloud + Applications (owner IA, 2026-09-07) ────────────────
+  // The 2026-08 leaf "operations/services" carried both halves; every one of its
+  // routes must land on the half that now owns it.
+  ["#/operations/services", "operations", "cloud"],
+  ["#/operations/services/overview", "operations", "cloud"],
+  ["#/operations/services/resources", "operations", "cloud"],
+  ["#/operations/services/investigations", "operations", "cloud"],
+  ["#/operations/services/security", "operations", "cloud"],
+  ["#/operations/services/datasources", "operations", "cloud"],
+  ["#/operations/services/settings", "operations", "cloud"],
+  ["#/operations/services/accounts", "operations", "cloud"],
+  ["#/operations/services/services", "infrastructure", "applications"],
+  ["#/operations/services/applications", "infrastructure", "applications"],
+  ["#/operations/services/catalog", "infrastructure", "applications"],
+  ["#/operations/services/registries", "infrastructure", "applications"],
+  ["#/operations/services/map", "infrastructure", "applications"],
+  ["#/operations/services/appmap", "infrastructure", "applications"],
   // The old top-level data-plane sections
   ["#/metrics", "explore", "metrics"],
   ["#/flows", "explore", "flows"],
@@ -170,7 +191,7 @@ describe("legacy-hash ratchet — every pre-redesign route resolves", () => {
 
 describe("canonicalHash — suffix + query preservation", () => {
   it("preserves sub-item suffixes across the rename", () => {
-    expect(canonicalHash("#/monitoring/appobs/investigations")).toBe("#/operations/services/investigations");
+    expect(canonicalHash("#/monitoring/appobs/investigations")).toBe("#/operations/cloud/investigations");
     expect(canonicalHash("#/logs/cloud")).toBe("#/explore/logs/cloud");
     expect(canonicalHash("#/infrastructure/geomap")).toBe("#/infrastructure/sites/map");
     expect(canonicalHash("#/infrastructure/nms")).toBe("#/infrastructure/discovery/nms");
@@ -200,6 +221,101 @@ describe("canonicalHash — suffix + query preservation", () => {
     expect(canonicalHash("#/resource/device/edge-1")).toBeNull();
     expect(canonicalHash("#/")).toBeNull();
     expect(canonicalHash("")).toBeNull();
+  });
+});
+
+// ── Services → Cloud + Applications (owner IA, 2026-09-07) ───────────────────
+//
+// The split is by WHAT FEEDS THE VIEW: Operations → Cloud holds what the cloud
+// connectors feed, Infrastructure → Applications holds the provider-neutral
+// application layer. Resolving to the right LEAF is not enough — the third
+// segment names the sub-view, and one id CHANGED MEANING in the move ("catalog"
+// was the business-service catalogue, and is now the application list), so every
+// old sub-view is asserted here as a full canonical hash.
+describe("Services split — every old sub-view lands on its new home", () => {
+  const CASES: [string, string][] = [
+    // cloud half — the tab ids are unchanged under the renamed leaf
+    ["#/operations/services", "#/operations/cloud"],
+    ["#/operations/services/overview", "#/operations/cloud/overview"],
+    ["#/operations/services/resources", "#/operations/cloud/resources"],
+    ["#/operations/services/investigations", "#/operations/cloud/investigations"],
+    ["#/operations/services/security", "#/operations/cloud/security"],
+    ["#/operations/services/datasources", "#/operations/cloud/datasources"],
+    ["#/operations/services/settings", "#/operations/cloud/settings"],
+    ["#/operations/services/accounts", "#/operations/cloud/accounts"],
+    // application half — including the two ids that used to sit under a
+    // "Services → Services" sub-tab nobody could name out loud
+    ["#/operations/services/services", "#/infrastructure/applications/catalog"],
+    ["#/operations/services/applications", "#/infrastructure/applications/catalog"],
+    ["#/operations/services/registries", "#/infrastructure/applications/registries"],
+    ["#/operations/services/map", "#/infrastructure/applications/appmap"],
+    ["#/operations/services/appmap", "#/infrastructure/applications/appmap"],
+    // the id that changed meaning: old "catalog" = business services
+    ["#/operations/services/catalog", "#/infrastructure/applications/business"],
+    // …and the same set one hop further back, from the pre-2026-08 Service View
+    ["#/monitoring/appobs", "#/operations/cloud"],
+    ["#/monitoring/appobs/overview", "#/operations/cloud/overview"],
+    ["#/monitoring/appobs/services", "#/infrastructure/applications/catalog"],
+    ["#/monitoring/appobs/applications", "#/infrastructure/applications/catalog"],
+    ["#/monitoring/appobs/catalog", "#/infrastructure/applications/business"],
+    ["#/monitoring/appobs/registries", "#/infrastructure/applications/registries"],
+    ["#/monitoring/appobs/map", "#/infrastructure/applications/appmap"],
+    ["#/monitoring/appobs/appmap", "#/infrastructure/applications/appmap"],
+  ];
+
+  it.each(CASES)("%s → %s", (from, to) => {
+    expect(canonicalHash(from)).toBe(to);
+  });
+
+  it("carries the deep-link query through the split", () => {
+    expect(canonicalHash("#/operations/services?provider=aws&range=7d"))
+      .toBe("#/operations/cloud?provider=aws&range=7d");
+    expect(canonicalHash("#/operations/services/investigations?inv=obj-1"))
+      .toBe("#/operations/cloud/investigations?inv=obj-1");
+    expect(canonicalHash("#/monitoring/appobs/catalog?q=checkout"))
+      .toBe("#/infrastructure/applications/business?q=checkout");
+  });
+
+  it("the unified-search app href still resolves (search_unified.go)", () => {
+    // src/backend/search_unified.go answers app hits with this legacy href.
+    expect(canonicalHash("#/monitoring/appobs/services"))
+      .toBe("#/infrastructure/applications/catalog");
+  });
+
+  it("both new routes are canonical — no further rewrite", () => {
+    expect(canonicalHash("#/operations/cloud")).toBeNull();
+    expect(canonicalHash("#/operations/cloud/resources")).toBeNull();
+    expect(canonicalHash("#/infrastructure/applications")).toBeNull();
+    expect(canonicalHash("#/infrastructure/applications/catalog")).toBeNull();
+  });
+
+  it("the two entries carry the owner's sub-items, and no 'Services / Services'", () => {
+    const leaf = (sec: string, id: string) =>
+      NAV.find((s) => s.id === sec)!.children!.find((l) => l.id === id)!;
+    const cloud = leaf("operations", "cloud");
+    expect(cloud.label).toBe("Cloud");
+    expect((cloud.subItems ?? []).map((i) => i.id)).toEqual([
+      "overview", "resources", "logs", "datasources", "security", "investigations", "settings",
+    ]);
+    // Cloud Logs moved in from Explore → Logs and deep-links back to the plane.
+    expect((cloud.subItems ?? []).find((i) => i.id === "logs")?.route).toBe("explore/logs/cloud");
+    expect(NAV.find((s) => s.id === "explore")!.children!.find((l) => l.id === "logs")!.subItems)
+      .toBeUndefined();
+
+    const apps = leaf("infrastructure", "applications");
+    expect(apps.label).toBe("Applications");
+    expect((apps.subItems ?? []).map((i) => i.id)).toEqual([
+      "catalog", "appmap", "registries", "business",
+    ]);
+    // Applications sits BESIDE Devices — same question, different inventory.
+    const infraIds = NAV.find((s) => s.id === "infrastructure")!.children!.map((l) => l.id);
+    expect(infraIds.indexOf("applications")).toBe(infraIds.indexOf("devices") + 1);
+    // The repetition the split existed to kill.
+    for (const l of [cloud, apps]) {
+      for (const sub of l.subItems ?? []) expect(sub.label).not.toBe(l.label);
+    }
+    // The old leaf id is gone from both sections.
+    expect(NAV.find((s) => s.id === "operations")!.children!.map((l) => l.id)).not.toContain("services");
   });
 });
 

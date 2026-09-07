@@ -1,11 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// App Observability (#81 P3F/P3H) — the cloud-native app-to-underlay story under Monitor.
+// App Observability (#81 P3F/P3H) — the cloud-native app-to-underlay story.
 // Identity → Health → Change → Cloud Network → Underlay → RCA, every claim with
 // confidence + evidence, unknown first-class. Built entirely on the existing design
 // system (NOC kit, ds-*/cc-* classes, var(--*) tokens, Inter/Space-Grotesk/Plex-Mono
 // fonts) so it matches the rest of Correlix.
+//
+// TWO SHELLS, ONE SET OF BODIES (owner IA, 2026-09-07). The single "Services"
+// leaf was split by WHAT FEEDS IT, and this module exports the two shells that
+// resulted — mounted by pages/CloudObservability.tsx and
+// pages/ApplicationsObservability.tsx so each gets its own route chunk:
+//
+//   CloudShell         Operations → Cloud            what cloud connectors feed:
+//                                                    Overview · Resources ·
+//                                                    Data sources · Security ·
+//                                                    Investigations · Settings
+//   ApplicationsShell  Infrastructure → Applications the provider-neutral
+//                                                    application layer:
+//                                                    Catalog · Application map ·
+//                                                    Registries · Business services
+//
+// No tab BODY changed in the split — only which shell mounts it, and the words
+// around it. Every pre-split hash is rewritten by nav.tsx's alias tables,
+// including the one id that changed meaning: the old "catalog" sub-view was the
+// business-service catalog, and the new "catalog" tab is the application list.
 //
 // EVERY surface here renders REAL, tenant-scoped cloud telemetry — the cloud
 // inventory (/api/cloud/resources|apps|coverage) plus the signals that actually
@@ -176,23 +195,18 @@ function CurrentNote() {
   return <span className="ao-panel-meta" title="the time range applies to signal views (alerts, changes, findings); inventory is always the current state">current inventory · not a time-range view</span>;
 }
 
-// 5-tab IA (audit C): Overview | Services | Investigations | Resources |
-// Data sources (+ Settings). The old 11 tab ids stay valid as deep-link
-// aliases so every existing bookmark/flyout link lands on the right sub-view.
-const TABS = ["overview", "services", "investigations", "security", "resources", "datasources", "settings"] as const;
+// ── Operations → Cloud ───────────────────────────────────────────────────────
+// The tabs cloud connectors feed, in the owner's order. The pre-2026-08 tab ids
+// stay valid as deep-link aliases so every existing bookmark lands on the right
+// sub-view; the four APPLICATION ids left with ApplicationsShell below and are
+// rewritten to it by nav.tsx before this page ever reads the hash.
+const TABS = ["overview", "resources", "datasources", "security", "investigations", "settings"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABEL: Record<Tab, string> = {
-  overview: "Overview", services: "Services", investigations: "Investigations",
-  security: "Security",
-  resources: "Resources", datasources: "Data sources", settings: "Settings",
+  overview: "Overview", resources: "Resources", datasources: "Data sources",
+  security: "Security", investigations: "Investigations", settings: "Settings",
 };
 const TAB_ALIAS: Record<string, { tab: Tab; sub?: string }> = {
-  applications: { tab: "services", sub: "applications" },
-  catalog: { tab: "services", sub: "catalog" },
-  // The operator-authored service catalog + application registry (distinct from
-  // the cloud business-service catalog the "catalog" alias above opens).
-  registries: { tab: "services", sub: "registries" },
-  appmap: { tab: "services", sub: "map" },
   attribution: { tab: "resources", sub: "mapping" },
   unknowns: { tab: "resources", sub: "untagged" },
   health: { tab: "investigations", sub: "alerts" },
@@ -206,10 +220,14 @@ const TAB_ALIAS: Record<string, { tab: Tab; sub?: string }> = {
   accounts: { tab: "datasources", sub: "accounts" },
 };
 
-export default function AppObservability() {
+/** The hash suffix (#/section/leaf/<suffix>) both shells route their tabs on. */
+function routeSuffix(): string {
+  return location.hash.replace(/^#\/?/, "").split("?")[0].split("/")[2] ?? "";
+}
+
+export function CloudShell() {
   const [tab, setTab] = useState<Tab>("overview");
   const [sub, setSub] = useState<string>("");
-  const [sel, setSel] = useState<App | null>(null);
   const shell = useCloudShell();
   // Embedded investigation drawer (#7): a correlation object opens INSIDE this
   // page (docked Inspector under shell-v2, page drawer on the v1 shell) and its
@@ -219,15 +237,13 @@ export default function AppObservability() {
   // with ?inv=), feeds EVERY tab below. Narrows within the tenant view only.
   const scopeCtl = useCloudScope();
 
-  // deep-link: #/operations/services/<tab-or-alias> → opens that (sub-)view.
+  // deep-link: #/operations/cloud/<tab-or-alias> → opens that (sub-)view.
   // Re-read on hashchange too, so clicking a flyout sub-item while ALREADY on
   // this page switches tabs (the leaf component stays mounted, so a mount-only
   // effect would never see the new suffix → the click looked dead).
-  // NB: read the THIRD segment explicitly, not .pop() — the 2026-08 leaf id is
-  // "services", so .pop() on the bare route would false-match the Services tab.
   useEffect(() => {
     const apply = () => {
-      const suffix = location.hash.replace(/^#\/?/, "").split("?")[0].split("/")[2] ?? "";
+      const suffix = routeSuffix();
       if ((TABS as readonly string[]).includes(suffix)) {
         setTab(suffix as Tab); setSub("");
       } else if (TAB_ALIAS[suffix]) {
@@ -239,14 +255,9 @@ export default function AppObservability() {
     return () => window.removeEventListener("hashchange", apply);
   }, []);
 
-  if (sel) return <AppDetail app={sel} onBack={() => setSel(null)} />;
-
   return (
     <div className="ao">
-      <NocHeader
-        title="Service View"
-        subtitle="Cloud service identity, health, change & network RCA — evidence-grounded"
-      />
+      <NocHeader title="Cloud" subtitle="What the connected cloud accounts report" />
       <CloudScopeBar scope={shell.scope} mode={shell.mode} summary={shell.summary}
         control={{
           scope: scopeCtl.scope, options: shell.options, active: scopeCtl.active,
@@ -254,7 +265,7 @@ export default function AppObservability() {
           clearFilters: scopeCtl.clearFilters, setRangeMinutes: scopeCtl.setRangeMinutes,
         }} />
 
-      <nav className="ao-tabs" role="tablist" aria-label="Service View">
+      <nav className="ao-tabs" role="tablist" aria-label="Cloud">
         {TABS.map((tk) => (
           <button key={tk} role="tab" aria-selected={tab === tk}
             className={`ao-tab${tab === tk ? " is-active" : ""}`}
@@ -265,7 +276,6 @@ export default function AppObservability() {
       </nav>
 
       {tab === "overview" && <Overview goTab={(t, s) => { setTab(t); setSub(s ?? ""); }} summary={shell.summary} openInvestigation={inv.open} ctl={scopeCtl} />}
-      {tab === "services" && <Services initialSub={sub} onOpen={setSel} ctl={scopeCtl} />}
       {tab === "investigations" && <Investigations initialSub={sub} goDataSources={() => { setTab("datasources"); setSub(""); }} openInvestigation={inv.open} ctl={scopeCtl} />}
       {tab === "security" && <Security windowHours={windowHoursFor(scopeCtl.scope.rangeMinutes)} />}
       {tab === "resources" && <ResourcesGroup initialSub={sub} ctl={scopeCtl} />}
@@ -275,10 +285,75 @@ export default function AppObservability() {
       {/* v1-shell fallback: same drawer content in the page-local panel (ESC/X/scrim). */}
       {inv.inlineId && (
         <EvidenceDrawer title={`Investigation · ${friendlyProblemId(inv.inlineId)}`}
-          subtitle="Service View" onClose={inv.closeInline}>
+          subtitle="Cloud" onClose={inv.closeInline}>
           <InvestigationDrawer id={inv.inlineId} />
         </EvidenceDrawer>
       )}
+    </div>
+  );
+}
+
+// ── Infrastructure → Applications ───────────────────────────────────────────
+// The provider-neutral application layer: what the identity engine names, how
+// those names relate, and the two catalogues an operator authors by hand. It
+// mounts the SAME bodies the Services tab used to carry — the split moved them,
+// it did not rewrite them.
+const APP_TABS = ["catalog", "appmap", "registries", "business"] as const;
+type AppTab = (typeof APP_TABS)[number];
+const APP_TAB_LABEL: Record<AppTab, string> = {
+  catalog: "Catalog", appmap: "Application map",
+  registries: "Registries", business: "Business services",
+};
+// Pre-split sub-view ids. nav.tsx rewrites the old hashes before they reach this
+// page, so these are a belt-and-braces second reading of the same intent — and
+// the reason "catalog" is NOT listed: it means the application list here, while
+// the pre-split "catalog" meant the business-service catalog. That one id is
+// remapped in the nav table, where a rewrite can still be seen.
+const APP_TAB_ALIAS: Record<string, AppTab> = {
+  applications: "catalog", services: "catalog", map: "appmap",
+};
+
+export function ApplicationsShell() {
+  const [tab, setTab] = useState<AppTab>("catalog");
+  const [sel, setSel] = useState<App | null>(null);
+  // The application views read the cloud inventory underneath, so they take the
+  // same scope control. No scope BAR is drawn here: provider/account/region is a
+  // cloud-connector idea, and this layer is provider-neutral.
+  const scopeCtl = useCloudScope();
+
+  useEffect(() => {
+    const apply = () => {
+      const suffix = routeSuffix();
+      if ((APP_TABS as readonly string[]).includes(suffix)) setTab(suffix as AppTab);
+      else if (APP_TAB_ALIAS[suffix]) setTab(APP_TAB_ALIAS[suffix]);
+    };
+    apply();
+    window.addEventListener("hashchange", apply);
+    return () => window.removeEventListener("hashchange", apply);
+  }, []);
+
+  if (sel) return <AppDetail app={sel} onBack={() => setSel(null)} />;
+
+  return (
+    <div className="ao">
+      <NocHeader title="Applications" subtitle="What runs, and who owns it" />
+      <nav className="ao-tabs" role="tablist" aria-label="Applications">
+        {APP_TABS.map((tk) => (
+          <button key={tk} role="tab" aria-selected={tab === tk}
+            className={`ao-tab${tab === tk ? " is-active" : ""}`}
+            onClick={() => setTab(tk)}>
+            {APP_TAB_LABEL[tk]}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "catalog" && <Applications onOpen={setSel} ctl={scopeCtl} />}
+      {tab === "appmap" && <MapView ctl={scopeCtl} />}
+      {/* The registries cross-link to the business-service catalogue switches
+          THIS tab directly: a hash change would not re-seat `tab` while the
+          shell stays mounted. */}
+      {tab === "registries" && <Registries onOpenCloudCatalog={() => setTab("business")} />}
+      {tab === "business" && <ServiceCatalog />}
     </div>
   );
 }
@@ -293,33 +368,6 @@ function SubTabs<T extends string>({ value, onChange, items }: {
         <button key={it.key} className={`ao-tab${value === it.key ? " is-active" : ""}`}
           onClick={() => onChange(it.key)}>{it.label}</button>
       ))}
-    </div>
-  );
-}
-
-// ── Services (Applications + Catalog + Service map) ──────────────────────────
-function Services({ initialSub, onOpen, ctl }: {
-  initialSub: string; onOpen: (a: App) => void; ctl: CloudScopeControl;
-}) {
-  const [sub, setSub] = useState<"applications" | "catalog" | "registries" | "map">(
-    initialSub === "map" ? "map" : initialSub === "catalog" ? "catalog"
-      : initialSub === "registries" ? "registries" : "applications");
-  return (
-    <div className="ao-stack">
-      <SubTabs value={sub} onChange={setSub}
-        items={[
-          { key: "applications", label: "Applications" },
-          { key: "catalog", label: "Catalog" },
-          { key: "registries", label: "Registries" },
-          { key: "map", label: "Service map" },
-        ]} />
-      {sub === "applications" && <Applications onOpen={onOpen} ctl={ctl} />}
-      {sub === "catalog" && <ServiceCatalog />}
-      {/* The operator-authored service catalog + application registry. Its
-          cross-link to the cloud registry switches THIS sub-tab directly: a
-          hash change would not re-seat `sub` while Services stays mounted. */}
-      {sub === "registries" && <Registries onOpenCloudCatalog={() => setSub("catalog")} />}
-      {sub === "map" && <MapView ctl={ctl} />}
     </div>
   );
 }
@@ -446,7 +494,7 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
     );
   }
   if (status === "error" || !data) {
-    return <div className="ao-panel"><EmptyState title="Unable to load the Service View summary" hint="retry, or check the cloud connector status in Settings" /></div>;
+    return <div className="ao-panel"><EmptyState title="Unable to load the Cloud summary" hint="retry, or check the cloud connector status in Settings" /></div>;
   }
 
   const { apps, resources, coverage, health, changes, objects, openCount, objectsTruncated, hadObjects, catalog } = data;
@@ -531,7 +579,7 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
         ) : (
           <DataTable<DegradedServiceRow> rows={degradedRows} rowKey={(r) => r.name}
             height={Math.min(300, 56 + degradedRows.length * 34)} ariaLabel="Degraded services"
-            onRowClick={() => goTab("services", "applications")}
+            onRowClick={() => { location.hash = "#/infrastructure/applications/catalog"; }}
             columns={[
               { key: "name", header: "Service", width: 200, text: (r) => r.name,
                 render: (r) => <strong>{r.name}</strong> },
@@ -634,7 +682,7 @@ function Applications({ onOpen, ctl }: { onOpen: (a: App) => void; ctl: CloudSco
   // loaded whole — there is no server filter on /api/cloud/apps), then the
   // tab's own FilterBar refines within it.
   const apps = all.filter((a) => appInScope(a, ctl.scope));
-  if (apps.length === 0) return <ScopeEmpty what="services" ctl={ctl} />;
+  if (apps.length === 0) return <ScopeEmpty what="applications" ctl={ctl} />;
   const rows = apps.filter((a) =>
     (!f.provider || a.providers.includes(f.provider as App["providers"][number])) &&
     (!f.env || a.env === f.env) &&
@@ -654,15 +702,15 @@ function Applications({ onOpen, ctl }: { onOpen: (a: App) => void; ctl: CloudSco
           { key: "source", label: "Mapped by", options: [{ value: "cloud_tag", label: "tag" }, { value: "cloud_graph", label: "resource graph" }, { value: "operator_catalog", label: "operator" }, { value: "firewall_appid", label: "firewall" }] },
         ]} />
       <div className="ao-panel">
-        {/* range-less honesty: services come from the inventory, not a window */}
-        <div className="ao-panel-h">Services <CurrentNote /></div>
+        {/* range-less honesty: applications come from the inventory, not a window */}
+        <div className="ao-panel-h">Applications <CurrentNote /></div>
         <DataTable<App> rows={rows} rowKey={(a) => a.id} height={Math.min(520, 44 + rows.length * 30)}
           ariaLabel="Applications" onRowClick={onOpen} initialSort={{ key: "name", dir: "asc" }}
           columns={[
             { key: "name", header: "Service", width: 160, sortable: true, text: (a) => a.name, render: (a) => <strong>{a.name}</strong> },
             { key: "health", header: "Health", width: 100, sortValue: (a) => healthRank(a.health), render: (a) => <HealthBadge status={a.health} /> },
-            // Criticality is the operator catalog's word (Services → Catalog);
-            // an app not in the catalog shows "—", never an assumed tier.
+            // Criticality is the operator catalog's word (Applications → Business
+            // services); an app not in it shows "—", never an assumed tier.
             { key: "crit", header: "Criticality", width: 175,
               sortValue: (a) => criticalityRank(catalog.get(nameKey(a.name))?.criticality ?? ""),
               render: (a) => <CriticalityBadge value={catalog.get(nameKey(a.name))?.criticality ?? ""} /> },
@@ -1453,9 +1501,9 @@ function Underlay({ goDataSources }: { goDataSources: () => void }) {
 //
 // Cloud accounts live in Data sources → Accounts (the connector wizard) — NOT in
 // Admin → Integrations, which is the ServiceNow / Jira ticketing gallery.
-function openCloudAccounts() { location.hash = "#/operations/services/accounts"; }
-// Attribution rules + precedence are Service View settings, not an ITSM concern.
-function openAttributionSettings() { location.hash = "#/operations/services/settings"; }
+function openCloudAccounts() { location.hash = "#/operations/cloud/accounts"; }
+// Attribution rules + precedence are Cloud settings, not an ITSM concern.
+function openAttributionSettings() { location.hash = "#/operations/cloud/settings"; }
 
 function Unknowns({ ctl }: { ctl: CloudScopeControl }) {
   const [fix, setFix] = useState<UnknownContributor | null>(null);
