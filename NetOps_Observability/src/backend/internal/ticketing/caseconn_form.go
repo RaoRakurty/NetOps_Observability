@@ -118,7 +118,14 @@ func (w JiraAttachWrite) apply(JiraAttachConfig) JiraAttachConfig {
 	}
 }
 
-// EmailConnectorWrite is the SMTP relay form. Password is the tri-state secret.
+// EmailConnectorWrite is the mailbox form. It carries every mode's fields
+// because one form edits one BLOCK, not one mode: the client sends the fields
+// belonging to the mode it is on and omits the rest, and an omitted field is an
+// empty one — which is exactly right, because switching a mailbox from a
+// password relay to Microsoft 365 should leave no half-configured relay behind.
+//
+// The three secrets are tri-state pointers (see the file header). Which of them
+// the validator DEMANDS is decided by auth_mode, in caseconn_config.go.
 type EmailConnectorWrite struct {
 	Enabled      bool    `json:"enabled"`
 	Host         string  `json:"host"`
@@ -127,6 +134,16 @@ type EmailConnectorWrite struct {
 	Password     *string `json:"password"`
 	TLSOnConnect bool    `json:"tls_on_connect"`
 	ReplyTo      string  `json:"reply_to"`
+
+	AuthMode            string  `json:"auth_mode"`
+	Mailbox             string  `json:"mailbox"`
+	OAuthProvider       string  `json:"oauth_provider"`
+	EntraTenantID       string  `json:"entra_tenant_id"`
+	OAuthClientID       string  `json:"oauth_client_id"`
+	OAuthClientSecret   *string `json:"oauth_client_secret"`
+	ServiceAccountEmail string  `json:"service_account_email"`
+	ServiceAccountKey   *string `json:"service_account_key"`
+	ReadReplies         bool    `json:"read_replies"`
 }
 
 func (w EmailConnectorWrite) apply(prev EmailConnectorConfig) EmailConnectorConfig {
@@ -138,6 +155,17 @@ func (w EmailConnectorWrite) apply(prev EmailConnectorConfig) EmailConnectorConf
 		Password:     mergeSecret(w.Password, prev.Password),
 		TLSOnConnect: w.TLSOnConnect,
 		ReplyTo:      strings.TrimSpace(w.ReplyTo),
+
+		AuthMode:          MailboxAuthMode(strings.ToLower(strings.TrimSpace(w.AuthMode))),
+		Mailbox:           strings.TrimSpace(w.Mailbox),
+		OAuthProvider:     strings.ToLower(strings.TrimSpace(w.OAuthProvider)),
+		EntraTenantID:     strings.TrimSpace(w.EntraTenantID),
+		OAuthClientID:     strings.TrimSpace(w.OAuthClientID),
+		OAuthClientSecret: mergeSecret(w.OAuthClientSecret, prev.OAuthClientSecret),
+		// The PEM keeps its newlines: only the surrounding whitespace goes.
+		ServiceAccountKey:   strings.TrimSpace(mergeSecret(w.ServiceAccountKey, prev.ServiceAccountKey)),
+		ServiceAccountEmail: strings.TrimSpace(w.ServiceAccountEmail),
+		ReadReplies:         w.ReadReplies,
 	}
 }
 
@@ -326,7 +354,7 @@ func ciscoIsEmpty(c CiscoConnectorConfig) bool {
 func SectionSecretNames(section ConnectorSection) []string {
 	switch section {
 	case SectionEmail:
-		return []string{"password"}
+		return []string{"password", "oauth_client_secret", "service_account_key"}
 	case SectionCisco:
 		return []string{"client_secret"}
 	case SectionJuniper:
@@ -343,6 +371,10 @@ func SectionSecretsPresent(section ConnectorSection, c TACConnectorConfig) map[s
 		switch {
 		case section == SectionEmail && name == "password":
 			out[name] = c.Email.Password != ""
+		case section == SectionEmail && name == "oauth_client_secret":
+			out[name] = c.Email.OAuthClientSecret != ""
+		case section == SectionEmail && name == "service_account_key":
+			out[name] = c.Email.ServiceAccountKey != ""
 		case section == SectionCisco && name == "client_secret":
 			out[name] = c.Cisco.ClientSecret != ""
 		case section == SectionJuniper && name == "client_secret":

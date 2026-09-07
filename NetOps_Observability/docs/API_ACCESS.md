@@ -120,6 +120,81 @@ A client either uses a long-lived **API key** (machine) or the
 
 ---
 
+## TAC case mailboxes: OAuth 2.0 mailbox authentication
+
+The email case connectors (Arista `support@arista.com`, Cisco `attach@cisco.com`)
+send through the **tenant's own mailbox**. Microsoft and Google have retired
+basic SMTP AUTH for most tenants, so the connector supports four sign-in modes,
+chosen per tenant on **Administration → Ticket delivery → Case connectors →
+Configure**. The stored fields are per-tenant, and every secret is write-only —
+the API reports only whether one is stored.
+
+| `auth_mode` | Transport | Credential | Message ceiling |
+|---|---|---|---|
+| `password` (default) | SMTP, TLS required | relay username + password | 14 MB profile |
+| `microsoft365` | Graph `POST /v1.0/users/{mailbox}/sendMail` | Entra app registration | **3 MB per request** |
+| `google_workspace` | Gmail `users.messages.send` | service account + domain-wide delegation | 25 MB per message |
+| `smtp_oauth` | SMTP with SASL `XOAUTH2` | either token source above | 14 MB profile |
+
+A blank `auth_mode` is `password`, so a relay configured before this existed
+keeps working unchanged.
+
+### Registering the Microsoft 365 app (Entra ID)
+
+1. **Entra admin centre → App registrations → New registration.** Single tenant
+   is enough; no redirect URI is needed (this is a daemon app).
+2. **API permissions → Microsoft Graph → Application permissions →
+   `Mail.Send`.** It must be the **Application** permission, not Delegated —
+   there is no signed-in user. Then **Grant admin consent**; without consent the
+   token mints but Graph answers 403.
+   Add **`Mail.Read`** only if you turn on *Read the reply for the case number*,
+   which lifts the vendor's case reference out of the reply subject.
+3. **Certificates & secrets → New client secret.** Copy the **Value**.
+4. Scope the app to the one mailbox with an **application access policy**
+   (Exchange Online PowerShell `New-ApplicationAccessPolicy`), so `Mail.Send`
+   cannot reach every mailbox in the tenant.
+5. In Correlix, enter the **Directory (tenant) ID**, the **Application (client)
+   ID**, the **client secret**, and the **mailbox** to send as.
+
+Correlix requests `https://graph.microsoft.com/.default` from
+`https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`. For `smtp_oauth`
+against Exchange Online the scope is `https://outlook.office365.com/.default`
+and the app needs the `SMTP.SendAsApp` permission instead.
+
+### Registering the Google Workspace service account
+
+1. **Google Cloud console → IAM & Admin → Service accounts → Create.** Enable
+   the **Gmail API** on the project and create a **JSON key**.
+2. **Admin console → Security → Access and data control → API controls →
+   Domain-wide delegation → Add new.** Client ID = the service account's
+   **numeric client ID**; OAuth scope = **`https://www.googleapis.com/auth/gmail.send`**
+   (for `smtp_oauth` use `https://mail.google.com/` instead).
+3. In Correlix, enter the service account's **`client_email`**, paste its
+   **`private_key`** (the whole PEM, newlines included), and the **mailbox** it
+   sends as — that mailbox is what the delegation impersonates.
+
+Correlix signs an RS256 JWT (`iss` = the service account, `sub` = the mailbox,
+`aud` = `https://oauth2.googleapis.com/token`, 30-minute window) and exchanges it
+with the `urn:ietf:params:oauth:grant-type:jwt-bearer` grant.
+
+### What `POST /api/tac/connectors/{id}/test` does per mode
+
+| Mode | Read-only probe |
+|---|---|
+| `password` / `smtp_oauth` | connect, EHLO, TLS, AUTH, QUIT |
+| `microsoft365` | `GET /v1.0/users/{mailbox}?$select=id,mail,userPrincipalName` |
+| `google_workspace` | `GET /gmail/v1/users/{mailbox}/profile` |
+
+None of them sends, drafts or stores a message. Outbound hosts are **pinned**:
+`login.microsoftonline.com`, `graph.microsoft.com`, `oauth2.googleapis.com`,
+`gmail.googleapis.com` — a tenant configures which mailbox, never which host.
+5xx and 429 are retried with backoff, jitter and the provider's `Retry-After`
+(clamped to the interactive cap); a 4xx is permanent and is never retried. Every
+send is audited with the vendor, the transport and the message id — never the
+subject, the body or the attachment.
+
+---
+
 ## Pagination & totals contract (stable)
 
 Every bounded list/search endpoint stamps the same response headers; the body

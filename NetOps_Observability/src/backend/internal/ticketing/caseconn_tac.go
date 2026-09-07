@@ -141,6 +141,13 @@ func (o *TACOpener) Info(ctx context.Context, tenantID string) tac.ConnectorInfo
 		Note:               caps.Notes,
 		// Which settings form brings credentials for this path, if any.
 		ConfigSection: string(SectionForConnector(o.Connector.Name())),
+		// What the VENDOR demands before it will open anything, and in which
+		// tokens it wants the severity. Both come from the table
+		// docs/design/TAC_CASE_FIELDS_2026-09-07.md is the authority for, so the
+		// confirmation screen can refuse BY NAME without this package's vendor
+		// knowledge leaking into internal/tac.
+		Required:       tacRequiredFields(o.Connector.Name()),
+		SeverityValues: SeverityVocabulary(o.Connector.Name()),
 	}
 	info.Profile = tac.ProfileForConnector(info)
 
@@ -163,6 +170,15 @@ func (o *TACOpener) Info(ctx context.Context, tenantID string) tac.ConnectorInfo
 	default:
 		verr := o.Connector.ValidateConfig(cfg)
 		info.Configured = verr == nil
+		info.AuthMode = tacAuthMode(o.Connector.Name(), cfg)
+		// A connector whose behaviour depends on HOW the tenant authenticates
+		// says so on the standing note, because "email" no longer means one
+		// thing: a Microsoft 365 mailbox carries a 3 MB ceiling an SMTP relay
+		// does not, and an operator reading the connector needs to know which
+		// one they have (mailbox_auth.go).
+		if r, ok := o.Connector.(mailboxAuthReporter); ok && verr == nil {
+			info.Note = strings.TrimSpace(info.Note + " " + r.AuthModeNote(cfg))
+		}
 		if verr != nil {
 			// The reason is what the operator needs: "not onboarded" and "no
 			// credentials" are different problems with different next steps.
@@ -172,9 +188,60 @@ func (o *TACOpener) Info(ctx context.Context, tenantID string) tac.ConnectorInfo
 	return info
 }
 
+// mailboxAuthReporter is implemented by a connector whose per-tenant behaviour
+// depends on how its mailbox is authenticated. The type system is the
+// declaration: a connector that has nothing to say simply does not implement it.
+type mailboxAuthReporter interface {
+	AuthModeNote(cfg TACConnectorConfig) string
+}
+
 // NotConfiguredStatusNote is the state a tenant with no stored credentials is
 // in. It is a sentence about what to do next, not a report of a failure.
 const NotConfiguredStatusNote = "No credentials for this tenant yet — bring your own to use it."
+
+// tacRequiredFields translates this package's required-field table onto the
+// seam's copy of the shape.
+func tacRequiredFields(connectorID string) []tac.RequiredField {
+	rows := RequiredCaseFields(connectorID)
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make([]tac.RequiredField, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, tac.RequiredField{
+			Key: r.Key, Label: r.Label, Why: r.Why,
+			SettingsHint: r.SettingsHint, AnyOf: r.AnyOf, Alt: r.Alt,
+		})
+	}
+	return out
+}
+
+// tacAuthMode names HOW this connector authenticates for this tenant.
+//
+// The owner's preference is explicit (2026-09-07): "make an API call to vendor
+// TAC management tools with authentication either OAuth or password
+// preferentially OAuth". So the mode is REPORTED rather than assumed, the case
+// chip shows it, and a tenant sitting on a token path can see that they are not
+// on the preferred one.
+func tacAuthMode(connectorID string, cfg TACConnectorConfig) string {
+	switch connectorID {
+	case "cisco-smart-bonding":
+		// Smart Bonding is OAuth client-credentials against Cisco's published
+		// token endpoint. There is no password path to fall back to.
+		return "oauth"
+	case "cisco-cxd":
+		// CXD is Basic auth with the per-case token the admin copies out of SCM.
+		// It is not a stored credential at all, which is why it is named
+		// differently rather than called "basic".
+		return "per-case upload token"
+	case "juniper":
+		if strings.EqualFold(strings.TrimSpace(cfg.Juniper.AuthMode), "apikey") {
+			return "api key"
+		}
+		return "oauth"
+	}
+	return ""
+}
 
 // tacCapabilities maps the declared Caps onto the seam's closed verb set.
 func tacCapabilities(c Caps) []tac.CaseCapability {
@@ -232,7 +299,46 @@ func (o *TACOpener) PrepareCase(ctx context.Context, req tac.CaseRequest) (tac.C
 		// is still worth showing, and SubmitCase fails loudly if it is unreadable.
 	}
 	form.MissingFields = o.missingFields(ctx, req, form)
+	// The STRUCTURED refusal, so the confirmation screen can name the field, the
+	// vendor's reason and where it is set — and link there — instead of printing
+	// a sentence the operator has to decode.
+	have := caseFormValues(form, req)
+	for _, m := range MissingRequired(o.Connector.Name(), have) {
+		form.MissingRequired = append(form.MissingRequired, tac.RequiredField{
+			Key: m.Key, Label: m.Label, Why: m.Why,
+			SettingsHint: m.SettingsHint, AnyOf: m.AnyOf, Alt: m.Alt,
+		})
+	}
+	form.MissingNote = MissingRequiredMessage(o.Connector.Name(), have)
 	return form, nil
+}
+
+// caseFormValues renders the seam's form as the key→value map the required-field
+// check reads. The device's own platform stands in for the product/PID when the
+// form carries none, because that is what the inventory actually knows.
+func caseFormValues(form tac.CaseForm, req tac.CaseRequest) map[string]string {
+	return map[string]string{
+		"title":                form.Title,
+		"description":          form.Description,
+		"severity":             form.Severity,
+		"product":              orDefault(form.Product, req.Platform),
+		"pid":                  form.Product,
+		"serial_number":        form.SerialNumber,
+		"contract_id":          form.ContractID,
+		"contact_name":         form.ContactName,
+		"contact_email":        form.ContactEmail,
+		"existing_case_number": form.ExistingCaseNumber,
+		"upload_token":         nonEmptyMark(req.Secrets.UploadToken),
+	}
+}
+
+// nonEmptyMark answers "is it there" without ever copying the value: a
+// credential must not travel through a map that is about to be rendered.
+func nonEmptyMark(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return ""
+	}
+	return "set"
 }
 
 // missingFields names what the operator must still supply for THIS connector.

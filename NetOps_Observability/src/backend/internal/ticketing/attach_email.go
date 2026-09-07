@@ -203,6 +203,15 @@ type EmailCaseConnector struct {
 	// to reach the code path that puts a message in front of a vendor.
 	probeFn func(ctx context.Context, cfg EmailConnectorConfig) error
 	retry   RetryPolicy
+	// tok mints and caches the OAuth bearers the mailbox modes need. It is keyed
+	// by the CREDENTIAL, so one connector instance serves every tenant without a
+	// tenant ever seeing another's token (mailbox_auth.go).
+	tok *mailboxTokens
+	// audit records one row per SEND. It lives here rather than in
+	// AuditedConnector because the two facts it carries — which mailbox API
+	// actually carried the message, and under which message id — exist only
+	// inside the transport and are invisible to a wrapper.
+	audit CaseAuditSink
 }
 
 // NewEmailCaseConnector builds the connector for one closed-table vendor.
@@ -211,7 +220,43 @@ func NewEmailCaseConnector(vendorID string) (*EmailCaseConnector, error) {
 	if !ok {
 		return nil, fmt.Errorf("email connector: %q is not in the closed vendor mailbox table", vendorID)
 	}
-	return &EmailCaseConnector{vendor: v, retry: DefaultCaseRetry()}, nil
+	return &EmailCaseConnector{vendor: v, retry: DefaultCaseRetry(), tok: newMailboxTokens()}, nil
+}
+
+// WithAudit sets the sink the SEND rows go to. A connector without one still
+// audits, through the package's structured applog sink (§10).
+func (c *EmailCaseConnector) WithAudit(sink CaseAuditSink) *EmailCaseConnector {
+	c.audit = sink
+	return c
+}
+
+// tokens returns the token source, building the production one on first use so
+// a connector constructed by a test that only drives SMTP never opens a client.
+func (c *EmailCaseConnector) tokens() *mailboxTokens {
+	if c.tok == nil {
+		c.tok = newMailboxTokens()
+	}
+	return c.tok
+}
+
+// endpoints are the pinned service bases. Only an in-package test replaces them.
+func (c *EmailCaseConnector) endpoints() mailboxEndpoints { return c.tokens().endpoints }
+
+// AuthModeNote is the one sentence the connector's Info line carries about HOW
+// this tenant's mailbox is authenticated. It names the mode, never a credential.
+func (c *EmailCaseConnector) AuthModeNote(cfg TACConnectorConfig) string {
+	mode := cfg.Email.authMode()
+	switch mode {
+	case MailboxAuthGraph:
+		return "Mailbox authentication: Microsoft 365 (Graph sendMail, ≤ 3 MB per message)."
+	case MailboxAuthGmail:
+		return "Mailbox authentication: Google Workspace (Gmail API, ≤ 25 MB per message)."
+	case MailboxAuthSMTPOAuth:
+		return "Mailbox authentication: SMTP with OAuth (SASL XOAUTH2, " +
+			orDefault(cfg.Email.tokenProvider(), "no provider chosen") + ")."
+	default:
+		return "Mailbox authentication: password relay."
+	}
 }
 
 // NewEmailCaseConnectorWithProbe injects the connection test (tests drive a
@@ -285,11 +330,11 @@ func (c *EmailCaseConnector) CreateCase(ctx context.Context, cfg TACConnectorCon
 	if err != nil {
 		return CaseRef{}, err
 	}
-	msg, err := buildCaseEmail(cfg.Email, c.vendor.Mailbox, subject, caseEmailBody(req), nil)
+	m, err := newOutgoingMail(cfg.Email, c.vendor.Mailbox, subject, caseEmailBody(req), nil)
 	if err != nil {
 		return CaseRef{}, err
 	}
-	if err := c.send(ctx, cfg.Email, req.IdempotencyKey, msg); err != nil {
+	if _, err := c.deliver(ctx, cfg.Email, req.IdempotencyKey, m); err != nil {
 		return CaseRef{}, err
 	}
 	// There is no case id yet: the vendor assigns one and replies. Saying so is
@@ -302,9 +347,8 @@ func (c *EmailCaseConnector) AttachBundle(ctx context.Context, cfg TACConnectorC
 	if err := c.ValidateConfig(cfg); err != nil {
 		return AttachResult{}, err
 	}
-	caps := c.Capabilities()
-	if err := checkBundle("email", b, caps.AttachLimit(),
-		"the email profile is capped so the message clears Cisco's 20 MB mailbox, ServiceNow's 18 MiB inbound cap and the Exchange Online default; use an API path or a link-only case description"); err != nil {
+	limit, advice := c.attachLimit(cfg.Email)
+	if err := checkBundle("email", b, limit, advice); err != nil {
 		return AttachResult{}, err
 	}
 	subject, err := emailSubject(c.vendor, orDefault(ref.Number, ref.ID), b.Name)
@@ -328,20 +372,56 @@ func (c *EmailCaseConnector) AttachBundle(ctx context.Context, cfg TACConnectorC
 	if int64(len(payload)) != b.Size {
 		return AttachResult{}, fmt.Errorf("email: bundle is %d bytes but declared %d", len(payload), b.Size)
 	}
-	msg, err := buildCaseEmail(cfg.Email, c.vendor.Mailbox, subject,
+	m, err := newOutgoingMail(cfg.Email, c.vendor.Mailbox, subject,
 		attachEmailBody(c.vendor, ref, b), []emailPart{{
 			Name: sanitizeFileName(b.Name), ContentType: orDefault(b.ContentType, "application/zip"), Data: payload,
 		}})
 	if err != nil {
 		return AttachResult{}, err
 	}
-	if err := c.send(ctx, cfg.Email, orDefault(ref.Number, b.SHA256), msg); err != nil {
+	id, err := c.deliver(ctx, cfg.Email, orDefault(ref.Number, b.SHA256), m)
+	if err != nil {
 		return AttachResult{}, err
 	}
 	return AttachResult{
-		Name: b.Name, Size: b.Size, SHA256: b.SHA256,
-		At: time.Now().UTC(), Transport: "email",
+		ID: id, Name: b.Name, Size: b.Size, SHA256: b.SHA256,
+		At: time.Now().UTC(), Transport: emailTransportName(cfg.Email.authMode()),
 	}, nil
+}
+
+// attachLimit resolves the ceiling this tenant's mailbox actually enforces, and
+// the advice that goes with a refusal. The mode matters: Graph's 3 MB
+// single-request ceiling is far stricter than the 14 MB email profile, and an
+// operator refused at 2 MB deserves to be told which ceiling they hit.
+func (c *EmailCaseConnector) attachLimit(cfg EmailConnectorConfig) (int64, string) {
+	limit := c.Capabilities().AttachLimit()
+	advice := "the email profile is capped so the message clears Cisco's 20 MB mailbox, ServiceNow's 18 MiB inbound cap and the Exchange Online default; use an API path or a link-only case description"
+	switch cfg.authMode() {
+	case MailboxAuthGraph:
+		if g := graphRawAttachLimit(); g < limit {
+			limit, advice = g, graphOversizeAdvice
+		}
+	case MailboxAuthGmail:
+		if g := gmailRawAttachLimit(); g < limit {
+			limit, advice = g, gmailOversizeAdvice
+		}
+	}
+	return limit, advice
+}
+
+// emailTransportName is the transport recorded on the result and in the audit:
+// which of the three paths actually carried the bytes.
+func emailTransportName(mode MailboxAuthMode) string {
+	switch mode {
+	case MailboxAuthGraph:
+		return "email-graph"
+	case MailboxAuthGmail:
+		return "email-gmail"
+	case MailboxAuthSMTPOAuth:
+		return "email-smtp-oauth"
+	default:
+		return "email"
+	}
 }
 
 // FetchCase is honestly unsupported: an email mailbox has no status surface.
@@ -354,16 +434,92 @@ func (c *EmailCaseConnector) AddNote(context.Context, TACConnectorConfig, CaseRe
 	return fmt.Errorf("%w: email cannot add a note to a case", ErrUnsupported)
 }
 
-// send applies the bounded retry around one SMTP conversation.
-func (c *EmailCaseConnector) send(ctx context.Context, cfg EmailConnectorConfig, key string, msg []byte) error {
-	sender := c.sendFn
-	if sender == nil {
-		sender = sendSMTP
-	}
-	_, err := withRetry(ctx, c.retry, orDefault(key, c.vendor.ID), func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, sender(ctx, cfg, c.vendor.Mailbox, msg)
+// deliver puts ONE message in front of the vendor, through whichever transport
+// this tenant's mailbox authentication implies, under the bounded retry (§9),
+// and audits the send on both outcomes (§10).
+//
+// It returns the message id the audit carries: Gmail's own id where the provider
+// gives one, and otherwise the reference Correlix generated — which is the
+// Message-ID on the SMTP and Gmail paths and the x-correlix-reference header on
+// the Graph one, so a single id ties the audit row to the message in the
+// operator's Sent Items whichever way it left.
+func (c *EmailCaseConnector) deliver(ctx context.Context, cfg EmailConnectorConfig, key string, m outgoingMail) (string, error) {
+	mode := cfg.authMode()
+	id, err := withRetry(ctx, c.retry, orDefault(key, c.vendor.ID), func(ctx context.Context) (string, error) {
+		switch mode {
+		case MailboxAuthGraph:
+			return c.sendGraph(ctx, cfg, m)
+		case MailboxAuthGmail:
+			msg, berr := buildCaseEmail(cfg, m)
+			if berr != nil {
+				return "", berr
+			}
+			return c.sendGmail(ctx, cfg, msg)
+		default:
+			msg, berr := buildCaseEmail(cfg, m)
+			if berr != nil {
+				return "", berr
+			}
+			return m.Reference, c.transmit(ctx, cfg, m.To, msg)
+		}
 	})
-	return err
+	c.recordSend(mode, orDefault(id, m.Reference), err)
+	return id, err
+}
+
+// transmit runs the SMTP half: the injected sender when a test supplied one, an
+// XOAUTH2 conversation when the mailbox is OAuth-authenticated, and the stored
+// password otherwise.
+func (c *EmailCaseConnector) transmit(ctx context.Context, cfg EmailConnectorConfig, to string, msg []byte) error {
+	if c.sendFn != nil {
+		return c.sendFn(ctx, cfg, to, msg)
+	}
+	if cfg.authMode() == MailboxAuthSMTPOAuth {
+		auth, err := c.xoauth2(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		return sendSMTPWithAuth(ctx, cfg, to, msg, auth)
+	}
+	return sendSMTP(ctx, cfg, to, msg)
+}
+
+// xoauth2 mints the bearer and wraps it in the SASL mechanism. The scope is the
+// provider's SMTP scope, which is NOT the API scope — asking for the wrong one
+// mints a token the relay will refuse.
+func (c *EmailCaseConnector) xoauth2(ctx context.Context, cfg EmailConnectorConfig) (smtp.Auth, error) {
+	scope := outlookSMTPScope
+	if cfg.tokenProvider() == MailboxProviderGoogle {
+		scope = gmailSMTPScope
+	}
+	tok, err := c.tokens().Token(ctx, cfg, scope)
+	if err != nil {
+		return nil, err
+	}
+	return xoauth2Auth{user: cfg.smtpLogin(), token: tok}, nil
+}
+
+// recordSend writes the send row: the vendor, the transport and the message id,
+// and NEVER the subject, the body or the attachment (§8).
+func (c *EmailCaseConnector) recordSend(mode MailboxAuthMode, messageID string, err error) {
+	sink := c.audit
+	if sink == nil {
+		sink = DefaultCaseAuditSink()
+	}
+	e := CaseAuditEvent{
+		At:        time.Now().UTC(),
+		Action:    "send",
+		Detail:    string(mode),
+		Connector: c.Name(),
+		Vendor:    c.vendor.Vendor,
+		Transport: emailTransportName(mode),
+		MessageID: messageID,
+		Result:    "ok",
+	}
+	if err != nil {
+		e.Result, e.Error = "error", Truncate(err.Error(), 400)
+	}
+	sink.RecordCaseAction(e)
 }
 
 var _ CaseConnector = (*EmailCaseConnector)(nil)
@@ -376,11 +532,56 @@ type emailPart struct {
 	Data        []byte
 }
 
+// outgoingMail is ONE message, described once and rendered by whichever
+// transport this tenant's mailbox authentication implies: RFC 5322 for SMTP and
+// Gmail, a JSON message resource for Graph. Describing it once is what stops the
+// three paths drifting into three different messages.
+type outgoingMail struct {
+	To      string
+	Subject string
+	Body    string
+	Parts   []emailPart
+	// Reference is the server-generated id that identifies this message
+	// everywhere: the RFC 5322 Message-ID on the SMTP and Gmail paths, the
+	// x-correlix-reference header on the Graph one, and the id in the audit row.
+	Reference string
+}
+
+// newOutgoingMail mints the reference and validates the two things every
+// transport needs before any of them is chosen.
+func newOutgoingMail(cfg EmailConnectorConfig, to, subject, body string, parts []emailPart) (outgoingMail, error) {
+	if sanitizeHeaderValue(cfg.sender()) == "" || strings.TrimSpace(to) == "" {
+		return outgoingMail{}, PermanentDeliveryError{errors.New("email: sender and recipient are required")}
+	}
+	ref, err := messageReference(cfg.sender())
+	if err != nil {
+		return outgoingMail{}, err
+	}
+	return outgoingMail{To: to, Subject: subject, Body: body, Parts: parts, Reference: ref}, nil
+}
+
+// messageReference mints an RFC 5322 msg-id: random left half, the sender's own
+// domain on the right, so it is globally unique without carrying anything about
+// the case.
+func messageReference(from string) (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("email: message id: %w", err)
+	}
+	domain := "correlix.invalid"
+	if at := strings.LastIndex(from, "@"); at >= 0 && at < len(from)-1 {
+		if d := sanitizeHeaderValue(strings.Trim(from[at+1:], "<> ")); d != "" {
+			domain = d
+		}
+	}
+	return "correlix-" + hex.EncodeToString(b[:]) + "@" + domain, nil
+}
+
 // buildCaseEmail assembles an RFC 5322 message: a text/plain body plus
 // base64 attachment parts under multipart/mixed. The boundary is random, not
 // derived from content, so it can never collide with the payload.
-func buildCaseEmail(cfg EmailConnectorConfig, to, subject, body string, parts []emailPart) ([]byte, error) {
-	from := sanitizeHeaderValue(cfg.From)
+func buildCaseEmail(cfg EmailConnectorConfig, m outgoingMail) ([]byte, error) {
+	from, to, subject, body, parts := sanitizeHeaderValue(cfg.sender()), m.To, m.Subject, m.Body, m.Parts
 	if from == "" || to == "" {
 		return nil, PermanentDeliveryError{errors.New("email: sender and recipient are required")}
 	}
@@ -392,6 +593,9 @@ func buildCaseEmail(cfg EmailConnectorConfig, to, subject, body string, parts []
 	writeHeader("To", to)
 	if cfg.ReplyTo != "" {
 		writeHeader("Reply-To", cfg.ReplyTo)
+	}
+	if m.Reference != "" {
+		writeHeader("Message-ID", "<"+m.Reference+">")
 	}
 	// Encoded-word the subject ONLY when it is not pure ASCII (RFC 2047):
 	// mime.QEncoding leaves ASCII untouched, which matters because the vendor
@@ -523,8 +727,32 @@ func checkAdvertisedSize(param string, msgLen int64) error {
 		Reply: "refused before DATA against the relay's advertised SIZE"}
 }
 
-// sendSMTP runs one bounded, TLS-required SMTP conversation.
+// sendSMTP runs one bounded, TLS-required SMTP conversation authenticated with
+// the STORED PASSWORD (or unauthenticated when no user is configured). It is the
+// default sender and the historical behaviour, unchanged.
 func sendSMTP(ctx context.Context, cfg EmailConnectorConfig, to string, msg []byte) error {
+	return sendSMTPWithAuth(ctx, cfg, to, msg, passwordAuth(cfg))
+}
+
+// passwordAuth is the PLAIN mechanism for a stored password, or nil when the
+// tenant configured no user at all (an anonymous internal relay). PlainAuth
+// itself refuses to send credentials over an unencrypted connection; that check
+// is deliberately left to it.
+func passwordAuth(cfg EmailConnectorConfig) smtp.Auth {
+	if strings.TrimSpace(cfg.User) == "" {
+		return nil
+	}
+	host := cfg.Host
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		host = host[:i]
+	}
+	return smtp.PlainAuth("", cfg.User, cfg.Password, host)
+}
+
+// sendSMTPWithAuth is the conversation itself. auth is the SASL mechanism to
+// offer — PLAIN for a stored password, XOAUTH2 for an OAuth mailbox, nil for a
+// relay that wants no AUTH at all.
+func sendSMTPWithAuth(ctx context.Context, cfg EmailConnectorConfig, to string, msg []byte, auth smtp.Auth) error {
 	host, _, err := net.SplitHostPort(cfg.Host)
 	if err != nil {
 		return PermanentDeliveryError{fmt.Errorf("smtp: host must be host:port")}
@@ -575,15 +803,13 @@ func sendSMTP(ctx context.Context, cfg EmailConnectorConfig, to string, msg []by
 			return err
 		}
 	}
-	if cfg.User != "" {
+	if auth != nil {
 		ok, _ := c.Extension("AUTH")
 		if !ok {
 			return PermanentDeliveryError{errors.New("smtp: credentials configured but the relay advertises no AUTH")}
 		}
-		// PlainAuth itself refuses to send credentials over an unencrypted
-		// connection; that check is deliberately left to it.
-		if err := c.Auth(smtp.PlainAuth("", cfg.User, cfg.Password, host)); err != nil {
-			// The error can quote the server's reply but never the password.
+		if err := c.Auth(auth); err != nil {
+			// The error can quote the server's reply but never the credential.
 			return PermanentDeliveryError{errors.New("smtp: authentication rejected by the relay")}
 		}
 	}

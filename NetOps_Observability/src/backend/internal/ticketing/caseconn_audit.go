@@ -46,8 +46,12 @@ type CaseAuditEvent struct {
 	BundleSHA256 string `json:"bundle_sha256,omitempty"`
 	BundleBytes  int64  `json:"bundle_bytes,omitempty"`
 	Transport    string `json:"transport,omitempty"`
-	Result       string `json:"result"` // ok|error
-	Error        string `json:"error,omitempty"`
+	// MessageID identifies ONE message a transport put in front of a vendor. It
+	// is the RFC 5322 Message-ID on the mail paths and the provider's own id
+	// where it returns one — never the subject, the body or the attachment (§8).
+	MessageID string `json:"message_id,omitempty"`
+	Result    string `json:"result"` // ok|error
+	Error     string `json:"error,omitempty"`
 	// ApprovedBy / ApprovedAt record the human-in-the-loop proof on a create.
 	ApprovedBy string    `json:"approved_by,omitempty"`
 	ApprovedAt time.Time `json:"approved_at,omitempty"`
@@ -83,6 +87,7 @@ func (applogCaseAudit) RecordCaseAction(e CaseAuditEvent) {
 		"incident": e.IncidentID, "device": e.DeviceID, "case_id": e.CaseID,
 		"case_number": e.CaseNumber, "bundle_sha256": e.BundleSHA256,
 		"transport": e.Transport, "approved_by": e.ApprovedBy,
+		"message_id": e.MessageID,
 	} {
 		if strings.TrimSpace(v) != "" {
 			fields[k] = v

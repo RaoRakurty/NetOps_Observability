@@ -65,11 +65,15 @@ type JiraAttachConfig struct {
 }
 
 // EmailConnectorConfig is the universal fallback transport: the tenant's own
-// SMTP relay. TLS is REQUIRED — an evidence bundle is customer network data and
-// never leaves in the clear.
+// mailbox. TLS is REQUIRED on every path — an evidence bundle is customer
+// network data and never leaves in the clear.
+//
+// AuthMode decides which of the remaining fields matter (mailbox_auth.go). A
+// blank AuthMode is the password relay, which is what every record written
+// before OAuth landed holds, so nothing that worked stops working.
 type EmailConnectorConfig struct {
 	Enabled bool   `json:"enabled"`
-	Host    string `json:"host"` // host:port
+	Host    string `json:"host"` // host:port — the SMTP modes only
 	From    string `json:"from"`
 	User    string `json:"user,omitempty"`
 	// Password is write-only: never serialized out, blank on update keeps stored.
@@ -78,6 +82,32 @@ type EmailConnectorConfig struct {
 	// ReplyTo is the named human the vendor replies to. Arista requires "your
 	// name and contact information" in the case; several vendors thread on it.
 	ReplyTo string `json:"reply_to,omitempty"`
+
+	// ── OAuth 2.0 mailbox authentication (mailbox_auth.go) ──────────────────
+
+	// AuthMode is password (default) | microsoft365 | google_workspace | smtp_oauth.
+	AuthMode MailboxAuthMode `json:"auth_mode,omitempty"`
+	// Mailbox is the mailbox the message is sent AS. Microsoft 365 and Google
+	// Workspace address it by name; the SMTP modes use it as the XOAUTH2 login
+	// when no separate user is set.
+	Mailbox string `json:"mailbox,omitempty"`
+	// OAuthProvider selects the token source for smtp_oauth: microsoft | google.
+	// The two API modes imply their own and ignore it.
+	OAuthProvider string `json:"oauth_provider,omitempty"`
+	// EntraTenantID / OAuthClientID / OAuthClientSecret are the Entra app
+	// registration. OAuthClientSecret is write-only.
+	EntraTenantID     string `json:"entra_tenant_id,omitempty"`
+	OAuthClientID     string `json:"oauth_client_id,omitempty"`
+	OAuthClientSecret string `json:"oauth_client_secret,omitempty"`
+	// ServiceAccountEmail / ServiceAccountKey are the Google service account with
+	// domain-wide delegation. ServiceAccountKey is the PEM private key out of the
+	// service-account JSON, and is write-only.
+	ServiceAccountEmail string `json:"service_account_email,omitempty"`
+	ServiceAccountKey   string `json:"service_account_key,omitempty"`
+	// ReadReplies opts into the Microsoft 365 reply read, which lifts the
+	// vendor's case number out of the reply subject. It needs a SECOND, wider
+	// Graph permission (Mail.Read), so it is off unless a tenant asks for it.
+	ReadReplies bool `json:"read_replies,omitempty"`
 }
 
 // CiscoConnectorConfig covers both Cisco halves: CXD attach-to-existing (needs
@@ -148,6 +178,8 @@ type TACConnectorConfig struct {
 // masked field. Secrets never leave the process (CLAUDE.md §8).
 func (c TACConnectorConfig) Redacted() TACConnectorConfig {
 	c.Email.Password = ""
+	c.Email.OAuthClientSecret = ""
+	c.Email.ServiceAccountKey = ""
 	c.Cisco.ClientSecret = ""
 	c.Juniper.ClientSecret = ""
 	c.Juniper.APIKey = ""
@@ -159,10 +191,12 @@ func (c TACConnectorConfig) Redacted() TACConnectorConfig {
 // "configured" without ever receiving the value.
 func (c TACConnectorConfig) SecretsPresent() map[string]bool {
 	return map[string]bool{
-		"email.password":        c.Email.Password != "",
-		"cisco.client_secret":   c.Cisco.ClientSecret != "",
-		"juniper.client_secret": c.Juniper.ClientSecret != "",
-		"juniper.api_key":       c.Juniper.APIKey != "",
+		"email.password":            c.Email.Password != "",
+		"email.oauth_client_secret": c.Email.OAuthClientSecret != "",
+		"email.service_account_key": c.Email.ServiceAccountKey != "",
+		"cisco.client_secret":       c.Cisco.ClientSecret != "",
+		"juniper.client_secret":     c.Juniper.ClientSecret != "",
+		"juniper.api_key":           c.Juniper.APIKey != "",
 	}
 }
 
@@ -171,6 +205,12 @@ func (c TACConnectorConfig) SecretsPresent() map[string]bool {
 func mergeSecrets(in, prev TACConnectorConfig) TACConnectorConfig {
 	if in.Email.Password == "" {
 		in.Email.Password = prev.Email.Password
+	}
+	if in.Email.OAuthClientSecret == "" {
+		in.Email.OAuthClientSecret = prev.Email.OAuthClientSecret
+	}
+	if in.Email.ServiceAccountKey == "" {
+		in.Email.ServiceAccountKey = prev.Email.ServiceAccountKey
 	}
 	if in.Cisco.ClientSecret == "" {
 		in.Cisco.ClientSecret = prev.Cisco.ClientSecret
@@ -220,21 +260,106 @@ func ValidateTACConnectorConfig(c TACConnectorConfig) error {
 	return nil
 }
 
+// validateEmailConfig checks the fields THIS mailbox mode actually uses. A
+// tenant on Microsoft 365 has no relay host and no password, and demanding them
+// would make a correct configuration unsavable; a tenant on a password relay has
+// no client secret, and demanding one would do the same. So the mode is resolved
+// first and each mode is validated on its own terms — fail-closed, with the
+// missing field named (§3).
 func validateEmailConfig(e EmailConnectorConfig) error {
+	if e.ReplyTo != "" && !strings.Contains(e.ReplyTo, "@") {
+		return errors.New("email: reply_to must be an address")
+	}
+	switch e.authMode() {
+	case MailboxAuthGraph:
+		return validateGraphMailbox(e)
+	case MailboxAuthGmail:
+		return validateGmailMailbox(e)
+	case MailboxAuthSMTPOAuth:
+		if err := validateSMTPRelay(e); err != nil {
+			return err
+		}
+		switch e.tokenProvider() {
+		case MailboxProviderMicrosoft:
+			return validateEntraApp(e)
+		case MailboxProviderGoogle:
+			if strings.TrimSpace(e.Mailbox) == "" {
+				return errors.New("email: the mailbox to send as is required (the service account impersonates it)")
+			}
+			return validateGoogleServiceAccount(e)
+		default:
+			return fmt.Errorf("email: oauth_provider must be %q or %q", MailboxProviderMicrosoft, MailboxProviderGoogle)
+		}
+	default:
+		if err := validateSMTPRelay(e); err != nil {
+			return err
+		}
+		if !strings.Contains(strings.TrimSpace(e.From), "@") {
+			return errors.New("email: a sender address is required")
+		}
+		return nil
+	}
+}
+
+// validateSMTPRelay checks the relay every SMTP mode dials.
+func validateSMTPRelay(e EmailConnectorConfig) error {
 	if strings.TrimSpace(e.Host) == "" {
 		return errors.New("email: SMTP host:port is required")
 	}
 	if !strings.Contains(e.Host, ":") {
 		return errors.New("email: SMTP host must be host:port")
 	}
-	if !strings.Contains(strings.TrimSpace(e.From), "@") {
-		return errors.New("email: a sender address is required")
-	}
-	if e.ReplyTo != "" && !strings.Contains(e.ReplyTo, "@") {
-		return errors.New("email: reply_to must be an address")
-	}
 	host := e.Host[:strings.LastIndex(e.Host, ":")]
 	return safehttp.ValidateURL(host)
+}
+
+// validateGraphMailbox: an Entra app registration plus the mailbox it sends as.
+// There is no relay and no password in this mode.
+func validateGraphMailbox(e EmailConnectorConfig) error {
+	if !strings.Contains(strings.TrimSpace(e.Mailbox), "@") {
+		return errors.New("email: the Microsoft 365 mailbox to send from is required")
+	}
+	return validateEntraApp(e)
+}
+
+// validateEntraApp names the three app-registration values in a FIXED order, so
+// an operator filling them in one at a time always makes progress.
+func validateEntraApp(e EmailConnectorConfig) error {
+	for _, f := range []struct{ name, value string }{
+		{"entra_tenant_id", e.EntraTenantID},
+		{"oauth_client_id", e.OAuthClientID},
+		{"oauth_client_secret", e.OAuthClientSecret},
+	} {
+		if strings.TrimSpace(f.value) == "" {
+			return fmt.Errorf("email: %s comes from the Entra app registration and is required", f.name)
+		}
+	}
+	return nil
+}
+
+// validateGmailMailbox: a service account with domain-wide delegation plus the
+// mailbox it impersonates.
+func validateGmailMailbox(e EmailConnectorConfig) error {
+	if !strings.Contains(strings.TrimSpace(e.Mailbox), "@") {
+		return errors.New("email: the Google Workspace mailbox to send from is required")
+	}
+	return validateGoogleServiceAccount(e)
+}
+
+// validateGoogleServiceAccount PARSES the key rather than checking that a string
+// is present. A key that cannot sign is a credential that will fail on the worst
+// night of the quarter; catching it on save is the whole point of validating.
+func validateGoogleServiceAccount(e EmailConnectorConfig) error {
+	if !strings.Contains(strings.TrimSpace(e.ServiceAccountEmail), "@") {
+		return errors.New("email: service_account_email is the client_email from the service-account JSON and is required")
+	}
+	if strings.TrimSpace(e.ServiceAccountKey) == "" {
+		return errors.New("email: service_account_key is the private_key from the service-account JSON and is required")
+	}
+	if _, err := parseRSAPrivateKey(e.ServiceAccountKey); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateCiscoConfig(c CiscoConnectorConfig) error {

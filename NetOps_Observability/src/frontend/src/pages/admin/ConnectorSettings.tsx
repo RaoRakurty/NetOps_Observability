@@ -9,6 +9,10 @@
 // brings its own Jira, ServiceNow, Cisco, Juniper or SMTP relay.
 //
 // WHAT IT WILL NOT DO.
+//   · It shows one mailbox sign-in mode's fields at a time. The email block
+//     covers four ways of reaching a mailbox and a customer is on exactly one;
+//     the rest would be boxes that must be left blank. Switching modes CLEARS
+//     the previous mode's credential rather than leaving one stored invisibly.
 //   · It never shows a stored secret. The server does not send one; the field
 //     says "stored" and offers Replace or Remove, and a save that touched
 //     neither sends nothing for it (connectorForms.payloadFromState).
@@ -23,6 +27,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, TacConnectorConfigView, TacConnectorProbe } from "../../services/api";
+import AskIris from "../../components/AskIris";
 import { operatorError } from "../../lib/errors";
 import {
   CONFIG_READ_FAILED,
@@ -33,11 +38,11 @@ import {
   FormState,
   PROBE_SENTENCE,
   REMOVE_CONSEQUENCE,
-  fieldsFor,
   formStateFromView,
   payloadFromState,
   probeTone,
   secretLabel,
+  visibleFields,
 } from "./connectorForms";
 
 export default function ConnectorSettings({ id, onChanged }: {
@@ -137,7 +142,10 @@ export default function ConnectorSettings({ id, onChanged }: {
     return <p className="adm-line">{view.status_note || "There is nothing to configure here."}</p>;
   }
 
-  const fields = fieldsFor(view.section);
+  // Narrowed to the mailbox sign-in mode the person is on: a Microsoft 365
+  // tenant has no relay password to type, and offering the box would only ask
+  // them to leave it blank.
+  const fields = visibleFields(view.section, form.values);
   return (
     <div className="tdc-form" data-testid={`ticket-conn-form-${id}`}>
       {fields.map((f) => (
@@ -247,6 +255,7 @@ function ConnectorFieldRow({ id, field, form, stored, onValue, onSecret }: {
     return (
       <div className="tdc-field">
         <label htmlFor={fieldId}>{field.label}</label>
+        {field.topic && <AskIris topic={field.topic} label={field.label} />}
         <select
           id={fieldId}
           value={String(form.values[field.name] ?? "")}

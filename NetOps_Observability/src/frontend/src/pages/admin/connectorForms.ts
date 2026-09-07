@@ -40,6 +40,24 @@ export type ConnectorField = {
   options?: readonly { value: string; label: string }[];
   /** A shape hint, shown in the empty box. Never an instruction. */
   placeholder?: string;
+  /**
+   * Mailbox sign-in modes this field belongs to. Absent means every mode.
+   *
+   * The email block holds four different ways of reaching a mailbox and a
+   * customer is on exactly one of them: a Microsoft 365 tenant has no relay
+   * password, and an on-prem relay has no application id. Showing all of it at
+   * once would be a form where most boxes must be left blank, which reads as a
+   * form somebody failed to fill in.
+   */
+  showIn?: readonly string[];
+  /**
+   * For the SMTP-with-OAuth mode only: which token issuer this field belongs
+   * to. Either issuer can sit behind a plain SMTP endpoint, so that one mode has
+   * a second question before its credential fields are known.
+   */
+  provider?: "microsoft" | "google";
+  /** AskIris topic for the (i) beside this field. */
+  topic?: string;
 };
 
 /**
@@ -66,11 +84,69 @@ export const CONNECTOR_FORMS: Readonly<Record<string, readonly ConnectorField[]>
   ],
   email: [
     { name: "enabled", label: "Send cases by email", kind: "toggle" },
-    { name: "host", label: "Mail relay, as host:port", kind: "text", placeholder: "smtp.example.com:587" },
-    { name: "from", label: "Send from", kind: "text", placeholder: "noc@example.com" },
-    { name: "user", label: "Sign-in name", kind: "text" },
-    { name: "password", label: "Password", kind: "secret" },
-    { name: "tls_on_connect", label: "Encrypt from the first byte, on port 465", kind: "toggle" },
+    {
+      name: "auth_mode", label: "How we sign in to the mailbox", kind: "select",
+      topic: "tac.mailbox-oauth",
+      options: [
+        { value: "password", label: "Password relay" },
+        { value: "microsoft365", label: "Microsoft 365" },
+        { value: "google_workspace", label: "Google Workspace" },
+        { value: "smtp_oauth", label: "SMTP with OAuth" },
+      ],
+    },
+    // The relay, for the two modes that dial one.
+    {
+      name: "host", label: "Mail relay, as host:port", kind: "text",
+      placeholder: "smtp.example.com:587", showIn: ["password", "smtp_oauth"],
+    },
+    { name: "from", label: "Send from", kind: "text", placeholder: "noc@example.com", showIn: ["password", "smtp_oauth"] },
+    { name: "user", label: "Sign-in name", kind: "text", showIn: ["password", "smtp_oauth"] },
+    { name: "password", label: "Password", kind: "secret", showIn: ["password"] },
+    {
+      name: "tls_on_connect", label: "Encrypt from the first byte, on port 465",
+      kind: "toggle", showIn: ["password", "smtp_oauth"],
+    },
+    // Which issuer mints the token, for the one mode that can take either.
+    {
+      name: "oauth_provider", label: "Who issues the sign-in token", kind: "select",
+      showIn: ["smtp_oauth"],
+      options: [
+        { value: "microsoft", label: "Microsoft" },
+        { value: "google", label: "Google" },
+      ],
+    },
+    // The mailbox the message is sent as.
+    {
+      name: "mailbox", label: "Mailbox we send as", kind: "text",
+      placeholder: "noc@example.com", showIn: ["microsoft365", "google_workspace", "smtp_oauth"],
+    },
+    // Microsoft: the app registration.
+    {
+      name: "entra_tenant_id", label: "Directory ID", kind: "text",
+      showIn: ["microsoft365", "smtp_oauth"], provider: "microsoft",
+    },
+    {
+      name: "oauth_client_id", label: "Application ID", kind: "text",
+      showIn: ["microsoft365", "smtp_oauth"], provider: "microsoft",
+    },
+    {
+      name: "oauth_client_secret", label: "Client secret", kind: "secret",
+      showIn: ["microsoft365", "smtp_oauth"], provider: "microsoft",
+    },
+    {
+      name: "read_replies", label: "Read the reply for the case number", kind: "toggle",
+      showIn: ["microsoft365"],
+    },
+    // Google: the service account.
+    {
+      name: "service_account_email", label: "Service account address", kind: "text",
+      placeholder: "correlix@project.iam.gserviceaccount.com",
+      showIn: ["google_workspace", "smtp_oauth"], provider: "google",
+    },
+    {
+      name: "service_account_key", label: "Service account key", kind: "secret",
+      showIn: ["google_workspace", "smtp_oauth"], provider: "google",
+    },
     { name: "reply_to", label: "Reply goes to", kind: "text", placeholder: "jane.doe@example.com" },
   ],
   cisco: [
@@ -107,6 +183,32 @@ export const CONNECTOR_FORMS: Readonly<Record<string, readonly ConnectorField[]>
 /** The fields of one section, or an empty list when there is no form. */
 export function fieldsFor(section: string | undefined): readonly ConnectorField[] {
   return CONNECTOR_FORMS[(section ?? "").trim()] ?? [];
+}
+
+/** The default sign-in mode. A blank one is the relay, exactly as the server reads it. */
+export const DEFAULT_MAILBOX_MODE = "password";
+
+/**
+ * Whether one field belongs to the mode the form is currently on. A field with
+ * no `showIn` belongs to every mode; a field with a `provider` belongs to that
+ * issuer, and the issuer only matters in the SMTP-with-OAuth mode — the two API
+ * modes each imply their own.
+ */
+export function fieldApplies(f: ConnectorField, values: Record<string, string | boolean>): boolean {
+  const mode = String(values.auth_mode ?? "") || DEFAULT_MAILBOX_MODE;
+  if (f.showIn && !f.showIn.includes(mode)) return false;
+  if (f.provider && mode === "smtp_oauth") {
+    return String(values.oauth_provider ?? "") === f.provider;
+  }
+  return true;
+}
+
+/** The fields to render: this section's, narrowed to the chosen sign-in mode. */
+export function visibleFields(
+  section: string | undefined,
+  values: Record<string, string | boolean>,
+): readonly ConnectorField[] {
+  return fieldsFor(section).filter((f) => fieldApplies(f, values));
 }
 
 /** What the person has decided about one stored secret. */
@@ -159,6 +261,12 @@ export function formStateFromView(view: ViewBlocks): FormState {
       values[f.name] = mapToText(raw);
     } else if (f.kind === "number") {
       values[f.name] = typeof raw === "number" && raw > 0 ? String(raw) : "";
+    } else if (f.kind === "select") {
+      // A select opens on the FIRST choice when nothing is stored, so what the
+      // box shows is what a save would send. A blank select that silently means
+      // something else is how a form lies.
+      const stored = typeof raw === "string" ? raw : "";
+      values[f.name] = stored || f.options?.[0]?.value || "";
     } else {
       values[f.name] = typeof raw === "string" ? raw : "";
     }
@@ -199,12 +307,23 @@ export function textToMap(text: string): Record<string, string> {
 export function payloadFromState(section: string | undefined, state: FormState): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const f of fieldsFor(section)) {
+    // A field the chosen mode does not use is not sent, so the stored block
+    // holds one mode's settings and not the wreckage of an earlier one. A SECRET
+    // the mode cannot use is not merely dropped — it is CLEARED, because a relay
+    // password sitting invisibly behind a Microsoft 365 mailbox is a credential
+    // nobody can see and nobody meant to keep.
+    const applies = fieldApplies(f, state.values);
     if (f.kind === "secret") {
+      if (!applies) {
+        out[f.name] = "";
+        continue;
+      }
       const s = state.secrets[f.name] ?? { mode: "keep", value: "" };
       if (s.mode === "replace") out[f.name] = s.value;
       else if (s.mode === "clear") out[f.name] = "";
       continue;
     }
+    if (!applies) continue;
     const v = state.values[f.name];
     if (f.kind === "toggle") {
       out[f.name] = v === true;

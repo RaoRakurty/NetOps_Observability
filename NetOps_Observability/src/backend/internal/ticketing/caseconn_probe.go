@@ -14,7 +14,11 @@ package ticketing
 //	Jira        GET /rest/api/2/myself           (who am I)
 //	ServiceNow  GET the incident table, limit 1  (can I read, am I authorised)
 //	email       SMTP connect + EHLO + STARTTLS   (is the relay there, does it
-//	                                              offer the TLS we require)
+//	                                              offer the TLS we require) — or,
+//	                                              on an OAuth mailbox, a read of
+//	                                              the mailbox itself: Graph
+//	                                              /users/{mailbox}, Gmail
+//	                                              users.getProfile
 //	Juniper     the API's own /getlov list       (does the token mint, is the
 //	                                              onboarding live)
 //
@@ -204,15 +208,38 @@ func (c *JuniperConnector) Probe(ctx context.Context, cfg TACConnectorConfig) er
 	return err
 }
 
-// Probe opens ONE bounded SMTP conversation and stops at the greeting: connect,
-// EHLO, the TLS this transport requires, and QUIT. No MAIL, no RCPT, no DATA —
-// nothing that could put a message in front of a vendor's case robot.
+// Probe asks the tenant's mailbox ONE read-only question, and which question
+// depends on how that mailbox is authenticated:
+//
+//	password / smtp_oauth  connect, EHLO, TLS, AUTH, QUIT. No MAIL, no RCPT, no
+//	                       DATA — nothing that could put a message in front of a
+//	                       vendor's case robot.
+//	microsoft365           GET /v1.0/users/{mailbox} — the token mints, Graph
+//	                       accepts it, and the mailbox is one the app can address.
+//	google_workspace       GET users.getProfile under the SEND scope — the
+//	                       assertion signs and the delegation is live.
+//
+// None of the three sends, drafts or stores anything.
 func (c *EmailCaseConnector) Probe(ctx context.Context, cfg TACConnectorConfig) error {
-	probe := c.probeFn
-	if probe == nil {
-		probe = probeSMTP
+	if c.probeFn != nil {
+		return c.probeFn(ctx, cfg.Email)
 	}
-	return probe(ctx, cfg.Email)
+	switch cfg.Email.authMode() {
+	case MailboxAuthGraph:
+		return c.probeGraph(ctx, cfg.Email)
+	case MailboxAuthGmail:
+		return c.probeGmail(ctx, cfg.Email)
+	case MailboxAuthSMTPOAuth:
+		// Mint FIRST: a relay that never sees a token cannot tell an operator
+		// whether the app registration is the thing that is wrong.
+		auth, err := c.xoauth2(ctx, cfg.Email)
+		if err != nil {
+			return err
+		}
+		return probeSMTPWithAuth(ctx, cfg.Email, auth)
+	default:
+		return probeSMTP(ctx, cfg.Email)
+	}
 }
 
 // probeSMTP runs the OPENING of the conversation sendSMTP runs, and stops.
@@ -224,6 +251,13 @@ func (c *EmailCaseConnector) Probe(ctx context.Context, cfg TACConnectorConfig) 
 // refused here exactly as it is there, because a test that passes against a
 // plaintext relay would certify a path the sender will not use.
 func probeSMTP(ctx context.Context, cfg EmailConnectorConfig) error {
+	return probeSMTPWithAuth(ctx, cfg, passwordAuth(cfg))
+}
+
+// probeSMTPWithAuth is the conversation. auth is the mechanism to offer: PLAIN
+// for a stored password, XOAUTH2 for an OAuth mailbox, nil for a relay that
+// wants no AUTH — in which case the exchange stops at the TLS handshake.
+func probeSMTPWithAuth(ctx context.Context, cfg EmailConnectorConfig, auth smtp.Auth) error {
 	host, _, err := net.SplitHostPort(cfg.Host)
 	if err != nil {
 		return PermanentDeliveryError{errors.New("smtp: host must be host:port")}
@@ -262,14 +296,14 @@ func probeSMTP(ctx context.Context, cfg EmailConnectorConfig) error {
 			return errors.New("smtp: STARTTLS was refused by the relay")
 		}
 	}
-	if cfg.User != "" {
-		// Credentials are stored, so prove the relay will take them. The
+	if auth != nil {
+		// A credential is available, so prove the relay will take it. The
 		// exchange itself is AUTH only — it never reaches a message.
 		if ok, _ := c.Extension("AUTH"); !ok {
-			return PermanentDeliveryError{errors.New("smtp: a user is configured but the relay advertises no AUTH")}
+			return PermanentDeliveryError{errors.New("smtp: a credential is configured but the relay advertises no AUTH")}
 		}
-		if err := c.Auth(smtp.PlainAuth("", cfg.User, cfg.Password, host)); err != nil {
-			// The reply can quote the server but never the password.
+		if err := c.Auth(auth); err != nil {
+			// The reply can quote the server but never the credential.
 			return PermanentDeliveryError{errors.New("smtp: the relay rejected the stored credentials")}
 		}
 	}

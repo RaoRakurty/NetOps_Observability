@@ -83,15 +83,35 @@ func retryable(err error) bool {
 	return true
 }
 
+// RetryAfterError is a retryable provider answer that named its own wait — a
+// 503 with a Retry-After header, typically. It is deliberately NOT
+// RateLimitedError: the wait is honoured the same way, but the operator-facing
+// text says the provider was unavailable rather than that it throttled us, and a
+// probe classifies it as unreachable rather than refused.
+type RetryAfterError struct {
+	Err   error
+	After time.Duration
+}
+
+func (e RetryAfterError) Error() string { return e.Err.Error() }
+func (e RetryAfterError) Unwrap() error { return e.Err }
+
 // retryDelay picks the wait before the next attempt, honouring a provider's
 // Retry-After over our own curve (research §8.5).
 func retryDelay(p RetryPolicy, err error, attempt int, key string) time.Duration {
-	var rl RateLimitedError
-	if errors.As(err, &rl) && rl.After > 0 {
-		if p.Cap > 0 && rl.After > p.Cap {
+	clamp := func(d time.Duration) time.Duration {
+		if p.Cap > 0 && d > p.Cap {
 			return p.Cap
 		}
-		return rl.After
+		return d
+	}
+	var rl RateLimitedError
+	if errors.As(err, &rl) && rl.After > 0 {
+		return clamp(rl.After)
+	}
+	var ra RetryAfterError
+	if errors.As(err, &ra) && ra.After > 0 {
+		return clamp(ra.After)
 	}
 	return caseBackoff(p, attempt, key)
 }
