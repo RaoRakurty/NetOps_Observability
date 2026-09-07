@@ -124,13 +124,48 @@ def test_the_success_line_is_only_reached_when_the_data_is_gone() -> None:
 # ── DEFECT-12: anonymous volumes ────────────────────────────────────────────
 
 def test_purge_removes_the_anonymous_volumes() -> None:
+    """`down --volumes` is NOT enough, and believing it was would have been a
+    fix that fixed nothing. Measured on Compose v2.40.3 / Docker 29.1.3
+    (2026-09-07): `down --remove-orphans --volumes` on a project whose only
+    volumes are anonymous removed NONE of them — the flag covers NAMED volumes
+    declared in the compose file, and this stack declares none. So the purge
+    has to remove them by id itself."""
     body = _func("cmd_uninstall")
-    assert "--volumes" in body, (
-        "the stack declares no NAMED volumes, so every volume it owns is "
-        "anonymous and unreachable by name after the project is gone; a "
-        "purge that leaves them is not a purge")
-    purge_branch = body[body.index('if [ "$PURGE" = 1 ]'):]
+    assert "remove_project_volumes" in body
+    assert "docker volume rm" in _func("remove_project_volumes")
+    # The flag stays for a future named volume, but only on a purge.
+    purge_branch = body[body.index('if [ "$PURGE" = 1 ]; then\n    compose down'):]
     assert "compose down --remove-orphans --volumes" in purge_branch
+
+
+def test_the_volume_list_is_read_before_the_containers_are_destroyed() -> None:
+    """An anonymous volume carries no label naming its project. Once `down`
+    has removed the containers, nothing on the host can attribute it to
+    Correlix — and a blanket `docker volume prune` would take other projects'
+    volumes with it. So the list must be captured first."""
+    body = _func("cmd_uninstall")
+    assert body.index("project_anonymous_volumes") < body.index("compose down"), (
+        "the volume list is read after the containers are gone — by then it is "
+        "empty and the purge silently removes nothing")
+    code = re.sub(r"^\s*#.*$", "", _src(), flags=re.MULTILINE)  # comments explain it
+    assert "docker volume prune" not in code, (
+        "a purge must never prune the whole daemon's volumes; other projects "
+        "may share it")
+
+
+def test_only_anonymous_volume_ids_are_collected() -> None:
+    body = _func("project_anonymous_volumes")
+    assert "^[0-9a-f]{64}$" in body, (
+        "restrict the sweep to docker's anonymous-volume id shape; a NAMED "
+        "volume is <project>_<name> and belongs to `down --volumes`")
+    assert "compose ps -aq" in body, "include stopped containers, not just running ones"
+
+
+def test_a_volume_that_cannot_be_removed_is_named() -> None:
+    body = _func("remove_project_volumes")
+    assert "warn " in body and "docker volume rm$failed" in body, (
+        "a volume the purge could not remove must be named with the command "
+        "that removes it, never counted as removed (§16.1)")
 
 
 def test_a_plain_uninstall_keeps_the_volumes_with_the_rest_of_the_data() -> None:

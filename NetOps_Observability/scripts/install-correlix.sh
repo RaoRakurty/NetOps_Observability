@@ -907,14 +907,58 @@ container. Nothing was quietly skipped — remove it with:
   return 0
 }
 
+# The anonymous volumes this compose project's containers are using, one per
+# line. MUST be read BEFORE `compose down`: an anonymous volume carries no
+# label naming a project, so once the containers are gone it can no longer be
+# attributed to Correlix and nothing may safely remove it (a blanket
+# `docker volume prune` would take other projects' volumes on a shared daemon).
+#
+# Only 64-hex names are collected — that is docker's anonymous-volume id shape.
+# A NAMED volume would be "<project>_<name>", and `compose down --volumes`
+# already owns those.
+project_anonymous_volumes() {
+  local ids
+  ids="$(compose ps -aq 2>/dev/null)" || return 0
+  [ -n "$ids" ] || return 0
+  # shellcheck disable=SC2086  # deliberate word-split of the container id list
+  docker inspect $ids \
+    --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}{{"\n"}}{{end}}{{end}}' \
+    2>/dev/null | grep -E '^[0-9a-f]{64}$' | sort -u
+}
+
+# Remove the volumes captured above, and say what happened either way.
+#
+# `docker compose down --volumes` does NOT do this. Measured on Compose v2.40.3
+# / Docker 29.1.3 (2026-09-07): `down --remove-orphans --volumes` on a project
+# whose only volumes are anonymous removed NONE of them — the flag covers named
+# volumes declared in the compose file, and this stack declares none. So the
+# ten volumes the acceptance found (DEFECT-12) survive `-v` too, and the flag
+# alone would have been a fix that fixed nothing.
+remove_project_volumes() {
+  local vols="$1" v failed="" n=0
+  [ -n "$vols" ] || return 0
+  for v in $vols; do
+    if docker volume rm "$v" >/dev/null 2>&1; then n=$((n + 1))
+    else failed="$failed $v"; fi
+  done
+  [ "$n" -gt 0 ] && ok "$n anonymous volume(s) removed"
+  if [ -n "$failed" ]; then
+    warn "these volumes could not be removed (something outside this install still uses them):$failed"
+    warn "remove them with: docker volume rm$failed"
+  fi
+  return 0
+}
+
 cmd_uninstall() {
   [ -f "$ENV_FILE" ] || die "Nothing to uninstall — no Correlix install found here."
+  # Read the volume list while the containers still exist (see above). Only a
+  # purge removes them; a plain uninstall keeps them with the rest of the data.
+  local anon_vols=""
+  [ "$PURGE" = 1 ] && anon_vols="$(project_anonymous_volumes)"
   say "Stopping and removing Correlix containers..."
-  # --volumes on a purge ONLY. The stack declares no named volumes, so every
-  # volume the project owns is anonymous — created by an image VOLUME
-  # directive, unreachable by name, and orphaned forever by a plain `down`
-  # (fresh-install acceptance, DEFECT-12: ten of them survived a --purge). On a
-  # non-purge uninstall they are kept deliberately, with the rest of the data.
+  # --volumes is purge-only and covers NAMED volumes (none today, but a future
+  # one must not survive a purge); the anonymous ones are removed explicitly
+  # below because this flag does not touch them.
   if [ "$PURGE" = 1 ]; then
     compose down --remove-orphans --volumes
   else
@@ -926,6 +970,7 @@ cmd_uninstall() {
     # Data FIRST, images second: the removal needs a local image to run the
     # privileged `rm` in, and the loop below deletes exactly those.
     purge_data_dir
+    remove_project_volumes "$anon_vols"
     if [ "$MODE" = "bundle" ] && [ -f "$BUNDLE_DIR/MANIFEST" ]; then
       # MANIFEST pins images as tag@sha256:digest, but docker-load restored
       # them by TAG only (digests are pull-time metadata) — so `docker rmi
