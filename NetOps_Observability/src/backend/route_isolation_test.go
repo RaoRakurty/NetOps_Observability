@@ -218,6 +218,13 @@ var routeIsolationLedger = map[string]string{
 	// computation over the caller's own text that reads and stores nothing.
 	// Both are still authenticated — a command set is product knowledge — and
 	// neither can return a row belonging to anyone.
+	// The case-connector list. The catalogue itself is platform reference data
+	// (ids, capabilities, ceilings, vendor research); the ONLY per-tenant field
+	// is `configured`, resolved through TACConnectorStore.Get(tenant,false,tenant)
+	// — a store call that refuses another tenant's key outright. The tenant comes
+	// from the token and the route accepts no selector, so there is nothing to
+	// widen. Classified scoped because a per-tenant field crosses it at all.
+	"/api/tac/connectors":         "scoped",
 	"/api/tac/templates":          "scoped",
 	"/api/tac/templates/":         "scoped",
 	"/api/tac/templates/defaults": "globalRef",

@@ -31,11 +31,19 @@
 // reconcile acts on the caller's own tenant only. The page never sends a tenant.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, TicketAuditRow, TicketOutboxItem } from "../../services/api";
+import { api, TacConnectorInfo, TicketAuditRow, TicketOutboxItem } from "../../services/api";
 import { fmtDateTime } from "../../lib/time";
 import { httpFailure, operatorError } from "../../lib/errors";
 import { Stat, StatStrip } from "../../components/ui";
 import AskIris from "../../components/AskIris";
+import {
+  CONNECTOR_CHIP,
+  connectorCapabilityLine,
+  connectorState,
+  connectorStatusNote,
+  connectorTopic,
+  humanBytes,
+} from "../troubleshoot/tacModel";
 
 const PAGE = 50;
 
@@ -96,6 +104,13 @@ export default function TicketDelivery() {
   const [appliedFilter, setAppliedFilter] = useState("");
   const [filterErr, setFilterErr] = useState<string | null>(null);
 
+  // The case connectors this tenant can reach. This page is where credentials
+  // are brought, so it is where each vendor path's standing research belongs
+  // (owner, 2026-09-06) — the escalation step no longer prints twelve
+  // paragraphs, and the paragraph is behind its own disclosure here.
+  const [connectors, setConnectors] = useState<TacConnectorInfo[] | null>(null);
+  const [connErr, setConnErr] = useState<string | null>(null);
+
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string | null>(null);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
@@ -125,6 +140,18 @@ export default function TicketDelivery() {
     }
   }, []);
 
+  const loadConnectors = useCallback(async () => {
+    try {
+      const r = await api.tacConnectors();
+      setConnectors(r.connectors ?? []);
+      setConnErr(null);
+    } catch (e) {
+      setConnectors(null);
+      setConnErr(operatorError(e, "The case connectors could not be read."));
+    }
+  }, []);
+
+  useEffect(() => { void loadConnectors(); }, [loadConnectors]);
   useEffect(() => { void loadOutbox(); }, [loadOutbox]);
   useEffect(() => { void loadAudit(appliedFilter); }, [loadAudit, appliedFilter]);
 
@@ -363,6 +390,53 @@ export default function TicketDelivery() {
             : `${auditTotal.toLocaleString()} recorded action${auditTotal === 1 ? "" : "s"} — this is the whole trail.`}
         </p>
       )}
+
+      <h3 style={{ marginBottom: "var(--sp-1)" }}>Case connectors</h3>
+      <p className="adm-line">
+        Vendor and ITSM paths a TAC escalation can use.
+        <AskIris topic="tac.case-connector" label="case connectors" />
+      </p>
+      {connErr && <p role="alert" style={{ color: "var(--bad)", fontSize: "var(--fs-meta)" }}>{connErr}</p>}
+      {connectors === null && !connErr ? (
+        <div className="empty" role="status">Reading the case connectors…</div>
+      ) : connectors !== null && connectors.length === 0 ? (
+        <div className="empty">No case connector on this deployment.</div>
+      ) : connectors !== null ? (
+        <ul className="tdc-list" data-testid="ticket-connectors">
+          {connectors.map((c) => {
+            const state = connectorState(c);
+            const note = connectorStatusNote(c);
+            return (
+              <li key={c.id} className="tdc-row" data-testid={`ticket-conn-${c.id}`}>
+                <div className="tdc-head">
+                  <b>{c.display}</b>
+                  <span className={`chip ${state === "unavailable" ? "chip-crit" : state === "ready" ? "chip-ok" : ""}`}>
+                    {CONNECTOR_CHIP[state]}
+                  </span>
+                  <span className="adm-line">{connectorCapabilityLine(c)}</span>
+                  {c.max_attachment_bytes > 0 && (
+                    <span className="adm-line">attaches up to {humanBytes(c.max_attachment_bytes)}</span>
+                  )}
+                  <AskIris topic={connectorTopic(c.id)} label={c.display} />
+                </div>
+                {note && (
+                  <p className="adm-line" style={state === "unavailable" ? { color: "var(--bad)" } : undefined} role={state === "unavailable" ? "alert" : undefined}>
+                    {note}
+                  </p>
+                )}
+                {/* The vendor research, behind its own disclosure — never inline.
+                    It is remote-authored text and renders as escaped React text. */}
+                {c.note && (
+                  <details className="tdc-fold">
+                    <summary>What this vendor path needs</summary>
+                    <p className="tdc-fold-text">{c.note}</p>
+                  </details>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
     </div>
   );
 }

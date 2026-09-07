@@ -119,6 +119,11 @@ func TestTACRoutesLiveInsideTheirMarkers(t *testing.T) {
 		// that tenant. Neither belongs under one incident id.
 		"/api/tac/learning":  false,
 		"/api/tac/learning/": false,
+		// The case-connector list. Per-TENANT for the `configured` flag alone —
+		// everything else on it is platform reference data — and deliberately
+		// NOT under an incident id: Administration → Ticket delivery asks the
+		// question without one.
+		"/api/tac/connectors": false,
 	}
 	for _, m := range tplRE.FindAllStringSubmatch(in, -1) {
 		if _, ok := wantTpl[m[1]]; !ok {

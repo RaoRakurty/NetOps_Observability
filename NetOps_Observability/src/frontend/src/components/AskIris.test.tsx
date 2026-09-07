@@ -18,6 +18,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import AskIris, { IRIS_ASK_EVENT, irisAskQuestion, type IrisAskDetail } from "./AskIris";
+import { CONNECTOR_IDS, connectorTopic } from "../pages/troubleshoot/tacModel";
 import { ShellContext, type ShellState, TIME_RANGES } from "../context/shell";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -155,5 +156,21 @@ describe("AskIris topics are authored", () => {
 
   it("finds topics to check (a broken walk must not pass silently)", () => {
     expect(referencedTopics(SRC).size).toBeGreaterThan(30);
+  });
+
+  // ── topics the walk CANNOT see ───────────────────────────────────────────
+  //
+  // referencedTopics reads literals. The TAC escalation step keys one (i) per
+  // connector — `topic={connectorTopic(info.id)}` — so the walk finds nothing
+  // and would pass while twelve (i)s promised an answer that did not exist.
+  // The ids are therefore an exported LIST, and it is checked here explicitly.
+  it("every TAC connector's explanation is authored", () => {
+    const authored = new Set(readdirSync(EXPLAIN).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)));
+    const missing = CONNECTOR_IDS.map(connectorTopic).filter((t) => !authored.has(t));
+    expect(
+      missing,
+      "the escalation step puts an (i) on every connector row; write " +
+      "src/backend/ai/skills/explain/<topic>.md for:\n" + missing.join("\n"),
+    ).toEqual([]);
   });
 });

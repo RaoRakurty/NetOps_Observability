@@ -127,10 +127,28 @@ type ConnectorInfo struct {
 	// An unconfigured connector is SHOWN, greyed, with Note explaining what is
 	// missing — the operator learns the option exists.
 	Configured bool `json:"configured"`
-	// Note is the honest one-line explanation shown beside a connector that is
-	// unconfigured or capability-limited ("Fortinet has no case-creation API —
-	// portal text only").
+	// Note is the connector's STANDING description — the vendor research that
+	// does not change from one read to the next (attachment ceilings, API
+	// caveats, the dated negative for a vendor with no API). It is reference
+	// material: the escalation step keeps it OFF screen and reaches it through
+	// Iris and through Administration → Ticket delivery, because twelve
+	// paragraphs on one step is a menu, not a study (owner, 2026-09-06).
 	Note string `json:"note,omitempty"`
+	// StatusNote is the short reason for the CURRENT state, and it is the only
+	// connector prose the step itself renders. "Not configured" carries the
+	// invitation to bring credentials; a validation refusal carries the
+	// connector's own sentence; an unreadable configuration carries the cause.
+	StatusNote string `json:"status_note,omitempty"`
+	// Unavailable reports that this tenant's stored configuration could not be
+	// READ — a storage failure, not a state.
+	//
+	// The distinction is the whole point (owner, 2026-09-06: every connector
+	// ended with "connector configuration could not be read for this tenant" on
+	// a deployment where nothing was wrong). "No credentials yet" is a PRODUCT
+	// STATE with a next step; "the store did not answer" is an ERROR that must
+	// name its cause and be logged (§10). Conflating them taught operators to
+	// ignore a sentence that one day means something.
+	Unavailable bool `json:"unavailable,omitempty"`
 }
 
 // Can reports whether the connector claims a capability.

@@ -20,32 +20,43 @@ import { describe, it, expect } from "vitest";
 import type { TacPlan, TacState, TacStep, TacConnectorInfo } from "../../services/api";
 import {
   COLLECT_FAILED,
-  CONNECTOR_CANNOT_CREATE,
+  CONNECTOR_CHIP,
+  CONNECTOR_IDS,
   CONNECTOR_NOT_CONFIGURED,
+  CONNECTOR_UNREADABLE,
   DOC_CLAIMED_LABEL,
-  MAX_PASTE_OUTPUTS,
   NOTHING_SCORED_NOTE,
   PLAN_LEGEND,
   SECTION_ORDER,
   STATUS_CHIP,
   UNBOUND_STEP_REASON,
   VERIFIED_LABEL,
-  buildPasteOutputs,
+  boundSteps,
   buildPlanRequest,
+  ceilingSuffix,
   collectErrorMessage,
   bundleFileName,
   cappedNote,
   classificationNote,
+  connectorApplies,
   connectorCapabilityLine,
-  connectorNote,
+  connectorState,
+  connectorStatusNote,
+  connectorTopic,
+  dialectVendor,
   evidenceLine,
   hasCapability,
   humanBytes,
   humanSeconds,
   isCollecting,
   isMissingField,
-  pasteIntents,
+  missingOutputs,
+  missingOutputsLine,
+  newestBundleBytes,
+  pasteOffered,
+  pasteOptionLabel,
   phaseLabel,
+  splitConnectors,
   planHeadline,
   planVersionTitle,
   reasonLine,
@@ -226,50 +237,86 @@ describe("phaseLabel", () => {
   });
 });
 
-describe("pasteIntents", () => {
-  const plan = {
+// ── the paste path (owner, 2026-09-06) ──────────────────────────────────────
+//
+// The regression this pins: a Nokia SR Linux plan has 23 bound steps and 72
+// unbound intents, and every one of the 95 used to become a labelled textarea.
+
+describe("missingOutputs", () => {
+  const nokiaPlan = {
     steps: [
-      step({ intent: "system.version", section: "baseline" }),
-      step({ intent: "ospf.neighbors", section: "deep-dive" }),
-      step({ intent: "site", section: "topology" }),
+      step({ intent: "system.version", section: "baseline", command: "show version" }),
+      step({ intent: "ospf.neighbors", section: "deep-dive", command: "show network-instance protocols ospf neighbor" }),
+      step({ intent: "site", section: "topology", command: "show system information" }),
     ],
-    unbound: [step({ intent: "ospf.database", bound: false, command: undefined })],
+    unbound: Array.from({ length: 72 }, (_, i) =>
+      step({ intent: `platform.unbound${i}`, bound: false, command: undefined })),
   } as unknown as TacPlan;
 
-  it("invites a paste for the unbound intents and everything not collected", () => {
-    expect(pasteIntents(plan, null).map((s) => s.intent))
-      .toEqual(["ospf.database", "system.version", "ospf.neighbors"]);
+  it("offers ONLY the plan's bound steps — never an unbound intent", () => {
+    const targets = missingOutputs(nokiaPlan, null);
+    expect(targets.map((t) => t.intent)).toEqual(["system.version", "ospf.neighbors"]);
+    expect(targets.some((t) => t.intent.startsWith("platform.unbound"))).toBe(false);
+    expect(boundSteps(nokiaPlan)).toHaveLength(2);
   });
 
-  it("never invites a paste for something already collected", () => {
+  it("drops a step the collection already brought back", () => {
     const state = {
-      capture: { commands: [{ intent: "system.version", output: "IOS-XE 17.9", error: "" }] },
+      capture: { commands: [{ intent: "system.version", output: "SR Linux 24.3", error: "" }] },
     } as unknown as TacState;
-    expect(pasteIntents(plan, state).map((s) => s.intent)).toEqual(["ospf.database", "ospf.neighbors"]);
+    expect(missingOutputs(nokiaPlan, state).map((t) => t.intent)).toEqual(["ospf.neighbors"]);
   });
 
-  it("still invites a paste for a command the device refused", () => {
+  it("keeps a step the device refused", () => {
     const state = {
       capture: { commands: [{ intent: "ospf.neighbors", output: "", error: "invalid input" }] },
     } as unknown as TacState;
-    expect(pasteIntents(plan, state).map((s) => s.intent)).toContain("ospf.neighbors");
+    expect(missingOutputs(nokiaPlan, state).map((t) => t.intent)).toContain("ospf.neighbors");
   });
 
   it("has nothing to offer without a plan", () => {
-    expect(pasteIntents(undefined, null)).toEqual([]);
+    expect(missingOutputs(undefined, null)).toEqual([]);
   });
 });
 
-describe("buildPasteOutputs", () => {
-  it("sends only what was typed, with its command", () => {
-    const steps = [step({ intent: "a", command: "show a" }), step({ intent: "b", command: "show b" })];
-    expect(buildPasteOutputs(steps, { a: " out-a ", b: "   " }))
-      .toEqual([{ intent: "a", command: "show a", output: "out-a" }]);
+describe("pasteOffered", () => {
+  const plan = {
+    steps: [step({ intent: "system.version", section: "baseline", command: "show version" })],
+    unbound: [],
+  } as unknown as TacPlan;
+
+  it("is offered when this deployment cannot collect at all", () => {
+    expect(pasteOffered(false, plan, null)).toBe(true);
   });
-  it("refuses more pasted outputs than the server accepts in one request", () => {
-    const steps = Array.from({ length: MAX_PASTE_OUTPUTS + 5 }, (_, i) => step({ intent: `i${i}` }));
-    const typed = Object.fromEntries(steps.map((s) => [s.intent, "x"]));
-    expect(buildPasteOutputs(steps, typed)).toHaveLength(MAX_PASTE_OUTPUTS);
+
+  it("is NOT a default wall when collection works and nothing has run", () => {
+    expect(pasteOffered(true, plan, null)).toBe(false);
+  });
+
+  it("is offered when a step failed", () => {
+    const state = {
+      capture: { commands: [{ intent: "system.version", output: "", error: "timed out" }] },
+    } as unknown as TacState;
+    expect(pasteOffered(true, plan, state)).toBe(true);
+  });
+
+  it("disappears once every bound step has output", () => {
+    const state = {
+      capture: { commands: [{ intent: "system.version", output: "IOS-XE", error: "" }] },
+    } as unknown as TacState;
+    expect(pasteOffered(false, plan, state)).toBe(false);
+    expect(pasteOffered(true, plan, state)).toBe(false);
+  });
+});
+
+describe("the paste target's words", () => {
+  it("names what it collects and the command — never the intent id", () => {
+    const label = pasteOptionLabel(step({ intent: "ospf.neighbors", title: "OSPF neighbours", command: "show ip ospf neighbor" }));
+    expect(label).toBe("OSPF neighbours · show ip ospf neighbor");
+    expect(label).not.toContain("ospf.neighbors");
+  });
+  it("counts what is left rather than drawing a box for each", () => {
+    expect(missingOutputsLine(3, 23)).toBe("3 of 23 outputs still missing");
   });
 });
 
@@ -288,19 +335,90 @@ describe("bundleFileName", () => {
 // ── connectors ───────────────────────────────────────────────────────────────
 
 describe("connector honesty", () => {
-  it("says plainly when a connector cannot open the case itself", () => {
+  it("says what a connector does in ONE plain sentence", () => {
+    expect(connectorCapabilityLine(connector({ capabilities: ["create", "attach", "poll_status"] })))
+      .toBe("Opens the case and attaches the bundle");
+    expect(connectorCapabilityLine(connector({ capabilities: ["attach"] })))
+      .toBe("Attaches to an existing case");
+    expect(connectorCapabilityLine(connector({ capabilities: ["create"] })))
+      .toBe("Opens the case");
     expect(connectorCapabilityLine(connector({ capabilities: ["link"] })))
-      .toContain(CONNECTOR_CANNOT_CREATE);
+      .toBe("Prepares the text and bundle for you to paste");
   });
-  it("lists what a full connector actually does", () => {
-    const line = connectorCapabilityLine(connector({ capabilities: ["create", "attach", "poll_status"] }));
-    expect(line).toBe("opens the case · attaches the bundle · reads the case status back");
-    expect(line).not.toContain(CONNECTOR_CANNOT_CREATE);
+
+  // The 2026-09-06 regression, as a unit: a tenant that has stored nothing is
+  // "Not configured" (a state), never "Unavailable" (an unreadable store).
+  it("separates a state from an error", () => {
+    expect(connectorState(connector({ configured: true, capabilities: ["create", "attach"] }))).toBe("ready");
+    expect(connectorState(connector({ configured: true, capabilities: ["attach"] }))).toBe("attach-only");
+    expect(connectorState(connector({ configured: false }))).toBe("not-configured");
+    expect(connectorState(connector({ configured: false, unavailable: true }))).toBe("unavailable");
+    expect(CONNECTOR_CHIP.ready).toBe("Ready");
+    expect(CONNECTOR_CHIP["not-configured"]).toBe("Not configured");
+    expect(CONNECTOR_CHIP["attach-only"]).toBe("Attach only");
+    expect(CONNECTOR_CHIP.unavailable).toBe("Unavailable");
   });
-  it("prefers the connector's own note and falls back to the unconfigured state", () => {
-    expect(connectorNote(connector({ note: "Bring a ServiceNow token." }))).toBe("Bring a ServiceNow token.");
-    expect(connectorNote(connector({ configured: false }))).toBe(CONNECTOR_NOT_CONFIGURED);
-    expect(connectorNote(connector({ configured: true }))).toBe("");
+
+  it("shows the server's own reason, and never the research paragraph", () => {
+    const research = "NSP publishes exactly five APIs … (checked 2026-09-05).";
+    expect(connectorStatusNote(connector({ configured: false, note: research, status_note: "No credentials for this tenant yet." })))
+      .toBe("No credentials for this tenant yet.");
+    expect(connectorStatusNote(connector({ configured: false, note: research }))).toBe(CONNECTOR_NOT_CONFIGURED);
+    expect(connectorStatusNote(connector({ configured: false, unavailable: true }))).toBe(CONNECTOR_UNREADABLE);
+    expect(connectorStatusNote(connector({ configured: true }))).toBe("");
+  });
+
+  // The owner's complaint, as a unit test: a Nokia escalation offers the Nokia
+  // path, the tenant's CONFIGURED ITSM, and the generic one — not all twelve.
+  it("shows only the connectors a device can use", () => {
+    const all = [
+      connector({ id: "portal-nokia", vendor: "nokia", configured: true, capabilities: [] }),
+      connector({ id: "servicenow", vendor: "servicenow", configured: true, capabilities: ["create", "attach"] }),
+      connector({ id: "jira", vendor: "jira", configured: false, capabilities: ["create", "attach"] }),
+      connector({ id: "portal-fortinet", vendor: "fortinet", configured: true, capabilities: [] }),
+      connector({ id: "email-arista", vendor: "arista", configured: false, capabilities: ["create", "attach"] }),
+      connector({ id: "cisco-cxd", vendor: "cisco", configured: false, capabilities: ["attach"] }),
+      connector({ id: "portal-text", vendor: "", configured: true, capabilities: ["link"] }),
+    ];
+    const { rows, others } = splitConnectors(all, dialectVendor("nokia-srlinux"));
+    expect(rows.map((r) => r.id)).toEqual(["portal-nokia", "servicenow", "portal-text"]);
+    expect(others.map((r) => r.id)).toEqual(["jira", "portal-fortinet", "email-arista", "cisco-cxd"]);
+  });
+
+  it("reads the vendor off the dialect slug", () => {
+    expect(dialectVendor("nokia-srlinux")).toBe("nokia");
+    expect(dialectVendor("cisco-iosxe")).toBe("cisco");
+    expect(dialectVendor("")).toBe("");
+  });
+
+  it("keeps an unreadable ITSM connector in view — an error is not hidden", () => {
+    const { rows } = splitConnectors(
+      [connector({ id: "jira", vendor: "jira", configured: false, unavailable: true, capabilities: ["create"] })],
+      "nokia",
+    );
+    expect(rows.map((r) => r.id)).toEqual(["jira"]);
+    expect(connectorApplies(connector({ id: "portal-fortinet", vendor: "fortinet" }), "nokia")).toBe(false);
+  });
+
+  it("names the ceiling only when the bundle would not fit", () => {
+    const email = connector({ id: "email-arista", max_attachment_bytes: 14_000_000 });
+    expect(ceilingSuffix(email, 4096)).toBe("");
+    expect(ceilingSuffix(email, 20_000_000)).toBe("over the 13 MB limit");
+    expect(ceilingSuffix(connector({ max_attachment_bytes: 0 }), 20_000_000)).toBe("");
+  });
+
+  it("takes the newest bundle as the size to compare", () => {
+    expect(newestBundleBytes([
+      { bytes: 100, created_at: "2026-09-05T10:00:00Z" },
+      { bytes: 900, created_at: "2026-09-05T11:00:00Z" },
+    ])).toBe(900);
+    expect(newestBundleBytes([])).toBe(0);
+  });
+
+  it("keys every connector's explanation on its id", () => {
+    expect(connectorTopic("portal-nokia")).toBe("tac.connector.portal-nokia");
+    expect(CONNECTOR_IDS).toContain("portal-text");
+    expect(CONNECTOR_IDS).toHaveLength(12);
   });
   it("reads capabilities as a closed set", () => {
     expect(hasCapability(connector({ capabilities: ["create"] }), "create")).toBe(true);

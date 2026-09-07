@@ -4,6 +4,7 @@
 // Route templates covered (the coverage guard matches this literal text):
 //   "/api/tac/templates"           "/api/tac/templates/"
 //   "/api/tac/templates/defaults"  "/api/tac/templates/validate"
+//   "/api/tac/connectors"
 
 package backend
 
@@ -40,6 +41,7 @@ import (
 	"netops/backend/internal/incident"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/tac"
+	"netops/backend/internal/ticketing"
 	"netops/backend/models"
 )
 
@@ -353,5 +355,110 @@ func TestTACTemplateStoreRLSIsolationPG(t *testing.T) {
 	// globex's row survived every one of those.
 	if got, gerr := st.Get(ctx, "globex", globex.ID); gerr != nil || got.Name != "globex baseline" {
 		t.Fatalf("acme's cross-tenant writes reached globex's row: %+v %v", got, gerr)
+	}
+}
+
+// ── /api/tac/connectors (§3a rule 5) ────────────────────────────────────────
+//
+// The catalogue is platform reference data, so a leak here cannot be a row of
+// someone else's; what CAN leak is the per-tenant `configured` flag and its
+// status note, which together say whether another customer has brought
+// credentials for a vendor. This proves the read is keyed on the TOKEN's tenant
+// and that an X-Acting-Tenant header cannot move it.
+func TestTACConnectorsAreScopedToTheCallersOwnTenant(t *testing.T) {
+	srv, s := newTACTestServer(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	fix := map[string]*orgFixture{}
+	for _, name := range []string{"A", "B"} {
+		st, b := do(t, srv, "POST", "/api/orgs", admin, map[string]any{"name": "CONN Org " + name})
+		if st != 201 {
+			t.Fatalf("create org %s: %d %s", name, st, b)
+		}
+		orgID := idOf(t, b)
+		st, b = do(t, srv, "POST", "/api/tenants", admin, map[string]any{"name": "CONN Tenant " + name, "org_id": orgID})
+		if st != 201 {
+			t.Fatalf("create tenant %s: %d %s", name, st, b)
+		}
+		tenantID := idOf(t, b)
+		user := "conn-user-" + name
+		st, b = do(t, srv, "POST", "/api/users", admin, map[string]any{
+			"username": user, "password": "Passw0rd!2345", "role": "operator", "tenant_id": tenantID,
+		})
+		if st != 201 {
+			t.Fatalf("create user %s: %d %s", name, st, b)
+		}
+		fix[name] = &orgFixture{orgID: orgID, tenantID: tenantID, user: user,
+			token: login(t, srv, user, "Passw0rd!2345").Token}
+	}
+	a, b := fix["A"], fix["B"]
+
+	// Only A opts a connector in. The stamp is the store's own scoping call —
+	// the same one the resolver makes — so this is A's row and nobody else's.
+	if err := s.tacConnectors.Set(a.tenantID, false, a.tenantID, ticketing.TACConnectorConfig{
+		Jira: ticketing.JiraAttachConfig{Enabled: true, Deployment: "cloud"},
+	}); err != nil {
+		t.Fatalf("store A's connector config: %v", err)
+	}
+
+	read := func(token, acting string) []map[string]any {
+		t.Helper()
+		req, err := http.NewRequest("GET", srv.URL+"/api/tac/connectors", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		if acting != "" {
+			req.Header.Set("X-Acting-Tenant", acting)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("GET /api/tac/connectors: %d", resp.StatusCode)
+		}
+		var out struct {
+			Connectors []map[string]any `json:"connectors"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(out.Connectors) == 0 {
+			t.Fatal("no connectors at all")
+		}
+		return out.Connectors
+	}
+	statusOf := func(rows []map[string]any, id string) string {
+		for _, r := range rows {
+			if r["id"] == id {
+				note, _ := r["status_note"].(string)
+				return note
+			}
+		}
+		t.Fatalf("connector %q missing from the list", id)
+		return ""
+	}
+
+	// A's own row is read: Jira is opted in but has no ITSM connection, so the
+	// note is the connector's own reason and not the not-configured state.
+	if got := statusOf(read(a.token, ""), "jira"); !strings.Contains(got, "no Jira connection") {
+		t.Fatalf("A must read its OWN connector row, got %q", got)
+	}
+	// B stored nothing. It must see the not-configured STATE — never A's row,
+	// and never an unreadable-store error.
+	bNote := statusOf(read(b.token, ""), "jira")
+	if bNote != ticketing.NotConfiguredStatusNote {
+		t.Fatalf("CROSS-TENANT LEAK or false error: B's jira status = %q", bNote)
+	}
+	for _, row := range read(b.token, "") {
+		if unavailable, _ := row["unavailable"].(bool); unavailable {
+			t.Fatalf("a tenant with no stored row must not read as unavailable: %v", row["id"])
+		}
+	}
+	// An X-Acting-Tenant override into another org is ignored: B still reads B.
+	if got := statusOf(read(b.token, a.tenantID), "jira"); got != ticketing.NotConfiguredStatusNote {
+		t.Fatalf("as_tenant into another org moved the read: %q", got)
 	}
 }

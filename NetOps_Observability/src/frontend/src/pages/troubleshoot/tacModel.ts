@@ -62,9 +62,14 @@ export const DEVICES_FAILED = "Your device inventory could not be read — type 
 export const NOTHING_SCORED_NOTE =
   "No evidence matched a known issue class, so this escalates as the general class. Override it below if you know better.";
 
-/** `has_plan:false` — the dialect carries no authored command set. */
+/** `has_plan:false` — the dialect carries no authored command set.
+ *
+ *  It used to promise the paste step. It cannot: the paste step names a COMMAND
+ *  for each output it accepts, and a platform with no authored plan binds no
+ *  command to name (owner, 2026-09-06). Add the commands you want in the review
+ *  step instead — that path is real, and the case text and bundle still work. */
 export const NO_AUTHORED_PLAN_NOTE =
-  "There is no authored command set for this platform. Every intent is listed unbound below; collect the outputs in your own session and paste them in the collect step.";
+  "There is no authored command set for this platform. Add the commands yourself in the review step below.";
 
 /** Shown beside the device picker before a plan exists. */
 export const PLAN_NEEDS_DEVICE = "Choose the device the outputs come from, then build the plan.";
@@ -75,23 +80,28 @@ export const UNBOUND_STEP_REASON = "This platform binds no command for this inte
 export const VERIFIED_LABEL = "verified on this platform";
 export const DOC_CLAIMED_LABEL = "documented, not verified";
 
-/** The paste path, offered wherever a command cannot be run for us. */
-export const PASTE_INVITE =
-  "Paste the output from your own session. Anything left empty is simply not collected.";
+/** The paste path. It is offered only where a command could NOT be run for us —
+ *  never as a default wall of boxes (owner, 2026-09-06: a Nokia plan rendered a
+ *  textarea for all 72 unbound intents, labelled with raw intent ids). */
+export const PASTE_INVITE = "Paste an output Correlix could not collect.";
+
+/** Nothing is missing: every planned command came back with output. */
+export const PASTE_NOTHING_MISSING = "Every planned output has been collected.";
 
 /** Nothing has been collected, so there is nothing to bundle or attach yet. */
 export const NO_CAPTURE_YET =
   "Nothing has been collected yet — start the collection or paste the outputs above.";
 
-export const NO_BUNDLE_YET = "No bundle has been built for this escalation yet.";
+export const NO_BUNDLE_YET = "No bundle yet.";
 
-/** A connector the tenant has brought no credentials for. */
+/** No connector at all on this deployment. The download path still works, and
+ *  what a case connector IS lives behind the (i). */
+export const NO_CASE_CONNECTOR = "No connector configured — download the bundle instead.";
+
+/** A connector the tenant has brought no credentials for. The server sends its
+ *  own `status_note`; this is the fallback for a build that does not yet. */
 export const CONNECTOR_NOT_CONFIGURED =
-  "Not configured for this tenant — bring your own credentials to use it.";
-
-/** A connector that can prepare the text but cannot open the case itself. */
-export const CONNECTOR_CANNOT_CREATE =
-  "This connector cannot open the case itself; it prepares the case text and the bundle for the vendor's portal.";
+  "No credentials for this tenant yet — bring your own to use it.";
 
 /** Submitting is always a person's press (design §4). */
 export const CASE_HUMAN_APPROVED =
@@ -141,8 +151,8 @@ export const COMMAND_POLICY_NO_EXCLUSIONS =
 
 // ── bounds (the server's own, mirrored so the UI refuses before the wire) ────
 
-/** internal/tac: at most 40 pasted outputs, 256 KiB each, per request. */
-export const MAX_PASTE_OUTPUTS = 40;
+/** internal/tac: at most 40 pasted outputs, 256 KiB each, per request. The UI
+ *  files ONE at a time, so only the per-output cap binds it. */
 export const MAX_PASTE_CHARS = 256 * 1024;
 
 /**
@@ -284,7 +294,7 @@ export function planVersionTitle(plan: TacPlan | undefined): string {
 /** The short sentence the Bundle step states once. The server's own full
  *  promise stays on the page, one disclosure away — it is never replaced. */
 export const REDACTION_SHORT =
-  "Passwords, keys and community strings are masked in the bundle. Hostnames, interfaces and addresses are kept.";
+  "Passwords, keys and community strings are masked. Names and addresses are kept.";
 
 /** The reason an unbound step carries, never blank. */
 export function unboundReason(step: TacStep): string {
@@ -328,52 +338,87 @@ export function phaseLabel(phase: TacProgress["phase"]): string {
   return "not collected";
 }
 
-/**
- * The intents the operator may paste for: every unbound step of the plan, plus
- * every planned command the capture did not bring back. It is the honest
- * inverse of what the runner managed — it never invites a paste for something
- * already collected.
- */
-export function pasteIntents(plan: TacPlan | undefined, state: TacState | null | undefined): TacStep[] {
-  if (!plan) return [];
-  const captured = new Set(
+// ── the paste path (owner, 2026-09-06) ──────────────────────────────────────
+//
+// It used to render one textarea per intent in the whole class — on a Nokia SR
+// Linux escalation that is 23 bound steps plus 72 UNBOUND ones, each labelled
+// with a raw intent id (platform.bios, install.status, redundancy.state…) and
+// no command. A wall of boxes for work Correlix already said it cannot do.
+//
+// Three rules now hold, and each is a function here so the panel decides
+// nothing:
+//   1. the paste path appears only when the gateway could not collect — the
+//      deployment has no runner, or a step failed or timed out;
+//   2. only the plan's BOUND steps that still lack output are offered, named by
+//      what they collect and the command (ids stay in the tooltip);
+//   3. an unbound intent NEVER appears — it is already counted by the plan's
+//      "n checks are not available on <platform>" line.
+
+/** The plan's runnable steps: a real command, not topology context. */
+export function boundSteps(plan: TacPlan | undefined): TacStep[] {
+  return (plan?.steps ?? []).filter((s) => s.section !== "topology" && (s.command ?? "").trim() !== "");
+}
+
+/** The intents the capture actually brought back with content. */
+function collectedIntents(state: TacState | null | undefined): Set<string> {
+  return new Set(
     (state?.capture?.commands ?? [])
       .filter((c) => !c.error && (c.output ?? "") !== "")
       .map((c) => c.intent),
   );
-  const wanted: TacStep[] = [
-    ...(plan.unbound ?? []),
-    ...(plan.steps ?? []).filter((s) => s.section !== "topology"),
-  ];
+}
+
+/** The bound steps that still have no output — the ONLY paste targets. */
+export function missingOutputs(plan: TacPlan | undefined, state: TacState | null | undefined): TacStep[] {
+  const have = collectedIntents(state);
   const seen = new Set<string>();
-  return wanted.filter((s) => {
-    if (captured.has(s.intent) || seen.has(s.intent)) return false;
+  return boundSteps(plan).filter((s) => {
+    if (have.has(s.intent) || seen.has(s.intent)) return false;
     seen.add(s.intent);
     return true;
   });
 }
 
-/** The collect body for pasted output: non-empty entries only, server-bounded. */
-export function buildPasteOutputs(
-  steps: TacStep[],
-  typed: Record<string, string>,
-): { intent: string; command: string; output: string }[] {
-  const out: { intent: string; command: string; output: string }[] = [];
-  for (const s of steps) {
-    const text = (typed[s.intent] ?? "").trim();
-    if (!text) continue;
-    if (out.length >= MAX_PASTE_OUTPUTS) break;
-    out.push({ intent: s.intent, command: s.command ?? "", output: text.slice(0, MAX_PASTE_CHARS) });
-  }
-  return out;
+/** True when a step of the last collection failed or timed out — a reason to
+ *  offer the paste path even on a deployment that CAN collect. */
+export function collectionFellShort(state: TacState | null | undefined): boolean {
+  if (state?.job?.status === "failed") return true;
+  return (state?.capture?.commands ?? []).some((c) => Boolean(c.error) || (c.output ?? "") === "");
+}
+
+/**
+ * Whether the paste path is offered at all. It is not a default: either this
+ * deployment cannot collect, or a collection ran and did not bring everything
+ * back. And in both cases something must actually still be missing.
+ */
+export function pasteOffered(
+  canCollect: boolean,
+  plan: TacPlan | undefined,
+  state: TacState | null | undefined,
+): boolean {
+  if (missingOutputs(plan, state).length === 0) return false;
+  return !canCollect || collectionFellShort(state);
+}
+
+/** "3 of 23 outputs still missing" — the count, never a wall of boxes. */
+export function missingOutputsLine(missing: number, total: number): string {
+  return `${missing} of ${total} outputs still missing`;
+}
+
+/** How one paste target is named: what it collects, then the command. Never the
+ *  intent id — that rides on the option's tooltip for support. */
+export function pasteOptionLabel(step: TacStep): string {
+  const what = (step.title || "").trim() || step.intent;
+  const cmd = (step.command || "").trim();
+  return cmd ? `${what} · ${cmd}` : what;
 }
 
 // ── bundle ──────────────────────────────────────────────────────────────────
 
 export const BUNDLE_PROFILES: { id: string; label: string; hint: string }[] = [
-  { id: "full", label: "Full", hint: "everything collected — for an API upload" },
-  { id: "email", label: "Email", hint: "trimmed to 14 MB so it survives mail gateways" },
-  { id: "link_only", label: "Link only", hint: "the case text and the manifest, without the outputs" },
+  { id: "full", label: "Full", hint: "everything collected" },
+  { id: "email", label: "Email", hint: "trimmed to 14 MB" },
+  { id: "link_only", label: "Link only", hint: "case text and manifest" },
 ];
 
 /** A safe download name. Only the closed character set survives, so a remote
@@ -397,22 +442,146 @@ export function hasCapability(info: TacConnectorInfo, cap: TacCaseCapability): b
   return (info.capabilities ?? []).includes(cap);
 }
 
-/** What a connector can honestly do, in the operator's words. */
+/**
+ * What a connector does, in one plain sentence.
+ *
+ * It used to enumerate every verb it claimed and then append a caveat — a
+ * two-clause sentence per row, twelve rows deep. An operator choosing a path
+ * needs one thing: does this open the case, add to a case I already have, or
+ * just hand me the text?
+ */
 export function connectorCapabilityLine(info: TacConnectorInfo): string {
-  const can: string[] = [];
-  if (hasCapability(info, "create")) can.push("opens the case");
-  if (hasCapability(info, "attach")) can.push("attaches the bundle");
-  if (hasCapability(info, "poll_status")) can.push("reads the case status back");
-  if (hasCapability(info, "link")) can.push("records the case link");
-  if (can.length === 0) return CONNECTOR_CANNOT_CREATE;
-  const line = can.join(" · ");
-  return hasCapability(info, "create") ? line : `${line}. ${CONNECTOR_CANNOT_CREATE}`;
+  const create = hasCapability(info, "create");
+  const attach = hasCapability(info, "attach");
+  if (create && attach) return "Opens the case and attaches the bundle";
+  if (create) return "Opens the case";
+  if (attach) return "Attaches to an existing case";
+  return "Prepares the text and bundle for you to paste";
 }
 
-/** The note under a connector: its own words when it has them, ours otherwise. */
-export function connectorNote(info: TacConnectorInfo): string {
-  if (info.note && info.note.trim()) return info.note.trim();
+/** The four states a connector row can be in. "Unavailable" is an ERROR — the
+ *  stored configuration could not be read — and is never used for a tenant that
+ *  simply has no credentials (owner, 2026-09-06). */
+export type ConnectorState = "ready" | "attach-only" | "not-configured" | "unavailable";
+
+/** One chip word per state. Never a sentence. */
+export const CONNECTOR_CHIP: Record<ConnectorState, string> = {
+  ready: "Ready",
+  "attach-only": "Attach only",
+  "not-configured": "Not configured",
+  unavailable: "Unavailable",
+};
+
+export function connectorState(info: TacConnectorInfo): ConnectorState {
+  if (info.unavailable) return "unavailable";
+  if (!info.configured) return "not-configured";
+  return hasCapability(info, "attach") && !hasCapability(info, "create") ? "attach-only" : "ready";
+}
+
+/** The short reason for the CURRENT state — the server's own sentence when it
+ *  sent one, ours when it did not. The connector's standing vendor research
+ *  (`note`) is deliberately NOT this: it lives behind the row's (i). */
+export function connectorStatusNote(info: TacConnectorInfo): string {
+  const own = (info.status_note || "").trim();
+  if (own) return own;
+  if (info.unavailable) return CONNECTOR_UNREADABLE;
   return info.configured ? "" : CONNECTOR_NOT_CONFIGURED;
+}
+
+/** The unreadable-configuration state, when the server named no cause. */
+export const CONNECTOR_UNREADABLE =
+  "The stored configuration for this connector could not be read.";
+
+/** Where a person brings credentials. */
+export const TICKET_DELIVERY_ROUTE = "#/admin/ticket-delivery";
+export const TICKET_DELIVERY_LABEL = "Ticket delivery";
+
+/** The disclosure that holds every connector this device has no use for. */
+export function showAllConnectorsLabel(n: number): string {
+  return `Show all connectors (${n})`;
+}
+
+/** The authored explanation for one connector — the research paragraph that
+ *  came off the step. One file per connector under ai/skills/explain/. */
+export function connectorTopic(id: string): string {
+  return `tac.connector.${id}`;
+}
+
+/**
+ * Every connector id the panel may render, and therefore every explain file
+ * that must exist. It is a LIST rather than a template-literal at the call site
+ * on purpose: AskIris.test.tsx reads it and fails when a file is missing, which
+ * an interpolated topic would silently skip.
+ */
+export const CONNECTOR_IDS: readonly string[] = [
+  "servicenow", "jira", "email-arista", "email-cisco",
+  "cisco-cxd", "cisco-smart-bonding", "juniper",
+  "portal-fortinet", "portal-huawei", "portal-nokia", "portal-paloalto",
+  "portal-text",
+] as const;
+
+/** The generic path, always present and always configured. */
+export const PORTAL_TEXT_ID = "portal-text";
+
+/** The ITSM connectors — a tenant's own ticketing system, relevant at any
+ *  vendor's device once it is configured. */
+const ITSM_IDS = new Set(["servicenow", "jira"]);
+
+/** The vendor a dialect belongs to: "nokia-srlinux" → "nokia". The dialect slug
+ *  is `<vendor>-<platform>` (internal/tac.DialectSlug), so the first segment is
+ *  the vendor and nothing needs a second lookup table. */
+export function dialectVendor(dialect: string): string {
+  return (dialect || "").trim().toLowerCase().split("-")[0] ?? "";
+}
+
+/**
+ * Does this connector apply to the device being escalated?
+ *
+ * Three things do (owner, 2026-09-06): the device vendor's own path(s), the
+ * tenant's CONFIGURED ITSM connectors, and the generic portal path. Everything
+ * else is a different vendor's support desk and belongs behind a disclosure —
+ * a Nokia escalation has no use for Fortinet's portal field list.
+ */
+export function connectorApplies(info: TacConnectorInfo, vendor: string): boolean {
+  if (info.id === PORTAL_TEXT_ID) return true;
+  if (ITSM_IDS.has(info.id)) return Boolean(info.configured) || Boolean(info.unavailable);
+  const v = (info.vendor || "").trim().toLowerCase();
+  return v !== "" && v === (vendor || "").trim().toLowerCase();
+}
+
+/** The connectors split into the ones this device can use and the rest. Order
+ *  is preserved: the server sends them cheapest-tier first. */
+export function splitConnectors(
+  connectors: TacConnectorInfo[] | undefined,
+  vendor: string,
+): { rows: TacConnectorInfo[]; others: TacConnectorInfo[] } {
+  const rows: TacConnectorInfo[] = [];
+  const others: TacConnectorInfo[] = [];
+  for (const c of connectors ?? []) (connectorApplies(c, vendor) ? rows : others).push(c);
+  return { rows, others };
+}
+
+/** The size of the newest bundle built for this escalation, or 0. It is what a
+ *  ceiling is compared against — a limit nothing exceeds is not worth a word. */
+export function newestBundleBytes(bundles: { bytes: number; created_at?: string }[] | undefined): number {
+  let best = 0;
+  let when = "";
+  for (const b of bundles ?? []) {
+    const at = b.created_at ?? "";
+    if (best === 0 || at >= when) { best = b.bytes; when = at; }
+  }
+  return best;
+}
+
+/**
+ * The attachment ceiling, and ONLY when it bites. A row that says "attachment
+ * ceiling 8.0 GB" on a 4 KB bundle taught nothing; a row that says the bundle
+ * is over the limit changes what the operator does next.
+ */
+export function ceilingSuffix(info: TacConnectorInfo, bundleBytes: number): string {
+  const max = Number(info.max_attachment_bytes);
+  if (!Number.isFinite(max) || max <= 0 || bundleBytes <= 0 || bundleBytes <= max) return "";
+  return `over the ${humanBytes(max)} limit`;
 }
 
 /** A field the vendor requires and the platform could not fill. */

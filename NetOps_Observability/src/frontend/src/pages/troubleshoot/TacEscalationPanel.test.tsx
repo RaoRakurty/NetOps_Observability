@@ -47,9 +47,12 @@ vi.mock("../../services/api", () => ({ api: { ...mocks } }));
 
 import TacEscalationPanel from "./TacEscalationPanel";
 import {
+  CONNECTOR_CHIP,
   CONNECTOR_NOT_CONFIGURED,
   NOTHING_SCORED_NOTE,
+  NO_BUNDLE_YET,
   NO_CAPTURE_YET,
+  NO_CASE_CONNECTOR,
   PASTE_INVITE,
   PLAN_NEEDS_DEVICE,
   PLAN_LEGEND,
@@ -59,6 +62,9 @@ import {
   STATE_READ_FAILED,
   STATUS_CHIP,
   bundleFileName,
+  connectorTopic,
+  missingOutputsLine,
+  showAllConnectorsLabel,
   unavailableLine,
   unboundReason,
 } from "./tacModel";
@@ -369,7 +375,7 @@ describe("plan preview", () => {
     expect(screen.getByTitle(/correlix-tac-plan-cisco-iosxe-2026-09-05/)).toBeInTheDocument();
   });
 
-  it("states the redaction promise once, in the bundle step, with the server's own words behind it", async () => {
+  it("states the redaction promise once, as ONE line, with the server's own words on it", async () => {
     await openClassified();
     mocks.tacPlan.mockResolvedValue(planResponse());
     mocks.tacState.mockResolvedValue(stateResponse({ state: stateWith() }));
@@ -377,11 +383,15 @@ describe("plan preview", () => {
 
     // NOT on the plan preview any more.
     expect(within(screen.getByTestId("tac-plan")).queryByText(REDACTION_SHORT)).toBeNull();
-    const fold = screen.getByTestId("tac-redaction");
-    expect(fold).toHaveTextContent(REDACTION_SHORT);
-    expect(fold).toHaveTextContent(
+    const line = screen.getByTestId("tac-redaction");
+    expect(line).toHaveTextContent(REDACTION_SHORT);
+    // The server's own full promise is never paraphrased out of existence — it
+    // rides on the line, and the (i) answers what "redacted" means.
+    expect(line).toHaveAttribute(
+      "title",
       "Secrets, community strings and keys are removed from the bundle; tenant ids are kept.",
     );
+    expect(within(line).getByRole("button", { name: /Ask Iris/ })).toBeInTheDocument();
   });
 
   it("renders at most ONE reference link on a step, whatever the pack cites", async () => {
@@ -450,9 +460,9 @@ describe("plan preview", () => {
 
     expect(screen.getByTestId("tac-no-plan"))
       .toHaveTextContent("There is no authored command set for Nokia SR Linux.");
-    expect(screen.getByTestId("tac-paste")).toHaveTextContent(PASTE_INVITE);
-    // words (sweep 5, tracker 270): a card heading is three words at most.
-    expect(screen.getByRole("heading", { name: "Paste missing output" })).toBeInTheDocument();
+    // And NO paste wall: a platform with no authored plan binds no command, so
+    // there is nothing the paste step could honestly name a target for.
+    expect(screen.queryByTestId("tac-paste")).toBeNull();
   });
 
   it("renders the plan failure as an operator sentence", async () => {
@@ -536,18 +546,85 @@ describe("collect", () => {
     expect(mocks.tacCancelCollect).toHaveBeenCalledWith(INC);
   });
 
-  it("files pasted output for exactly the intents that were not collected", async () => {
+  // ── the paste path (owner, 2026-09-06) ───────────────────────────────────
+  //
+  // It used to render one textarea per intent in the whole class — on a Nokia SR
+  // Linux escalation that is 23 bound steps and 72 UNBOUND ones, each labelled
+  // with a raw intent id and no command. These four tests are the regression.
+
+  it("offers no paste wall when the gateway can collect and nothing has failed", async () => {
     await openPlanned();
+    expect(screen.queryByTestId("tac-paste")).toBeNull();
+  });
+
+  it("offers ONE control over the bound steps only, never an unbound intent", async () => {
+    const nokia = plan({
+      dialect: "nokia-srlinux", dialect_display: "Nokia SR Linux",
+      steps: Array.from({ length: 23 }, (_, i) => ({
+        intent: `srl.bound${i}`, title: `Bound check ${i}`, section: "deep-dive" as const,
+        bound: true, command: `show bound ${i}`,
+      })),
+      unbound: Array.from({ length: 72 }, (_, i) => ({
+        intent: `platform.unbound${i}`, title: `Unbound check ${i}`, section: "deep-dive" as const,
+        bound: false, note: "no binding on this dialect",
+      })),
+    });
+    await show(stateResponse({
+      can_collect: false, collect_note: COLLECT_NOTE, state: stateWith({ plan: nokia }),
+    }));
+
+    const picker = screen.getByTestId("tac-paste-picker") as HTMLSelectElement;
+    expect(picker.options).toHaveLength(23);
+    // ONE textarea for the whole step, not 95.
+    expect(within(screen.getByTestId("tac-paste")).getAllByRole("textbox")).toHaveLength(1);
+    // No option is labelled with a raw intent id; the ids stay in the tooltip.
+    for (const opt of Array.from(picker.options)) {
+      expect(opt.textContent).not.toMatch(/srl\.bound|platform\.unbound/);
+      expect(opt.getAttribute("title")).toContain("srl.bound");
+    }
+    expect(screen.getByTestId("tac-paste-count")).toHaveTextContent(missingOutputsLine(23, 23));
+    expect(screen.getByTestId("tac-paste")).toHaveTextContent(PASTE_INVITE);
+  });
+
+  it("files ONE pasted output for the step the operator picked", async () => {
+    await show(stateResponse({
+      can_collect: false, collect_note: COLLECT_NOTE, state: stateWith(),
+    }));
     mocks.tacCollect.mockResolvedValue({ job: {}, state: {} });
 
-    fireEvent.change(screen.getByLabelText("Output for ospf.database.router"), {
-      target: { value: "  Router Link States  " },
-    });
-    await click("File the pasted output");
+    fireEvent.change(screen.getByTestId("tac-paste-picker"), { target: { value: "ospf.neighbors.detail" } });
+    fireEvent.change(screen.getByLabelText("Pasted output"), { target: { value: "  Neighbor 10.0.0.2  " } });
+    await click("Add output");
 
+    // Only the output travels: pasting is not a request to RUN anything.
     expect(mocks.tacCollect).toHaveBeenCalledWith(INC, {
-      outputs: [{ intent: "ospf.database.router", command: "", output: "Router Link States" }],
+      outputs: [{
+        intent: "ospf.neighbors.detail",
+        command: "show ip ospf neighbor detail",
+        output: "Neighbor 10.0.0.2",
+      }],
     });
+  });
+
+  it("disappears once every bound step has output", async () => {
+    await show(stateResponse({
+      can_collect: false,
+      collect_note: COLLECT_NOTE,
+      state: stateWith({
+        capture: {
+          incident_id: INC, plan_id: "plan-1", class_id: "ospf-adjacency", class_title: "x",
+          device_id: "leaf1", hostname: "leaf1", platform: "p", dialect: "cisco-iosxe",
+          dialect_display: "Cisco IOS-XE", has_plan: true, started_at: "x", finished_at: "y",
+          commands: [
+            { intent: "system.version", title: "Software version", section: "baseline", command: "show version", output: "IOS-XE", bytes: 6, started_at: "x", duration_ms: 1 },
+            { intent: "ospf.neighbors.detail", title: "OSPF neighbours", section: "deep-dive", command: "show ip ospf neighbor detail", output: "Neighbor", bytes: 8, started_at: "x", duration_ms: 1 },
+          ],
+          unbound: [], topology: [], target: {}, total_bytes: 14, redacted: true,
+          catalog_version: "v", engine_version: "e",
+        },
+      }),
+    }));
+    expect(screen.queryByTestId("tac-paste")).toBeNull();
   });
 
   it("renders captured device output as escaped text, never as markup", async () => {
@@ -638,13 +715,13 @@ describe("open the case", () => {
     state: stateWith(),
     connectors: [
       {
-        id: "servicenow", display: "ServiceNow", capabilities: ["create", "attach"],
+        id: "servicenow", display: "ServiceNow", vendor: "servicenow", capabilities: ["create", "attach"],
         max_attachment_bytes: 18 * 1024 * 1024, profile: "full", configured: true,
       },
       {
-        id: "cisco", display: "Cisco TAC", capabilities: ["create", "attach"],
+        id: "cisco-cxd", display: "Cisco TAC", vendor: "cisco", capabilities: ["create", "attach"],
         max_attachment_bytes: 20 * 1024 * 1024, profile: "full", configured: false,
-        note: "Bring a Smart Bonding client id and a CXD token for this tenant.",
+        status_note: "Bring a Smart Bonding client id and a CXD token for this tenant.",
       },
       {
         id: "portal-text", display: "Vendor portal text", capabilities: ["link"],
@@ -653,18 +730,22 @@ describe("open the case", () => {
     ],
   });
 
-  it("greys an unconfigured connector and shows its own note", async () => {
+  it("greys an unconfigured connector and links to where credentials are brought", async () => {
     await show(withConnectors());
-    const row = screen.getByTestId("tac-conn-cisco");
+    const row = screen.getByTestId("tac-conn-cisco-cxd");
     expect(row.className).toContain("off");
-    expect(row).toHaveTextContent("Bring a Smart Bonding client id and a CXD token for this tenant.");
+    expect(row).toHaveTextContent(CONNECTOR_CHIP["not-configured"]);
+    expect(within(row).getByRole("link", { name: "Ticket delivery" }))
+      .toHaveAttribute("href", "#/admin/ticket-delivery");
     expect(screen.getByRole("button", { name: "Cisco TAC" })).toBeDisabled();
   });
 
-  it("says honestly when a connector cannot open the case itself", async () => {
+  it("says in plain words what each connector does", async () => {
     await show(withConnectors());
     expect(screen.getByTestId("tac-conn-portal-text"))
-      .toHaveTextContent("This connector cannot open the case itself");
+      .toHaveTextContent("Prepares the text and bundle for you to paste");
+    expect(screen.getByTestId("tac-conn-servicenow"))
+      .toHaveTextContent("Opens the case and attaches the bundle");
   });
 
   it("pre-fills the form, marks the fields the vendor requires and shows the case text", async () => {
@@ -723,8 +804,11 @@ describe("open the case", () => {
   // count moved — what a case connector IS is behind the (i).
   it("does not offer a connector that this deployment does not carry", async () => {
     await show(stateResponse({ state: stateWith(), connectors: [] }));
-    expect(screen.getByText(/No case connector here/)).toBeInTheDocument();
-    expect(screen.getByText(/download the bundle and open the case/)).toBeInTheDocument();
+    expect(screen.getByText(NO_CASE_CONNECTOR)).toBeInTheDocument();
+    // The CLAIM survives the word cut: the download path still works, and what a
+    // case connector IS is behind the (i).
+    expect(NO_CASE_CONNECTOR).toMatch(/download the bundle/);
+    expect(NO_CASE_CONNECTOR.split(/\s+/).length).toBeLessThanOrEqual(8);
     expect(screen.getByRole("button", { name: "Ask Iris about No case connector" })).toBeInTheDocument();
   });
 });
@@ -736,13 +820,143 @@ describe("an unconfigured connector never becomes a case", () => {
     await show(stateResponse({
       state: stateWith(),
       connectors: [{
-        id: "juniper", display: "Juniper", capabilities: ["create"], max_attachment_bytes: 0,
-        profile: "full", configured: false,
+        id: "juniper", display: "Juniper", vendor: "juniper", capabilities: ["create"],
+        max_attachment_bytes: 0, profile: "full", configured: false,
       }],
     }));
-    expect(screen.getByTestId("tac-conn-juniper")).toHaveTextContent(CONNECTOR_NOT_CONFIGURED);
+    const row = screen.getByTestId("tac-conn-juniper");
+    expect(row).toHaveTextContent(CONNECTOR_CHIP["not-configured"]);
+    expect(within(row).getByRole("link", { name: "Ticket delivery" })).toHaveAttribute("title", CONNECTOR_NOT_CONFIGURED);
     fireEvent.click(screen.getByRole("button", { name: "Juniper" }));
     expect(mocks.tacCaseForm).not.toHaveBeenCalled();
+  });
+});
+
+// ── the step reads like a study, not a menu (owner, 2026-09-06) ─────────────
+//
+// The owner pasted the escalation step for a NOKIA device and asked "what's all
+// this": it rendered ALL twelve connectors, each with its full research
+// paragraph (attachment ceilings, API caveats, "checked 2026-09-05", rate
+// limits), and each ending "connector configuration could not be read for this
+// tenant" on a deployment where nothing was wrong.
+
+describe("the Nokia escalation shows the paths this device can use", () => {
+  const NOKIA_RESEARCH =
+    "NSP publishes exactly five APIs (NSP REST, RESTCONF, Kafka, NFM-P REST, NFM-P XML) and none is a " +
+    "case/ticket/TSR API (checked 2026-09-05). phone is the vendor-preferred channel for outages.";
+  const JIRA_RESEARCH =
+    "Cloud defaults to 1 GB per attachment on /rest/api/3, Data Center to 10 MB on /rest/api/2. " +
+    "Jira Cloud rate-limits 20 writes per 2 s PER ISSUE.";
+
+  const nokiaPlan = () => plan({ dialect: "nokia-srlinux", dialect_display: "Nokia SR Linux" });
+
+  /** The twelve the api actually ships, as the lab returns them. */
+  const twelve = (over: Record<string, Partial<TacStateResponse["connectors"][number]>> = {}) => {
+    const rows: TacStateResponse["connectors"] = [
+      { id: "email-arista", display: "Arista support email", vendor: "arista", capabilities: ["create", "attach", "link"], max_attachment_bytes: 14_000_000, profile: "email", configured: false },
+      { id: "email-cisco", display: "Cisco support email", vendor: "cisco", capabilities: ["attach"], max_attachment_bytes: 14_000_000, profile: "email", configured: false },
+      { id: "jira", display: "Jira issue", vendor: "jira", capabilities: ["create", "attach", "poll_status", "link"], max_attachment_bytes: 1_073_741_824, profile: "full", configured: true, note: JIRA_RESEARCH },
+      { id: "servicenow", display: "ServiceNow incident", vendor: "servicenow", capabilities: ["create", "attach", "poll_status", "link"], max_attachment_bytes: 1_073_741_824, profile: "full", configured: false },
+      { id: "cisco-cxd", display: "Cisco CXD (attach to an existing SR)", vendor: "cisco", capabilities: ["attach"], max_attachment_bytes: 8_589_934_592, profile: "full", configured: false },
+      { id: "cisco-smart-bonding", display: "Cisco Smart Bonding (open an SR)", vendor: "cisco", capabilities: ["create", "attach", "poll_status", "link"], max_attachment_bytes: 8_589_934_592, profile: "full", configured: false },
+      { id: "juniper", display: "Juniper Service Case", vendor: "juniper", capabilities: ["create", "attach", "poll_status", "link"], max_attachment_bytes: 8_589_934_592, profile: "full", configured: false },
+      { id: "portal-fortinet", display: "Fortinet portal (copy & paste)", vendor: "fortinet", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: true },
+      { id: "portal-huawei", display: "Huawei portal (copy & paste)", vendor: "huawei", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: true },
+      { id: "portal-nokia", display: "Nokia portal (copy & paste)", vendor: "nokia", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: true, note: NOKIA_RESEARCH },
+      { id: "portal-paloalto", display: "Palo Alto portal (copy & paste)", vendor: "paloalto", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: true },
+      { id: "portal-text", display: "Vendor portal / email (copy & paste)", capabilities: ["link"], max_attachment_bytes: 0, profile: "link_only", configured: true },
+    ];
+    return rows.map((r) => ({ ...r, ...(over[r.id] ?? {}) }));
+  };
+
+  const nokiaState = (over: Record<string, Partial<TacStateResponse["connectors"][number]>> = {}) =>
+    stateResponse({ state: stateWith({ plan: nokiaPlan() }), connectors: twelve(over) });
+
+  it("shows the Nokia path, the configured ITSM and the generic one — the rest are folded", async () => {
+    await show(nokiaState());
+    const rows = screen.getByTestId("tac-conn-rows");
+    const ids = Array.from(rows.querySelectorAll("li")).map((li) => li.getAttribute("data-testid"));
+    expect(ids).toEqual(["tac-conn-jira", "tac-conn-portal-nokia", "tac-conn-portal-text"]);
+
+    const others = screen.getByTestId("tac-conn-others") as HTMLDetailsElement;
+    expect(others.open).toBe(false);
+    expect(within(others).getByText(showAllConnectorsLabel(9))).toBeInTheDocument();
+    // Nothing is hidden — every connector is still reachable, one press away.
+    expect(within(others).getByTestId("tac-conn-portal-fortinet")).toBeInTheDocument();
+    expect(within(others).getByTestId("tac-conn-juniper")).toBeInTheDocument();
+  });
+
+  it("carries no research paragraph in the visible step — it is behind the (i)", async () => {
+    await show(nokiaState());
+    const step = screen.getByTestId("tac-conn-rows");
+    expect(step.textContent).not.toContain("NSP publishes exactly five APIs");
+    expect(step.textContent).not.toContain("checked 2026-09-05");
+    expect(step.textContent).not.toContain("rate-limits 20 writes");
+    expect(step.textContent).not.toContain("1 GB per attachment");
+    // The paragraph is one press away, keyed on the connector id.
+    const nokiaRow = screen.getByTestId("tac-conn-portal-nokia");
+    expect(within(nokiaRow).getByRole("button", { name: /Ask Iris/ }))
+      .toHaveAttribute("data-topic", connectorTopic("portal-nokia"));
+  });
+
+  it("carries ONE chip per row, and never says 'could not be read' for a fresh tenant", async () => {
+    await show(nokiaState());
+    const rows = screen.getByTestId("tac-conn-rows");
+    expect(rows.textContent).not.toContain("could not be read");
+    expect(within(screen.getByTestId("tac-conn-jira")).getByText(CONNECTOR_CHIP.ready)).toBeInTheDocument();
+    expect(within(screen.getByTestId("tac-conn-portal-nokia")).getByText(CONNECTOR_CHIP.ready)).toBeInTheDocument();
+    // One chip per row, not a stack of notes.
+    for (const li of Array.from(rows.querySelectorAll("li"))) {
+      expect(li.querySelectorAll(".tac-chip")).toHaveLength(1);
+    }
+  });
+
+  it("chips an attach-only connector as such", async () => {
+    await show(nokiaState({ "email-cisco": { configured: true } }));
+    const row = within(screen.getByTestId("tac-conn-others")).getByTestId("tac-conn-email-cisco");
+    expect(row).toHaveTextContent(CONNECTOR_CHIP["attach-only"]);
+    expect(row).toHaveTextContent("Attaches to an existing case");
+  });
+
+  // "could not be read" is an ERROR. It keeps a chip of its own, it names the
+  // cause the server gave, and it is announced — it is not a state.
+  it("names the cause when a connector's configuration really cannot be read", async () => {
+    await show(nokiaState({
+      jira: { configured: false, unavailable: true, status_note: "the stored connector configuration could not be read: app_kv: connection refused" },
+    }));
+    const row = screen.getByTestId("tac-conn-jira");
+    expect(row).toHaveTextContent(CONNECTOR_CHIP.unavailable);
+    expect(within(row).getByRole("alert")).toHaveTextContent("app_kv: connection refused");
+  });
+
+  // The ceiling is a small suffix, and only when the bundle would not fit.
+  it("mentions an attachment ceiling only when the bundle exceeds it", async () => {
+    await show(nokiaState({ "email-arista": { configured: true } }));
+    expect(screen.getByTestId("tac-conn-others").textContent).not.toContain("13 MB");
+
+    await cleanup();
+    await show(stateResponse({
+      state: stateWith({
+        plan: plan({ dialect: "arista-eos", dialect_display: "Arista EOS" }),
+        bundles: [{
+          name: "correlix-tac-INC-2026-0007-email.zip", bytes: 30_000_000,
+          created_at: "2026-09-05T10:05:00Z", incident_id: INC, profile: "email",
+          class_id: "ospf-adjacency", plan_id: "plan-1",
+        }],
+      }),
+      connectors: twelve({ "email-arista": { configured: true } }),
+    }));
+    expect(screen.getByTestId("tac-conn-email-arista")).toHaveTextContent("over the 13 MB limit");
+  });
+});
+
+// ── the bundle step is one line, one select, one button ─────────────────────
+
+describe("the bundle step does not lecture", () => {
+  it("says 'No bundle yet' in one short line", async () => {
+    await show(stateResponse({ state: stateWith() }));
+    expect(screen.getByText(NO_BUNDLE_YET)).toBeInTheDocument();
+    expect(NO_BUNDLE_YET.split(/\s+/)).toHaveLength(3);
   });
 });
 

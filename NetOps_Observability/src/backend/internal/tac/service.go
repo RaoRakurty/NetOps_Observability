@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -234,10 +235,30 @@ func (s *Service) Catalog() *Catalog { return s.catalog }
 func (s *Service) CanCollect() bool { return s.collector != nil }
 
 // Connectors returns the case connectors' declared capabilities for a tenant.
+//
+// A connector whose stored configuration could not be READ is an error, not a
+// state, so it is logged here — ONCE per read, naming every connector affected
+// and the first cause — rather than only being rendered. Before 2026-09-06 the
+// UI printed "connector configuration could not be read for this tenant" and
+// nothing was logged at all: the api's own log had no trace of a sentence the
+// operator was staring at (§10, no silent failures).
 func (s *Service) Connectors(ctx context.Context, tenant string) []ConnectorInfo {
 	out := make([]ConnectorInfo, 0, len(s.openers))
+	var unreadable []string
+	cause := ""
 	for _, o := range s.openers {
-		out = append(out, o.Info(ctx, tenant))
+		info := o.Info(ctx, tenant)
+		if info.Unavailable {
+			unreadable = append(unreadable, info.ID)
+			if cause == "" {
+				cause = info.StatusNote
+			}
+		}
+		out = append(out, info)
+	}
+	if len(unreadable) > 0 {
+		s.warn("case-connector configuration could not be read — these connectors are shown unavailable, not unconfigured",
+			map[string]any{"tenant": tenant, "connectors": strings.Join(unreadable, " "), "cause": cause})
 	}
 	return out
 }

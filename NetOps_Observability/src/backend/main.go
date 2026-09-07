@@ -2932,6 +2932,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	// The vendor-coverage view behind Iris → Knowledge: version-pinned reference
 	// data, identical for every tenant, revealing no tenant's devices.
 	mux.HandleFunc("/api/troubleshoot/tac/knowledge", s.handleTACKnowledge)
+	// The case connectors as the CALLER'S tenant sees them, with no incident:
+	// Administration → Ticket delivery reads this to show what each vendor path
+	// can do and what it still needs.
+	mux.HandleFunc("/api/tac/connectors", s.handleTACConnectors)
 	// The per-tenant COMMAND TEMPLATES (tracker 250): the sets a NOC admin saves
 	// per vendor dialect and loads into the review step. Registered as LITERALS,
 	// not as the tac.*Path constants, because the route-isolation ledger's

@@ -90,8 +90,17 @@ func TestAdapterReportsConfiguredPerTenantWithTheReason(t *testing.T) {
 	if info.Configured {
 		t.Fatal("a tenant that never opted in must not read as configured")
 	}
-	if info.Note == "" || !strings.Contains(info.Note, "not configured") {
-		t.Errorf("the note must say WHY, got %q", info.Note)
+	// The REASON lives on StatusNote; Note stays the connector's standing
+	// vendor research. Splitting them is what lets the escalation step render a
+	// state without printing a research paragraph beside it.
+	if !strings.Contains(info.StatusNote, "not configured") {
+		t.Errorf("the status note must say WHY, got %q", info.StatusNote)
+	}
+	if info.Unavailable {
+		t.Error("an incomplete configuration is a STATE, never an unreadable store")
+	}
+	if !strings.Contains(info.Note, "Beta API") {
+		t.Errorf("Note must keep the vendor research, got %q", info.Note)
 	}
 
 	configured := NewTACOpener(c, "juniper", "Juniper Service Case",
@@ -403,3 +412,81 @@ func TestAdapterUsesTheIncidentIDAsTheIdempotencyKey(t *testing.T) {
 
 // timeZero is a fixed instant so the mapping test asserts values, not clocks.
 func timeZero() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) }
+
+// ── the 2026-09-06 regression: "could not be read" on a healthy install ──────
+//
+// Owner report: a Nokia escalation showed all twelve connectors, each ending
+// "connector configuration could not be read for this tenant" — including the
+// portal-only ones, which have nothing to configure at all. Nothing was broken:
+// the tenant simply had no stored row, the store answered ErrTenantNotFound,
+// the adapter mapped it to ErrNotConfigured, and Info's `err != nil` arm called
+// that a failed read. A state was reported as an error, on every connector, on
+// every fresh install.
+
+func TestNoStoredRowIsNotConfiguredAndNotUnreadable(t *testing.T) {
+	for name, resolve := range map[string]TenantConfigResolver{
+		"tenant has no row": func(context.Context, string) (TACConnectorConfig, error) {
+			return TACConnectorConfig{}, ErrTenantNotFound
+		},
+		"connector not configured": func(context.Context, string) (TACConnectorConfig, error) {
+			return TACConnectorConfig{}, ErrNotConfigured
+		},
+		"no resolver wired at all": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := NewTACOpener(NewJuniperConnector(nil), "juniper", "Juniper Service Case", resolve, nil)
+			info := o.Info(context.Background(), "org-a-tenant")
+			if info.Configured {
+				t.Error("a tenant with no stored row must not read as configured")
+			}
+			if info.Unavailable {
+				t.Error("no stored row is a STATE — it must not be reported as an unreadable store")
+			}
+			if info.StatusNote != NotConfiguredStatusNote {
+				t.Errorf("status note = %q, want the not-configured state sentence", info.StatusNote)
+			}
+			if strings.Contains(info.Note, "could not be read") || strings.Contains(info.StatusNote, "could not be read") {
+				t.Errorf("nothing failed to read; note=%q status=%q", info.Note, info.StatusNote)
+			}
+		})
+	}
+}
+
+// A PORTAL-ONLY connector has nothing to configure, so it must never carry a
+// configuration complaint of any kind — it was the clearest proof the old
+// message was wrong.
+func TestPortalOnlyConnectorCarriesNoConfigurationComplaint(t *testing.T) {
+	c, err := NewPortalOnlyConnector("nokia")
+	if err != nil {
+		t.Fatalf("nokia portal connector: %v", err)
+	}
+	o := NewTACOpener(c, "nokia", "Nokia portal (copy & paste)",
+		func(context.Context, string) (TACConnectorConfig, error) {
+			return TACConnectorConfig{}, ErrTenantNotFound
+		}, nil)
+	info := o.Info(context.Background(), "org-a-tenant")
+	if info.Unavailable {
+		t.Error("a portal-only connector cannot have an unreadable configuration")
+	}
+	if !strings.Contains(info.Note, "checked 2026-09-05") {
+		t.Errorf("the dated negative must survive on Note, got %q", info.Note)
+	}
+}
+
+// A REAL read failure keeps its own arm: flagged, named, and distinguishable.
+func TestUnreadableConfigurationIsAnErrorThatNamesItsCause(t *testing.T) {
+	o := NewTACOpener(NewJuniperConnector(nil), "juniper", "Juniper Service Case",
+		func(context.Context, string) (TACConnectorConfig, error) {
+			return TACConnectorConfig{}, errors.New("app_kv: connection refused")
+		}, nil)
+	info := o.Info(context.Background(), "org-a-tenant")
+	if !info.Unavailable {
+		t.Fatal("a store that did not answer must be reported as unavailable")
+	}
+	if info.Configured {
+		t.Error("an unreadable configuration is never configured")
+	}
+	if !strings.Contains(info.StatusNote, "connection refused") {
+		t.Errorf("the cause must be named, got %q", info.StatusNote)
+	}
+}

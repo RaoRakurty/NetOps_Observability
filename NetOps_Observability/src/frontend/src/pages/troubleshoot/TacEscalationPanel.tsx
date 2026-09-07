@@ -59,7 +59,7 @@ import {
   CASE_HUMAN_APPROVED,
   CASE_SUBMIT_FAILED,
   CLASSIFY_FAILED,
-  CONNECTOR_NOT_CONFIGURED,
+  CONNECTOR_CHIP,
   DEVICES_FAILED,
   MAX_PASTE_CHARS,
   MAX_REVIEW_COMMANDS,
@@ -67,6 +67,7 @@ import {
   NO_AUTHORED_PLAN_NOTE,
   NO_BUNDLE_YET,
   NO_CAPTURE_YET,
+  NO_CASE_CONNECTOR,
   PASTE_INVITE,
   PLAN_FAILED,
   PLAN_LEGEND,
@@ -83,32 +84,44 @@ import {
   TEMPLATES_FAILED,
   TEMPLATE_NEEDS_NAME,
   TEMPLATE_SAVE_FAILED,
+  TICKET_DELIVERY_LABEL,
+  TICKET_DELIVERY_ROUTE,
   VALIDATE_FAILED,
-  buildPasteOutputs,
+  boundSteps,
   buildPlanRequest,
   buildReviewedSteps,
   buildTemplateWrite,
   bundleFileName,
   cappedNote,
+  ceilingSuffix,
   classificationNote,
   collectErrorMessage,
   connectorCapabilityLine,
-  connectorNote,
+  connectorState,
+  connectorStatusNote,
+  connectorTopic,
+  dialectVendor,
   editSummary,
   evidenceLine,
   hasCapability,
   humanBytes,
   isCollecting,
   isMissingField,
+  missingOutputs,
+  missingOutputsLine,
   moveCommand,
+  newestBundleBytes,
   originLabel,
-  pasteIntents,
+  pasteOffered,
+  pasteOptionLabel,
   phaseLabel,
   planCommands,
   planHeadline,
   planVersionTitle,
   reasonLine,
   reviewChanged,
+  showAllConnectorsLabel,
+  splitConnectors,
   stepReference,
   stepStatus,
   stepTooltip,
@@ -179,7 +192,10 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
 
   const [collectBusy, setCollectBusy] = useState(false);
   const [collectErr, setCollectErr] = useState("");
-  const [paste, setPaste] = useState<Record<string, string>>({});
+  // The paste path is ONE control (owner, 2026-09-06): which output is missing,
+  // the text, and a button. Not a textarea per intent in the whole class.
+  const [pasteIntent, setPasteIntent] = useState("");
+  const [pasteText, setPasteText] = useState("");
 
   const [bundleErr, setBundleErr] = useState("");
   const [bundleNote, setBundleNote] = useState("");
@@ -216,7 +232,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   // The escalation's state, and the caller's own inventory for the device picker.
   useEffect(() => {
     setInfo(null); setInfoErr(""); setClassify(null); setClassErr("");
-    setDeviceId(""); setPlanErr(""); setCollectErr(""); setPaste({});
+    setDeviceId(""); setPlanErr(""); setCollectErr(""); setPasteIntent(""); setPasteText("");
     setReviewCmds([]); setVerdicts([]); setReviewErr(""); setTemplateId("");
     setSaveName(""); setSaveDesc(""); setSaveNote(""); setSaveErr("");
     setCaseForm(null); setCaseConnector(null); setCaseResult(null); setCaseErr("");
@@ -365,14 +381,24 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     }
   };
 
-  const pasteSteps = useMemo(() => pasteIntents(plan, state), [plan, state]);
+  // What is still missing, and whether the paste path is offered at all. Only
+  // the plan's BOUND steps can be pasted for: an unbound intent has no command
+  // to run and is already counted by the plan's "not available" line.
+  const missing = useMemo(() => missingOutputs(plan, state), [plan, state]);
+  const boundTotal = useMemo(() => boundSteps(plan).length, [plan]);
+  const showPaste = pasteOffered(Boolean(info?.can_collect), plan, state);
 
-  const runCollect = async (withPaste: boolean) => {
+  // Keep the picker on a target that still exists: filing an output removes it
+  // from the list, and a stale selection would silently file nothing.
+  useEffect(() => {
+    if (missing.length === 0) { setPasteIntent(""); return; }
+    if (!missing.some((s) => s.intent === pasteIntent)) setPasteIntent(missing[0].intent);
+  }, [missing, pasteIntent]);
+
+  const runCollect = async () => {
     setCollectErr(""); setCollectBusy(true);
     try {
-      const outputs = withPaste ? buildPasteOutputs(pasteSteps, paste) : [];
       const body: TacCollectRequest = {};
-      if (outputs.length) body.outputs = outputs;
       // The reviewed list travels ONLY when it differs from the plan or came
       // from a template — otherwise the server runs the plan it already holds,
       // and the bundle honestly records that nothing was edited.
@@ -382,6 +408,25 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
       }
       await api.tacCollect(incidentId, body);
       if (alive.current) await readState();
+    } catch (e) {
+      if (alive.current) setCollectErr(collectErrorMessage(e, info?.collect_note ?? ""));
+    } finally {
+      if (alive.current) setCollectBusy(false);
+    }
+  };
+
+  /** File ONE pasted output for the selected step. The reviewed command list is
+   *  deliberately NOT sent: pasting an output is not a request to run anything. */
+  const addPastedOutput = async () => {
+    const step = missing.find((s) => s.intent === pasteIntent);
+    const text = pasteText.trim();
+    if (!step || !text) return;
+    setCollectErr(""); setCollectBusy(true);
+    try {
+      await api.tacCollect(incidentId, {
+        outputs: [{ intent: step.intent, command: step.command ?? "", output: text.slice(0, MAX_PASTE_CHARS) }],
+      });
+      if (alive.current) { setPasteText(""); await readState(); }
     } catch (e) {
       if (alive.current) setCollectErr(collectErrorMessage(e, info?.collect_note ?? ""));
     } finally {
@@ -472,6 +517,11 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   const evidence = evidenceLine(classify?.evidence_sources ?? [], classify?.evidence_missing ?? []);
   const planRows = orderedSteps(plan?.steps);
   const bundles = state?.bundles ?? [];
+  // Which connectors this DEVICE can use, and which are somebody else's support
+  // desk. A Nokia escalation rendered all twelve with a research paragraph each
+  // (owner, 2026-09-06); the rest now sit behind one disclosure.
+  const caseRows = splitConnectors(info.connectors, dialectVendor(plan?.dialect ?? capture?.dialect ?? ""));
+  const bundleBytes = newestBundleBytes(bundles);
 
   return (
     <section className="tac-panel card" aria-label="Escalate to TAC">
@@ -870,7 +920,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
             <button
               type="button"
               className="btn accent"
-              onClick={() => { void runCollect(false); }}
+              onClick={() => { void runCollect(); }}
               disabled={collectBusy || running || !info.can_collect || refused > 0}
               title={info.can_collect ? undefined : info.collect_note}
             >
@@ -937,29 +987,50 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
             </div>
           )}
 
-          {/* the paste fallback lives HERE and only here */}
-          {pasteSteps.length > 0 && (
+          {/* The paste path, and ONLY where the gateway could not collect.
+              It used to render one textarea per intent in the whole class —
+              72 of them on a Nokia SR Linux plan, labelled with raw intent ids
+              for checks Correlix had already said it cannot run. It is now one
+              control over the bound steps that still lack output, and the count
+              says how much is left. */}
+          {showPaste && (
             <div className="tac-paste" data-testid="tac-paste">
               <h4 className="tac-section-h">Paste missing output</h4>
               <p className="mini-meta tac-note">{PASTE_INVITE}</p>
-              {pasteSteps.slice(0, ROW_RENDER_CAP).map((s) => (
-                <label className="tac-paste-item" key={`p-${s.intent}`}>
-                  <span className="tac-step-t">
-                    {s.title} <code className="tac-id">{s.intent}</code>
-                    {s.command ? <> — <code className="tac-cmd">{s.command}</code></> : null}
-                  </span>
-                  <textarea
-                    rows={4}
-                    maxLength={MAX_PASTE_CHARS}
-                    value={paste[s.intent] ?? ""}
-                    aria-label={`Output for ${s.intent}`}
-                    onChange={(e) => setPaste((p) => ({ ...p, [s.intent]: e.target.value }))}
-                  />
+              <div className="tac-row">
+                <label className="tac-field">
+                  <span>Output</span>
+                  <select
+                    value={pasteIntent}
+                    data-testid="tac-paste-picker"
+                    onChange={(e) => setPasteIntent(e.target.value)}
+                  >
+                    {missing.slice(0, ROW_RENDER_CAP).map((s) => (
+                      <option key={`p-${s.intent}`} value={s.intent} title={stepTooltip(s)}>
+                        {pasteOptionLabel(s)}
+                      </option>
+                    ))}
+                  </select>
                 </label>
-              ))}
+                <span className="mini-meta" data-testid="tac-paste-count">
+                  {missingOutputsLine(missing.length, boundTotal)}
+                </span>
+              </div>
+              <textarea
+                rows={5}
+                maxLength={MAX_PASTE_CHARS}
+                value={pasteText}
+                aria-label="Pasted output"
+                onChange={(e) => setPasteText(e.target.value)}
+              />
               <div className="tac-actions">
-                <button type="button" className="btn" onClick={() => { void runCollect(true); }} disabled={collectBusy}>
-                  {collectBusy ? "Filing…" : "File the pasted output"}
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={collectBusy || pasteText.trim() === "" || pasteIntent === ""}
+                  onClick={() => { void addPastedOutput(); }}
+                >
+                  {collectBusy ? "Filing…" : "Add output"}
                 </button>
               </div>
             </div>
@@ -971,16 +1042,17 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
       {started && plan && (
         <section className="tac-step" aria-labelledby="tac-bundle-h">
           <h3 id="tac-bundle-h" className="tac-step-h">Bundle</h3>
-          {/* The redaction promise is made ONCE, here, where the file that
-              carries it is built — not repeated on the plan preview. The short
-              sentence is the summary; the server's own full promise is one
-              disclosure away and is never paraphrased out of existence. */}
-          <details className="tac-fold" data-testid="tac-redaction">
-            <summary>{REDACTION_SHORT}</summary>
-            <p className="tac-fold-text">{plan.redaction_note}</p>
-          </details>
+          {/* ONE line, a profile, a button (owner, 2026-09-06). The redaction
+              promise is made once, here, where the file that carries it is
+              built. The server's own full promise is not paraphrased out of
+              existence — it rides on this line's tooltip, and the (i) answers
+              what "redacted" means from the authored corpus. */}
+          <p className="mini-meta tac-note" data-testid="tac-redaction" title={plan.redaction_note}>
+            {REDACTION_SHORT}
+            <AskIris topic="tac.bundle-redaction" label="masked in the bundle" />
+          </p>
           {!capture ? (
-            <p className="mini-meta tac-note" role="status">{NO_CAPTURE_YET}</p>
+            <p className="fact-line" role="status">{NO_CAPTURE_YET}</p>
           ) : (
             <>
               <div className="tac-actions">
@@ -997,12 +1069,12 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
                 </button>
               </div>
               {bundleErr && <p className="tac-bad" role="alert">{bundleErr}</p>}
-              {bundleNote && <p className="mini-meta tac-note" role="status">{bundleNote}</p>}
+              {bundleNote && <p className="fact-line" role="status">{bundleNote}</p>}
             </>
           )}
           <h4 className="tac-section-h">Built bundles</h4>
           {bundles.length === 0 ? (
-            <p className="mini-meta tac-note">{NO_BUNDLE_YET}</p>
+            <p className="tac-empty">{NO_BUNDLE_YET}</p>
           ) : (
             <ul className="tac-bundles">
               {bundles.map((b) => (
@@ -1022,33 +1094,34 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
           <h3 id="tac-case-h" className="tac-step-h">Open the case</h3>
           <p className="mini-meta tac-note">{CASE_HUMAN_APPROVED}</p>
           {(info.connectors ?? []).length === 0 ? (
-            <p className="mini-meta tac-note">
-              No case connector here — download the bundle and open the case.
+            <p className="tac-empty">
+              {NO_CASE_CONNECTOR}
               <AskIris topic="tac.case-connector" label="No case connector" />
             </p>
           ) : (
-            <ul className="tac-connectors">
-              {info.connectors.map((c) => (
-                <li key={c.id} className={`tac-conn${c.configured ? "" : " off"}`} data-testid={`tac-conn-${c.id}`}>
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={!c.configured || caseBusy}
-                    aria-disabled={!c.configured}
-                    onClick={() => { void openCaseForm(c); }}
-                  >
-                    {c.display}
-                  </button>
-                  <span className="mini-meta">{connectorCapabilityLine(c)}</span>
-                  {connectorNote(c) && (
-                    <span className={`mini-meta${c.configured ? "" : " tac-bad"}`}>{connectorNote(c)}</span>
-                  )}
-                  <span className="mini-meta">
-                    attachment ceiling {humanBytes(c.max_attachment_bytes)} · {c.profile} profile
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="tac-connectors" data-testid="tac-conn-rows">
+                {caseRows.rows.map((c) => (
+                  <ConnectorRow
+                    key={c.id} info={c} bundleBytes={bundleBytes} busy={caseBusy}
+                    onOpen={() => { void openCaseForm(c); }}
+                  />
+                ))}
+              </ul>
+              {caseRows.others.length > 0 && (
+                <details className="tac-fold" data-testid="tac-conn-others">
+                  <summary>{showAllConnectorsLabel(caseRows.others.length)}</summary>
+                  <ul className="tac-connectors">
+                    {caseRows.others.map((c) => (
+                      <ConnectorRow
+                        key={c.id} info={c} bundleBytes={bundleBytes} busy={caseBusy}
+                        onOpen={() => { void openCaseForm(c); }}
+                      />
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </>
           )}
           {caseErr && <p className="tac-bad" role="alert" data-testid="tac-case-error">{caseErr}</p>}
 
@@ -1057,7 +1130,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
               <h4 className="tac-section-h">{caseConnector.display} — review before sending</h4>
               <p className="mini-meta tac-note">
                 {caseForm.bundle_name} · {humanBytes(caseForm.bundle_bytes)} · {caseForm.profile} profile
-                {caseConnector.configured ? "" : ` · ${CONNECTOR_NOT_CONFIGURED}`}
+                {caseConnector.configured ? "" : ` · ${connectorStatusNote(caseConnector)}`}
               </p>
               <div className="tac-form">
                 {CASE_FIELD_LABEL.map(({ key, label }) => {
@@ -1134,6 +1207,58 @@ function orderedSteps(steps: TacStep[] | undefined): TacStep[] {
     .map((s, i) => ({ s, i, rank: Math.max(0, SECTION_ORDER.indexOf(s.section)) }))
     .sort((a, b) => (a.rank === b.rank ? a.i - b.i : a.rank - b.rank))
     .map((x) => x.s);
+}
+
+/**
+ * One connector, as one row (owner, 2026-09-06: "what's all this").
+ *
+ * Four things and nothing else: the name, one plain-words sentence about what
+ * it does, one chip for the state, and — only when the bundle would not fit —
+ * the ceiling. The connector's standing vendor research (attachment limits,
+ * API caveats, the dated negative) is a paragraph per connector and used to
+ * print here, twelve deep; it is now behind the row's (i), answered from
+ * ai/skills/explain/tac.connector.<id>.md, and on Administration → Ticket
+ * delivery where the credentials are brought.
+ *
+ * "Not configured" is a STATE with a next step, and it links to where that step
+ * is taken. "Unavailable" is an ERROR: the stored configuration could not be
+ * read, the row says so with the cause the server named, and the server logs it.
+ */
+function ConnectorRow({ info, bundleBytes, busy, onOpen }: {
+  info: TacConnectorInfo;
+  bundleBytes: number;
+  busy: boolean;
+  onOpen: () => void;
+}) {
+  const state = connectorState(info);
+  const note = connectorStatusNote(info);
+  const over = ceilingSuffix(info, bundleBytes);
+  const usable = state === "ready" || state === "attach-only";
+  return (
+    <li className={`tac-conn${usable ? "" : " off"}`} data-testid={`tac-conn-${info.id}`}>
+      <button
+        type="button"
+        className="btn"
+        disabled={!usable || busy}
+        aria-disabled={!usable}
+        onClick={onOpen}
+      >
+        {info.display}
+      </button>
+      <span className="mini-meta">{connectorCapabilityLine(info)}</span>
+      <span className={`tac-chip tac-chip-${state}`}>{CONNECTOR_CHIP[state]}</span>
+      {over && <span className="mini-meta tac-over">{over}</span>}
+      {state === "not-configured" && (
+        <a className="mini-meta tac-conn-link" href={TICKET_DELIVERY_ROUTE} title={note}>
+          {TICKET_DELIVERY_LABEL}
+        </a>
+      )}
+      {state === "unavailable" && (
+        <span className="mini-meta tac-bad" role="alert">{note}</span>
+      )}
+      <AskIris topic={connectorTopic(info.id)} label={info.display} />
+    </li>
+  );
 }
 
 /** One row of the command plan: the step number, what it collects in plain

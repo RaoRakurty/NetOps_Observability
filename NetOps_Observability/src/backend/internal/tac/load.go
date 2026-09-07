@@ -714,6 +714,25 @@ func DialectSlug(profileID string) string {
 	return vendor + "-" + platform
 }
 
+// KnownDialects lists every platform the vendorprofile registry carries, as the
+// coverage view's DialectRef. It lives here rather than in the HTTP adapter
+// because the mapping IS this package's own vocabulary — a coverage page that
+// only shows what works is a marketing page, so the list has to include the
+// platforms with NO authored plan, and deciding what "a known platform" means
+// is a catalogue decision, not a route's.
+func KnownDialects() []DialectRef {
+	reg := vendorprofile.Default()
+	out := make([]DialectRef, 0, len(reg.IDs()))
+	for _, id := range reg.IDs() {
+		prof, ok := reg.Lookup(id)
+		if !ok {
+			continue
+		}
+		out = append(out, DialectRef{Slug: DialectSlug(prof.ID), Display: prof.DisplayName, Profile: prof.ID})
+	}
+	return out
+}
+
 // DialectForPlatform resolves a free-form device platform string onto a dialect
 // slug through the vendorprofile registry — the ONLY authority, exactly as
 // internal/showparse does it. An unrecognized platform returns ("", false): the

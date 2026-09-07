@@ -144,20 +144,35 @@ func (o *TACOpener) Info(ctx context.Context, tenantID string) tac.ConnectorInfo
 
 	cfg, err := o.tenantConfig(ctx, tenantID)
 	switch {
-	case err != nil:
+	case errors.Is(err, ErrNotConfigured), errors.Is(err, ErrTenantNotFound):
+		// A TENANT WITH NO ROW IS NOT A FAILED READ. This is the normal state of
+		// every fresh install: nobody has brought credentials yet. It used to
+		// fall into the error arm below and print "connector configuration could
+		// not be read for this tenant" on all twelve connectors — including the
+		// portal-only ones, which have nothing to configure at all.
 		info.Configured = false
-		info.Note = joinNote(caps.Notes, "connector configuration could not be read for this tenant")
+		info.StatusNote = NotConfiguredStatusNote
+	case err != nil:
+		// A REAL read failure. It is named, it is flagged for the UI, and the
+		// service logs it (§10) — it is never dressed up as a state.
+		info.Configured = false
+		info.Unavailable = true
+		info.StatusNote = "the stored connector configuration could not be read: " + Truncate(err.Error(), 160)
 	default:
 		verr := o.Connector.ValidateConfig(cfg)
 		info.Configured = verr == nil
 		if verr != nil {
 			// The reason is what the operator needs: "not onboarded" and "no
 			// credentials" are different problems with different next steps.
-			info.Note = joinNote(caps.Notes, verr.Error())
+			info.StatusNote = verr.Error()
 		}
 	}
 	return info
 }
+
+// NotConfiguredStatusNote is the state a tenant with no stored credentials is
+// in. It is a sentence about what to do next, not a report of a failure.
+const NotConfiguredStatusNote = "No credentials for this tenant yet — bring your own to use it."
 
 // tacCapabilities maps the declared Caps onto the seam's closed verb set.
 func tacCapabilities(c Caps) []tac.CaseCapability {
@@ -191,16 +206,6 @@ func tacMaxAttachment(c Caps) int64 {
 		return 0
 	}
 	return c.AttachLimit()
-}
-
-func joinNote(base, extra string) string {
-	switch {
-	case base == "":
-		return extra
-	case extra == "":
-		return base
-	}
-	return base + " — " + extra
 }
 
 // PrepareCase fills in what THIS connector knows and names what it still needs.

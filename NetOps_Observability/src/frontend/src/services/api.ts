@@ -3490,7 +3490,17 @@ export type TacConnectorInfo = {
   max_attachment_bytes: number;
   profile: string;
   configured: boolean;
+  /** The connector's STANDING vendor research — attachment ceilings, API
+   *  caveats, the dated negative for a vendor with no API. Reference material:
+   *  the escalation step keeps it off screen (Iris and Administration → Ticket
+   *  delivery carry it) so twelve paragraphs never stack up on one step. */
   note?: string;
+  /** The short reason for the CURRENT state: "no credentials yet", the
+   *  connector's own validation refusal, or the cause of an unreadable read. */
+  status_note?: string;
+  /** The stored configuration could not be READ — an error with a cause, never
+   *  the ordinary "this tenant has brought no credentials" state. */
+  unavailable?: boolean;
 };
 
 /** The pre-filled case form. `missing_fields` names what the vendor requires and
@@ -6088,6 +6098,11 @@ export const api = {
     }),
   /** Iris → Knowledge: the per-dialect coverage catalogue. Reference data. */
   tacKnowledge: () => request<TacKnowledge>("/api/troubleshoot/tac/knowledge"),
+  /** The case connectors as THIS tenant sees them, with no incident — what
+   *  Administration → Ticket delivery reads to show each vendor path and what
+   *  it still needs. `configured` is the only per-tenant field. */
+  tacConnectors: () =>
+    request<{ connectors: TacConnectorInfo[] }>("/api/tac/connectors"),
 
   // ---------- TAC command templates (tracker 250) --------------------------
   // The command sets a NOC admin saves per vendor dialect and loads into the

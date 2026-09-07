@@ -6,6 +6,7 @@ package tac
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -216,5 +217,65 @@ func waitJob(t *testing.T, s *Service, tenant, incident string) {
 			t.Fatal("the collection never finished")
 		case <-time.After(2 * time.Millisecond):
 		}
+	}
+}
+
+// ── the unreadable-configuration log (§10, owner report 2026-09-06) ──────────
+//
+// The sentence the operator saw on every connector ("connector configuration
+// could not be read for this tenant") had NO counterpart in the api log: nothing
+// was recorded, so nobody could tell whether a store had actually failed. A
+// connector that reports Unavailable is now logged once per read, naming which
+// connectors and the first cause — and a connector that is merely unconfigured
+// logs nothing, because nothing failed.
+
+// stubOpener is a CaseOpener that declares whatever Info it is given.
+type stubOpener struct{ info ConnectorInfo }
+
+func (s stubOpener) Info(context.Context, string) ConnectorInfo { return s.info }
+func (s stubOpener) PrepareCase(_ context.Context, req CaseRequest) (CaseForm, error) {
+	return req.Form, nil
+}
+func (s stubOpener) SubmitCase(context.Context, CaseRequest) (CaseResult, error) {
+	return CaseResult{ConnectorID: s.info.ID}, nil
+}
+func (s stubOpener) PollStatus(context.Context, string, string) (CaseResult, error) {
+	return CaseResult{}, ErrCapabilityUnsupported
+}
+
+func TestConnectorsLogAnUnreadableConfigurationExactlyOnce(t *testing.T) {
+	var logged []map[string]any
+	s := testService(t,
+		WithOpeners(
+			stubOpener{ConnectorInfo{ID: "alpha", Unavailable: true, StatusNote: "app_kv: connection refused"}},
+			stubOpener{ConnectorInfo{ID: "beta", Unavailable: true, StatusNote: "app_kv: connection refused"}},
+			stubOpener{ConnectorInfo{ID: "gamma", StatusNote: "no credentials yet"}},
+		),
+		WithServiceWarn(func(_ string, f map[string]any) { logged = append(logged, f) }),
+	)
+	infos := s.Connectors(context.Background(), "t1")
+	if len(infos) < 4 { // three stubs + the always-present portal-text
+		t.Fatalf("connectors = %d", len(infos))
+	}
+	if len(logged) != 1 {
+		t.Fatalf("want exactly one log line per read, got %d", len(logged))
+	}
+	if got := logged[0]["connectors"]; got != "alpha beta" {
+		t.Errorf("the line must NAME the affected connectors, got %v", got)
+	}
+	if got, _ := logged[0]["cause"].(string); !strings.Contains(got, "connection refused") {
+		t.Errorf("the line must carry the cause, got %q", got)
+	}
+}
+
+func TestConnectorsDoNotLogWhenNothingFailed(t *testing.T) {
+	var logged int
+	s := testService(t,
+		WithOpeners(stubOpener{ConnectorInfo{ID: "alpha", StatusNote: "no credentials yet"}}),
+		WithServiceWarn(func(string, map[string]any) { logged++ }),
+	)
+	s.Connectors(context.Background(), "t1")
+	if logged != 0 {
+		t.Fatalf("an unconfigured connector is a state, not a failure — logged %d lines", logged)
 	}
 }

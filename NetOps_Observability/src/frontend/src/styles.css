@@ -2880,6 +2880,18 @@ body.dtv-resizing { cursor: col-resize !important; user-select: none !important;
   text-transform: uppercase;
 }
 .adm .mini-meta { font-size: 12.5px; line-height: 1.5; }
+
+/* Case connectors (Ticket delivery). One row per vendor path: the name, its
+   state, what it does, and the vendor research behind its own disclosure —
+   never inline. This page is where credentials are brought, so it is where the
+   reference material lives (owner, 2026-09-06). */
+.tdc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tdc-row { padding: 6px 0; border-bottom: 1px dashed var(--panel-border, var(--border)); }
+.tdc-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 14px; }
+.tdc-fold { font-size: 12.5px; }
+.tdc-fold > summary { cursor: pointer; color: var(--fg); padding: 3px 0; }
+.tdc-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tdc-fold-text { margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
 .adm .sync-block > summary::before { font-size: 12.5px; }
 
 /* A subtle accent-tinted banner marking a not-yet-wired feature. */

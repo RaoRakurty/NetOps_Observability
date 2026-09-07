@@ -15,6 +15,7 @@ const ticketsOutbox = vi.fn();
 const ticketsAudit = vi.fn();
 const integrationsReconcile = vi.fn();
 const correlationTicketSync = vi.fn();
+const tacConnectors = vi.fn();
 
 vi.mock("../../services/api", () => ({
   api: {
@@ -22,6 +23,7 @@ vi.mock("../../services/api", () => ({
     ticketsAudit: (...a: unknown[]) => ticketsAudit(...a),
     integrationsReconcile: (...a: unknown[]) => integrationsReconcile(...a),
     correlationTicketSync: (...a: unknown[]) => correlationTicketSync(...a),
+    tacConnectors: (...a: unknown[]) => tacConnectors(...a),
   },
 }));
 
@@ -63,9 +65,36 @@ const AUDIT = {
   at: "2026-09-05T10:30:00Z",
 };
 
+// The vendor research that used to print twelve-deep on the escalation step and
+// now lives here, behind each connector's own disclosure.
+const NOKIA_RESEARCH =
+  "NSP publishes exactly five APIs (NSP REST, RESTCONF, Kafka, NFM-P REST, NFM-P XML) and none is a " +
+  "case/ticket/TSR API (checked 2026-09-05). phone is the vendor-preferred channel for outages.";
+const JIRA_RESEARCH =
+  "Cloud defaults to 1 GB per attachment on /rest/api/3, Data Center to 10 MB on /rest/api/2. " +
+  "Jira Cloud rate-limits 20 writes per 2 s PER ISSUE.";
+
+const CONNECTORS = [
+  {
+    id: "jira", display: "Jira issue", vendor: "jira",
+    capabilities: ["create", "attach", "poll_status", "link"],
+    max_attachment_bytes: 1_073_741_824, profile: "full", configured: true, note: JIRA_RESEARCH,
+  },
+  {
+    id: "portal-nokia", display: "Nokia portal (copy & paste)", vendor: "nokia",
+    capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: true, note: NOKIA_RESEARCH,
+  },
+  {
+    id: "juniper", display: "Juniper Service Case", vendor: "juniper",
+    capabilities: ["create", "attach"], max_attachment_bytes: 8_589_934_592, profile: "full",
+    configured: false, status_note: "No credentials for this tenant yet — bring your own to use it.",
+  },
+];
+
 afterEach(cleanup);
 beforeEach(() => {
-  for (const m of [ticketsOutbox, ticketsAudit, integrationsReconcile, correlationTicketSync]) m.mockReset();
+  for (const m of [ticketsOutbox, ticketsAudit, integrationsReconcile, correlationTicketSync, tacConnectors]) m.mockReset();
+  tacConnectors.mockResolvedValue({ connectors: CONNECTORS });
   ticketsOutbox.mockResolvedValue({ outbox: [FAILED, PENDING, SENT], total: 3, limit: 50, offset: 0, has_more: false });
   ticketsAudit.mockResolvedValue({ audit: [AUDIT], total: 1, limit: 50, offset: 0, has_more: false });
 });
@@ -181,5 +210,61 @@ describe("TicketDelivery — per-case sync and the audit trail", () => {
     const trail = await screen.findByRole("table", { name: /ticket audit trail/i });
     expect(within(trail).getByText("not_created → failed")).toBeTruthy();
     expect(within(trail).getByText(/u_correlix_seam is mandatory/)).toBeTruthy();
+  });
+});
+
+// ── case connectors (owner, 2026-09-06) ─────────────────────────────────────
+//
+// The escalation step used to print every connector's research paragraph —
+// attachment ceilings, API caveats, "checked 2026-09-05", rate limits — twelve
+// deep. The paragraph belongs where the credentials are brought, and it belongs
+// behind a disclosure even here: this page states facts and offers actions.
+
+describe("TicketDelivery — case connectors", () => {
+  it("lists each vendor path with what it does and its state", async () => {
+    render(<TicketDelivery />);
+    const list = await screen.findByTestId("ticket-connectors");
+    expect(tacConnectors).toHaveBeenCalled();
+
+    const jira = within(list).getByTestId("ticket-conn-jira");
+    expect(jira).toHaveTextContent("Opens the case and attaches the bundle");
+    expect(jira).toHaveTextContent("Ready");
+    expect(jira).toHaveTextContent("attaches up to 1.0 GB");
+
+    const juniper = within(list).getByTestId("ticket-conn-juniper");
+    expect(juniper).toHaveTextContent("Not configured");
+    expect(juniper).toHaveTextContent("No credentials for this tenant yet");
+  });
+
+  it("keeps every research paragraph behind its own disclosure, closed", async () => {
+    render(<TicketDelivery />);
+    const list = await screen.findByTestId("ticket-connectors");
+    for (const id of ["jira", "portal-nokia"]) {
+      const row = within(list).getByTestId(`ticket-conn-${id}`);
+      const fold = row.querySelector("details") as HTMLDetailsElement;
+      expect(fold, `${id} carries no disclosure`).toBeTruthy();
+      expect(fold.open).toBe(false);
+      expect(within(fold).getByText("What this vendor path needs")).toBeTruthy();
+    }
+    // The paragraph is inside the disclosure, not beside the row.
+    const nokia = within(list).getByTestId("ticket-conn-portal-nokia");
+    const summaryLine = nokia.querySelector(".tdc-head") as HTMLElement;
+    expect(summaryLine.textContent).not.toContain("NSP publishes exactly five APIs");
+    expect(nokia.querySelector("details")).toHaveTextContent("NSP publishes exactly five APIs");
+    expect(nokia.querySelector("details")).toHaveTextContent("checked 2026-09-05");
+  });
+
+  it("puts an (i) on every connector, keyed on its id", async () => {
+    render(<TicketDelivery />);
+    const list = await screen.findByTestId("ticket-connectors");
+    expect(within(list).getByTestId("ticket-conn-portal-nokia").querySelector("button.ask-iris"))
+      .toHaveAttribute("data-topic", "tac.connector.portal-nokia");
+  });
+
+  it("a failed read says so and never renders as 'no connectors'", async () => {
+    tacConnectors.mockRejectedValue(new Error("TypeError: fetch failed"));
+    render(<TicketDelivery />);
+    expect(await screen.findByText(/case connectors could not be read/i)).toBeTruthy();
+    expect(screen.queryByTestId("ticket-connectors")).toBeNull();
   });
 });

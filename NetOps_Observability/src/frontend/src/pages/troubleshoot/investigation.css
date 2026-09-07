@@ -222,6 +222,14 @@
 .tac-chip-verified { border-color: var(--good, #16a34a); color: var(--good, #16a34a); }
 .tac-chip-vendor-docs { border-color: var(--warn, #d97706); color: var(--warn, #d97706); }
 .tac-chip-unverified { border-color: var(--border); color: var(--muted); }
+/* Connector state (owner, 2026-09-06). One chip per row, four states.
+   "Unavailable" is an ERROR — the stored configuration could not be read —
+   so it takes the bad colour; "Not configured" is only a state and stays
+   neutral, with the link to where credentials are brought beside it. */
+.tac-chip-ready { border-color: var(--good, #16a34a); color: var(--good, #16a34a); }
+.tac-chip-attach-only { border-color: var(--warn, #d97706); color: var(--warn, #d97706); }
+.tac-chip-not-configured { border-color: var(--border); color: var(--muted); }
+.tac-chip-unavailable { border-color: var(--bad, #ef4444); color: var(--bad, #ef4444); }
 .tac-plan-legend { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
 
 /* One line, with the long list behind it. */
@@ -256,7 +264,7 @@
 .tac-pre { margin: 6px 0 0; padding: 8px; border-radius: 6px; background: var(--panel, rgba(0,0,0,.15)); overflow: auto; max-height: 320px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
 .tac-paste { display: flex; flex-direction: column; gap: 8px; }
 .tac-paste-item { display: flex; flex-direction: column; gap: 3px; }
-.tac-paste-item textarea, .tac-portal {
+.tac-paste textarea, .tac-paste-item textarea, .tac-portal {
   width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
   background: var(--bg); color: var(--fg); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px;
 }
@@ -264,6 +272,12 @@
 /* connectors + case form */
 .tac-conn { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px dashed var(--border); }
 .tac-conn.off { opacity: .55; }
+/* The ceiling is a small suffix and only appears when the bundle exceeds it. */
+.tac-over { color: var(--warn, #d97706); }
+.tac-conn-link { color: var(--accent); text-decoration: none; }
+.tac-conn-link:hover, .tac-conn-link:focus-visible { text-decoration: underline; }
+/* Empty states: a fact, not an explanation. Same 12.5px floor as .mini-meta. */
+.tac-empty { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
 .tac-case { display: flex; flex-direction: column; gap: 8px; }
 
 /* Iris → Knowledge */

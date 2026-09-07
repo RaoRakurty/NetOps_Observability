@@ -67,7 +67,6 @@ import (
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/tac"
 	"netops/backend/internal/ticketing"
-	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
 )
 
@@ -1581,23 +1580,30 @@ func (s *server) handleTACKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, errTACUnavailable)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.tacSvc().Catalog().Knowledge(tacKnownDialects()))
+	writeJSON(w, http.StatusOK, s.tacSvc().Catalog().Knowledge(tac.KnownDialects()))
 }
 
-// tacKnownDialects lists the platforms the vendorprofile registry carries, so
-// the coverage view can name the ones with NO authored plan. A coverage page
-// that only shows what works is a marketing page.
-func tacKnownDialects() []tac.DialectRef {
-	reg := vendorprofile.Default()
-	out := make([]tac.DialectRef, 0, len(reg.IDs()))
-	for _, id := range reg.IDs() {
-		prof, ok := reg.Lookup(id)
-		if !ok {
-			continue
-		}
-		out = append(out, tac.DialectRef{Slug: tac.DialectSlug(prof.ID), Display: prof.DisplayName, Profile: prof.ID})
+// GET /api/tac/connectors — the case connectors as THIS tenant sees them, with
+// no incident (Administration → Ticket delivery). §3a: the tenant is the
+// caller's own, from the token; `configured` is the only per-tenant field.
+func (s *server) handleTACConnectors(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
 	}
-	return out
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	if s.tacSvc() == nil {
+		writeError(w, http.StatusServiceUnavailable, errTACUnavailable)
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	if tenant == TenantGlobal {
+		tenant = ""
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"connectors": s.tacSvc().Connectors(r.Context(), tenant)})
 }
 
 // tacConnectorConfig resolves ONE tenant's case-connector configuration for ONE
