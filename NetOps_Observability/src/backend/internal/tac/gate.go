@@ -38,6 +38,16 @@ import (
 // bounded time and output) over THIS table.
 type Gate struct {
 	byDialect map[string][][]string
+	// exemptByDialect is the SUBSET of byDialect whose bindings carry a CITED
+	// `read_only_exception`, or are documented session-scoped setters (and their
+	// teardowns). It answers protocoldiag.ReadOnlyExemptGate.
+	//
+	// It is a second table rather than a flag on the first because the question
+	// is different: byDialect answers "could an authored plan have produced
+	// this?", this one answers "is this one of the few commands whose READ
+	// spelling the grammar cannot recognise?". A command must be in BOTH to skip
+	// the grammar, and the output-only policy is applied to it either way.
+	exemptByDialect map[string][][]string
 	// policy is the owner's OUTPUT-ONLY command policy, re-applied here. It is a
 	// SEPARATE authority from the table: the table says "an authored plan could
 	// have produced this", the policy says "Correlix does not do this at all".
@@ -69,7 +79,7 @@ func WithReviewRegistry(r *ReviewRegistry) GateOption {
 // mutated (the review registry it may hold has its own lock), so it is safe to
 // share across goroutines.
 func NewGate(c *Catalog, opts ...GateOption) *Gate {
-	g := &Gate{byDialect: map[string][][]string{}}
+	g := &Gate{byDialect: map[string][][]string{}, exemptByDialect: map[string][][]string{}}
 	for _, o := range opts {
 		o(g)
 	}
@@ -88,12 +98,33 @@ func NewGate(c *Catalog, opts ...GateOption) *Gate {
 			seen[key] = true
 			g.byDialect[d] = append(g.byDialect[d], append([]string(nil), toks...))
 		}
+		exemptSeen := map[string]bool{}
+		addExempt := func(toks []string) {
+			key := strings.Join(toks, " ")
+			if key == "" || exemptSeen[key] {
+				return
+			}
+			exemptSeen[key] = true
+			g.exemptByDialect[d] = append(g.exemptByDialect[d], append([]string(nil), toks...))
+		}
 		for _, b := range p.Bindings {
 			add(b.tokens)
 			// A session-scoped setter's teardown is run by the collector, so it
 			// must be in the table too — the runner gates every string it puts
 			// on a wire, and an ungated teardown would simply never run.
 			add(b.teardownTokens)
+			// The exemption table. The loader has ALREADY proved each of these:
+			// a `read_only_exception` without a citation is a load error
+			// (load.go), and a teardown that is not the policy's documented one
+			// for that setter is a load error too. So this is a projection of
+			// data that was validated, never a new decision.
+			if b.ReadOnlyException != "" {
+				addExempt(b.tokens)
+			}
+			if b.Teardown != "" {
+				addExempt(b.tokens)
+				addExempt(b.teardownTokens)
+			}
 		}
 	}
 	return g
@@ -167,6 +198,40 @@ func (g *Gate) AllowsDialect(dialect, command string) bool {
 // Name implements protocoldiag.CommandGate.
 func (g *Gate) Name() string { return "TAC escalation command plan" }
 
+// ReadOnlyExempt implements protocoldiag.ReadOnlyExemptGate.
+//
+// It answers true ONLY for a rendering of an authored binding that carries a
+// CITED `read_only_exception` (FortiOS spells several pure status prints
+// `diagnose debug …`; Junos spells its documented support collection `request
+// support information`; FortiOS spells its own `execute tac report`), or for a
+// documented session-scoped setter and its teardown.
+//
+// It is not a way around anything. The output-only policy is applied HERE, to
+// the rendered string, before the table is consulted at all — so a config,
+// restart or daemon command can never be exempted — and the caller still has to
+// pass the closed-table check separately. A reviewed CUSTOM command is
+// deliberately NOT exempt: a line a customer typed has no citation behind it, so
+// it must be a read the grammar itself recognises.
+func (g *Gate) ReadOnlyExempt(dev protocoldiag.Device, command string) bool {
+	dialect, _, ok := DialectForPlatform(dev.Platform)
+	if !ok {
+		return false
+	}
+	if _, forbidden := g.policy.Match(dialect, command); forbidden {
+		return false
+	}
+	cmd := strings.Fields(command)
+	if len(cmd) == 0 {
+		return false
+	}
+	for _, tmpl := range g.exemptByDialect[dialect] {
+		if matchTemplate(tmpl, cmd) {
+			return true
+		}
+	}
+	return false
+}
+
 // matchTemplate reports whether the command token list cmd is a rendering of the
 // template token list tmpl. Literals must match exactly; a placeholder consumes
 // zero or one argument token; {vrf-scope} may additionally consume the two-token
@@ -200,4 +265,7 @@ func matchTemplate(tmpl, cmd []string) bool {
 	return false
 }
 
-var _ protocoldiag.CommandGate = (*Gate)(nil)
+var (
+	_ protocoldiag.CommandGate        = (*Gate)(nil)
+	_ protocoldiag.ReadOnlyExemptGate = (*Gate)(nil)
+)

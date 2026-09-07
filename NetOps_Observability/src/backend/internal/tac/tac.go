@@ -276,11 +276,32 @@ type Binding struct {
 
 // DialectPlan is one CLI dialect's authored command set.
 type DialectPlan struct {
-	Dialect  string             `json:"dialect"`
-	Profile  string             `json:"profile"`
-	Display  string             `json:"display"`
-	Version  string             `json:"version"`
-	Sources  []Source           `json:"sources,omitempty"`
+	Dialect string   `json:"dialect"`
+	Profile string   `json:"profile"`
+	Display string   `json:"display"`
+	Version string   `json:"version"`
+	Sources []Source `json:"sources,omitempty"`
+	// FirstAsk is the VENDOR'S OWN FIRST-ASK COLLECTION — the one command (or
+	// short set) their TAC opens a case with: `show tech-support` on Cisco and
+	// Arista, `request support information` on Junos, `execute tac report` on
+	// FortiOS. It leads every capture, before the baseline (owner, 2026-09-06:
+	// "we pre-gather common commands especially things like show tech-support
+	// which is good enough to open a case initially").
+	//
+	// It is a SEPARATE list from `baseline` and not simply the head of it,
+	// because the two carry different budgets and different honesty. A baseline
+	// command is kilobytes and seconds; a first-ask collection is tens of
+	// megabytes and minutes, is streamed to the bundle rather than buffered, and
+	// a dialect whose vendor's own spelling WRITES TO THE DEVICE (SR OS `admin
+	// tech-support`, SR Linux `tools system tech-support`) has none at all — and
+	// says why, rather than quietly leading with something else.
+	FirstAsk []string `json:"first_ask,omitempty"`
+	// FirstAskNote is the honest sentence for a dialect with NO first-ask
+	// collection: which vendor spelling was refused and under which rule, or
+	// which out-of-band path the operator must use instead (PAN-OS). It is
+	// required when FirstAsk is empty, so the gap is always explained.
+	FirstAskNote string `json:"first_ask_note,omitempty"`
+
 	Baseline []string           `json:"baseline"`
 	Optional []string           `json:"optional,omitempty"`
 	Bindings map[string]Binding `json:"bindings"`

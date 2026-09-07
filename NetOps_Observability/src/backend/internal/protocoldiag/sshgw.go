@@ -54,6 +54,23 @@ const (
 	// MaxOutputBytes is the hard ceiling on ONE command's captured output (§9).
 	// A diagnostics `show` is kilobytes; this is generous headroom, not a target.
 	MaxOutputBytes = 512 << 10
+	// MaxStreamOutputBytes is the hard ceiling on ONE command's output when it
+	// is STREAMED rather than buffered (RunStream).
+	//
+	// It is a different number from MaxOutputBytes because it bounds a different
+	// risk. MaxOutputBytes protects the HEAP: everything under it is held in
+	// memory at once, so it must stay small. A streamed command never lands in
+	// memory — it goes to the caller's writer, which for the TAC escalation is a
+	// spill file on the way into the bundle — so what needs bounding there is
+	// the DISK and the wall clock, not the heap. The vendors' own first-ask
+	// collection sets the size: Cisco documents `show tech-support` output in
+	// the tens of megabytes on a loaded chassis, and a ceiling below that would
+	// turn the one command TAC always asks for into a truncated file.
+	MaxStreamOutputBytes = 128 << 20
+	// DefaultStreamTimeout bounds ONE streamed command end to end. A support
+	// bundle takes minutes on a busy box; 30 s (DefaultCommandTimeout) is the
+	// right budget for a `show ip ospf neighbor` and the wrong one for this.
+	DefaultStreamTimeout = 15 * time.Minute
 )
 
 var (
@@ -89,6 +106,25 @@ type Gateway interface {
 	Run(ctx context.Context, dev Device, command string, maxBytes int64) (string, error)
 }
 
+// StreamingGateway runs one already-validated command and STREAMS its output to
+// w instead of returning it.
+//
+// It is a separate, OPTIONAL interface rather than a change to Gateway for two
+// reasons. First, compatibility: every existing gateway and every test fake
+// stays valid, and a caller that needs streaming asks for it with a type
+// assertion and falls back honestly when the transport cannot. Second, honesty
+// about the bound: a streamed command is allowed a far larger ceiling
+// (MaxStreamOutputBytes) precisely because its bytes never accumulate in memory,
+// and that budget must not be reachable through the buffered call by accident.
+//
+// It returns the number of bytes written to w. A gateway that hits the ceiling
+// returns ErrTooLarge with the bytes written so far already in w — a truncated
+// support bundle with an honest note beats no bundle at all, and the caller
+// records the truncation on the command.
+type StreamingGateway interface {
+	RunStream(ctx context.Context, dev Device, command string, maxBytes int64, w io.Writer) (int64, error)
+}
+
 // SSHGateway is the production Gateway.
 type SSHGateway struct {
 	// Credentials yields the diagnostics identity for a device. Required.
@@ -109,20 +145,60 @@ type SSHGateway struct {
 	OnHostKey func(dev Device, fingerprint string, firstSeen bool)
 }
 
-// Run implements Gateway.
+// Run implements Gateway. Output is BUFFERED and bounded by MaxOutputBytes; use
+// RunStream for a command whose output belongs on disk rather than on the heap.
 func (g *SSHGateway) Run(ctx context.Context, dev Device, command string, maxBytes int64) (string, error) {
+	if maxBytes <= 0 || maxBytes > MaxOutputBytes {
+		maxBytes = MaxOutputBytes
+	}
+	out := &capWriter{max: maxBytes}
+	if _, err := g.exec(ctx, dev, command, out); err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
+// RunStream implements StreamingGateway: the SAME session, the same host-key
+// custody and the same bounds, with the output written straight through to w.
+//
+// The ceiling is MaxStreamOutputBytes rather than MaxOutputBytes because nothing
+// here accumulates in memory — see the constant's own note. On overflow the
+// bytes already written to w are KEPT and ErrTooLarge is returned with the count,
+// so a caller can record an honest truncation instead of discarding minutes of a
+// support bundle.
+func (g *SSHGateway) RunStream(ctx context.Context, dev Device, command string, maxBytes int64, w io.Writer) (int64, error) {
+	if w == nil {
+		return 0, errors.New("protocoldiag: RunStream needs a writer")
+	}
+	if maxBytes <= 0 || maxBytes > MaxStreamOutputBytes {
+		maxBytes = MaxStreamOutputBytes
+	}
+	cw := &capStream{w: w, max: maxBytes}
+	n, err := g.exec(ctx, dev, command, cw)
+	if cw.overflow {
+		return n, ErrTooLarge
+	}
+	return n, err
+}
+
+// exec opens one session, runs one already-validated command and copies its
+// stdout into sink. It is the single place the dial, the host-key custody, the
+// deadline watchdog and the session hygiene live, so the buffered and streamed
+// paths cannot drift apart on any of them.
+func (g *SSHGateway) exec(ctx context.Context, dev Device, command string, sink interface {
+	io.Writer
+	written() int64
+	overflowed() bool
+}) (int64, error) {
 	if g.Credentials == nil {
-		return "", errors.New("protocoldiag: no diagnostics credentials configured")
+		return 0, errors.New("protocoldiag: no diagnostics credentials configured")
 	}
 	if g.HostKeyCheck == nil {
 		// Fail CLOSED. An absent host-key policy is not "trust everything".
-		return "", errors.New("protocoldiag: no host-key verification configured — refusing to connect")
+		return 0, errors.New("protocoldiag: no host-key verification configured — refusing to connect")
 	}
 	if dev.Address == "" {
-		return "", ErrNoAddress
-	}
-	if maxBytes <= 0 || maxBytes > MaxOutputBytes {
-		maxBytes = MaxOutputBytes
+		return 0, ErrNoAddress
 	}
 	timeout := g.DialTimeout
 	if timeout <= 0 {
@@ -139,14 +215,14 @@ func (g *SSHGateway) Run(ctx context.Context, dev Device, command string, maxByt
 
 	cred, err := g.Credentials(ctx, dev)
 	if err != nil {
-		return "", fmt.Errorf("diagnostics credentials unavailable: %w", err)
+		return 0, fmt.Errorf("diagnostics credentials unavailable: %w", err)
 	}
 	if cred.Username == "" || (cred.Password == "" && cred.PrivateKey == "") {
-		return "", errors.New("protocoldiag: diagnostics credentials are incomplete")
+		return 0, errors.New("protocoldiag: diagnostics credentials are incomplete")
 	}
 	auth, err := sshAuthMethods(cred)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	cfg := &ssh.ClientConfig{
@@ -173,7 +249,7 @@ func (g *SSHGateway) Run(ctx context.Context, dev Device, command string, maxByt
 	}
 	conn, err := dial(ctx, "tcp", addr)
 	if err != nil {
-		return "", fmt.Errorf("connect: %w", err)
+		return 0, fmt.Errorf("connect: %w", err)
 	}
 	// A context deadline must be able to break a stuck handshake or read, so it
 	// is pushed onto the socket rather than only wrapping the call (§9).
@@ -193,33 +269,32 @@ func (g *SSHGateway) Run(ctx context.Context, dev Device, command string, maxByt
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
 		_ = conn.Close() // best-effort: the handshake already failed
-		return "", fmt.Errorf("ssh handshake: %w", err)
+		return 0, fmt.Errorf("ssh handshake: %w", err)
 	}
 	client := ssh.NewClient(sshConn, chans, reqs)
 	defer client.Close()
 
 	session, err := client.NewSession()
 	if err != nil {
-		return "", fmt.Errorf("ssh session: %w", err)
+		return 0, fmt.Errorf("ssh session: %w", err)
 	}
 	defer session.Close()
 
 	// No PTY and no stdin: this session can be read from, never typed into.
-	out := &capWriter{max: maxBytes}
-	session.Stdout = out
+	session.Stdout = sink
 	session.Stderr = io.Discard // device chatter is not diagnostic output
 	if err := session.Run(command); err != nil {
-		if out.overflow {
-			return "", ErrTooLarge
+		if sink.overflowed() {
+			return sink.written(), ErrTooLarge
 		}
 		// A non-zero exit is an honest per-command failure. The collector records
 		// it on that command and continues — it never invents output.
-		return "", fmt.Errorf("command %q failed: %w", command, err)
+		return sink.written(), fmt.Errorf("command %q failed: %w", command, err)
 	}
-	if out.overflow {
-		return "", ErrTooLarge
+	if sink.overflowed() {
+		return sink.written(), ErrTooLarge
 	}
-	return out.String(), nil
+	return sink.written(), nil
 }
 
 // sshAuthMethods builds the offered SSH auth methods. Password is ALSO offered
@@ -288,6 +363,59 @@ func (c *capWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (c *capWriter) String() string { return string(c.buf) }
+func (c *capWriter) String() string   { return string(c.buf) }
+func (c *capWriter) written() int64   { return c.n }
+func (c *capWriter) overflowed() bool { return c.overflow }
 
-var _ Gateway = (*SSHGateway)(nil)
+// capStream is the STREAMING byte cap: it passes bytes straight through to the
+// underlying writer and stops at max.
+//
+// It differs from capWriter in the one way that matters. capWriter refuses the
+// whole write that would cross the cap, because its caller is going to discard
+// the buffer anyway. capStream writes the PREFIX that still fits and then stops:
+// its caller has a file on disk with minutes of a support bundle in it, and
+// throwing that away to return a rounder number would be worse for the TAC
+// engineer who has to read it. The truncation is recorded on the command, so
+// nothing is silently short.
+type capStream struct {
+	w        io.Writer
+	max      int64
+	n        int64
+	overflow bool
+}
+
+func (c *capStream) Write(p []byte) (int, error) {
+	if c.overflow {
+		// Report the bytes as consumed so ssh.Session.Run does not fail the
+		// whole command with a short-write error: the cap is OUR decision, and
+		// it is reported through ErrTooLarge, not through a broken session.
+		return len(p), nil
+	}
+	room := c.max - c.n
+	if room <= 0 {
+		c.overflow = true
+		return len(p), nil
+	}
+	chunk := p
+	if int64(len(chunk)) > room {
+		chunk = chunk[:room]
+		c.overflow = true
+	}
+	written, err := c.w.Write(chunk)
+	c.n += int64(written)
+	if err != nil {
+		return written, err
+	}
+	if written != len(chunk) {
+		return written, io.ErrShortWrite
+	}
+	return len(p), nil
+}
+
+func (c *capStream) written() int64   { return c.n }
+func (c *capStream) overflowed() bool { return c.overflow }
+
+var (
+	_ Gateway          = (*SSHGateway)(nil)
+	_ StreamingGateway = (*SSHGateway)(nil)
+)

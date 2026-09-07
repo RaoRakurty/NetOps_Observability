@@ -40,13 +40,37 @@ func buildFixtureCapture(t *testing.T) (*Plan, *Capture) {
 		f.out[s.Command] = "line one\nline two\n"
 	}
 	// Plant a secret in one output and in one error string.
+	//
+	// The failing command is chosen as one whose RENDERED STRING is unique in
+	// this plan. The fake is keyed by command text, and a dialect legitimately
+	// binds two intents to the same command (IOS-XE renders both system.version
+	// and system.uptime as `show version`), so failing a shared string would
+	// fail two steps and the manifest assertion below would be counting the
+	// fixture rather than the code.
 	f.out[p.Steps[0].Command] = "hostname core1\nusername admin password 7 " + plantedSecret + "\n"
-	f.fail[p.Steps[1].Command] = errors.New("device said: snmp-server community " + plantedSecret + " ro")
+	f.fail[uniqueCommandStep(t, p)] = errors.New("device said: snmp-server community " + plantedSecret + " ro")
 	capt, err := testCollector(t, f, WithClock(fixedClock())).Collect(context.Background(), p, nil, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 	return p, capt
+}
+
+// uniqueCommandStep returns the command of the first step (after the first) that
+// no other step in the plan renders to the same string.
+func uniqueCommandStep(t *testing.T, p *Plan) string {
+	t.Helper()
+	count := map[string]int{}
+	for _, s := range p.Steps {
+		count[s.Command]++
+	}
+	for i, s := range p.Steps {
+		if i > 0 && count[s.Command] == 1 {
+			return s.Command
+		}
+	}
+	t.Fatal("the fixture plan has no step with a unique command to fail")
+	return ""
 }
 
 func fixtureBundleInput(t *testing.T) BundleInput {

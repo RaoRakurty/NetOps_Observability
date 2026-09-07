@@ -34,6 +34,9 @@ package tac
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -50,7 +53,14 @@ const (
 	defaultPacing = 1 * time.Second
 	// defaultMaxTotalBytes is the WHOLE-collection ceiling. A collection that
 	// reaches it stops, honestly, with everything captured so far.
-	defaultMaxTotalBytes int64 = 32 << 20
+	//
+	// It was 32 MiB while every command was buffered in memory, which was the
+	// right number for a heap bound. Since 2026-09-07 the vendor's first-ask
+	// support collection is STREAMED to disk and a single one of those may be
+	// 64 MiB by its own authored ceiling, so a 32 MiB whole-collection cap would
+	// stop the collection in the middle of the one command TAC asks for first.
+	// What this number now bounds is the spill directory, not the heap.
+	defaultMaxTotalBytes int64 = 256 << 20
 	// maxCommandsPerCollection bounds the plan length a collector will run.
 	maxCommandsPerCollection = 200
 )
@@ -63,12 +73,30 @@ type CollectedCommand struct {
 	Command  string   `json:"command"`
 	Verified Verified `json:"verified"`
 	// Output is REDACTED text. Bytes is its size after redaction.
-	Output     string    `json:"output"`
-	Bytes      int       `json:"bytes"`
+	//
+	// Output is EMPTY for a STREAMED command; its body is in SpillPath. The two
+	// are never both set, and Bytes is the redacted size either way, so
+	// everything that reports a size — the summary, the manifest, the total-cap
+	// arithmetic — reads one field and cannot disagree with itself.
+	Output string `json:"output"`
+	Bytes  int    `json:"bytes"`
+	// SpillPath is the on-disk file holding this command's REDACTED output when
+	// it was streamed rather than buffered (the vendor's first-ask support
+	// collection: tens of megabytes, minutes long).
+	//
+	// It is `json:"-"` deliberately. A spill path is process-local state, not a
+	// fact about the capture: serialising it would put a filesystem location in
+	// the state endpoint, in the learning backlog and in anything that persists
+	// a capture, and none of those can do anything useful with it. The bundle
+	// builder, which runs in this process, is the only reader.
+	SpillPath  string    `json:"-"`
 	Err        string    `json:"error,omitempty"`
 	StartedAt  time.Time `json:"started_at"`
 	DurationMS int64     `json:"duration_ms"`
 }
+
+// Streamed reports a command whose output is on disk rather than in memory.
+func (c CollectedCommand) Streamed() bool { return c.SpillPath != "" }
 
 // OK reports a command that ran and produced usable output.
 func (c CollectedCommand) OK() bool { return c.Err == "" }
@@ -106,6 +134,12 @@ type Capture struct {
 	Template TemplateRef `json:"template,omitzero"`
 	Edits    []PlanEdit  `json:"edits,omitempty"`
 
+	// SpillDir is the directory holding this capture's streamed outputs. It is
+	// this process's own temporary directory, owned by the capture, and removed
+	// by Close — which the service calls when the capture is replaced or the
+	// escalation is evicted. Like SpillPath it never crosses the wire.
+	SpillDir string `json:"-"`
+
 	TotalBytes int64 `json:"total_bytes"`
 	// Redacted is always true — it is stated rather than assumed, so a reader
 	// of the JSON never has to wonder.
@@ -116,6 +150,27 @@ type Capture struct {
 	CatalogVersion string `json:"catalog_version"`
 	PlanVersion    string `json:"plan_version,omitempty"`
 	EngineVersion  string `json:"engine_version"`
+}
+
+// Close releases the capture's streamed outputs. It is idempotent, and it is
+// safe to call on a capture that streamed nothing.
+//
+// A capture that is never closed leaks a temporary directory for the life of the
+// process, which is why the service closes the OLD capture at the moment it
+// records a new one and at eviction — the two points where a capture stops being
+// reachable. It is not tied to the bundle: a bundle can be built many times from
+// one capture (once per profile the operator tries), so the bundle cannot own
+// the bytes it reads.
+func (c *Capture) Close() error {
+	if c == nil || c.SpillDir == "" {
+		return nil
+	}
+	dir := c.SpillDir
+	c.SpillDir = ""
+	for i := range c.Commands {
+		c.Commands[i].SpillPath = ""
+	}
+	return os.RemoveAll(dir)
 }
 
 // SuppliedOutput is one manually-pasted output, the fallback path for a platform
@@ -146,10 +201,18 @@ type Progress struct {
 // package globals, no hidden singletons).
 type Collector struct {
 	runner protocoldiag.CommandRunner
-	now    func() time.Time
-	sleep  func(ctx context.Context, d time.Duration) error
-	pace   time.Duration
-	maxTot int64
+	// stream is the runner's OPTIONAL streaming half. It is set only when the
+	// injected runner implements protocoldiag.StreamingRunner; when it is nil
+	// every command is buffered, and a first-ask support collection is refused
+	// rather than silently truncated to the buffered ceiling.
+	stream protocoldiag.StreamingRunner
+	// spillRoot is where streamed outputs are written. Empty means the OS
+	// temporary directory, which is what production uses; a test pins it.
+	spillRoot string
+	now       func() time.Time
+	sleep     func(ctx context.Context, d time.Duration) error
+	pace      time.Duration
+	maxTot    int64
 
 	mu   sync.Mutex
 	busy map[string]bool
@@ -196,6 +259,16 @@ func WithMaxTotalBytes(n int64) CollectorOption {
 	}
 }
 
+// WithSpillRoot pins the directory streamed outputs are written under. Tests use
+// it; production leaves it empty and gets the OS temporary directory.
+func WithSpillRoot(dir string) CollectorOption {
+	return func(c *Collector) {
+		if strings.TrimSpace(dir) != "" {
+			c.spillRoot = dir
+		}
+	}
+}
+
 // NewCollector builds a Collector over an injected read-only command runner. A
 // nil runner is a fail-closed error, never a silent no-op that would fabricate
 // an empty capture.
@@ -207,11 +280,24 @@ func NewCollector(runner protocoldiag.CommandRunner, opts ...CollectorOption) (*
 		runner: runner, now: time.Now, sleep: sleepCtx,
 		pace: defaultPacing, maxTot: defaultMaxTotalBytes, busy: map[string]bool{},
 	}
+	// The streaming half is DISCOVERED, not configured: a runner either can
+	// stream or cannot, and asking a deployment to declare it would be one more
+	// thing to get wrong. A runner that cannot is not degraded — every command
+	// but the first-ask collection is kilobytes and buffers fine.
+	if sr, ok := runner.(protocoldiag.StreamingRunner); ok {
+		c.stream = sr
+	}
 	for _, o := range opts {
 		o(c)
 	}
 	return c, nil
 }
+
+// CanStream reports whether this collector can run a first-ask support
+// collection. It is read by the escalation so the UI can say plainly that this
+// deployment's transport will not carry one, rather than producing a truncated
+// bundle and calling it done.
+func (c *Collector) CanStream() bool { return c != nil && c.stream != nil }
 
 // sleepCtx waits d, or returns early when the context is done.
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -268,6 +354,19 @@ func (c *Collector) Collect(ctx context.Context, p *Plan, supplied []SuppliedOut
 	if capt.Topology == nil {
 		capt.Topology = []TopologyNote{}
 	}
+	// The spill directory is created ONLY when the plan actually carries a
+	// streamed step, so an ordinary collection touches no disk at all.
+	if c.stream != nil && planNeedsStream(p) {
+		dir, derr := os.MkdirTemp(c.spillRoot, "correlix-tac-capture-")
+		if derr != nil {
+			// A collection that cannot spill still runs: the streamed steps fall
+			// back to the buffered path and record their own truncation, which
+			// is far better than refusing to collect anything.
+			capt.Stopped = ""
+		} else {
+			capt.SpillDir = dir
+		}
+	}
 
 	dev := protocoldiag.Device{
 		ID: p.DeviceID, Hostname: p.Hostname, Platform: p.Platform, TenantID: p.TenantID,
@@ -290,7 +389,12 @@ func (c *Collector) Collect(ctx context.Context, p *Plan, supplied []SuppliedOut
 			}
 		}
 		emit(progress, Progress{Index: i, Total: total, Intent: st.Intent, Command: st.Command, Phase: "start"})
-		cc := c.runOne(ctx, dev, st)
+		var cc CollectedCommand
+		if c.streamable(st) && capt.SpillDir != "" {
+			cc = c.runStreamed(ctx, dev, st, capt.SpillDir, i)
+		} else {
+			cc = c.runOne(ctx, dev, st)
+		}
 		capt.Commands = append(capt.Commands, cc)
 		capt.TotalBytes += int64(cc.Bytes)
 		if st.Teardown != "" {
@@ -348,6 +452,107 @@ func (c *Collector) runOne(ctx context.Context, dev protocoldiag.Device, st Step
 	cc.Output = protocoldiag.RedactOutput(out)
 	cc.Bytes = len(cc.Output)
 	return cc
+}
+
+// streamable reports that this step is one the collector should STREAM.
+//
+// The rule is the step's own budget, not its section: a step whose authored
+// MaxBytes exceeds what the buffered path can carry would be truncated by the
+// buffered path, and truncating the vendor's support bundle is the one failure
+// this whole seam exists to prevent. First-ask steps are exactly the steps that
+// carry such a budget, which is why the loader REQUIRES them to declare one.
+func (c *Collector) streamable(st Step) bool {
+	return c.stream != nil && st.MaxBytes > defaultMaxOutputBytes
+}
+
+// planNeedsStream reports whether any of the plan's steps will be streamed.
+func planNeedsStream(p *Plan) bool {
+	for _, st := range p.Steps {
+		if st.MaxBytes > defaultMaxOutputBytes {
+			return true
+		}
+	}
+	return false
+}
+
+// runStreamed runs one step with its output written STRAIGHT INTO a spill file,
+// redacted on the way through.
+//
+// The redaction is the load-bearing part. Nothing unredacted is ever written to
+// disk: protocoldiag.RedactingWriter applies the identical per-line rules the
+// buffered path applies, in a stream, with the PEM-block state carried across
+// write boundaries — so a private key split over a hundred packets is redacted
+// exactly as it would be in a 4 KB `show run` output.
+func (c *Collector) runStreamed(ctx context.Context, dev protocoldiag.Device, st Step, dir string, idx int) CollectedCommand {
+	start := c.now().UTC()
+	cc := CollectedCommand{
+		Intent: st.Intent, Title: st.Title, Section: st.Section,
+		Command: st.Command, Verified: st.Verified, StartedAt: start,
+	}
+	path := filepath.Join(dir, spillName(idx, st.Intent))
+	// #nosec G304 -- path is built from this collector's own temp dir and a
+	// slugged intent id from the loaded catalog; no caller supplies it.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		cc.Err = "this output could not be streamed to disk: " + err.Error()
+		cc.DurationMS = c.now().UTC().Sub(start).Milliseconds()
+		return cc
+	}
+	red := protocoldiag.NewRedactingWriter(f)
+	to := time.Duration(st.TimeoutSeconds) * time.Second
+	if to <= 0 {
+		to = defaultCommandTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, to)
+	n, runErr := c.stream.RunStream(runCtx, dev, st.Command, st.MaxBytes, red)
+	cancel()
+	closeErr := red.Close()
+	if ferr := f.Close(); ferr != nil && closeErr == nil {
+		closeErr = ferr
+	}
+	cc.DurationMS = c.now().UTC().Sub(start).Milliseconds()
+	cc.Bytes = int(red.Written())
+	cc.SpillPath = path
+	switch {
+	case runErr != nil && errors.Is(runErr, protocoldiag.ErrTooLarge):
+		// Honest truncation: the bytes collected are KEPT and the operator and
+		// the TAC engineer are both told the file is short.
+		cc.Err = "output exceeded this command's size cap and was truncated"
+	case runErr != nil:
+		// §8: an error string can echo device output — redact it too.
+		cc.Err = protocoldiag.RedactOutput(runErr.Error())
+	case closeErr != nil:
+		cc.Err = "this output could not be flushed to disk: " + closeErr.Error()
+	}
+	if cc.Bytes == 0 && cc.Err == "" {
+		// Nothing came back. The empty spill file is not evidence; drop it so
+		// the bundle reports "returned no output" the way it always has.
+		cc.SpillPath = ""
+		if rerr := os.Remove(path); rerr != nil {
+			cc.Err = "an empty streamed output could not be cleaned up: " + rerr.Error()
+		}
+	}
+	_ = n // the redacted count (red.Written) is the size that matters, not the raw one
+	return cc
+}
+
+// spillName is the on-disk name of one streamed output. It is built from a
+// closed character set so a catalog id can never steer a path.
+func spillName(idx int, intent string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%03d-", idx)
+	for _, r := range intent {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + 32)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	b.WriteString(".txt")
+	return b.String()
 }
 
 // runTeardown runs a step's session-scope teardown. It deliberately does NOT

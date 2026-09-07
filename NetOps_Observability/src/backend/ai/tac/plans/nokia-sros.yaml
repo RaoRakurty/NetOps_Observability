@@ -131,6 +131,21 @@ sources:
   - title: '7705 SAR 24.4.R1 — Show Router Commands'
     url: https://documentation.nokia.com/sar/24-4-1/books/services/show-router-commands.html
 
+# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture
+# (owner, 2026-09-06: "we pre-gather common commands especially things like show
+# tech-support which is good enough to open a case initially"). It is empty on a
+# platform whose own bundle command WRITES TO THE DEVICE or is generated out of
+# band; first_ask_note says which, with the vendor's page.
+first_ask_note: >-
+  SR OS has no first-ask capture Correlix will run. `admin tech-support` is
+  REFUSED BY NAME: it writes an archive onto the device's compact flash (the
+  configured ts-location, or a mandatory file-url when none is set), and
+  Nokia's own reference says it "creates a system core dump" and "should
+  only be used with authorized direction of Nokia support". Correlix
+  collects the read-only `show` set in this plan's baseline instead,
+  including `admin display-config` for the configuration.
+  https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html
+
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
 baseline:

@@ -3976,6 +3976,7 @@ classes:
       - reachability.path
       - pathmtu.probe
       - ospf.multicast.reachability
+      - techsupport.bundle
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2'
         url: https://www.arista.com/en/um-eos/eos-open-shortest-path-first-version-2
@@ -5369,6 +5370,7 @@ classes:
       - inventory.hardware
       - inventory.firmware
       - alarms.system
+      - techsupport.bundle
     sources:
       - title: 'https://www.arista.com/en/um-eos/eos-configuring-and-viewing-environment-settings'
         url: https://www.arista.com/en/um-eos/eos-configuring-and-viewing-environment-settings
@@ -5475,6 +5477,7 @@ classes:
       - cpu.top_processes
       - punt.rate.per_interface
       - punt.cpu_interface.stats
+      - techsupport.bundle
     sources:
       - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html'
         url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-16/213549-troubleshoot-high-cpu-usage-in-catalyst.html
@@ -5585,6 +5588,7 @@ classes:
       - process.list.extensive
       - storage.usage
       - service.fdb.usage
+      - techsupport.bundle
     sources:
       - title: 'https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-17/225227-troubleshoot-memory-issues-in-ios-xe.html'
         url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xe-17/225227-troubleshoot-memory-issues-in-ios-xe.html
@@ -9085,6 +9089,7 @@ classes:
       - alarms.system
       - alarms.chassis
       - version.info
+      - techsupport.bundle
     sources:
       - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-core-dumps.html'
         url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-core-dumps.html

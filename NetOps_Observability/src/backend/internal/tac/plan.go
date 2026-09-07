@@ -29,6 +29,9 @@ import (
 type Section string
 
 const (
+	// SectionFirstAsk is the VENDOR'S OWN first-ask collection — the thing their
+	// TAC asks for before anything else. It leads the plan.
+	SectionFirstAsk Section = "first-ask"
 	// SectionBaseline is the vendor-standard set collected for every class.
 	SectionBaseline Section = "baseline"
 	// SectionDeepDive is the class's own intent list.
@@ -334,6 +337,14 @@ func (c *Catalog) Plan(classID string, dev Device, opt PlanOptions) (*Plan, erro
 			"no binding on the "+dp.Display+" dialect"))
 	}
 
+	// FIRST, ALWAYS: the vendor's own first-ask collection. It leads because it
+	// is what closes the time lag — an operator who has it can open the case
+	// now, and the deep-dive is what the TAC engineer asks for second.
+	for _, in := range dp.FirstAsk {
+		if b, ok := dp.Bound(in); ok {
+			addBound(in, SectionFirstAsk, b)
+		}
+	}
 	for _, in := range dp.Baseline {
 		if b, ok := dp.Bound(in); ok {
 			addBound(in, SectionBaseline, b)
@@ -363,7 +374,26 @@ func (c *Catalog) Plan(classID string, dev Device, opt PlanOptions) (*Plan, erro
 	}
 	if opt.IncludeOptional {
 		for _, in := range dp.Optional {
-			if b, ok := dp.Bound(in); ok {
+			b, ok := dp.Bound(in)
+			switch {
+			case !ok:
+			case b.Consent && !opt.Consent[in]:
+				// `include_optional` is a request for the LARGE captures, not a
+				// blanket approval. A command the vendor's own documentation
+				// calls not-routine still needs its own yes — which is what the
+				// deep-dive path has always done, and what this path did not
+				// until 2026-09-07.
+				if !seen[in] {
+					seen[in] = true
+					st := c.unboundStep(in, SectionOptional,
+						"needs your explicit approval — "+b.ConsentNote)
+					st.NeedsConsent = true
+					st.Command = renderCommand(b.Command, dp.vrfScopeKeyword, opt.Target)
+					st.Verified = b.Verified
+					st.Sources = stepSources(b.Sources)
+					p.Unbound = append(p.Unbound, st)
+				}
+			default:
 				addBound(in, SectionOptional, b)
 			}
 		}

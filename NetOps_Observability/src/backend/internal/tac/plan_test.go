@@ -62,19 +62,26 @@ func TestPlanBaselinePlusDeepDive(t *testing.T) {
 	}
 }
 
-// TestPlanOptionalIsOffByDefault proves show tech-support is opt-in and is shown
-// honestly rather than hidden.
+// TestPlanOptionalIsOffByDefault proves an optional capture is opt-in and is
+// shown honestly rather than hidden.
+//
+// It used to assert this of `tech.support`. Since 2026-09-07 that intent is the
+// dialect's FIRST-ASK collection and leads every capture by owner decision, so
+// the property is asserted against whatever the dialect still lists as optional
+// — which is the right way to write it anyway: the rule is about the `optional`
+// list, not about one command.
 func TestPlanOptionalIsOffByDefault(t *testing.T) {
 	c := mustCatalog(t)
+	intent := firstOptionalIntent(t, c, "cisco-iosxe")
 	off, _ := c.Plan("ospf-adjacency", iosxeDevice(), PlanOptions{})
 	for _, s := range off.Steps {
-		if s.Intent == "tech.support" {
-			t.Fatal("show tech-support ran without being asked for")
+		if s.Intent == intent {
+			t.Fatalf("optional intent %q ran without being asked for", intent)
 		}
 	}
 	var listed bool
 	for _, s := range off.Unbound {
-		if s.Intent == "tech.support" && strings.Contains(s.Note, "OFF by default") {
+		if s.Intent == intent && strings.Contains(s.Note, "OFF by default") {
 			listed = true
 		}
 	}
@@ -84,7 +91,7 @@ func TestPlanOptionalIsOffByDefault(t *testing.T) {
 	on, _ := c.Plan("ospf-adjacency", iosxeDevice(), PlanOptions{IncludeOptional: true})
 	var included bool
 	for _, s := range on.Steps {
-		if s.Intent == "tech.support" {
+		if s.Intent == intent {
 			included = true
 		}
 	}
@@ -270,3 +277,22 @@ func TestGateRefusesAnUnknownPlatform(t *testing.T) {
 }
 
 func protoDevice(platform string) protocoldiag.Device { return protocoldiag.Device{Platform: platform} }
+
+// firstOptionalIntent returns a dialect's first OPTIONAL intent that binds a
+// command needing no operator consent — the only kind `IncludeOptional` alone
+// can turn on. It skips over consent-gated captures rather than asserting
+// against one, because those need a second, separate yes.
+func firstOptionalIntent(t *testing.T, c *Catalog, dialect string) string {
+	t.Helper()
+	p, ok := c.PlanFor(dialect)
+	if !ok {
+		t.Fatalf("the catalog has no %s plan", dialect)
+	}
+	for _, in := range p.Optional {
+		if b, bound := p.Bound(in); bound && !b.Consent {
+			return in
+		}
+	}
+	t.Skipf("%s lists no consent-free optional intent to assert against", dialect)
+	return ""
+}

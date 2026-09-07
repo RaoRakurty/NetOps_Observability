@@ -158,6 +158,16 @@ func TestPolicyMatchesTokensNotSubstrings(t *testing.T) {
 		{"fortinet-fortios", "diagnose debug crashlog read"},
 		{"fortinet-fortios", "execute ping 192.0.2.1"},
 		{"fortinet-fortios", "execute log display"},
+		// FortiOS's documented TAC collection. It is an output-only leaf of the
+		// `execute` branch (docs.fortinet.com CLI troubleshooting cheat sheet
+		// describes it purely as output; no Fortinet page Correlix holds says it
+		// writes a file), so the policy admits it and the CITED read-only
+		// exception in the plan is what gets it past the grammar.
+		{"fortinet-fortios", "execute tac report"},
+		// Junos's documented read-only support collection. Same shape: the
+		// policy has no `request support information` rule, and the plan's cited
+		// exception is what admits it to the grammar.
+		{"juniper-junos", "request support information"},
 		{"paloalto-panos", "show system info"},
 		{"paloalto-panos", "request license info"},
 		{"arista-eos", "show agent Rib logs"},
@@ -178,12 +188,18 @@ func TestPolicyMatchesTokensNotSubstrings(t *testing.T) {
 		{"juniper-junos", "restart routing gracefully", FamilyDaemon},
 		{"juniper-junos", "request system reboot", FamilyRestart},
 		{"nokia-sros", "admin reboot", FamilyRestart},
+		// The vendor support bundles that WRITE TO THE DEVICE. Each is refused
+		// BY NAME (owner, 2026-09-07) rather than offered behind a consent
+		// checkbox: a file written on a customer's router is a change, and the
+		// output-only rule does not negotiate about changes.
+		{"nokia-sros", "admin tech-support cf3:/ts.dat", FamilyConfig},
+		{"nokia-srlinux", "tech-support", FamilyConfig},
+		{"nokia-srlinux", "tools system tech-support", FamilyConfig},
 		{"nokia-srlinux", "tools system app-management application bgp_mgr restart", FamilyDaemon},
 		{"huawei-vrp", "reset bgp all", FamilyConfig},
 		{"huawei-vrp", "pads diagnose", FamilyDaemon},
 		{"fortinet-fortios", "diagnose test application miglogd 6", FamilyDaemon},
 		{"fortinet-fortios", "execute reboot", FamilyRestart},
-		{"fortinet-fortios", "execute tac report", FamilyConfig},
 		{"paloalto-panos", "debug software restart process dnsproxy", FamilyDaemon},
 	}
 	for _, tc := range refused {

@@ -486,6 +486,10 @@ def load_plan(slug: str):
     doc.setdefault("bindings", {})
     doc.setdefault("baseline", [])
     doc.setdefault("sources", [])
+    # first_ask / first_ask_note are read back as they are, so `--check` sees the
+    # file's own values in the BEFORE snapshot. apply_first_ask then overwrites
+    # them from FIRST_ASK, which is the authority — so a hand edit to either key
+    # shows up as a drift the check refuses, rather than surviving silently.
     # A citation is identified by the PAGE IT POINTS AT. Earlier merges appended
     # the research file's whole citation set on every run without comparing, so
     # nokia-srlinux carried the same 61 pages six times over (366 entries) and
@@ -500,9 +504,20 @@ def load_plan(slug: str):
 
 # ── writers ──────────────────────────────────────────────────────────────────
 
+# Every rendered file carries the repo's per-file licence header. It is emitted
+# HERE rather than left to `scripts/spdx-headers.py --write`, because the merge
+# rewrites these files wholesale: a header the merge dropped would fail the
+# --check gate on the very next run, and a generated file with no licence is a
+# licence question in a tarball.
+SPDX_HEADER = [
+    "# SPDX-License-Identifier: Apache-2.0",
+    "# Copyright 2026 Correlix",
+    "",
+]
+
 
 def render_classes(doc: dict) -> str:
-    out = []
+    out = list(SPDX_HEADER)
     out.append("# classes.yaml — the TAC escalation issue-class taxonomy and intent vocabulary.")
     out.append("#")
     out.append("# Schema, closed enums and the rules for adding to this file: ai/tac/README.md.")
@@ -567,7 +582,7 @@ def render_classes(doc: dict) -> str:
 
 
 def render_plan(doc: dict) -> str:
-    out = []
+    out = list(SPDX_HEADER)
     out.append("# plans/{}.yaml — the {} command plan for the TAC escalation pack.".format(doc["dialect"], doc.get("display", doc["dialect"])))
     out.append("#")
     out.append("# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven")
@@ -598,6 +613,19 @@ def render_plan(doc: dict) -> str:
             out.append("    url: " + src["url"])
             if src.get("retrieved"):
                 out.append("    retrieved: " + src["retrieved"])
+    out.append("")
+    out.append("# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture")
+    out.append("# (owner, 2026-09-06: \"we pre-gather common commands especially things like show")
+    out.append("# tech-support which is good enough to open a case initially\"). It is empty on a")
+    out.append("# platform whose own bundle command WRITES TO THE DEVICE or is generated out of")
+    out.append("# band; first_ask_note says which, with the vendor's page.")
+    if doc.get("first_ask"):
+        out.append("first_ask:")
+        for intent in doc["first_ask"]:
+            out.append("  - " + intent)
+    if doc.get("first_ask_note"):
+        out.append("first_ask_note: >-")
+        out += emit_block(doc["first_ask_note"], "  ")
     out.append("")
     out.append("# baseline — collected for EVERY class: the vendor-standard set a TAC engineer")
     out.append("# opens before anything issue-specific.")
@@ -854,6 +882,11 @@ def shape_vrf_scope(cmd: str, dialect: str) -> str:
 # Everything not listed here still fails closed.
 READ_ONLY_EXCEPTIONS = {
     "fortinet-fortios": {
+        "execute tac report":
+            "FortiOS's documented TAC collection: the guide describes it purely as output "
+            "— \"an extensive snapshot of your system ... this command runs many diagnostic "
+            "commands\" — and no fetched Fortinet page states that it writes a file to the "
+            "FortiGate filesystem, so it is a session transcript, not a device write",
         "diagnose debug crashlog read":
             "a status print of the stored crash log; it reads, it does not enable debugging",
         "diagnose debug config-error-log read":
@@ -875,12 +908,21 @@ READ_ONLY_EXCEPTIONS = {
         "dir": "lists the storage device so the operator can confirm a diagnostic "
                "file was written; Huawei's own collection procedure uses it",
     },
+    "juniper-junos": {
+        "request support information":
+            "Juniper's documented READ-ONLY support collection: it runs a large set of "
+            "show commands internally and prints them to the session. It writes nothing "
+            "— the `| save` form in JTAC's own procedure is what writes a file, and that "
+            "form is not bound here",
+    },
 }
 EXCEPTION_SOURCE = {
     "fortinet-fortios": ("FortiOS CLI troubleshooting cheat sheet",
                          "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"),
     "huawei-vrp": ("Huawei VRP — collecting fault information",
                    "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/c4073c75/collecting-fault-information"),
+    "juniper-junos": ("request support information — Junos CLI reference",
+                      "https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html"),
 }
 
 # ── (3a) the OUTPUT-ONLY command policy ──────────────────────────────────────
@@ -942,22 +984,237 @@ EXPLICIT_REFUSALS = [
 # with consent: true and the vendor's own caveat, and they are never in a
 # baseline. `writes_file: true` in the research is the primary signal; these
 # patterns catch the ones whose caveat is about load or authorisation instead.
+# NOTE (2026-09-07): `admin tech-support` (SR OS) and the bare `tech-support`
+# (SR Linux) USED to land here, as consent commands. They do not any more: both
+# WRITE A FILE ON THE DEVICE (SR OS an archive into the configured ts-location on
+# compact flash, SR Linux a zip under /tmp), and the owner's output-only rule
+# refuses a device write outright rather than offering it behind a checkbox. They
+# are now named rules in the `config` family of ai/tac/forbidden.yaml, so they are
+# refused BY NAME at the door, in the loader and at the wire — and each dialect's
+# plan carries a `first_ask_note` saying exactly that, with the vendor page.
 CONSENT_PATTERNS = [
-    (re.compile(r"^\s*admin\s+tech-support\b", re.IGNORECASE),
-     ("Nokia's own reference says this creates a system CORE DUMP and should only be used with "
-     "authorised direction of Nokia support. It is not a routine collector.")),
     (re.compile(r"^\s*display\s+diagnostic-information\b", re.IGNORECASE),
      ("Huawei warns that this markedly raises CPU and degrades device performance, and that its "
      "output contains personal data (MAC addresses) that must be deleted after use.")),
-    (re.compile(r"^\s*tech-support\b", re.IGNORECASE),
-     ("SR Linux pauses while every application dumps its report and WRITES A ZIP on the device "
-     "under /tmp.")),
     (re.compile(r"^\s*show\s+tech-support\b", re.IGNORECASE),
      ("The vendor's full support bundle: output can be tens of megabytes and take minutes on a "
      "loaded box.")),
-    (re.compile(r"^\s*execute\s+tac\s+report\b", re.IGNORECASE),
-     "Fortinet documents this as running the whole diagnostic battery; the output is very large."),
 ]
+# `tech-support` (SR Linux) is now refused by the policy at step (0) and
+# `execute tac report` is admitted at step (READ_ONLY_EXCEPTIONS); neither can
+# reach this list any more, so neither has an entry. The `show tech-support`
+# entry stays: it still governs the OPTIONAL, operator-driven twin of the
+# first-ask capture (techsupport.bundle), which is a different thing from the
+# FIRST_ASK binding below and keeps the vendor's own size caveat on it.
+
+# ── (3b) the vendor's FIRST-ASK collection ───────────────────────────────────
+#
+# Owner decision, 2026-09-06/07, verbatim: "we pre-gather common commands
+# especially things like show tech-support which is good enough to open a case
+# initially and later vendor TAC engineer might ask more detail".
+#
+# So every dialect's DEFAULT capture LEADS with whatever that vendor's own TAC
+# asks for first — or says plainly why it has none. This table is the authority
+# for both halves; ai/tac/plans/*.yaml is rendered from it, and internal/tac's
+# loader refuses a plan that has neither a first_ask list nor a note.
+#
+# THE SIZE AND TIME BUDGETS ARE PART OF THE FACT. A first-ask collection is not
+# a `show` — Cisco's own command reference says it "can generate a very large
+# amount of output", and the Nexus guide warns the SSH timeout must exceed the
+# generation time or the capture is truncated. So each entry carries the ceiling
+# the collector streams to disk under; internal/tac refuses a first_ask binding
+# that declares neither.
+#
+# A DIALECT WITH NO ENTRY HERE, OR AN EMPTY `intents`, MUST CARRY A `note`. The
+# five that do are the five where the vendor's own spelling writes to the device
+# or is generated out of band — that is a product fact a TAC engineer reading the
+# bundle needs, not a gap to paper over.
+FIRST_ASK = {
+    "cisco-ios": {
+        "intents": ["tech.support"],
+        "bindings": {
+            "tech.support": {
+                "command": "show tech-support",
+                "max_bytes": 33554432,
+                "timeout_s": 600,
+                "sources": [
+                    ("Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)",
+                     "https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html"),
+                ],
+            },
+        },
+    },
+    "cisco-iosxe": {
+        "intents": ["tech.support"],
+        "bindings": {
+            "tech.support": {
+                "command": "show tech-support",
+                "max_bytes": 33554432,
+                "timeout_s": 600,
+                "sources": [
+                    ("Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)",
+                     "https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html"),
+                    ("Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues",
+                     "https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html"),
+                ],
+            },
+        },
+    },
+    "cisco-nxos": {
+        # The Nexus 9000 "Before Contacting Technical Support" chapter asks for
+        # `show tech-support details`, not the bare form — that IS the vendor's
+        # first ask on this platform, so it is what Correlix collects.
+        "intents": ["tech.support"],
+        "bindings": {
+            "tech.support": {
+                "command": "show tech-support details",
+                "max_bytes": 67108864,
+                "timeout_s": 900,
+                "sources": [
+                    ("Cisco Nexus 9000 Series NX-OS Troubleshooting Guide — Before Contacting Technical Support",
+                     "https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html"),
+                    ("Quick Reference Guide to collect TAC requested outputs from Nexus switches",
+                     "https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html"),
+                ],
+            },
+        },
+    },
+    "cisco-asa": {
+        "intents": ["tech.support"],
+        "bindings": {
+            "tech.support": {
+                "command": "show tech-support",
+                "max_bytes": 16777216,
+                "timeout_s": 300,
+                "sources": [
+                    ("Cisco ASA Series Command Reference",
+                     "https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html"),
+                ],
+            },
+        },
+    },
+    "arista-eos": {
+        "intents": ["tech.support"],
+        "bindings": {
+            "tech.support": {
+                "command": "show tech-support",
+                "max_bytes": 33554432,
+                "timeout_s": 600,
+                "sources": [
+                    ("Arista Support Community Guide — what to attach to a case",
+                     "https://www.arista.com/assets/data/pdf/Arista_Support_Community_Guide.pdf"),
+                ],
+            },
+        },
+    },
+    "juniper-junos": {
+        # Junos spells it `request support information`, which the read-only
+        # grammar cannot recognise by its lead token — it is admitted by the
+        # CITED exception in READ_ONLY_EXCEPTIONS above and by nothing else.
+        # JTAC's own procedure adds `| save /var/tmp/...`, which WRITES A FILE;
+        # that form is deliberately not bound.
+        "intents": ["tech.support"],
+        "bindings": {
+            "tech.support": {
+                "command": "request support information",
+                "max_bytes": 33554432,
+                "timeout_s": 600,
+                "sources": [
+                    ("request support information — Junos CLI reference",
+                     "https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html"),
+                    ("Data Collection for Customer Support (JTAC)",
+                     "https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html"),
+                ],
+            },
+        },
+        "note": ("Junos also publishes `show system core-dumps`, which Correlix collects as its "
+                 "own intent. JTAC's procedure pipes the support information to a file with "
+                 "`| save /var/tmp/rsi-<date>.log` and archives /var/log — both WRITE to the "
+                 "device, so Correlix runs neither and the operator attaches those by hand if "
+                 "JTAC asks."),
+    },
+    "fortinet-fortios": {
+        "intents": ["tech.support"],
+        "bindings": {
+            "tech.support": {
+                "command": "execute tac report",
+                "max_bytes": 16777216,
+                "timeout_s": 600,
+                "sources": [
+                    ("FortiOS CLI troubleshooting cheat sheet",
+                     "https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet"),
+                    ("FortiOS CLI Reference — execute commands",
+                     "https://docs.fortinet.com/document/fortigate/7.6.0/cli-reference"),
+                ],
+            },
+        },
+        "note": ("Fortinet's own guide adds: \"Do not provide the output from the execute tac "
+                 "report unless the support team requests it. The output from this command is "
+                 "very large and is not required in many cases.\" Correlix collects it into the "
+                 "bundle rather than pasting it into the case text, so the size lands where it "
+                 "belongs."),
+    },
+    "cisco-iosxr": {
+        "intents": [],
+        "note": ("IOS-XR has no first-ask capture Correlix will run. On IOS-XR the unscoped "
+                 "`show tech-support` WRITES a .tgz to the router's own hard disk instead of "
+                 "streaming to the session (Cisco doc 221131 exists to explain how to move it "
+                 "off-box), so it is a device write and the output-only policy refuses it. "
+                 "Correlix collects the per-platform list Cisco's Quick Reference Guide 215365 "
+                 "publishes for TAC instead — see this plan's baseline — and the operator "
+                 "attaches the .tgz from the router if TAC asks for it. "
+                 "https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html"),
+    },
+    "nokia-sros": {
+        "intents": [],
+        "note": ("SR OS has no first-ask capture Correlix will run. `admin tech-support` is "
+                 "REFUSED BY NAME: it writes an archive onto the device's compact flash (the "
+                 "configured ts-location, or a mandatory file-url when none is set), and "
+                 "Nokia's own reference says it \"creates a system core dump\" and \"should only "
+                 "be used with authorized direction of Nokia support\". Correlix collects the "
+                 "read-only `show` set in this plan's baseline instead, including "
+                 "`admin display-config` for the configuration. "
+                 "https://documentation.nokia.com/sr/23-7-2/cli-books/classic-cli-command-reference/classic-t-commands.html"),
+    },
+    "nokia-srlinux": {
+        "intents": [],
+        "note": ("SR Linux has no first-ask capture Correlix will run. Its bundle command is the "
+                 "bare `tech-support` (NOT `tools system tech-support` — Correlix refuses both "
+                 "by name): it pauses while every application dumps its report and WRITES A ZIP "
+                 "on the device under /tmp. Correlix collects `info from state`, "
+                 "`show system logging` and the read-only `show` set in this plan's baseline "
+                 "instead. "
+                 "https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html"),
+    },
+    "paloalto-panos": {
+        "intents": [],
+        "note": ("PAN-OS has no first-ask capture Correlix will run. The tech-support file is "
+                 "GENERATED ON THE DEVICE and then downloaded: no read-only CLI form appears on "
+                 "any Palo Alto page Correlix has, and `scp export tech-support` / `tftp export "
+                 "tech-support` push a file to a third-party host, which is a different trust "
+                 "model from a read. Generate it from the GUI (Device > Support > Generate Tech "
+                 "Support File) or the XML API (`type=export&category=tech-support`) with your "
+                 "own key, and attach it to the case beside the Correlix bundle. "
+                 "https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start"),
+    },
+    "huawei-vrp": {
+        "intents": [],
+        "note": ("VRP has no first-ask capture Correlix runs BY DEFAULT. "
+                 "`display diagnostic-information` prints to the terminal without a file name, "
+                 "but Huawei's own troubleshooting guide warns that it markedly raises CPU and "
+                 "degrades device performance, and that its output contains personal data (MAC "
+                 "addresses) that must be deleted after use — so it stays an opt-in capture the "
+                 "operator approves, never the default lead. "
+                 "https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands"),
+    },
+}
+
+# The stock note for a dialect with no FIRST_ASK entry at all — a plan file
+# created by a future research drop. It is honest and it loads; the real note is
+# written when someone reads that vendor's own data-collection page.
+FIRST_ASK_DEFAULT_NOTE = ("No first-ask support capture has been authored for this platform yet. "
+                          "Correlix collects this plan's baseline and deep-dive commands, and "
+                          "will not invent the vendor's own bundle command.")
 
 
 def _families_line(counts: dict) -> str:
@@ -1380,6 +1637,47 @@ def merge_vendor(path: str, classes_doc: dict, plans: dict, facts: dict) -> Repo
     return rep
 
 
+def apply_first_ask(plan: dict, dialect: str) -> None:
+    """Stamp the dialect's FIRST-ASK collection onto its plan.
+
+    It runs LAST, after the research has been folded in, because it is the
+    authority: whatever the corpus bound for one of these intents, the vendor's
+    own data-collection page decides what the first ask is, what it costs and
+    where that claim comes from.
+
+    A first-ask binding is written whole — command, verification, citations and
+    the size/time ceilings — and the intent is removed from `optional`, because
+    an intent cannot be both the thing that always runs first and the thing that
+    is off by default.
+    """
+    spec = FIRST_ASK.get(dialect)
+    if spec is None:
+        plan["first_ask"] = []
+        plan["first_ask_note"] = FIRST_ASK_DEFAULT_NOTE
+        return
+    for intent, binding in (spec.get("bindings") or {}).items():
+        record = {
+            "command": binding["command"],
+            "verified": "doc_claimed",
+            "sources": [{"title": t, "url": u} for t, u in binding.get("sources", ())],
+            "max_bytes": binding["max_bytes"],
+            "timeout_s": binding["timeout_s"],
+        }
+        exception = READ_ONLY_EXCEPTIONS.get(dialect, {}).get(binding["command"])
+        if exception:
+            record["read_only_exception"] = exception
+        plan["bindings"][intent] = record
+    wanted = list(spec.get("intents") or [])
+    plan["first_ask"] = [i for i in wanted if i in plan["bindings"]]
+    if plan["first_ask"]:
+        plan["optional"] = [i for i in plan.get("optional", []) if i not in plan["first_ask"]]
+        plan["baseline"] = [i for i in plan.get("baseline", []) if i not in plan["first_ask"]]
+    note = spec.get("note", "")
+    if not plan["first_ask"] and not note:
+        note = FIRST_ASK_DEFAULT_NOTE
+    plan["first_ask_note"] = note
+
+
 def add_source(bucket: list, src: dict, cap: int = 12) -> None:
     """Add a citation to a list, DEDUPED BY URL.
 
@@ -1530,6 +1828,13 @@ def main() -> int:
             continue
         kept.append(cls)
     classes_doc["classes"] = kept
+
+    # The FIRST-ASK collection is stamped on EVERY plan, including the dialects
+    # with no research file of their own (cisco-ios, cisco-asa): the vendor's own
+    # first ask is a fact about the platform, not about whether a research drop
+    # happened to cover it.
+    for slug, plan in plans.items():
+        apply_first_ask(plan, slug)
 
     after = {CLASSES: render_classes(classes_doc)}
     for slug, plan in plans.items():

@@ -58,6 +58,20 @@ sources:
   - title: EVPN Type-2 and Type-5 route coexistence
     url: https://www.juniper.net/documentation/us/en/software/junos/evpn/topics/concept/evpn-t2-t5-coexist-evpn-vxlan.html
 
+# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture
+# (owner, 2026-09-06: "we pre-gather common commands especially things like show
+# tech-support which is good enough to open a case initially"). It is empty on a
+# platform whose own bundle command WRITES TO THE DEVICE or is generated out of
+# band; first_ask_note says which, with the vendor's page.
+first_ask:
+  - tech.support
+first_ask_note: >-
+  Junos also publishes `show system core-dumps`, which Correlix collects as
+  its own intent. JTAC's procedure pipes the support information to a file
+  with `| save /var/tmp/rsi-<date>.log` and archives /var/log — both WRITE
+  to the device, so Correlix runs neither and the operator attaches those by
+  hand if JTAC asks.
+
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
 baseline:
@@ -77,6 +91,7 @@ baseline:
   - environment.all
   - alarms.chassis
   - alarms.system
+  - techsupport.bundle
 
 bindings:
   system.version:
@@ -832,3 +847,29 @@ bindings:
     sources:
       - title: 'https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-pim-neighbors.html'
         url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-pim-neighbors.html
+  techsupport.bundle:
+    command: request support information
+    verified: doc_claimed
+    read_only_exception: >-
+      Juniper's documented READ-ONLY support collection: it runs a large set of
+      show commands internally and prints them to the session. It writes nothing
+      — the `| save` form in JTAC's own procedure is what writes a file, and
+      that form is not bound here
+    sources:
+      - title: 'Data Collection for Customer Support (JTAC)'
+        url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
+  tech.support:
+    command: request support information
+    verified: doc_claimed
+    read_only_exception: >-
+      Juniper's documented READ-ONLY support collection: it runs a large set of
+      show commands internally and prints them to the session. It writes nothing
+      — the `| save` form in JTAC's own procedure is what writes a file, and
+      that form is not bound here
+    sources:
+      - title: 'request support information — Junos CLI reference'
+        url: https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/request-support-information.html
+      - title: 'Data Collection for Customer Support (JTAC)'
+        url: https://www.juniper.net/documentation/us/en/software/junos/chassis-cluster-security-devices/topics/task/data-collection-for-jtac.html
+    max_bytes: 33554432
+    timeout_s: 600

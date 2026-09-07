@@ -59,6 +59,20 @@ sources:
   - title: 'CloudEngine — Common Troubleshooting Roadmap for a CSS Setup Failure'
     url: https://support.huawei.com/enterprise/en/doc/EDOC1100559442/817e67bb/common-troubleshooting-roadmap-for-a-css-setup-failure
 
+# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture
+# (owner, 2026-09-06: "we pre-gather common commands especially things like show
+# tech-support which is good enough to open a case initially"). It is empty on a
+# platform whose own bundle command WRITES TO THE DEVICE or is generated out of
+# band; first_ask_note says which, with the vendor's page.
+first_ask_note: >-
+  VRP has no first-ask capture Correlix runs BY DEFAULT. `display
+  diagnostic-information` prints to the terminal without a file name, but
+  Huawei's own troubleshooting guide warns that it markedly raises CPU and
+  degrades device performance, and that its output contains personal data
+  (MAC addresses) that must be deleted after use — so it stays an opt-in
+  capture the operator approves, never the default lead.
+  https://support.huawei.com/enterprise/en/doc/EDOC1100280260/974004b2/collecting-fault-information-using-query-commands
+
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
 baseline:

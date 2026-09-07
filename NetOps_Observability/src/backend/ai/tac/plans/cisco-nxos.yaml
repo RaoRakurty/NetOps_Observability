@@ -40,6 +40,14 @@ sources:
   - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide 9.3(x) — Troubleshooting Tools and Methodology'
     url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010001.html
 
+# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture
+# (owner, 2026-09-06: "we pre-gather common commands especially things like show
+# tech-support which is good enough to open a case initially"). It is empty on a
+# platform whose own bundle command WRITES TO THE DEVICE or is generated out of
+# band; first_ask_note says which, with the vendor's page.
+first_ask:
+  - tech.support
+
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
 baseline:
@@ -52,10 +60,6 @@ baseline:
   - route.summary
   - logging.recent
   - config.running
-
-# optional — off by default: large and slow captures the operator opts into.
-optional:
-  - tech.support
 
 bindings:
   system.version:
@@ -257,8 +261,15 @@ bindings:
     command: show running-config
     verified: doc_claimed
   tech.support:
-    command: show tech-support
+    command: show tech-support details
     verified: doc_claimed
+    sources:
+      - title: 'Cisco Nexus 9000 Series NX-OS Troubleshooting Guide — Before Contacting Technical Support'
+        url: https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/93x/troubleshooting/guide/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x/b-cisco-nexus-9000-nx-os-troubleshooting-guide-93x_chapter_010000.html
+      - title: Quick Reference Guide to collect TAC requested outputs from Nexus switches
+        url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/nx-os-software/214107-quick-reference-guide-to-collect-tac-req.html
+    max_bytes: 67108864
+    timeout_s: 900
   stp.state.overall:
     command: show spanning-tree
     verified: doc_claimed

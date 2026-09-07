@@ -31,6 +31,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,10 @@ type SSHCommandRunner struct {
 	gate    commandGate
 	max     int64
 	timeout time.Duration
+	// streamTimeout bounds ONE streamed command. It is separate from timeout
+	// because the two bound different things: 30 s is right for a `show ip ospf
+	// neighbor` and would abort every support bundle ever collected.
+	streamTimeout time.Duration
 
 	mu   sync.Mutex
 	busy map[string]bool // device id → a command is in flight
@@ -75,6 +80,16 @@ func WithCommandTimeout(d time.Duration) SSHRunnerOption {
 	return func(r *SSHCommandRunner) {
 		if d > 0 {
 			r.timeout = d
+		}
+	}
+}
+
+// WithStreamTimeout overrides the per-STREAMED-command deadline. A non-positive
+// value is ignored (DefaultStreamTimeout stands) — there is no "no timeout".
+func WithStreamTimeout(d time.Duration) SSHRunnerOption {
+	return func(r *SSHCommandRunner) {
+		if d > 0 {
+			r.streamTimeout = d
 		}
 	}
 }
@@ -117,11 +132,12 @@ func NewSSHBatteryRunner(battery *StateBattery, gw Gateway, opts ...SSHRunnerOpt
 // newLiveRunner is the shared constructor behind both live runners.
 func newLiveRunner(gw Gateway, gate commandGate, opts ...SSHRunnerOption) *SSHCommandRunner {
 	r := &SSHCommandRunner{
-		gw:      gw,
-		gate:    gate,
-		max:     MaxOutputBytes,
-		timeout: DefaultCommandTimeout,
-		busy:    map[string]bool{},
+		gw:            gw,
+		gate:          gate,
+		max:           MaxOutputBytes,
+		timeout:       DefaultCommandTimeout,
+		streamTimeout: DefaultStreamTimeout,
+		busy:          map[string]bool{},
 	}
 	for _, o := range opts {
 		o(r)
@@ -137,6 +153,10 @@ type commandGate interface {
 	allows(dev Device, command string) bool
 	// name identifies the gate in a refusal message.
 	name() string
+	// readOnlyExempt reports that this command is a DOCUMENTED STATUS READ that
+	// the read-only grammar cannot recognise, admitted by the feature's own
+	// cited data. See ReadOnlyExemptGate for why this exists and what it is not.
+	readOnlyExempt(dev Device, command string) bool
 }
 
 // catalogGate is the 15-issue catalog's gate, keyed on the catalog's
@@ -147,6 +167,9 @@ func (g catalogGate) allows(dev Device, command string) bool {
 	return g.table.Allows(dev.Vendor(), command)
 }
 func (g catalogGate) name() string { return "diagnostics catalog" }
+
+// The 15-issue catalog authors only read-only shows, so it claims no exemption.
+func (catalogGate) readOnlyExempt(Device, string) bool { return false }
 
 // batteryGate is the state battery's gate, keyed on the device's resolved
 // vendorprofile DIALECT. A platform that resolves to no dialect is refused —
@@ -162,6 +185,9 @@ func (g batteryGate) allows(dev Device, command string) bool {
 }
 func (g batteryGate) name() string { return "state battery" }
 
+// The show-first battery is show-first by construction; it claims no exemption.
+func (batteryGate) readOnlyExempt(Device, string) bool { return false }
+
 // Run implements CommandRunner.
 func (r *SSHCommandRunner) Run(ctx context.Context, device Device, command string) (string, error) {
 	// (1) read-only shape — belt to the Collector's braces: this runner is also
@@ -174,18 +200,8 @@ func (r *SSHCommandRunner) Run(ctx context.Context, device Device, command strin
 	// modifiers. Widening this step does not widen what any caller can run: the
 	// closed table at step (2) still has to contain the command, and only a
 	// feature that authored a probe template has one.
-	if err := ValidateReadOnly(command); err != nil {
-		if !IsProbeCommand(command) {
-			return "", fmt.Errorf("%w: %s", ErrNotReadOnly, err.Error())
-		}
-		if perr := ValidateBoundedProbe(command); perr != nil {
-			return "", fmt.Errorf("%w: %s", ErrNotReadOnly, perr.Error())
-		}
-	}
-	// (2) closed table for THIS device's dialect.
-	if !r.gate.allows(device, command) {
-		return "", fmt.Errorf("%w: %q is not in the %s table for platform %q",
-			ErrCommandNotInTable, command, r.gate.name(), device.Platform)
+	if err := r.admit(device, command); err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(device.Address) == "" {
 		return "", ErrNoAddress
@@ -203,6 +219,79 @@ func (r *SSHCommandRunner) Run(ctx context.Context, device Device, command strin
 	runCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 	return r.gw.Run(runCtx, device, command, r.max)
+}
+
+// RunStream implements StreamingRunner: the SAME four guarantees, with the
+// output written straight through to w instead of returned.
+//
+// It exists for exactly one class of command — the vendor's first-ask support
+// bundle (`show tech-support`, `request support information`, `execute tac
+// report`), which runs to tens of megabytes and minutes. Buffering that is the
+// unbounded allocation §9 refuses, so the TAC collector streams it into the
+// bundle. Every other command still goes through Run.
+//
+// A gateway that cannot stream is an honest refusal (ErrStreamUnsupported), not
+// a silent fall back to the buffered path with its much smaller ceiling: the
+// caller must know it is about to truncate a support bundle.
+func (r *SSHCommandRunner) RunStream(ctx context.Context, device Device, command string, maxBytes int64, w io.Writer) (int64, error) {
+	if w == nil {
+		return 0, errors.New("protocoldiag: RunStream needs a writer")
+	}
+	sg, ok := r.gw.(StreamingGateway)
+	if !ok {
+		return 0, ErrStreamUnsupported
+	}
+	if err := r.admit(device, command); err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(device.Address) == "" {
+		return 0, ErrNoAddress
+	}
+	key := device.ID
+	if key == "" {
+		key = device.Address
+	}
+	if !r.claim(key) {
+		return 0, ErrDeviceBusy
+	}
+	defer r.release(key)
+	timeout := r.streamTimeout
+	if timeout <= 0 {
+		timeout = DefaultStreamTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if maxBytes <= 0 || maxBytes > MaxStreamOutputBytes {
+		maxBytes = MaxStreamOutputBytes
+	}
+	return sg.RunStream(runCtx, device, command, maxBytes, w)
+}
+
+// admit is policy steps (1) and (2), shared by Run and RunStream so the two can
+// never diverge on what may reach a device.
+func (r *SSHCommandRunner) admit(device Device, command string) error {
+	// (1) read-only shape — belt to the Collector's braces.
+	if err := ValidateReadOnly(command); err != nil {
+		switch {
+		case IsProbeCommand(command):
+			// A BOUNDED REACHABILITY PROBE is not a read, so it can never pass
+			// ValidateReadOnly. It passes its OWN grammar instead.
+			if perr := ValidateBoundedProbe(command); perr != nil {
+				return fmt.Errorf("%w: %s", ErrNotReadOnly, perr.Error())
+			}
+		case r.gate.readOnlyExempt(device, command):
+			// A DOCUMENTED STATUS READ the grammar cannot recognise, admitted by
+			// the calling feature's own CITED data. See ReadOnlyExemptGate.
+		default:
+			return fmt.Errorf("%w: %s", ErrNotReadOnly, err.Error())
+		}
+	}
+	// (2) closed table for THIS device's dialect.
+	if !r.gate.allows(device, command) {
+		return fmt.Errorf("%w: %q is not in the %s table for platform %q",
+			ErrCommandNotInTable, command, r.gate.name(), device.Platform)
+	}
+	return nil
 }
 
 // claim marks a device busy, returning false when a command is already running
@@ -273,3 +362,56 @@ type exportedGate struct{ gate CommandGate }
 
 func (g exportedGate) allows(dev Device, command string) bool { return g.gate.Allows(dev, command) }
 func (g exportedGate) name() string                           { return g.gate.Name() }
+
+// readOnlyExempt asks the caller's gate, and ONLY when it implements the
+// optional seam. A gate that does not is unchanged: nothing it authors can skip
+// the grammar.
+func (g exportedGate) readOnlyExempt(dev Device, command string) bool {
+	ex, ok := g.gate.(ReadOnlyExemptGate)
+	return ok && ex.ReadOnlyExempt(dev, command)
+}
+
+// ReadOnlyExemptGate is the OPTIONAL half of the gate seam: it lets a feature
+// declare that one of its authored commands is a documented status READ whose
+// spelling the read-only grammar cannot recognise.
+//
+// WHY IT HAS TO EXIST. The grammar decides by the LEAD TOKEN — show / display /
+// get / info — which is right for nine dialects out of ten and wrong for the
+// handful of places a vendor spells a pure read as something else:
+//
+//	· FortiOS  `diagnose debug crashlog read`, `diagnose debug rating` — status
+//	  prints under a branch whose name says "debug".
+//	· Junos    `request support information` — the documented read-only support
+//	  collection, under the same `request` branch as the actions.
+//	· FortiOS  `execute tac report` — the documented TAC collection, which
+//	  prints to the session and writes nothing.
+//
+// Without this seam those commands load, plan, gate and then fail at the wire —
+// which is exactly what happened before 2026-09-07: the plan files carried
+// cited `read_only_exception` bindings that the runner refused, silently turning
+// a baseline command into a failed row on every FortiOS collection.
+//
+// WHAT IT IS NOT. It is not a hole. An implementation must answer true ONLY for
+// a command that is a rendering of an AUTHORED binding carrying a CITED
+// `read_only_exception` (or a documented session-scoped setter and its
+// teardown), and the closed-table check at step (2) still has to pass, and the
+// feature's own output-only policy still has to pass. The exemption is data with
+// a citation next to it, not a runtime decision.
+type ReadOnlyExemptGate interface {
+	// ReadOnlyExempt reports that command is an authored, cited documented-status
+	// read for this device's dialect.
+	ReadOnlyExempt(dev Device, command string) bool
+}
+
+// StreamingRunner is the optional streaming half of CommandRunner.
+type StreamingRunner interface {
+	RunStream(ctx context.Context, dev Device, command string, maxBytes int64, w io.Writer) (int64, error)
+}
+
+// ErrStreamUnsupported is the honest refusal when a streamed command is asked of
+// a transport that cannot stream. It is never a silent downgrade to the buffered
+// path: that path caps at MaxOutputBytes, and truncating a support bundle
+// without saying so is the failure mode this whole seam exists to avoid.
+var ErrStreamUnsupported = errors.New("protocoldiag: this command source cannot stream output")
+
+var _ StreamingRunner = (*SSHCommandRunner)(nil)

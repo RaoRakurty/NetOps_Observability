@@ -119,6 +119,20 @@ sources:
   - title: Checking the logs
     url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/458906/checking-the-logs
 
+# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture
+# (owner, 2026-09-06: "we pre-gather common commands especially things like show
+# tech-support which is good enough to open a case initially"). It is empty on a
+# platform whose own bundle command WRITES TO THE DEVICE or is generated out of
+# band; first_ask_note says which, with the vendor's page.
+first_ask:
+  - tech.support
+first_ask_note: >-
+  Fortinet's own guide adds: "Do not provide the output from the execute tac
+  report unless the support team requests it. The output from this command
+  is very large and is not required in many cases." Correlix collects it
+  into the bundle rather than pasting it into the case text, so the size
+  lands where it belongs.
+
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
 baseline:
@@ -411,3 +425,19 @@ bindings:
     sources:
       - title: Troubleshooting process for FortiGuard updates
         url: https://docs.fortinet.com/document/fortigate/7.6.0/administration-guide/518872/troubleshooting-process-for-fortiguard-updates
+  tech.support:
+    command: execute tac report
+    verified: doc_claimed
+    read_only_exception: >-
+      FortiOS's documented TAC collection: the guide describes it purely as
+      output — "an extensive snapshot of your system ... this command runs many
+      diagnostic commands" — and no fetched Fortinet page states that it writes
+      a file to the FortiGate filesystem, so it is a session transcript, not a
+      device write
+    sources:
+      - title: FortiOS CLI troubleshooting cheat sheet
+        url: https://docs.fortinet.com/document/fortigate/7.4.0/cli-troubleshooting-cheat-sheet/420966/cli-troubleshooting-cheat-sheet
+      - title: 'FortiOS CLI Reference — execute commands'
+        url: https://docs.fortinet.com/document/fortigate/7.6.0/cli-reference
+    max_bytes: 16777216
+    timeout_s: 600

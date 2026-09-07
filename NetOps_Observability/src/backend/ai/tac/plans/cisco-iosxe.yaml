@@ -43,6 +43,14 @@ sources:
   - title: Troubleshoot High CPU on ASR1000 Series Router
     url: https://www.cisco.com/c/en/us/support/docs/routers/asr-1000-series-aggregation-services-routers/212646-troubleshoot-high-cpu-on-asr1000-series.html
 
+# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture
+# (owner, 2026-09-06: "we pre-gather common commands especially things like show
+# tech-support which is good enough to open a case initially"). It is empty on a
+# platform whose own bundle command WRITES TO THE DEVICE or is generated out of
+# band; first_ask_note says which, with the vendor's page.
+first_ask:
+  - tech.support
+
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
 baseline:
@@ -55,10 +63,6 @@ baseline:
   - route.summary
   - logging.recent
   - config.running
-
-# optional — off by default: large and slow captures the operator opts into.
-optional:
-  - tech.support
 
 bindings:
   system.version:
@@ -247,6 +251,13 @@ bindings:
   tech.support:
     command: show tech-support
     verified: doc_claimed
+    sources:
+      - title: 'Cisco IOS Configuration Fundamentals Command Reference — show protocols through show mon (contains show tech-support)'
+        url: https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fundamentals/command/cf_command_ref/show_protocols_through_showmon.html
+      - title: 'Quick Start Guide - Data Collection for Various Routing & Platform (IOS & IOS-XE Routers) Related Issues'
+        url: https://www.cisco.com/c/en/us/support/docs/ip/ip-routing/216088-quick-start-guide-data-collection-for.html
+    max_bytes: 33554432
+    timeout_s: 600
   ospf.neighbors.list:
     command: show ip ospf neighbor
     verified: doc_claimed

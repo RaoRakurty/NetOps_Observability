@@ -42,6 +42,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -261,12 +263,78 @@ type Bundle struct {
 }
 
 // bundleFile is one entry before the zip is written.
+//
+// An entry is EITHER in memory (data) or backed by a SPILL FILE on disk (head +
+// path). The second form exists for exactly one thing: the vendor's first-ask
+// support collection, which the collector streams to disk rather than buffering
+// because `show tech-support` runs to tens of megabytes. Reading it back into a
+// []byte here would undo that, so this file copies it into the zip entry and
+// hashes it in a stream, and only the COMPRESSED bytes ever accumulate.
 type bundleFile struct {
 	name string
 	data []byte
+	// head is the entry's header block when the body is a spill file. It is the
+	// same block renderOutput writes; only the body moved.
+	head []byte
+	// path is the spill file holding this entry's REDACTED body. Empty for an
+	// in-memory entry. It is always a file this process wrote in its own spill
+	// directory, never a caller-supplied path.
+	path string
+	// size is the spill file's byte length, recorded at capture so a missing or
+	// changed file is detectable rather than silently short.
+	size int64
 	// trimmable marks a command output the email profile may drop. The manifest,
 	// the statement and the evidence index are never trimmable.
 	trimmable bool
+}
+
+// length is the entry's UNCOMPRESSED size, whichever form it takes.
+func (f bundleFile) length() int64 {
+	if f.path != "" {
+		return int64(len(f.head)) + f.size
+	}
+	return int64(len(f.data))
+}
+
+// writeTo writes the entry's bytes to w.
+func (f bundleFile) writeTo(w io.Writer) error {
+	if f.path == "" {
+		_, err := w.Write(f.data)
+		return err
+	}
+	if _, err := w.Write(f.head); err != nil {
+		return err
+	}
+	fh, err := os.Open(f.path) // #nosec G304 -- a spill file this process wrote in its own collection directory
+	if err != nil {
+		// An entry whose body vanished is reported IN THE BUNDLE rather than
+		// failing the whole assembly: the operator is mid-escalation and the
+		// other twenty outputs are still worth having.
+		_, werr := fmt.Fprintf(w, "\n(this output was streamed to disk and could not be read back: %s)\n", err.Error())
+		return werr
+	}
+	defer fh.Close()
+	_, err = io.Copy(w, fh)
+	return err
+}
+
+// sum returns the entry's SHA256 and its uncompressed length, streaming a
+// spill-backed body rather than holding it.
+func (f bundleFile) sum() (string, int64) {
+	h := sha256.New()
+	if err := f.writeTo(h); err != nil {
+		// A hash that could not be computed is reported as such, never as a
+		// plausible-looking digest of nothing.
+		return "unreadable", f.length()
+	}
+	var n int64
+	switch {
+	case f.path == "":
+		n = int64(len(f.data))
+	default:
+		n = f.length()
+	}
+	return hex.EncodeToString(h.Sum(nil)), n
 }
 
 // BuildBundle assembles the zip. The narrator may be nil (template statement).
@@ -305,11 +373,15 @@ func BuildBundle(ctx context.Context, in BundleInput, n Narrator, now func() tim
 		{name: "device.json", data: mustJSON(deviceDoc(in))},
 	}
 	for i, cc := range in.Capture.Commands {
-		files = append(files, bundleFile{
-			name:      outputFileName(i, cc),
-			data:      []byte(renderOutput(cc)),
-			trimmable: true,
-		})
+		f := bundleFile{name: outputFileName(i, cc), trimmable: true}
+		if cc.SpillPath != "" {
+			f.head = []byte(renderOutputHeader(cc))
+			f.path = cc.SpillPath
+			f.size = int64(cc.Bytes)
+		} else {
+			f.data = []byte(renderOutput(cc))
+		}
+		files = append(files, f)
 	}
 
 	// Email profile: drop the largest trimmable outputs until the bundle fits.
@@ -341,9 +413,8 @@ func BuildBundle(ctx context.Context, in BundleInput, n Narrator, now func() tim
 	man.Files = make([]ManifestFile, 0, len(files)+1)
 	var sums bytes.Buffer
 	for _, f := range files {
-		sum := sha256.Sum256(f.data)
-		hexsum := hex.EncodeToString(sum[:])
-		man.Files = append(man.Files, ManifestFile{Name: f.name, Bytes: len(f.data), SHA256: hexsum})
+		hexsum, n := f.sum()
+		man.Files = append(man.Files, ManifestFile{Name: f.name, Bytes: int(n), SHA256: hexsum})
 		fmt.Fprintf(&sums, "%s  %s\n", hexsum, f.name)
 	}
 	manBytes := mustJSON(man)
@@ -365,7 +436,7 @@ func BuildBundle(ctx context.Context, in BundleInput, n Narrator, now func() tim
 		if err != nil {
 			return nil, fmt.Errorf("tac: bundle: %w", err)
 		}
-		if _, err := w.Write(f.data); err != nil {
+		if err := f.writeTo(w); err != nil {
 			return nil, fmt.Errorf("tac: bundle: %w", err)
 		}
 	}
@@ -520,7 +591,7 @@ func buildEvidenceIndex(in BundleInput) []EvidenceItem {
 func trimForEmail(files []bundleFile, man Manifest, limit int64) ([]bundleFile, []ManifestTrim) {
 	total := int64(len(mustJSON(man)))
 	for _, f := range files {
-		total += int64(len(f.data))
+		total += f.length()
 	}
 	if total <= limit {
 		return files, nil
@@ -531,7 +602,7 @@ func trimForEmail(files []bundleFile, man Manifest, limit int64) ([]bundleFile, 
 			idx = append(idx, i)
 		}
 	}
-	sort.SliceStable(idx, func(a, b int) bool { return len(files[idx[a]].data) > len(files[idx[b]].data) })
+	sort.SliceStable(idx, func(a, b int) bool { return files[idx[a]].length() > files[idx[b]].length() })
 
 	drop := map[int]bool{}
 	var trimmed []ManifestTrim
@@ -542,9 +613,9 @@ func trimForEmail(files []bundleFile, man Manifest, limit int64) ([]bundleFile, 
 			break
 		}
 		drop[i] = true
-		total -= int64(len(files[i].data))
+		total -= files[i].length()
 		trimmed = append(trimmed, ManifestTrim{
-			File: files[i].name, Bytes: len(files[i].data), Reason: reason,
+			File: files[i].name, Bytes: int(files[i].length()), Reason: reason,
 		})
 	}
 	out := make([]bundleFile, 0, len(files))
@@ -563,6 +634,31 @@ func outputFileName(i int, cc CollectedCommand) string {
 		n = "0" + n
 	}
 	return "outputs/" + n + "-" + fileSlug(cc.Intent) + ".txt"
+}
+
+// renderOutputHeader is the header block every output file carries. It is split
+// out of renderOutput so a STREAMED output can carry the identical header while
+// its body stays on disk.
+func renderOutputHeader(cc CollectedCommand) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# intent   : %s\n", cc.Intent)
+	fmt.Fprintf(&b, "# command  : %s\n", cc.Command)
+	fmt.Fprintf(&b, "# section  : %s\n", cc.Section)
+	if cc.Verified != "" {
+		fmt.Fprintf(&b, "# sourcing : %s\n", cc.Verified)
+	}
+	if !cc.StartedAt.IsZero() {
+		fmt.Fprintf(&b, "# at       : %s\n", cc.StartedAt.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintf(&b, "# redacted : yes\n")
+	if cc.SpillPath != "" {
+		fmt.Fprintf(&b, "# streamed : yes (%d bytes, written straight to this bundle)\n", cc.Bytes)
+	}
+	if cc.Err != "" {
+		fmt.Fprintf(&b, "# ERROR    : %s\n", cc.Err)
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func renderOutput(cc CollectedCommand) string {

@@ -339,7 +339,7 @@ func (s *Service) evictLocked(byInc map[string]*State) {
 			continue
 		}
 		if st.UpdatedAt.Before(cutoff) {
-			delete(byInc, id)
+			s.dropLocked(byInc, id)
 		}
 	}
 	for len(byInc) >= maxEscalationsPerTenant {
@@ -356,8 +356,21 @@ func (s *Service) evictLocked(byInc map[string]*State) {
 		if oldestID == "" {
 			return // everything is running; refuse to evict live work
 		}
-		delete(byInc, oldestID)
+		s.dropLocked(byInc, oldestID)
 	}
+}
+
+// dropLocked removes one escalation and releases the disk its capture holds.
+// Every eviction path goes through it, so a streamed output cannot outlive the
+// state that pointed at it.
+func (s *Service) dropLocked(byInc map[string]*State, id string) {
+	if st := byInc[id]; st != nil {
+		if err := st.Capture.Close(); err != nil {
+			s.warn("an evicted TAC capture's streamed outputs could not be removed",
+				map[string]any{"incident_id": id, "error": err.Error()})
+		}
+	}
+	delete(byInc, id)
 }
 
 // Classify records a classification against an escalation.
@@ -419,6 +432,14 @@ func (s *Service) StartCollect(tenant, incident string, supplied []SuppliedOutpu
 		Total: len(plan.Steps), Progress: []Progress{},
 	}
 	st.Job = job
+	// A capture being replaced owns a spill directory of streamed outputs, so it
+	// is released HERE — the moment it stops being reachable — rather than left
+	// for the process to forget.
+	if err := st.Capture.Close(); err != nil {
+		s.warn("a TAC capture's streamed outputs could not be removed", map[string]any{
+			"incident_id": incident, "error": err.Error(),
+		})
+	}
 	st.Capture = nil
 	st.UpdatedAt = job.StartedAt
 	key := tenant + "\x00" + incident
@@ -465,8 +486,11 @@ func commandsOf(p *Plan) []string {
 // per-command budgets plus a margin, so a stuck collection ends by itself.
 func collectionDeadline(p *Plan) time.Duration {
 	d := time.Duration(p.EstimatedSeconds)*time.Second + 2*time.Minute
-	if d > 30*time.Minute {
-		d = 30 * time.Minute
+	// The ceiling accommodates a first-ask support collection (authored at up to
+	// 15 minutes on its own) plus a full baseline and deep-dive behind it. It is
+	// still a ceiling: the plan's own summed budgets are what normally decide.
+	if d > 45*time.Minute {
+		d = 45 * time.Minute
 	}
 	return d
 }
@@ -511,6 +535,11 @@ func (s *Service) runCollect(ctx context.Context, cancel context.CancelFunc, key
 	} else {
 		job.Status = JobDone
 		if st != nil {
+			if cerr := st.Capture.Close(); cerr != nil {
+				s.warn("a TAC capture's streamed outputs could not be removed", map[string]any{
+					"incident_id": incident, "error": cerr.Error(),
+				})
+			}
 			st.Capture = capt
 		}
 	}

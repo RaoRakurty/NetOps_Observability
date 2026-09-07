@@ -1,19 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Correlix
 
-# plans/cisco-asa.yaml — the Cisco ASA BASELINE plan for the TAC escalation pack.
+# plans/cisco-asa.yaml — the Cisco ASA command plan for the TAC escalation pack.
 #
-# Schema: ai/tac/README.md §4. This dialect carries the vendor's STANDARD
-# data-collection set only — the outputs a TAC engineer opens before anything
-# issue-specific. It has no class deep-dive bindings yet, so every class's own
-# intents are listed as UNBOUND in the plan preview with the reason, and the
-# operator collects those by hand and pastes them in. That is the honest state,
-# not a degraded one: an authored baseline plus a named gap beats a guessed
-# command every time.
+# Schema: ai/tac/README.md §4. Every command here is a READ-ONLY show, proven
+# by the loader (protocoldiag.ValidateReadOnly) and again by the runner. An
+# intent this dialect does not bind is simply ABSENT — the plan preview shows
+# it as unbound rather than rendering another vendor's command at this device.
 #
-# Every command here is `verified: doc_claimed` — taken from the vendor's
-# published command reference and NOT yet run by Correlix on this platform. The
-# plan preview and the bundle MANIFEST both say so.
+# `verified: doc_claimed` means the vendor documents the command and Correlix
+# has not run it on this platform. `consent: true` marks a command the vendor
+# says is NOT routine (a core dump, a control-plane load, a file written on the
+# device): it never runs by default and never sits in a baseline.
+# `read_only_exception` is a CITED documented-status read whose text carries a
+# token the grammar refuses on sight.
+#
+# MACHINE-MERGED from ai/tac/research/*.yaml by scripts/tac-merge-research.py.
 schema_version: 1
 dialect: cisco-asa
 profile: cisco/asa
@@ -23,10 +25,20 @@ version: correlix-tac-plan-cisco-asa-2026-09-05
 # The dialect's BIBLIOGRAPHY — the pages this file was built from. A binding
 # cites its own page(s) below; this list never rides on a plan step.
 sources:
-  - title: 'Cisco ASA Series Command Reference'
+  - title: Cisco ASA Series Command Reference
     url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
     retrieved: 2026-09-05
 
+# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture
+# (owner, 2026-09-06: "we pre-gather common commands especially things like show
+# tech-support which is good enough to open a case initially"). It is empty on a
+# platform whose own bundle command WRITES TO THE DEVICE or is generated out of
+# band; first_ask_note says which, with the vendor's page.
+first_ask:
+  - tech.support
+
+# baseline — collected for EVERY class: the vendor-standard set a TAC engineer
+# opens before anything issue-specific.
 baseline:
   - system.version
   - system.inventory
@@ -37,71 +49,68 @@ baseline:
   - logging.recent
   - config.running
 
-# optional — off by default: large and slow captures the operator opts into.
-optional:
-  - tech.support
-
 bindings:
   system.version:
     command: show version
     verified: doc_claimed
     sources:
-      - title: 'Cisco ASA Series Command Reference'
+      - title: Cisco ASA Series Command Reference
         url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
         retrieved: 2026-09-05
   system.inventory:
     command: show inventory
     verified: doc_claimed
     sources:
-      - title: 'Cisco ASA Series Command Reference'
+      - title: Cisco ASA Series Command Reference
         url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
         retrieved: 2026-09-05
   system.uptime:
     command: show version
     verified: doc_claimed
     sources:
-      - title: 'Cisco ASA Series Command Reference'
+      - title: Cisco ASA Series Command Reference
         url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
         retrieved: 2026-09-05
   hardware.environment:
     command: show environment
     verified: doc_claimed
     sources:
-      - title: 'Cisco ASA Series Command Reference'
+      - title: Cisco ASA Series Command Reference
         url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
         retrieved: 2026-09-05
   interface.brief:
     command: show interface ip brief
     verified: doc_claimed
     sources:
-      - title: 'Cisco ASA Series Command Reference'
+      - title: Cisco ASA Series Command Reference
         url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
         retrieved: 2026-09-05
   route.summary:
     command: show route summary
     verified: doc_claimed
     sources:
-      - title: 'Cisco ASA Series Command Reference'
+      - title: Cisco ASA Series Command Reference
         url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
         retrieved: 2026-09-05
   logging.recent:
     command: show logging
     verified: doc_claimed
     sources:
-      - title: 'Cisco ASA Series Command Reference'
+      - title: Cisco ASA Series Command Reference
         url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
         retrieved: 2026-09-05
   config.running:
     command: show running-config
     verified: doc_claimed
     sources:
-      - title: 'Cisco ASA Series Command Reference'
+      - title: Cisco ASA Series Command Reference
         url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
         retrieved: 2026-09-05
   tech.support:
     command: show tech-support
     verified: doc_claimed
     sources:
-      - title: 'Cisco ASA Series Command Reference'
+      - title: Cisco ASA Series Command Reference
         url: https://www.cisco.com/c/en/us/support/security/adaptive-security-appliance-asa-software/products-command-reference-list.html
-        retrieved: 2026-09-05
+    max_bytes: 16777216
+    timeout_s: 300

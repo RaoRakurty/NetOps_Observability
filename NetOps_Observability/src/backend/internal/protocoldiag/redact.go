@@ -4,6 +4,7 @@
 package protocoldiag
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"strings"
@@ -27,11 +28,40 @@ type redactor struct {
 	pemBegin   *regexp.Regexp
 	pemEnd     *regexp.Regexp
 	pemOneLine *regexp.Regexp
+	// anchors is the union of every rule's anchors, lowercased. A line carrying
+	// none of them cannot be matched by ANY rule, so the rule loop is skipped.
+	//
+	// This is a performance property with a safety proof, not a heuristic. Each
+	// rule declares the literal alternatives that its own pattern REQUIRES —
+	// they sit at an alternation the pattern cannot match around — and
+	// TestPrefilterCannotMissARule asserts, per rule, that the pattern text
+	// still contains each declared anchor, so an edit that drops a literal fails
+	// the build rather than quietly widening what gets through.
+	//
+	// It exists because of the first-ask capture: `show tech-support` is tens of
+	// megabytes of lines with no secret in them, and running ten regexes over
+	// every one of them made a 50 MB collection cost half a minute of CPU.
+	//
+	// It is a BYTE SCAN and not a regexp on purpose. The obvious spelling —
+	// one `(?i)a|b|c` alternation — is 1 MB/s in Go, because a case-insensitive
+	// alternation with no literal prefix defeats the engine's memchr fast path;
+	// it made the prefilter slower than the rules it was meant to skip. A
+	// lowercase copy plus bytes.Contains is two orders of magnitude faster and
+	// answers exactly the same question.
+	anchors [][]byte
+	// scratch is the reusable lowercase buffer. A redactor is used by ONE
+	// goroutine at a time (RedactOutput builds its own; RedactingWriter owns
+	// one for the life of one command's stream), which is what makes reusing it
+	// safe — and is asserted by the race build in CI.
+	scratch []byte
 }
 
 type redactRule struct {
 	re   *regexp.Regexp
 	repl string
+	// anchors are LOWERCASE literals, at least one of which must appear
+	// (case-insensitively) in any string this rule can match.
+	anchors []string
 }
 
 // newRedactor builds the default redaction pass. The patterns target the secrets
@@ -42,41 +72,102 @@ type redactRule struct {
 // the value, never the whole line — and fail-safe: an unmatched line is passed
 // through unchanged (redaction never fabricates or drops evidence).
 func newRedactor() *redactor {
-	rule := func(pat, repl string) redactRule {
-		return redactRule{re: regexp.MustCompile(pat), repl: repl}
+	rule := func(pat, repl string, anchors ...string) redactRule {
+		if len(anchors) == 0 {
+			panic("protocoldiag: a redaction rule must declare its anchors")
+		}
+		return redactRule{re: regexp.MustCompile(pat), repl: repl, anchors: anchors}
 	}
 	// Private-key-class PEM labels: PRIVATE KEY and any prefixed variant
 	// (RSA/EC/DSA/ENCRYPTED/OPENSSH …), plus PGP's "PRIVATE KEY BLOCK".
 	const pemKeyLabel = `[A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?`
-	return &redactor{
+	r := &redactor{
 		pemBegin:   regexp.MustCompile(`(?i)-----BEGIN ` + pemKeyLabel + `-----`),
 		pemEnd:     regexp.MustCompile(`(?i)-----END ` + pemKeyLabel + `-----`),
 		pemOneLine: regexp.MustCompile(`(?i)-----BEGIN ` + pemKeyLabel + `-----.*-----END ` + pemKeyLabel + `-----`),
 		rules: []redactRule{
 			// `username X password [enc] <secret>` / `... secret <secret>` — redact the secret.
-			rule(`(?i)((?:username\s+\S+\s+)?(?:password|secret)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
+			rule(`(?i)((?:username\s+\S+\s+)?(?:password|secret)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark,
+				"password", "secret"),
 			// `enable secret 5 <hash>` / `enable password <secret>`.
-			rule(`(?i)(enable\s+(?:secret|password)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
+			rule(`(?i)(enable\s+(?:secret|password)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark,
+				"secret", "password"),
 			// SNMP community string.
-			rule(`(?i)(snmp-server\s+community\s+)(\S+)`, "${1}"+redactionMark),
+			rule(`(?i)(snmp-server\s+community\s+)(\S+)`, "${1}"+redactionMark, "community"),
 			// OSPF/IS-IS/generic keychain: `... md5 <secret>`, `authentication-key <secret>`,
 			// `key-string <secret>`, `message-digest-key N md5 <secret>`.
-			rule(`(?i)((?:md5|authentication-key|key-string|password)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
+			rule(`(?i)((?:md5|authentication-key|key-string|password)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark,
+				"md5", "authentication-key", "key-string", "password"),
 			// BGP neighbor password: `neighbor <x> password <secret>` handled by the
 			// password rule above; TCP-AO keychain name is not a secret, left intact.
 			// IPsec / IKE pre-shared keys: `pre-shared-key <secret>`,
 			// `crypto isakmp key <secret> address …`, `keyring … key <secret>`.
-			rule(`(?i)(pre-shared-key\s+(?:\S+\s+)?(?:key\s+)?)(\S+)`, "${1}"+redactionMark),
-			rule(`(?i)((?:isakmp|keyring)\s+key\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
+			rule(`(?i)(pre-shared-key\s+(?:\S+\s+)?(?:key\s+)?)(\S+)`, "${1}"+redactionMark, "pre-shared-key"),
+			rule(`(?i)((?:isakmp|keyring)\s+key\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark, "isakmp", "keyring"),
 			// A PEM private key squeezed onto a single line. Real multi-line PEM
 			// blocks are handled by the stateful scanner in redactText — this
 			// per-line rule cannot see across lines.
-			rule(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`, redactionMark),
+			rule(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`, redactionMark,
+				"private key"),
 		}}
+	r.anchors = buildAnchors(r.rules)
+	return r
+}
+
+// buildAnchors is the deduplicated union of every rule's anchors, lowercased.
+func buildAnchors(rules []redactRule) [][]byte {
+	seen := map[string]bool{}
+	out := make([][]byte, 0, len(rules)*2)
+	for _, ru := range rules {
+		for _, a := range ru.anchors {
+			low := strings.ToLower(a)
+			if seen[low] {
+				continue
+			}
+			seen[low] = true
+			out = append(out, []byte(low))
+		}
+	}
+	return out
+}
+
+// prefilterHit reports whether line carries at least one rule anchor, matched
+// case-insensitively. A false answer means no rule can match the line.
+func (r *redactor) prefilterHit(line string) bool {
+	r.scratch = appendLowerASCII(r.scratch[:0], line)
+	for _, a := range r.anchors {
+		if bytes.Contains(r.scratch, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// appendLowerASCII appends s to dst with ASCII letters lowered. Every anchor is
+// ASCII, so a Unicode-aware fold would buy nothing and cost a great deal;
+// non-ASCII bytes are copied through untouched and therefore cannot make a
+// non-matching line match.
+func appendLowerASCII(dst []byte, s string) []byte {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		dst = append(dst, c)
+	}
+	return dst
 }
 
 // redactLine applies every rule to one line.
+//
+// The prefilter runs first. A line carrying none of the rules' literal anchors
+// cannot be matched by any of them, so it is returned untouched without running
+// a single regex — which is what makes streaming a 50 MB support bundle through
+// this pass cost seconds rather than half a minute.
 func (r *redactor) redactLine(line string) string {
+	if !r.prefilterHit(line) {
+		return line
+	}
 	for _, rule := range r.rules {
 		line = rule.re.ReplaceAllString(line, rule.repl)
 	}

@@ -86,8 +86,6 @@ tac_baseline:
     - {cmd: "show network-instance summary", intent: vrf.summary, params: []}
     - {cmd: "show system logging file messages", intent: logging.recent, params: []}
     - {cmd: "info", intent: config.running, params: []}
-    - {cmd: "tech-support", intent: support.techsupport, params: [], writes_file: true}
-    - {cmd: "tech-support exclude-binaries", intent: support.techsupport.no-binaries, params: [], writes_file: true}
   notes: >-
     Nokia TAC opens almost every SR Linux case with the tech-support bundle plus
     `show version` for the exact build. `tech-support` is a global CLI command

@@ -384,7 +384,7 @@ func loadPlan(c *Catalog, slug, src string) (*DialectPlan, error) {
 		return nil, fmt.Errorf("document must be a mapping")
 	}
 	if err := yonly(doc, "a plan", "schema_version", "dialect", "profile", "display",
-		"version", "sources", "baseline", "optional", "bindings"); err != nil {
+		"version", "sources", "first_ask", "first_ask_note", "baseline", "optional", "bindings"); err != nil {
 		return nil, err
 	}
 	if err := requireSchemaVersion(doc); err != nil {
@@ -454,7 +454,7 @@ func loadPlan(c *Catalog, slug, src string) (*DialectPlan, error) {
 	for _, spec := range []struct {
 		key string
 		dst *[]string
-	}{{"baseline", &p.Baseline}, {"optional", &p.Optional}} {
+	}{{"first_ask", &p.FirstAsk}, {"baseline", &p.Baseline}, {"optional", &p.Optional}} {
 		list, lerr := ystrs(doc, spec.key)
 		if lerr != nil {
 			return nil, lerr
@@ -468,9 +468,23 @@ func loadPlan(c *Catalog, slug, src string) (*DialectPlan, error) {
 			if !ok {
 				return nil, fmt.Errorf("%s lists intent %q, which this dialect does not bind", spec.key, in)
 			}
-			if spec.key == "baseline" && b.Consent {
-				return nil, fmt.Errorf("baseline lists intent %q, which needs operator consent — "+
-					"a command the vendor says is not routine can never be in a baseline that runs by default", in)
+			if (spec.key == "baseline" || spec.key == "first_ask") && b.Consent {
+				return nil, fmt.Errorf("%s lists intent %q, which needs operator consent — "+
+					"a command the vendor says is not routine can never be in a set that runs by default", spec.key, in)
+			}
+			if spec.key == "first_ask" && b.MaxBytes <= 0 {
+				// A first-ask collection is the vendor's whole support bundle.
+				// Running it under the package's default 512 KiB cap would
+				// truncate it silently, which is worse than not collecting it:
+				// TAC would receive a file that LOOKS like a tech-support and is
+				// the first half of one. So the ceiling must be authored,
+				// explicitly, from the vendor's own guidance.
+				return nil, fmt.Errorf("first_ask lists intent %q, whose binding declares no `max_bytes` — "+
+					"a first-ask support collection must carry its own vendor-derived size ceiling", in)
+			}
+			if spec.key == "first_ask" && b.Timeout <= 0 {
+				return nil, fmt.Errorf("first_ask lists intent %q, whose binding declares no `timeout_s` — "+
+					"a first-ask support collection takes minutes and must carry its own deadline", in)
 			}
 			if seen[in] {
 				return nil, fmt.Errorf("%s lists intent %q twice", spec.key, in)
@@ -482,10 +496,35 @@ func loadPlan(c *Catalog, slug, src string) (*DialectPlan, error) {
 	if len(p.Baseline) == 0 {
 		return nil, fmt.Errorf("`baseline` is required — the vendor-standard set every class collects")
 	}
+	note, err := ystr(doc, "first_ask_note")
+	if err != nil {
+		return nil, err
+	}
+	p.FirstAskNote = strings.Join(strings.Fields(note), " ")
+	if len(p.FirstAsk) == 0 && p.FirstAskNote == "" {
+		// A dialect with no first-ask collection is a real product state — the
+		// vendor's own spelling writes to the device and Correlix refuses it, or
+		// the bundle is generated out of band. It is never a silent gap: the
+		// reason travels with the plan, into the capture and into the bundle.
+		return nil, fmt.Errorf("`first_ask` is empty and `first_ask_note` says nothing — " +
+			"a dialect with no vendor first-ask collection must state why")
+	}
+	for _, in := range p.FirstAsk {
+		for _, b := range p.Baseline {
+			if in == b {
+				return nil, fmt.Errorf("intent %q is in both first_ask and baseline", in)
+			}
+		}
+	}
 	for _, in := range p.Optional {
 		for _, b := range p.Baseline {
 			if in == b {
 				return nil, fmt.Errorf("intent %q is in both baseline and optional", in)
+			}
+		}
+		for _, f := range p.FirstAsk {
+			if in == f {
+				return nil, fmt.Errorf("intent %q is in both first_ask and optional", in)
 			}
 		}
 	}

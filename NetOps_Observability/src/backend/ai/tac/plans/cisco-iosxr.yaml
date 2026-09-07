@@ -37,6 +37,21 @@ sources:
   - title: Troubleshoot Input Drops in Cisco IOS XR
     url: https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/213967-troubleshoot-input-drops-in-ios-xr.html
 
+# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture
+# (owner, 2026-09-06: "we pre-gather common commands especially things like show
+# tech-support which is good enough to open a case initially"). It is empty on a
+# platform whose own bundle command WRITES TO THE DEVICE or is generated out of
+# band; first_ask_note says which, with the vendor's page.
+first_ask_note: >-
+  IOS-XR has no first-ask capture Correlix will run. On IOS-XR the unscoped
+  `show tech-support` WRITES a .tgz to the router's own hard disk instead of
+  streaming to the session (Cisco doc 221131 exists to explain how to move
+  it off-box), so it is a device write and the output-only policy refuses
+  it. Correlix collects the per-platform list Cisco's Quick Reference Guide
+  215365 publishes for TAC instead — see this plan's baseline — and the
+  operator attaches the .tgz from the router if TAC asks for it.
+  https://www.cisco.com/c/en/us/support/docs/ios-nx-os-software/ios-xr-software/215365-quick-reference-guide-to-collect-tac-req.html
+
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
 baseline:

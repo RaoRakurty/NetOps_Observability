@@ -79,7 +79,6 @@ tac_baseline:
     - {cmd: "show log log-id {log-id}", intent: logging.recent, params: [log-id]}
     - {cmd: "show redundancy synchronization", intent: platform.redundancy, params: []}
     - {cmd: "admin display-config", intent: config.running, params: []}
-    - {cmd: "admin tech-support {file-url}", intent: support.techsupport, params: [file-url], writes_file: true}
   notes: >-
     `admin tech-support [file-url]` is the Nokia support bundle. Nokia's own
     command reference states it "creates a system core dump" and that it
@@ -1042,7 +1041,6 @@ issues:
       - {cmd: "show chassis detail", intent: platform.chassis, params: []}
       - {cmd: "show system alarms", intent: platform.alarms, params: []}
       - {cmd: "show card {slot-number} fp {fp-number} fwd-engine drop-reason statistics", intent: platform.forwarding.drops, params: [slot-number, fp-number]}
-      - {cmd: "admin tech-support {file-url}", intent: support.techsupport, params: [file-url], writes_file: true}
     tac_first_look: "Nokia TAC will want `show card state` plus the tech-support bundle taken while the card is still in the failed state — capture both before any reseat, because the failure evidence is lost on reset."
     sources:
       - "https://infocenter.nokia.com/public/7750SR160R4A/topic/com.sr.interface/html/interfaces_show-cli.html"
@@ -1141,7 +1139,6 @@ issues:
       - {cmd: "show router fib {slot-number} summary", intent: route.fib.summary, params: [slot-number]}
       - {cmd: "show service system fdb-usage", intent: service.fdb.usage, params: []}
       - {cmd: "show router bgp summary all", intent: bgp.summary, params: []}
-      - {cmd: "admin tech-support {file-url}", intent: support.techsupport, params: [file-url], writes_file: true}
     tac_first_look: "Record which pool is growing and whether it tracks route/FDB scale; a pool that grows with no matching scale increase is the leak signature TAC needs the tech-support bundle for."
     sources:
       - "https://documentation.nokia.com/sr/22-10-2/cli-books/CMST%20Command%20Reference%20Guide/cmst-m-commands.html"

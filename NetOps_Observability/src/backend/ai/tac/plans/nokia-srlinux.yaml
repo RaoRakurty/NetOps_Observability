@@ -148,6 +148,20 @@ sources:
   - title: SR Linux R26.7 Log Events Guide - sync
     url: https://documentation.nokia.com/srlinux/26-7/books/log-events/log-sync.html
 
+# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture
+# (owner, 2026-09-06: "we pre-gather common commands especially things like show
+# tech-support which is good enough to open a case initially"). It is empty on a
+# platform whose own bundle command WRITES TO THE DEVICE or is generated out of
+# band; first_ask_note says which, with the vendor's page.
+first_ask_note: >-
+  SR Linux has no first-ask capture Correlix will run. Its bundle command is
+  the bare `tech-support` (NOT `tools system tech-support` — Correlix
+  refuses both by name): it pauses while every application dumps its report
+  and WRITES A ZIP on the device under /tmp. Correlix collects `info from
+  state`, `show system logging` and the read-only `show` set in this plan's
+  baseline instead.
+  https://documentation.nokia.com/srlinux/26-7/books/system-mgmt/general-operational-commands.html
+
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
 baseline:

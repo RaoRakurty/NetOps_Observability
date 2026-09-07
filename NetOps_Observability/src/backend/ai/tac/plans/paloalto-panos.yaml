@@ -87,6 +87,22 @@ sources:
   - title: 'PAN-OS Administration — Monitoring / View and Manage Logs'
     url: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-admin/monitoring/view-and-manage-logs
 
+# first_ask — the VENDOR'S OWN first-ask collection, and it LEADS every capture
+# (owner, 2026-09-06: "we pre-gather common commands especially things like show
+# tech-support which is good enough to open a case initially"). It is empty on a
+# platform whose own bundle command WRITES TO THE DEVICE or is generated out of
+# band; first_ask_note says which, with the vendor's page.
+first_ask_note: >-
+  PAN-OS has no first-ask capture Correlix will run. The tech-support file
+  is GENERATED ON THE DEVICE and then downloaded: no read-only CLI form
+  appears on any Palo Alto page Correlix has, and `scp export tech-support`
+  / `tftp export tech-support` push a file to a third-party host, which is a
+  different trust model from a read. Generate it from the GUI (Device >
+  Support > Generate Tech Support File) or the XML API
+  (`type=export&category=tech-support`) with your own key, and attach it to
+  the case beside the Correlix bundle.
+  https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-cli-quick-start
+
 # baseline — collected for EVERY class: the vendor-standard set a TAC engineer
 # opens before anything issue-specific.
 baseline:
