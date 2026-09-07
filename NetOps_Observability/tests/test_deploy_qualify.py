@@ -198,3 +198,153 @@ def test_each_bootstrap_bound_is_clamped_to_the_global_budget() -> None:
         assert want in code, (
             f"a bound is used unclamped ({want} missing) — the sum of the "
             "phases could then outrun the global deadline")
+
+
+# ---------------------------------------------------------------------------
+# Q6's bootstrap-aware window floor (fresh-install acceptance, DEFECT-10).
+#
+# Q6 greps a fixed wall-clock window for bootstrap-class Kafka errors. An
+# installer CANNOT apply the SEC-007 ACL matrix before the broker it runs
+# inside exists, so TLS phases A and B necessarily run against an empty ACL
+# store and the consumers necessarily log GroupAuthorizationFailed /
+# TopicAuthorizationFailedError until the matrix lands — then join their groups
+# and stay quiet. On 10.70.245.123 the gate therefore reported NOT QUALIFIED
+# about a stack that was working, and PASSED on a re-run once the window had
+# rolled past. The floor fixes that WITHOUT weakening the steady-state check.
+# ---------------------------------------------------------------------------
+
+def _q6_block() -> str:
+    src = _script()
+    start = src.index("# --- Q6: no bootstrap-class Kafka errors")
+    end = src.index("# --- Q7:", start)
+    return src[start:end]
+
+
+def test_q6_window_is_floored_at_the_acl_application_not_replaced_by_it() -> None:
+    """Steady state must be untouched: the floor may only ever RAISE the start
+    of the window, never lower it, or a long-idle appliance would be graded on
+    hours of logs instead of twenty minutes."""
+    block = _q6_block()
+    assert "acl_applied_epoch" in block, "Q6 does not consult the ACL marker"
+    # The comparison that makes it a max(): the floor is used only when it is
+    # later than the ordinary window start.
+    assert re.search(r'\[ "\$q6_floor" -gt \$\(\( q6_now - q6_window_s \)\)',
+                     block), (
+        "the floor must be applied only when it is NEWER than (now - window); "
+        "anything else changes steady-state behaviour")
+
+
+def test_q6_never_passes_on_an_empty_window() -> None:
+    """A floor set to 'five seconds ago' would make Q6 a rubber stamp. It has
+    to wait until it has a real slice of post-matrix logs to judge."""
+    block = _q6_block()
+    assert "Q6_MIN_OBSERVE" in block and "sleep" in block, (
+        "Q6 must wait for at least Q6_MIN_OBSERVE seconds of post-matrix logs "
+        "before a PASS can mean anything")
+    assert 'clamp "$q6_wait"' in block, (
+        "that wait must be clamped to the global deadline like every other "
+        "bound in this script")
+
+
+def test_q6_reports_the_floor_and_what_it_excluded() -> None:
+    """A window that silently narrows itself is a gate nobody can audit."""
+    block = _q6_block()
+    assert "Q6_FLOOR_NOTE" in block
+    assert "pre-matrix line(s) in the wider" in block, (
+        "Q6 must say HOW MANY lines the floor excluded, not merely that a "
+        "floor was applied")
+    assert "not install bootstrap noise" in block, (
+        "a FAIL under a raised floor must state that the hits are post-matrix")
+
+
+def test_q6_degrades_to_the_old_behaviour_when_the_marker_is_absent() -> None:
+    """No marker (an upgrade, an externally managed broker, a deleted file) =
+    exactly the check that shipped before. Absence must never be an error."""
+    block = _q6_block()
+    assert 'Q6_SINCE="$LOG_WINDOW"' in block, (
+        "the default must remain the plain fixed window")
+    assert 'elif [ -n "$q6_acl_at" ]' in block, (
+        "the floor branch must be conditional on the marker existing")
+
+
+def test_the_marker_is_stamped_by_b1_when_it_applies_the_matrix() -> None:
+    """deploy-qualify.sh can be the thing that applies the matrix (B1 on a
+    stack whose install did not). It then owns the same fact install.py owns
+    and must record it, or its own Q6 will grade its own bootstrap."""
+    src = _script()
+    b1 = src[src.index("# ---- B1: the Kafka ACL matrix"):
+             src.index("# ---- B2: canonical topic pre-creation")]
+    assert "stamp_acl_marker" in b1
+    assert b1.index("stamp_acl_marker") < b1.index(
+        'record PASS REQUIRED "B1 kafka ACL matrix" \\\n        "applied and verified'), \
+        "stamp before the PASS is recorded, so a stamp failure is visible"
+
+
+def test_the_marker_path_matches_the_one_install_py_writes() -> None:
+    """Two scripts, one file. A rename in either is a silent regression to the
+    failing-by-construction behaviour."""
+    installer = (ROOT / "scripts" / "install.py").read_text(encoding="utf-8")
+    m = re.search(r'^KAFKA_ACL_MARKER = "([^"]+)"$', installer, re.MULTILINE)
+    assert m, "install.py no longer defines KAFKA_ACL_MARKER"
+    name = m.group(1)
+    assert f'ACL_MARKER_FILE="${{DQ_ACL_MARKER:-$REPO_ROOT/data/{name}}}"' in _script(), (
+        f"deploy-qualify.sh must read the same file install.py writes ({name})")
+
+
+def test_q6_knobs_are_documented_in_usage() -> None:
+    """§16: a knob that only exists in the source is a knob nobody can use."""
+    usage = _script()[:_script().index("# --------", _script().index("EOF\n}"))]
+    for knob in ("DQ_ACL_MARKER", "DQ_ACL_SETTLE", "DQ_Q6_MIN_OBSERVE"):
+        assert knob in usage, f"{knob} is not documented in --help"
+
+
+# --- behavioural: run the real helpers out of the real script ---------------
+
+def _source_helpers(extra: str = "") -> str:
+    """Run a snippet with deploy-qualify.sh's Q6 helpers in scope.
+
+    The helpers are extracted from the shipped file rather than restated, so a
+    change to them is a change to what is tested.
+    """
+    src = _script()
+    start = src.index("stamp_acl_marker() {")
+    end = src.index("# Is the ACL matrix already applied?")
+    return "set -euo pipefail\n" + src[start:end] + "\n" + extra
+
+
+def _run_bash(body: str, env: dict | None = None) -> str:
+    import os
+    import subprocess
+    res = subprocess.run(["bash", "-c", body], capture_output=True, text=True,
+                         env={**os.environ, **(env or {})}, timeout=30,
+                         check=False)
+    assert res.returncode == 0, f"bash failed: {res.stderr}"
+    return res.stdout
+
+
+def test_duration_seconds_understands_dockers_since_syntax() -> None:
+    out = _run_bash(_source_helpers(
+        'for d in 20m 2h 90s 1h30m 10m30s abc 3d ""; do '
+        'printf "%s=[%s]\\n" "$d" "$(duration_seconds "$d")"; done'))
+    assert "20m=[1200]" in out and "2h=[7200]" in out and "90s=[90]" in out
+    assert "1h30m=[5400]" in out and "10m30s=[630]" in out
+    # Anything it does not fully understand yields nothing, so the caller keeps
+    # the literal string and the pre-existing behaviour instead of guessing.
+    assert "abc=[]" in out and "3d=[]" in out
+
+
+def test_marker_round_trip_and_malformed_markers_read_as_unknown(tmp_path) -> None:
+    marker = tmp_path / "data" / ".kafka-acls-applied"
+    body = _source_helpers(
+        'stamp_acl_marker\n'
+        'printf "roundtrip=[%s]\\n" "$(acl_applied_epoch)"\n'
+        'printf "garbage\\n" > "$ACL_MARKER_FILE"\n'
+        'printf "malformed=[%s]\\n" "$(acl_applied_epoch)"\n'
+        'printf "applied_epoch=not-a-number\\n" > "$ACL_MARKER_FILE"\n'
+        'printf "nonnumeric=[%s]\\n" "$(acl_applied_epoch)"\n'
+        'rm -f "$ACL_MARKER_FILE"\n'
+        'printf "absent=[%s]\\n" "$(acl_applied_epoch)"\n')
+    out = _run_bash(body, env={
+        "ACL_MARKER_FILE": str(marker), "LOG_WINDOW": "20m"})
+    assert re.search(r"roundtrip=\[\d{10}\]", out), out
+    assert "malformed=[]" in out and "nonnumeric=[]" in out and "absent=[]" in out

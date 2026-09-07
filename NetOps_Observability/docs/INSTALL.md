@@ -86,6 +86,29 @@ password is shown once; it is also in
 `NetOps_Observability/deployment/docker/.env`, which you should treat as a
 secret. Change it in Settings after your first sign-in.
 
+### Which URL, and why `:8000` stops answering
+
+The transport question you answered during setup decides the address:
+
+| Transport | Dashboard | API | What `http://<host>:8000` does |
+|---|---|---|---|
+| **TLS/mTLS** (the default) | `https://<host>/` | `https://<host>/api/` | **nothing — the connection is refused** |
+| Plaintext (evaluation) | `http://<host>:8000` | `http://<host>:8000/api/` | serves the dashboard |
+
+On a TLS install the ingress moves to **443** and the plaintext port is
+published to **loopback only** (`127.0.0.1:8000`). That is deliberate: an
+appliance that advertises a full TLS mesh must not also hand the whole
+dashboard — and `POST /api/auth/login`, carrying the administrator password —
+to anything that can reach the host, in the clear. If you have an old bookmark
+on `:8000`, replace it with `https://<host>/`; from the server itself
+`curl http://localhost:8000/` still answers, because that is where the
+appliance's own health, qualification and watchdog probes run.
+
+The certificate a fresh install generates is **self-signed**, so a browser
+warns once. Replace `deployment/docker/nginx/certs/fullchain.pem` and
+`privkey.pem` with a certificate from your own issuer (same filenames), then
+`cd deployment/docker && docker compose restart nginx`.
+
 ---
 
 ## Afterwards

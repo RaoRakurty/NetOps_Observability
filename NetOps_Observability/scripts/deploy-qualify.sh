@@ -165,6 +165,10 @@ WHAT IT DOES
       Q4  vector-aggregator sinks are emitting events
       Q5  vector-router sinks are emitting events
       Q6  no bootstrap-class Kafka errors in correlation / vector-router logs
+          (window floored at the Kafka ACL matrix's application: an installer
+           starts the stack before it can apply the matrix, so the errors in
+           that gap are the install's own and would fail the gate by
+           construction on a healthy fresh appliance)
       Q7  the API answers 200 with a non-empty body
       Q9r OpenSearch cluster status is not RED
     ADVISORY (reported, never fatal)
@@ -191,6 +195,14 @@ CONFIG (all optional; a bare checkout works with the defaults)
     DQ_LAG_INTERVAL        seconds between lag samples        (default 20)
     DQ_LOG_WINDOW          log window for Q6, docker syntax   (default 20m)
     DQ_LOG_TAIL            max log lines pulled per service   (default 4000)
+    DQ_ACL_MARKER          file recording when the Kafka ACL matrix was
+                           applied; Q6 will not blame an install for the
+                           errors it necessarily logged before that instant
+                           (default <repo>/data/.kafka-acls-applied)
+    DQ_ACL_SETTLE          grace after the matrix lands, for the clients'
+                           resubscribe backoff                (default 120)
+    DQ_Q6_MIN_OBSERVE      minimum seconds of post-matrix logs Q6 will pass
+                           on; it waits for them              (default 60)
     DQ_BOOTSTRAP_TIMEOUT   per-bootstrap wall-clock bound     (default 600)
     DQ_DOCKER_TIMEOUT      bound on ordinary docker calls     (default 30)
     DQ_AGG_INSTANCE        Vector aggregator scrape instance  (vector-aggregator:9598)
@@ -257,6 +269,29 @@ LAG_SAMPLES="${DQ_LAG_SAMPLES:-3}"
 LAG_INTERVAL="${DQ_LAG_INTERVAL:-20}"
 LOG_WINDOW="${DQ_LOG_WINDOW:-20m}"
 LOG_TAIL="${DQ_LOG_TAIL:-4000}"
+# Q6's window FLOOR (fresh-install acceptance 2026-09-06, DEFECT-10). Q6 used a
+# fixed wall-clock window, which makes it fail BY CONSTRUCTION for the first
+# twenty minutes of an appliance's life: the installer must start the stack
+# before it can apply the Kafka ACL matrix, so the consumers spend the gap
+# logging exactly the authorization errors Q6 hunts for, and then recover. Run
+# right after an install — which is when an operator runs it — the gate said
+# NOT QUALIFIED about a stack that was working.
+#
+# install.py stamps the instant the matrix was applied AND verified into
+# $ACL_MARKER_FILE (and B1 below does the same when it applies the matrix
+# itself). Q6 starts its window at the LATER of that instant and the ordinary
+# fixed window, so steady-state behaviour is byte-identical and only the
+# minutes after a bootstrap are affected.
+ACL_MARKER_FILE="${DQ_ACL_MARKER:-$REPO_ROOT/data/.kafka-acls-applied}"
+# Grace after the matrix lands, for the clients' own metadata refresh + retry
+# backoff: a consumer that was denied a second before the grant can emit one
+# more error while it re-subscribes. Bounded and reported, never open-ended.
+ACL_SETTLE="${DQ_ACL_SETTLE:-120}"
+# The floor must never shrink Q6's window to nothing: a PASS has to be backed
+# by at least this many seconds of actually-observed post-ACL logs. If the
+# matrix landed more recently than that, Q6 WAITS for the difference rather
+# than passing on an empty window.
+Q6_MIN_OBSERVE="${DQ_Q6_MIN_OBSERVE:-60}"
 # Per-bootstrap ceiling. Lowered 600 -> 240 on 2026-09-03: the old value was
 # large enough that a slow-but-progressing bootstrap looked like a hang, and
 # three of them in series could hold a deploy for 30 minutes. B2 no longer
@@ -509,6 +544,70 @@ kafka_missing_topics() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# Kafka-ACL bootstrap marker (Q6's window floor). See ACL_SETTLE above.
+# ---------------------------------------------------------------------------
+
+# Write the marker install.py's record_bus_authorization_time() writes, in the
+# same format. Advisory: a marker we cannot write costs Q6 its floor and
+# nothing else, so it warns rather than failing the gate — but it never
+# pretends to have written one (§16.1).
+stamp_acl_marker() {
+  local now utc dir
+  now="$(date +%s)"
+  utc="$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')"
+  dir="$(dirname "$ACL_MARKER_FILE")"
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    warn "could not create $dir to record the ACL-application time — Q6 will use its fixed ${LOG_WINDOW} window."
+    return 0
+  fi
+  if ! { printf '# The SEC-007 Kafka ACL matrix was applied and verified at this\n'
+         printf '# moment by scripts/deploy-qualify.sh. Read by Q6 to floor its log\n'
+         printf '# window; safe to delete.\n'
+         printf 'applied_epoch=%s\n' "$now"
+         printf 'applied_utc=%s\n' "$utc"; } > "$ACL_MARKER_FILE" 2>/dev/null; then
+    warn "could not write $ACL_MARKER_FILE — Q6 will use its fixed ${LOG_WINDOW} window."
+    return 0
+  fi
+  return 0
+}
+
+# The epoch second the ACL matrix was applied, or empty when unknown. An
+# unreadable, absent or malformed marker is the "unknown" case: Q6 then behaves
+# exactly as it did before this existed.
+acl_applied_epoch() {
+  local raw
+  [ -r "$ACL_MARKER_FILE" ] || return 0
+  raw="$(sed -n 's/^applied_epoch=//p' "$ACL_MARKER_FILE" 2>/dev/null | head -1)"
+  case "$raw" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  printf '%s' "$raw"
+}
+
+# Docker's --since duration syntax ("20m", "2h", "90s", "1h30m") as seconds.
+# Prints nothing for anything it does not fully understand, so the caller keeps
+# the literal string and the pre-existing behaviour rather than guessing.
+duration_seconds() {
+  local spec="$1" total=0 num unit rest
+  case "$spec" in ''|*[!0-9smh]*) return 0 ;; esac
+  rest="$spec"
+  while [ -n "$rest" ]; do
+    num="${rest%%[smh]*}"
+    case "$num" in ''|*[!0-9]*) return 0 ;; esac
+    rest="${rest#"$num"}"
+    unit="${rest%"${rest#?}"}"
+    rest="${rest#?}"
+    case "$unit" in
+      s) total=$(( total + num )) ;;
+      m) total=$(( total + num * 60 )) ;;
+      h) total=$(( total + num * 3600 )) ;;
+      *) return 0 ;;
+    esac
+  done
+  printf '%s' "$total"
+}
+
 # Is the ACL matrix already applied? Mirrors apply-acls.sh's OWN definition of
 # "verified" (it reads the store back and asserts the router grant plus a >=40
 # entry floor), so this cannot drift into a weaker claim than the applier makes.
@@ -661,6 +760,10 @@ else
     b1_bound="$(clamp "$ACL_TIMEOUT")"
     b1_out="$(bound "$b1_bound" docker exec -i "$KAFKA_CID" sh -s < "$ACL_SCRIPT" 2>&1)" || b1_rc=$?
     if [ "$b1_rc" -eq 0 ]; then
+      # Same stamp install.py writes, for the same reason: whatever consumers
+      # logged before this instant, they logged without a matrix to authorize
+      # them. Q6 reads it below.
+      stamp_acl_marker
       record PASS REQUIRED "B1 kafka ACL matrix" \
         "applied and verified: $(oneline "$(printf '%s\n' "$b1_out" | grep -i 'matrix applied' | tail -1)" 120)"
     elif [ "$b1_rc" -eq 124 ]; then
@@ -1070,9 +1173,62 @@ vector_emit_check "Q5" "vector-router emitting"     "$ROUTER_INSTANCE"
 # the window, so it covers everything that happened during qualification. It is
 # deliberately NOT a poll: these errors do not "clear" — a subscription
 # abandoned at bootstrap stays abandoned until the process restarts.
+#
+# WINDOW FLOOR (DEFECT-10, 2026-09-06). "The last 20 minutes" is the right
+# window for a steady-state deploy and the WRONG one for the first minutes of
+# an appliance's life. An install cannot apply the Kafka ACL matrix before the
+# broker exists, so phases A and B necessarily run with an empty ACL store and
+# the consumers necessarily log GroupAuthorizationFailed /
+# TopicAuthorizationFailedError until the matrix lands — then join their groups
+# and stay. Those lines are the install's own bootstrap, not a fault, and
+# grepping a fixed window guarantees the gate fails on a healthy new appliance.
+#
+# So Q6 starts its window at the LATER of (now - LOG_WINDOW) and (the moment
+# the matrix was applied and verified + ACL_SETTLE). Three properties matter:
+#   * steady state is UNCHANGED — the marker is then older than the window, the
+#     max() picks the window, and the check is byte-identical to before;
+#   * a raised floor is only ever reachable within LOG_WINDOW of a real ACL
+#     bootstrap, and it is REPORTED, including how many pre-floor lines were
+#     excluded, so nothing is quietly dropped;
+#   * a PASS is never granted on an empty window: if the matrix landed less
+#     than Q6_MIN_OBSERVE seconds ago, Q6 waits for the difference first.
 Q6_PATTERN='TopicAuthorizationFailedError|UnknownTopicOrPartitionError|TOPIC_AUTHORIZATION_FAILED|UNKNOWN_TOPIC_OR_PARTITION|GroupAuthorizationFailed'
+Q6_SINCE="$LOG_WINDOW"          # what is handed to `docker logs --since`
+Q6_WINDOW_DESC="the last $LOG_WINDOW"
+Q6_FLOOR_NOTE=''                # non-empty only when the floor was raised
+
+q6_acl_at="$(acl_applied_epoch)"
+q6_window_s="$(duration_seconds "$LOG_WINDOW")"
+if [ -z "$q6_window_s" ]; then
+  warn "DQ_LOG_WINDOW='$LOG_WINDOW' is not a duration this script can convert to seconds — Q6 keeps the fixed window and no bootstrap floor is applied."
+elif [ -n "$q6_acl_at" ]; then
+  q6_now="$(date +%s)"
+  q6_floor=$(( q6_acl_at + ACL_SETTLE ))
+  if [ "$q6_floor" -gt $(( q6_now - q6_window_s )) ]; then
+    # A bootstrap happened inside the window. Make sure we will have looked at
+    # a real slice of post-matrix logs before we are willing to say PASS.
+    q6_wait=$(( Q6_MIN_OBSERVE - (q6_now - q6_floor) ))
+    if [ "$q6_wait" -gt 0 ]; then
+      q6_wait_bound="$(clamp "$q6_wait")"
+      if [ "$q6_wait_bound" -le 0 ]; then
+        warn "the global deadline leaves no room to observe ${Q6_MIN_OBSERVE}s of post-ACL logs for Q6."
+      else
+        say "  Q6: the Kafka ACL matrix landed $(( q6_now - q6_acl_at ))s ago — waiting ${q6_wait_bound}s so the verdict rests on at least ${Q6_MIN_OBSERVE}s of post-matrix logs ..."
+        sleep "$q6_wait_bound"
+      fi
+    fi
+    Q6_SINCE="$(date -u -d "@$q6_floor" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$LOG_WINDOW")"
+    if [ "$Q6_SINCE" = "$LOG_WINDOW" ]; then
+      warn "could not format the ACL-bootstrap floor as a timestamp (no GNU date?) — Q6 keeps the fixed window."
+    else
+      Q6_WINDOW_DESC="since $Q6_SINCE"
+      Q6_FLOOR_NOTE="window floored at the Kafka ACL matrix's application ($(date -u -d "@$q6_acl_at" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'epoch %s' "$q6_acl_at")) plus a ${ACL_SETTLE}s client-resubscribe grace: an installer necessarily starts the stack before it can apply the matrix, so everything before that instant was logged with no ACLs to authorize it"
+    fi
+  fi
+fi
+
 q6_rc=0
-q6_logs="$(dc "$DOCKER_TIMEOUT" logs --no-color --since "$LOG_WINDOW" --tail "$LOG_TAIL" \
+q6_logs="$(dc "$DOCKER_TIMEOUT" logs --no-color --since "$Q6_SINCE" --tail "$LOG_TAIL" \
              correlation vector-router 2>&1)" || q6_rc=$?
 if [ "$q6_rc" -ne 0 ]; then
   record SKIP REQUIRED "Q6 no bootstrap-class Kafka errors" \
@@ -1081,13 +1237,31 @@ else
   # `|| true` neutralizes grep's documented exit-1-on-no-match ONLY; the
   # no-match case is the PASS branch immediately below, not a swallowed error.
   q6_hits="$(printf '%s\n' "$q6_logs" | grep -E "$Q6_PATTERN" || true)"
+  # When the floor is in effect, say out loud how much was excluded by it —
+  # a floor whose size is invisible is a floor nobody can audit.
+  q6_excluded=''
+  if [ -n "$Q6_FLOOR_NOTE" ]; then
+    q6_full_rc=0
+    q6_full="$(dc "$DOCKER_TIMEOUT" logs --no-color --since "$LOG_WINDOW" --tail "$LOG_TAIL" \
+                 correlation vector-router 2>&1)" || q6_full_rc=$?
+    if [ "$q6_full_rc" -eq 0 ]; then
+      q6_excluded="$(printf '%s\n' "$q6_full" | grep -Ec "$Q6_PATTERN" || true)"
+    fi
+  fi
   if [ -z "$q6_hits" ]; then
-    record PASS REQUIRED "Q6 no bootstrap-class Kafka errors" \
-      "none of TopicAuthorizationFailedError / UnknownTopicOrPartitionError / TOPIC_AUTHORIZATION_FAILED / UNKNOWN_TOPIC_OR_PARTITION / GroupAuthorizationFailed in the last $LOG_WINDOW"
+    q6_detail="none of TopicAuthorizationFailedError / UnknownTopicOrPartitionError / TOPIC_AUTHORIZATION_FAILED / UNKNOWN_TOPIC_OR_PARTITION / GroupAuthorizationFailed in $Q6_WINDOW_DESC"
+    if [ -n "$Q6_FLOOR_NOTE" ]; then
+      q6_detail="$q6_detail. $Q6_FLOOR_NOTE"
+      [ -n "$q6_excluded" ] && [ "$q6_excluded" != "0" ] && \
+        q6_detail="$q6_detail; $q6_excluded pre-matrix line(s) in the wider ${LOG_WINDOW} window were excluded on that basis"
+    fi
+    record PASS REQUIRED "Q6 no bootstrap-class Kafka errors" "$q6_detail"
   else
     q6_count="$(printf '%s\n' "$q6_hits" | grep -c .)"
-    record FAIL REQUIRED "Q6 no bootstrap-class Kafka errors" \
-      "$q6_count matching line(s) in the last $LOG_WINDOW — a Kafka authorization/topic fault at subscribe() abandons the ENTIRE subscription, not just the offending lane (2026-09-02, 2026-08-16)."
+    q6_detail="$q6_count matching line(s) in $Q6_WINDOW_DESC — a Kafka authorization/topic fault at subscribe() abandons the ENTIRE subscription, not just the offending lane (2026-09-02, 2026-08-16)."
+    [ -n "$Q6_FLOOR_NOTE" ] && \
+      q6_detail="$q6_detail These are AFTER the ACL matrix was applied, so they are not install bootstrap noise."
+    record FAIL REQUIRED "Q6 no bootstrap-class Kafka errors" "$q6_detail"
     say "    ---- first 5 matching log lines (redacted, truncated) ----"
     printf '%s\n' "$q6_hits" | head -5 | redact | cut -c1-240 | sed 's/^/    | /'
     say "    ---- end matching log lines ----"

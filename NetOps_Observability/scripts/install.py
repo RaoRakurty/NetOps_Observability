@@ -196,6 +196,53 @@ def _stage_fail(message: str) -> None:
     _progress({"kind": "result", "status": "fail"})
 
 
+def _route_source_address() -> str | None:
+    """The source IPv4 the kernel would use for off-box traffic, or None.
+
+    A UDP connect() to a documentation address (RFC 5737) sends no packet and
+    resolves no name — the kernel just fills in the source address of the
+    default route. On a host with no default route it raises, which is the
+    None case."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.5)
+            sock.connect(("192.0.2.1", 9))
+            addr = sock.getsockname()[0]
+    except OSError:
+        return None
+    return addr if addr and not addr.startswith("127.") else None
+
+
+def _first_host_address() -> str | None:
+    """The host's first non-loopback IPv4 per `hostname -I`, or None.
+
+    The fallback for a genuinely air-gapped segment with no default route,
+    and the same source install-correlix.sh's print_success reads."""
+    try:
+        res = subprocess.run(["hostname", "-I"], capture_output=True, text=True,
+                             timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for addr in (res.stdout or "").split():
+        if ":" not in addr and not addr.startswith("127."):
+            return addr
+    return None
+
+
+def _reachable_host() -> str:
+    """The address an operator most likely reached this host on, or "localhost".
+
+    The installer runs ON the appliance, so it cannot know which name the
+    operator typed. Printing a bare "localhost" is actively wrong for the
+    common case (a remote install over SSH): the fresh-install acceptance
+    (2026-09-06, DEFECT-7) watched the product hand an operator a URL that only
+    resolves on the server itself, and under TLS the plaintext port they would
+    otherwise fall back to is now loopback-only. Never raises: any failure
+    degrades to "localhost", which is exactly what the caller printed before
+    this existed."""
+    return _route_source_address() or _first_host_address() or "localhost"
+
+
 def _result_ok(url: str, admin_user: str) -> None:
     _stage_close_ok()
     _progress({"kind": "result", "status": "ok", "url": url,
@@ -2546,6 +2593,44 @@ def verify_bus_consumers(compose_dir: Path, group: str = "netops-correlation",
          f"and re-run the installer. Last probe output: {last}")
 
 
+# Where the ACL matrix's application time is recorded, relative to the repo
+# root. scripts/deploy-qualify.sh reads it to floor Q6's log window: the
+# installer necessarily starts the stack BEFORE this matrix can exist, so a
+# fresh install always writes bootstrap-class authorization errors into its own
+# logs, and a fixed wall-clock window makes the gate fail by construction on a
+# stack that is working (fresh-install acceptance, 2026-09-06, DEFECT-10).
+#
+# It lives under data/ on purpose: the KRaft ACL store IS data/kafka, so any
+# wipe that destroys the matrix (uninstall --purge, reset-demo) destroys this
+# claim about it in the same stroke. A stale marker is therefore impossible.
+KAFKA_ACL_MARKER = ".kafka-acls-applied"
+
+
+def record_bus_authorization_time(root: Path, when: float | None = None) -> Path | None:
+    """Stamp data/.kafka-acls-applied. Advisory: never fails an install.
+
+    A marker we could not write costs deploy-qualify.sh its bootstrap floor and
+    nothing else (Q6 falls back to its fixed window), so a warning is the
+    correct severity — but it IS warned, never swallowed (§16.1)."""
+    path = root / "data" / KAFKA_ACL_MARKER
+    stamp = time.time() if when is None else when
+    utc = datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# The SEC-007 Kafka ACL matrix was applied and verified at this\n"
+            "# moment by scripts/install.py. Read by scripts/deploy-qualify.sh\n"
+            "# (Q6) to floor its log window; safe to delete.\n"
+            f"applied_epoch={int(stamp)}\n"
+            f"applied_utc={utc}\n")
+    except OSError as exc:
+        warn(f"could not record the ACL-application time in {path}: {exc}. "
+             "deploy-qualify.sh's Q6 will fall back to its fixed log window "
+             "and may report the install's own pre-ACL bootstrap noise.")
+        return None
+    return path
+
+
 def apply_bus_authorization(compose_dir: Path, env_path: Path,
                             tls_enabled: bool) -> None:
     """Install-owned Kafka authorization convergence (SEC-007, P0 2026-08-16).
@@ -2570,6 +2655,9 @@ def apply_bus_authorization(compose_dir: Path, env_path: Path,
         return
     apply_kafka_acls(compose_dir)
     verify_bus_consumers(compose_dir)
+    # Both proved: the matrix is written AND a real consumer holds membership
+    # through the enforcing broker. That instant is the honest floor for Q6.
+    record_bus_authorization_time(compose_dir.parents[1])
 
 
 def bootstrap_opensearch(root: Path, tls: bool = False) -> None:
@@ -3204,7 +3292,13 @@ def main() -> None:
     # through the same line-surgery path; the actual activation is two-phase
     # around compose_up below.
     tls_enabled = resolve_tls_choice(args)
-    dash_url = "https://localhost/" if tls_enabled else f"http://localhost:{args.port}"
+    # Under TLS the ingress is 443 and the plaintext port is loopback-only
+    # (compose.tls.yml), so "localhost" is not merely unhelpful to a remote
+    # operator, it is the ONLY thing that would not answer them. Resolve the
+    # host we can actually be reached on (tracker 265 / DEFECT-7).
+    dash_host = _reachable_host()
+    dash_url = (f"https://{dash_host}/" if tls_enabled
+                else f"http://localhost:{args.port}")
     if tls_enabled:
         step("enabling TLS/mTLS transport security", stage="tls-env")
         enable_tls_env(env_path)
@@ -3284,15 +3378,17 @@ def main() -> None:
     print()
     print("==============================================================")
     if tls_enabled:
-        # compose.tls.yml publishes the TLS ingress on 443; the plaintext
-        # port stays alongside during the migration window (see the nginx
-        # NOTE in compose.tls.yml — it is removed together with this
-        # messaging becoming the only path).
-        print("  Dashboard: https://localhost/   (TLS ingress, port 443)")
-        print("  API:       https://localhost/api/")
-        print("  Health:    https://localhost/admin/health")
-        print(f"             (plaintext http://localhost:{args.port} remains "
-              "during the migration window)")
+        # compose.tls.yml publishes the TLS ingress on 443 and binds the
+        # plaintext port to 127.0.0.1, so :8000 is reachable only from the
+        # appliance itself (the host-local qualifier/watchdog probes). Say both
+        # halves plainly: the URL that works from elsewhere, and the fact that
+        # the http one deliberately does not (tracker 265 / DEFECT-7).
+        print(f"  Dashboard: https://{dash_host}/   (TLS ingress, port 443)")
+        print(f"  API:       https://{dash_host}/api/")
+        print(f"  Health:    https://{dash_host}/admin/health")
+        print(f"             (http://localhost:{args.port} answers on this host "
+              "only — it is bound to loopback so nothing off-box can reach the "
+              "dashboard or the login API unencrypted)")
         print()
         print("  The ingress certificate is SELF-SIGNED (gen-dev-cert.sh) —")
         print("  your browser will warn once; replace the files under")

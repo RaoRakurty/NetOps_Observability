@@ -351,3 +351,88 @@ def test_nightly_workflow_interim_step_is_gone():
     assert "install-path gap" not in text and "docker cp" not in text, (
         "the interim CI ACL step must stay deleted — CI has to prove the "
         "installer applies the matrix itself")
+
+
+# ── (h) the ACL-application marker Q6 floors its window on ───────────────────
+#
+# Fresh-install acceptance 2026-09-06, DEFECT-10: deploy-qualify.sh's Q6 greps
+# a fixed 20-minute window for bootstrap-class Kafka errors, and an installer
+# cannot apply the ACL matrix before the broker it runs in exists — so a
+# healthy fresh appliance always fails the gate. install.py now records the
+# instant the matrix was applied AND verified; deploy-qualify.sh reads it.
+
+def test_marker_is_written_after_apply_and_verify(compose_dir, clock,
+                                                  monkeypatch):
+    env_path = write_env(compose_dir, "embedded-bus,prober")
+    monkeypatch.setattr(install.subprocess, "run", BusRecorder())
+
+    install.apply_bus_authorization(compose_dir, env_path, tls_enabled=True)
+
+    marker = compose_dir.parents[1] / "data" / install.KAFKA_ACL_MARKER
+    assert marker.is_file(), (
+        "install.py must stamp the ACL-application time under data/ — without "
+        "it deploy-qualify.sh's Q6 falls back to a window that fails by "
+        "construction right after an install")
+    body = marker.read_text()
+    assert f"applied_epoch={int(clock.now)}" in body
+    assert "applied_utc=" in body
+
+
+def test_marker_is_not_written_when_the_matrix_was_not_applied(
+        compose_dir, clock, monkeypatch):
+    """A marker without a matrix behind it would silence Q6 for nothing."""
+    env_path = write_env(compose_dir, "embedded-bus")
+    monkeypatch.setattr(install.subprocess, "run", BusRecorder())
+
+    # plaintext: no authorizer at all, apply_bus_authorization returns early
+    install.apply_bus_authorization(compose_dir, env_path, tls_enabled=False)
+    assert not (compose_dir.parents[1] / "data" / install.KAFKA_ACL_MARKER).exists()
+
+    # external broker: the matrix belongs to its owner, not to us
+    env_path = write_env(compose_dir, "prober")
+    install.apply_bus_authorization(compose_dir, env_path, tls_enabled=True)
+    assert not (compose_dir.parents[1] / "data" / install.KAFKA_ACL_MARKER).exists()
+
+
+def test_a_failed_apply_leaves_no_marker(compose_dir, clock, monkeypatch):
+    env_path = write_env(compose_dir, "embedded-bus")
+    monkeypatch.setattr(install.subprocess, "run", BusRecorder(
+        apply_results=[(1, "", "acls: FATAL: could not list ACLs back")]))
+
+    with pytest.raises(SystemExit):
+        install.apply_bus_authorization(compose_dir, env_path, tls_enabled=True)
+
+    assert not (compose_dir.parents[1] / "data" / install.KAFKA_ACL_MARKER).exists(), (
+        "a marker after a FAILED apply would tell Q6 to ignore precisely the "
+        "authorization errors that failure produces")
+
+
+def test_marker_lives_under_data_so_an_acl_store_wipe_takes_it_with_it():
+    """The KRaft ACL store IS data/kafka. Anything that destroys the matrix
+    (uninstall --purge, reset-demo, a data wipe) must destroy the claim about
+    it in the same stroke, or Q6 would trust a marker for a matrix that no
+    longer exists."""
+    assert not install.KAFKA_ACL_MARKER.startswith("/")
+    assert "/" not in install.KAFKA_ACL_MARKER
+    src = (SCRIPTS / "install.py").read_text()
+    assert 'path = root / "data" / KAFKA_ACL_MARKER' in src
+
+
+def test_an_unwritable_marker_warns_and_never_fails_the_install(
+        tmp_path, capsys, monkeypatch):
+    """Advisory by design: the marker only sharpens a gate. Losing it must not
+    lose an otherwise-good install — but it must be SAID (§16.1)."""
+    root = tmp_path / "root"
+    (root / "data").mkdir(parents=True)
+
+    def boom(*_a, **_kw):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(install.Path, "write_text", boom)
+    assert install.record_bus_authorization_time(root) is None
+    err = capsys.readouterr().err
+    assert "could not record the ACL-application time" in err, (
+        "a marker that could not be written must be NAMED, not swallowed — "
+        f"stderr was: {err!r}")
+    assert "fall back to its fixed log window" in err, (
+        "say what the operator loses by it, not just that something failed")

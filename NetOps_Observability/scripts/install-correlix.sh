@@ -454,15 +454,33 @@ wait_healthy() {
   return 1
 }
 
-print_success() {
+# Is this install running the TLS/mTLS variant? .env's COMPOSE_FILE chain is
+# the single on-disk statement of it (install.py writes compose.tls.yml into it
+# at TLS phase B), so this and install.py cannot disagree.
+tls_active() {
+  case "$(env_get COMPOSE_FILE)" in *compose.tls.yml*) return 0 ;; *) return 1 ;; esac
+}
+
+# The URL to hand the operator. Under TLS the ingress is 443 and the plaintext
+# port is bound to loopback (compose.tls.yml), so http://<host>:8000 is not
+# merely second-best — off the appliance it does not answer at all. Printing it
+# there is the defect the fresh-install acceptance hit (2026-09-06, DEFECT-7);
+# the graphical path was fixed in d31245c7 and this is the terminal path.
+# Pinned by tests/test_install_tls_ingress.py.
+dashboard_url() {
   local host ip
   ip=$(hostname -I 2>/dev/null | awk '{print $1}') ; host=${ip:-localhost}
+  if tls_active; then printf 'https://%s/' "$host"
+  else printf 'http://%s:%s' "$host" "$UI_PORT"; fi
+}
+
+print_success() {
   say ""
   say "${GREEN}${BOLD}────────────────────────────────────────────────${RST}"
   say "${GREEN}${BOLD}  Correlix is installed and running${RST}"
   say "${GREEN}${BOLD}────────────────────────────────────────────────${RST}"
   say ""
-  say "  Open the UI:   ${BOLD}http://${host}:${UI_PORT}${RST}"
+  say "  Open the UI:   ${BOLD}$(dashboard_url)${RST}"
   say "  Sign in as:    ${BOLD}$(env_get ADMIN_USERNAME || echo admin)${RST}"
   say "  Password:      ${BOLD}$(env_get ADMIN_INITIAL_PASSWORD)${RST}"
   say "                 ${DIM}(generated for this install — change it in Settings)${RST}"
@@ -814,9 +832,7 @@ cmd_install() {
     # the stage always closes ok; the credential itself NEVER rides a marker.
     cx_stage verify-login "verifying the admin credential" ok
     print_success
-    local ip host
-    ip=$(hostname -I 2>/dev/null | awk '{print $1}'); host=${ip:-localhost}
-    cx_result ok "http://${host}:${UI_PORT}" "$(env_get ADMIN_USERNAME || echo admin)"
+    cx_result ok "$(dashboard_url)" "$(env_get ADMIN_USERNAME || echo admin)"
   else
     cx_stage verify-health "waiting for services to become healthy" fail \
       "services did not become healthy within the wait window"
@@ -826,13 +842,90 @@ cmd_install() {
   fi
 }
 
+# The image `purge_data_dir` runs its privileged `rm` in. The store data was
+# written by containers as THEIR uids (postgres 999, clickhouse 101, victoria
+# root), so an unprivileged installer cannot remove it from the host at all —
+# it needs a container that is root inside the mount, exactly as cmd_reset_demo
+# already does. On an air-gapped appliance we may not pull one, so the image
+# has to be something already on this host (the same lesson install.py's
+# _chown_helper_ref() encodes for the chown helper: `docker load` restores by
+# TAG, and a virgin host has nothing else).
+#
+# Preference order: a tiny general-purpose image if the host happens to have
+# one, then the bundle's own alpine-based images by name. `docker run
+# --entrypoint sh` bypasses whatever entrypoint the borrowed image declares.
+purge_helper_image() {
+  local img
+  for img in alpine:latest alpine:3 alpine busybox:latest busybox; do
+    docker image inspect "$img" >/dev/null 2>&1 && { printf '%s' "$img"; return 0; }
+  done
+  if [ -n "$BUNDLE_DIR" ] && [ -f "$BUNDLE_DIR/MANIFEST" ]; then
+    while read -r img; do
+      case "$img" in *alpine*) ;; *) continue ;; esac
+      docker image inspect "$img" >/dev/null 2>&1 && { printf '%s' "$img"; return 0; }
+    done < <(sed -n 's/^  - //p' "$BUNDLE_DIR/MANIFEST" | sed 's/@sha256:[0-9a-f]*$//' | sort -u)
+  fi
+  return 1
+}
+
+# Remove $ROOT/data completely, or say precisely why it could not be and stop.
+#
+# `rm -rf "$ROOT/data"` alone is what shipped, and on a real appliance it fails
+# with hundreds of "Permission denied", exits 1, and leaves the stores on disk
+# AFTER the script has announced "Purging data..." — a purge that silently is
+# not one (fresh-install acceptance, 2026-09-06, DEFECT-11). §16.1: the failure
+# is now either repaired or named, never printed over.
+purge_data_dir() {
+  [ -e "$ROOT/data" ] || return 0
+  # Fast path: everything in there is ours (a --no-start install, or a root
+  # installer). Nothing to explain, nothing to borrow an image for.
+  if rm -rf "$ROOT/data" 2>/dev/null && [ ! -e "$ROOT/data" ]; then
+    return 0
+  fi
+  local img out rc=0
+  if img="$(purge_helper_image)"; then
+    say "  store data is owned by the service accounts inside the containers —"
+    say "  removing it through a privileged helper container ($img)..."
+    out="$(docker run --rm --entrypoint sh -v "$ROOT/data:/data" "$img" \
+             -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} +' 2>&1)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      die "the helper container could not remove $ROOT/data (exit $rc): $(printf '%s' "$out" | tail -3)" \
+"Nothing was left half-removed on purpose — the images and containers are gone.
+Finish the purge by hand and re-run if you want the rest:
+  sudo rm -rf '$ROOT/data'"
+    fi
+    rm -rf "$ROOT/data" 2>/dev/null || true
+  fi
+  if [ -e "$ROOT/data" ]; then
+    die "could not remove $ROOT/data." \
+"The store data belongs to the uids the containers ran as (postgres 999,
+clickhouse 101, victoria 0) and this installer is not root, so it cannot
+delete it, and no local image was available to do it from inside a
+container. Nothing was quietly skipped — remove it with:
+  sudo rm -rf '$ROOT/data'"
+  fi
+  return 0
+}
+
 cmd_uninstall() {
   [ -f "$ENV_FILE" ] || die "Nothing to uninstall — no Correlix install found here."
   say "Stopping and removing Correlix containers..."
-  compose down --remove-orphans
+  # --volumes on a purge ONLY. The stack declares no named volumes, so every
+  # volume the project owns is anonymous — created by an image VOLUME
+  # directive, unreachable by name, and orphaned forever by a plain `down`
+  # (fresh-install acceptance, DEFECT-12: ten of them survived a --purge). On a
+  # non-purge uninstall they are kept deliberately, with the rest of the data.
+  if [ "$PURGE" = 1 ]; then
+    compose down --remove-orphans --volumes
+  else
+    compose down --remove-orphans
+  fi
   ok "containers removed"
   if [ "$PURGE" = 1 ]; then
     say "Purging data, configuration, and loaded images..."
+    # Data FIRST, images second: the removal needs a local image to run the
+    # privileged `rm` in, and the loop below deletes exactly those.
+    purge_data_dir
     if [ "$MODE" = "bundle" ] && [ -f "$BUNDLE_DIR/MANIFEST" ]; then
       # MANIFEST pins images as tag@sha256:digest, but docker-load restored
       # them by TAG only (digests are pull-time metadata) — so `docker rmi
@@ -841,8 +934,8 @@ cmd_uninstall() {
         docker rmi "$img" >/dev/null 2>&1 || true
       done
     fi
-    rm -rf "$ROOT/data" "$ENV_FILE"
-    ok "data and configuration removed (images unreferenced elsewhere were deleted)"
+    rm -f "$ENV_FILE"
+    ok "data, volumes and configuration removed (images unreferenced elsewhere were deleted)"
   else
     say "Your data and configuration were kept:"
     say "  data:    $ROOT/data"

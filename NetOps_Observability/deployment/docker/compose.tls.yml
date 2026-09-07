@@ -32,13 +32,40 @@ x-logging: &deflog
 
 services:
   nginx:
-    # NOTE (enforce wave 2026-08-09): the LAB dropped the plaintext :8000 host
-    # ingress (`ports: !override` → 443 only). The shipped variant keeps 8000
-    # DELIBERATELY for now: install.py's printed URLs/readiness messaging are
-    # not TLS-aware yet — dropping it here would strand fresh --tls installs on
-    # dead http URLs. Close both together (installer messaging + this drop).
-    ports:
+    # PLAINTEXT INGRESS IS LOOPBACK-ONLY UNDER TLS (tracker 265, closed
+    # 2026-09-07 — fresh-install acceptance DEFECT-7).
+    #
+    # Until this change the shipped TLS variant published :8000 on 0.0.0.0
+    # ALONGSIDE 443, so a stack that advertised a "full TLS/mTLS mesh" also
+    # served the whole dashboard AND `POST /api/auth/login` unencrypted to
+    # anything that could reach the host — and the wizard's own (then wrong)
+    # https URL pushed operators onto it, carrying the generated administrator
+    # password in the clear. The NOTE that stood here kept the publish
+    # "deliberately for now" because install.py's printed URLs were not
+    # TLS-aware; that half shipped in d31245c7 and is completed here, so both
+    # halves close together exactly as that NOTE required.
+    #
+    # `ports` is a LIST and compose MERGES lists across files, so the base
+    # file's "${BASE_PORT}:8080" cannot be dropped by restating this key —
+    # only `!override` replaces it, which means BOTH entries are restated here
+    # in full.
+    #
+    # The plaintext listener is kept, bound to 127.0.0.1, rather than deleted:
+    #   * tls.conf terminates TLS and proxies to 127.0.0.1:8080 INSIDE this
+    #     container, so the :8080 server block is load-bearing either way;
+    #   * the host-local tooling that qualifies and watches an appliance —
+    #     scripts/deploy-qualify.sh (APP_URL), scripts/stack-watchdog.sh
+    #     (APP_URL + the api liveness probe), install-correlix.sh's
+    #     wait_healthy / verify_admin_login and install.py's readiness gate —
+    #     all speak http://localhost:8000 and all run ON the host. Answering
+    #     them with a 301 instead would break every one of them: none follow
+    #     redirects and verify_admin_login POSTs.
+    # Off-host, :8000 is simply not published any more — the connection is
+    # refused, which is the behaviour a customer can verify in one command.
+    # Pinned by tests/test_install_tls_ingress.py.
+    ports: !override
       - "443:8443"
+      - "127.0.0.1:${BASE_PORT:-8000}:8080"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       # mTLS VARIANT of default.conf (repo default.conf keeps plaintext inner
