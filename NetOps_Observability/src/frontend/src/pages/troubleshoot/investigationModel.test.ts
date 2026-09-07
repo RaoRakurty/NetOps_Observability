@@ -34,6 +34,7 @@ import {
   classifyPathLane,
   confidenceChip,
   describedTitle,
+  hashWithoutSection,
   isConfigChangeKind,
   isLiveInvestigation,
   laneError,
@@ -302,21 +303,22 @@ describe("change vocabulary", () => {
 // ── deep link ────────────────────────────────────────────────────────────────
 
 describe("parseInvestigationHash", () => {
+  // ONE FACE (2026-09-07). The page has a single surface, so every `?section=`
+  // a bookmark can still carry — the retired protocol bench, the retired
+  // collection-pipeline board, a typo — resolves to the investigation. A
+  // bookmark never lands on a blank page, and never reopens a dead surface.
   it.each([
-    ["#/investigate/troubleshooting", "investigate"],
-    ["#/investigate/troubleshooting?section=investigate", "investigate"],
-    ["#/investigate/troubleshooting?section=protocol", "investigate"],
-    ["#/investigate/troubleshooting?section=pipeline", "pipeline"],
-    ["#/investigate/troubleshooting?section=nonsense", "investigate"],
-    ["#/investigate/troubleshooting?section=", "investigate"],
-    ["", "investigate"],
-    ["?section=protocol", "investigate"],
-  ] as const)("%p → section %s", (hash, section) => {
-    expect(parseInvestigationHash(hash).section).toBe(section);
-  });
-
-  it("is case-sensitive on the section token (no fuzzy matching)", () => {
-    expect(parseInvestigationHash("#/x?section=Protocol").section).toBe("investigate");
+    "#/investigate/troubleshooting",
+    "#/investigate/troubleshooting?section=investigate",
+    "#/investigate/troubleshooting?section=protocol",
+    "#/investigate/troubleshooting?section=pipeline",
+    "#/investigate/troubleshooting?section=nonsense",
+    "#/investigate/troubleshooting?section=",
+    "",
+    "?section=protocol",
+    "#/x?section=Protocol",
+  ] as const)("%p → the investigation", (hash) => {
+    expect(parseInvestigationHash(hash).section).toBe("investigate");
   });
 
   // `?symptom=` is no longer a mode: a described problem becomes a case, so an
@@ -663,5 +665,42 @@ describe("describedTitle", () => {
 
   it("bounds the text so a title is never a payload", () => {
     expect(describedTitle("x".repeat(500))).toHaveLength(200);
+  });
+});
+
+// ── the retired `?section=` is erased, not just ignored ──────────────────────
+//
+// Owner, 2026-09-07: "Whenever I refresh troubleshooting page there is a stale
+// page … It looks like stale page". Resolving the parameter to the investigation
+// is only half the fix — while it stays in the address, every refresh is a fresh
+// chance to reopen a surface that no longer exists. The page rewrites the hash
+// on load with what this returns.
+
+describe("hashWithoutSection", () => {
+  it.each([
+    ["#/investigate/troubleshooting?section=pipeline", "#/investigate/troubleshooting"],
+    ["#/investigate/troubleshooting?section=protocol", "#/investigate/troubleshooting"],
+    ["#/investigate/troubleshooting?section=", "#/investigate/troubleshooting"],
+  ] as const)("%p → %p", (hash, cleaned) => {
+    expect(hashWithoutSection(hash)).toBe(cleaned);
+  });
+
+  it("keeps every other parameter, and the case link keeps working", () => {
+    expect(hashWithoutSection("#/investigate/troubleshooting?section=pipeline&case=corr-9"))
+      .toBe("#/investigate/troubleshooting?case=corr-9");
+    expect(parseInvestigationHash(hashWithoutSection("#/x?section=pipeline&case=corr-9")).caseId)
+      .toBe("corr-9");
+  });
+
+  // "" is the "leave the address alone" answer — a hash with nothing to strip
+  // must not cause a rewrite, or every page load would push a history entry.
+  it.each([
+    "#/investigate/troubleshooting",
+    "#/investigate/troubleshooting?case=corr-9",
+    "#/investigate/troubleshooting?symptom=dns",
+    "",
+    "?section=pipeline",
+  ] as const)("%p is left alone", (hash) => {
+    expect(hashWithoutSection(hash)).toBe("");
   });
 });

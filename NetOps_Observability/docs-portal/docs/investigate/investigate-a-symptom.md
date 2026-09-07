@@ -26,16 +26,18 @@ naming the API it read.
 
 ### Step 1 - Open the workspace
 
-1. Go to **Investigate → Troubleshooting**. The page opens on **Investigation**.
-2. The section switch also offers **Protocol diagnostics** and **Collection
-   pipeline**. Each section is a deep link, for example
-   `#/investigate/troubleshooting?section=protocol`. An unrecognised link lands
-   on Investigation rather than on a blank page.
+1. Go to **Investigate → Troubleshooting**. The page has one surface: the
+   investigation.
+2. A bookmark carrying an old `?section=` parameter — `protocol` (the retired
+   manual bench) or `pipeline` (the retired collection-pipeline board) — lands
+   on the investigation, and the parameter is removed from the address so a
+   refresh stays on it. `?case=<id>` still opens the workspace on that case.
 
 :::note
-**Collection pipeline** is the older collector board, kept reachable for one
-release while operators migrate. Its step-zero question, "is the pipeline or the
-device at fault", is now answered beside the evidence lanes.
+The **Collection pipeline** board is gone. Its step-zero question, "is the
+pipeline or the device at fault", is answered beside the evidence lanes; its
+collector counts, per-collector rows and flow sources moved to
+**Platform → Tools → Stack Health**, in the Collection section.
 :::
 
 ### Step 2 - Pick a symptom or an open case

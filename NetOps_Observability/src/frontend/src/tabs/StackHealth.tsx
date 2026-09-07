@@ -4,8 +4,18 @@
 import { useEffect, useState } from "react";
 import { api, StackHealth as StackHealthData, StackComponent } from "../services/api";
 import Icon from "../components/Icon";
+import AskIris from "../components/AskIris";
 import { StatStrip, Stat, Skeleton } from "../components/ui";
 import { operatorError } from "../lib/errors";
+import {
+  COLLECTION_QUERIES,
+  collectorRows,
+  flowSourceRows,
+  flowsTotal,
+  scalarValue,
+  type CollectorRow,
+  type FlowSourceRow,
+} from "./stackCollection";
 // Stack Health — the platform's OWN infrastructure monitoring: the data
 // backends, event bus, state stores and visualization that make up the stack
 // behind the app. Platform-owner only (the API returns 403 otherwise); the nav
@@ -14,6 +24,14 @@ import { operatorError } from "../lib/errors";
 // Presentation mirrors the modern self-service cards (ChangePasswordCard): an
 // icon-chip header + subtitle, a data-dense StatStrip, skeleton loading, and a
 // scannable per-category status board instead of a flat table.
+//
+// IT ALSO CARRIES COLLECTION (2026-09-07). Troubleshooting used to keep a second
+// section — the June collection-pipeline board — which a `?section=pipeline`
+// bookmark reopened on every refresh, reading as a stale page. The board is
+// gone; the facts no other screen carried are the Collection section below:
+// the fleet counts, one row per collector, and the flow sources. Its model is
+// tabs/stackCollection.ts; the words it used to spend teaching now sit behind
+// the (i) as ai/skills/explain/pipeline.reachable-zero.md.
 
 const CATEGORY_LABELS: Record<string, string> = {
   search: "Search",
@@ -61,6 +79,150 @@ function Header() {
           app. Refreshes every 15&nbsp;seconds.
         </p>
       </div>
+    </div>
+  );
+}
+
+// ── Collection ───────────────────────────────────────────────────────────────
+//
+// The four fleet counts, one row per collector and the flow sources — what the
+// retired collection-pipeline board was the only screen to carry. Facts only:
+// the reading that makes them worth putting side by side (reachable 0 while
+// monitored is above 0 points at the devices) is behind the (i).
+
+const fmtCount = (n: number | null): string => (n == null ? "—" : Math.round(n).toLocaleString());
+const fmtMs = (n: number | null): string => (n == null ? "—" : `${Math.round(n)} ms`);
+
+function CollectionSection() {
+  const [monitored, setMonitored] = useState<number | null>(null);
+  const [snmpReachable, setSnmpReachable] = useState<number | null>(null);
+  const [collectors, setCollectors] = useState<CollectorRow[]>([]);
+  const [sources, setSources] = useState<FlowSourceRow[]>([]);
+  const [traps, setTraps] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const [mon, reach, conf, cReach, poll, byType, trapHits] = await Promise.all([
+          api.metricsQuery(COLLECTION_QUERIES.monitored),
+          api.metricsQuery(COLLECTION_QUERIES.snmpReachable),
+          api.metricsQuery(COLLECTION_QUERIES.configured),
+          api.metricsQuery(COLLECTION_QUERIES.reachable),
+          api.metricsQuery(COLLECTION_QUERIES.poll),
+          api.flowsByType(3600),
+          api.searchLogs({ query: "*", signal: "snmptrap", size: 0 }),
+        ]);
+        if (!alive) return;
+        setMonitored(scalarValue(mon?.data?.result));
+        setSnmpReachable(scalarValue(reach?.data?.result));
+        setCollectors(collectorRows(conf?.data?.result, cReach?.data?.result, poll?.data?.result));
+        setSources(flowSourceRows(byType?.data));
+        setTraps(Number(trapHits?.hits?.total?.value ?? NaN) || 0);
+        setErr(null);
+        setLoaded(true);
+      } catch (e) {
+        if (!alive) return;
+        setErr(operatorError(e, "Collection could not be read."));
+        setLoaded(true);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  const flows = flowsTotal(sources);
+
+  return (
+    <div className="card sh-card" data-section="collection">
+      <div className="pw-head">
+        <span className="pw-head-icon"><Icon name="plug" size={18} /></span>
+        <div>
+          <h2>Collection<AskIris topic="pipeline.reachable-zero" label="Reachable versus monitored" /></h2>
+        </div>
+      </div>
+
+      {err ? (
+        <p className="sh-note err"><Icon name="alerts" size={14} /> {err}</p>
+      ) : !loaded ? (
+        <StatStrip>
+          {[0, 1, 2, 3].map((i) => (
+            <div className="ds-stat" key={i}>
+              <Skeleton w={56} h={22} />
+              <Skeleton w={68} h={9} style={{ marginTop: 6 }} />
+            </div>
+          ))}
+        </StatStrip>
+      ) : (
+        <>
+          <StatStrip>
+            <Stat label="Monitored devices" value={fmtCount(monitored)} />
+            <Stat
+              label="Reachable (SNMP)"
+              value={fmtCount(snmpReachable)}
+              tone={snmpReachable == null ? "" : snmpReachable > 0 ? "good" : "bad"}
+            />
+            <Stat label="Flows (1h)" value={fmtCount(flows)} tone={flows > 0 ? "good" : "warn"} />
+            <Stat label="Traps (1h)" value={fmtCount(traps)} />
+          </StatStrip>
+
+          <div className="sh-grid">
+            <section className="sh-cat">
+              <header className="sh-cat-head">
+                <span>Collectors</span>
+                <span className="sh-cat-count">{collectors.length}</span>
+              </header>
+              <ul className="sh-list">
+                {collectors.length === 0 ? (
+                  <li className="sh-row sh-empty">No collector reported.</li>
+                ) : (
+                  collectors.map((c) => (
+                    <li className="sh-row" key={c.collector}>
+                      <Dot status={c.status} />
+                      <span className="sh-main">
+                        <span className="sh-name">{c.collector}</span>
+                        <span className="sh-detail">
+                          {fmtCount(c.reachable)} / {fmtCount(c.configured)} reachable
+                        </span>
+                      </span>
+                      <span className="sh-lat mono">{fmtMs(c.pollMs)}</span>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </section>
+
+            <section className="sh-cat">
+              <header className="sh-cat-head">
+                <span>Flow sources<AskIris topic="pipeline.flow-aggregation" label="Exported versus indexed flows" /></span>
+                <span className="sh-cat-count">{sources.length}</span>
+              </header>
+              <ul className="sh-list">
+                {sources.length === 0 ? (
+                  <li className="sh-row sh-empty">No flows in the last hour.</li>
+                ) : (
+                  sources.map((f) => (
+                    <li className="sh-row" key={f.flowType}>
+                      <Dot status={f.flows > 0 ? "up" : "down"} />
+                      <span className="sh-main">
+                        <span className="sh-name">{f.flowType}</span>
+                        <span className="sh-detail">{f.exporters} exporters</span>
+                      </span>
+                      <span className="sh-lat mono">{fmtCount(f.flows)}</span>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </section>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -179,6 +341,8 @@ export default function StackHealth() {
           </>
         )}
       </div>
+
+      <CollectionSection />
     </div>
   );
 }

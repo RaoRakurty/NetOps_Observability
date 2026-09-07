@@ -8,5 +8,6 @@ and the devices are unreachable — it is not a pipeline failure. The collector
 counted the targets it was configured with, tried them, and got nothing back.
 The usual causes are credentials (a rotated SNMP community or v3 user), an ACL
 or firewall between the collector and the devices, or the devices being down.
-Start at the device end, not at Correlix. The reverse reading — monitored at
-zero — means nothing was configured for collection at all.
+Start at the device end, not at Correlix. Both counts sit in Stack Health's
+Collection section, beside one row per collector. The reverse reading —
+monitored at zero — means nothing was configured for collection at all.

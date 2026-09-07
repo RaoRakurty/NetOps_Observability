@@ -640,28 +640,50 @@ export function describedTitle(text: string): string {
 
 // ── Deep link ────────────────────────────────────────────────────────────────
 
-// The page carries TWO sections. "Protocol diagnostics" was removed on
-// 2026-09-05 (docs/design/TAC_ESCALATION_2026-09-05.md §5): the manual bench is
-// replaced by the escalation flow on the investigation surface, and the issue ×
-// command knowledge moved to Iris → Knowledge. An old `?section=protocol` deep
-// link therefore resolves to the investigation surface — the same fallback any
-// unrecognized section takes, so a bookmark lands on the work, not on a blank.
-export type TroubleshootSection = "investigate" | "pipeline";
+// THE PAGE HAS ONE FACE (owner, 2026-09-07: "Whenever I refresh troubleshooting
+// page there is a stale page … It looks like stale page"). Troubleshooting used
+// to carry a second section — the June collection-pipeline board — and a
+// bookmark holding `?section=pipeline` reopened it on every refresh. The board
+// is gone: its collector counts, per-collector rows and flow sources now live on
+// Platform → Stack Health, beside the rest of the stack's own health.
+//
+// `?section=` is still PARSED, and always resolves to the investigation, so no
+// old bookmark lands on a blank page — `?section=protocol` (the manual bench
+// retired on 2026-09-05, docs/design/TAC_ESCALATION_2026-09-05.md §5) and
+// `?section=pipeline` both open the work. The page then strips the parameter
+// from the address so the next refresh is clean.
+export type TroubleshootSection = "investigate";
 
 /**
- * Reads the section and case out of the page hash. Anything unrecognized falls
- * back to the investigation surface — a deep link never lands on a blank page.
- * `?symptom=` is no longer a mode, so an old symptom link lands on the picker
- * rather than on a surface that no longer exists.
+ * The hash with the retired `section=` parameter removed, or "" when there was
+ * nothing to remove. "" is the "leave the address alone" answer: a page hash
+ * always carries its route, so a cleaned hash is never empty.
+ */
+export function hashWithoutSection(hash: string): string {
+  const raw = String(hash || "");
+  const cut = raw.indexOf("?");
+  if (cut < 0) return "";
+  const q = new URLSearchParams(raw.slice(cut + 1));
+  if (!q.has("section")) return "";
+  q.delete("section");
+  const rest = q.toString();
+  const route = raw.slice(0, cut);
+  if (!route) return "";
+  return rest ? `${route}?${rest}` : route;
+}
+
+/**
+ * Reads the case out of the page hash. `section` is reported for the callers
+ * that still name it, and is always the investigation — the page has one face.
+ * `?symptom=` is no longer a mode either, so an old symptom link lands on the
+ * picker rather than on a surface that no longer exists.
  */
 export function parseInvestigationHash(hash: string): {
   section: TroubleshootSection;
   caseId: string;
 } {
   const q = new URLSearchParams(String(hash || "").split("?")[1] || "");
-  const raw = q.get("section");
-  const section: TroubleshootSection = raw === "pipeline" ? "pipeline" : "investigate";
   // Only an opaque token is accepted as a case id — never rendered as markup.
   const caseId = /^[A-Za-z0-9_-]{1,64}$/.test(q.get("case") || "") ? String(q.get("case")) : "";
-  return { section, caseId };
+  return { section: "investigate", caseId };
 }

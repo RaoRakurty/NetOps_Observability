@@ -3715,6 +3715,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .sh-detail { font-size: var(--fs-micro); color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sh-lat { font-size: var(--fs-meta); color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Collection section (Stack Health): an honest "nothing reported" row inside a
+   category list — it spans the row's three columns rather than faking a dot. */
+.sh-row.sh-empty { display: block; color: var(--muted); font-size: var(--fs-meta); }
 
 /* ===== Vendor icons (Topology editor + monogram tile) ===================== */
 .vendor-mono {

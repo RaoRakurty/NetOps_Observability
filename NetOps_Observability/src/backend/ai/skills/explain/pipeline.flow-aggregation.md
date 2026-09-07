@@ -7,6 +7,7 @@ Flow records are aggregated exporter-side before they ever reach Correlix, so a
 difference between what a device says it exported and what is indexed here is
 expected, not a loss. Sampling rates, active and inactive flow timeouts and the
 exporter's own cache all collapse many packets into one record, and each vendor
-does it slightly differently. Treat the counts on this board as a presence
-check — records are arriving from these exporters — rather than an audit. Full
-per-dimension analysis lives in the Flows dashboard.
+does it slightly differently. Treat the flow-source counts in Stack Health's
+Collection section as a presence check — records are arriving from these
+exporters — rather than an audit. Full per-dimension analysis lives in the
+Flows dashboard.
