@@ -33,6 +33,7 @@ Run:  python3 -m pytest tests/test_install_data_dirs.py -v
 from __future__ import annotations
 
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -609,3 +610,54 @@ def test_tls_services_is_created_before_any_compose_up():
     dirs = main_src.index("ensure_data_dirs(root)")
     up = main_src.index("compose_up(compose_dir")
     assert dirs < up, "ensure_data_dirs must precede the first compose_up"
+
+
+# ── (i) the installer's own preflight must be clean on an INSTALLED host ────
+# Fresh-install acceptance, 2026-09-06. preflight-install.py ships inside the
+# customer bundle, but it hard-failed on every installed appliance:
+#   ✗ docs/security/transport-inventory.yaml missing (SEC-001.1 as-built inventory)
+# make-installer.sh deliberately leaves the security-design docs out of the
+# customer tree, so the gate was failing on the absence of a file the customer
+# was never sent — and telling them so in language about an internal invariant.
+
+def _run_preflight(cwd: Path):
+    return subprocess.run([sys.executable, str(SCRIPTS / "preflight-install.py")],
+                          cwd=str(cwd), capture_output=True, text=True, check=False)
+
+
+def test_preflight_is_clean_in_the_repo():
+    """The gate must still do its job where drift actually happens."""
+    r = _run_preflight(ROOT)
+    assert r.returncode == 0, (
+        f"preflight-install.py fails in the repo:\n{r.stdout}\n{r.stderr}")
+
+
+def test_preflight_reports_the_real_migration_count():
+    """The migrations line pointed at src/backend/migrations, which has not
+    existed for a long time, so it reported '0 present' on every single run."""
+    r = _run_preflight(ROOT)
+    m = re.search(r"\[migrations\] (\d+) present", r.stdout)
+    assert m, f"no migrations line in the output:\n{r.stdout}"
+    counted = int(m.group(1))
+    actual = len(list((ROOT / "src" / "backend" / "internal" / "platformdb"
+                       / "migrations").glob("*.sql")))
+    assert counted == actual and counted > 0, (
+        f"preflight reports {counted} migrations, the tree has {actual} — "
+        "the path is stale again")
+
+
+def test_transport_inventory_gate_is_repo_only():
+    """Absent inventory + no git (an extracted customer tree) must SKIP, not
+    fail; absent inventory inside a git checkout must still fail."""
+    src = (SCRIPTS / "preflight-install.py").read_text()
+    block = src[src.index('inv_path = ROOT / "docs"'):]
+    block = block[:block.index("# 6)")] if "# 6)" in block else block[:4000]
+    assert "if tracked is None:" in block, (
+        "the transport-inventory check no longer distinguishes an extracted "
+        "customer tree from a git checkout — it will fail on every install")
+    head = block[:block.index("else:")]
+    assert "warn(" in head and "bad(" not in head, (
+        "a shipped tree without the repo-only inventory must warn, not fail")
+    assert "bad(" in block[block.index("else:"):], (
+        "a GIT checkout missing the inventory must still fail — that is the drift "
+        "this gate exists to catch")

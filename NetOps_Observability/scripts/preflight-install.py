@@ -263,7 +263,17 @@ def main() -> int:
     import json
     inv_path = ROOT / "docs" / "security" / "transport-inventory.yaml"
     if not inv_path.exists():
-        bad("docs/security/transport-inventory.yaml missing (SEC-001.1 as-built inventory)")
+        if tracked is None:
+            # No git → this is an EXTRACTED CUSTOMER TREE, and make-installer.sh
+            # deliberately leaves the security-design docs out of it. Failing
+            # here made the installer's own preflight report exit 1 on every
+            # installed host, with a message about a file the customer was
+            # never shipped (fresh-install acceptance, 2026-09-06). The gate
+            # still fails hard in a repo, which is where drift happens.
+            warn("transport inventory not in this tree — repo-only gate, skipped "
+                 "(expected on an installed appliance)")
+        else:
+            bad("docs/security/transport-inventory.yaml missing (SEC-001.1 as-built inventory)")
     else:
         try:
             inv = json.loads(inv_path.read_text())
@@ -331,7 +341,12 @@ def main() -> int:
                 ok(f"declared plaintext exceptions well-formed ({n_exc} declared, each with owner + accepted date)")
 
     # 6) informational: migrations auto-apply on api start; just surface the count
-    migs = sorted((ROOT / "src" / "backend" / "migrations").glob("*.sql"))
+    # The api's migrations live under internal/platformdb; the old
+    # src/backend/migrations path has not existed for a long time, so this line
+    # reported "0 present" on every run — an informational line that informed
+    # nobody of anything (fresh-install acceptance, 2026-09-06).
+    migs = sorted((ROOT / "src" / "backend" / "internal" / "platformdb"
+                   / "migrations").glob("*.sql"))
     print(f"[migrations] {len(migs)} present, auto-applied by the api on startup (latest: {migs[-1].name if migs else 'none'})")
 
     print()
