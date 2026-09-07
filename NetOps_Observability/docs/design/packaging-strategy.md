@@ -257,7 +257,7 @@ validation; none of them was attempted here:
 * **Correlation Python → Go** — after L1 (and L8) the remaining Python base is
   42.6 MB in the bundle rather than ~66 MB, which weakens this one considerably.
 
-### 8.4 The bundle, actually built and measured (2026-09-06, tracker 125)
+### 8.4 The bundle, actually built and measured (2026-09-06 and 2026-09-07; trackers 125 and 265)
 
 The bundle has been built here, twice on 2026-09-06 on the lab host, with
 `APK_REPO_SCHEME=http` and a local corresponding-source mirror: once at `f07c834a` (11:05 UTC) and again at
@@ -265,21 +265,43 @@ The bundle has been built here, twice on 2026-09-06 on the lab host, with
 not estimates**, and both columns are real builds rather than one build and one
 projection.
 
-| Artifact | `f07c834a` bytes | `9967eaf5` bytes | Δ |
-|---|---:|---:|---|
-| `correlix-images-core-<v>.tar.zst` | 1 578 211 793 | **1 210 520 662** | **−367 691 131 (−23.3 %)** |
-| `correlix-source-<v>.tar.gz` | 18 091 804 | 18 185 513 | +94 KB (tree grew) |
-| `correlix-setup` | 7 291 042 | 7 291 042 | — |
-| `correlix-debug` | 7 377 058 | 7 377 058 | — |
-| `correlix-licence` | 4 653 218 | 4 653 218 | — |
-| `docs/` (305 files) | ~10 400 000 | 9 711 333 | — |
-| `source-offer/` (36 files) | ~40 000 000 | 32 176 597 | — |
-| notices, docs, MANIFEST, checksums, `LICENSES/` | ~110 000 | 229 711 | — |
-| **core + nothing optional** (folder minus the packs) | **1 657 778 030** | **1 290 149 240** | **−367 628 790 (−22.2 %)** |
-| `correlix-addon-log-search-ui-<v>.tar.zst` | 447 216 664 | 447 216 664 | — |
-| `correlix-addon-self-monitoring-<v>.tar.zst` | 184 609 379 | 184 609 379 | — |
-| `correlix-addon-sso-<v>.tar.zst` | *(none — Keycloak was a base image)* | **234 232 600** | new pack |
-| **whole folder, everything** | **2 289 604 073** | **2 156 207 883** | −133 396 190 (−5.8 %) |
+| Artifact | `f07c834a` bytes | `9967eaf5` bytes | `fb07ac69` bytes | Δ vs `9967eaf5` |
+|---|---:|---:|---:|---|
+| `correlix-images-core-<v>.tar.zst` | 1 578 211 793 | 1 210 520 662 | **1 217 640 927** | +7 120 265 (+0.6 %) |
+| `correlix-source-<v>.tar.gz` | 18 091 804 | 18 185 513 | 18 316 683 | +131 170 (tree grew) |
+| `correlix-setup` | 7 291 042 | 7 291 042 | 7 291 042 | — |
+| `correlix-debug` | 7 377 058 | 7 377 058 | 7 377 058 | — |
+| `correlix-licence` | 4 653 218 | 4 653 218 | 4 653 218 | — |
+| `docs/` | ~10 400 000 | 9 711 333 | 9 019 109 | −692 224 |
+| `source-offer/` (36 files) | ~40 000 000 | 32 176 597 | 32 172 501 | −4 096 |
+| notices, docs, MANIFEST, checksums, `LICENSES/`, the two scripts | ~110 000 | 229 711 | 226 993 | — |
+| **core + nothing optional** (folder minus the packs) | **1 657 778 030** | **1 290 149 240** | **1 296 708 531** | **+6 559 291 (+0.5 %)** |
+| `correlix-addon-log-search-ui-<v>.tar.zst` | 447 216 664 | 447 216 664 | 447 216 664 | — |
+| `correlix-addon-self-monitoring-<v>.tar.zst` | 184 609 379 | 184 609 379 | 184 609 379 | — |
+| `correlix-addon-sso-<v>.tar.zst` | *(none — Keycloak was a base image)* | 234 232 600 | 234 232 600 | — |
+| **whole folder, everything** | **2 289 604 073** | **2 156 207 883** | **2 162 767 174** | +6 559 291 (+0.3 %) |
+
+**The `fb07ac69` column (2026-09-07) is the bundle that closes tracker 265** —
+built the same way (`APK_REPO_SCHEME=http`, `CORRELIX_SOURCE_MIRROR_DIR` at the
+previous bundle's own `source-offer/`), from a **clean `git worktree` at HEAD**
+rather than the working tree, so the images and the source tarball describe the
+same commit. It is the first bundle whose base archive contains
+`victoriametrics/vmauth` — the image every default TLS install starts and which
+`BASE_PROFILES` had omitted, making the 2026-09-06 artifact un-installable
+air-gapped (fresh-install acceptance DEFECT-3). That single image is most of the
++7.1 MB on the core archive: `vmauth:v1.101.0` is 28.5 MB as an image and
+compresses into the shared-layer set for about +7 MB. Everything else moved by
+rounding.
+
+A build host needs a `deployment/docker/.env`: several compose services declare
+`${VAR:?}` interpolations (`INGEST_TOKEN_TRAPS` first among them), so
+`docker compose build` refuses outright in a tree that has never been installed.
+On a clean worktree the fix is one command — `python3 scripts/install.py
+--no-start --tls no --bootstrap-docker no --assume-yes` — which mints a
+throwaway `.env` and nothing else. Worth knowing before anyone tries to cut a
+bundle on a CI runner: §8.4's earlier note that `make-installer.sh` pins
+`COMPOSE_FILE`/`COMPOSE_PROFILES` covers *profile* resolution, not the required
+variables.
 
 The two rows that answer the question. **A default download is 1.29 GB**, not
 2.2 GB, because 235 MB of it (Keycloak) is now a file you take only if you want
@@ -369,7 +391,8 @@ fetched from upstream per release.**
 
 ### 8.5 What a customer downloads by default
 
-**1.29 GB.** That is `correlix-images-core-<version>.tar.zst` (1.21 GB) plus the
+**1.30 GB** (`fb07ac69`; 1.29 GB at `9967eaf5`, before `vmauth` was put back in
+the archive). That is `correlix-images-core-<version>.tar.zst` (1.22 GB) plus the
 source tarball, the three Go binaries, the offline documentation portal, the
 corresponding-source archives and the notices — the complete, installable,
 air-gapped appliance, with every collector, the bus, all four stores, the

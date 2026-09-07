@@ -801,3 +801,301 @@ Supporting logs in the same directory:
 | `11-wizard.log` … `23-wizard5.log` | the five Playwright walks, step by step |
 | `13-installlog.log`, `18-run2-datadirs.log`, `21-tlsown.log` | the installer's own logs and the ownership evidence for DEFECT‑1 and DEFECT‑6 |
 | `24-validate.log`, `25-addon.log` | §5's validation and the add-on exercise |
+
+---
+---
+
+# Re-verification — 2026-09-07, from the rebuilt bundle
+
+> The run above closed nine of twelve defects and filed three. This section is
+> the run that closes the remaining four things tracker 265 was narrowed to:
+> the plaintext `:8000` ingress under TLS, the three filed defects, and the
+> bundle rebuild. Same host, same graphical path, same Playwright driver —
+> but from a **freshly cut bundle** rather than a patched one, so what was
+> verified is what a customer would actually receive.
+
+| | |
+|---|---|
+| **Host** | `10.70.245.123` (`netops`), owner-designated — wiped to bare metal first (see §R1) |
+| **Bundle** | `correlix-2026.09.07-gfb07ac69` (git `fb07ac69`, built 2026-09-07T05:33:14Z), cut from a **clean `git worktree` at HEAD**, not the working tree |
+| **Path driven** | **Graphical** (`correlix-setup` over HTTPS), Playwright/chromium from the dev box, core only, discovery off, PostgreSQL, full mTLS |
+| **Result** | **PASS on the FIRST attempt.** 19/19 services, `deploy-qualify.sh` 9 passed / 0 failed, `http://<host>:8000` refused from the network while `https://<host>/` serves, add-on enabled and disabled cleanly. Install wall clock **19 min 50 s** (1 189.7 s). |
+| **Sign-in URL** | **`https://10.70.245.123/`** — administrator `admin`, password in `deployment/docker/.env` as `ADMIN_INITIAL_PASSWORD`. Self-signed certificate; the browser warns once. |
+| **Left running** | yes: 19 services, core only, self-monitoring enabled then disabled again |
+
+---
+
+## R1. Wiping the host — with the FIXED uninstall (the test of DEFECT-11 and ‑12)
+
+The 2026-09-06 install was still running (19 containers). The point of removing
+it with the **new** `install-correlix.sh` rather than by hand is that the
+removal *is* the test.
+
+**Before.** `data/` held 24 store directories, and the ones that broke the old
+purge were exactly the ones the defect predicted — `postgres` owned by uid 70,
+`clickhouse` by 101, and `cloud-logs`, `syslog-ng`, `vector-aggregator` by
+**root** — none of them removable by the unprivileged installer. 5 anonymous
+volumes, 24 images.
+
+**The run.**
+
+```
+✔ containers removed
+Purging data, configuration, and loaded images...
+  store data is owned by the service accounts inside the containers —
+  removing it through a privileged helper container (clickhouse/clickhouse-server:24.8-alpine)...
+✔ data, volumes and configuration removed (images unreferenced elsewhere were deleted)
+EXIT=0
+```
+
+Exit **0**, where the old script exited **1** and left 6.3 MB behind. Note the
+helper image: no `alpine:latest` existed on this air-gapped host, so the
+selector fell through to the bundle's own MANIFEST and borrowed the first
+alpine-based image `docker load` had actually put there — which is the whole
+point of choosing from what is local instead of naming one.
+
+**After.** `data/` gone, `.env` gone, 0 containers, 0 images (bar one — below),
+84 GB free.
+
+### DEFECT‑12, and a fix that would have fixed nothing
+
+The first cut of this fix was `compose down --remove-orphans --volumes`, on the
+reasonable assumption that `-v` removes the anonymous volumes a project owns.
+**It does not.** Measured, because the purge above left all five volumes
+standing:
+
+| Step (Compose v2.40.3 / Docker 29.1.3) | anonymous volumes |
+|---|---|
+| `up -d` | +1 created |
+| `down --remove-orphans` | still there (this is DEFECT‑12) |
+| `up -d`, then `up -d --force-recreate` | still there |
+| **`down --remove-orphans --volumes`** | **still there** |
+| `docker volume rm <id>` | removed |
+
+`--volumes` covers **named** volumes declared in the compose file, and this
+stack declares none. So the purge now reads the volume ids its own containers
+mount **before** `down` destroys them — an anonymous volume carries no label
+naming a project, so afterwards nothing on the host can attribute it to
+Correlix — and removes those ids itself. A blanket `docker volume prune` is
+deliberately not used: other projects may share the daemon. On the live
+appliance the capture returns **5 of 5**, which is the load-bearing half.
+
+Two residues were removed by hand and are named here for honesty: the five
+volumes the *old* uninstall had already orphaned (unattributable by then, by
+construction), and `victoriametrics/vmauth:v1.101.0`, which was `docker load`ed
+manually during the previous run to work around DEFECT‑3 and so was never in
+that bundle's MANIFEST for `cmd_uninstall` to remove. Both are artefacts of the
+old bundle; neither can recur with this one.
+
+---
+
+## R2. The bundle
+
+`bash scripts/make-installer.sh` with `APK_REPO_SCHEME=http` and
+`CORRELIX_SOURCE_MIRROR_DIR` at the previous bundle's own `source-offer/`.
+
+Two things worth recording for the next person who cuts a release:
+
+* **Build from a clean worktree, not the working tree.** `docker compose build`
+  takes its context from the working tree while the source tarball is
+  `git archive HEAD` — so a dirty tree ships images that do not correspond to
+  the source beside them. This bundle was cut from `git worktree add --detach`
+  at HEAD.
+* **A build host needs a `deployment/docker/.env`.** Several services declare
+  `${VAR:?}` interpolations (`INGEST_TOKEN_TRAPS` first), so `compose build`
+  refuses outright in a tree that has never been installed. One command fixes
+  it: `python3 scripts/install.py --no-start --tls no --bootstrap-docker no
+  --assume-yes`.
+
+| Check | Result |
+|---|---|
+| `vmauth` in the core MANIFEST | ✅ `victoriametrics/vmauth:v1.101.0@sha256:2b56af14…` — **the DEFECT‑3 blocker is gone**; 20 base images, all digest-pinned |
+| `scripts/bundle-staleness.sh` | ✅ OK — current with HEAD `fb07ac69`, 0 shippable commits since the stamp |
+| `tests/test_download_folder.py` + `test_release_bundle_labels.py` | ✅ 68 passed |
+| archive tag check | ✅ 20/1/4/1 images across core + three packs, all tagged |
+| `sha256sum -c SHA256SUMS` on the target host | ✅ **365/365 OK, exit 0**, 13.9 s |
+
+Sizes (bytes), against the 2026-09-06 bundle. Full table in
+`docs/design/packaging-strategy.md` §8.4.
+
+| Artifact | `9967eaf5` | `fb07ac69` | Δ |
+|---|---:|---:|---|
+| `correlix-images-core-<v>.tar.zst` | 1 210 520 662 | **1 217 640 927** | +7 120 265 (the `vmauth` image) |
+| `correlix-source-<v>.tar.gz` | 18 185 513 | 18 316 683 | +131 170 |
+| **core + nothing optional** | 1 290 149 240 | **1 296 708 531** | +6 559 291 (+0.5 %) |
+| three add-on packs | 866 058 643 | 866 058 643 | — |
+| **whole folder** | 2 156 207 883 | **2 162 767 174** | +6 559 291 (+0.3 %) |
+
+---
+
+## R3. Steps and timings
+
+| # | Step | How | Outcome | Duration |
+|---|---|---|---|---|
+| 1 | Uninstall the old install | `./install-correlix.sh uninstall --purge` with the fixed script | **exit 0**, data and volumes gone (§R1) | ~1 min |
+| 2 | Verify the host is clean | ssh survey | 0 containers · 0 images · 0 volumes · no bundle dir · 84 GB free | — |
+| 3 | Ship the folder | `rsync -a` of 2.16 GB | 537 entries, 366 files | **12.6 s** (160 MB/s) |
+| 4 | Verify integrity | `sha256sum -c SHA256SUMS` on the host | **365/365 OK, exit 0** | 13.9 s |
+| 5 | Readiness audit | `./prepare-host.sh --check` | 7 PASS, 1 FIX (the PATH alias, pointing at the removed bundle) | 1 s |
+| 6 | Prepare the host | `sudo ./prepare-host.sh` | 8 PASS, 1 FIXED, exit 0 — "Host is ready for Correlix." | 2 s |
+| 7 | Start the wizard | `./install-correlix.sh gui` | HTTPS on `10.70.245.123:8800`, fingerprint + one-time token printed | 10 s |
+| 8 | Wizard walk | Playwright/chromium, `ignoreHTTPSErrors` | core only, discovery off, sizing auto, admin `admin`, PostgreSQL, full mTLS | 20 s |
+| 9 | **Install** | wizard **Install** | ✅ **COMPLETE, first attempt** | **19 min 50 s** |
+| 10 | Validate | §R5 | §R5 | ~6 min |
+| 11 | Add-on enable → re-qualify → disable | `./install-correlix.sh` | §R5 | 2 min 31 s to enable |
+
+Installer stage timings (`data/install-timing.json`, total 1 189.7 s):
+
+| Stage | | Stage | |
+|---|---|---|---|
+| prereq / scaffold / env / sizing | 0.2 s | mint (SVIDs) | 145.1 s |
+| **bundle (`docker load`)** | **359.2 s** | up-b (fail-closed mesh) | 274.0 s |
+| tls-env | 11.2 s | kafka-acls | 223.8 s |
+| data-dirs | 13.4 s | status | 0.7 s |
+| bootstrap-appstate (Postgres role) | 16.8 s | bootstrap-os | 22.0 s |
+| up-a (TLS phase A) | 123.2 s | | |
+
+Every stage that failed a run last time — `tls-env` (D‑1, 42 %),
+`bootstrap-appstate` (D‑2, 67 %), the bring-up that needed `vmauth` (D‑3, 75 %),
+`mint` (D‑6, 83 %) — passed on the first pass here, from the shipped artifact
+with no manual intervention.
+
+---
+
+## R4. Defects
+
+**None.** For the first time this acceptance produced an empty defect table.
+
+| # | Severity | What | Status |
+|---|---|---|---|
+| — | — | *(no new defects; the four items tracker 265 carried are closed below)* | — |
+
+The four items that were open, and how each was closed and proven:
+
+| Was open | Fix | Proof on this run |
+|---|---|---|
+| **D‑7 (dangerous half)** — plaintext `:8000` served the dashboard and the auth API on a TLS install | `compose.tls.yml` takes `ports` with `!override` and republishes the plaintext port as `127.0.0.1:${BASE_PORT}:8080`; the listener is kept (tls.conf proxies to it inside the container, and every host-local probe speaks it) but is no longer an off-box ingress. Both installer paths now print `https://<host>/`. | §R5, table rows 1–4: refused from the network, 200 over TLS, and still 200 from the appliance itself |
+| **D‑10** — `deploy-qualify.sh` Q6 fails by construction after an install | Q6's window is floored at the instant the Kafka ACL matrix was applied *and verified* (`data/.kafka-acls-applied`, written by `install.py` and by the gate's own B1) plus a settle grace, taking the LATER of that and the fixed window; a wait cut short by the global budget records SKIP, never PASS | **Q6 PASSED 4 minutes after the install finished** — see §R5 |
+| **D‑11** — `uninstall --purge` cannot delete the data it claims to | privileged helper container chosen from images already on the host, run before the images are deleted; a refusal is named with the exact `sudo rm -rf` | §R1: exit 0, `data/` gone |
+| **D‑12** — `uninstall` orphans anonymous volumes | volume ids captured before `down` and removed explicitly (`--volumes` provably does not) | §R1: the measured table, and 5/5 captured on the live appliance |
+
+---
+
+## R5. Validation of the installed stack
+
+The wizard's own Done screen reported all three verifications green:
+
+> ✓ All services healthy — held stable through a re-check
+> ✓ Ingress answered end to end
+> ✓ Administrator login verified
+
+…and the URL it printed was **`https://10.70.245.123/`**, on the Settings step,
+the Review step and the Done screen alike.
+
+### The `:8000` question, answered from both sides
+
+| Probe | From | Result |
+|---|---|---|
+| `http://10.70.245.123:8000/` | the network (dev box) | **connection refused** — the dashboard is gone from plaintext |
+| `POST http://10.70.245.123:8000/api/auth/login` | the network | **connection refused** — no more 401-over-plaintext invitation |
+| TCP connect to `10.70.245.123:8000` | the network | **refused**; port 443 open |
+| `https://10.70.245.123/` | the network | **200**, `<title>Correlix — Network Observability</title>` |
+| `POST https://10.70.245.123/api/auth/login` | the network | 401 on wrong credentials — the API is reachable, over TLS only |
+| `http://localhost:8000/` | the appliance | **200** — the qualifier and watchdog probes still work |
+| `http://127.0.0.1:8000/admin/version` | the appliance | **200** with a body |
+| `http://10.70.245.123:8000/` | the appliance | refused — even locally, only loopback answers |
+| `ss -lnt` | the appliance | `127.0.0.1:8000` and `0.0.0.0:443` — nothing else |
+| `docker port netops-nginx-1` | the appliance | `8080/tcp -> 127.0.0.1:8000`, `8443/tcp -> 0.0.0.0:443` |
+
+### Everything else
+
+| Check | Result |
+|---|---|
+| `docker compose ps` | **19/19 services running**; 12 `healthy`, 7 (`api`, `frontend`, `gnmic`, `goflow2`, `nginx`, `prober`, `vmauth`) declare no healthcheck. Three `-init` one-shots exited 0. Nothing restarting. |
+| **Administrator sign-in** | **works over TLS** — 244-char bearer token, `{"username":"admin","role":"admin","auth_source":"local","mfa_enabled":false}` |
+| **`/api/registries/status`** | `configured_backend: postgres` · `persistence: persistent` · `backend_healthy: true`; all three registries (`applications`, `service_catalog`, `business_services`) `active_backend: postgres`, `healthy: true`. **Tracker‑245's default landed — no silent downgrade to files.** |
+| `/api/system/licence` | **200** authenticated, **401** without a token |
+| `/licenses/` | **200** |
+| `preflight-install.py` on the appliance | **exit 0** (DEFECT‑8 stays fixed in the shipped bundle) |
+| ACL marker | `data/.kafka-acls-applied` — `applied_utc=2026-09-07T05:59:53Z`, written by `install.py` after apply **and** membership verification |
+| Add-on `enable self-monitoring` | **2 min 31 s**, exit 0 — `grafana`, `cadvisor`, `node-exporter`, `kafka-exporter` all up |
+| Add-on `disable self-monitoring` | exit 0 — **all four gone**, not even a stopped container left; `COMPOSE_PROFILES` back to `embedded-bus,prober,seal,security,vmauth`; core stack intact; `https://…/` still 200 (DEFECT‑9 stays fixed) |
+
+### `deploy-qualify.sh`
+
+**Run 1 — four minutes after the install finished, core only.** This is the run
+that used to be impossible to pass.
+
+```
+✓ PASS  Q6 no bootstrap-class Kafka errors — none … in since 2026-09-07T06:01:53Z.
+        window floored at the Kafka ACL matrix's application (2026-09-07T05:59:53Z)
+        plus a 120s client-resubscribe grace: an installer necessarily starts the
+        stack before it can apply the matrix, so everything before that instant was
+        logged with no ACLs to authorize it; 26 pre-matrix line(s) in the wider 20m
+        window were excluded on that basis
+```
+
+Twenty-six lines excluded, counted and named — the floor is auditable, not a
+silent narrowing. `passed: 7 · failed: 0 · skipped(required): 3` (Q1/Q2/Q3 need
+`kafka-exporter`, which lives behind the optional add-on — the pre-existing
+condition DEFECT‑10's second half describes, unchanged here).
+
+**Run 2 — with `self-monitoring` enabled, the full verdict:**
+
+```
+  passed: 9 · failed: 0 · skipped(required): 1 · skipped(advisory): 0 · advisory: 2
+```
+
+| Check | Result |
+|---|---|
+| B1 kafka ACL matrix | PASS — 72 ACL entries live (≥ 40 floor), including the vector-router grant |
+| B2 kafka-init topics | PASS — all 21 canonical topics |
+| B4 router lanes writable | PASS — 9 lanes, 9 templates |
+| **Q1 correlation consumer joined** | **PASS** — 1 member |
+| **Q2 router consumers joined** | **PASS** — 10 `netops-router-*` groups, all 10 with a live member |
+| Q3 correlation lag draining | SKIPPED — the series does not exist; correct on a device-less fresh install |
+| Q4 vector-aggregator emitting | PASS — 6 248 events/5 min |
+| Q5 vector-router emitting | PASS — 7 623 events/5 min |
+| **Q6 bootstrap-class Kafka errors** | **PASS** |
+| Q7 api serving | PASS |
+| Q8 alert delivery heartbeat | ADVISORY — fresh at 06:04 (54 s old); it read 0 immediately after the add-on's `compose up` recreated the api, and recovered to 87 s old once vmalert re-evaluated. The end-to-end chain is proven wired. |
+| Q9 opensearch cluster status | ADVISORY — YELLOW (unassigned replicas, expected on a single node) |
+
+`INCOMPLETE` rather than `QUALIFIED` only because Q3 has no lag to measure on a
+device-less appliance, and the gate refuses to call "we could not check" a pass.
+**Nothing failed.**
+
+---
+
+## R6. Screenshots
+
+Every wizard step, full-page PNG, captured headlessly against
+`https://10.70.245.123:8800`. Scratchpad root:
+`/tmp/claude-1000/-home-rao-Projects-NetOps-Observability/c1877382-7bdb-4c71-b803-462d023d52bf/scratchpad/accept6/`
+
+| Step | File |
+|---|---|
+| 01 Readiness | `shots6/01-readiness.png` |
+| 02 Prepare host | `shots6/02-prepare-host.png` |
+| 03 Deployment (core only) | `shots6/03-deployment.png` |
+| 04 Discovery (off) | `shots6/04-discovery.png` |
+| 05 Sizing (auto) | `shots6/05-sizing.png` |
+| 06 Settings — sign-in URL `https://10.70.245.123/` | `shots6/06-settings.png` |
+| 07 Review | `shots6/07-review.png` |
+| 08 Install started | `shots6/08-install-started.png` |
+| 09 **Done** | `shots6/09-done.png` |
+| Done screen text | `shots6/done-page.txt` |
+
+Supporting logs in the same directory:
+
+| File | What it holds |
+|---|---|
+| `40-pre-uninstall.log` | the store ownership that broke the old purge, and the 5 volumes |
+| `41-uninstall-purge.log`, `42-post-uninstall.log`, `43-host-clean.log` | the fixed purge, and the host being verified bare |
+| `44-rsync.log`, `45-sha.log` | the 2.16 GB transfer and the 365-file checksum verification |
+| `46-prepare-check.log`, `47-prepare.log` | the readiness audit and the host preparation |
+| `48-gui-launch.log`, `50-gui-relaunch.log`, `49-wizard.log` | the wizard, and the Playwright walk step by step |
+| `51-validate.log`, `52-port-proof.log`, `53-hostlocal.log`, `60-final-port-proof.log` | the service list, the port bindings, and `:8000` probed from both sides |
+| `54-deploy-qualify.log`, `57-deploy-qualify-2.log` | the gate, core-only and with the add-on |
+| `55-login-registries.log` | the sign-in and `/api/registries/status` |
+| `56-addon-enable.log`, `58-addon-disable.log`, `59-final-state.log`, `61-timings.log` | the add-on cycle, the final state and the stage timings |
