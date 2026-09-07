@@ -246,6 +246,21 @@ def test_q6_never_passes_on_an_empty_window() -> None:
         "bound in this script")
 
 
+def test_a_clamped_wait_downgrades_the_verdict_instead_of_passing() -> None:
+    """The wait for post-matrix logs is clamped to the global budget, so it can
+    end early — and a `--since` timestamp in the future returns no lines at
+    all, which would read as a clean PASS on a window nobody looked at. That is
+    the rubber stamp this whole gate exists to refuse: it becomes a required
+    SKIP (exit 2, INCOMPLETE), exactly as the exit-code table promises."""
+    block = _q6_block()
+    assert "Q6_SHORT" in block
+    assert re.search(r'if \[ -n "\$Q6_SHORT" \]; then\n\s*record SKIP REQUIRED "Q6', block), (
+        "a too-short post-matrix window must record SKIP REQUIRED, not PASS")
+    # The clock is re-read AFTER the sleep, or the shortfall is invisible.
+    sleep_at = block.index('sleep "$q6_wait_bound"')
+    assert block.index('q6_observed=$(( q6_now - q6_floor ))') > sleep_at
+
+
 def test_q6_reports_the_floor_and_what_it_excluded() -> None:
     """A window that silently narrows itself is a gate nobody can audit."""
     block = _q6_block()

@@ -1196,6 +1196,8 @@ Q6_PATTERN='TopicAuthorizationFailedError|UnknownTopicOrPartitionError|TOPIC_AUT
 Q6_SINCE="$LOG_WINDOW"          # what is handed to `docker logs --since`
 Q6_WINDOW_DESC="the last $LOG_WINDOW"
 Q6_FLOOR_NOTE=''                # non-empty only when the floor was raised
+Q6_SHORT=''                     # non-empty when the post-matrix window is too
+                                # short to judge on — a SKIP, never a PASS
 
 q6_acl_at="$(acl_applied_epoch)"
 q6_window_s="$(duration_seconds "$LOG_WINDOW")"
@@ -1216,6 +1218,17 @@ elif [ -n "$q6_acl_at" ]; then
         say "  Q6: the Kafka ACL matrix landed $(( q6_now - q6_acl_at ))s ago — waiting ${q6_wait_bound}s so the verdict rests on at least ${Q6_MIN_OBSERVE}s of post-matrix logs ..."
         sleep "$q6_wait_bound"
       fi
+    fi
+    # Re-read the clock: the wait above is CLAMPED to the global budget, so it
+    # can end early. If it did, the window we are about to grep is shorter than
+    # the minimum a verdict may rest on — and a `--since` in the future would
+    # return no lines at all, i.e. a rubber-stamp PASS. Record that here and
+    # downgrade the no-hits verdict to SKIP below: "we could not look long
+    # enough" is not "nothing was wrong" (the doctrine in the exit-code table).
+    q6_now="$(date +%s)"
+    q6_observed=$(( q6_now - q6_floor ))
+    if [ "$q6_observed" -lt "$Q6_MIN_OBSERVE" ]; then
+      Q6_SHORT="only ${q6_observed}s of post-matrix log time was available and a verdict needs ${Q6_MIN_OBSERVE}s — the global deadline (DQ_GLOBAL_TIMEOUT) left no room to wait for the rest. Re-run once the stack has been up a few minutes."
     fi
     Q6_SINCE="$(date -u -d "@$q6_floor" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$LOG_WINDOW")"
     if [ "$Q6_SINCE" = "$LOG_WINDOW" ]; then
@@ -1255,7 +1268,12 @@ else
       [ -n "$q6_excluded" ] && [ "$q6_excluded" != "0" ] && \
         q6_detail="$q6_detail; $q6_excluded pre-matrix line(s) in the wider ${LOG_WINDOW} window were excluded on that basis"
     fi
-    record PASS REQUIRED "Q6 no bootstrap-class Kafka errors" "$q6_detail"
+    if [ -n "$Q6_SHORT" ]; then
+      record SKIP REQUIRED "Q6 no bootstrap-class Kafka errors" \
+        "$q6_detail — but $Q6_SHORT"
+    else
+      record PASS REQUIRED "Q6 no bootstrap-class Kafka errors" "$q6_detail"
+    fi
   else
     q6_count="$(printf '%s\n' "$q6_hits" | grep -c .)"
     q6_detail="$q6_count matching line(s) in $Q6_WINDOW_DESC — a Kafka authorization/topic fault at subscribe() abandons the ENTIRE subscription, not just the offending lane (2026-09-02, 2026-08-16)."
