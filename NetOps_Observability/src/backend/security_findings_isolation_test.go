@@ -41,6 +41,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"netops/backend/internal/discovery"
 	"netops/backend/models"
@@ -62,6 +63,84 @@ type secFakeOS struct {
 	calls []secOSCall
 	docs  map[string]string // index pattern → canned `hits.hits` JSON array body
 	aggs  string            // canned `aggregations` object, or ""
+	// windowAware makes the double HONOUR the `ts` range clause in the request
+	// body: a canned document stamped outside the emitted window is dropped,
+	// exactly as the cluster would answer. Without it the double replies with
+	// the same canned hits to every query, so a query that matches NOTHING in
+	// production still reads as a full result set in a test — which is how H2
+	// (review 2026-09-08) stayed invisible: the assistant's read emitted `ts`
+	// between 0001-01-01 and 0001-01-01 and every test was green.
+	//
+	// It is OPT-IN because the shared canned documents are stamped at a fixed
+	// past instant most tests do not line up with their default window. Switch
+	// it on wherever the WINDOW is the thing under test.
+	//
+	// HONEST ABOUT WHAT IT STILL IGNORES: severity/status/seam/framework/device
+	// terms, the free-text `q` clause, `collapse`, `sort`, paging and the
+	// per-doc tenant clause. The tenant boundary is proven here by the index
+	// PATTERN instead (see the file header); a test that needs any of the other
+	// clauses honoured needs a double that reads them.
+	windowAware bool
+}
+
+// tsWindow reads the `ts` range clause out of an emitted body, in millis. ok is
+// false when the body carries no such clause.
+func (f *secFakeOS) tsWindow(body string) (lo, hi int64, ok bool) {
+	var q struct {
+		Query struct {
+			Bool struct {
+				Filter []struct {
+					Range map[string]struct {
+						GTE string `json:"gte"`
+						LTE string `json:"lte"`
+					} `json:"range"`
+				} `json:"filter"`
+			} `json:"bool"`
+		} `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(body), &q); err != nil {
+		return 0, 0, false
+	}
+	for _, clause := range q.Query.Bool.Filter {
+		r, has := clause.Range["ts"]
+		if !has {
+			continue
+		}
+		start, errA := time.Parse(time.RFC3339, r.GTE)
+		end, errB := time.Parse(time.RFC3339, r.LTE)
+		if errA != nil || errB != nil {
+			return 0, 0, false
+		}
+		return start.UnixMilli(), end.UnixMilli(), true
+	}
+	return 0, 0, false
+}
+
+// inWindow drops canned hits whose `_source.ts` falls outside [lo, hi].
+func (f *secFakeOS) inWindow(hits string, lo, hi int64) string {
+	var rows []json.RawMessage
+	if err := json.Unmarshal([]byte(hits), &rows); err != nil {
+		return hits
+	}
+	kept := make([]json.RawMessage, 0, len(rows))
+	for _, row := range rows {
+		var doc struct {
+			Source struct {
+				TS int64 `json:"ts"`
+			} `json:"_source"`
+		}
+		if err := json.Unmarshal(row, &doc); err != nil {
+			continue
+		}
+		if doc.Source.TS >= lo && doc.Source.TS <= hi {
+			kept = append(kept, row)
+		}
+	}
+	out, err := json.Marshal(kept)
+	if err != nil {
+		return "[]"
+	}
+	return string(out)
 }
 
 func (f *secFakeOS) record(c secOSCall) {
@@ -89,6 +168,11 @@ func secStartFakeOS(t *testing.T, fake *secFakeOS) {
 		if hits == "" {
 			hits = "[]"
 		}
+		if fake.windowAware {
+			if lo, hi, ok := fake.tsWindow(string(body)); ok {
+				hits = fake.inWindow(hits, lo, hi)
+			}
+		}
 		n := strings.Count(hits, `"_id"`)
 		out := `{"took":1,"timed_out":false,"hits":{"total":{"value":` +
 			strconv.Itoa(n) + `,"relation":"eq"},"hits":` + hits + `}`
@@ -103,16 +187,24 @@ func secStartFakeOS(t *testing.T, fake *secFakeOS) {
 	t.Setenv("OPENSEARCH_URL", srv.URL)
 }
 
-// secDoc renders one canned findings document for a tenant.
+// secDoc renders one canned findings document for a tenant, stamped at the
+// shared fixed instant.
 func secDoc(id, tenant, severity, status, seam, device string) string {
+	return secDocAt(id, tenant, severity, status, seam, device, 1756684800000)
+}
+
+// secDocAt is secDoc with a caller-chosen `ts`, for the tests that assert on the
+// time WINDOW (which needs a document inside it).
+func secDocAt(id, tenant, severity, status, seam, device string, tsMillis int64) string {
+	ts := strconv.FormatInt(tsMillis, 10)
 	return `{"_index":"netops-secfindings-` + tenant + `-2026.09.01","_id":"` + id + `",` +
-		`"_source":{"tenant_id":"` + tenant + `","ts":1756684800000,"severity":"` + severity + `",` +
+		`"_source":{"tenant_id":"` + tenant + `","ts":` + ts + `,"severity":"` + severity + `",` +
 		`"entity_id":"` + device + `","native_id":"n-` + id + `","seam_type":"` + seam + `",` +
 		`"attrs":{"status":"` + status + `","scan_id":"scan-1","evidence_class":"posture",` +
 		`"control_id":"AC-17","standards":["CIS:1.2"]}},` +
 		// One sort value per listSort key (ts, native_id, attrs.scan_id) — the
 		// shape a real hit carries, and what cursorFromSort reads.
-		`"sort":[1756684800000,"n-` + id + `","scan-1"]}`
+		`"sort":[` + ts + `,"n-` + id + `","scan-1"]}`
 }
 
 // secTestServer builds the minimal server the security handlers need, with the

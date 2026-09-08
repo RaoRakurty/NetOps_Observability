@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ErrNoSearch reports that no findings backend is configured on this
@@ -40,7 +41,7 @@ func (a *API) ListFindings(p Principal, f Filters, limit int) ([]Finding, error)
 	if a == nil || a.d.Search == nil {
 		return nil, ErrNoSearch
 	}
-	if err := validateFilters(&f); err != nil {
+	if err := validateFilters(&f, a.now()); err != nil {
 		return nil, err
 	}
 	switch {
@@ -66,11 +67,13 @@ func (a *API) ListFindings(p Principal, f Filters, limit int) ([]Finding, error)
 	return out, nil
 }
 
-// validateFilters re-applies ParseFilters' vocabulary and token rules to a
-// Filters built as a struct literal, canonicalizing in place. It is deliberately
-// the same rules and the same wording, so a programmatic caller cannot reach a
-// query shape an HTTP caller could not.
-func validateFilters(f *Filters) error {
+// validateFilters re-applies ParseFilters' vocabulary, token AND WINDOW rules to
+// a Filters built as a struct literal, canonicalizing in place. It is
+// deliberately the same rules and the same wording, so a programmatic caller
+// cannot reach a query shape an HTTP caller could not.
+//
+// now is the caller's clock, injected for the same reason ParseFilters takes it.
+func validateFilters(f *Filters, now time.Time) error {
 	for i, s := range f.Severity {
 		canon := strings.ToLower(strings.TrimSpace(s))
 		if !containsToken(Severities, canon) {
@@ -100,8 +103,40 @@ func validateFilters(f *Filters) error {
 	if len(f.Q) > MaxQueryLen {
 		return fmt.Errorf("q must be at most %d characters", MaxQueryLen)
 	}
-	if !f.Since.IsZero() && !f.Until.IsZero() && f.Until.Before(f.Since) {
-		return errors.New("until must not be before since")
+	return resolveWindow(f, now)
+}
+
+// resolveWindow defaults and then bounds a struct-literal caller's time range,
+// exactly as parseWindow does for an HTTP caller.
+//
+// WHY THIS EXISTS (review 2026-09-08, H2). BuildFilters emits the `ts` range
+// clause UNCONDITIONALLY. A Filters with a zero Since and a zero Until therefore
+// renders as `ts` between 0001-01-01T00:00:00Z and 0001-01-01T00:00:00Z: a legal
+// strict_date_optional_time point range that matches NOTHING. The assistant's
+// findings tool builds precisely that literal, because ai.FindingsQuery carries
+// no time fields at all, so an operator asking "what security findings does this
+// device have" was told "none" over a tenant with failing criticals. An empty
+// answer that is really a broken query is the false clear ErrNoSearch was
+// written to prevent, arriving through the other door.
+//
+// The refusals are ERRORS, never a clamp: a caller who asked for a range we will
+// not serve must be told so, not handed a different range with a 200.
+func resolveWindow(f *Filters, now time.Time) error {
+	if f.Until.IsZero() {
+		f.Until = now.UTC()
+	} else {
+		f.Until = f.Until.UTC()
+	}
+	if f.Since.IsZero() {
+		f.Since = f.Until.Add(-DefaultWindow)
+	} else {
+		f.Since = f.Since.UTC()
+	}
+	if !f.Since.Before(f.Until) {
+		return errors.New("since must be strictly before until")
+	}
+	if f.Until.Sub(f.Since) > MaxWindow {
+		return fmt.Errorf("time range must span at most %d days", int(MaxWindow.Hours()/24))
 	}
 	return nil
 }

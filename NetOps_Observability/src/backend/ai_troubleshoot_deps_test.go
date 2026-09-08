@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"netops/backend/ai"
 	"netops/backend/internal/bgpdepth"
@@ -40,6 +41,7 @@ import (
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/showparse"
 	"netops/backend/models"
+	"netops/backend/secapi"
 )
 
 // ---- fixtures ---------------------------------------------------------------
@@ -514,6 +516,90 @@ func TestAITroubleshootSecurityFindingsIsTenantScoped(t *testing.T) {
 	}
 	if len(fake.all()) != before {
 		t.Fatal("a refused caller must not have reached the findings index at all")
+	}
+}
+
+// H2 (review 2026-09-08): the assistant's findings tool must ask a question the
+// cluster can answer. ai.FindingsQuery has no time fields, so aiSecurityFindings
+// hands secapi a struct literal with a zero Since and a zero Until — and
+// BuildFilters emits the `ts` range clause unconditionally. Before the fix the
+// rendered range was 0001-01-01T00:00:00Z to 0001-01-01T00:00:00Z, a legal point
+// range that matches nothing, so an operator asking "what security findings does
+// this device have" was told "none" over a tenant with failing criticals.
+//
+// The assertion is on the EMITTED QUERY BODY plus a window-honouring double.
+// Reading the double's canned reply proves nothing here: it is exactly what hid
+// this bug for the life of the feature.
+func TestAITroubleshootSecurityFindingsAsksASaneTimeWindow(t *testing.T) {
+	// A finding one hour old: inside any sane default window, outside a
+	// zero-width point range at the year 1.
+	recent := time.Now().UTC().Add(-time.Hour).UnixMilli()
+	fake := &secFakeOS{
+		windowAware: true,
+		docs: map[string]string{
+			secPatternFor("acme"): "[" + secDocAt("a1", "acme", "critical", "Fail", "ISP", "acme-core", recent) + "]",
+		},
+	}
+	secStartFakeOS(t, fake)
+	deps := aiTSDeps(t, secTestServer(t), acme())
+
+	rows, err := deps.SecurityFindings(context.Background(), aiTSPrincipal(), ai.FindingsQuery{Current: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("SecurityFindings: %v", err)
+	}
+	calls := fake.all()
+	if len(calls) != 1 {
+		t.Fatalf("want exactly 1 OpenSearch query, got %d", len(calls))
+	}
+	body := calls[0].Body
+	if strings.Contains(body, "0001-01-01") {
+		t.Fatalf("FALSE CLEAR: the assistant's query carries a zero time bound, which matches nothing: %s", body)
+	}
+	lo, hi, ok := fake.tsWindow(body)
+	if !ok {
+		t.Fatalf("the assistant's query carries no readable `ts` range: %s", body)
+	}
+	if lo >= hi {
+		t.Fatalf("the assistant's `ts` range is a zero-width point, which matches nothing: %s", body)
+	}
+	if recent < lo || recent > hi {
+		t.Fatalf("an hour-old finding falls outside the assistant's window [%d, %d]: %s", lo, hi, body)
+	}
+	if len(rows) != 1 || rows[0].ID != "a1" {
+		t.Fatalf("the operator must be told about the failing critical, got %+v", rows)
+	}
+}
+
+// The defaulting fills a gap; it must not overwrite what a caller asked for.
+// aiSecurityFindings names no window today, so this guards the layer beneath it
+// directly: secapi.ListFindings with an explicit range keeps that range.
+func TestSecurityFindingsHonourAnExplicitWindowThroughListFindings(t *testing.T) {
+	since := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	inside := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC).UnixMilli()
+	outside := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC).UnixMilli()
+	fake := &secFakeOS{
+		windowAware: true,
+		docs: map[string]string{
+			secPatternFor("acme"): "[" +
+				secDocAt("in", "acme", "critical", "Fail", "ISP", "acme-core", inside) + "," +
+				secDocAt("out", "acme", "critical", "Fail", "ISP", "acme-core", outside) + "]",
+		},
+	}
+	secStartFakeOS(t, fake)
+	s := secTestServer(t)
+
+	p := secapi.Principal{Tenant: "acme", Subject: "op@acme", DeviceKeys: []string{"acme-core"}}
+	rows, err := s.secAPI.ListFindings(p, secapi.Filters{Since: since, Until: until}, 10)
+	if err != nil {
+		t.Fatalf("ListFindings: %v", err)
+	}
+	body := fake.all()[0].Body
+	if !strings.Contains(body, since.Format(time.RFC3339)) || !strings.Contains(body, until.Format(time.RFC3339)) {
+		t.Fatalf("the explicit window was not emitted: %s", body)
+	}
+	if len(rows) != 1 || rows[0].DocID != "in" {
+		t.Fatalf("only the finding inside the requested window may come back, got %+v", rows)
 	}
 }
 
