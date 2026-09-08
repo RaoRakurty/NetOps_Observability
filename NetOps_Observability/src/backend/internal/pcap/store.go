@@ -65,6 +65,49 @@ func clampLimit(n int) int {
 	}
 }
 
+// retentionSplit applies the per-device retention rule to a NEWEST-FIRST
+// listing and returns the rows to keep and the rows to drop.
+//
+// There are TWO budgets, and that is the point:
+//
+//   - `keep` protects STORED captures. Each one owns a sealed blob, and
+//     dropping the row is what deletes the blob.
+//   - maxFailedCaptures protects the attempt timeline. A failed capture holds
+//     no packets and owns no blob, and a device that has stopped answering
+//     mints one per attempt.
+//
+// They used to share one budget over a newest-first ordering, so a run of failed
+// attempts filled it and the next successful capture pruned away every real
+// capture and every sealed blob with it. An outage must not be able to destroy
+// the captures it merely failed to add to.
+//
+// A RUNNING capture is never dropped: its device is still working. It occupies a
+// stored-capture slot, as it always has.
+func retentionSplit(ordered []Capture, keep int) (kept, doomed []Capture) {
+	kept = make([]Capture, 0, len(ordered))
+	stored, failed := 0, 0
+	for _, c := range ordered {
+		switch {
+		case c.Active():
+			kept = append(kept, c)
+			stored++
+		case c.Status == StatusFailed:
+			if failed < maxFailedCaptures {
+				kept = append(kept, c)
+				failed++
+				continue
+			}
+			doomed = append(doomed, c)
+		case stored < keep:
+			kept = append(kept, c)
+			stored++
+		default:
+			doomed = append(doomed, c)
+		}
+	}
+	return kept, doomed
+}
+
 // newestFirst orders a device listing: started_at desc, id asc as the
 // deterministic tiebreak for two captures in the same instant.
 func newestFirst(rows []Capture) {
@@ -244,16 +287,10 @@ func (s *FileStore) Prune(_ context.Context, tenant string, cross bool, deviceID
 		if k.device != deviceID || !visible(tenant, cross, k.tenant) {
 			continue
 		}
-		newestFirst(rows)
-		kept := make([]Capture, 0, len(rows))
-		for _, c := range rows {
-			// A running capture is never pruned: its device is still working.
-			if c.Active() || len(kept) < keep {
-				kept = append(kept, c)
-				continue
-			}
-			removed = append(removed, c)
-		}
+		ordered := append([]Capture(nil), rows...)
+		newestFirst(ordered)
+		kept, doomed := retentionSplit(ordered, keep)
+		removed = append(removed, doomed...)
 		s.rows[k] = kept
 	}
 	if len(removed) == 0 {
@@ -401,13 +438,12 @@ func (p *pgStore) Prune(ctx context.Context, tenant string, cross bool, deviceID
 	if err != nil {
 		return nil, err
 	}
+	// List already returns the device NEWEST FIRST, which is the order the
+	// retention rule is written against. Both backends share it so the two can
+	// never disagree about what retention means.
+	_, doomed := retentionSplit(rows, keep)
 	removed := []Capture{}
-	kept := 0
-	for _, c := range rows {
-		if c.Active() || kept < keep {
-			kept++
-			continue
-		}
+	for _, c := range doomed {
 		if _, derr := p.Delete(ctx, tenant, cross, c.DeviceID, c.ID); derr != nil {
 			return nil, derr
 		}

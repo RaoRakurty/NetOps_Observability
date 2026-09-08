@@ -95,6 +95,14 @@ const (
 	MaxListLimit = 200
 	// DefaultListLimit is the unrequested page size.
 	DefaultListLimit = 50
+	// maxFailedCaptures is the SEPARATE retention budget for failed captures.
+	// A failed capture is an attempt timeline, not an artifact: it holds no
+	// packets and owns no blob, and a device that has stopped answering mints
+	// one per attempt. Counting them against the stored-capture budget let an
+	// outage evict every real capture and delete its sealed blob, so they get
+	// their own small budget instead. Ten is enough to show an operator that
+	// the device has been failing and why.
+	maxFailedCaptures = 10
 )
 
 // ClampKeep bounds the retention knob.

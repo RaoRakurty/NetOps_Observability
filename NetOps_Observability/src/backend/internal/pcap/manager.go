@@ -456,6 +456,10 @@ func (m *Manager) fail(ctx context.Context, scope Principal, rec Capture, cause 
 	m.deps.LogWarn("packet capture failed", map[string]any{
 		"device": rec.DeviceID, "capture": rec.ID, "error": rec.Error})
 	m.deps.Metrics.RecordRun(OutcomeFailed)
+	// Prune here too. Retention otherwise only runs on the success path, so a
+	// device that never answers would grow its register by a row per attempt
+	// with nothing ever trimming it (§9 bounded).
+	m.prune(ctx, scope, rec.DeviceID)
 }
 
 // cleanup tears the capture point down and removes the on-device file. It runs
@@ -486,6 +490,15 @@ func (m *Manager) prune(ctx context.Context, scope Principal, deviceID string) {
 	}
 	for _, c := range removed {
 		if c.BlobRef == "" {
+			continue
+		}
+		// A capture that did not store owns no blob. A blob reference arriving
+		// on such a row is therefore not this row's blob, and deleting it would
+		// take a STORED capture's sealed copy. Refuse and say so rather than
+		// trusting the row (§3, §10).
+		if c.Status != StatusStored {
+			m.deps.LogWarn("retention refused to delete a blob referenced by a capture that never stored",
+				map[string]any{"device": deviceID, "capture": c.ID, "status": c.Status})
 			continue
 		}
 		if derr := m.deps.Blobs.Delete(c.BlobRef); derr != nil {

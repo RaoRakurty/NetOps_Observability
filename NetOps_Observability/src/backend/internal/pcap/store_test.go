@@ -6,6 +6,7 @@ package pcap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -157,5 +158,75 @@ func TestBlobStoreRefusesUnsealedAndEscapingReferences(t *testing.T) {
 		if _, err := b.Get(ref); err == nil {
 			t.Errorf("the blob store served an escaping reference %q", ref)
 		}
+	}
+}
+
+// TestPruneCountsFailedCapturesSeparately is the store-level half of the
+// retention rule: failed captures are an attempt timeline, not an artifact.
+// They must never consume the budget that protects a stored capture, and
+// pruning one must never hand the caller a blob reference to delete.
+func TestPruneCountsFailedCapturesSeparately(t *testing.T) {
+	ctx := context.Background()
+	s := NewFileStore("")
+	base := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
+
+	kept := []Capture{}
+	for i := 0; i < 3; i++ {
+		id := fmt.Sprintf("%032x", i+1)
+		row := storeRow("acme", "acme-core", id, base.Add(time.Duration(i)*time.Minute))
+		if err := s.Put(ctx, "acme", false, row); err != nil {
+			t.Fatal(err)
+		}
+		kept = append(kept, row)
+	}
+	// The failures land AFTER every real capture, so a newest-first budget
+	// fills with them first. That ordering is the whole bug.
+	for i := 0; i < 4*maxFailedCaptures; i++ {
+		at := base.Add(24*time.Hour + time.Duration(i)*time.Minute)
+		row := storeRow("acme", "acme-core", fmt.Sprintf("%032x", 1000+i), at)
+		row.Status = StatusFailed
+		row.Error = "connection refused"
+		row.BlobRef = "" // a failed capture stores no packets, so it owns no blob
+		if err := s.Put(ctx, "acme", false, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := s.Prune(ctx, "acme", false, "acme-core", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range removed {
+		if r.Status == StatusStored {
+			t.Errorf("CAPTURE LOST: retention removed stored capture %s", r.ID)
+		}
+		if r.BlobRef != "" {
+			t.Errorf("a pruned failed capture carried a blob reference (%q); the caller deletes those", r.BlobRef)
+		}
+	}
+	rows, err := s.List(ctx, "acme", false, "acme-core", MaxListLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alive := map[string]bool{}
+	storedRows, failedRows := 0, 0
+	for _, r := range rows {
+		alive[r.ID] = true
+		if r.Status == StatusStored {
+			storedRows++
+		} else {
+			failedRows++
+		}
+	}
+	for _, c := range kept {
+		if !alive[c.ID] {
+			t.Errorf("CAPTURE LOST: %s is gone from the register", c.ID)
+		}
+	}
+	if storedRows != 3 {
+		t.Errorf("register holds %d stored captures, want 3", storedRows)
+	}
+	if failedRows == 0 || failedRows > maxFailedCaptures {
+		t.Errorf("register holds %d failed captures, want 1..%d", failedRows, maxFailedCaptures)
 	}
 }

@@ -445,3 +445,138 @@ func TestMetricsCoverTheDocumentedSeries(t *testing.T) {
 		}
 	}
 }
+
+// TestCaptureOutageDoesNotDestroyStoredCaptures walks the configstore H7 outage
+// on this module's register. An operator chases a problem on a device that has
+// stopped answering: every attempt mints a NEW capture id, and every one of them
+// is written back as a `failed` row in the SAME register retention counts
+// against. Then the device recovers, one capture succeeds, and retention runs.
+//
+// If failure rows share the budget that protects stored captures, the budget is
+// full of them and every real capture is evicted with its sealed blob. The
+// outage would not merely fail to collect packets, it would delete the captures
+// the operator already had.
+func TestCaptureOutageDoesNotDestroyStoredCaptures(t *testing.T) {
+	// The budget holds all four real captures this test takes (three plus the
+	// recovery), so anything missing at the end was evicted by failure rows and
+	// not by honest retention.
+	fx := newFixture(t, func(d *Deps) { d.Keep = 4 })
+	ctx := context.Background()
+	dev := fx.devices["acme-core"]
+
+	// Three real captures, each with its own sealed blob on disk.
+	kept := []Capture{}
+	for i := 0; i < 3; i++ {
+		fx.now = fx.now.Add(time.Minute)
+		rec, err := fx.mgr.Start(ctx, fx.principal, dev,
+			StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+		if err != nil {
+			t.Fatalf("capture %d: %v", i, err)
+		}
+		row, err := fx.store.Get(ctx, "acme", false, dev.ID, rec.ID)
+		if err != nil {
+			t.Fatalf("capture %d row: %v", i, err)
+		}
+		if row.Status != StatusStored || row.BlobRef == "" {
+			t.Fatalf("capture %d did not store: %+v", i, row)
+		}
+		kept = append(kept, row)
+	}
+
+	// The outage. The device stops answering, and the operator keeps trying.
+	fx.gw.execErr = errors.New("dial tcp 10.1.0.1:22: connect: connection refused")
+	for i := 0; i < 30; i++ {
+		fx.now = fx.now.Add(time.Minute)
+		rec, err := fx.mgr.Start(ctx, fx.principal, dev,
+			StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+		if err != nil {
+			t.Fatalf("attempt %d was refused before it reached the device: %v", i, err)
+		}
+		row, err := fx.store.Get(ctx, "acme", false, dev.ID, rec.ID)
+		if err != nil {
+			// Retention may already have trimmed this row, which is fine; what
+			// matters is that a failed attempt is recorded at all.
+			continue
+		}
+		if row.Status != StatusFailed {
+			t.Fatalf("attempt %d was recorded as %q, want %q", i, row.Status, StatusFailed)
+		}
+	}
+
+	// The device comes back and one capture succeeds. Retention runs on it.
+	fx.gw.execErr = nil
+	fx.now = fx.now.Add(time.Minute)
+	rec, err := fx.mgr.Start(ctx, fx.principal, dev,
+		StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme")
+	if err != nil {
+		t.Fatalf("recovery capture: %v", err)
+	}
+	recovered, err := fx.store.Get(ctx, "acme", false, dev.ID, rec.ID)
+	if err != nil {
+		t.Fatalf("recovery row: %v", err)
+	}
+
+	for i, c := range append(append([]Capture{}, kept...), recovered) {
+		got, err := fx.store.Get(ctx, "acme", false, dev.ID, c.ID)
+		if err != nil {
+			t.Errorf("CAPTURE LOST: %d (%s) was evicted from the register by failure rows: %v", i, c.ID, err)
+		} else if got.Status != StatusStored {
+			t.Errorf("capture %d came back as %q", i, got.Status)
+		}
+		// The row surviving is not the whole property. What the operator opens
+		// in Wireshark is the sealed blob, so check the disk itself.
+		if _, err := os.Stat(filepath.Join(fx.blobs.Root(), filepath.FromSlash(c.BlobRef))); err != nil {
+			t.Errorf("SEALED BLOB LOST from disk: capture %d (%s): %v", i, c.ID, err)
+		}
+		if _, err := fx.mgr.Open(c); err != nil {
+			t.Errorf("capture %d can no longer be opened: %v", i, err)
+		}
+	}
+
+	// The other half of the rule: an outage must stay visible, and it must not
+	// grow the register without a bound either (§9).
+	rows, err := fx.store.List(ctx, "acme", false, dev.ID, MaxListLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := 0
+	for _, r := range rows {
+		if r.Status == StatusFailed {
+			failed++
+		}
+	}
+	if failed == 0 {
+		t.Error("the outage left no trace at all; a failed capture must stay visible")
+	}
+	if failed > maxFailedCaptures {
+		t.Errorf("register holds %d failure rows, budget is %d", failed, maxFailedCaptures)
+	}
+}
+
+// TestFailedCapturesArePrunedWhileTheDeviceIsStillDown: retention only runs on
+// the SUCCESS path, so without a prune on the failure path a device that never
+// answers grows its register by one row per attempt with nothing trimming it.
+func TestFailedCapturesArePrunedWhileTheDeviceIsStillDown(t *testing.T) {
+	fx := newFixture(t, func(d *Deps) { d.Keep = 3 })
+	ctx := context.Background()
+	fx.gw.execErr = errors.New("capture start refused")
+
+	for i := 0; i < 4*maxFailedCaptures; i++ {
+		fx.now = fx.now.Add(time.Minute)
+		if _, err := fx.mgr.Start(ctx, fx.principal, fx.devices["acme-core"],
+			StartRequest{Interface: "Ethernet1/1", DurationSec: 1}, "a@acme"); err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+	}
+	rows, err := fx.store.List(ctx, "acme", false, "acme-core", MaxListLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("the outage must still be visible in the register")
+	}
+	if len(rows) > maxFailedCaptures {
+		t.Fatalf("an outage with no capture in between grew the register to %d rows; budget is %d",
+			len(rows), maxFailedCaptures)
+	}
+}
