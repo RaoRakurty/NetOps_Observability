@@ -127,11 +127,25 @@ func (s *server) withAudit(next http.Handler) http.Handler {
 		}
 		claims, _ := userFrom(r.Context())
 		tenant, cross := principalTenant(claims)
+		// The ELEVATED grant in force, if any (elevation providers, 2026-09-07).
+		// Recorded on every row so the trail answers "what did that JIT grant
+		// actually do" by filtering on one id, instead of correlating
+		// timestamps by hand. Read-only lookup of an in-memory store; nil
+		// bindings / no elevation configured leave both fields blank, which is
+		// exactly what every deployment that has not opted in records.
+		bindingID := ""
+		if claims.Sub != "" {
+			if b, held := s.activeElevation(r, claims.Sub, claims.Tenant); held {
+				bindingID = b.ID
+			}
+		}
 		s.audit.Record(AuditEvent{
-			Actor:  claims.Sub,
-			Tenant: tenant,
-			Cross:  cross,
-			Method: r.Method,
+			Actor:     claims.Sub,
+			Tenant:    tenant,
+			Cross:     cross,
+			BindingID: bindingID,
+			SessionID: claims.Sid,
+			Method:    r.Method,
 			// Masked: a DENIED request on a capability-link route still carries
 			// the token in its path, and this trail is persisted to Postgres and
 			// readable by admins. A forged-or-expired token is exactly what an
@@ -278,7 +292,7 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	// clamped, and a malformed `before`/`since` was silently dropped — so a SIEM
 	// asking for a window it mistyped got the FULL newest page and read it as
 	// the window. Every parameter is now applied as written or refused by name.
-	if err := httppage.RejectUnknownQuery(r, "before", "since"); err != nil {
+	if err := httppage.RejectUnknownQuery(r, "before", "since", "binding_id"); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -305,6 +319,18 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		q.Since = t
+	}
+	// binding_id narrows the trail to the actions taken under ONE elevated
+	// grant. The tenant scope above is unchanged and still applies on top: a
+	// tenant admin filtering by a binding id from another tenant gets its own
+	// tenant's rows for that id, which is none (§3a — the filter narrows, it
+	// never widens).
+	if v := strings.TrimSpace(r.URL.Query().Get("binding_id")); v != "" {
+		if len(v) > 256 {
+			writeError(w, http.StatusBadRequest, errors.New("binding_id is too long"))
+			return
+		}
+		q.BindingID = v
 	}
 	// The org-admin merge path must materialise Offset+Limit rows per
 	// administered tenant. Past the ceiling, say so — a short page here would

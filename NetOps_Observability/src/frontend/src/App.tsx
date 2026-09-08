@@ -19,6 +19,7 @@ import IconRail from "./components/IconRail";
 import SubNav from "./components/SubNav";
 import ScopeBadge from "./components/ScopeBadge";
 import OpsisDrawer from "./components/OpsisDrawer";
+import ElevationRequired from "./components/ElevationRequired";
 import HelpDrawer from "./components/HelpDrawer";
 import CommandPalette from "./components/CommandPalette";
 import Inspector from "./components/Inspector";
@@ -391,6 +392,7 @@ export default function App() {
           </div>
         </main>
         <OpsisDrawer />
+        <ElevationRequired />
         <HelpDrawer />
         <CommandPalette nav={nav} />
         <Inspector />

@@ -36,6 +36,12 @@ type Txn struct {
 	// started the flow — the login-CSRF / session-fixation defence (M20). It is
 	// opaque to the server; carried here so it never rides the browser URL.
 	FEState string
+	// IdP is the provider alias this flow was STARTED with (kc_idp_hint), kept
+	// server-side so the callback knows which door was used without trusting the
+	// browser. It is validated against the configured button list before the
+	// transaction is created, so it can only ever name a provider the operator
+	// configured.
+	IdP     string
 	expires time.Time
 }
 
@@ -58,6 +64,13 @@ func (st *TxnStore) Create(state, nonce, verifier string, now time.Time) error {
 // CreateFlow is Create with the SPA-minted FEState (M20). Create delegates here
 // with an empty FEState so existing callers are unchanged.
 func (st *TxnStore) CreateFlow(state, nonce, verifier, feState string, now time.Time) error {
+	return st.CreateFlowIdP(state, nonce, verifier, feState, "", now)
+}
+
+// CreateFlowIdP is CreateFlow plus the provider alias the flow was started
+// with. Separate constructor rather than a widened CreateFlow so the existing
+// two-callsite contract stays readable at every call.
+func (st *TxnStore) CreateFlowIdP(state, nonce, verifier, feState, idp string, now time.Time) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if len(st.m) >= txnCap {
@@ -70,7 +83,7 @@ func (st *TxnStore) CreateFlow(state, nonce, verifier, feState string, now time.
 			return ErrTxnFull
 		}
 	}
-	st.m[state] = Txn{Nonce: nonce, Verifier: verifier, FEState: feState, expires: now.Add(txnTTL)}
+	st.m[state] = Txn{Nonce: nonce, Verifier: verifier, FEState: feState, IdP: idp, expires: now.Add(txnTTL)}
 	return nil
 }
 

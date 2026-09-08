@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
-import { AuthUser } from "../services/api";
+import { api, AuthUser, type ElevationStatus } from "../services/api";
 import Icon from "./Icon";
 import NavFlyout from "./NavFlyout";
 import { Modal } from "./ui";
@@ -32,6 +32,57 @@ const MOD_HUE: Record<string, string> = {
   platform: "#64748B", // Platform (provider-only) — deeper slate than Admin
 };
 const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
+
+// countdown renders the time left on an elevated grant as something an operator
+// reads at a glance. Under a minute it says so rather than showing "0m", and an
+// already-past expiry reads "ending" — the grant stops on the next request
+// regardless, so the menu must never claim time that is gone.
+export function countdown(expiresAt: string, now: Date = new Date()): string {
+  const end = new Date(expiresAt).getTime();
+  if (!isFinite(end)) return "";
+  const secs = Math.round((end - now.getTime()) / 1000);
+  if (secs <= 0) return "ending";
+  if (secs < 60) return "under a minute";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m left`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m left`;
+}
+
+/**
+ * ElevatedAccessRow — the account menu's line about elevated access.
+ *
+ * It polls its own state rather than taking it as a prop: the grant EXPIRES on
+ * its own, with no request and no logout involved, so a value handed down at
+ * mount would keep showing access that ended ten minutes ago. Polling only
+ * while the menu is open keeps that honest without a background timer running
+ * for every session that never elevates.
+ */
+export function ElevatedAccessRow({ onStepDown }: { onStepDown?: () => void }) {
+  const [state, setState] = useState<ElevationStatus | null>(null);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let live = true;
+    const load = () => { api.elevation().then((s) => { if (live) setState(s); }).catch(() => { if (live) setState(null); }); };
+    load();
+    const t = window.setInterval(() => { setTick((n) => n + 1); load(); }, 30_000);
+    return () => { live = false; window.clearInterval(t); };
+  }, []);
+  void tick;
+  if (!state?.active) return null;
+  const left = state.expires_at ? countdown(state.expires_at) : "";
+  return (
+    <div className="menu-head" data-testid="elevated-access">
+      Elevated · {state.role}
+      {left && <span style={{ color: "var(--muted)" }}> · {left}</span>}
+      <button
+        type="button"
+        onClick={() => { api.endElevation().catch(() => {}).finally(() => { setState(null); onStepDown?.(); }); }}
+      >
+        End
+      </button>
+    </div>
+  );
+}
 
 // Segregated nav groups (presentation only — the nav data in nav.tsx is shared
 // with the v1 sidebar and stays untouched). Sections render under their group's
@@ -302,6 +353,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
                 <span style={{ color: "var(--muted)" }}> · {user.role}</span>
                 <ScopeBadge user={user} />
               </div>
+              <ElevatedAccessRow onStepDown={() => setAcctOpen(false)} />
               <AppearanceControls />
               <button onClick={() => { setAcctOpen(false); navigate("admin/settings"); }}>Settings</button>
               {onChangePassword && (

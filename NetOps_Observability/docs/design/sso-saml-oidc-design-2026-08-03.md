@@ -821,3 +821,107 @@ SaaS or contract requires it.
 4. Phase 0 filed as eight separate tracker rows with acceptance evidence.
 5. CLAUDE.md §6 amendment applied with the dependency pin (0.7); the design
    refers to the library only by exact module identity (§11).
+
+---
+
+## Addendum A — Elevation identity providers (shipped 2026-09-07)
+
+**Status: SHIPPED.** This addendum records a change that landed *ahead* of the
+deferred SaaS/native-SAML build above, on the existing Keycloak-brokered path.
+It does not alter any Phase 0 precondition and does not depend on one.
+
+### A.1 The requirement
+
+Owner, from customers, 2026-09-07:
+
+> "In extreme secure environments they maintain different IdPs, one for regular
+> auth and another one to maintain the JIT access."
+
+The design's federation model assumed one class of connection: the one that
+authenticates and provisions. Real high-assurance deployments run two, governed
+separately, and expect the product to know the difference.
+
+### A.2 What was added
+
+Each identity-provider connection (`internal/ssoidp.Config`) gained an **access
+model**, orthogonal to its wire protocol:
+
+- `kind: standing` (default, and what a record written before this reads as) —
+  the door described everywhere else in this document, unchanged;
+- `kind: elevation` — a door that authenticates but provisions nothing.
+
+LDAP and TACACS+ remain standing-only: they are credential-verification
+providers with no claim surface to carry a grant's bounds.
+
+A successful sign-in through an elevation connection produces exactly one
+artefact: a **time-bound `role_binding`** on an account that already exists
+(§7.1's condition/time-bound machinery, the same shape break-glass uses), then
+an ordinary session. The three refusals that define it:
+
+1. **Never creates an account.** Unknown subject ⇒ refused by name, pointing at
+   the standing provider. This is the §4.2.5 "JIT never resurrects" rule taken
+   one step further: an elevation door never JITs at all.
+2. **Never moves a tenant.** The grant's scope is stamped from the ACCOUNT.
+   A tenant-bearing claim is not read on this path — the design's inviolable
+   "a claim never moves a tenant" rule, enforced by construction rather than by
+   validation.
+3. **Never changes the standing role.** `UpsertFederated` — and therefore
+   `MergeFederated` — is not called; the stored account is read, never written.
+   SR-025 (`guardFederatedRole`) still applies to the ELEVATED role, so the
+   second door is not a back door to platform ownership either.
+
+Bounds come from the connection, values from the token, and a token can only
+ever ask for **less**: `expires_at = min(now + claimTTL, now + providerMax)`,
+`not_before = now`, `granted_by = <alias>`, `reason = <reason claim>` or
+`"elevation login"`, `condition.elevation = true` plus the IdP `sid` when the
+token carries one. Re-login through the same door REFRESHES the grant (every
+prior elevation for the principal is dropped first) and never stacks.
+
+### A.3 Step-up
+
+Elevated-only routes (binding GRANT, TAC case submit, the device SSH gateway)
+refuse a standing session with `403 { code: "ELEVATION_REQUIRED",
+elevation_providers: [...] }` — a **named** refusal, so the SPA offers the
+button rather than dead-ending an operator mid-incident.
+
+Two deliberate carve-outs:
+
+- **Additive by construction.** With no elevation connection configured the gate
+  is a pass-through, so every existing deployment is unchanged. Shipping it
+  otherwise would have locked operators out of routes they administer today on
+  the strength of a feature they had not configured.
+- **Revocation is never gated.** A safety control you cannot exercise without
+  first passing the control is not a safety control.
+
+### A.4 Sessions and logout — §12 unchanged, and one gap restated
+
+§12 stands: the session model, cookies and the "local logout is authoritative"
+rule are untouched. An elevation is not a session — it is a grant held beside
+one, evaluated per request, so expiry needs no logout and revocation is
+immediate.
+
+**The gap §12 named is still open and is now load-bearing for this feature.**
+Upstream logout (SAML SLO, OIDC RP-initiated and back-channel) remains out of
+scope, so revoking a grant in Correlix does not end the operator's session at
+the elevation IdP. Per §12's own provision, the session reference is stored from
+day one — `condition.elevation_sid` carries the IdP session id whenever the ID
+token asserts one — so targeted upstream revocation, when it is built, needs no
+migration and no re-issue of existing grants. Implementing a back-channel logout
+receiver was considered for this change and NOT done: it is a new unauthenticated
+public endpoint whose §3a story (which tenant's sessions may a given logout token
+end?) is exactly the kind of question that deserves its own design, not a
+paragraph in someone else's.
+
+### A.5 Audit
+
+`audit.Event` gained `binding_id` (the elevated grant in force when the action
+ran) and `session_id`, and the trail is filterable by `binding_id` under the
+existing tenant scope — the filter narrows, never widens. Grant, expiry and
+revoke are themselves recorded under `/elevation/ELEVATION_*` with the binding
+id, so a grant's whole life is one query.
+
+### A.6 Where it is documented
+
+`docs/runbooks/elevation-idp.md` — the operator-facing setup (Okta and Entra
+claim configuration, the sign-in and expiry behaviour, the step-up route list,
+and the end-to-end verification).

@@ -182,6 +182,28 @@ func (s *server) handleBindingByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logInfo("bindings", "binding revoked", map[string]any{"id": id, "by": claims.Sub})
+	// An ELEVATED grant revoked here dies immediately: every gate re-reads the
+	// store per request, so the elevated session loses its extra rights on its
+	// very next call while the session itself carries on with standing rights.
+	// It is audited as its own event, carrying the binding id, so the grant's
+	// whole life — granted, used, revoked — is one filterable trail.
+	//
+	// UPSTREAM LOGOUT IS A DOCUMENTED GAP, not an oversight: the SSO design
+	// (docs/design/sso-saml-oidc-design-2026-08-03.md §12) puts SAML SLO and
+	// OIDC RP-initiated/back-channel logout out of scope and makes local logout
+	// authoritative, keeping the session reference stored so targeted
+	// revocation needs no migration. The IdP session id IS captured on the
+	// binding (elevation_sid) for exactly that future; we log it here rather
+	// than pretend to honour a channel we do not implement.
+	if target.IsElevation() {
+		logWarn("elevation", "elevated access revoked by an administrator", map[string]any{
+			"id": id, "by": claims.Sub, "principal": target.PrincipalID,
+			"provider":    target.ConditionString(ConditionElevationProvider),
+			"idp_session": target.ConditionString(ConditionElevationSID) != "",
+		})
+		s.auditElevation(r, "ELEVATION_REVOKED", *target, claims.Sub,
+			target.ConditionString(ConditionElevationTenant), claims.Sid)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

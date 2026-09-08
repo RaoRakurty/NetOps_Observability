@@ -6,6 +6,12 @@ next person can reproduce it without rediscovering the dead ends.
 
 Target: federate Okta into Correlix for the **Homedepot Retail** tenant.
 
+> **Running a SECOND Okta app for just-in-time access?** That is an *elevation*
+> connection, and it behaves deliberately differently — it never creates an
+> account, never moves a tenant and never changes a standing role. Its setup
+> (Okta and Entra claims, the step-up routes, expiry and revoke) is
+> `docs/runbooks/elevation-idp.md`.
+
 ---
 
 ## 0. Architecture — read this first

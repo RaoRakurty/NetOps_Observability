@@ -189,3 +189,77 @@ func TestStoreRemove(t *testing.T) {
 		t.Fatalf("list = %+v, want empty", got)
 	}
 }
+
+// ── access model: standing vs elevation (2026-09-07) ────────────────────────
+
+func TestKindDefaultsToStandingSoOldRecordsAreUnchanged(t *testing.T) {
+	// A record written before the field existed carries no kind. It must read
+	// as standing everywhere, or an upgrade would silently stop a working
+	// connection from provisioning accounts.
+	c := Config{Alias: "okta", DisplayName: "Okta", Protocol: "oidc", Enabled: true,
+		DiscoveryURL: "https://idp.example.test/.well-known/openid-configuration", ClientID: "x"}
+	if c.KindOrStanding() != KindStanding || c.IsElevation() {
+		t.Fatalf("a blank kind read as %q", c.KindOrStanding())
+	}
+	if got := c.Normalize().Kind; got != KindStanding {
+		t.Errorf("Normalize left kind %q", got)
+	}
+	if got := c.Public().Kind; got != KindStanding {
+		t.Errorf("Public reported kind %q", got)
+	}
+}
+
+func TestElevationConfigIsValidatedAndClamped(t *testing.T) {
+	base := Config{Alias: "elev", DisplayName: "Elev", Protocol: "oidc", Enabled: true,
+		DiscoveryURL: "https://idp.example.test/.well-known/openid-configuration", ClientID: "x",
+		Kind: KindElevation}
+	roleValid := func(string) bool { return true }
+
+	t.Run("a missing ceiling defaults rather than meaning forever", func(t *testing.T) {
+		c := base.Normalize()
+		if c.Elevation.MaxMinutes != ElevationMaxMinutesDefault {
+			t.Fatalf("max_minutes %d, want the %d default", c.Elevation.MaxMinutes, ElevationMaxMinutesDefault)
+		}
+		if err := c.Validate(roleValid, false); err != nil {
+			t.Fatalf("normalized elevation record rejected: %v", err)
+		}
+	})
+
+	t.Run("an absurd ceiling is clamped, not accepted", func(t *testing.T) {
+		c := base
+		c.Elevation.MaxMinutes = 100000
+		c = c.Normalize()
+		if c.Elevation.MaxMinutes != ElevationMaxMinutesCeiling {
+			t.Fatalf("max_minutes %d, want the %d ceiling", c.Elevation.MaxMinutes, ElevationMaxMinutesCeiling)
+		}
+	})
+
+	t.Run("an unnormalized over-ceiling record is refused", func(t *testing.T) {
+		c := base
+		c.Elevation.MaxMinutes = ElevationMaxMinutesCeiling + 1
+		if err := c.Validate(roleValid, false); err == nil {
+			t.Fatal("a grant longer than the ceiling was accepted")
+		}
+	})
+
+	t.Run("an unknown kind is refused by name", func(t *testing.T) {
+		c := base
+		c.Kind = "sudo"
+		c.Elevation.MaxMinutes = 30
+		if err := c.Validate(roleValid, false); err == nil {
+			t.Fatal("an unknown access model was accepted")
+		}
+	})
+
+	t.Run("the claim names round-trip through Public", func(t *testing.T) {
+		c := base
+		c.Elevation = Elevation{TTLClaim: " ttl ", MaxMinutes: 20, ReasonClaim: " chg ", ScopeClaim: " dev "}
+		p := c.Normalize().Public()
+		if p.Elevation.TTLClaim != "ttl" || p.Elevation.ReasonClaim != "chg" || p.Elevation.ScopeClaim != "dev" {
+			t.Fatalf("claim names not trimmed/round-tripped: %+v", p.Elevation)
+		}
+		if p.Kind != KindElevation {
+			t.Errorf("Public kind %q", p.Kind)
+		}
+	})
+}

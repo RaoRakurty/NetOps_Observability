@@ -192,6 +192,15 @@ var platformPathExclusions = []string{
 	"/api/auth/mfa/",
 	"/api/auth/sso/login",
 	"/api/auth/sso/callback",
+	// Locator resolution is a page load, not a config change: the sign-in page
+	// calls it on every visit to a per-tenant URL. Its REFUSALS are separately
+	// recorded by auditSSOBindingRefusal, which is the event worth keeping.
+	"/api/auth/locator",
+	// The caller's OWN elevated-access state. The account menu polls it while
+	// the menu is open, so it is a page affordance, not a config change. The
+	// grant/expiry/revoke events themselves are recorded separately under
+	// /elevation/ELEVATION_*, which is what the trail exists to keep.
+	"/api/auth/elevation",
 	"/api/auth/ldap/login",
 	"/api/auth/tacacs/login",
 	"/api/copilot/chat",

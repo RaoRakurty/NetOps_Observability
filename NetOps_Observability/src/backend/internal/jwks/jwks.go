@@ -79,6 +79,48 @@ type Claims struct {
 	// transaction so a captured/substituted ID token cannot complete a login it
 	// was not minted for.
 	Nonce string `json:"nonce"`
+	// Sid is the IdP's own session id (OIDC front-channel/back-channel logout,
+	// RFC 7588 / OIDC Session Management). Carried so a grant made during an
+	// IdP session can name it and be correlated with an upstream logout.
+	Sid string `json:"sid"`
+	// Raw is the VERIFIED claim set, kept verbatim so a caller can read a
+	// deployment-specific claim whose NAME is operator configuration (an
+	// elevation TTL / reason / scope claim) without this struct having to know
+	// it. Populated only after the signature verifies — never before — so
+	// nothing here is readable off an unverified token. Claim() is the only
+	// accessor; it re-parses on demand rather than caching, because Claims is a
+	// value type that is copied freely and a cache on a copy is a lie.
+	Raw json.RawMessage `json:"-"`
+}
+
+// Claim returns a VERIFIED top-level claim as a string. JSON strings come back
+// verbatim; numbers come back in their JSON form (so a numeric epoch or a
+// minute count is usable); every other shape (object, array, bool, null) is
+// reported absent rather than stringified — a caller asking for a scalar must
+// never receive "[object]" and treat it as one. Absent, blank and malformed are
+// all ("", false): fail-closed at the boundary.
+func (c Claims) Claim(name string) (string, bool) {
+	if len(c.Raw) == 0 || strings.TrimSpace(name) == "" {
+		return "", false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(c.Raw, &m); err != nil {
+		return "", false
+	}
+	v, ok := m[strings.TrimSpace(name)]
+	if !ok || len(v) == 0 {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err == nil {
+		s = strings.TrimSpace(s)
+		return s, s != ""
+	}
+	var n json.Number
+	if err := json.Unmarshal(v, &n); err == nil {
+		return n.String(), n.String() != ""
+	}
+	return "", false
 }
 
 func (c Claims) Audiences() []string {
@@ -378,5 +420,9 @@ func (c *Cache) VerifyRS256(token, wantIssuer, wantAudience string) (Claims, err
 			return Claims{}, errors.New("audience mismatch")
 		}
 	}
+	// Only now — after the signature, issuer, expiry and audience all passed —
+	// is the claim set trustworthy enough to expose verbatim for the
+	// operator-named claims Claim() reads.
+	claims.Raw = json.RawMessage(cb)
 	return claims, nil
 }

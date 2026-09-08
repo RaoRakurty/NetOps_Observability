@@ -122,6 +122,7 @@ import (
 	"netops/backend/internal/ssoidp"
 	"netops/backend/internal/storagemeter"
 	"netops/backend/internal/tenant"
+	"netops/backend/internal/tenantlocator"
 	"netops/backend/internal/ticketing"
 	"netops/backend/internal/tlsprobe"
 	"netops/backend/internal/vault"
@@ -283,6 +284,17 @@ type server struct {
 	// collect at all.
 	tacLearning      *tac.LearningAPI
 	tacLearningStore tac.LearningStore
+
+	// tacRouting is the tenant's TAC ROUTING record: the named human on a case,
+	// which connector carries which vendor, which capture runs on which
+	// platform, and the support-contract data a vendor checks. It is what makes
+	// the one-click escalation's confirmation screen arrive already complete.
+	tacRouting *ticketing.TACRoutingStore
+	// tacCases tracks OPEN cases and their severity-tiered refresh schedule;
+	// tacPoller is the loop that re-reads them. Both are always built — a
+	// deployment with no case connector simply never records a case.
+	tacCases  *tac.CaseTracker
+	tacPoller *tac.CasePoller
 	// TAC-ROUTES-END
 	tenants          tenantRepo
 	orgs             *tenant.OrgStore
@@ -2312,6 +2324,14 @@ func Run() {
 	// Appliance self-health guard: watches disk + OpenSearch read-only blocks,
 	// heals ingest after disk pressure, pages via the platform lane (self_heal.go).
 	workers.start("self-heal", func() { srv.selfHeal.Run(ctx) })
+	// The vendor-case status poller (owner, 2026-09-07: "update the status of
+	// the case with a refresh interval that is reasonable for case management").
+	// It is in the drain group rather than a bare goroutine because it WRITES —
+	// onto the incident record — and a shutdown that abandoned it mid-write is
+	// exactly the silent failure the group exists to close.
+	if srv.tacPoller != nil {
+		workers.start("tac-case-poller", func() { srv.tacPoller.Run(ctx) })
+	}
 	// Service Path Graph ingest (contract v1): the prober's traceroutes → immutable
 	// PathObservations + ordered PathHops, each hop resolved through the §3 ranked
 	// resolver. Opt-in (FEATURE_PATH_GRAPH=true), dormant by default.
@@ -2798,7 +2818,19 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/oidc/config", s.handleOIDCConfig)
 	mux.HandleFunc("/api/auth/sso/idp", s.handleSSOIdPList)  // platform admin: configured IdPs + Keycloak ping
 	mux.HandleFunc("/api/auth/sso/idp/", s.handleSSOIdPItem) // platform admin: {alias} CRUD + {alias}/test probe
-	mux.HandleFunc("/api/notify/itsm", s.handleITSMConfig)   // ServiceNow/Jira config (platform-owner)
+	// TENANT-SIGNIN-BEGIN — per-tenant sign-in and SSO URLs (design §6.1, tracker 276).
+	// The locator resolver the sign-in page calls (public), the tenant-admin half
+	// of the connection store (§3a: own realm only), and the per-tenant SSO URLs
+	// /t/{slug}/sso/{alias}/{callback,login} + their immutable /org/ twins. The
+	// SPA itself is still served statically at /t/{slug} by nginx's history
+	// fallback — only the sso sub-paths reach the api.
+	mux.HandleFunc("/api/auth/locator", s.handleAuthLocator)
+	mux.HandleFunc("/api/auth/sso/tenant-idp", s.handleTenantIdPList)
+	mux.HandleFunc("/api/auth/sso/tenant-idp/", s.handleTenantIdPItem)
+	mux.HandleFunc(tenantlocator.TenantPrefix, s.handleTenantSSO)
+	mux.HandleFunc(tenantlocator.OrgPrefix, s.handleTenantSSO)
+	// TENANT-SIGNIN-END
+	mux.HandleFunc("/api/notify/itsm", s.handleITSMConfig) // ServiceNow/Jira config (platform-owner)
 	mux.HandleFunc("/api/auth/methods", s.handleAuthMethods)
 	mux.HandleFunc("/api/auth/ldap/login", s.handleLDAPLogin)
 	// LICENCE-BEGIN — LDAP is in the owner's LOCKED Enterprise set. Only the
@@ -2837,8 +2869,15 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/onboard/snmp-config", s.handleGenerateSNMPConfig) // SNMP config generator // operator: org + first tenant (+SSO) in one audited step
 	mux.HandleFunc("/api/regions", s.handleRegions)
 	mux.HandleFunc("/api/regions/topology", s.handleRegionTopology)
-	mux.HandleFunc("/api/bindings", s.handleBindings)
+	// STEP-UP (elevation providers, 2026-09-07): GRANTING a standing binding is
+	// an elevated-only action when an elevation IdP is configured; listing and
+	// REVOKING are never gated — see elevatedOnlyMutations. With no elevation
+	// provider configured the wrapper is a pass-through, so this is additive.
+	mux.HandleFunc("/api/bindings", s.elevatedOnlyMutations(s.handleBindings))
 	mux.HandleFunc("/api/bindings/", s.handleBindingByID)
+	// The caller's OWN elevated-access state (account menu countdown) and the
+	// "step down" that ends it. Self-scoped: the principal is the token subject.
+	mux.HandleFunc("/api/auth/elevation", s.handleElevation)
 	mux.HandleFunc("/api/breakglass", s.handleBreakGlass)
 	mux.HandleFunc("/api/breakglass/", s.handleBreakGlassByID)
 	mux.HandleFunc("/api/scopes", s.handleMyScopes)
@@ -2932,7 +2971,21 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/incidents/{id}/tac/plan", s.handleTACPlan)
 	mux.HandleFunc("/api/incidents/{id}/tac/collect", s.handleTACCollect)
 	mux.HandleFunc("/api/incidents/{id}/tac/bundle", s.handleTACBundle)
-	mux.HandleFunc("/api/incidents/{id}/tac/case", s.handleTACCase)
+	// Opening a vendor case ships a redacted bundle of a customer's diagnostics
+	// to a third party — the archetypal action an "extreme secure environment"
+	// wants behind a second identity provider, so it is elevated-only.
+	mux.HandleFunc("/api/incidents/{id}/tac/case", s.elevatedOnly(s.handleTACCase))
+	// The ONE ACTION (owner, 2026-09-06: "open the case with one or two
+	// clicks"). Three routes, two of them clicks: escalate starts the whole
+	// escalation and sends NOTHING, prepare renders the single confirmation
+	// screen and sends NOTHING, confirm is the only one that can cause a case to
+	// exist — so it carries the same elevated gate the case route does. refresh
+	// is the operator's "Refresh now", floored at 60 s per case so a person
+	// cannot be the thing that trips a vendor's rate limit.
+	mux.HandleFunc("/api/incidents/{id}/tac/escalate", s.handleTACEscalate)
+	mux.HandleFunc("/api/incidents/{id}/tac/escalate/prepare", s.handleTACEscalatePrepare)
+	mux.HandleFunc("/api/incidents/{id}/tac/escalate/confirm", s.elevatedOnly(s.handleTACEscalateConfirm))
+	mux.HandleFunc("/api/incidents/{id}/tac/case/refresh", s.handleTACCaseRefresh)
 	// The vendor-coverage view behind Iris → Knowledge: version-pinned reference
 	// data, identical for every tenant, revealing no tenant's devices.
 	mux.HandleFunc("/api/troubleshoot/tac/knowledge", s.handleTACKnowledge)
@@ -2940,6 +2993,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Administration → Ticket delivery reads this to show what each vendor path
 	// can do and what it still needs.
 	mux.HandleFunc("/api/tac/connectors", s.handleTACConnectors)
+	// The tenant's TAC ROUTING record — contact, per-vendor route, per-dialect
+	// preferred capture, and the vendor contracts a case is entitled with. It is
+	// PER-TENANT DATA (a customer's own support agreement), so the gate is
+	// requirePerm + a tenant filter, never requirePlatformAdmin.
+	mux.HandleFunc("/api/tac/routing", s.handleTACRouting)
 	// And the SETTINGS behind that list: the four routes a customer brings its
 	// own Jira / ServiceNow / Cisco / Juniper / SMTP credentials through
 	// (internal/ticketing/caseconn_http.go). Until they existed the store had a
@@ -3969,12 +4027,17 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 	// SSH gateway lives under the device path: /api/devices/{id}/ssh (opt-in,
 	// dormant unless FEATURE_DEVICE_SSH). Delegate before the id parse below.
+	// STEP-UP (elevation providers): an interactive shell on a customer device
+	// is elevated-only. BOTH halves are gated — the ticket mint, which is the
+	// ordinary authenticated request whose named 403 the SPA can render, and
+	// the socket itself, so a ticket minted a moment before the grant expired
+	// cannot still be spent. A pass-through when no elevation IdP is configured.
 	if strings.HasSuffix(r.URL.Path, "/ssh-ticket") {
-		s.handleDeviceSSHTicket(w, r)
+		s.elevatedOnly(s.handleDeviceSSHTicket)(w, r)
 		return
 	}
 	if strings.HasSuffix(r.URL.Path, "/ssh") {
-		s.handleDeviceSSH(w, r)
+		s.elevatedOnly(s.handleDeviceSSH)(w, r)
 		return
 	}
 	// Location annotation layer: /api/devices/locations (editor list) and
@@ -4720,6 +4783,17 @@ func isPublicPath(p string) bool {
 			return true
 		}
 	}
+	// TENANT-SIGNIN-BEGIN — the per-tenant SSO URLs (tracker 276) run BEFORE any
+	// session exists, exactly like /api/auth/sso/callback next to them, so they
+	// are public by the same reasoning. They are also PRE-AUTH, so they inherit
+	// the 256 KiB pre-auth body cap through this same predicate rather than
+	// needing a cap of their own. Prefix rather than exact match because the
+	// tenant slug is part of the path; the handler resolves it fail-closed and
+	// refuses anything that is not exactly …/sso/{alias}/{callback,login}.
+	if _, _, _, _, ok := tenantlocator.ParseCallbackPath(p); ok {
+		return true
+	}
+	// TENANT-SIGNIN-END
 	return false
 }
 

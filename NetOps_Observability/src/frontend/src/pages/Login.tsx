@@ -103,6 +103,13 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
     ...(methods?.tacacs.enabled ? [{ id: "tacacs" as Method, label: methods.tacacs.name }] : []),
   ];
   const ssoProviders = methods?.sso.enabled ? methods.sso.providers : [];
+  // Elevation doors are shown SEPARATELY, never mixed into the ordinary
+  // sign-in list. They do not create accounts and they do not sign a new person
+  // in — an operator who picks one because it looked like the front door gets
+  // "sign in through your standing provider first", which is a confusing way to
+  // learn the difference. Grouping them is the fix.
+  const standingProviders = ssoProviders.filter((p) => p.access !== "elevation");
+  const elevationProviders = ssoProviders.filter((p) => p.access === "elevation");
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,6 +202,16 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
     <LoginScene>
       <form onSubmit={submit} className="card login-card">
         <h2 className="login-card-title">Sign in</h2>
+        {/* Per-tenant sign-in URL (/t/{slug}, /org/{org_id}): name the realm the
+            visitor landed on, so a wrong link is obvious before they type a
+            password. The name comes from the SERVER's resolution of the URL —
+            the browser never asserts a tenant — and the provider list below is
+            already filtered to that realm's identity providers. */}
+        {methods?.locator && (
+          <p className="login-msg" role="status" style={{ color: "var(--muted)" }}>
+            Signing in to <strong>{methods.locator.name}</strong>
+          </p>
+        )}
 
         {notice && <p className="login-msg" role="status" aria-live="polite" style={{ color: "var(--muted)" }}>{notice}</p>}
 
@@ -264,10 +281,10 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
           </button>
         </div>
 
-        {ssoProviders.length > 0 && (
+        {standingProviders.length > 0 && (
           <div className="login-sso">
             <div className="login-divider">or</div>
-            {ssoProviders.map((p) => (
+            {standingProviders.map((p) => (
               <button
                 key={p.id || "default"}
                 type="button"
@@ -277,6 +294,24 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
                 style={{ width: "100%" }}
               >
                 Sign in with {p.name}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {elevationProviders.length > 0 && (
+          <div className="login-sso">
+            <div className="login-divider">Elevated access</div>
+            {elevationProviders.map((p) => (
+              <button
+                key={p.id || "default"}
+                type="button"
+                className="btn"
+                onClick={() => { window.location.href = api.ssoLoginUrl(p.id); }}
+                title="Adds time-bound access to an existing account"
+                style={{ width: "100%" }}
+              >
+                Elevate with {p.name}
               </button>
             ))}
           </div>

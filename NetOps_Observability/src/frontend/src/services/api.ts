@@ -1985,6 +1985,40 @@ function takeSSOPendingCookie(): string | null {
   return val || null;
 }
 
+// SSO_RETURN_KEY remembers the hash route the user was heading for when an SSO
+// login started, so a deep link survives the round trip through the IdP. The
+// PATH half is kept by the server (a per-tenant flow is dropped back at
+// /t/{slug}); only the fragment, which never reaches a server, needs stashing.
+// Per-tab sessionStorage, single-use, and it can only ever restore a relative
+// "#/…" route — never an absolute URL, so it cannot become an open redirect.
+export const SSO_RETURN_KEY = "netops.ssoReturn";
+
+// stashSSOReturn records the current hash route before an SSO redirect.
+function stashSSOReturn(): void {
+  try {
+    const h = window.location.hash;
+    if (/^#\/[A-Za-z0-9]/.test(h)) sessionStorage.setItem(SSO_RETURN_KEY, h);
+    else sessionStorage.removeItem(SSO_RETURN_KEY);
+  } catch { /* sessionStorage unavailable: the deep link is simply not restored */ }
+}
+
+// takeSSOReturn consumes the stashed route, validating it again on the way out
+// (a stored value is still untrusted input).
+function takeSSOReturn(): string | null {
+  try {
+    const h = sessionStorage.getItem(SSO_RETURN_KEY);
+    sessionStorage.removeItem(SSO_RETURN_KEY);
+    return h && /^#\/[A-Za-z0-9][A-Za-z0-9/_?&=.-]*$/.test(h) ? h : null;
+  } catch { return null; }
+}
+
+// loginLocatorPath reads the per-tenant sign-in path out of the address bar.
+// "/t/{slug}" and "/org/{org_id}" only; anything else is not a locator.
+export function loginLocatorPath(pathname: string): string | null {
+  const m = /^\/(t|org)\/([A-Za-z0-9_-]{1,64})(?:\/|$)/.exec(pathname);
+  return m ? `/${m[1]}/${m[2]}` : null;
+}
+
 // captureSSORedirect inspects the URL fragment the SSO callback redirects to
 // (#token=…&refresh=…&sso=1, or #sso_error=…) and, on success, stores the
 // session and clears the fragment. Call once at startup before rendering.
@@ -2052,6 +2086,16 @@ export function captureSSORedirect(): string | null {
     setRefresh(refresh);
     markFreshLogin();
     clear();
+    // Deep link kept: the server already put us back on the tenant's own path,
+    // so restoring the stashed hash completes the round trip to the exact page
+    // the user asked for. replaceState, not assign — no extra history entry and
+    // no reload before React has even mounted.
+    const back = takeSSOReturn();
+    if (back) {
+      try {
+        history.replaceState(null, "", window.location.pathname + window.location.search + back);
+      } catch { /* sandboxed history: the app just opens at its default route */ }
+    }
   }
   return null;
 }
@@ -2168,6 +2212,29 @@ export function secFindingParams(q: SecFindingQuery): string {
   return p.toString();
 }
 
+/** The window event a step-up refusal raises. components/ElevationRequired.tsx listens. */
+export const ELEVATION_REQUIRED_EVENT = "elevation:required";
+export type ElevationRefusal = { error: string; providers: ElevationProviderRef[] };
+
+/**
+ * Reads a step-up refusal out of a 403 body. Returns null for every other 403,
+ * so an ordinary permission denial is untouched. Deliberately total: a body that
+ * is not JSON, or is JSON of another shape, is simply "not a step-up refusal"
+ * rather than an exception thrown from inside an error path.
+ */
+export function parseElevationRefusal(body: string): ElevationRefusal | null {
+  try {
+    const j = JSON.parse(body) as { code?: string; error?: string; elevation_providers?: ElevationProviderRef[] };
+    if (j?.code !== "ELEVATION_REQUIRED") return null;
+    return {
+      error: j.error || "Elevated access is required.",
+      providers: Array.isArray(j.elevation_providers) ? j.elevation_providers : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -2199,6 +2266,19 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    // STEP-UP refusal. An elevated-only action refused for a standing session
+    // comes back NAMED — it says which identity provider grants the access —
+    // and that is the whole point: a generic 403 leaves an operator stuck
+    // mid-incident with nothing to act on. Raise it as an app-wide event so the
+    // shell can offer the button, and still throw so the caller's own error
+    // handling is unchanged.
+    if (res.status === 403) {
+      const refusal = parseElevationRefusal(text);
+      if (refusal) {
+        window.dispatchEvent(new CustomEvent<ElevationRefusal>(ELEVATION_REQUIRED_EVENT, { detail: refusal }));
+        throw new Error(refusal.error);
+      }
+    }
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }
   if (res.status === 204) return undefined as T;
@@ -4557,6 +4637,7 @@ export const api = {
   ssoLoginUrl: (idp?: string) => {
     const st = newSSOState();
     try { sessionStorage.setItem(SSO_STATE_KEY, st); } catch { /* fail closed at capture */ }
+    stashSSOReturn(); // deep links keep their page across the IdP round trip
     const qs = new URLSearchParams();
     if (idp) qs.set("idp", idp);
     qs.set("fe_state", st);
@@ -4564,7 +4645,26 @@ export const api = {
   },
 
   // Auth-method discovery for the login page (which sign-in options are enabled).
-  authMethods: () => request<AuthMethods>("/api/auth/methods"),
+  // resolveLoginLocator turns a per-tenant sign-in URL in the address bar into a
+  // candidate realm SERVER-SIDE and arms the signed, HttpOnly candidate cookie.
+  // A no-op on every other path. The raw slug is never trusted for anything —
+  // it is handed to the api, which resolves it to the immutable tenant id.
+  resolveLoginLocator: async (): Promise<LoginLocator | null> => {
+    const path = loginLocatorPath(window.location.pathname);
+    if (!path) return null;
+    try {
+      const r = await request<{ locator: LoginLocator | null }>(`/api/auth/locator?path=${encodeURIComponent(path)}`);
+      return r.locator ?? null;
+    } catch {
+      return null; // unresolvable locator => the generic sign-in page
+    }
+  },
+  // authMethods arms the candidate FIRST so the provider list comes back
+  // already filtered to that tenant's connections.
+  authMethods: async (): Promise<AuthMethods> => {
+    await api.resolveLoginLocator();
+    return request<AuthMethods>("/api/auth/methods");
+  },
 
   // Direct (native) LDAP / TACACS+ logins — same session-issuing contract as login().
   ldapLogin: async (username: string, password: string) => {
@@ -4602,6 +4702,10 @@ export const api = {
   // gated). The client secret is write-only (GET returns client_secret_set);
   // PUT reports whether the change was applied to Keycloak plus any warnings
   // (e.g. Keycloak unreachable → saved but not applied).
+  // The caller's own elevated access: what is held, and how to end it.
+  elevation: () => request<ElevationStatus>("/api/auth/elevation"),
+  endElevation: () => request<void>("/api/auth/elevation", { method: "DELETE" }),
+
   ssoIdps: () => request<SsoIdpListResponse>("/api/auth/sso/idp"),
   saveSsoIdp: (idp: SsoIdP) =>
     request<SsoIdpSaveResponse>(`/api/auth/sso/idp/${encodeURIComponent(idp.alias)}`, { method: "PUT", body: JSON.stringify(idp) }),
@@ -4609,6 +4713,19 @@ export const api = {
     request<void>(`/api/auth/sso/idp/${encodeURIComponent(alias)}`, { method: "DELETE" }),
   testSsoIdp: (alias: string) =>
     request<SsoIdpTestResult>(`/api/auth/sso/idp/${encodeURIComponent(alias)}/test`, { method: "POST" }),
+
+  // Tenant-managed identity providers (tracker 276). Same store, tenant half:
+  // a tenant administrator manages the connections of its OWN tenant, and the
+  // owning tenant is stamped from the token — there is deliberately no tenant
+  // field to send. Each row carries the per-tenant sign-in and callback URLs an
+  // IdP team registers on their side.
+  tenantSsoIdps: () => request<TenantSsoIdpListResponse>("/api/auth/sso/tenant-idp"),
+  tenantSsoIdp: (alias: string) =>
+    request<TenantSsoIdpRow>(`/api/auth/sso/tenant-idp/${encodeURIComponent(alias)}`),
+  saveTenantSsoIdp: (alias: string, idp: Omit<SsoIdP, "alias">) =>
+    request<TenantSsoIdpRow>(`/api/auth/sso/tenant-idp/${encodeURIComponent(alias)}`, { method: "PUT", body: JSON.stringify(idp) }),
+  deleteTenantSsoIdp: (alias: string) =>
+    request<void>(`/api/auth/sso/tenant-idp/${encodeURIComponent(alias)}`, { method: "DELETE" }),
 
   // Native-provider admin config (admin-gated; secrets are write-only on the server).
   ldapConfig: () => request<{ config: LdapConfig }>("/api/auth/ldap/config"),
@@ -7974,7 +8091,12 @@ export type SavedObject = {
 };
 
 // ----- SSO / API / ITSM -----
-export type SSOProvider = { id: string; name: string; kind: "oidc" | "saml" | "ldap" | "tacacs" };
+// access = the sign-in button's PURPOSE, as distinct from kind (its wire
+// protocol). "standing" is the everyday front door; "elevation" is a separately
+// governed second door that creates no account and only mints a time-bound
+// grant on one that already exists. Absent reads as standing.
+export type SSOAccess = "standing" | "elevation";
+export type SSOProvider = { id: string; name: string; kind: "oidc" | "saml" | "ldap" | "tacacs"; access?: SSOAccess };
 export type SSOConfig = { enabled: boolean; providers: SSOProvider[] };
 
 // OIDC/SSO provider config (admin-gated). The client secret is write-only: the
@@ -8021,12 +8143,43 @@ export type SsoIdP = {
   groups_attr: string;
   attr_mappings: SsoIdpAttrMapping[];
   role_mappings: SsoIdpRoleMapping[];
+  // Access model. An elevation connection never provisions an account, never
+  // moves a tenant and never changes a standing role — a sign-in through it
+  // produces one expiring grant on an existing account and nothing else.
+  kind?: SSOAccess;
+  elevation?: SsoIdpElevation;
+  // The tenant this connection is BOUND to (read-only; the server stamps it
+  // from the caller's token). Blank is the platform realm — offered on every
+  // sign-in page and keeping the generic callback URL.
+  tenant_id?: string;
+};
+// The claim NAMES an elevation connection reads, and the ceiling it enforces.
+// A claim can only ever make a grant shorter or narrower, never longer or wider.
+export type SsoIdpElevation = {
+  ttl_claim?: string;
+  max_minutes?: number;
+  reason_claim?: string;
+  scope_claim?: string;
 };
 export type SsoIdpListResponse = {
   idps: SsoIdP[];
   keycloak: { reachable: boolean; realm: string; detail?: string };
 };
 export type SsoIdpSaveResponse = { idp: SsoIdP; applied: boolean; warnings: string[] };
+
+// TenantSsoIdpRow is one tenant-owned connection plus the four URLs its IdP
+// team needs. The URLs are absent for a platform-realm connection, which keeps
+// the generic /api/auth/sso/callback and has no per-tenant form.
+export type TenantSsoIdpRow = {
+  idp: SsoIdP;
+  sign_in_url?: string;
+  callback_url?: string;
+  callback_url_immutable?: string;
+  idp_initiated_url?: string;
+  applied?: boolean;
+  warnings?: string[];
+};
+export type TenantSsoIdpListResponse = { idps: TenantSsoIdpRow[]; sign_in_url: string };
 export type SsoIdpTestCheck = { name: string; ok: boolean; detail: string };
 export type SsoIdpTestResult = { ok: boolean; checks: SsoIdpTestCheck[]; cert_not_after?: string };
 
@@ -8074,12 +8227,35 @@ export type TokenPolicy = {
     refresh_min_seconds: number; refresh_max_seconds: number; refresh_recommended_seconds: number;
   };
 };
+// The caller's own elevated-access state (GET /api/auth/elevation).
+export type ElevationProviderRef = { id: string; name: string };
+export type ElevationStatus = {
+  active: boolean;
+  binding_id?: string;
+  provider?: string;
+  role?: string;
+  scope?: string;
+  reason?: string;
+  expires_at?: string;
+  configured: boolean;
+  elevation_providers: ElevationProviderRef[];
+};
+
 export type AuthMethods = {
   local: boolean;
   ldap: { enabled: boolean; name: string };
   tacacs: { enabled: boolean; name: string };
   sso: { enabled: boolean; providers: SSOProvider[] };
+  // Present only when the page was entered through a per-tenant sign-in URL
+  // (/t/{slug} or /org/{org_id}). The server resolved it; the browser never
+  // asserts a tenant. With it present, `sso.providers` is already filtered to
+  // the connections that realm reaches.
+  locator?: LoginLocator;
 };
+
+// LoginLocator is the RESOLVED candidate realm behind a per-tenant sign-in URL:
+// a display name and the canonical path, never an id the browser could assert.
+export type LoginLocator = { kind: "tenant" | "org"; name: string; path: string };
 
 export type OpenAPIOperation = { tags?: string[]; summary?: string };
 export type OpenAPISpec = {

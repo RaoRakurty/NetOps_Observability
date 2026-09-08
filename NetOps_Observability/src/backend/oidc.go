@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/elevation"
+	"netops/backend/internal/jwks"
 	"netops/backend/internal/oidc"
 	"netops/backend/internal/users"
 )
@@ -72,6 +74,15 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("unknown identity provider"))
 		return
 	}
+	// Per-tenant sign-in (tracker 276): when the browser arrived through a
+	// tenant's own sign-in URL, it may only start a flow through a provider that
+	// tenant's realm reaches. Same 404 as an unknown alias — a wrong-tenant
+	// probe learns nothing an unknown-alias probe does not.
+	if !s.ssoIDPAllowedForLocator(r, idpHint) {
+		logWarn("auth", "sso login refused — provider not registered for this realm", map[string]any{"idp": idpHint})
+		writeError(w, http.StatusNotFound, errors.New("unknown identity provider"))
+		return
+	}
 	state, err := randomToken(24)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -124,7 +135,13 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 			MaxAge:   600,
 		})
 	}
-	if err := s.ssoTxns.CreateFlow(state, nonce, verifier, feState, time.Now()); err != nil {
+	// The alias travels in the SERVER-SIDE transaction, not the browser: the
+	// callback must know which door was used to decide whether this sign-in
+	// provisions an account or only elevates one, and that decision may not
+	// depend on anything the browser can restate. It was validated against the
+	// configured button list above, so it can only name a provider the operator
+	// configured.
+	if err := s.ssoTxns.CreateFlowIdP(state, nonce, verifier, feState, idpHint, time.Now()); err != nil {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
@@ -135,15 +152,20 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 	// deployment and became stealable off any plaintext request to the same
 	// host, which is exactly the login-CSRF the state parameter exists to stop.
 	http.SetCookie(w, &http.Cookie{
-		Name:     ssoStateCookie,
-		Value:    state,
-		Path:     "/api/auth/sso",
+		Name:  ssoStateCookie,
+		Value: state,
+		// Path "/" — NOT "/api/auth/sso". A tenant-bound connection returns to
+		// /t/{slug}/sso/{alias}/callback (tracker 276), and a cookie scoped to
+		// the api prefix would simply not be sent there, taking the CSRF defence
+		// off exactly the flow that needs it most. HttpOnly + SameSite=Lax +
+		// Secure are unchanged, and the value stays a single-use opaque nonce.
+		Path:     "/",
 		HttpOnly: true,
 		Secure:   cookieSecure(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
 	})
-	authURL, err := p.AuthorizeURL(p.CallbackURL(r), state, nonce, challenge, idpHint)
+	authURL, err := p.AuthorizeURL(s.ssoLoginRedirectURI(r, p, idpHint), state, nonce, challenge, idpHint)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -178,7 +200,7 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     ssoStateCookie,
 		Value:    "",
-		Path:     "/api/auth/sso",
+		Path:     "/", // must match the Set above or the expiry lands on nothing
 		HttpOnly: true,
 		Secure:   cookieSecure(r),
 		SameSite: http.SameSiteLaxMode,
@@ -201,7 +223,7 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		s.ssoFail(w, r, "missing authorization code")
 		return
 	}
-	idToken, err := p.Exchange(code, p.CallbackURL(r), txn.Verifier)
+	idToken, err := p.Exchange(code, s.ssoCallbackRedirectURI(r, p), txn.Verifier)
 	if err != nil {
 		s.ssoFail(w, r, "token exchange failed: "+err.Error())
 		return
@@ -232,7 +254,15 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	role := p.RoleFor(claims)
-	user, err := s.users.UpsertFederated(username, claims.Email, firstNonEmpty(claims.Name, username), role, "oidc", p.DefaultTenant())
+	// ELEVATION DOOR. A provider configured as `kind: elevation` provisions
+	// nothing: it reads the existing account and mints a time-bound binding on
+	// it. UpsertFederated — and therefore MergeFederated, and therefore any
+	// chance of a role or a source being rewritten — is not on this path at all.
+	if pol, isElev := s.elevationPolicy(txn.IdP); isElev {
+		s.completeElevationSSO(w, r, p, pol, username, role, txn.FEState, claims)
+		return
+	}
+	user, err := s.users.UpsertFederated(username, claims.Email, firstNonEmpty(claims.Name, username), role, "oidc", s.ssoProvisionTenant(r, p))
 	if err != nil {
 		// H1: the username names a LOCALLY-managed account — the IdP's verdict
 		// must not be accepted against it (that would bypass the local password
@@ -288,6 +318,73 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	if txn.FEState != "" {
 		frag.Set("state", txn.FEState)
 	}
+	http.Redirect(w, r, s.ssoPostLoginPath(r, p)+"#"+frag.Encode(), http.StatusFound)
+}
+
+// completeElevationSSO finishes a sign-in through an ELEVATION provider.
+//
+// Everything the standing path does to the account store is deliberately
+// absent. What remains is: prove the account exists and is usable, derive the
+// elevated role under the SAME federation guard the standing path uses (SR-025
+// — an elevation IdP must not be the back door to platform ownership either),
+// mint the grant, and then open an ordinary session so the operator is simply
+// signed in with elevated access held beside their standing rights.
+func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p *oidcProvider, pol elevation.Policy, username, mappedRole, feState string, claims jwks.Claims) {
+	user, ok := s.users.Get(username)
+	if !ok {
+		logWarn("auth", "elevation login refused — no such account", map[string]any{"user": username, "provider": pol.Provider})
+		s.ssoFail(w, r, elevation.UnknownAccountRefusal)
+		return
+	}
+	// H1 parity: an elevation IdP must not act against a LOCALLY-managed
+	// account any more than a standing one may. The local password and its MFA
+	// enrolment are what protect that record.
+	if isLocalAccount(user.AuthSource) {
+		logWarn("auth", "elevation login refused — account is managed locally", map[string]any{"user": username, "provider": pol.Provider})
+		s.ssoFail(w, r, "this account is managed locally; sign in with your local password")
+		return
+	}
+	if user.Status == "disabled" {
+		s.ssoFail(w, r, "account disabled")
+		return
+	}
+	if msg := s.federatedLoginBarrier(r, user); msg != "" {
+		s.ssoFail(w, r, msg)
+		return
+	}
+	// SR-025 still applies: the guard is evaluated against the ACCOUNT's tenant,
+	// which is the tenant the grant will be made in.
+	role := guardFederatedRole(mappedRole, user.TenantID, username, "oidc-elevation")
+	b, err := s.completeElevationLogin(r, pol, user, role, claims.Sid, claims.Claim)
+	if err != nil {
+		logWarn("auth", "elevation login refused", map[string]any{
+			"user": username, "provider": pol.Provider, "reason": err.Error()})
+		s.ssoFail(w, r, err.Error())
+		return
+	}
+	if err := s.enforceConcurrentLoginDeny(r, user); err != nil {
+		s.ssoFail(w, r, err.Error())
+		return
+	}
+	access, refresh, err := s.mintSession(r, user)
+	if err != nil {
+		s.ssoFail(w, r, err.Error())
+		return
+	}
+	s.users.TouchLogin(user.Username)
+	logInfo("auth", "elevation login ok", map[string]any{
+		"user": user.Username, "role": user.Role, "elevated_role": b.RoleID,
+		"provider": pol.Provider, "binding": b.ID, "src": "oidc-elevation"})
+	frag := url.Values{}
+	frag.Set("token", access)
+	frag.Set("refresh", refresh)
+	frag.Set("sso", "1")
+	frag.Set("elevated", "1")
+	// M20: echo the SPA's own nonce so the fragment is accepted only in the tab
+	// that started the flow — identical binding to the standing path.
+	if feState != "" {
+		frag.Set("state", feState)
+	}
 	http.Redirect(w, r, p.PostLoginURL()+"#"+frag.Encode(), http.StatusFound)
 }
 
@@ -295,7 +392,7 @@ func (s *server) ssoFail(w http.ResponseWriter, r *http.Request, msg string) {
 	logInfo("auth", "sso login failed", map[string]any{"reason": msg})
 	frag := url.Values{}
 	frag.Set("sso_error", msg)
-	http.Redirect(w, r, s.oidcProvider().PostLoginURL()+"#"+frag.Encode(), http.StatusFound)
+	http.Redirect(w, r, s.ssoPostLoginPath(r, s.oidcProvider())+"#"+frag.Encode(), http.StatusFound)
 }
 
 // exchange trades an authorization code for tokens at Keycloak's token endpoint

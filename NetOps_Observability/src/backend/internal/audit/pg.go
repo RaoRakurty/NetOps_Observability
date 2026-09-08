@@ -102,6 +102,13 @@ func pgWhere(q Query) (string, []any) {
 		args = append(args, q.Path)
 		conds = append(conds, fmt.Sprintf("data->>'path' = $%d", len(args)))
 	}
+	if q.BindingID != "" {
+		// Same exact-match discipline as Path. The binding id is an opaque
+		// server-minted string; it is parameterized, never interpolated, and
+		// the RLS tenant scope still applies on top of it.
+		args = append(args, q.BindingID)
+		conds = append(conds, fmt.Sprintf("data->>'binding_id' = $%d", len(args)))
+	}
 	if len(conds) == 0 {
 		return "", args
 	}

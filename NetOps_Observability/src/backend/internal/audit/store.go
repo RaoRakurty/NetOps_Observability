@@ -91,6 +91,10 @@ type Query struct {
 	// rows — a compliance surface that silently reports "nobody read anything"
 	// is the one failure mode it must never have.
 	Path string
+	// BindingID filters to the actions taken under ONE elevated grant. Same
+	// reasoning as Path: "what did this elevation actually do" must be answered
+	// by the query, not by paging the whole trail and hoping.
+	BindingID string
 }
 
 // MergeCeiling bounds the org-admin merge path (auditScopedList), which
@@ -127,6 +131,16 @@ type Event struct {
 	// Detail carries action-specific context for sensitive operations (e.g. an
 	// export's query/size/execution_id) beyond the generic request envelope.
 	Detail map[string]any `json:"detail,omitempty"`
+	// BindingID names the ELEVATED role binding that was in force when the
+	// action ran ("" when the actor held only standing rights). It is the field
+	// that turns "an admin changed this" into "an admin changed this while
+	// holding grant X, issued by IdP Y, expiring at Z" — the question an auditor
+	// of a JIT-access deployment actually asks. Filterable on the trail.
+	BindingID string `json:"binding_id,omitempty"`
+	// SessionID is the server-side session the action ran in (the access
+	// token's sid). Recorded so a trail can be walked per sign-in, and so an
+	// elevation can be tied to the session that spent it.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 type FileStore struct {
@@ -330,6 +344,9 @@ func (s *FileStore) matching(tenant string, cross bool, q Query) []Event {
 			return
 		}
 		if q.Path != "" && e.Path != q.Path {
+			return
+		}
+		if q.BindingID != "" && e.BindingID != q.BindingID {
 			return
 		}
 		if dedupe && seen[e.ID] {

@@ -17,6 +17,9 @@ import {
   RoleMappingTable,
   AttrMappingTable,
   CertExpiryBanner,
+  elevationIsValid,
+  ELEVATION_MAX_DEFAULT,
+  ELEVATION_MAX_CEILING,
 } from "./AdminSsoIdp";
 import type { SsoIdpRoleMapping } from "../services/api";
 
@@ -163,5 +166,41 @@ describe("CertExpiryBanner", () => {
   it("renders nothing without a date", () => {
     const { container } = render(<CertExpiryBanner notAfter={null} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+// ── access model: standing vs elevation (elevation providers, 2026-09-07) ────
+//
+// A blank kind must read as standing everywhere, or upgrading would silently
+// stop a working connection from provisioning accounts.
+
+describe("elevation connections", () => {
+  it("blankIdp starts standing, with the default ceiling ready", () => {
+    const idp = blankIdp("oidc");
+    expect(idp.kind).toBe("standing");
+    expect(idp.elevation?.max_minutes).toBe(ELEVATION_MAX_DEFAULT);
+  });
+
+  it("a standing connection is never held to the elevation rules", () => {
+    expect(elevationIsValid({ ...blankIdp("saml"), elevation: { max_minutes: 0 } })).toBe(true);
+    expect(elevationIsValid({ ...blankIdp("saml"), kind: undefined })).toBe(true);
+  });
+
+  it("an elevation connection must be able to END", () => {
+    const base = { ...blankIdp("oidc"), kind: "elevation" as const };
+    expect(elevationIsValid({ ...base, elevation: { max_minutes: 30 } })).toBe(true);
+    expect(elevationIsValid({ ...base, elevation: { max_minutes: 0 } })).toBe(false);
+    expect(elevationIsValid({ ...base, elevation: {} })).toBe(false);
+    expect(elevationIsValid({ ...base, elevation: { max_minutes: ELEVATION_MAX_CEILING + 1 } })).toBe(false);
+  });
+
+  it("Save stays disabled while the ceiling is unusable", () => {
+    const valid = {
+      ...blankIdp("oidc"), alias: "jit", display_name: "JIT",
+      discovery_url: "https://idp.example.test/.well-known/openid-configuration", client_id: "x",
+      kind: "elevation" as const, elevation: { max_minutes: 30 },
+    };
+    expect(idpIsValid(valid)).toBe(true);
+    expect(idpIsValid({ ...valid, elevation: { max_minutes: 0 } })).toBe(false);
   });
 });

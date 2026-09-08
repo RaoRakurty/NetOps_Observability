@@ -34,10 +34,29 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+// Access models a sign-in button's PURPOSE, as distinct from Kind (its wire
+// protocol). "standing" is the everyday front door; "elevation" is a separately
+// governed second door that provisions nothing and only ever mints a time-bound
+// grant on an account that already exists. Blank reads as standing, so every
+// provider string written before this segment existed keeps its behaviour.
+const (
+	AccessStanding  = "standing"
+	AccessElevation = "elevation"
+)
+
 type ProviderInfo struct {
 	ID   string `json:"id"`   // kc_idp_hint; "" = realm default (plain OIDC)
 	Name string `json:"name"` // display label
-	Kind string `json:"kind"` // oidc | saml | ldap
+	Kind string `json:"kind"` // oidc | saml | ldap  (the WIRE protocol)
+	// Access is the access model: standing (default) | elevation. The login
+	// page groups elevation providers separately; the callback treats a
+	// sign-in through one as an elevation, never as a provisioning login.
+	Access string `json:"access"`
+}
+
+// IsElevation reports whether this button is an elevation door.
+func (p ProviderInfo) IsElevation() bool {
+	return strings.EqualFold(strings.TrimSpace(p.Access), AccessElevation)
 }
 
 type Provider struct {
@@ -92,8 +111,12 @@ func splitSet(csv string) map[string]bool {
 	return m
 }
 
-// ParseProviders turns "id:Label:kind,id2:Label2:kind2" into the button list.
-// A bare "id" defaults to kind=oidc and Label=id.
+// ParseProviders turns "id:Label:kind[:access]" entries into the button list.
+// A bare "id" defaults to kind=oidc, Label=id and access=standing; a 3-segment
+// entry (every entry written before elevation providers existed) is standing.
+// Only the exact word "elevation" turns a button into an elevation door —
+// anything else, including a typo, stays standing (fail-closed: a mis-spelled
+// access segment must never silently disable account provisioning).
 func ParseProviders(csv string) []ProviderInfo {
 	var out []ProviderInfo
 	for _, raw := range strings.Split(csv, ",") {
@@ -101,14 +124,17 @@ func ParseProviders(csv string) []ProviderInfo {
 		if raw == "" {
 			continue
 		}
-		parts := strings.SplitN(raw, ":", 3)
-		p := ProviderInfo{ID: strings.TrimSpace(parts[0]), Kind: "oidc"}
+		parts := strings.SplitN(raw, ":", 4)
+		p := ProviderInfo{ID: strings.TrimSpace(parts[0]), Kind: "oidc", Access: AccessStanding}
 		p.Name = p.ID
 		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
 			p.Name = strings.TrimSpace(parts[1])
 		}
 		if len(parts) > 2 && strings.TrimSpace(parts[2]) != "" {
 			p.Kind = strings.ToLower(strings.TrimSpace(parts[2]))
+		}
+		if len(parts) > 3 && strings.EqualFold(strings.TrimSpace(parts[3]), AccessElevation) {
+			p.Access = AccessElevation
 		}
 		out = append(out, p)
 	}
@@ -142,9 +168,10 @@ func NewProviderFromConfig(c Config, jwksTTL time.Duration) *Provider {
 	if p.enabled && p.issuer != "" {
 		p.jwks = jwks.New(p.issuer, jwksTTL)
 	}
-	// Always offer at least the realm-default OIDC button when enabled.
+	// Always offer at least the realm-default OIDC button when enabled. The
+	// realm default is STANDING by construction: it is the door that provisions.
 	if p.enabled && len(p.providers) == 0 {
-		p.providers = []ProviderInfo{{ID: "", Name: "Single Sign-On", Kind: "oidc"}}
+		p.providers = []ProviderInfo{{ID: "", Name: "Single Sign-On", Kind: "oidc", Access: AccessStanding}}
 	}
 	return p
 }
@@ -242,6 +269,33 @@ func (p *Provider) VerifyBearer(token string) (jwks.Claims, error) {
 // middleware and the methods endpoint render.
 func (p *Provider) DefaultTenant() string     { return p.defaultTenant }
 func (p *Provider) Providers() []ProviderInfo { return p.providers }
+
+// ProviderByID returns the configured button for an alias. Used by the callback
+// to decide whether the flow that just completed was a standing sign-in or an
+// elevation — the alias comes from the SERVER-SIDE login transaction, never
+// from the browser.
+func (p *Provider) ProviderByID(id string) (ProviderInfo, bool) {
+	id = strings.TrimSpace(id)
+	for _, pi := range p.providers {
+		if pi.ID == id {
+			return pi, true
+		}
+	}
+	return ProviderInfo{}, false
+}
+
+// ElevationProviders returns the configured elevation doors, in button order.
+// The step-up refusal names these, so an operator told "you need elevated
+// access" is also told exactly where to get it.
+func (p *Provider) ElevationProviders() []ProviderInfo {
+	var out []ProviderInfo
+	for _, pi := range p.providers {
+		if pi.IsElevation() {
+			out = append(out, pi)
+		}
+	}
+	return out
+}
 
 func (p *Provider) Ready() bool {
 	return p != nil && p.enabled && p.issuer != "" && p.clientID != "" && p.jwks != nil

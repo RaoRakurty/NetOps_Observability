@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"netops/backend/internal/keycloak"
 	"netops/backend/internal/oidc"
 	"netops/backend/internal/ssoidp"
+	"netops/backend/internal/tenantlocator"
 )
 
 // oidc_config.go — runtime-configurable, kv-persisted overlay for the SSO/OIDC
@@ -299,10 +301,14 @@ func csvEnsure(csv, val string) string {
 	return csv + "," + val
 }
 
-// upsertProviderCSV reconciles one "alias:Label:kind" entry in the login-page
-// provider list (oidc.ParseProviders format): replaced when present, appended
-// when include and absent, dropped when !include.
-func upsertProviderCSV(csv, alias, label, kind string, include bool) string {
+// upsertProviderCSV reconciles one "alias:Label:kind[:access]" entry in the
+// login-page provider list (oidc.ParseProviders format): replaced when present,
+// appended when include and absent, dropped when !include.
+//
+// The fourth segment carries the ACCESS MODEL and is written only for an
+// elevation door, so a standing provider's entry is byte-identical to what this
+// function produced before elevation existed.
+func upsertProviderCSV(csv, alias, label, kind, access string, include bool) string {
 	var out []string
 	for _, raw := range strings.Split(csv, ",") {
 		raw = strings.TrimSpace(raw)
@@ -312,7 +318,11 @@ func upsertProviderCSV(csv, alias, label, kind string, include bool) string {
 		out = append(out, raw)
 	}
 	if include {
-		out = append(out, alias+":"+label+":"+kind)
+		entry := alias + ":" + label + ":" + kind
+		if strings.EqualFold(strings.TrimSpace(access), oidc.AccessElevation) {
+			entry += ":" + oidc.AccessElevation
+		}
+		out = append(out, entry)
 	}
 	return strings.Join(out, ",")
 }
@@ -446,7 +456,7 @@ func (s *server) handleSSOIdPDelete(w http.ResponseWriter, r *http.Request, alia
 	}
 	// Drop the login-page button for this alias.
 	cfg := s.oidcCfg.effective()
-	cfg.Providers = upsertProviderCSV(cfg.Providers, alias, idp.DisplayName, idp.Protocol, false)
+	cfg.Providers = upsertProviderCSV(cfg.Providers, alias, idp.DisplayName, idp.Protocol, idp.KindOrStanding(), false)
 	if _, err := s.oidcCfg.set(cfg); err != nil {
 		warnings = append(warnings, "provider list update failed: "+err.Error())
 	}
@@ -480,7 +490,7 @@ func (s *server) applySSOIdP(r *http.Request, idp ssoIdPConfig) ([]string, error
 		clientID = "netops"
 	}
 	secret, err := s.kc.EnsureClient(ctx, realm, clientID,
-		[]string{base + "/api/auth/sso/callback"}, []string{base})
+		s.ssoClientRedirectURIs(base), []string{base})
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +572,7 @@ func (s *server) wireSSORelyingParty(base, realm, clientID, secret string, idp s
 	if secret != "" {
 		cfg.ClientSecret = secret
 	}
-	cfg.Providers = upsertProviderCSV(cfg.Providers, idp.Alias, idp.DisplayName, idp.Protocol, idp.Enabled)
+	cfg.Providers = upsertProviderCSV(cfg.Providers, idp.Alias, idp.DisplayName, idp.Protocol, idp.KindOrStanding(), idp.Enabled)
 	if idp.Enabled {
 		cfg.Enabled = true
 	}
@@ -757,4 +767,461 @@ func latestCertExpiry(certs []string) (*time.Time, error) {
 		}
 	}
 	return latest, nil
+}
+
+// ---------------------------------------------------------------------------
+// Per-tenant SSO URLs (design §6.1/§6.3, tracker 276)
+// ---------------------------------------------------------------------------
+//
+// A connection bound to a tenant gets its OWN redirect URI:
+//
+//	/t/{tenant-slug}/sso/{alias}/callback        the URI handed to the IdP
+//	/org/{org_public_id}/sso/{alias}/callback    the rename-proof twin
+//	/t/{tenant-slug}/sso/{alias}/login           IdP-initiated entry (the tile URL)
+//
+// The URL is the BINDING. Before the ordinary callback runs, three things must
+// agree: the realm named by the URL, the realm in the signed candidate cookie
+// the browser got when it started this flow, and the realm the connection is
+// registered to. A token replayed on another tenant's callback URL, or a
+// provider that is not registered for the realm in the URL, is refused and
+// audited — no session is ever minted.
+//
+// Connections that predate this feature carry no tenant. They keep the generic
+// /api/auth/sso/callback exactly as before: an existing IdP registration must
+// never have to change for an upgrade.
+
+// handleTenantSSO serves the /t/… and /org/… SSO entry points. Public: it runs
+// before any session exists, and it authenticates nothing itself — it only
+// decides whether this URL may carry this provider's flow for this realm.
+func (s *server) handleTenantSSO(w http.ResponseWriter, r *http.Request) {
+	kind, ref, alias, leaf, ok := tenantlocator.ParseCallbackPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	// 1. The realm named by the URL. Unknown or not-active is a plain 404 —
+	//    identical for "no such tenant" and "that tenant is suspended".
+	cand, ok := tenantlocator.Resolve(s.locatorDir(), kind, ref)
+	if !ok {
+		s.auditSSOBindingRefusal(r, "unknown or inactive locator", alias, "")
+		http.NotFound(w, r)
+		return
+	}
+	// 2. The connection must be BOUND TO THIS REALM. A per-tenant URL exists
+	//    only for a tenant-bound connection: an alias nobody registered, one
+	//    that is platform-realm (those keep the generic callback), and one
+	//    belonging to another tenant are all refused here, identically.
+	bound, isBound := s.connectionLocator(alias)
+	if !isBound || !cand.Reaches(bound.TenantID, bound.OrgID) {
+		s.auditSSOBindingRefusal(r, "provider not registered for this realm", alias, cand.TenantID)
+		s.ssoLocatorRefuse(w, r, cand,
+			"“"+alias+"” is not an identity provider for "+cand.DisplayName+". Ask your administrator for this organization's sign-in link.")
+		return
+	}
+	switch leaf {
+	case "login":
+		// IdP-initiated / bookmark entry: pin the realm, then run the ordinary
+		// SP-initiated flow through this provider. The browser never gets to
+		// name the provider — the URL the IdP admin registered does.
+		s.setLocatorCookie(w, r, cand)
+		q := r.URL.Query()
+		q.Set("idp", alias)
+		r2 := r.Clone(r.Context())
+		r2.URL = &url.URL{Path: r.URL.Path, RawQuery: q.Encode()}
+		s.handleSSOLogin(w, r2)
+	default: // "callback"
+		// 3. The browser must have STARTED this flow in this realm. The signed
+		//    candidate cookie is the proof; a token delivered to a browser that
+		//    was never here, or that was here for a DIFFERENT tenant, dies now.
+		held, ok := s.locatorCandidate(r)
+		if !ok || held.Kind != cand.Kind || held.TenantID != cand.TenantID || held.OrgID != cand.OrgID {
+			s.auditSSOBindingRefusal(r, "callback realm does not match the realm this browser signed in from", alias, cand.TenantID)
+			s.ssoLocatorRefuse(w, r, cand,
+				"This sign-in did not start at "+cand.DisplayName+". Open your organization's sign-in link and try again.")
+			return
+		}
+		s.handleSSOCallback(w, r)
+	}
+}
+
+// ssoLocatorRefuse sends the browser back to the realm's OWN sign-in page with
+// an honest, named message. It never says which other tenant a provider belongs
+// to — the caller is told what is wrong here, not what exists elsewhere.
+func (s *server) ssoLocatorRefuse(w http.ResponseWriter, r *http.Request, c tenantlocator.Candidate, msg string) {
+	frag := url.Values{}
+	frag.Set("sso_error", msg)
+	http.Redirect(w, r, c.Path()+"#"+frag.Encode(), http.StatusFound)
+}
+
+// auditSSOBindingRefusal records a refused per-tenant callback. Every refusal is
+// evidence: an attempt to replay a token onto another tenant's URL is exactly
+// the event an investigator needs to see (§10 — no silent failures).
+func (s *server) auditSSOBindingRefusal(r *http.Request, reason, alias, tenantID string) {
+	logWarn("auth", "per-tenant sso callback refused", map[string]any{
+		"reason": reason, "idp": alias, "path": r.URL.Path,
+	})
+	if s.audit == nil {
+		return
+	}
+	s.audit.Record(AuditEvent{
+		Actor:    "anonymous",
+		Tenant:   tenantID,
+		Method:   r.Method,
+		Path:     r.URL.Path,
+		Decision: "deny",
+		Remote:   auditClientIP(r),
+		Detail:   map[string]any{"action": "sso.callback.binding_refused", "reason": reason, "idp": alias},
+	})
+}
+
+// ssoLoginRedirectURI is the redirect_uri handed to the IdP when a login STARTS.
+// A tenant-bound connection gets its own per-tenant callback URL, derived from
+// the CONNECTION's tenant (not from the browser), so the value is deterministic
+// and matches what the provider form told the IdP team to register. Everything
+// else keeps the generic callback, unchanged.
+func (s *server) ssoLoginRedirectURI(r *http.Request, p *oidcProvider, alias string) string {
+	if c, ok := s.connectionLocator(alias); ok {
+		return ssoPublicBase(r) + c.CallbackPath(alias)
+	}
+	return p.CallbackURL(r)
+}
+
+// ssoCallbackRedirectURI is the same value re-derived at the callback, where the
+// code exchange must echo the exact redirect_uri the authorization used. It is
+// read from the REQUEST PATH: the IdP just sent the browser to that URL, and the
+// binding checks above have already proved the path names the right realm.
+func (s *server) ssoCallbackRedirectURI(r *http.Request, p *oidcProvider) string {
+	if _, _, _, leaf, ok := tenantlocator.ParseCallbackPath(r.URL.Path); ok && leaf == "callback" {
+		return ssoPublicBase(r) + r.URL.Path
+	}
+	return p.CallbackURL(r)
+}
+
+// ssoPostLoginPath is where the SPA is dropped after a per-tenant flow: back at
+// the tenant's OWN sign-in URL, so a deep link into /t/{slug}/#/… returns to
+// that path (the SPA restores the hash it stashed). Generic flows are unchanged.
+func (s *server) ssoPostLoginPath(r *http.Request, p *oidcProvider) string {
+	if kind, ref, _, leaf, ok := tenantlocator.ParseCallbackPath(r.URL.Path); ok && leaf == "callback" {
+		if c, ok := tenantlocator.Resolve(s.locatorDir(), kind, ref); ok {
+			return c.Path()
+		}
+	}
+	return p.PostLoginURL()
+}
+
+// connectionLocator returns the canonical locator of the tenant a connection is
+// bound to. ok=false for an unbound (platform-realm) connection — those keep the
+// generic callback URL, which is what makes this change upgrade-safe.
+func (s *server) connectionLocator(alias string) (tenantlocator.Candidate, bool) {
+	tid, _, ok := s.providerRealm(alias)
+	if !ok || tid == "" {
+		return tenantlocator.Candidate{}, false
+	}
+	return tenantlocator.ResolveID(s.locatorDir(), tenantlocator.KindTenant, tid)
+}
+
+// ssoIDPAllowedForLocator gates the generic /api/auth/sso/login when the browser
+// is carrying a candidate: a tenant may only start a flow through a provider its
+// own realm reaches. Without a candidate nothing changes.
+func (s *server) ssoIDPAllowedForLocator(r *http.Request, alias string) bool {
+	c, ok := s.locatorCandidate(r)
+	if !ok {
+		return true
+	}
+	return s.providerVisible(&c, alias)
+}
+
+// ssoClientRedirectURIs is the exact set of redirect URIs the broker client may
+// return to. The generic callback is always present (unbound connections, and
+// every registration that predates per-tenant URLs). Each TENANT-BOUND
+// connection adds its own two: the tenant form, which is the URI handed to the
+// IdP, and the org form, which is the same door under the immutable org id so a
+// slug rename does not strand a customer.
+//
+// Enumerated explicitly rather than wildcarded: an open redirect_uri pattern on
+// the broker client is the classic way an authorization code is delivered
+// somewhere it should never go.
+func (s *server) ssoClientRedirectURIs(base string) []string {
+	out := []string{base + "/api/auth/sso/callback"}
+	if s.ssoIdPCfg == nil {
+		return out
+	}
+	seen := map[string]bool{out[0]: true}
+	for _, reg := range s.ssoIdPCfg.List() {
+		c, ok := s.connectionLocator(reg.Alias)
+		if !ok {
+			continue
+		}
+		org := tenantlocator.Candidate{Kind: tenantlocator.KindOrg, OrgID: c.OrgID}
+		for _, u := range []string{base + c.CallbackPath(reg.Alias), base + org.CallbackPath(reg.Alias)} {
+			if !seen[u] {
+				seen[u] = true
+				out = append(out, u)
+			}
+		}
+	}
+	return out
+}
+
+// ssoProvisionTenant decides which tenant a NEWLY provisioned federated account
+// belongs to. For a tenant-bound connection that is the tenant the OPERATOR
+// bound the connection to, read from the callback URL the binding checks have
+// already validated. Every other flow keeps the global OIDC default, unchanged.
+//
+// It never MOVES anyone: UpsertFederated leaves an existing federated account's
+// tenant untouched, so the design's "a claim never moves a tenant" invariant
+// holds — and this is not a claim at all, it is the operator's registration.
+func (s *server) ssoProvisionTenant(r *http.Request, p *oidcProvider) string {
+	if _, _, alias, leaf, ok := tenantlocator.ParseCallbackPath(r.URL.Path); ok && leaf == "callback" {
+		if tid, _, ok := s.providerRealm(alias); ok && tid != "" {
+			return tid
+		}
+	}
+	return p.DefaultTenant()
+}
+
+// ---------------------------------------------------------------------------
+// Tenant-managed identity providers (CLAUDE.md §3a, design §6.3, tracker 276)
+// ---------------------------------------------------------------------------
+//
+// /api/auth/sso/idp is PLATFORM-GLOBAL plumbing and stays requirePlatformAdmin:
+// it can create a connection in ANY realm, including the unbound platform-realm
+// ones every tenant sees. This surface is the tenant-admin half of the same
+// store: a tenant administrator manages the connections OF THEIR OWN TENANT and
+// nothing else.
+//
+// The §3a rules, all enforced here:
+//   - the owning tenant is stamped from the TOKEN, never from the payload;
+//   - a list returns only the caller's own connections;
+//   - a connection belonging to another tenant answers 404 on get/put/delete —
+//     never 403, which would confirm the alias exists;
+//   - an `as_tenant` selector can only ever narrow (principalTenant already
+//     enforces that), and a non-owner's is ignored outright;
+//   - an UNBOUND (platform-realm) connection is invisible and immutable here.
+
+// tenantIdPBody is the wire type for a tenant-managed connection. It has NO
+// tenant field ON PURPOSE: a tenant a caller could name is a tenant a caller
+// could get wrong, so the binding is inexpressible in the request.
+type tenantIdPBody struct {
+	DisplayName    string               `json:"display_name"`
+	Protocol       string               `json:"protocol"`
+	Enabled        bool                 `json:"enabled"`
+	MetadataURL    string               `json:"metadata_url,omitempty"`
+	MetadataXML    string               `json:"metadata_xml,omitempty"`
+	SigningCertPEM string               `json:"signing_cert_pem,omitempty"`
+	DiscoveryURL   string               `json:"discovery_url,omitempty"`
+	ClientID       string               `json:"client_id,omitempty"`
+	ClientSecret   string               `json:"client_secret,omitempty"`
+	GroupsAttr     string               `json:"groups_attr,omitempty"`
+	AttrMappings   []ssoidp.AttrMapping `json:"attr_mappings,omitempty"`
+	RoleMappings   []ssoidp.RoleMapping `json:"role_mappings,omitempty"`
+}
+
+// tenantIdPScope resolves the realm a tenant-admin request acts in: the caller's
+// own tenant, taken from the token. A cross-tenant caller (the platform owner
+// with no "view as tenant" selection) has no single realm to act in — reads
+// span every bound connection, and a WRITE is refused until they pick a tenant,
+// because silently choosing one for them is how a connection lands in the wrong
+// customer's realm.
+func (s *server) tenantIdPScope(claims jwtClaims) (tenantID string, cross bool) {
+	return principalTenant(claims)
+}
+
+// tenantOwnsIdP reports whether a stored connection belongs to the caller's
+// realm. An UNBOUND connection belongs to the platform realm and is owned by
+// nobody here, so it is invisible on this surface at every scope.
+func (s *server) tenantOwnsIdP(reg ssoidp.Config, tenantID string, cross bool) bool {
+	realm := reg.Realm()
+	if realm == "" {
+		return false
+	}
+	if cross {
+		return true
+	}
+	return realm == strings.ToLower(strings.TrimSpace(tenantID))
+}
+
+// handleTenantIdPList: GET /api/auth/sso/tenant-idp — this tenant's connections,
+// each with the sign-in and callback URLs its IdP team needs.
+func (s *server) handleTenantIdPList(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tenantID, cross := s.tenantIdPScope(claims)
+	out := []map[string]any{}
+	if s.ssoIdPCfg != nil {
+		for _, reg := range s.ssoIdPCfg.List() {
+			if s.tenantOwnsIdP(reg, tenantID, cross) {
+				out = append(out, s.tenantIdPView(r, reg))
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"idps": out, "sign_in_url": s.tenantSignInURL(r, tenantID, cross)})
+}
+
+// tenantIdPView is the redacted record plus the three URLs an IdP team pastes
+// into Okta/Entra. The client secret never appears — Public() replaces it with a
+// boolean, exactly as on the platform surface.
+func (s *server) tenantIdPView(r *http.Request, reg ssoidp.Config) map[string]any {
+	v := map[string]any{"idp": reg.Public()}
+	if c, ok := s.connectionLocator(reg.Alias); ok {
+		base := ssoPublicBase(r)
+		org := tenantlocator.Candidate{Kind: tenantlocator.KindOrg, OrgID: c.OrgID}
+		v["sign_in_url"] = base + c.Path()
+		v["callback_url"] = base + c.CallbackPath(reg.Alias)
+		v["callback_url_immutable"] = base + org.CallbackPath(reg.Alias)
+		v["idp_initiated_url"] = base + c.LoginPath(reg.Alias)
+	}
+	return v
+}
+
+// tenantSignInURL is the customer-facing sign-in link for the caller's realm.
+func (s *server) tenantSignInURL(r *http.Request, tenantID string, cross bool) string {
+	if cross || strings.TrimSpace(tenantID) == "" {
+		return ""
+	}
+	c, ok := tenantlocator.ResolveID(s.locatorDir(), tenantlocator.KindTenant, tenantID)
+	if !ok {
+		return ""
+	}
+	return ssoPublicBase(r) + c.Path()
+}
+
+// handleTenantIdPItem routes /api/auth/sso/tenant-idp/{alias} (GET/PUT/DELETE).
+func (s *server) handleTenantIdPItem(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	alias := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/auth/sso/tenant-idp/")))
+	if alias == "" || strings.Contains(alias, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	tenantID, cross := s.tenantIdPScope(claims)
+	switch r.Method {
+	case http.MethodGet:
+		reg, found := s.tenantIdPOwned(alias, tenantID, cross)
+		if !found {
+			http.NotFound(w, r) // unknown and someone-else's are the SAME answer
+			return
+		}
+		writeJSON(w, http.StatusOK, s.tenantIdPView(r, reg))
+	case http.MethodPut:
+		s.handleTenantIdPPut(w, r, claims, alias)
+	case http.MethodDelete:
+		s.handleTenantIdPDelete(w, r, alias, tenantID, cross)
+	default:
+		w.Header().Set("Allow", "GET, PUT, DELETE")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// tenantIdPOwned fetches a connection only if the caller's realm owns it.
+func (s *server) tenantIdPOwned(alias, tenantID string, cross bool) (ssoidp.Config, bool) {
+	if s.ssoIdPCfg == nil {
+		return ssoidp.Config{}, false
+	}
+	reg, found := s.ssoIdPCfg.Get(alias)
+	if !found || !s.tenantOwnsIdP(reg, tenantID, cross) {
+		return ssoidp.Config{}, false
+	}
+	return reg, true
+}
+
+// handleTenantIdPPut creates or edits a connection in the caller's own realm.
+func (s *server) handleTenantIdPPut(w http.ResponseWriter, r *http.Request, claims jwtClaims, alias string) {
+	r.Body = http.MaxBytesReader(w, r.Body, 512<<10) // metadata cap + JSON overhead
+	tenantID, cross := s.tenantIdPScope(claims)
+	if cross {
+		writeError(w, http.StatusBadRequest, errors.New("choose a tenant before adding an identity provider — a connection belongs to exactly one tenant"))
+		return
+	}
+	if strings.TrimSpace(tenantID) == "" || tenantID == TenantGlobal {
+		// The global realm IS the platform realm; its connections are platform
+		// plumbing and stay on the platform-admin surface (§3a rule 3).
+		writeError(w, http.StatusForbidden, errors.New("platform-realm identity providers are managed by a platform administrator"))
+		return
+	}
+	if s.tenants != nil {
+		if t, ok := s.tenants.Get(tenantID); !ok || t.EffectiveStatus() != TenantStatusActive {
+			writeError(w, http.StatusForbidden, errors.New("this tenant cannot own an identity provider"))
+			return
+		}
+	}
+	var in tenantIdPBody
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	// An alias is a Keycloak-wide path segment: it can name only ONE connection
+	// on the whole broker. Taking one another tenant already holds answers 404,
+	// the same as editing theirs would — the caller learns nothing either way.
+	if existing, found := s.ssoIdPCfg.Get(alias); found && !s.tenantOwnsIdP(existing, tenantID, cross) {
+		http.NotFound(w, r)
+		return
+	}
+	cfg := ssoidp.Config{
+		Alias: alias, DisplayName: in.DisplayName, Protocol: in.Protocol, Enabled: in.Enabled,
+		MetadataURL: in.MetadataURL, MetadataXML: in.MetadataXML, SigningCertPEM: in.SigningCertPEM,
+		DiscoveryURL: in.DiscoveryURL, ClientID: in.ClientID, ClientSecret: in.ClientSecret,
+		GroupsAttr: in.GroupsAttr, AttrMappings: in.AttrMappings, RoleMappings: in.RoleMappings,
+		TenantID: tenantID, // stamped from the token — the body cannot say otherwise
+	}
+	// LICENCE-BEGIN — SAML is in the LOCKED Enterprise set; OIDC is core. Gates
+	// CONFIGURING a SAML connection, never signing in with one (see the platform
+	// handler for the full reasoning).
+	if strings.EqualFold(strings.TrimSpace(cfg.Protocol), "saml") {
+		if err := entitlement.Require(s.entitlements, entitlement.FeatureSAML); err != nil {
+			entitlement.WriteRefusal(w, err)
+			return
+		}
+	}
+	// LICENCE-END
+	out, err := s.ssoIdPCfg.Set(cfg)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	warnings, err := s.applySSOIdP(r, out)
+	s.recordIdentityAudit(r, claims, "sso.tenant_idp.save", map[string]any{
+		"idp": out.Alias, "protocol": out.Protocol, "enabled": out.Enabled, "tenant_id": out.TenantID,
+	})
+	logInfo("auth", "tenant sso idp saved", map[string]any{
+		"alias": out.Alias, "protocol": out.Protocol, "enabled": out.Enabled, "applied": err == nil,
+	})
+	view := s.tenantIdPView(r, out)
+	if err != nil {
+		warnings = append(warnings, "desired state saved but NOT applied to Keycloak — it will be re-applied on the next successful save")
+		view["applied"] = false
+		view["warnings"] = warnings
+		view["error"] = err.Error()
+		writeJSON(w, http.StatusBadGateway, view)
+		return
+	}
+	view["applied"] = true
+	view["warnings"] = warnings
+	writeJSON(w, http.StatusOK, view)
+}
+
+// handleTenantIdPDelete removes one of the caller's own connections.
+func (s *server) handleTenantIdPDelete(w http.ResponseWriter, r *http.Request, alias, tenantID string, cross bool) {
+	reg, found := s.tenantIdPOwned(alias, tenantID, cross)
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	if claims, ok := userFrom(r.Context()); ok {
+		s.recordIdentityAudit(r, claims, "sso.tenant_idp.delete", map[string]any{"idp": alias, "tenant_id": reg.Realm()})
+	}
+	// Ownership is settled; the removal itself (Keycloak, the store, the
+	// login-page button) is the SAME operation the platform surface performs —
+	// delegate rather than keep a second copy that can drift out of step.
+	s.handleSSOIdPDelete(w, r, alias)
 }

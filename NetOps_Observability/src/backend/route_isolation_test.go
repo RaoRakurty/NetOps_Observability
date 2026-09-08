@@ -198,12 +198,37 @@ var routeIsolationLedger = map[string]string{
 	"/api/incidents/{id}/tac/collect":  "scoped",
 	"/api/incidents/{id}/tac/bundle":   "scoped",
 	"/api/incidents/{id}/tac/case":     "scoped",
+	// The ONE ACTION (owner, 2026-09-06). Same subject, same resolution, same
+	// isolation: {id} resolves through the caller's OWN incident/correlation
+	// scope and 404s anything else, the device through the principal-scoped
+	// inventory, and the escalation's tenant is stamped from those resolved
+	// records. `escalate` additionally reads the caller's own TAC ROUTING record
+	// (contact, route, contracts) through TACRoutingStore, whose every read is
+	// scoped by the caller's tenant and whose cross-tenant target answers
+	// ErrTenantNotFound → 404.
+	"/api/incidents/{id}/tac/escalate":         "scoped",
+	"/api/incidents/{id}/tac/escalate/prepare": "scoped",
+	"/api/incidents/{id}/tac/escalate/confirm": "scoped",
+	// The case's own status refresh. The case link is keyed on (tenant,
+	// incident) in an in-memory tracker with no cross-tenant listing at all, so
+	// another tenant's incident id simply has no case under this caller's key —
+	// the same 404 an incident that was never escalated gets.
+	"/api/incidents/{id}/tac/case/refresh": "scoped",
 	// The Iris → Knowledge coverage view is version-pinned REFERENCE DATA: the
 	// issue-class taxonomy and the per-dialect command plans, identical for
 	// every tenant, naming no device, no incident and no tenant. It reads no
 	// store. Same classification, for the same reason, as the diagnostics
 	// analyze/export routes.
 	"/api/troubleshoot/tac/knowledge": "globalRef",
+	// The tenant's TAC ROUTING record: who Correlix names on a case, which
+	// connector carries which vendor, which capture runs on which platform, and
+	// the SUPPORT CONTRACT data a vendor entitles on. All of that is one
+	// customer's own commercial relationship, so it is per-tenant DATA and not
+	// platform-global plumbing: the gate is requirePerm + the store's own tenant
+	// filter, a non-cross caller's `as_tenant` is ignored outright, and a
+	// cross-tenant target answers ErrTenantNotFound → 404 rather than confirming
+	// the row exists. Proven by tac_routing_isolation_test.go.
+	"/api/tac/routing": "scoped",
 	// TAC command templates (tracker 250). The collection and the item routes
 	// are per-tenant DATA: the command sets a tenant saved. Isolation is in the
 	// STORE (a tenant-keyed bucket / PG `tac_templates` with the tenant_iso
@@ -692,9 +717,23 @@ var routeIsolationLedger = map[string]string{
 	"/api/auth/oidc/config":   "platform",
 	"/api/auth/sso/idp":       "platform", // GUI-configurable SSO IdPs (Keycloak reconcile); requirePlatformAdmin
 	"/api/auth/sso/idp/":      "platform", // {alias} CRUD + {alias}/test probe; requirePlatformAdmin
-	"/api/auth/sso/config":    "platform",
-	"/api/auth/token-policy":  "platform",
-	"/api/copilot/config":     "platform",
+	// Per-tenant sign-in and SSO URLs (design §6.1, tracker 276).
+	// The locator resolver runs before any session exists: it turns /t/{slug} or
+	// /org/{org_id} into a CANDIDATE realm and arms a signed cookie. It grants
+	// nothing and returns no tenant data — an unknown locator and a suspended
+	// one get the identical empty answer.
+	"/api/auth/locator": "public",
+	// The tenant-admin half of the connection store: administration:admin plus a
+	// tenant filter taken from the token (tenantIdPScope/tenantOwnsIdP), so a
+	// tenant admin sees and edits only its OWN realm's identity providers and a
+	// foreign alias answers 404. Platform-realm connections stay on
+	// /api/auth/sso/idp behind requirePlatformAdmin. Isolation proven by
+	// tenant_idp_isolation_test.go.
+	"/api/auth/sso/tenant-idp":  "adminScoped",
+	"/api/auth/sso/tenant-idp/": "adminScoped",
+	"/api/auth/sso/config":      "platform",
+	"/api/auth/token-policy":    "platform",
+	"/api/copilot/config":       "platform",
 	// Per-tenant ingestion service surface (Wave 1 #2): the cloud-ingest poller's
 	// platform credential (ingest:cloud API key in the global realm). It fans one
 	// poller across EVERY tenant's connectors, so it is platform plumbing by
@@ -835,7 +874,12 @@ var routeIsolationLedger = map[string]string{
 	"/api/auth/mfa/disable":     "selfScoped",
 	"/api/auth/mfa/setup":       "selfScoped",
 	"/api/auth/mfa/status":      "selfScoped",
-	"/api/scopes":               "selfScoped",
+	// Elevated access (elevation identity providers): the caller's OWN grant —
+	// GET renders the account-menu countdown, DELETE steps down. The principal
+	// is the token subject and is never read from the request, so there is no
+	// other tenant's row to reach.
+	"/api/auth/elevation": "selfScoped",
+	"/api/scopes":         "selfScoped",
 
 	// ── capability-link / token-authenticated (not principal-scoped) ──
 	"/api/exports/":              "token",

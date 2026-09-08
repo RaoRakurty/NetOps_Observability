@@ -49,6 +49,26 @@ const (
 // ConditionBreakGlass marks a binding as an emergency-access grant.
 const ConditionBreakGlass = "break_glass"
 
+// Elevation-provider condition keys (the "second IdP for JIT access" pattern,
+// 2026-09-07). An ELEVATION binding is minted by a successful sign-in through a
+// provider whose kind is `elevation`; it grants nothing standing, expires on its
+// own, and names where it came from:
+//
+//	elevation           bool   — this binding IS an elevated-access grant
+//	elevation_provider  string — the IdP alias that minted it (also GrantedBy)
+//	elevation_sid       string — the IdP session id (`sid`) when the token carried
+//	                             one, so an upstream logout can be correlated
+//	elevation_tenant    string — the tenant the grant was made IN, stamped from the
+//	                             ACCOUNT (never from a claim: a claim never moves a
+//	                             tenant). The gate compares it to the caller's own
+//	                             tenant, so a grant can never be spent elsewhere.
+const (
+	ConditionElevation         = "elevation"
+	ConditionElevationProvider = "elevation_provider"
+	ConditionElevationSID      = "elevation_sid"
+	ConditionElevationTenant   = "elevation_tenant"
+)
+
 // RoleBinding grants (or denies) a role to a principal at a scope. Optional
 // condition/time-bounds support tag filters and break-glass sessions (§7.1).
 type RoleBinding struct {
@@ -85,6 +105,34 @@ func (b RoleBinding) IsBreakGlass() bool {
 	}
 	v, ok := b.Condition[ConditionBreakGlass].(bool)
 	return ok && v
+}
+
+// IsElevation reports whether a binding is an elevation-provider grant. The
+// condition survives a JSON round-trip through the kv store, where a Go bool
+// comes back as a bool but a hand-written record may carry the string "true";
+// both are honoured, anything else is NOT an elevation (fail-closed).
+func (b RoleBinding) IsElevation() bool {
+	if b.Condition == nil {
+		return false
+	}
+	switch v := b.Condition[ConditionElevation].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+// ConditionString reads a string-valued condition key ("" when absent or of
+// another shape).
+func (b RoleBinding) ConditionString(key string) string {
+	if b.Condition == nil {
+		return ""
+	}
+	v, _ := b.Condition[key].(string)
+	return strings.TrimSpace(v)
 }
 
 // BindingStore is the file-backed role_binding registry (role_bindings.json).

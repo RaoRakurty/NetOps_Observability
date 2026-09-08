@@ -14,7 +14,7 @@
 // Plain React + native inputs; talks to /api/auth/sso/idp (platform-admin).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, SsoIdP, SsoIdpAttrMapping, SsoIdpRoleMapping, SsoIdpTestResult } from "../services/api";
+import { api, SsoIdP, SsoIdpAttrMapping, SsoIdpRoleMapping, SsoIdpTestResult, TenantSsoIdpRow } from "../services/api";
 import { certExpiry, parseCertNotAfter } from "../lib/x509";
 import AskIris from "../components/AskIris";
 
@@ -36,7 +36,24 @@ export function blankIdp(protocol: "saml" | "oidc"): SsoIdP {
     groups_attr: "groups",
     attr_mappings: DEFAULT_ATTR_MAPPINGS.map((m) => ({ ...m })),
     role_mappings: [],
+    kind: "standing",
+    elevation: { max_minutes: ELEVATION_MAX_DEFAULT },
   };
+}
+
+// The provider ceiling on an elevated grant. Mirrors internal/ssoidp: a default
+// of one hour and a hard ceiling of eight — past that a "time-bound" grant is
+// standing access wearing a timer.
+export const ELEVATION_MAX_DEFAULT = 60;
+export const ELEVATION_MAX_CEILING = 8 * 60;
+
+// An elevation connection is only usable if it can end. The ceiling is the one
+// field that must be sane before Save, which is why it is checked here and not
+// left to a server error the operator reads after the fact.
+export function elevationIsValid(idp: SsoIdP): boolean {
+  if (idp.kind !== "elevation") return true;
+  const m = idp.elevation?.max_minutes ?? 0;
+  return m >= 1 && m <= ELEVATION_MAX_CEILING;
 }
 
 // moveRow — reorder an ordered mapping list by one position (up/down buttons;
@@ -68,10 +85,31 @@ export function spValues(origin: string, realm: string, alias: string, protocol:
   ];
 }
 
+// tenantUrlValues — the CORRELIX-side URLs for a connection that is bound to a
+// tenant (tracker 276). These are the ones an IdP team registers as the redirect
+// URI and the IdP-initiated tile URL, and they are what makes the connection
+// visible on that tenant's sign-in page and nowhere else. Absent for a
+// platform-realm connection, which keeps the generic /api/auth/sso/callback.
+//
+// The immutable /org/ form is offered alongside the /t/{slug} one because a slug
+// is a display alias: renaming the tenant changes the /t/ URL, and an IdP
+// registered against the /org/ form survives it.
+export function tenantUrlValues(row: TenantSsoIdpRow | null): { label: string; value: string }[] {
+  if (!row?.callback_url) return [];
+  const out = [
+    { label: "Redirect URI for this tenant", value: row.callback_url },
+    { label: "Tenant sign-in URL", value: row.sign_in_url ?? "" },
+    { label: "IdP-initiated tile URL", value: row.idp_initiated_url ?? "" },
+    { label: "Redirect URI (rename-proof)", value: row.callback_url_immutable ?? "" },
+  ];
+  return out.filter((v) => v.value !== "");
+}
+
 // Editor-side validity: what must be filled before Save makes sense.
 export function idpIsValid(idp: SsoIdP): boolean {
   if (!/^[a-z0-9][a-z0-9_-]*$/i.test(idp.alias)) return false;
   if (!idp.display_name.trim()) return false;
+  if (!elevationIsValid(idp)) return false;
   if (idp.protocol === "saml") return !!(idp.metadata_url?.trim() || idp.metadata_xml?.trim());
   return !!(idp.discovery_url?.trim() && idp.client_id?.trim());
 }
@@ -280,6 +318,15 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
   const [msg, setMsg] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [applied, setApplied] = useState(true);
+  // The per-tenant URLs (tracker 276) come from the server, which knows the
+  // tenant this connection is bound to; nothing here derives a tenant.
+  const [tenantRow, setTenantRow] = useState<TenantSsoIdpRow | null>(null);
+  useEffect(() => {
+    let live = true;
+    if (isNew || !initial.alias) { setTenantRow(null); return; }
+    api.tenantSsoIdp(initial.alias).then((r) => { if (live) setTenantRow(r); }).catch(() => { if (live) setTenantRow(null); });
+    return () => { live = false; };
+  }, [isNew, initial.alias]);
   const [test, setTest] = useState<SsoIdpTestResult | null>(null);
   const set = (patch: Partial<SsoIdP>) => setIdp((cur) => ({ ...cur, ...patch }));
 
@@ -353,7 +400,65 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
         </label>
         <Field label="Groups attribute / claim" value={idp.groups_attr} onChange={(v) => set({ groups_attr: v })} placeholder="groups"
           hint="The attribute or claim carrying group membership." />
+        <label style={labelStyle}>
+          Access model
+          <select
+            aria-label="Access model"
+            value={idp.kind ?? "standing"}
+            onChange={(e) => set({
+              kind: e.target.value as "standing" | "elevation",
+              elevation: { max_minutes: ELEVATION_MAX_DEFAULT, ...(idp.elevation ?? {}) },
+            })}
+            style={inputStyle}
+          >
+            <option value="standing">Standing — signs users in</option>
+            <option value="elevation">Elevation — grants time-bound access</option>
+          </select>
+          <span className="adm-line">
+            An elevation provider creates no account and changes no role.
+            <AskIris topic="sso.elevation-provider" label="elevation provider" />
+          </span>
+        </label>
       </div>
+
+      {idp.kind === "elevation" && (
+        <div style={{ marginTop: 12 }}>
+          <h4 style={{ margin: "0 0 6px" }}>Elevated access</h4>
+          <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+            <Field
+              label="Maximum duration (minutes)"
+              type="number"
+              value={String(idp.elevation?.max_minutes ?? ELEVATION_MAX_DEFAULT)}
+              onChange={(v) => set({ elevation: { ...(idp.elevation ?? {}), max_minutes: Number(v) || 0 } })}
+              hint={`1 to ${ELEVATION_MAX_CEILING}. A claim can shorten this, never extend it.`}
+            />
+            <Field
+              label="Duration claim"
+              value={idp.elevation?.ttl_claim ?? ""}
+              onChange={(v) => set({ elevation: { ...(idp.elevation ?? {}), ttl_claim: v } })}
+              placeholder="access_expires_at"
+              hint="Epoch seconds, RFC3339, or a count of minutes. Blank uses the maximum."
+            />
+            <Field
+              label="Reason claim"
+              value={idp.elevation?.reason_claim ?? ""}
+              onChange={(v) => set({ elevation: { ...(idp.elevation ?? {}), reason_claim: v } })}
+              placeholder="change_ticket"
+              hint="The change or ticket id recorded on the grant."
+            />
+            <Field
+              label="Resource claim"
+              value={idp.elevation?.scope_claim ?? ""}
+              onChange={(v) => set({ elevation: { ...(idp.elevation ?? {}), scope_claim: v } })}
+              placeholder="target_device"
+              hint="Confines the grant to one device. Blank scopes it to the tenant."
+            />
+          </div>
+          {!elevationIsValid(idp) && (
+            <p className="result err">✗ Maximum duration must be between 1 and {ELEVATION_MAX_CEILING} minutes.</p>
+          )}
+        </div>
+      )}
 
       {idp.protocol === "saml" ? (
         <div style={{ marginTop: 12 }}>
@@ -397,6 +502,19 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
           {spValues(window.location.origin, realm, idp.alias, idp.protocol).map((v) => <CopyValue key={v.label} label={v.label} value={v.value} />)}
         </div>
       </div>
+
+      {tenantUrlValues(tenantRow).length > 0 && (
+        <div style={{ marginTop: 12, padding: "8px 10px", border: "1px solid var(--panel-border)", borderRadius: 6 }}>
+          <h4 style={{ margin: "0 0 6px" }}>This tenant&rsquo;s sign-in URLs</h4>
+          <p className="adm-line">
+            This provider is bound to one tenant. It appears only on that tenant&rsquo;s sign-in
+            page, and a sign-in that arrives on any other tenant&rsquo;s URL is refused.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {tenantUrlValues(tenantRow).map((v) => <CopyValue key={v.label} label={v.label} value={v.value} />)}
+          </div>
+        </div>
+      )}
 
       <div style={{ marginTop: 12 }}>
         <h4 style={{ margin: "0 0 6px" }}>User attributes</h4>
@@ -472,7 +590,7 @@ export function SsoIdpPanel({ roleIds, defaultRole }: { roleIds: string[]; defau
       ) : (
         <table className="map-table">
           <thead>
-            <tr><th>Alias</th><th>Name</th><th>Protocol</th><th>Status</th><th aria-label="actions" /></tr>
+            <tr><th>Alias</th><th>Name</th><th>Protocol</th><th>Access</th><th>Status</th><th aria-label="actions" /></tr>
           </thead>
           <tbody>
             {idps.map((p) => (
@@ -480,6 +598,7 @@ export function SsoIdpPanel({ roleIds, defaultRole }: { roleIds: string[]; defau
                 <td className="mono">{p.alias}</td>
                 <td>{p.display_name}</td>
                 <td>{p.protocol === "saml" ? "SAML 2.0" : "OIDC"}</td>
+                <td>{p.kind === "elevation" ? <span className="badge accent-badge">Elevation</span> : "Standing"}</td>
                 <td><span className={`badge ${p.enabled ? "good" : "accent-badge"}`}>{p.enabled ? "Enabled" : "Disabled"}</span></td>
                 <td><button type="button" onClick={() => setEditing({ idp: p, isNew: false })}>Edit</button></td>
               </tr>
