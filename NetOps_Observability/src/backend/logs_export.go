@@ -81,6 +81,16 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
 		return
 	}
+	// The SAME refusal logsScope applies to the interactive search (review
+	// 2026-09-08, H9). This handler builds its own spec instead of resolving
+	// logsScope, so the boundary has to be restated here or the export door
+	// stays open on data the search door now refuses. See logsScope for the
+	// gate-choice reasoning: findings are read at /api/security/findings, which
+	// checks infrastructure:read AND the licence feature.
+	if oslog.IsSecFindingsSignal(q.Get("signal")) {
+		writeError(w, http.StatusForbidden, logsForbiddenErr(q.Get("signal")))
+		return
+	}
 
 	// Decide sync vs async by the matched count (cheap _count), unless forced.
 	mode := strings.ToLower(q.Get("mode"))

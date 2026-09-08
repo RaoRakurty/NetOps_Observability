@@ -18,6 +18,12 @@ import (
 	"time"
 )
 
+// SecFindingsIndexBase is the security-findings index family. It is exported so
+// the log-search chokepoint can refuse this family by the base a signal RESOLVES
+// TO rather than by a list of signal spellings: a new alias added to IndexBase
+// below is then refused automatically instead of opening a new door.
+const SecFindingsIndexBase = "netops-secfindings"
+
 func IndexBase(signal string) string {
 	switch strings.ToLower(signal) {
 	case "applogs", "app":
@@ -37,11 +43,25 @@ func IndexBase(signal string) string {
 		// the durable, append-only verdict store the router writes from the
 		// netops.security topic into netops-secfindings-{tenant}-{date}. It is
 		// deliberately NOT part of the "" / "all" log search (it is verdict data,
-		// not log lines) and is reachable only through this explicit signal.
-		return "netops-secfindings"
+		// not log lines): the log-search chokepoint REFUSES this family outright
+		// (review 2026-09-08, H9 — the free-form `signal` parameter used to reach
+		// it with no permission and no licence check). The base is returned here
+		// so secapi, which owns the gated read, can name the pattern.
+		return SecFindingsIndexBase
 	default:
 		return "netops"
 	}
+}
+
+// IsSecFindingsSignal reports whether a caller-supplied log-search `signal`
+// names the security-findings family, whatever its spelling.
+//
+// It asks IndexBase rather than comparing against a list of names, so an alias
+// added there is covered here without a second edit. It TRIMS first (IndexBase
+// does not), so a padded spelling cannot dodge the refusal — the same
+// normalization the applogs gate applies.
+func IsSecFindingsSignal(signal string) bool {
+	return IndexBase(strings.TrimSpace(signal)) == SecFindingsIndexBase
 }
 
 // tenantSegRe strips any character not allowed in an OpenSearch index segment.

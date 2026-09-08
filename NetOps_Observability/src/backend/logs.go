@@ -6,6 +6,7 @@ package backend
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -120,6 +121,26 @@ func (s *server) logsScope(r *http.Request, signal string) (index string, filter
 	if sig := strings.ToLower(strings.TrimSpace(signal)); (sig == "applogs" || sig == "app") && !isPlatformOwner(claims) {
 		return "", nil, nil, false, true
 	}
+	// Security findings are NOT log lines and are not served here (review
+	// 2026-09-08, H9). oslog.IndexBase maps the signals `security` and
+	// `secfindings` onto the netops-secfindings-* family, and this handler calls
+	// requirePerm zero times — so the free-form parameter reached a tenant's CTEM
+	// verdicts with no permission check and no licence check, for any principal
+	// that merely authenticated (a zero-permission ingest key included).
+	//
+	// GATE CHOICE (§3a rule 3). Findings are per-tenant OPERATOR data, so the
+	// right gate is requirePerm(infrastructure:read) plus the licence feature —
+	// and that gate already exists on /api/security/findings, along with the
+	// tenant filter and the per-doc isolation clause. Adding a second permission
+	// gate here would build a SECOND door onto the same data carrying its own
+	// copy of the isolation rules, which is what §3a rule 4 forbids, and it would
+	// still miss the licence check. So the family is refused OUTRIGHT, here at
+	// the chokepoint the interactive search, the retention read and the
+	// pipeline-debug replay all resolve through, and the caller is sent to the
+	// door that has both gates.
+	if oslog.IsSecFindingsSignal(signal) {
+		return "", nil, nil, false, true
+	}
 	index = oslog.TenantIndexPattern(signal, tenant, cross)
 	// Defense-in-depth chokepoint: fail CLOSED if a non-owner's resolved pattern
 	// ever references an applogs index.
@@ -160,6 +181,17 @@ func syntheticDebugExclusion() map[string]any {
 }
 
 // DEBUG-ROUTES-END
+
+// logsForbiddenErr names WHY a log read was refused. logsScope returns one
+// boolean for two different boundaries, and an operator who asked for security
+// findings must not be told that app logs are restricted (§10: no silent or
+// misleading failures) — they need to know which door to use instead.
+func logsForbiddenErr(signal string) error {
+	if oslog.IsSecFindingsSignal(signal) {
+		return errors.New("security findings are not part of log search — read them at /api/security/findings, which checks infrastructure:read and the licence feature")
+	}
+	return errors.New("app logs are restricted to the platform owner")
+}
 
 func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodGet {
@@ -224,7 +256,7 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	// logsScope path (identical for search and retention reads).
 	index, scopeFilters, mustNot, denyAll, forbidden := s.logsScope(r, req.Signal)
 	if forbidden {
-		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
+		writeError(w, http.StatusForbidden, logsForbiddenErr(req.Signal))
 		return
 	}
 
@@ -321,7 +353,7 @@ func (s *server) handleLogsRetention(w http.ResponseWriter, r *http.Request) {
 	signal := r.URL.Query().Get("signal")
 	index, filters, mustNot, denyAll, forbidden := s.logsScope(r, signal)
 	if forbidden {
-		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
+		writeError(w, http.StatusForbidden, logsForbiddenErr(signal))
 		return
 	}
 	if denyAll {
