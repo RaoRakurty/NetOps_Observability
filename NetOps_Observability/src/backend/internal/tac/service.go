@@ -116,6 +116,10 @@ type Service struct {
 	// deployment with no live runner (there is nothing to gate), and a nil
 	// registry allows nothing.
 	reviews *ReviewRegistry
+	// identity is where a finished collection reports the device's hardware
+	// identity (chassis serial, model) it happened to read. Nil means this
+	// deployment does not fold that back into the inventory.
+	identity IdentitySink
 	// learning is where a finished collection files what the parsers could not
 	// read (learning.go). Nil means the backlog is not kept on this deployment
 	// and a collection simply files nothing — never a failed collection.
@@ -156,6 +160,37 @@ func WithOpeners(o ...CaseOpener) ServiceOption {
 // command will be refused at the wire — which is the safe direction to fail, and
 // is what the service's own test asserts.
 func WithReviews(r *ReviewRegistry) ServiceOption { return func(s *Service) { s.reviews = r } }
+
+// WithIdentitySink injects the seam a finished collection reports the device's
+// HARDWARE IDENTITY through — the chassis serial and model it just read.
+//
+// It exists because the escalation has ALREADY fetched exactly the output the
+// inventory's own probe would fetch: a TAC collection opens with `show version`
+// and `show inventory` on its way to opening a case. Re-dialling the box a
+// minute later to ask the same question would be a second session on a router
+// that is, by definition, having a bad day.
+//
+// The seam takes the parsed identity rather than the raw output, so this package
+// carries no vendor parsing of its own (§13, one vocabulary) — the extraction is
+// internal/deviceident's, over the vendor profile data. Nil is the honest
+// "nothing to tell" wiring: the collection still runs and simply reports nothing.
+func WithIdentitySink(fn IdentitySink) ServiceOption {
+	return func(s *Service) { s.identity = fn }
+}
+
+// IdentitySink receives a device's hardware identity as one collection read it.
+// deviceID is the inventory row it belongs to; commands are the capture's own
+// (command, output, platform) rows, which the caller parses.
+type IdentitySink func(deviceID string, commands []IdentityObservation)
+
+// IdentityObservation is one command's output, offered for identity extraction.
+// It is deliberately the shape internal/deviceident already takes: this package
+// hands over what it has and makes no claim about what can be read from it.
+type IdentityObservation struct {
+	Command  string
+	Output   string
+	Platform string
+}
 
 // WithLearning injects the learning store. Nil is the honest "this deployment
 // does not keep the backlog" path: a collection still runs, and files nothing.
@@ -535,6 +570,7 @@ func (s *Service) runCollect(ctx context.Context, cancel context.CancelFunc, key
 	// service lock across it would stall every other escalation on this api.
 	if err == nil {
 		s.fileLearning(ctx, tenant, capt)
+		s.observeIdentity(capt)
 	}
 
 	s.mu.Lock()
@@ -860,6 +896,32 @@ func (s *Service) fileLearning(ctx context.Context, tenant string, capt *Capture
 			"gaps": len(rec.Gaps), "error": err.Error(),
 		})
 	}
+}
+
+// observeIdentity offers the capture's own output to the identity sink.
+//
+// It sends ONLY successful, non-streamed command output. A streamed first-ask
+// collection lives on disk and is tens of megabytes; reading it back to hunt for
+// a serial would undo the whole reason it was streamed, and the short commands
+// that carry the serial (`show version`, `show inventory`) are never the
+// streamed ones.
+func (s *Service) observeIdentity(capt *Capture) {
+	if s.identity == nil || capt == nil || capt.DeviceID == "" {
+		return
+	}
+	obs := make([]IdentityObservation, 0, len(capt.Commands))
+	for _, cc := range capt.Commands {
+		if cc.Err != "" || cc.Streamed() || strings.TrimSpace(cc.Output) == "" {
+			continue
+		}
+		obs = append(obs, IdentityObservation{
+			Command: cc.Command, Output: cc.Output, Platform: capt.Platform,
+		})
+	}
+	if len(obs) == 0 {
+		return
+	}
+	s.identity(capt.DeviceID, obs)
 }
 
 // classFromSignature reports whether a SIGNATURE, rather than an alert name or

@@ -509,3 +509,78 @@ func TestPreferredCaptureIDReadsTheTenantSetting(t *testing.T) {
 		t.Fatal("a dialect with no preference must report none")
 	}
 }
+
+// TestACollectionReportsTheDeviceIdentityItRead — the escalation has already
+// fetched `show version` on its way to a case, so the chassis serial it printed
+// is offered back to the inventory rather than re-read a minute later on a
+// second session against a device that is already having a bad day.
+func TestACollectionReportsTheDeviceIdentityItRead(t *testing.T) {
+	dev := ciscoDevice()
+	cat := mustCatalog(t)
+	p, err := cat.Plan("bgp-session", dev, PlanOptions{})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	f := newFake()
+	for _, s := range p.Steps {
+		f.out[s.Command] = "ok\n"
+	}
+	f.out["show version"] = "Cisco IOS XE Software, Version 17.09.04a\nProcessor board ID FTX1234ABCD\n"
+	f.fail["show inventory"] = errors.New("invalid input detected")
+
+	var gotDevice string
+	var gotObs []IdentityObservation
+	svc, serr := NewService(cat,
+		WithCollector(testCollector(t, f, WithClock(fixedClock()))),
+		WithServiceClock(fixedClock()),
+		WithIdentitySink(func(id string, obs []IdentityObservation) {
+			gotDevice, gotObs = id, obs
+		}))
+	if serr != nil {
+		t.Fatalf("service: %v", serr)
+	}
+	escalateAndCollectWith(t, svc, dev)
+
+	if gotDevice != dev.ID {
+		t.Fatalf("the sink was told device %q, want %q", gotDevice, dev.ID)
+	}
+	var sawVersion bool
+	for _, o := range gotObs {
+		if o.Command == "show version" {
+			sawVersion = true
+			if !strings.Contains(o.Output, "FTX1234ABCD") {
+				t.Fatalf("the output was not carried: %q", o.Output)
+			}
+			if o.Platform != dev.Platform {
+				t.Fatalf("platform = %q, want the device's own %q", o.Platform, dev.Platform)
+			}
+		}
+		// A FAILED command has no output worth parsing and must not be offered:
+		// an error string is not a serial, and handing one to a parser is how a
+		// device gets a serial of "invalid".
+		if o.Command == "show inventory" {
+			t.Fatal("a failed command was offered for identity extraction")
+		}
+	}
+	if !sawVersion {
+		t.Fatal("the collection's own `show version` was not offered to the inventory")
+	}
+}
+
+// TestNoIdentitySinkIsNotAFailedCollection — a deployment that does not fold
+// identities back simply reports nothing.
+func TestNoIdentitySinkIsNotAFailedCollection(t *testing.T) {
+	dev := ciscoDevice()
+	svc, _ := escalationFixture(t, dev)
+	escalateAndCollectWith(t, svc, dev)
+	if st := svc.Get(dev.TenantID, "inc-1"); st == nil || st.Capture == nil {
+		t.Fatal("the collection must still land with no identity sink wired")
+	}
+}
+
+// escalateAndCollectWith runs click one and waits for the capture, with no
+// tenant settings and no route override — the plain one-click path.
+func escalateAndCollectWith(t *testing.T, svc *Service, dev Device) {
+	t.Helper()
+	escalateAndCollect(t, svc, dev, EscalateRequest{}, EscalationSettings{})
+}

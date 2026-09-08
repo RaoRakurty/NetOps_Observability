@@ -25,8 +25,10 @@ import (
 	"io"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
+	"netops/backend/internal/deviceident"
 	"netops/backend/internal/osprobe"
 	"netops/backend/models"
 )
@@ -110,7 +112,7 @@ func (a *DiscoveryAggregator) enrichOSVersions(ctx context.Context) {
 		a.mu.Lock()
 		a.osProbeAt[c.target.DeviceID] = time.Now().UTC()
 		if ok {
-			a.applyOSVersionLocked(c.target.DeviceID, reading)
+			a.applyProbeReadingLocked(c.target.DeviceID, c.current, reading)
 		}
 		a.mu.Unlock()
 	}
@@ -145,15 +147,25 @@ func (a *DiscoveryAggregator) osProbeCandidatesLocked(now time.Time) []osProbeCa
 			continue
 		}
 		cur := osprobe.Current{
-			Version: d.OSVersion,
-			Source:  osprobe.Method(d.OSVersionSource),
-			At:      d.OSVersionAt,
+			Version:      d.OSVersion,
+			Source:       osprobe.Method(d.OSVersionSource),
+			At:           d.OSVersionAt,
+			Serial:       d.SerialNumber,
+			SerialSource: osprobe.Method(d.SerialSource),
+			SerialAt:     d.SerialAt,
 		}
-		if len(osprobe.Plan(cur)) == 0 {
-			continue // an operator's value; nothing the ladder learns could replace it
+		if len(osprobe.Plan(cur))+len(osprobe.PlanIdentity(cur)) == 0 {
+			// Operator values on BOTH halves; nothing the ladder learns could
+			// replace either, so the device is not dialled at all.
+			continue
 		}
 		cool := osProbeRetryInterval
-		if cur.Version != "" {
+		if cur.Version != "" || cur.Serial != "" {
+			// SOMETHING has been learned off this device, so the fast retry has
+			// done its job and the slow refresh takes over — for both halves.
+			// A platform that answers with a version and will never answer with
+			// a serial must not be re-dialled every half hour forever; that is
+			// the SSH storm this cool-down exists to prevent.
 			cool = osProbeRefreshInterval
 		}
 		if last, ok := a.osProbeAt[id]; ok && now.Sub(last) < cool {
@@ -181,31 +193,56 @@ func osProbeText(d models.Device) string {
 	return d.OSVersion
 }
 
-// applyOSVersionLocked writes an accepted reading onto the cached row and, for
-// an OPERATOR-OWNED row, persists it.
-//
-// Tenancy: the row is looked up by id in the aggregator's own cache and only
-// its version fields are touched, so the device's TenantID travels with it
-// untouched — there is no list of "all devices" here and no path by which one
-// tenant's probe can reach another tenant's row (§3a). Persistence is limited to
-// manual rows on purpose: a source-reported device's source is its authority,
-// and persisting a shadow of one would resurrect what pollOnce legitimately
-// prunes (see the store field's own doc).
+// applyProbeReadingLocked writes an accepted reading onto the cached row and,
+// for an OPERATOR-OWNED row, persists it — ONE cache write and at most ONE
+// store write for both halves of the reading.
 //
 // Caller holds a.mu.
-func (a *DiscoveryAggregator) applyOSVersionLocked(id string, r osprobe.Reading) {
+// RecordIdentity folds a hardware identity learned OUTSIDE the probe ladder onto
+// a device row — today, from a TAC escalation's own read-only collection.
+//
+// It exists because the collection has already fetched exactly the output the
+// probe would fetch. A TAC escalation runs `show version` and `show inventory`
+// against the device on its way to opening a case; re-dialling the box a minute
+// later to ask the same question would be a second session on a router that is,
+// by definition, having a bad day. So the capture's answer is folded in here,
+// through the SAME apply rules the ladder uses (applyIdentity) — same overwrite
+// order, same model rule, same provenance stamp — rather than through a second,
+// subtly different path.
+//
+// The METHOD is the caller's to name, so provenance stays honest: a serial the
+// escalation read says so, and is not dressed up as a probe result.
+func (a *DiscoveryAggregator) RecordIdentity(id string, ident deviceident.Identity, method osprobe.Method, at time.Time) {
+	if strings.TrimSpace(id) == "" || ident.Empty() {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	d, ok := a.cache[id]
+	if !ok {
+		return // the device left the inventory while the collection was running
+	}
+	cur := osprobe.Current{Serial: d.SerialNumber, SerialSource: osprobe.Method(d.SerialSource)}
+	a.applyProbeReadingLocked(id, cur, osprobe.Reading{
+		Identity: ident, IdentityMethod: method, IdentityAt: at,
+	})
+}
+
+func (a *DiscoveryAggregator) applyProbeReadingLocked(id string, cur osprobe.Current, r osprobe.Reading) {
 	d, ok := a.cache[id]
 	if !ok {
 		return // the device left the inventory while the probe was in flight
 	}
-	if d.OSVersion == r.Version && d.OSVersionSource == string(r.Method) {
-		d.OSVersionAt = r.At
-		a.cache[id] = d
+	changed := false
+	if r.Version != "" {
+		changed = applyOSVersion(&d, id, r) || changed
+	}
+	if !r.Identity.Empty() {
+		changed = applyIdentity(&d, id, cur, r) || changed
+	}
+	if !changed {
 		return
 	}
-	log.Printf("discovery: device %s os_version learned via %s: %q (was %q via %q)",
-		id, r.Method, r.Version, d.OSVersion, d.OSVersionSource)
-	d.OSVersion, d.OSVersionSource, d.OSVersionAt = r.Version, string(r.Method), r.At
 	a.cache[id] = d
 	if a.store == nil || d.Source != "manual" {
 		return
@@ -217,7 +254,69 @@ func (a *DiscoveryAggregator) applyOSVersionLocked(id string, r osprobe.Reading)
 	persist := d
 	persist.Monitored, persist.MonitorReason, persist.MonitorMethods = false, "", nil
 	if err := a.store.Put(persist); err != nil {
-		// The cache keeps the learned version either way; the next boot re-probes.
-		log.Printf("discovery: device %s os_version learned but not persisted: %v", id, err)
+		// The cache keeps what was learned either way; the next boot re-probes.
+		log.Printf("discovery: device %s probe reading not persisted: %v", id, err)
 	}
+}
+
+// applyOSVersion folds the VERSION half of a reading onto a row. It reports
+// whether anything about the row changed.
+func applyOSVersion(d *models.Device, id string, r osprobe.Reading) bool {
+	if d.OSVersion == r.Version && d.OSVersionSource == string(r.Method) {
+		if d.OSVersionAt.Equal(r.At) {
+			return false
+		}
+		d.OSVersionAt = r.At
+		return true
+	}
+	log.Printf("discovery: device %s os_version learned via %s: %q (was %q via %q)",
+		id, r.Method, r.Version, d.OSVersion, d.OSVersionSource)
+	d.OSVersion, d.OSVersionSource, d.OSVersionAt = r.Version, string(r.Method), r.At
+	return true
+}
+
+// applyIdentity folds the HARDWARE IDENTITY half of a reading onto a row.
+//
+// THE MODEL RULE, stated here because this is the only place it is applied. The
+// serial's own overwrite rule lives in osprobe (AcceptIdentity) and has already
+// been applied by the ladder; the model has no such rule because it is not an
+// identity and it has other legitimate writers — a NetBox device_type, an SNMP
+// inference, an operator. So a probe may:
+//
+//   - FILL an empty model, always: a blank column is nobody's answer; and
+//   - REFRESH a model it already owns, meaning the row's serial provenance is
+//     this same method — that is the chassis-swap path, where the model must
+//     move with the serial or the row would describe two different boxes;
+//
+// and it may NOT displace a model that came from somewhere else. Reporting the
+// disagreement is left to whoever compares the two claims; silently picking a
+// winner here would destroy the evidence that they differ.
+func applyIdentity(d *models.Device, id string, cur osprobe.Current, r osprobe.Reading) bool {
+	changed := false
+	if r.Identity.Serial != "" {
+		if d.SerialNumber == r.Identity.Serial && d.SerialSource == string(r.IdentityMethod) {
+			if !d.SerialAt.Equal(r.IdentityAt) {
+				d.SerialAt = r.IdentityAt
+				changed = true
+			}
+		} else {
+			log.Printf("discovery: device %s serial_number learned via %s from %q: %q (was %q via %q)",
+				id, r.IdentityMethod, r.Identity.SerialCommand, r.Identity.Serial,
+				d.SerialNumber, d.SerialSource)
+			d.SerialNumber = r.Identity.Serial
+			d.SerialSource = string(r.IdentityMethod)
+			d.SerialAt = r.IdentityAt
+			changed = true
+		}
+	}
+	if m := r.Identity.Model; m != "" && d.Model != m {
+		ownsRow := cur.SerialSource == r.IdentityMethod && cur.Serial != ""
+		if d.Model == "" || ownsRow {
+			log.Printf("discovery: device %s model learned via %s from %q: %q (was %q)",
+				id, r.IdentityMethod, r.Identity.ModelCommand, m, d.Model)
+			d.Model = m
+			changed = true
+		}
+	}
+	return changed
 }

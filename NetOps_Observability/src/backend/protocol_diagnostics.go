@@ -61,8 +61,10 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/deviceident"
 	"netops/backend/internal/httppage"
 	"netops/backend/internal/incident"
+	"netops/backend/internal/osprobe"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/tac"
@@ -1197,6 +1199,12 @@ func (s *server) tacResolveDevice(w http.ResponseWriter, r *http.Request, inc ta
 		// The management endpoint comes from the resolved inventory row, the
 		// same one the diagnostics collector and the operator terminal dial.
 		Address: dev.Address, Port: envInt(protocoldiag.EnvSSHPort, 22),
+		// The device's identity AS THE VENDOR CHECKS IT, from the same resolved
+		// row. This is what lets the confirmation screen arrive already carrying
+		// the serial a vendor's entitlement check demands, instead of asking an
+		// operator to go and read a label off a chassis at three in the morning.
+		Vendor: strings.ToLower(strings.TrimSpace(dev.Vendor)),
+		Serial: dev.SerialNumber, Model: dev.Model,
 	}, true
 }
 
@@ -1732,6 +1740,13 @@ func (s *server) buildTACService() error {
 	opts = append(opts,
 		tac.WithLearning(s.tacLearningStore),
 		tac.WithServiceWarn(func(m string, f map[string]any) { logWarn("tac", m, f) }),
+		// A finished collection has already read `show version` / `show
+		// inventory` on its way to opening a case, so the chassis serial it
+		// printed is folded back onto the inventory row through the SAME apply
+		// rules the OS-version ladder uses — provenance stamped as the
+		// escalation, never dressed up as a probe result. It is best-effort: a
+		// device that left the inventory mid-collection simply gets nothing.
+		tac.WithIdentitySink(s.tacRecordDeviceIdentity),
 	)
 	svc, err := tac.NewService(cat, opts...)
 	if err != nil {
@@ -1789,6 +1804,39 @@ func (s *server) buildTACService() error {
 	s.tacPoller = poller
 	return nil
 }
+
+// tacRecordDeviceIdentity folds a collection's own reading of the chassis serial
+// and model onto the device record.
+//
+// The PARSING is internal/deviceident's, over the vendor profile data — this
+// file carries no regex and no vendor name, which is what keeps the platform on
+// one vendor vocabulary (§13). The WRITE goes through the discovery
+// aggregator's RecordIdentity, which applies the ladder's own overwrite rules
+// so a serial read here and a serial read by the probe cannot disagree about
+// which one wins.
+func (s *server) tacRecordDeviceIdentity(deviceID string, obs []tac.IdentityObservation) {
+	if s.discovery == nil || len(obs) == 0 {
+		return
+	}
+	cmds := make([]deviceident.CapturedCommand, 0, len(obs))
+	for _, o := range obs {
+		cmds = append(cmds, deviceident.CapturedCommand{
+			Command: o.Command, Output: o.Output, Platform: o.Platform,
+		})
+	}
+	ident := deviceident.FromCapture(cmds)
+	if ident.Empty() {
+		return // nothing this collection printed was a hardware identity
+	}
+	s.discovery.RecordIdentity(deviceID, ident, tacIdentityMethod, time.Now().UTC())
+}
+
+// tacIdentityMethod is the provenance stamp a serial learned this way carries.
+// It is deliberately its OWN value rather than "ssh": an operator looking at the
+// row must be able to tell that the serial came from an escalation's collection,
+// which happens on a bad day and against one device, from one the inventory's
+// own probe learned on its regular walk.
+const tacIdentityMethod = osprobe.Method("tac-escalation")
 
 // newTACLearningStore builds the backlog's backend: FILE-backed, the sibling of
 // the BUNDLE store rather than of the template store, because a learning record
