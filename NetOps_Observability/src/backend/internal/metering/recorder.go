@@ -87,7 +87,11 @@ func (r *Recorder) Snapshot(ctx context.Context) error {
 		// A prune that fails does NOT fail the snapshot: the numbers are
 		// recorded, the history is simply longer than it should be, and that is
 		// an operator's problem rather than a lost measurement.
-		r.fail(fmt.Sprintf("metering: usage history older than %d days could not be pruned; it is being kept instead", RetentionDays), err)
+		//
+		// The store guarantees the claim this line makes. A prune that cannot
+		// write its result drops nothing at all — every row is still in the
+		// register and still on disk — so "kept" is a fact here, not a hope.
+		r.fail(fmt.Sprintf("metering: usage history older than %d days could not be pruned; every row is still kept, and the sweep retries on the next snapshot", RetentionDays), err)
 	} else if n > 0 {
 		r.pruned.Add(int64(n))
 	}

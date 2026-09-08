@@ -158,11 +158,26 @@ func (s *FileStore) loadLocked() {
 }
 
 func (s *FileStore) flushLocked() error {
+	return s.flushViewLocked(nil)
+}
+
+// flushViewLocked writes the register out, with `view` standing in for s.rows
+// when it is non-nil. It NEVER touches s.rows.
+//
+// That is what lets Prune persist first and adopt second: the survivors are
+// written from a separate view, and the in-memory register is only replaced
+// once the bytes are durable. A "delete, then flush, then roll back on error"
+// shape cannot be used here — restoring a saved header can leave a caller
+// pointing at data that was mutated in the meantime.
+func (s *FileStore) flushViewLocked(view map[string]map[string]DailyRecord) error {
 	if s.path == "" {
 		return nil
 	}
+	if view == nil {
+		view = s.rows
+	}
 	f := meteringFile{Records: make([]DailyRecord, 0, 64)}
-	for _, byDay := range s.rows {
+	for _, byDay := range view {
 		for _, r := range byDay {
 			f.Records = append(f.Records, r)
 		}
@@ -257,6 +272,17 @@ func (s *FileStore) Rows(context.Context) (int, error) {
 }
 
 // Prune drops rows older than `before`.
+//
+// PERSIST, THEN ADOPT. The survivors are built into a separate view and written
+// out first; s.rows is replaced only after that write succeeds. The sweep used
+// to delete from the live register and flush afterwards, so a write that failed
+// (a full or read-only volume) left the rows gone from memory while the file
+// still held them — and the next hourly snapshot then serialised the register
+// as it stood and made the loss permanent. This is billing data, and the
+// recorder was logging that the history was being kept while it was going.
+//
+// On a failed write NOTHING is dropped and the count returned is 0, so the
+// pruned metric never claims rows the store still holds.
 func (s *FileStore) Prune(_ context.Context, before string) (int, error) {
 	if s == nil {
 		return 0, errors.New("metering: no store")
@@ -267,22 +293,32 @@ func (s *FileStore) Prune(_ context.Context, before string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.loadLocked()
+	survivors := make(map[string]map[string]DailyRecord, len(s.rows))
 	n := 0
 	for t, byDay := range s.rows {
-		for d := range byDay {
+		kept := make(map[string]DailyRecord, len(byDay))
+		for d, r := range byDay {
 			if d < before {
-				delete(byDay, d)
 				n++
+				continue
 			}
+			kept[d] = r
 		}
-		if len(byDay) == 0 {
-			delete(s.rows, t)
+		// A tenant with nothing left leaves the register entirely, exactly as
+		// it did when the deletes were made in place.
+		if len(kept) == 0 {
+			continue
 		}
+		survivors[t] = kept
 	}
 	if n == 0 {
 		return 0, nil
 	}
-	return n, s.flushLocked()
+	if err := s.flushViewLocked(survivors); err != nil {
+		return 0, err
+	}
+	s.rows = survivors
+	return n, nil
 }
 
 func collectRange(byDay map[string]DailyRecord, from, to string, out *[]DailyRecord) {
