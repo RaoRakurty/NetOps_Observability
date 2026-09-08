@@ -505,10 +505,10 @@ function IdpEditor({ initial, isNew, realm, roleIds, defaultRole, onBack, onSave
 
       {tenantUrlValues(tenantRow).length > 0 && (
         <div style={{ marginTop: 12, padding: "8px 10px", border: "1px solid var(--panel-border)", borderRadius: 6 }}>
-          <h4 style={{ margin: "0 0 6px" }}>This tenant&rsquo;s sign-in URLs</h4>
+          <h4 style={{ margin: "0 0 6px" }}>Tenant sign-in URLs</h4>
           <p className="adm-line">
-            This provider is bound to one tenant. It appears only on that tenant&rsquo;s sign-in
-            page, and a sign-in that arrives on any other tenant&rsquo;s URL is refused.
+            Bound to one tenant. Another tenant&rsquo;s URL is refused.
+            <AskIris topic="sso.per-tenant-urls" label="tenant sign-in URLs" />
           </p>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {tenantUrlValues(tenantRow).map((v) => <CopyValue key={v.label} label={v.label} value={v.value} />)}

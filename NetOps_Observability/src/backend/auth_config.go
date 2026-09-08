@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/tacacs"
+	"netops/backend/internal/tenantlocator"
 	"netops/backend/internal/vault"
 	"os"
 	"strconv"
@@ -482,7 +483,14 @@ func (s *server) handleTACACSTest(w http.ResponseWriter, r *http.Request) {
 // handleAuthMethods: GET /api/auth/methods (public). Tells the login page which
 // sign-in options to render: local always; native LDAP/TACACS when enabled; and
 // the Keycloak-brokered SSO buttons. No secrets are exposed.
-func (s *server) handleAuthMethods(w http.ResponseWriter, _ *http.Request) {
+//
+// LOCATOR-AWARE (design §6.1, tracker 276): when the caller arrived through a
+// per-tenant sign-in URL, the signed candidate cookie names the realm and the
+// SSO button list is filtered to the connections that realm reaches — a tenant
+// never sees another tenant's identity providers. With no locator the answer is
+// unchanged (every configured button), because the bare sign-in page is the
+// platform's own front door and every existing deployment depends on it.
+func (s *server) handleAuthMethods(w http.ResponseWriter, r *http.Request) {
 	ldap := s.ldap.effective()
 	tac := s.tacacs.effective()
 	resp := map[string]any{
@@ -490,10 +498,237 @@ func (s *server) handleAuthMethods(w http.ResponseWriter, _ *http.Request) {
 		"ldap":   map[string]any{"enabled": ldap.Enabled, "name": "LDAP / Active Directory"},
 		"tacacs": map[string]any{"enabled": tac.Enabled, "name": "TACACS+"},
 	}
+	var cand *tenantlocator.Candidate
+	if c, ok := s.locatorCandidate(r); ok {
+		cand = &c
+		resp["locator"] = locatorPublic(c)
+	}
 	if op := s.oidcProvider(); op.Ready() {
-		resp["sso"] = map[string]any{"enabled": true, "providers": op.Providers()}
+		all := op.Providers()
+		shown := make([]ssoProviderInfo, 0, len(all))
+		for _, pi := range all {
+			if s.providerVisible(cand, pi.ID) {
+				shown = append(shown, pi)
+			}
+		}
+		resp["sso"] = map[string]any{"enabled": true, "providers": shown}
 	} else {
 		resp["sso"] = map[string]any{"enabled": false, "providers": []ssoProviderInfo{}}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// providerRealm reports the realm a sign-in button belongs to: the tenant its
+// connection is BOUND to and that tenant's org. A blank tenant is the PLATFORM
+// realm — an unbound connection, or a button that has no stored connection at
+// all (the env-configured OIDC_PROVIDERS entries) — offered everywhere.
+//
+// ok=false means the connection names a tenant that no longer exists. That
+// button is then offered to NOBODY: a dangling binding fails closed rather than
+// decaying into "platform realm", which would silently republish a decommissioned
+// customer's identity provider on every other customer's sign-in page.
+func (s *server) providerRealm(alias string) (tenantID, orgID string, ok bool) {
+	if s.ssoIdPCfg == nil {
+		return "", "", true
+	}
+	reg, found := s.ssoIdPCfg.Get(strings.ToLower(strings.TrimSpace(alias)))
+	if !found {
+		return "", "", true
+	}
+	tid := reg.Realm()
+	if tid == "" {
+		return "", "", true
+	}
+	if s.tenants == nil {
+		return "", "", false
+	}
+	t, found := s.tenants.Get(tid)
+	if !found {
+		return "", "", false
+	}
+	return tid, orgOf(t), true
+}
+
+// providerVisible answers whether a sign-in button is offered at a candidate.
+// A nil candidate is the generic sign-in page — unchanged behaviour, every
+// configured button.
+func (s *server) providerVisible(c *tenantlocator.Candidate, alias string) bool {
+	tid, org, ok := s.providerRealm(alias)
+	if !ok {
+		return false
+	}
+	if c == nil {
+		return true
+	}
+	return c.Reaches(tid, org)
+}
+
+// ---------------------------------------------------------------------------
+// Login locators — per-tenant sign-in URLs (design §6.1, tracker 276)
+// ---------------------------------------------------------------------------
+//
+// A customer hands its people ONE URL. Two shapes exist today:
+//
+//	/t/{tenant-slug}          shared_path — the slug is a display ALIAS
+//	/org/{org_public_id}      immutable_org_url — opaque, survives a rename
+//
+// `managed_subdomain` and `custom_domain` are reserved names and DEFERRED: they
+// need a Correlix-operated DNS/TLS plane a single-port compose product does not
+// have. See internal/tenantlocator.
+//
+// HOW THE PIECES FIT (and why the SPA stays a static bundle): nginx already
+// history-falls-back every unknown path to index.html, so /t/{slug} serves the
+// ordinary SPA with no nginx route of its own. The SPA then asks the api
+// GET /api/auth/locator?path=/t/{slug}; the api resolves the slug to the
+// IMMUTABLE tenant id, hands back the display name, and sets a signed,
+// short-lived, HttpOnly cookie carrying that id. From then on the raw URL is
+// never trusted for anything: the cookie is what /api/auth/methods filters the
+// provider list by, and what the per-tenant SSO callback is bound against.
+//
+// A CANDIDATE IS NOT A CLAIM. It decides which doors to show and which callback
+// URL is legitimate. It never grants access, never sets a session tenant, and
+// never moves an account between tenants.
+
+// loginLocatorCookie carries the SIGNED candidate: locator kind + immutable id,
+// nothing else. HttpOnly (the SPA has no business reading it) and short-lived.
+const loginLocatorCookie = "netops_login_locator"
+
+// locatorDirectory adapts the tenant + org registries onto the resolver's seam.
+// It is deliberately list-shaped: the resolver scans everything on every call so
+// an unknown slug and a suspended tenant cost the same (no enumeration oracle).
+type locatorDirectory struct{ s *server }
+
+func (d locatorDirectory) Tenants() []tenantlocator.TenantRef {
+	if d.s == nil || d.s.tenants == nil {
+		return nil
+	}
+	list := d.s.tenants.List()
+	out := make([]tenantlocator.TenantRef, 0, len(list))
+	for _, t := range list {
+		out = append(out, tenantlocator.TenantRef{
+			ID: t.ID, Slug: t.Slug, Name: t.Name, OrgID: orgOf(t), Status: t.EffectiveStatus(),
+		})
+	}
+	return out
+}
+
+func (d locatorDirectory) Orgs() []tenantlocator.OrgRef {
+	if d.s == nil || d.s.orgs == nil {
+		return nil
+	}
+	list := d.s.orgs.List()
+	out := make([]tenantlocator.OrgRef, 0, len(list))
+	for _, o := range list {
+		out = append(out, tenantlocator.OrgRef{ID: o.ID, Slug: o.Slug, Name: o.Name})
+	}
+	return out
+}
+
+// locatorDir is the resolver seam for this server.
+func (s *server) locatorDir() tenantlocator.Directory { return locatorDirectory{s: s} }
+
+// locatorSigner derives the candidate-cookie MAC key from the platform signing
+// secret. Derived per call (one SHA-256) rather than held on the server so a
+// rotated JWT_SECRET invalidates outstanding candidate cookies exactly like it
+// invalidates sessions, with no second key to rotate.
+func (s *server) locatorSigner() *tenantlocator.Signer {
+	return tenantlocator.NewSigner(jwtSecret())
+}
+
+// setLocatorCookie mints and sets the signed candidate cookie.
+func (s *server) setLocatorCookie(w http.ResponseWriter, r *http.Request, c tenantlocator.Candidate) {
+	tok, err := s.locatorSigner().Mint(c, time.Now())
+	if err != nil {
+		// Nothing to hand the browser: fall through with no cookie, which lands
+		// the caller on the generic sign-in rather than a wrong tenant's.
+		logWarn("auth", "login locator not minted", map[string]any{"kind": c.Kind})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     loginLocatorCookie,
+		Value:    tok,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   cookieSecure(r),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(tenantlocator.TTL / time.Second),
+	})
+}
+
+// clearLocatorCookie expires the candidate cookie with the SAME attributes it
+// was set with (a delete is a Set with MaxAge<0, and a browser rejects a Secure
+// cookie arriving over plain HTTP), so a stale candidate cannot survive an
+// unresolvable entry URL.
+func (s *server) clearLocatorCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name: loginLocatorCookie, Value: "", Path: "/", HttpOnly: true,
+		Secure: cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: -1,
+	})
+}
+
+// locatorCandidate re-resolves the candidate carried by the request's cookie.
+// The signature proves the id came from us; the re-resolution proves the realm
+// still exists and is still active, so suspending a tenant takes effect on the
+// next request instead of at cookie expiry. ok=false means "no candidate" — the
+// generic sign-in, never a fallback tenant.
+func (s *server) locatorCandidate(r *http.Request) (tenantlocator.Candidate, bool) {
+	ck, err := r.Cookie(loginLocatorCookie)
+	if err != nil {
+		// No candidate cookie at all — the ordinary generic sign-in page. Kept
+		// separate from the blank-value branch below: they are two different
+		// events (never arrived vs. deliberately cleared) and collapsing them
+		// is exactly the conflation the silent-failure guard forbids.
+		return tenantlocator.Candidate{}, false
+	}
+	if ck.Value == "" {
+		// Present but blank: a candidate this server EXPIRED, which is what an
+		// unresolvable entry URL does. Also no candidate.
+		return tenantlocator.Candidate{}, false
+	}
+	claim, err := s.locatorSigner().Verify(ck.Value, time.Now())
+	if err != nil {
+		return tenantlocator.Candidate{}, false
+	}
+	return tenantlocator.ResolveID(s.locatorDir(), claim.Kind, claim.ID)
+}
+
+// locatorPublic is the sign-in page's view of a resolved candidate: a display
+// name and the canonical path, never an id the browser could then assert.
+func locatorPublic(c tenantlocator.Candidate) map[string]any {
+	return map[string]any{"kind": c.Kind, "name": c.DisplayName, "path": c.Path()}
+}
+
+// handleAuthLocator: GET /api/auth/locator?path=/t/{slug} (public). Resolves the
+// entry URL to a candidate realm and arms the signed candidate cookie.
+//
+// NO INFORMATION LEAK: an unknown locator and a locator naming a suspended
+// tenant get the byte-identical `{"locator":null}` answer, and the resolver does
+// the identical amount of work for both (internal/tenantlocator.Resolve), so
+// neither the body nor the clock distinguishes "no such customer" from "that
+// customer is suspended". Both also CLEAR any stale candidate cookie, so a
+// wrong entry URL can never leave an earlier tenant's doors on screen.
+func (s *server) handleAuthLocator(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	raw := r.URL.Query().Get("path")
+	if len(raw) > 256 { // untrusted: bound it before it is parsed or logged
+		raw = raw[:256]
+	}
+	kind, ref, ok := tenantlocator.ParsePath(raw)
+	if !ok {
+		s.clearLocatorCookie(w, r)
+		writeJSON(w, http.StatusOK, map[string]any{"locator": nil})
+		return
+	}
+	c, ok := tenantlocator.Resolve(s.locatorDir(), kind, ref)
+	if !ok {
+		s.clearLocatorCookie(w, r)
+		writeJSON(w, http.StatusOK, map[string]any{"locator": nil})
+		return
+	}
+	s.setLocatorCookie(w, r, c)
+	writeJSON(w, http.StatusOK, map[string]any{"locator": locatorPublic(c)})
 }

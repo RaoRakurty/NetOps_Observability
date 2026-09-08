@@ -104,6 +104,36 @@ on `:8000`, replace it with `https://<host>/`; from the server itself
 `curl http://localhost:8000/` still answers, because that is where the
 appliance's own health, qualification and watchdog probes run.
 
+### Per-tenant sign-in URLs
+
+Every tenant also has its own sign-in link under the same address:
+
+| Link | Example |
+|---|---|
+| Tenant path | `https://<host>/t/<tenant-slug>` |
+| Organization path (rename-proof) | `https://<host>/org/<org-id>` |
+
+Nothing extra is deployed for them. The SPA is still one static bundle: nginx
+already falls back to `index.html` for an unknown path, so `/t/<slug>` serves
+the ordinary sign-in page, which then asks the api
+`GET /api/auth/locator?path=/t/<slug>` to resolve the slug to the tenant's
+permanent identifier and to arm a signed, HttpOnly candidate cookie. The slug is
+never trusted for anything but deciding which sign-in doors to show.
+
+The SSO sub-paths are the exception and DO reach the api: an identity provider
+redirects the browser to `/t/<slug>/sso/<provider>/callback`, so
+`deployment/docker/nginx/default.conf` carries one narrow regex location that
+proxies `/t/…/sso/…/callback` and `/t/…/sso/…/login` (and their `/org/`
+twins) to the api. Keep that
+block in step across `default.conf`, `default-mtls.conf` and the Helm copy — it
+is the only route the three files need for this feature. Per-tenant URLs are
+otherwise self-configuring: a provider bound to a tenant shows its own redirect
+URI to copy in **Administration → Authentication → Single Sign-On**.
+
+Custom subdomains (`acme.<host>`) and customer domains are reserved in the
+design and **deferred** — they need a DNS and TLS plane a self-hosted
+single-port deployment does not have.
+
 The certificate a fresh install generates is **self-signed**, so a browser
 warns once. Replace `deployment/docker/nginx/certs/fullchain.pem` and
 `privkey.pem` with a certificate from your own issuer (same filenames), then

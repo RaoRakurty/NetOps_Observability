@@ -855,6 +855,7 @@ var publicPaths = []string{
 	"/api/auth/sso/login",
 	"/api/auth/sso/callback",
 	"/api/auth/methods",
+	"/api/auth/locator", // resolves a per-tenant sign-in URL to a candidate realm; grants nothing
 	"/api/auth/ldap/login",
 	"/api/auth/tacacs/login",
 	"/api/auth/change-password", // self-service from the login window; names the account + verifies the current password (local accounts only)
@@ -870,11 +871,13 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		for _, p := range publicPaths {
-			if r.URL.Path == p {
-				next.ServeHTTP(w, r)
-				return
-			}
+		// One predicate, shared with the body-limit middleware (isPublicPath), so
+		// "reachable without a Bearer token" and "capped at the pre-auth size"
+		// can never drift apart — and a public route added in one place is
+		// public in both.
+		if isPublicPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
 		}
 		// Secure report/export links carry a signed, expiring token in the path and
 		// do their own authorization in the view handler — no Bearer needed.

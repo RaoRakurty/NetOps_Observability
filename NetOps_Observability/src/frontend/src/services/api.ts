@@ -3673,6 +3673,20 @@ export type TacConnectorInfo = {
    *  "jira", "email", "cisco", "juniper"), or absent when the connector holds
    *  no settings at all — a portal-only vendor has no API to hold one for. */
   config_section?: string;
+  /** What the VENDOR demands before a case can be opened at all, declared by
+   *  the connector rather than guessed by the caller. It is what lets the
+   *  confirmation screen refuse BY NAME and link to where each value is set. */
+  required?: TacRequiredField[];
+  /** The vendor's accepted severity vocabulary, in the vendor's own tokens.
+   *  Empty means the vendor publishes none — a fact, not a gap: the form then
+   *  carries Correlix's mapped severity as free text. */
+  severity_values?: string[];
+  /** A path that cannot read a case STATUS back but CAN learn the case NUMBER
+   *  (an email-opened case once the tenant reads the vendor's reply thread). */
+  number_lookup?: boolean;
+  /** How this connector authenticates for THIS tenant ("oauth", "api_token",
+   *  "basic", "smtp"), so the case chip's tooltip can say so. */
+  auth_mode?: string;
 };
 
 /** One connector's stored settings, as Administration renders them. Exactly one
@@ -3691,9 +3705,16 @@ export type TacConnectorConfigView = {
   secrets: Record<string, boolean>;
   servicenow?: { enabled: boolean; max_attach_bytes?: number };
   jira?: { enabled: boolean; deployment?: string; max_attach_bytes?: number };
+  /** The mailbox block. `auth_mode` decides which of the rest matter; a blank
+   *  one is the password relay, exactly as the server reads it. The three
+   *  write-only secrets (password, oauth_client_secret, service_account_key)
+   *  are NEVER here — `secrets` reports only which of them are stored. */
   email?: {
     enabled: boolean; host: string; from: string; user?: string;
     tls_on_connect?: boolean; reply_to?: string;
+    auth_mode?: string; mailbox?: string; oauth_provider?: string;
+    entra_tenant_id?: string; oauth_client_id?: string;
+    service_account_email?: string; read_replies?: boolean;
   };
   cisco?: {
     enabled: boolean; cco_id?: string; customer_source_id?: string;
@@ -3728,10 +3749,19 @@ export type TacCaseForm = {
   contract_id?: string;
   contact_name?: string;
   contact_email?: string;
+  /** The SR / case / issue this bundle attaches to, for the attach-to-existing
+   *  connectors. A case reference, not a credential. */
+  existing_case_number?: string;
   bundle_name: string;
   bundle_bytes: number;
   profile: string;
   missing_fields?: string[];
+  /** The same refusal in STRUCTURED form: each field with the vendor's reason
+   *  and where it is set, so the screen can link to the settings page that
+   *  fixes it instead of printing a sentence the operator has to decode. */
+  missing_required?: TacRequiredField[];
+  /** MissingRequired as one sentence, in the vendor's own terms. */
+  missing_note?: string;
   portal_text: string;
   portal_url?: string;
 };
@@ -3823,6 +3853,211 @@ export type TacCaseFormResponse = {
 };
 /** POST … with submit:true — the human-approved action's result. */
 export type TacCaseSubmitResponse = { result: TacCaseResult; bundle: TacStoredBundle };
+
+// ── the ONE ACTION: escalate → prepare → confirm ────────────────────────────
+//
+// internal/tac/escalate.go. The split is the safety property, not a
+// convenience: escalate and prepare have NO path to a vendor, so "Correlix
+// never opens a case on its own" is true by construction. Confirm is the only
+// call that can cause a case to exist, and it needs an authenticated person.
+
+/** WHY a connector was chosen. A closed set, because it is rendered as a
+ *  sentence and the words must mean the same thing every time. */
+export type TacRouteReason =
+  | "tenant_route" | "requested" | "vendor_native" | "vendor_email" | "portal_fallback";
+
+/** The chosen path and the reason, for the confirmation screen. */
+export type TacEscalationRoute = {
+  connector_id: string;
+  display: string;
+  vendor?: string;
+  reason: TacRouteReason;
+  /** The operator-facing sentence: "your team routed Cisco cases here". */
+  note: string;
+  /** Whether the chosen connector actually has credentials for this tenant. A
+   *  tenant route naming an unconfigured connector is HONOURED and then refused
+   *  by name — never silently rerouted. */
+  configured: boolean;
+  /** A path that opens nothing: text, a bundle and a link. A complete outcome. */
+  portal: boolean;
+  auth_mode?: string;
+  /** The other connectors that could carry this vendor. */
+  alternatives?: string[];
+};
+
+/** One piece of data a vendor demands before it will open a case, named the way
+ *  the operator has to think about it. `any_of` groups alternatives. */
+export type TacRequiredField = {
+  key: string;
+  label: string;
+  why: string;
+  settings_hint: string;
+  any_of?: string;
+  alt?: string;
+};
+
+/** The ONE confirmation screen: exactly what will be sent, and nothing has been
+ *  sent yet. `ready:false` means Confirm would refuse, and `blockers` says what
+ *  is missing BY NAME and where each one is set. */
+export type TacProposal = {
+  incident_id: string;
+  route: TacEscalationRoute;
+  form: TacCaseForm;
+  bundle: TacStoredBundle;
+  ready: boolean;
+  blockers?: TacRequiredField[];
+  /** The same refusal as one sentence in the vendor's own terms. */
+  blocker_note?: string;
+  /** Things an operator should see that do not block: an expired contract, a
+   *  partial collection, a bundle trimmed to fit a mailbox. */
+  warnings?: string[];
+  /** The standing redaction promise, restated on the screen that sends. */
+  redaction: string;
+  /** The sentence the screen carries above the button. */
+  approval: string;
+  prepared_at: string;
+};
+
+/** POST /api/incidents/{id}/tac/escalate and …/prepare share this body. */
+export type TacEscalateRequest = {
+  device_id: string;
+  class_id?: string;
+  connector_id?: string;
+  capture_id?: string;
+  severity?: string;
+  title?: string;
+  include_optional?: boolean;
+  consent?: string[];
+  target?: TacTarget;
+};
+
+/** 202 from …/tac/escalate — classified, planned, routed, collecting. NOTHING
+ *  has left the platform. */
+export type TacEscalateResponse = {
+  incident_id: string;
+  route: TacEscalationRoute;
+  state: TacState;
+  can_collect: boolean;
+  collect_note: string;
+  /** Set when this tenant's preferred capture for the platform was configured. */
+  capture_note: string;
+  evidence_sources: string[];
+  evidence_missing: string[];
+  connectors: TacConnectorInfo[];
+};
+
+/** 200 from …/tac/escalate/prepare — the bundle is built and redacted, the form
+ *  is filled, and still nothing has been sent. */
+export type TacPrepareResponse = { proposal: TacProposal; state: TacState };
+
+/** POST …/tac/escalate/confirm — the human-approved submit. `upload_token` is
+ *  the ephemeral per-case credential a vendor's portal mints (Cisco CXD); it is
+ *  never stored and never echoed back. */
+export type TacConfirmRequest = {
+  form: {
+    title: string;
+    severity: string;
+    product?: string;
+    serial_number?: string;
+    contract_id?: string;
+    contact_name?: string;
+    contact_email?: string;
+    existing_case_number?: string;
+  };
+  upload_token?: string;
+  upload_host?: string;
+};
+
+export type TacConfirmResponse = { result: TacCaseResult; case: TacCaseLink };
+
+/** The cadence class a case earns from the severity ACTUALLY SENT to the vendor.
+ *  An unrecognised severity tiers DOWN, never up. */
+export type TacSeverityTier = "emergency" | "high" | "routine";
+
+/** The case as the incident records it — the chip's whole content.
+ *
+ *  `last_error` set means the most recent read FAILED: the chip reads "status
+ *  unknown since <last_checked_at>" with the cause, never a stale status. */
+export type TacCaseLink = {
+  connector: string;
+  vendor?: string;
+  /** Empty on a path that cannot return one — an email-opened case until the
+   *  mailbox connector can read the reply. The chip says "number pending". */
+  case_id?: string;
+  case_url?: string;
+  opened_at: string;
+  status?: string;
+  severity?: string;
+  tier: TacSeverityTier;
+  auth_mode?: string;
+  attached: boolean;
+  attach_note?: string;
+  /** When the status was last READ SUCCESSFULLY — never "last tried". */
+  last_checked_at?: string;
+  last_error?: string;
+  next_check_at?: string;
+  cadence_note?: string;
+  cadence_label?: string;
+  /** Whether this connector can read a status back at all. */
+  pollable: boolean;
+  closed: boolean;
+};
+
+/** POST /api/incidents/{id}/tac/case/refresh — the operator's "Refresh now".
+ *  429 when the 60-second floor has not passed; the body says how long. */
+export type TacCaseRefreshResponse = {
+  case: TacCaseLink;
+  status_line: string;
+  tooltip: string;
+};
+
+// ── GET|PUT|DELETE /api/tac/routing ─────────────────────────────────────────
+// The tenant's TAC routing record: the named human a vendor calls back, which
+// connector carries which vendor's cases, the preferred capture per platform,
+// and the support-contract identifiers a vendor checks before it opens
+// anything. Per-tenant data — the body NEVER carries a tenant; the server
+// stamps the owner from the token.
+
+/** The NAMED HUMAN a vendor opens the case against. Correlix never substitutes
+ *  a shared identity. */
+export type TacRoutingContact = { name?: string; email?: string; phone?: string };
+
+/** One vendor's support agreement as this tenant holds it. The field names are
+ *  generic and the LABEL is per vendor (Cisco CCO ID, Juniper CSP user, …). */
+export type TacVendorContract = {
+  vendor: string;
+  contract_id?: string;
+  account_id?: string;
+  site_id?: string;
+  support_level?: string;
+  /** Coverage end date, YYYY-MM-DD. An expired one WARNS, it never refuses. */
+  expires_on?: string;
+  note?: string;
+};
+
+export type TacRoutingConfig = {
+  contact: TacRoutingContact;
+  /** Device vendor id → the connector id that opens its cases. */
+  route_by_vendor?: Record<string, string>;
+  /** CLI dialect slug → the tenant capture id that replaces the default. */
+  capture_by_dialect?: Record<string, string>;
+  contract_by_vendor?: Record<string, TacVendorContract>;
+  /** Per-device override, keyed by SERIAL — what the vendor actually checks. */
+  contract_by_serial?: Record<string, TacVendorContract>;
+};
+
+/** One platform a preferred capture can be set for. */
+export type TacRoutingDialect = { dialect: string; display: string };
+
+export type TacRoutingResponse = {
+  routing: TacRoutingConfig;
+  /** False for a tenant that has configured nothing — a state, not a failure. */
+  configured: boolean;
+  connectors: TacConnectorInfo[];
+  dialects: TacRoutingDialect[];
+};
+
+export type TacRoutingSaveResponse = { routing: TacRoutingConfig; configured: boolean };
 
 // ── Iris → Knowledge (GET /api/troubleshoot/tac/knowledge) ──────────────────
 // Version-pinned REFERENCE data, identical for every tenant: what Correlix knows
@@ -4650,8 +4885,11 @@ export const api = {
   // A no-op on every other path. The raw slug is never trusted for anything —
   // it is handed to the api, which resolves it to the immutable tenant id.
   resolveLoginLocator: async (): Promise<LoginLocator | null> => {
-    const path = loginLocatorPath(window.location.pathname);
-    if (!path) return null;
+    // Called on EVERY sign-in page load, locator or not. A blank path is how the
+    // generic page says "no candidate": the server clears any candidate cookie
+    // an earlier tenant link left behind, so /  always shows the platform's own
+    // full sign-in page rather than the last tenant's filtered one.
+    const path = loginLocatorPath(window.location.pathname) ?? "";
     try {
       const r = await request<{ locator: LoginLocator | null }>(`/api/auth/locator?path=${encodeURIComponent(path)}`);
       return r.locator ?? null;
@@ -6354,6 +6592,61 @@ export const api = {
     }),
   /** Iris → Knowledge: the per-dialect coverage catalogue. Reference data. */
   tacKnowledge: () => request<TacKnowledge>("/api/troubleshoot/tac/knowledge"),
+
+  // ---------- the ONE ACTION (internal/tac/escalate.go) --------------------
+  // Escalate and prepare have NO path to a vendor; confirm is the only call
+  // that can cause a case to exist, and it needs an authenticated person. All
+  // three are infrastructure:write — they run commands against a device and
+  // open a vendor case. The route is decided SERVER-side because the fallback
+  // ladder, the connector capabilities and the tenant's settings all live
+  // there; a client that computed it would get it subtly different.
+  /** CLICK ONE: classify, plan, pick the capture, pick the route, start
+   *  collecting. 202. Nothing leaves the platform. */
+  tacEscalate: (incidentId: string, req: TacEscalateRequest) =>
+    request<TacEscalateResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/escalate`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  /** The confirmation screen: the redacted bundle and the pre-filled form for
+   *  the chosen route, plus whether Confirm could succeed. Still sends nothing. */
+  tacEscalatePrepare: (incidentId: string, req: TacEscalateRequest) =>
+    request<TacPrepareResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/escalate/prepare`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  /** CLICK TWO: the human-approved submit. The ONLY call that opens a case. */
+  tacEscalateConfirm: (incidentId: string, body: TacConfirmRequest) =>
+    request<TacConfirmResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/escalate/confirm`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /** The operator's "Refresh now" on an opened case. 429 while the 60-second
+   *  floor holds — a person hammering the button must not be the thing that
+   *  trips a vendor's rate limit for their whole tenant. */
+  tacCaseRefresh: (incidentId: string) =>
+    request<TacCaseRefreshResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/case/refresh`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+
+  // ---------- TAC routing (Administration → Ticket delivery) ---------------
+  // The tenant's own contact, per-vendor route, preferred capture per platform
+  // and support contracts. Per-tenant data: requirePerm + the store's tenant
+  // filter, and the body never carries a tenant.
+  /** This tenant's routing record, plus the connectors and platforms it may
+   *  choose between. `configured:false` is a tenant that has set nothing. */
+  tacRouting: () => request<TacRoutingResponse>("/api/tac/routing"),
+  /** Replaces the whole record. A route naming a connector this platform does
+   *  not have is refused by name. */
+  tacRoutingSave: (routing: TacRoutingConfig) =>
+    request<TacRoutingSaveResponse>("/api/tac/routing", {
+      method: "PUT",
+      body: JSON.stringify(routing),
+    }),
+  /** Clears this tenant's record. Escalations then arrive with nothing
+   *  pre-filled, which is a state and not a failure. */
+  tacRoutingDelete: () =>
+    request<void>("/api/tac/routing", { method: "DELETE" }),
   /** The case connectors as THIS tenant sees them, with no incident — what
    *  Administration → Ticket delivery reads to show each vendor path and what
    *  it still needs. `configured` is the only per-tenant field. */

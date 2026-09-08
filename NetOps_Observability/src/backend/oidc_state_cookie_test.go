@@ -128,8 +128,16 @@ func TestSSOStateCookieCarriesSecureOnHTTPS(t *testing.T) {
 			if ck.SameSite != http.SameSiteLaxMode {
 				t.Errorf("SameSite = %v, want Lax", ck.SameSite)
 			}
-			if ck.Path != "/api/auth/sso" {
-				t.Errorf("Path = %q, want /api/auth/sso", ck.Path)
+			// Path "/" — widened from "/api/auth/sso" with per-tenant sign-in
+			// URLs (tracker 276). A tenant-bound connection returns to
+			// /t/{slug}/sso/{alias}/callback, and a cookie scoped to the api
+			// prefix is simply NOT SENT there — which would take the CSRF
+			// defence off the newest flow while looking fine in this test. The
+			// value stays a single-use opaque nonce and HttpOnly + SameSite=Lax
+			// + Secure (asserted above) are unchanged, so widening the path
+			// costs nothing an attacker can spend.
+			if ck.Path != "/" {
+				t.Errorf("Path = %q, want / (must reach the per-tenant callback URLs)", ck.Path)
 			}
 			if ck.Value == "" {
 				t.Error("state cookie carries no value — CSRF check would compare empty to empty")
@@ -172,7 +180,9 @@ func TestSSOStateClearCookieMatchesSecureSemantics(t *testing.T) {
 			if ck.Secure != cookieSecure(r) {
 				t.Errorf("clear-cookie Secure = %v, want %v (cookieSecure(r))", ck.Secure, cookieSecure(r))
 			}
-			if !ck.HttpOnly || ck.SameSite != http.SameSiteLaxMode || ck.Path != "/api/auth/sso" {
+			// Same Path as the Set above (see the note there) or the expiry
+			// lands on a cookie that does not exist.
+			if !ck.HttpOnly || ck.SameSite != http.SameSiteLaxMode || ck.Path != "/" {
 				t.Errorf("clear-cookie attributes drifted from the set-cookie: httpOnly=%v sameSite=%v path=%q",
 					ck.HttpOnly, ck.SameSite, ck.Path)
 			}
