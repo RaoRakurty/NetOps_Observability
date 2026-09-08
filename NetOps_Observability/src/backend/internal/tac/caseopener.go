@@ -150,6 +150,35 @@ type ConnectorInfo struct {
 	// Twelve connectors share five blocks, so the mapping is the server's to
 	// state, never the client's to guess.
 	ConfigSection string `json:"config_section,omitempty"`
+	// Required is what the VENDOR demands before a case can be opened at all,
+	// declared by the connector rather than guessed by the caller.
+	//
+	// It exists so the confirmation screen can refuse BY NAME — "Cisco needs
+	// your CCO-ID; a serial number, or a contract id and a PID" — and say where
+	// each missing value is set. The alternative was for this package to carry a
+	// table of vendor entitlement rules, which is exactly the vendor knowledge
+	// the connector already owns (docs/design/TAC_CASE_FIELDS_2026-09-07.md).
+	Required []RequiredField `json:"required,omitempty"`
+	// SeverityValues is the vendor's accepted severity vocabulary, in the
+	// vendor's own tokens. Empty means the vendor publishes none, which is a
+	// fact rather than a gap: the form then carries Correlix's mapped severity
+	// as free text.
+	SeverityValues []string `json:"severity_values,omitempty"`
+	// NumberLookup reports a path that cannot read a case STATUS back but CAN
+	// learn the case NUMBER — an email-opened Arista or Cisco case, once the
+	// tenant has turned on reading the vendor's reply thread.
+	//
+	// It is a separate flag from CapPollStatus on purpose, and the distinction is
+	// the honesty rule the email connector already states: reading our own
+	// mailbox can tell us the number the vendor assigned, and it can never tell
+	// us what they have done with the case. So the chip moves from "opened by
+	// email · number pending" to the real number, and stops there rather than
+	// inventing a status.
+	NumberLookup bool `json:"number_lookup,omitempty"`
+	// AuthMode names how this connector authenticates for THIS tenant ("oauth",
+	// "api_token", "basic", "smtp", ""), so the case chip can say so and an
+	// operator can see at a glance which paths are on the preferred OAuth path.
+	AuthMode string `json:"auth_mode,omitempty"`
 	// Unavailable reports that this tenant's stored configuration could not be
 	// READ — a storage failure, not a state.
 	//
@@ -160,6 +189,31 @@ type ConnectorInfo struct {
 	// name its cause and be logged (§10). Conflating them taught operators to
 	// ignore a sentence that one day means something.
 	Unavailable bool `json:"unavailable,omitempty"`
+}
+
+// RequiredField is one piece of data a vendor demands before it will open a
+// case, named the way the operator has to think about it.
+//
+// It mirrors internal/ticketing.RequiredField field for field, on purpose: the
+// dependency runs one way (ticketing imports tac, never the reverse), so the
+// seam carries a copy of the shape and the connector fills it. The AUTHORITY is
+// docs/design/TAC_CASE_FIELDS_2026-09-07.md and the table the connector holds;
+// this type is how that authority crosses the seam.
+type RequiredField struct {
+	// Key is the CaseForm field this maps to (serial_number, contract_id,
+	// contact_email, product, severity…), or a name of something set elsewhere.
+	Key string `json:"key"`
+	// Label reads inside a sentence: "a serial number", "your CCO-ID".
+	Label string `json:"label"`
+	// Why is the vendor's own reason, one sentence.
+	Why string `json:"why"`
+	// SettingsHint names WHERE the operator supplies it.
+	SettingsHint string `json:"settings_hint"`
+	// AnyOf groups alternatives: the group is satisfied by ONE of them.
+	AnyOf string `json:"any_of,omitempty"`
+	// Alt is the alternative id within the group; fields sharing an Alt must all
+	// be present for that alternative to count.
+	Alt string `json:"alt,omitempty"`
 }
 
 // Can reports whether the connector claims a capability.
@@ -211,6 +265,14 @@ type CaseForm struct {
 	// so the UI can disable submit WITH A REASON rather than failing at the
 	// vendor.
 	MissingFields []string `json:"missing_fields,omitempty"`
+	// MissingRequired is the same refusal in STRUCTURED form: each field with
+	// the vendor's reason and where it is set, so the confirmation screen can
+	// link the operator straight to the settings page that fixes it instead of
+	// printing a sentence they have to decode.
+	MissingRequired []RequiredField `json:"missing_required,omitempty"`
+	// MissingNote is the one-sentence rendering of MissingRequired, in the
+	// vendor's own terms. Empty when nothing is missing.
+	MissingNote string `json:"missing_note,omitempty"`
 	// PortalText is the paste-ready case text for connectors with no create
 	// capability. It is always populated — even for an API connector — so an
 	// operator always has a path that does not depend on an integration.

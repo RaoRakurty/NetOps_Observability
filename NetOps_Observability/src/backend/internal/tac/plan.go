@@ -122,6 +122,13 @@ type Plan struct {
 	DeviceID string `json:"device_id"`
 	Hostname string `json:"hostname"`
 	Platform string `json:"platform"`
+	// Vendor / Serial / Model are the device's identity as the VENDOR checks it.
+	// They travel with the plan so they reach the capture, and through it the
+	// pre-filled case form — the confirmation screen carries the serial a
+	// vendor's entitlement check demands without anyone typing it.
+	Vendor string `json:"vendor,omitempty"`
+	Serial string `json:"serial,omitempty"`
+	Model  string `json:"model,omitempty"`
 
 	// Dialect is the resolved dialect slug; DialectDisplay its label. HasPlan is
 	// false when this platform has no authored command set — the honest path.
@@ -225,6 +232,18 @@ type Device struct {
 	// row that authorised the device — never from a request body.
 	Address string
 	Port    int
+	// Vendor is the device's VENDOR id ("cisco", "juniper", "arista", …), which
+	// is what a TAC route is keyed on. It is resolved from the same inventory
+	// row as Platform; a device whose vendor could not be resolved routes to the
+	// portal-text path, which is honest rather than wrong.
+	Vendor string
+	// Serial and Model are the device's own identity as the VENDOR checks it,
+	// parsed from `show version` / `show inventory` and carried on the inventory
+	// row. They are on the plan so they reach the capture, and through the
+	// capture the case form — which is how the confirmation screen arrives
+	// already carrying the serial a vendor's entitlement check demands.
+	Serial string
+	Model  string
 }
 
 // Plan builds the command plan for a class on a device.
@@ -248,6 +267,7 @@ func (c *Catalog) Plan(classID string, dev Device, opt PlanOptions) (*Plan, erro
 	p := &Plan{
 		TenantID: dev.TenantID, DeviceID: dev.ID, Hostname: dev.Hostname, Platform: dev.Platform,
 		Address: dev.Address, Port: dev.Port,
+		Vendor: dev.Vendor, Serial: dev.Serial, Model: dev.Model,
 		Dialect: dialect, DialectDisplay: display,
 		ClassID: cl.ID, ClassTitle: cl.Title, TACFirstLook: cl.TACFirstLook,
 		Target: opt.Target, IncludeOptional: opt.IncludeOptional,

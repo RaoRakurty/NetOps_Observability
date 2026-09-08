@@ -149,6 +149,12 @@ func (o *TACOpener) Info(ctx context.Context, tenantID string) tac.ConnectorInfo
 		Required:       tacRequiredFields(o.Connector.Name()),
 		SeverityValues: SeverityVocabulary(o.Connector.Name()),
 	}
+	// A path that cannot poll a status may still be able to learn the case
+	// NUMBER from the vendor's reply. It is declared separately so the chip can
+	// promise exactly that and no more.
+	if _, isEmail := o.Connector.(*EmailCaseConnector); isEmail {
+		info.NumberLookup = true
+	}
 	info.Profile = tac.ProfileForConnector(info)
 
 	cfg, err := o.tenantConfig(ctx, tenantID)
@@ -515,9 +521,22 @@ func attachOnlyMissingFields(req tac.CaseRequest) []string {
 }
 
 // PollStatus reads a case's status back.
+//
+// EMAIL IS THE EXCEPTION, and it is a narrow one. An email-opened case has no
+// number at send time — the vendor assigns one and puts it in the subject of
+// their reply — so a path with no Poll capability may still be able to LEARN THE
+// NUMBER by reading the tenant's own mailbox (LookupCaseNumber, opt-in behind
+// `read_replies`). It can never learn a STATUS, and this method does not pretend
+// otherwise: it returns the number and the honest "opened by email" status, and
+// once a number is known it stops asking.
 func (o *TACOpener) PollStatus(ctx context.Context, tenantID, caseID string) (tac.CaseResult, error) {
 	res := tac.CaseResult{ConnectorID: o.Connector.Name(), CaseID: caseID, SubmittedAt: o.now()}
 	if !o.Connector.Capabilities().Poll {
+		if ref, found, err := o.lookupEmailCaseNumber(ctx, tenantID, caseID); err == nil && found {
+			res.CaseID = ref
+			res.Status = EmailOpenedStatus
+			return res, nil
+		}
 		return res, tac.ErrCapabilityUnsupported
 	}
 	cfg, err := o.tenantConfig(ctx, tenantID)
@@ -539,6 +558,41 @@ func (o *TACOpener) PollStatus(ctx context.Context, tenantID, caseID string) (ta
 		res.CaseID = rc.Number
 	}
 	return res, nil
+}
+
+// EmailOpenedStatus is the only status an email-opened case can honestly carry
+// until a human reads the thread: the vendor has it, and their reply gave us the
+// number. It is a constant because the chip, the incident record and the tests
+// must all say the same words.
+const EmailOpenedStatus = "opened by email"
+
+// lookupEmailCaseNumber asks the email connector to read the vendor's reply and
+// lift the case number out of the subject.
+//
+// It runs ONLY when the case has no number yet: once the number is known there
+// is nothing left for it to learn, and re-reading a mailbox on a schedule to
+// discover the same string is exactly the kind of wasted permission use that
+// makes a customer turn the permission off.
+func (o *TACOpener) lookupEmailCaseNumber(ctx context.Context, tenantID, caseID string) (string, bool, error) {
+	if strings.TrimSpace(caseID) != "" {
+		return "", false, nil
+	}
+	em, ok := o.Connector.(*EmailCaseConnector)
+	if !ok {
+		return "", false, nil
+	}
+	cfg, err := o.tenantConfig(ctx, tenantID)
+	if err != nil {
+		return "", false, err
+	}
+	ref, found, err := em.LookupCaseNumber(ctx, cfg)
+	if err != nil {
+		return "", false, err
+	}
+	if !found {
+		return "", false, nil
+	}
+	return orDefault(ref.Number, ref.ID), true, nil
 }
 
 // tenantConfig resolves one tenant's configuration. A nil resolver is not a

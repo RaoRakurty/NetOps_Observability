@@ -98,6 +98,13 @@ var vocabularyGuardAllowlist = map[string]string{
 	// meaning to the profile data.
 	"internal/ticketing/attach_email.go":    "vendor → TAC attachment mailbox / subject convention (support organisation, not device profile)",
 	"internal/ticketing/caseconn_portal.go": "vendor → case-portal descriptor (URL + form fields the portal asks for), not device profile",
+	// Same class, and for the same reason: the literal picks the vendor's own
+	// published REPLY-SUBJECT convention (Cisco writes `SR ######### `, Arista
+	// writes `Ref. ID …`), which is how their support mailbox threads a case. It
+	// is a fact about the vendor's ticketing system, not about their devices,
+	// and it is the read half of the table attach_email.go already holds for the
+	// write half.
+	"internal/ticketing/mailbox_send.go": "vendor → TAC reply-subject case-reference convention (support organisation, not device profile)",
 }
 
 // vocabularyGuardMinHits is how many distinct registry ids one literal must

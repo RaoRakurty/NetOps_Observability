@@ -77,6 +77,18 @@ type State struct {
 	Capture        *Capture        `json:"capture,omitempty"`
 	Bundles        []StoredBundle  `json:"bundles"`
 	Case           *CaseResult     `json:"case,omitempty"`
+	// Route is the connector this escalation will use and WHY (escalate.go). It
+	// is decided once, when the operator presses Escalate, so the panel can name
+	// it while the collection runs rather than only at the end.
+	Route *EscalationRoute `json:"route,omitempty"`
+	// Settings is the tenant's routing record as it was resolved for THIS
+	// device, kept so Prepare fills the form from the same values the route was
+	// chosen with — a contract edited mid-collection must not silently change
+	// what the confirmation screen says it will send.
+	Settings *EscalationSettings `json:"-"`
+	// Proposal is the confirmation screen's content: the exact case that will be
+	// opened. Its existence is what makes Confirm legal.
+	Proposal *Proposal `json:"proposal,omitempty"`
 	// Remembered records that this escalation has already been written into the
 	// investigation memory Iris recalls from. It exists so the memory is written
 	// ONCE, at the first moment the escalation became real (a bundle was
@@ -643,6 +655,19 @@ func (s *Service) SubmitCase(ctx context.Context, tenant, incident, connectorID 
 	return res, nil
 }
 
+// PollCase reads one case's status back through the connector that opened it.
+//
+// It is on the SERVICE rather than exposed as a bare opener because the opener
+// list is the service's, and because a connector id that is no longer wired must
+// answer honestly ("this path is gone") instead of panicking on a nil interface.
+func (s *Service) PollCase(ctx context.Context, tenant, connectorID, caseID string) (CaseResult, error) {
+	o, _, ok := s.opener(ctx, tenant, connectorID)
+	if !ok {
+		return CaseResult{}, ErrCapabilityUnsupported
+	}
+	return o.PollStatus(ctx, tenant, caseID)
+}
+
 // MarkRemembered claims the one-time investigation-memory write for this
 // escalation. It returns true exactly once per escalation, so the caller can
 // record the memory without a second store read to check.
@@ -741,15 +766,17 @@ func (c *Capture) Summary() *CaptureSummary {
 // StateView is the wire form of an escalation: everything a caller needs to
 // render the flow, with the capture reduced to its summary.
 type StateView struct {
-	IncidentID     string          `json:"incident_id"`
-	Classification *Classification `json:"classification,omitempty"`
-	Plan           *Plan           `json:"plan,omitempty"`
-	Job            *Job            `json:"job,omitempty"`
-	Capture        *CaptureSummary `json:"capture,omitempty"`
-	Bundles        []StoredBundle  `json:"bundles"`
-	Case           *CaseResult     `json:"case,omitempty"`
-	Remembered     bool            `json:"remembered"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	IncidentID     string           `json:"incident_id"`
+	Classification *Classification  `json:"classification,omitempty"`
+	Plan           *Plan            `json:"plan,omitempty"`
+	Job            *Job             `json:"job,omitempty"`
+	Capture        *CaptureSummary  `json:"capture,omitempty"`
+	Bundles        []StoredBundle   `json:"bundles"`
+	Case           *CaseResult      `json:"case,omitempty"`
+	Route          *EscalationRoute `json:"route,omitempty"`
+	Proposal       *Proposal        `json:"proposal,omitempty"`
+	Remembered     bool             `json:"remembered"`
+	UpdatedAt      time.Time        `json:"updated_at"`
 
 	// DefaultCapture is the vendor default derived from the plan — the command
 	// set Correlix will run unless the customer picks another. It is derived
@@ -773,7 +800,8 @@ func (st *State) View() *StateView {
 	v := &StateView{
 		IncidentID: st.IncidentID, Classification: st.Classification, Plan: st.Plan,
 		Job: st.Job, Capture: summary, Bundles: st.Bundles,
-		Case: st.Case, Remembered: st.Remembered, UpdatedAt: st.UpdatedAt,
+		Case: st.Case, Route: st.Route, Proposal: st.Proposal,
+		Remembered: st.Remembered, UpdatedAt: st.UpdatedAt,
 		DefaultCapture: VendorDefaultCapture(st.Plan),
 	}
 	if st.Job != nil || summary != nil {

@@ -112,6 +112,12 @@ type Capture struct {
 	DeviceID string `json:"device_id"`
 	Hostname string `json:"hostname"`
 	Platform string `json:"platform"`
+	// VendorID / Serial / Model are the device's identity as the VENDOR checks
+	// it, carried from the plan so the case form and the bundle's device.json
+	// both name the same chassis.
+	VendorID string `json:"vendor,omitempty"`
+	Serial   string `json:"serial,omitempty"`
+	Model    string `json:"model,omitempty"`
 	Dialect  string `json:"dialect"`
 	Display  string `json:"dialect_display"`
 	HasPlan  bool   `json:"has_plan"`
@@ -171,6 +177,16 @@ func (c *Capture) Close() error {
 		c.Commands[i].SpillPath = ""
 	}
 	return os.RemoveAll(dir)
+}
+
+// Vendor returns the device's vendor id, which is what a TAC route is keyed on.
+// It is a method rather than a bare field read so a capture with no resolved
+// vendor answers "" once, here, instead of at every call site.
+func (c *Capture) Vendor() string {
+	if c == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(c.VendorID))
 }
 
 // SuppliedOutput is one manually-pasted output, the fallback path for a platform
@@ -342,6 +358,7 @@ func (c *Collector) Collect(ctx context.Context, p *Plan, supplied []SuppliedOut
 		TenantID: p.TenantID, IncidentID: p.IncidentID, PlanID: p.ID,
 		ClassID: p.ClassID, ClassTitle: p.ClassTitle,
 		DeviceID: p.DeviceID, Hostname: p.Hostname, Platform: p.Platform,
+		VendorID: p.Vendor, Serial: p.Serial, Model: p.Model,
 		Dialect: p.Dialect, Display: p.DialectDisplay, HasPlan: p.HasPlan,
 		StartedAt: c.now().UTC(), Unbound: p.Unbound, Topology: p.Topology, Target: p.Target,
 		Reviewed: p.Reviewed, Template: p.Template, Edits: p.Edits,

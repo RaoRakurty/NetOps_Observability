@@ -74,7 +74,7 @@ func TestTACRoutesLiveInsideTheirMarkers(t *testing.T) {
 	// main.go: every /tac route registration, and the server field, and the
 	// construction call, are inside the markers.
 	in, out := markerBlocks(t, "main.go", "TAC-ROUTES")
-	routeRE := regexp.MustCompile(`mux\.HandleFunc\("(/api/[^"]*/tac(?:/[a-z]+)?)"`)
+	routeRE := regexp.MustCompile(`mux\.HandleFunc\("(/api/[^"]*/tac(?:/[a-z]+){0,2})"`)
 	if got := routeRE.FindAllStringSubmatch(out, -1); len(got) > 0 {
 		t.Errorf("TAC routes registered OUTSIDE the markers in main.go: %v", got)
 	}
@@ -87,6 +87,14 @@ func TestTACRoutesLiveInsideTheirMarkers(t *testing.T) {
 		"/api/incidents/{id}/tac/bundle":   false,
 		"/api/incidents/{id}/tac/case":     false,
 		"/api/troubleshoot/tac/knowledge":  false,
+		// The ONE ACTION (owner, 2026-09-06). Three routes, two of them clicks:
+		// escalate and prepare have no path to a vendor at all, and confirm is
+		// the only one that can cause a case to exist.
+		"/api/incidents/{id}/tac/escalate":         false,
+		"/api/incidents/{id}/tac/escalate/prepare": false,
+		"/api/incidents/{id}/tac/escalate/confirm": false,
+		// The case's own status refresh, floored at one per case per minute.
+		"/api/incidents/{id}/tac/case/refresh": false,
 	}
 	for _, m := range inside {
 		if _, ok := want[m[1]]; !ok {
@@ -135,6 +143,12 @@ func TestTACRoutesLiveInsideTheirMarkers(t *testing.T) {
 		// the subtree carries the upload verb as well as one capture by id.
 		"/api/tac/captures":  false,
 		"/api/tac/captures/": false,
+		// The tenant's TAC ROUTING record: the named human on a case, the route
+		// per vendor, the preferred capture per dialect, and the support
+		// contracts a case is entitled with. Per-TENANT for every field, and
+		// deliberately not under an incident id — it is configured in
+		// Administration, once, so that every later escalation arrives complete.
+		"/api/tac/routing": false,
 	}
 	for _, m := range tplRE.FindAllStringSubmatch(in, -1) {
 		if _, ok := wantTpl[m[1]]; !ok {
