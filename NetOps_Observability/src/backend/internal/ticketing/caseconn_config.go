@@ -167,6 +167,12 @@ type TACConnectorConfig struct {
 	Email      EmailConnectorConfig   `json:"email"`
 	Cisco      CiscoConnectorConfig   `json:"cisco"`
 	Juniper    JuniperConnectorConfig `json:"juniper"`
+	// Portals holds one MANUAL vendor path's details per connector id
+	// ("portal-nokia" → its portal address, support desk, account and
+	// case-number shape). It is a map rather than five named fields because the
+	// Tier-3 table is data, not code: a vendor added to it must not need a new
+	// struct field here (caseconn_portal_settings.go). No secret lives in it.
+	Portals map[string]PortalConnectorConfig `json:"portals,omitempty"`
 	// ITSM carries the tenant's existing ServiceNow/Jira CONNECTION (instance
 	// URL + credentials) resolved from ITSMConfigStore. It is populated at call
 	// time by the caller, never persisted here and never serialized out.
@@ -183,6 +189,8 @@ func (c TACConnectorConfig) Redacted() TACConnectorConfig {
 	c.Cisco.ClientSecret = ""
 	c.Juniper.ClientSecret = ""
 	c.Juniper.APIKey = ""
+	// Portals hold no secret at all: every field is something a person reads off
+	// their own portal. They round-trip whole, on purpose.
 	c.ITSM = SystemConfig{}
 	return c
 }
@@ -257,7 +265,26 @@ func ValidateTACConnectorConfig(c TACConnectorConfig) error {
 			return err
 		}
 	}
+	// Every stored portal row, in a STABLE order: a record with two bad rows must
+	// refuse with the same sentence on every save, and map iteration would make
+	// that a coin toss.
+	for _, id := range sortedPortalIDs(c.Portals) {
+		if err := ValidatePortalConnectorConfig(id, c.Portals[id]); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// sortedPortalIDs lists the stored portal connector ids in a deterministic
+// order.
+func sortedPortalIDs(m map[string]PortalConnectorConfig) []string {
+	out := make([]string, 0, len(m))
+	for id := range m {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // validateEmailConfig checks the fields THIS mailbox mode actually uses. A

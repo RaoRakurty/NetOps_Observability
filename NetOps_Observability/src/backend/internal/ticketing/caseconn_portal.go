@@ -36,6 +36,7 @@ package ticketing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -123,6 +124,25 @@ var portalVendors = map[string]PortalVendor{
 	},
 }
 
+// ShortName is the vendor's name as it reads INSIDE a sentence — the display
+// name with any scoping parenthetical dropped ("Huawei (enterprise / carrier
+// networking)" → "Huawei").
+//
+// The parenthetical is there because the NEGATIVE is scoped: Huawei Cloud does
+// publish a ticket API and Huawei's enterprise networking desk does not. That
+// scope belongs in the research paragraph, not in a one-line row that says who
+// publishes no API.
+func (v PortalVendor) ShortName() string {
+	name := strings.TrimSpace(v.Vendor)
+	if i := strings.Index(name, " ("); i > 0 {
+		name = name[:i]
+	}
+	if name == "" {
+		return strings.TrimSpace(v.ID)
+	}
+	return name
+}
+
 // PortalVendorFor returns the Tier-3 descriptor for a vendor id.
 func PortalVendorFor(id string) (PortalVendor, bool) {
 	v, ok := portalVendors[strings.ToLower(strings.TrimSpace(id))]
@@ -169,9 +189,35 @@ func (c *PortalOnlyConnector) Capabilities() Caps {
 	}
 }
 
-// ValidateConfig always succeeds: there is nothing to configure, and reporting
-// a configuration error would imply configuration could enable an API.
-func (c *PortalOnlyConnector) ValidateConfig(TACConnectorConfig) error { return nil }
+// PortalOnly declares the Tier-3 fact to the tac seam: this vendor publishes no
+// case-creation API, so the prepared text and the bundle ARE the path. It is a
+// method rather than a capability flag because "claims no capability" and
+// "cannot ever claim one" are different things — an unconfigured ServiceNow
+// claims nothing today and will claim everything tomorrow.
+func (c *PortalOnlyConnector) PortalOnly() bool { return true }
+
+// VendorDisplayName is the vendor's name as a sentence would write it.
+func (c *PortalOnlyConnector) VendorDisplayName() string { return c.vendor.ShortName() }
+
+// ValidateConfig reports whether this tenant has brought the MANUAL path's own
+// details.
+//
+// It used to always succeed, on the reasoning that a configuration error would
+// imply configuration could enable an API. Configuration cannot — and the row
+// then read "Ready" on every deployment, which promised an integration that does
+// not exist (owner, 2026-09-08: "it still shows copy paste options"). What
+// configuration DOES enable is the manual path itself: which portal this
+// customer opens cases in, the desk that also takes mail, their support account,
+// and what a case number for this vendor looks like. Without those, the step can
+// only hand out a generic link, and that is "Not configured" — with a form
+// behind it that can actually be completed.
+func (c *PortalOnlyConnector) ValidateConfig(cfg TACConnectorConfig) error {
+	p := PortalSettingsFor(c.Name(), cfg)
+	if !p.Enabled {
+		return errors.New(NotConfiguredPortalNote)
+	}
+	return ValidatePortalConnectorConfig(c.Name(), p)
+}
 
 func (c *PortalOnlyConnector) CreateCase(context.Context, TACConnectorConfig, CaseRequest) (CaseRef, error) {
 	return CaseRef{}, c.unsupported("open a case")

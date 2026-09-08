@@ -73,6 +73,10 @@ import {
   commandCountLine,
   connectorTopic,
   missingOutputsLine,
+  SEND_ACTION,
+  SEND_NEEDS_CAPTURES,
+  SEND_WITHOUT_CAPTURES,
+  SEND_WITHOUT_CAPTURES_NOTE,
   showAllConnectorsLabel,
 } from "./tacModel";
 
@@ -933,17 +937,29 @@ describe("the Nokia escalation shows the paths this device can use", () => {
       { id: "cisco-cxd", display: "Cisco CXD (attach to an existing SR)", vendor: "cisco", capabilities: ["attach"], max_attachment_bytes: 8_589_934_592, profile: "full", configured: false },
       { id: "cisco-smart-bonding", display: "Cisco Smart Bonding (open an SR)", vendor: "cisco", capabilities: ["create", "attach", "poll_status", "link"], max_attachment_bytes: 8_589_934_592, profile: "full", configured: false },
       { id: "juniper", display: "Juniper Service Case", vendor: "juniper", capabilities: ["create", "attach", "poll_status", "link"], max_attachment_bytes: 8_589_934_592, profile: "full", configured: false },
-      { id: "portal-fortinet", display: "Fortinet portal (copy & paste)", vendor: "fortinet", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: true },
-      { id: "portal-huawei", display: "Huawei portal (copy & paste)", vendor: "huawei", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: true },
-      { id: "portal-nokia", display: "Nokia portal (copy & paste)", vendor: "nokia", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: true, note: NOKIA_RESEARCH },
-      { id: "portal-paloalto", display: "Palo Alto portal (copy & paste)", vendor: "paloalto", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: true },
-      { id: "portal-text", display: "Vendor portal / email (copy & paste)", capabilities: ["link"], max_attachment_bytes: 0, profile: "link_only", configured: true },
+      { id: "portal-fortinet", display: "Fortinet portal", vendor: "fortinet", vendor_display: "Fortinet", portal_only: true, config_section: "portal", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: false },
+      { id: "portal-huawei", display: "Huawei portal", vendor: "huawei", vendor_display: "Huawei", portal_only: true, config_section: "portal", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: false },
+      { id: "portal-nokia", display: "Nokia portal", vendor: "nokia", vendor_display: "Nokia", portal_only: true, config_section: "portal", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: false, note: NOKIA_RESEARCH },
+      { id: "portal-paloalto", display: "Palo Alto portal", vendor: "paloalto", vendor_display: "Palo Alto Networks", portal_only: true, config_section: "portal", capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: false },
+      { id: "portal-text", display: "Vendor portal or email", portal_only: true, capabilities: ["link"], max_attachment_bytes: 0, profile: "link_only", configured: true },
     ];
     return rows.map((r) => ({ ...r, ...(over[r.id] ?? {}) }));
   };
 
   const nokiaState = (over: Record<string, Partial<TacStateResponse["connectors"][number]>> = {}) =>
     stateResponse({ state: stateWith({ plan: nokiaPlan() }), connectors: twelve(over) });
+
+  /** The same, with the collection's own state folded in. */
+  const nokiaState2 = (
+    st: Partial<TacState>,
+    over: Record<string, Partial<TacStateResponse["connectors"][number]>> = {},
+  ) => stateResponse({ state: stateWith({ plan: nokiaPlan(), ...st }), connectors: twelve(over) });
+
+  /** A finished collection, in the shape the server reports it. */
+  const capturedProgress = (status: "done" | "partial") => ({
+    capture_id: "cap-1", status, total: 4, done: status === "done" ? 4 : 3,
+    failed: status === "done" ? 0 : 1, commands: [],
+  }) as never;
 
   it("shows the Nokia path, the configured ITSM and the generic one — the rest are folded", async () => {
     await show(nokiaState());
@@ -976,10 +992,68 @@ describe("the Nokia escalation shows the paths this device can use", () => {
     const rows = screen.getByTestId("tac-conn-rows");
     expect(rows.textContent).not.toContain("could not be read");
     expect(within(screen.getByTestId("tac-conn-jira")).getByText(CONNECTOR_CHIP.ready)).toBeInTheDocument();
-    expect(within(screen.getByTestId("tac-conn-portal-nokia")).getByText(CONNECTOR_CHIP.ready)).toBeInTheDocument();
     for (const li of Array.from(rows.querySelectorAll("li"))) {
       expect(li.querySelectorAll(".tac-chip")).toHaveLength(1);
     }
+  });
+
+  // ── the owner's complaint, on the screen (2026-09-08) ─────────────────────
+  //
+  // "it still shows copy paste options" — a Nokia escalation showed "Nokia
+  // portal (copy & paste) · Ready" and "Vendor portal / email (copy & paste) ·
+  // Ready", which reads like two idle integrations. Nokia publishes no case API
+  // at all, so the prepared text IS the path and the row has to say so.
+
+  it("chips a vendor with no case API Manual, never Ready, and says whose API is missing", async () => {
+    await show(nokiaState());
+    const row = screen.getByTestId("tac-conn-portal-nokia");
+    expect(within(row).getByText(CONNECTOR_CHIP.manual)).toBeInTheDocument();
+    expect(row).not.toHaveTextContent(CONNECTOR_CHIP.ready);
+    expect(row).toHaveTextContent("Nokia publishes no case API; this is the shortest path");
+    // The mechanism is off the button now: the chip carries it.
+    expect(row).not.toHaveTextContent("copy & paste");
+    // Not configured yet, so the row offers the same next step an API connector
+    // does — and the (i) is still there.
+    expect(within(row).getByRole("link", { name: "Ticket delivery" }))
+      .toHaveAttribute("href", "#/admin/ticket-delivery");
+    expect(within(row).getByRole("button", { name: /Ask Iris/ }))
+      .toHaveAttribute("data-topic", connectorTopic("portal-nokia"));
+  });
+
+  it("says a manual path is configured once the customer has brought its details", async () => {
+    await show(nokiaState({ "portal-nokia": { configured: true } }));
+    const row = screen.getByTestId("tac-conn-portal-nokia");
+    expect(within(row).getByText(CONNECTOR_CHIP["manual-configured"])).toBeInTheDocument();
+    expect(row).not.toHaveTextContent(CONNECTOR_CHIP.ready);
+    expect(row.className).not.toContain("off");
+    expect(screen.getByRole("button", { name: "Nokia portal" })).toBeEnabled();
+  });
+
+  it("hides the generic manual row when the device's own vendor path is ready", async () => {
+    // An Arista device whose support mailbox this tenant HAS configured: the
+    // generic "Vendor portal or email" row would be a second, worse way to do
+    // what the first row already does.
+    await show(stateResponse({
+      state: stateWith({ plan: plan({ dialect: "arista-eos", dialect_display: "Arista EOS" }) }),
+      connectors: twelve({ "email-arista": { configured: true } }),
+    }));
+    const ids = Array.from(screen.getByTestId("tac-conn-rows").querySelectorAll("li"))
+      .map((li) => li.getAttribute("data-testid"));
+    expect(ids).toContain("tac-conn-email-arista");
+    expect(ids).not.toContain("tac-conn-portal-text");
+    // Nothing is hidden: it is one press away, in the disclosure that lists
+    // everything.
+    expect(within(screen.getByTestId("tac-conn-others")).getByTestId("tac-conn-portal-text"))
+      .toBeInTheDocument();
+
+    // With nothing configured for Arista, the generic row is the honest floor.
+    cleanup();
+    await show(stateResponse({
+      state: stateWith({ plan: plan({ dialect: "arista-eos", dialect_display: "Arista EOS" }) }),
+      connectors: twelve(),
+    }));
+    expect(Array.from(screen.getByTestId("tac-conn-rows").querySelectorAll("li"))
+      .map((li) => li.getAttribute("data-testid"))).toContain("tac-conn-portal-text");
   });
 
   it("chips an attach-only connector as such", async () => {
@@ -996,6 +1070,80 @@ describe("the Nokia escalation shows the paths this device can use", () => {
     const row = screen.getByTestId("tac-conn-jira");
     expect(row).toHaveTextContent(CONNECTOR_CHIP.unavailable);
     expect(within(row).getByRole("alert")).toHaveTextContent("app_kv: connection refused");
+  });
+
+  // ── ONE button, then a chooser (owner, 2026-09-08) ───────────────────────
+  //
+  // "From this page when they are ready with captures, they should hit a
+  // button, it will let them choose the vendor and send."
+
+  it("is one button that is dead until the captures have run, and says why", async () => {
+    await show(nokiaState());
+    const send = screen.getByTestId("tac-send-btn");
+    expect(send).toHaveTextContent(SEND_ACTION);
+    expect(send).toBeDisabled();
+    expect(screen.getByTestId("tac-send-blocked")).toHaveTextContent(SEND_NEEDS_CAPTURES);
+    expect(screen.queryByTestId("tac-vendor-chooser")).toBeNull();
+
+    // The escape is real and it is honest about what it costs.
+    const anyway = screen.getByTestId("tac-send-anyway");
+    expect(within(anyway).getByText(SEND_WITHOUT_CAPTURES)).toBeInTheDocument();
+    expect(anyway).toHaveTextContent(SEND_WITHOUT_CAPTURES_NOTE);
+    fireEvent.click(screen.getByTestId("tac-send-anyway-btn"));
+    expect(screen.getByTestId("tac-vendor-chooser")).toBeInTheDocument();
+  });
+
+  it("opens the chooser once the captures have run — partial counts", async () => {
+    await show(nokiaState2({ progress: capturedProgress("partial") }));
+    const send = screen.getByTestId("tac-send-btn");
+    expect(send).toBeEnabled();
+    expect(screen.queryByTestId("tac-send-blocked")).toBeNull();
+    fireEvent.click(send);
+    expect(screen.getByTestId("tac-vendor-chooser")).toBeInTheDocument();
+  });
+
+  // Ready first, configured manual next, dead ends last but still visible with
+  // the link to where their details are brought.
+  it("orders the chooser and never hides a route it cannot offer", async () => {
+    await show(nokiaState2(
+      { progress: capturedProgress("done") },
+      { "portal-nokia": { configured: true } },
+    ));
+    fireEvent.click(screen.getByTestId("tac-send-btn"));
+    const chooser = screen.getByTestId("tac-vendor-chooser");
+    const ids = Array.from(chooser.querySelectorAll("li")).map((li) => li.getAttribute("data-testid"));
+    // Jira is the tenant's ticketing system and this vendor is not routed to it,
+    // so it is not a destination here.
+    expect(ids).toEqual(["tac-route-portal-nokia", "tac-route-portal-text"]);
+    const nokia = within(chooser).getByTestId("tac-route-portal-nokia");
+    expect(within(nokia).getByText(CONNECTOR_CHIP["manual-configured"])).toBeInTheDocument();
+    expect(within(nokia).getByRole("button", { name: "Nokia portal" })).toBeEnabled();
+
+    // An unconfigured manual path is SHOWN and cannot be chosen: an option
+    // missing from a chooser is indistinguishable from one that does not exist.
+    cleanup();
+    await show(nokiaState2({ progress: capturedProgress("done") }));
+    fireEvent.click(screen.getByTestId("tac-send-btn"));
+    const dead = screen.getByTestId("tac-route-portal-nokia");
+    expect(within(dead).getByRole("button", { name: "Nokia portal" })).toBeDisabled();
+    expect(within(dead).getByRole("link", { name: "Ticket delivery" }))
+      .toHaveAttribute("href", "#/admin/ticket-delivery");
+  });
+
+  it("choosing a route builds the confirmation screen for THAT connector", async () => {
+    await show(nokiaState2(
+      { progress: capturedProgress("done") },
+      { "portal-nokia": { configured: true } },
+    ));
+    fireEvent.click(screen.getByTestId("tac-send-btn"));
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId("tac-route-portal-nokia")).getByRole("button", { name: "Nokia portal" }));
+    });
+    expect(mocks.tacEscalatePrepare).toHaveBeenCalledWith(INC, expect.objectContaining({
+      connector_id: "portal-nokia",
+    }));
+    // The chooser closes: the decision has been made.
+    expect(screen.queryByTestId("tac-vendor-chooser")).toBeNull();
   });
 
   it("mentions an attachment ceiling only when the bundle exceeds it", async () => {

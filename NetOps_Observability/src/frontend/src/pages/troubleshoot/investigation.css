@@ -230,6 +230,16 @@
 .tac-chip-attach-only { border-color: var(--warn, #d97706); color: var(--warn, #d97706); }
 .tac-chip-not-configured { border-color: var(--border); color: var(--muted); }
 .tac-chip-unavailable { border-color: var(--bad, #ef4444); color: var(--bad, #ef4444); }
+/* MANUAL (owner, 2026-09-08). A vendor with no case API can never be Ready, so
+   it never takes the ready colour. Unconfigured is neutral like "Not
+   configured"; configured is a real, usable route and reads as one — but as an
+   ACCENT rather than the green an API path earns, because a human still has to
+   press submit in the vendor's own portal. */
+.tac-chip-manual { border-color: var(--border); color: var(--muted); }
+.tac-chip-manual-configured { border-color: var(--accent); color: var(--accent); }
+
+/* The "Send to vendor" chooser: the one decision, not the catalogue. */
+.tac-chooser { margin: 8px 0 4px; }
 .tac-plan-legend { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
 
 /* One line, with the long list behind it. */

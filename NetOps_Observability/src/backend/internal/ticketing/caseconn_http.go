@@ -150,8 +150,10 @@ type ConnectorConfigView struct {
 	Display string           `json:"display"`
 	Vendor  string           `json:"vendor,omitempty"`
 	Section ConnectorSection `json:"section,omitempty"`
-	// Editable is false for the portal-only paths: they store no credential, so
-	// there is no form. Saying so is the honest state, not an omission.
+	// Editable is false only for a connector this deployment carries no form
+	// for. The portal paths ARE editable: they store no credential, and they do
+	// store the four facts about a customer's own support arrangement that
+	// nobody else can supply (owner, 2026-09-08).
 	Editable bool `json:"editable"`
 	// Configured / StatusNote are the same two values the connector list carries,
 	// recomputed here so a save's response tells the operator what changed.
@@ -166,6 +168,10 @@ type ConnectorConfigView struct {
 	Email      *EmailConnectorConfig   `json:"email,omitempty"`
 	Cisco      *CiscoConnectorConfig   `json:"cisco,omitempty"`
 	Juniper    *JuniperConnectorConfig `json:"juniper,omitempty"`
+	// Portal is the MANUAL path's own details, for the portal connectors. It
+	// opens on the vendor's published defaults when this tenant has stored
+	// nothing, so the form is never a blank page the person has to research.
+	Portal *PortalConnectorConfig `json:"portal,omitempty"`
 }
 
 // HandleConnectorItem serves GET/PUT/DELETE on one connector's settings.
@@ -244,6 +250,11 @@ func (a *TACConnectorAPI) put(w http.ResponseWriter, r *http.Request) {
 	// The change is applied INSIDE the store's lock, so a save to one connector
 	// can never carry another connector's block back to an older value.
 	saved, err := store.Update(tenant, false, tenant, func(prev TACConnectorConfig) (TACConnectorConfig, error) {
+		// A portal save needs the VENDOR, which the section name does not carry.
+		// It comes from the id the request was addressed to, never from the body.
+		if section == SectionPortal {
+			return ApplyPortalWrite(entry.ID, body, prev)
+		}
 		return ApplyConnectorWrite(section, body, prev)
 	})
 	if err != nil {
@@ -277,6 +288,9 @@ func (a *TACConnectorAPI) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	left, err := store.Update(tenant, false, tenant, func(prev TACConnectorConfig) (TACConnectorConfig, error) {
+		if section == SectionPortal {
+			return ClearPortalSection(entry.ID, prev)
+		}
 		return ClearConnectorSection(section, prev)
 	})
 	if err != nil {
@@ -387,6 +401,9 @@ func (a *TACConnectorAPI) view(r *http.Request, entry ConnectorEntry, tenant str
 		out.Cisco = &red.Cisco
 	case SectionJuniper:
 		out.Juniper = &red.Juniper
+	case SectionPortal:
+		p := PortalSettingsFor(entry.ID, stored)
+		out.Portal = &p
 	}
 	out.Configured, out.StatusNote = a.state(r, entry, tenant)
 	return out

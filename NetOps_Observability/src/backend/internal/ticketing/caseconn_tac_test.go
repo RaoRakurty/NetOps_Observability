@@ -273,7 +273,13 @@ func TestAdapterPortalOnlySubmitIsASuccessfulOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o := NewTACOpener(c, "fortinet", "", testResolver(TACConnectorConfig{}), nil)
+	// A CONFIGURED manual path: the tenant has brought the portal details, so
+	// the path is usable. (An unconfigured one is refused by name — that is
+	// TestAdapterPortalOnlyIsNotReadyUntilItsDetailsAreBrought.)
+	cfg := TACConnectorConfig{Portals: map[string]PortalConnectorConfig{
+		"portal-fortinet": {Enabled: true, PortalURL: "https://support.fortinet.example/"},
+	}}
+	o := NewTACOpener(c, "fortinet", "", testResolver(cfg), nil)
 	res, err := o.SubmitCase(context.Background(), tac.CaseRequest{
 		TenantID: "org-a-tenant", Actor: "user:42",
 		Form: tac.CaseForm{PortalText: "TITLE: link down"},

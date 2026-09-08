@@ -243,3 +243,73 @@ func TestAnUnservedMethodIsRefused(t *testing.T) {
 		t.Fatalf("GET on the probe = %d, want 405", st)
 	}
 }
+
+// The MANUAL vendor paths are configured HERE, through the same four routes as
+// every API connector (owner, 2026-09-08: "Administrator → Ticket Delivery
+// should be the place where customer configures all the details of vendors
+// portals"). They used to answer 409 "this connector holds no settings".
+func TestPortalConnectorConfiguresThroughTheSameFourRoutes(t *testing.T) {
+	h := newConnHarness(t)
+
+	// GET opens on the vendor's published defaults and says it is editable.
+	status, body := h.call(t, http.MethodGet, "/api/tac/connectors/portal-nokia", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET = %d: %s", status, body)
+	}
+	var view ConnectorConfigView
+	if err := json.Unmarshal([]byte(body), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Section != SectionPortal || !view.Editable {
+		t.Fatalf("a portal path is editable through the portal section: %+v", view)
+	}
+	if view.Portal == nil || view.Portal.PortalURL == "" {
+		t.Fatalf("the form must open on the vendor's published portal: %+v", view.Portal)
+	}
+	if view.Configured {
+		t.Error("a fresh tenant has brought nothing, so the path is not configured")
+	}
+	if len(view.Secrets) != 0 {
+		t.Errorf("a portal path holds no secret: %v", view.Secrets)
+	}
+	if strings.Contains(strings.ToLower(view.Display), "copy") {
+		t.Errorf("the mechanism belongs on the chip, not in the name: %q", view.Display)
+	}
+
+	// PUT saves the customer's own details and the path becomes configured.
+	save := `{"enabled":true,"portal_url":"https://partner.example/tac",` +
+		`"support_mailbox":"tac@partner.example","support_account":"NOK-99","case_number_pattern":"TSR\\d{6}"}`
+	status, body = h.call(t, http.MethodPut, "/api/tac/connectors/portal-nokia", save)
+	if status != http.StatusOK {
+		t.Fatalf("PUT = %d: %s", status, body)
+	}
+	if err := json.Unmarshal([]byte(body), &view); err != nil {
+		t.Fatal(err)
+	}
+	if !view.Configured || view.Portal == nil || view.Portal.PortalURL != "https://partner.example/tac" {
+		t.Fatalf("the save must be what the response reports: %+v", view)
+	}
+	if _, ok := h.audit.find("save"); !ok {
+		t.Error("a settings write must be audited (§10)")
+	}
+
+	// A link that must never reach a browser is refused, and the refusal is
+	// audited exactly like a successful save.
+	status, body = h.call(t, http.MethodPut, "/api/tac/connectors/portal-nokia",
+		`{"enabled":true,"portal_url":"javascript:alert(1)","support_mailbox":"","support_account":"","case_number_pattern":""}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("a javascript: portal address must be refused, got %d: %s", status, body)
+	}
+
+	// DELETE takes the row away and the path is not configured again.
+	status, body = h.call(t, http.MethodDelete, "/api/tac/connectors/portal-nokia", "")
+	if status != http.StatusOK {
+		t.Fatalf("DELETE = %d: %s", status, body)
+	}
+	if err := json.Unmarshal([]byte(body), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Configured {
+		t.Errorf("after a remove the path is not configured: %+v", view)
+	}
+}

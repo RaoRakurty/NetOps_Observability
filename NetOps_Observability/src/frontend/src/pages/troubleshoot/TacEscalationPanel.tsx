@@ -87,11 +87,24 @@ import {
   CASE_HUMAN_APPROVED,
   CASE_SUBMIT_FAILED,
   CLASSIFY_FAILED,
-  CONFIRM_ACTION,
+  CASE_NUMBER_LABEL,
+  capturesHaveRun,
+  caseNumberLooksValid,
+  caseNumberRefusal,
+  confirmAction,
+  connectorVendorLabel,
   CONFIRM_BLOCKED,
+  CONFIRM_PORTAL_NEXT,
+  routeIsChoosable,
+  safePortalHref,
+  SEND_ACTION,
+  SEND_CHOOSER_HEADING,
+  SEND_NEEDS_CAPTURES,
+  SEND_WITHOUT_CAPTURES,
+  SEND_WITHOUT_CAPTURES_NOTE,
+  sendRoutes,
   CONFIRM_FAILED,
   CONFIRM_HEADING,
-  CONFIRM_RUNNING,
   CONNECTOR_CHIP,
   DEVICES_FAILED,
   DRY_RUN_ACTION,
@@ -298,6 +311,10 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
   const [caseNote, setCaseNote] = useState("");
   const [caseResult, setCaseResult] = useState<TacCaseResult | null>(null);
   const [caseBusy, setCaseBusy] = useState(false);
+  // The "Send to vendor" chooser. Closed until the operator asks for it: the
+  // step is ONE button, and the list of where it could go is the answer to
+  // pressing it (owner, 2026-09-08).
+  const [chooserOpen, setChooserOpen] = useState(false);
 
   // ── the ONE ACTION (internal/tac/escalate.go) ─────────────────────────────
   // Escalate → (the server classifies, plans, routes and collects) → prepare →
@@ -827,6 +844,18 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
   // vocabulary and its capabilities are what the confirmation screen renders —
   // the client never guesses either.
   const routedConnector = (info.connectors ?? []).find((c) => c.id === route?.connector_id);
+  const routedVendorLabel = routedConnector ? connectorVendorLabel(routedConnector) : "";
+  // The number the operator pastes back off a vendor's portal, checked against
+  // the shape their administrator configured. Empty is fine — the case may not
+  // be open yet — and anything else that is not a case number stops the button
+  // rather than being filed on the incident.
+  const portalNumberOK = !route?.portal ||
+    caseNumberLooksValid(routedConnector?.case_number_pattern, confirmFields.existing_case_number);
+  // Which routes the "Send to vendor" chooser offers, and whether there is
+  // anything to send yet.
+  const deviceVendor = dialectVendor(plan?.dialect ?? capture?.dialect ?? "");
+  const chooserRoutes = sendRoutes(info.connectors, deviceVendor, route?.connector_id ?? "");
+  const captured = capturesHaveRun(state);
   // The case as it stands. What this panel just opened wins; otherwise the
   // state read carries it, so a reload still shows the number and its status.
   const shownCase = caseLink ?? info.case ?? null;
@@ -1123,6 +1152,25 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
                     />
                   </label>
                 )}
+                {/* THE NUMBER THAT COMES BACK. On a manual route the case is
+                    created in the vendor's own portal, so this is the one value
+                    Correlix cannot derive — and the one the next operator will
+                    search for. It is optional (the case may not be open yet)
+                    and checked against the shape the administrator configured
+                    for this vendor, at the keyboard, before it is filed. */}
+                {proposal.route.portal && !needsExistingCase(routedConnector, proposal) && (
+                  <label className="tac-field">
+                    <span>{CASE_NUMBER_LABEL}</span>
+                    <input
+                      type="text"
+                      maxLength={64}
+                      value={confirmFields.existing_case_number}
+                      data-testid="tac-portal-case-number"
+                      aria-invalid={!portalNumberOK}
+                      onChange={(e) => setConfirmFields((f) => ({ ...f, existing_case_number: e.target.value }))}
+                    />
+                  </label>
+                )}
               </div>
 
               <p className="fact-line" data-testid="tac-confirm-device">
@@ -1172,17 +1220,24 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
                   it false. */}
               <p className="fact-line" data-testid="tac-redaction-promise">{proposal.redaction}</p>
               <p className="fact-line" data-testid="tac-approval">{proposal.approval}</p>
+              {/* A MANUAL route opens nothing, so the screen says what pressing
+                  the button DOES before it is pressed. Without it, "Prepare for
+                  the portal" is a button whose outcome you have to press to
+                  learn (owner, 2026-09-08). */}
+              {proposal.route.portal && (
+                <p className="fact-line" data-testid="tac-portal-next">{CONFIRM_PORTAL_NEXT}</p>
+              )}
 
               <div className="tac-actions">
                 <button
                   type="button"
                   className="btn accent"
-                  disabled={!proposal.ready || confirming}
-                  aria-disabled={!proposal.ready}
+                  disabled={!proposal.ready || confirming || !portalNumberOK}
+                  aria-disabled={!proposal.ready || !portalNumberOK}
                   data-testid="tac-confirm-btn"
                   onClick={() => { void runConfirm(); }}
                 >
-                  {confirming ? CONFIRM_RUNNING : CONFIRM_ACTION}
+                  {confirmAction(proposal.route.portal, confirming)}
                 </button>
                 {/* SECONDARY, deliberately: Open case is what this screen is
                     for, and a dry run is what you do the day you bring
@@ -1209,8 +1264,14 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
                     Copy the case text
                   </button>
                 )}
-                {proposal.form.portal_url && (
-                  <a className="btn" href={proposal.form.portal_url} target="_blank" rel="noreferrer noopener">
+                {safePortalHref(proposal.form.portal_url) && (
+                  <a
+                    className="btn"
+                    href={safePortalHref(proposal.form.portal_url)}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    data-testid="tac-confirm-portal-link"
+                  >
                     Open the vendor portal
                   </a>
                 )}
@@ -1218,6 +1279,11 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
               {!proposal.ready && (
                 <p className="tac-bad" role="status" data-testid="tac-confirm-blocked">
                   {proposal.blocker_note || CONFIRM_BLOCKED}
+                </p>
+              )}
+              {!portalNumberOK && (
+                <p className="tac-bad" role="alert" data-testid="tac-case-number-bad">
+                  {caseNumberRefusal(routedVendorLabel)}
                 </p>
               )}
               {confirmErr && <p className="tac-bad" role="alert" data-testid="tac-confirm-error">{confirmErr}</p>}
@@ -1303,6 +1369,67 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
             </p>
           ) : (
             <>
+              {/* ONE BUTTON, THEN A CHOOSER (owner, 2026-09-08: "when they are
+                  ready with captures, they should hit a button, it will let
+                  them choose the vendor and send").
+
+                  Before the captures have run it is disabled and says why in
+                  one line — with the honest escape beside it, because some
+                  vendors do accept a case with a description and no outputs and
+                  an operator who knows that must not be blocked by us. */}
+              <div className="tac-actions" data-testid="tac-send">
+                <button
+                  type="button"
+                  className="btn accent"
+                  disabled={!captured || preparing || chooserRoutes.length === 0}
+                  aria-disabled={!captured}
+                  aria-expanded={chooserOpen}
+                  data-testid="tac-send-btn"
+                  onClick={() => setChooserOpen((v) => !v)}
+                >
+                  {SEND_ACTION}
+                </button>
+                {!captured && (
+                  <span className="mini-meta" data-testid="tac-send-blocked">{SEND_NEEDS_CAPTURES}</span>
+                )}
+              </div>
+              {!captured && (
+                <details className="tac-fold" data-testid="tac-send-anyway">
+                  <summary>{SEND_WITHOUT_CAPTURES}</summary>
+                  <p className="fact-line">{SEND_WITHOUT_CAPTURES_NOTE}</p>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={preparing || chooserRoutes.length === 0}
+                    data-testid="tac-send-anyway-btn"
+                    onClick={() => setChooserOpen(true)}
+                  >
+                    {SEND_ACTION}
+                  </button>
+                </details>
+              )}
+
+              {chooserOpen && chooserRoutes.length > 0 && (
+                <div className="tac-chooser" data-testid="tac-vendor-chooser">
+                  <h4 className="tac-section-h">{SEND_CHOOSER_HEADING}</h4>
+                  <ul className="tac-connectors">
+                    {chooserRoutes.map((c) => (
+                      <ChooserRow
+                        key={c.id}
+                        info={c}
+                        busy={preparing}
+                        onChoose={() => {
+                          setChooserOpen(false);
+                          setProposal(null);
+                          setPrepareErr("");
+                          void runPrepare(c.id);
+                        }}
+                      />
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <ul className="tac-connectors" data-testid="tac-conn-rows">
                 {caseRows.rows.map((c) => (
                   <ConnectorRow
@@ -1365,8 +1492,13 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
                 >
                   Copy the case text
                 </button>
-                {caseForm.portal_url && (
-                  <a className="btn" href={caseForm.portal_url} target="_blank" rel="noreferrer noopener">
+                {safePortalHref(caseForm.portal_url) && (
+                  <a
+                    className="btn"
+                    href={safePortalHref(caseForm.portal_url)}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
                     Open the vendor portal
                   </a>
                 )}
@@ -1739,7 +1871,13 @@ function ConnectorRow({ info, bundleBytes, busy, onOpen }: {
   const state = connectorState(info);
   const note = connectorStatusNote(info);
   const over = ceilingSuffix(info, bundleBytes);
-  const usable = state === "ready" || state === "attach-only";
+  const usable = state === "ready" || state === "attach-only" || state === "manual-configured";
+  // A MANUAL path with no details brought is in exactly the state an
+  // unconfigured API connector is in — a real option, not yet usable — so it
+  // gets the same next step: the link to where the details are brought (owner,
+  // 2026-09-08). Its chip still says Manual, because configuration can bring a
+  // portal address and can never bring an API.
+  const needsSetup = state === "not-configured" || state === "manual";
   return (
     <li className={`tac-conn${usable ? "" : " off"}`} data-testid={`tac-conn-${info.id}`}>
       <button
@@ -1754,7 +1892,7 @@ function ConnectorRow({ info, bundleBytes, busy, onOpen }: {
       <span className="mini-meta">{connectorCapabilityLine(info)}</span>
       <span className={`tac-chip tac-chip-${state}`}>{CONNECTOR_CHIP[state]}</span>
       {over && <span className="mini-meta tac-over">{over}</span>}
-      {state === "not-configured" && (
+      {needsSetup && (
         <a className="mini-meta tac-conn-link" href={TICKET_DELIVERY_ROUTE} title={note}>
           {TICKET_DELIVERY_LABEL}
         </a>
@@ -1763,6 +1901,51 @@ function ConnectorRow({ info, bundleBytes, busy, onOpen }: {
         <span className="mini-meta tac-bad" role="alert">{note}</span>
       )}
       <AskIris topic={connectorTopic(info.id)} label={info.display} />
+    </li>
+  );
+}
+
+/**
+ * One row of the "Send to vendor" chooser: where this case would go, what
+ * happens if it goes there, and its chip.
+ *
+ * It is deliberately NOT the connector row. The connector rows are a catalogue
+ * — every path this device could ever use, with its research behind an (i) — and
+ * this is a decision the operator makes once, mid-incident, from the two or
+ * three routes that are actually live. A path that cannot be chosen is still
+ * SHOWN, greyed, with the link to where its details are brought: an option
+ * missing from a chooser is indistinguishable from an option that does not
+ * exist (§ the same honesty rule the Tier-3 connectors exist for).
+ */
+function ChooserRow({ info, busy, onChoose }: {
+  info: TacConnectorInfo;
+  busy: boolean;
+  onChoose: () => void;
+}) {
+  const state = connectorState(info);
+  const choosable = routeIsChoosable(info);
+  return (
+    <li className={`tac-conn${choosable ? "" : " off"}`} data-testid={`tac-route-${info.id}`}>
+      <button
+        type="button"
+        className="btn"
+        disabled={!choosable || busy}
+        aria-disabled={!choosable}
+        onClick={onChoose}
+      >
+        {info.display}
+      </button>
+      <span className="mini-meta">{connectorCapabilityLine(info)}</span>
+      <span className={`tac-chip tac-chip-${state}`}>{CONNECTOR_CHIP[state]}</span>
+      {!choosable && (
+        <a
+          className="mini-meta tac-conn-link"
+          href={TICKET_DELIVERY_ROUTE}
+          title={connectorStatusNote(info)}
+        >
+          {TICKET_DELIVERY_LABEL}
+        </a>
+      )}
     </li>
   );
 }

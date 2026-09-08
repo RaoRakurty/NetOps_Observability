@@ -437,9 +437,12 @@ export default function TicketDelivery() {
                     <p className="tdc-fold-text">{c.note}</p>
                   </details>
                 )}
-                {/* Configure appears only where there is something to configure:
-                    a portal-only vendor publishes no API, so it carries no
-                    settings block and gets no button that could only refuse. */}
+                {/* Configure appears only where there is something to configure.
+                    That now INCLUDES the manual vendor paths: they publish no
+                    API and they still hold this customer's own portal address,
+                    support desk, account and case-number shape (owner,
+                    2026-09-08 — this page is where vendor portals are set up,
+                    and Troubleshooting is where the case is opened). */}
                 {c.config_section && (
                   <button
                     type="button"

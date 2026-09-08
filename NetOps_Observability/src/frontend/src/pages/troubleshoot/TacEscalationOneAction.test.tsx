@@ -48,7 +48,10 @@ vi.mock("../../services/api", () => ({ api: { ...mocks } }));
 
 import TacEscalationPanel from "./TacEscalationPanel";
 import {
+  caseNumberRefusal,
   CONFIRM_ACTION,
+  CONFIRM_PORTAL_ACTION,
+  CONFIRM_PORTAL_NEXT,
   DRY_RUN_ACTION,
   DRY_RUN_CREATED_NOTHING,
   DRY_RUN_SENTENCE,
@@ -447,6 +450,95 @@ describe("the portal path is a complete outcome, not a failure", () => {
     expect(screen.getByRole("link", { name: /vendor portal/i }))
       .toHaveAttribute("href", "https://portal.example/cases/new");
     expect(screen.getByTestId("tac-confirm-btn")).toBeEnabled();
+  });
+});
+
+// ── the MANUAL route says what pressing the button does (owner, 2026-09-08) ──
+//
+// "it still shows copy paste options". The vendors in this state publish no case
+// API, so "Open case" was a button that could not do what it said. It now says
+// what actually happens, and the line beside it says what the next few seconds
+// look like.
+
+describe("a portal route asks to PREPARE, not to open", () => {
+  const NOKIA_PORTAL: TacConnectorInfo = {
+    id: "portal-nokia", display: "Nokia portal", vendor: "nokia", vendor_display: "Nokia",
+    portal_only: true, config_section: "portal", capabilities: [],
+    max_attachment_bytes: 0, profile: "link_only", configured: true,
+    portal_url: "https://customer.nokia.example/support/s/",
+    case_number_pattern: "TSR\\d{6}",
+  };
+  const nokiaRoute = {
+    ...ROUTE, connector_id: "portal-nokia", display: "Nokia portal", vendor: "nokia",
+    portal: true, reason: "portal_fallback" as const,
+    note: "Nokia publishes no case API, so Correlix has prepared the case text and the bundle.",
+  };
+
+  const showNokia = async () => {
+    const res = stateResponse({ connectors: [NOKIA_PORTAL] });
+    mocks.tacEscalate.mockResolvedValue({
+      incident_id: INC, route: nokiaRoute, state: state(), can_collect: true, collect_note: "",
+      capture_note: "", evidence_sources: [], evidence_missing: [], connectors: [NOKIA_PORTAL],
+    });
+    mocks.tacEscalatePrepare.mockResolvedValue({
+      proposal: proposal({
+        route: nokiaRoute,
+        form: {
+          ...proposal().form, connector_id: "portal-nokia",
+          portal_url: "https://customer.nokia.example/support/s/",
+        },
+      }),
+      state: state(),
+    });
+    await escalate(res);
+    return await screen.findByTestId("tac-confirm-btn");
+  };
+
+  it("labels the one control 'Prepare for the portal' and says what happens next", async () => {
+    const btn = await showNokia();
+    expect(btn).toHaveTextContent(CONFIRM_PORTAL_ACTION);
+    expect(btn).not.toHaveTextContent(CONFIRM_ACTION);
+    expect(screen.getByTestId("tac-portal-next")).toHaveTextContent(CONFIRM_PORTAL_NEXT);
+    // The configured portal is a link, and it is the tenant's own address.
+    expect(screen.getByTestId("tac-confirm-portal-link"))
+      .toHaveAttribute("href", "https://customer.nokia.example/support/s/");
+  });
+
+  it("checks the case number pasted back before it can be filed", async () => {
+    const btn = await showNokia();
+    const box = screen.getByTestId("tac-portal-case-number");
+    // Empty is fine: the case may not be open yet.
+    expect(btn).toBeEnabled();
+    expect(screen.queryByTestId("tac-case-number-bad")).toBeNull();
+
+    fireEvent.change(box, { target: { value: "I have not opened it yet" } });
+    expect(screen.getByTestId("tac-case-number-bad")).toHaveTextContent(caseNumberRefusal("Nokia"));
+    expect(screen.getByTestId("tac-confirm-btn")).toBeDisabled();
+
+    fireEvent.change(box, { target: { value: "TSR900123" } });
+    expect(screen.queryByTestId("tac-case-number-bad")).toBeNull();
+    expect(screen.getByTestId("tac-confirm-btn")).toBeEnabled();
+  });
+
+  // A link on an incident screen can only ever be http(s) — whatever reached the
+  // client.
+  it("renders no link at all for an address that is not one", async () => {
+    const res = stateResponse({ connectors: [NOKIA_PORTAL] });
+    mocks.tacEscalate.mockResolvedValue({
+      incident_id: INC, route: nokiaRoute, state: state(), can_collect: true, collect_note: "",
+      capture_note: "", evidence_sources: [], evidence_missing: [], connectors: [NOKIA_PORTAL],
+    });
+    mocks.tacEscalatePrepare.mockResolvedValue({
+      proposal: proposal({
+        route: nokiaRoute,
+        form: { ...proposal().form, portal_url: "javascript:alert(1)" },
+      }),
+      state: state(),
+    });
+    await escalate(res);
+    await screen.findByTestId("tac-confirm-btn");
+    expect(screen.queryByTestId("tac-confirm-portal-link")).toBeNull();
+    expect(screen.queryByRole("link", { name: /vendor portal/i })).toBeNull();
   });
 });
 

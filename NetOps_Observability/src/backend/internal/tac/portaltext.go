@@ -40,13 +40,18 @@ const PortalTextConnectorID = "portal-text"
 func (p *PortalTextOpener) Info(_ context.Context, _ string) ConnectorInfo {
 	return ConnectorInfo{
 		ID:      PortalTextConnectorID,
-		Display: "Vendor portal / email (copy & paste)",
+		Display: "Vendor portal or email",
 		// Capabilities: it can produce a link to the bundle inside Correlix and
 		// nothing else. It deliberately does NOT claim create or attach.
 		Capabilities:       []CaseCapability{CapLink},
 		MaxAttachmentBytes: 0,
 		Profile:            ProfileLinkOnly,
 		Configured:         true,
+		// There is nothing to configure and nothing this path can automate: it
+		// is MANUAL by construction, not an integration waiting for credentials.
+		// Saying so is what stops the step chipping it "Ready" beside connectors
+		// that really do open cases (owner, 2026-09-08).
+		PortalOnly: true,
 		Note: "No integration required. Correlix pre-fills the case text and you attach the downloaded bundle " +
 			"in the vendor's own portal or email. This is the only supported path for vendors that publish no " +
 			"case-creation API.",
@@ -81,14 +86,26 @@ func (p *PortalTextOpener) SubmitCase(_ context.Context, req CaseRequest) (CaseR
 	if strings.TrimSpace(form.PortalText) == "" {
 		form.PortalText = renderPortalText(req, form)
 	}
-	return CaseResult{
+	res := CaseResult{
 		ConnectorID: PortalTextConnectorID,
 		Attached:    false,
 		AttachNote: "This connector cannot attach: paste the text below into the vendor's portal or email and " +
 			"attach the bundle you downloaded from Correlix.",
 		SubmittedAt: now().UTC(),
 		PortalText:  form.PortalText,
-	}, nil
+	}
+	// The number the operator read back off the vendor's portal, if they have
+	// one yet. It is the only value this path can record, and it is checked
+	// against the default shape before it is filed — a typed case id nothing can
+	// verify against the vendor must at least not be prose.
+	if num := strings.TrimSpace(form.ExistingCaseNumber); num != "" {
+		if err := ValidateCaseNumber("", num); err != nil {
+			return res, fmt.Errorf("%w: %s", ErrFormIncomplete, err.Error())
+		}
+		res.CaseID = num
+		res.Status = "opened in the vendor's portal"
+	}
+	return res, nil
 }
 
 // PollStatus implements CaseOpener. There is no case to poll.

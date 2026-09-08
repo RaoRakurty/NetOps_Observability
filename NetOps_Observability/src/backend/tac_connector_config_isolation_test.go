@@ -241,13 +241,33 @@ func TestTACConnectorSettingsAreScopedToTheCallersOwnTenant(t *testing.T) {
 		t.Fatal("a probe of an unknown connector must be 404")
 	}
 
-	// ── a portal-only path has nothing to configure, and says so ────────────
+	// ── a MANUAL path holds no credential and IS configurable ───────────────
+	//
+	// It used to answer "nothing to configure" (owner, 2026-09-08 reversed
+	// that: Ticket delivery is where vendor portals are set up). What must
+	// still hold is that its settings are the CALLER's tenant's own — the whole
+	// point of this file — and that a form cannot carry a field it does not
+	// have.
 	if st, body := tacConnRequest(t, srv.URL, "GET", "/api/tac/connectors/portal-nokia", a.token, "", nil); st != 200 ||
-		!strings.Contains(string(body), `"editable":false`) {
-		t.Fatalf("a portal-only connector must read as not editable: %d %s", st, body)
+		!strings.Contains(string(body), `"editable":true`) ||
+		!strings.Contains(string(body), `"section":"portal"`) ||
+		strings.Contains(string(body), `"secrets":{"`) {
+		t.Fatalf("a manual path is editable, on the portal section, and holds no secret: %d %s", st, body)
 	}
-	if st, _ := tacConnRequest(t, srv.URL, "PUT", "/api/tac/connectors/portal-nokia", a.token, "", []byte(`{"enabled":true}`)); st != http.StatusConflict {
-		t.Fatal("saving settings on a portal-only connector must be refused")
+	if st, _ := tacConnRequest(t, srv.URL, "PUT", "/api/tac/connectors/portal-nokia", a.token, "",
+		[]byte(`{"enabled":true,"portal_url":"https://a.example/","support_mailbox":"","support_account":"","case_number_pattern":"","password":"x"}`)); st != http.StatusBadRequest {
+		t.Fatal("a portal form must refuse a field it does not have")
+	}
+	portalSave := []byte(`{"enabled":true,"portal_url":"https://org-a.example/tac","support_mailbox":"","support_account":"A-1","case_number_pattern":""}`)
+	if st, body := tacConnRequest(t, srv.URL, "PUT", "/api/tac/connectors/portal-nokia", a.token, "", portalSave); st != 200 ||
+		!strings.Contains(string(body), "https://org-a.example/tac") {
+		t.Fatalf("org A must be able to bring its own portal details: %d %s", st, body)
+	}
+	// And org B still sees only the vendor's published default: one customer's
+	// support arrangement is never another's.
+	if st, body := tacConnRequest(t, srv.URL, "GET", "/api/tac/connectors/portal-nokia", b.token, "", nil); st != 200 ||
+		strings.Contains(string(body), "org-a.example") {
+		t.Fatalf("org B must not see org A's portal details: %d %s", st, body)
 	}
 
 	// ── the probe never touches a vendor when nothing is configured ─────────

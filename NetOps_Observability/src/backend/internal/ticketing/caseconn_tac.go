@@ -108,7 +108,14 @@ func connectorDisplayName(e ConnectorEntry) string {
 		return strings.ToUpper(e.Vendor[:1]) + e.Vendor[1:] + " support email"
 	}
 	if strings.HasPrefix(e.ID, "portal-") {
-		return strings.ToUpper(e.Vendor[:1]) + e.Vendor[1:] + " portal (copy & paste)"
+		// NO "(copy & paste)" here any more. The row's chip says Manual and its
+		// one line says whose API is missing; spelling the mechanism into the
+		// button as well was what made a vendor's only path read like an option
+		// somebody chose to do the slow way (owner, 2026-09-08).
+		if v, ok := PortalVendorFor(e.Vendor); ok {
+			return v.ShortName() + " portal"
+		}
+		return strings.ToUpper(e.Vendor[:1]) + e.Vendor[1:] + " portal"
 	}
 	return e.ID
 }
@@ -148,6 +155,15 @@ func (o *TACOpener) Info(ctx context.Context, tenantID string) tac.ConnectorInfo
 		// knowledge leaking into internal/tac.
 		Required:       tacRequiredFields(o.Connector.Name()),
 		SeverityValues: SeverityVocabulary(o.Connector.Name()),
+	}
+	// A vendor with NO case API declares itself, so the step can chip the row
+	// "Manual" instead of "Ready" and say whose API is missing. It is asked of
+	// the connector rather than inferred from an empty capability list, because
+	// an unconfigured connector also claims nothing and is a different thing
+	// entirely (owner, 2026-09-08).
+	if p, ok := o.Connector.(portalOnlyReporter); ok && p.PortalOnly() {
+		info.PortalOnly = true
+		info.VendorDisplay = p.VendorDisplayName()
 	}
 	// A path that cannot poll a status may still be able to learn the case
 	// NUMBER from the vendor's reply. It is declared separately so the chip can
@@ -190,8 +206,25 @@ func (o *TACOpener) Info(ctx context.Context, tenantID string) tac.ConnectorInfo
 			// credentials" are different problems with different next steps.
 			info.StatusNote = verr.Error()
 		}
+		// WHERE the manual case is opened and WHAT its number looks like are the
+		// tenant's own, so they are read from the same resolved configuration the
+		// validator just judged — never from the vendor table alone, which is
+		// only the default the form opened on.
+		if info.PortalOnly {
+			p := PortalSettingsFor(o.Connector.Name(), cfg)
+			info.PortalURL = p.PortalURL
+			info.CaseNumberPattern = p.CaseNumberPattern
+		}
 	}
 	return info
+}
+
+// portalOnlyReporter is implemented by a connector whose vendor publishes no
+// case-creation API at all. The type system is the declaration: a connector that
+// can be configured into an integration simply does not implement it.
+type portalOnlyReporter interface {
+	PortalOnly() bool
+	VendorDisplayName() string
 }
 
 // mailboxAuthReporter is implemented by a connector whose per-tenant behaviour
@@ -293,6 +326,12 @@ func (o *TACOpener) PrepareCase(ctx context.Context, req tac.CaseRequest) (tac.C
 	form.Profile = info.Profile
 	if caps.PortalURL != "" {
 		form.PortalURL = caps.PortalURL
+	}
+	// The TENANT's own portal address wins over the vendor's published one: a
+	// partner or managed-service contract routes cases somewhere else, and the
+	// address on the screen has to be the one this customer actually uses.
+	if info.PortalURL != "" {
+		form.PortalURL = info.PortalURL
 	}
 	if form.BundleName == "" && req.BundlePath != "" {
 		form.BundleName = filepath.Base(req.BundlePath)
@@ -497,7 +536,26 @@ func (o *TACOpener) SubmitCase(ctx context.Context, req tac.CaseRequest) (tac.Ca
 		res.CaseID = ref.Number
 		res.Status = "existing"
 	default:
+		// THE MANUAL PATH. The case is created in the vendor's own portal by the
+		// person pressing this button, so there is nothing to call — but there
+		// IS something to record: the number they read back off the portal.
+		//
+		// It is the one value on the whole escalation that cannot be derived and
+		// cannot be checked against the vendor, so it is checked against the
+		// SHAPE the tenant configured, at the keyboard, before it is filed
+		// (tac.ValidateCaseNumber). Filing a transposed number under an incident
+		// is worse than filing none: the next operator searches for a case that
+		// does not exist.
 		res.AttachNote = "this connector cannot open a case; use the portal text and the downloaded bundle"
+		if num := strings.TrimSpace(req.Form.ExistingCaseNumber); num != "" {
+			info := o.Info(ctx, req.TenantID)
+			if verr := tac.ValidateCaseNumber(info.CaseNumberPattern, num); verr != nil {
+				return res, fmt.Errorf("%w: %s", tac.ErrFormIncomplete, verr.Error())
+			}
+			res.CaseID = num
+			res.CaseURL = info.PortalURL
+			res.Status = "opened in the vendor's portal"
+		}
 		return res, nil
 	}
 

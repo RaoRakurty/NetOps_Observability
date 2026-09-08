@@ -3669,10 +3669,24 @@ export type TacConnectorInfo = {
   /** The stored configuration could not be READ — an error with a cause, never
    *  the ordinary "this tenant has brought no credentials" state. */
   unavailable?: boolean;
-  /** Which settings form brings credentials for this path ("servicenow",
-   *  "jira", "email", "cisco", "juniper"), or absent when the connector holds
-   *  no settings at all — a portal-only vendor has no API to hold one for. */
+  /** Which settings form this path edits ("servicenow", "jira", "email",
+   *  "cisco", "juniper", "portal"), or absent when the connector holds no
+   *  settings at all. The portal paths hold no CREDENTIAL and do hold the
+   *  customer's own portal address, support desk, account and case-number shape
+   *  (owner, 2026-09-08). */
   config_section?: string;
+  /** The vendor behind this path publishes NO case-creation API, so the
+   *  prepared text and the downloaded bundle are the whole path — not a
+   *  fallback. The row chips it Manual and never Ready. */
+  portal_only?: boolean;
+  /** The vendor's name as it reads inside a sentence ("Nokia", "Palo Alto
+   *  Networks"), supplied by the server because the id does not title-case. */
+  vendor_display?: string;
+  /** Where a MANUAL case is opened, server-validated to an http(s) address so
+   *  it is safe to render as a link. */
+  portal_url?: string;
+  /** The shape the case number read back off the portal must take. */
+  case_number_pattern?: string;
   /** What the VENDOR demands before a case can be opened at all, declared by
    *  the connector rather than guessed by the caller. It is what lets the
    *  confirmation screen refuse BY NAME and link to where each value is set. */
@@ -3697,8 +3711,9 @@ export type TacConnectorConfigView = {
   display: string;
   vendor?: string;
   section?: string;
-  /** False for the portal-only paths: there is no form, and saying so is the
-   *  honest state rather than an empty card. */
+  /** False only for a connector this deployment carries no form for. The
+   *  portal paths ARE editable: no credential, and four facts about the
+   *  customer's own support arrangement (owner, 2026-09-08). */
   editable: boolean;
   configured: boolean;
   status_note?: string;
@@ -3724,6 +3739,13 @@ export type TacConnectorConfigView = {
   juniper?: {
     enabled: boolean; app_id?: string; customer_source_id?: string; user_id?: string;
     account_id?: string; default_contact_email?: string; auth_mode?: string; client_id?: string;
+  };
+  /** A MANUAL vendor path's own details. It holds no secret, so it round-trips
+   *  whole. It opens on the vendor's published portal address, which is a
+   *  starting point and not a claim about where this customer's cases go. */
+  portal?: {
+    enabled: boolean; portal_url?: string; support_mailbox?: string;
+    support_account?: string; case_number_pattern?: string;
   };
 };
 

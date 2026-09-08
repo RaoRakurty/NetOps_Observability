@@ -46,8 +46,14 @@ import (
 type ConnectorSection string
 
 const (
-	// SectionNone: nothing to configure. The portal-only connectors are in this
-	// state permanently and honestly — there is no API to hold a credential for.
+	// SectionNone: nothing to configure. Nothing is in this state today; it is
+	// the honest answer for an id this switch was never taught.
+	//
+	// The portal-only connectors USED to live here permanently, on the reasoning
+	// that no API means no credential. That was half right and it left the one
+	// group of vendors a customer most needs to configure with no form at all
+	// (owner, 2026-09-08). They now hold SectionPortal: no credential, four
+	// facts only the customer knows.
 	SectionNone ConnectorSection = ""
 	// SectionServiceNow / SectionJira tune the ATTACH path only. The CONNECTION
 	// (instance URL, credentials) is the tenant's existing ITSM configuration
@@ -61,6 +67,17 @@ const (
 	SectionCisco ConnectorSection = "cisco"
 	// SectionJuniper is the Service Case API onboarding identifiers.
 	SectionJuniper ConnectorSection = "juniper"
+	// SectionPortal is a MANUAL vendor path's own details — portal address,
+	// support desk, support account and case-number shape. It holds no
+	// credential.
+	//
+	// It is ONE section name shared by every portal connector rather than one
+	// per vendor, because the FORM is identical for all of them; which vendor's
+	// row a save lands in comes from the connector id the request already
+	// carries (ApplyPortalWrite), not from the section name. That keeps the
+	// client's rendering rule — "the server names a section, I render its
+	// fields" — exactly as it was.
+	SectionPortal ConnectorSection = "portal"
 )
 
 // SectionForConnector maps a registry id onto the block it edits. It is a closed
@@ -80,6 +97,9 @@ func SectionForConnector(id string) ConnectorSection {
 	}
 	if strings.HasPrefix(key, "email-") {
 		return SectionEmail
+	}
+	if strings.HasPrefix(key, "portal-") {
+		return SectionPortal
 	}
 	return SectionNone
 }
@@ -244,9 +264,9 @@ func mergeSecret(in *string, stored string) string {
 
 // ── decoding a save ─────────────────────────────────────────────────────────
 
-// ErrNoSettings is the honest answer for a connector that holds no settings at
-// all: the portal-only paths automate everything up to submission and store no
-// credential, so there is no form to save.
+// ErrNoSettings is the honest answer for a connector this deployment carries no
+// form for — an id the section switch was never taught, or a portal write aimed
+// at something that is not a portal.
 var ErrNoSettings = fmt.Errorf("this connector holds no settings: it stores no credential")
 
 // ApplyConnectorWrite decodes body as the section's OWN form and returns the
@@ -304,6 +324,77 @@ func ApplyConnectorWrite(section ConnectorSection, body []byte, prev TACConnecto
 	return out, nil
 }
 
+// ApplyPortalWrite decodes a MANUAL path's form into ONE vendor's row.
+//
+// It is separate from ApplyConnectorWrite because a portal save needs one thing
+// the section name cannot carry: WHICH vendor. The connector id is what the
+// request was addressed to, so it comes from the caller rather than from the
+// body — a body-supplied vendor would let a save aimed at Nokia land on Fortinet
+// (§3a rule 2, the same reasoning that keeps the tenant off the wire).
+func ApplyPortalWrite(connectorID string, body []byte, prev TACConnectorConfig) (TACConnectorConfig, error) {
+	id := strings.ToLower(strings.TrimSpace(connectorID))
+	if !strings.HasPrefix(id, "portal-") {
+		return TACConnectorConfig{}, ErrNoSettings
+	}
+	var w PortalConnectorWrite
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&w); err != nil {
+		return TACConnectorConfig{}, fmt.Errorf("this form does not accept that: %w", err)
+	}
+	if dec.More() {
+		return TACConnectorConfig{}, fmt.Errorf("the body carries more than one object")
+	}
+	out := prev
+	out.ITSM = SystemConfig{}
+	next := w.apply(prev.Portals[id])
+	// The block is validated HERE, before it is stored, so a refusal names the
+	// field the person is looking at rather than surfacing later as a connector
+	// that will not open.
+	if err := ValidatePortalConnectorConfig(id, next); err != nil {
+		return TACConnectorConfig{}, err
+	}
+	// A row saved back to nothing is REMOVED rather than kept as an empty shell:
+	// an absent row and a blank row must read the same on the next open.
+	if next.IsZero() {
+		return ClearPortalSection(id, prev)
+	}
+	portals := make(map[string]PortalConnectorConfig, len(prev.Portals)+1)
+	for k, v := range prev.Portals {
+		portals[k] = v
+	}
+	portals[id] = next
+	out.Portals = portals
+	return out, nil
+}
+
+// ClearPortalSection removes ONE vendor's portal row. Removing Nokia must never
+// take Fortinet's with it, which is the same rule the credential blocks follow.
+func ClearPortalSection(connectorID string, prev TACConnectorConfig) (TACConnectorConfig, error) {
+	id := strings.ToLower(strings.TrimSpace(connectorID))
+	if !strings.HasPrefix(id, "portal-") {
+		return TACConnectorConfig{}, ErrNoSettings
+	}
+	out := prev
+	out.ITSM = SystemConfig{}
+	if len(prev.Portals) == 0 {
+		out.Portals = nil
+		return out, nil
+	}
+	portals := make(map[string]PortalConnectorConfig, len(prev.Portals))
+	for k, v := range prev.Portals {
+		if k == id {
+			continue
+		}
+		portals[k] = v
+	}
+	if len(portals) == 0 {
+		portals = nil
+	}
+	out.Portals = portals
+	return out, nil
+}
+
 // ClearConnectorSection removes one block, leaving every other connector's
 // settings untouched. Removing Jira must never take the SMTP relay with it.
 func ClearConnectorSection(section ConnectorSection, prev TACConnectorConfig) (TACConnectorConfig, error) {
@@ -335,6 +426,7 @@ func (c TACConnectorConfig) IsEmpty() bool {
 		c.Jira == (JiraAttachConfig{}) &&
 		c.Email == (EmailConnectorConfig{}) &&
 		c.Juniper == (JuniperConnectorConfig{}) &&
+		len(c.Portals) == 0 &&
 		ciscoIsEmpty(c.Cisco)
 }
 

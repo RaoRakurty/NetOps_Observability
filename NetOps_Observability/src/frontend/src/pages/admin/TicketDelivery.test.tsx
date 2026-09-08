@@ -47,6 +47,7 @@ vi.mock("../../services/api", () => ({
 }));
 
 import TicketDelivery from "./TicketDelivery";
+import { CONNECTOR_CHIP } from "../troubleshoot/tacModel";
 
 const CASE_A = "11111111-2222-4333-8444-555555555555";
 const CASE_B = "66666666-7777-4888-8999-aaaaaaaaaaaa";
@@ -107,8 +108,10 @@ const CONNECTORS = [
     config_section: "email",
   },
   {
-    id: "portal-nokia", display: "Nokia portal (copy & paste)", vendor: "nokia",
-    capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: true, note: NOKIA_RESEARCH,
+    id: "portal-nokia", display: "Nokia portal", vendor: "nokia", vendor_display: "Nokia",
+    portal_only: true, config_section: "portal",
+    capabilities: [], max_attachment_bytes: 0, profile: "link_only", configured: false, note: NOKIA_RESEARCH,
+    status_note: "No portal details for this tenant yet — add the portal address on Ticket delivery.",
   },
   {
     id: "juniper", display: "Juniper Service Case", vendor: "juniper",
@@ -325,14 +328,27 @@ describe("TicketDelivery — case connectors", () => {
     expect(screen.queryByTestId("ticket-connectors")).toBeNull();
   });
 
-  it("offers Configure only where there is something to configure", async () => {
+  it("offers Configure wherever there is something to configure", async () => {
     render(<TicketDelivery />);
     const list = await screen.findByTestId("ticket-connectors");
     expect(within(list).getByTestId("ticket-conn-configure-jira")).toBeTruthy();
     expect(within(list).getByTestId("ticket-conn-configure-email-arista")).toBeTruthy();
-    // A portal-only vendor publishes no API, so it gets no button that could
-    // only ever refuse.
-    expect(screen.queryByTestId("ticket-conn-configure-portal-nokia")).toBeNull();
+    // And that now INCLUDES the manual vendor paths. They publish no API and
+    // they still hold this customer's own portal address, support desk, account
+    // and case-number shape (owner, 2026-09-08: this page is where vendor
+    // portals are set up, Troubleshooting is where the case is opened).
+    expect(within(list).getByTestId("ticket-conn-configure-portal-nokia")).toBeTruthy();
+  });
+
+  // The chip is the owner's own complaint, on the settings page too: a vendor
+  // with no case API is never "Ready".
+  it("chips a manual vendor path Manual and not Ready", async () => {
+    render(<TicketDelivery />);
+    const list = await screen.findByTestId("ticket-connectors");
+    const nokia = within(list).getByTestId("ticket-conn-portal-nokia");
+    expect(nokia).toHaveTextContent(CONNECTOR_CHIP.manual);
+    expect(nokia).not.toHaveTextContent(CONNECTOR_CHIP.ready);
+    expect(nokia).toHaveTextContent("Nokia publishes no case API; this is the shortest path");
   });
 });
 
@@ -411,6 +427,72 @@ describe("TicketDelivery — bringing your own credentials", () => {
     const result = await screen.findByTestId("ticket-conn-probe-email-arista");
     expect(result).toHaveTextContent("The vendor refused these credentials.");
     expect(result).toHaveTextContent("rejected the stored credentials");
+  });
+
+  // ── the MANUAL vendor paths (owner, 2026-09-08) ──────────────────────────
+  //
+  // "Administrator → Ticket Delivery should be the place where customer
+  // configures all the details of vendors portals and necessary details."
+
+  const PORTAL_CONFIG = {
+    id: "portal-nokia",
+    display: "Nokia portal",
+    vendor: "nokia",
+    section: "portal",
+    editable: true,
+    configured: false,
+    status_note: "No portal details for this tenant yet — add the portal address on Ticket delivery.",
+    secrets: {},
+    portal: {
+      enabled: false,
+      portal_url: "https://customer.nokia.com/support/s/",
+      case_number_pattern: "[A-Za-z0-9][A-Za-z0-9._/-]{2,63}",
+    },
+  };
+
+  const openPortalForm = async () => {
+    tacConnectorConfig.mockResolvedValue(PORTAL_CONFIG);
+    tacConnectorSave.mockResolvedValue({ ...PORTAL_CONFIG, configured: true });
+    render(<TicketDelivery />);
+    const list = await screen.findByTestId("ticket-connectors");
+    fireEvent.click(within(list).getByTestId("ticket-conn-configure-portal-nokia"));
+    return await screen.findByTestId("ticket-conn-form-portal-nokia");
+  };
+
+  it("opens the portal form on the vendor's published address, and holds no secret", async () => {
+    const form = await openPortalForm();
+    expect(tacConnectorConfig).toHaveBeenCalledWith("portal-nokia");
+    expect((within(form).getByLabelText(/Portal address/i) as HTMLInputElement).value)
+      .toBe("https://customer.nokia.com/support/s/");
+    expect(within(form).getByLabelText(/Your support account/i)).toBeTruthy();
+    expect(within(form).getByLabelText(/What a case number looks like/i)).toBeTruthy();
+    expect(form.querySelector('input[type="password"]')).toBeNull();
+    // There is nothing to connect to, so there is nothing to test.
+    expect(within(form).queryByRole("button", { name: "Test" })).toBeNull();
+  });
+
+  it("saves the customer's own portal details, and never a tenant", async () => {
+    const form = await openPortalForm();
+    fireEvent.click(within(form).getByLabelText(/Open cases with this vendor by portal/i));
+    fireEvent.change(within(form).getByLabelText(/Portal address/i), {
+      target: { value: "https://partner.example/tac" },
+    });
+    fireEvent.change(within(form).getByLabelText(/Your support account/i), { target: { value: "NOK-99" } });
+    fireEvent.change(within(form).getByLabelText(/What a case number looks like/i), {
+      target: { value: "TSR\\d{6}" },
+    });
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(tacConnectorSave).toHaveBeenCalled());
+    const [id, body] = tacConnectorSave.mock.calls[0] as [string, Record<string, unknown>];
+    expect(id).toBe("portal-nokia");
+    expect(body).toEqual({
+      enabled: true,
+      portal_url: "https://partner.example/tac",
+      support_mailbox: "",
+      support_account: "NOK-99",
+      case_number_pattern: "TSR\\d{6}",
+    });
+    expect(Object.keys(body).some((k) => /tenant/i.test(k))).toBe(false);
   });
 
   it("removing the settings states its one consequence before it happens", async () => {

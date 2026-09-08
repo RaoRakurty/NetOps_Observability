@@ -465,6 +465,11 @@ export function hasCapability(info: TacConnectorInfo, cap: TacCaseCapability): b
  * just hand me the text?
  */
 export function connectorCapabilityLine(info: TacConnectorInfo): string {
+  // A vendor with NO case API comes first, because it is the one line that
+  // changes what the operator concludes: "prepares the text for you to paste"
+  // reads like the slow option somebody chose, and this path is the only path
+  // there is (owner, 2026-09-08).
+  if (info.portal_only) return portalOnlyLine(info);
   const create = hasCapability(info, "create");
   const attach = hasCapability(info, "attach");
   if (create && attach) return "Opens the case and attaches the bundle";
@@ -473,23 +478,74 @@ export function connectorCapabilityLine(info: TacConnectorInfo): string {
   return "Prepares the text and bundle for you to paste";
 }
 
-/** The four states a connector row can be in. "Unavailable" is an ERROR — the
- *  stored configuration could not be read — and is never used for a tenant that
- *  simply has no credentials (owner, 2026-09-06). */
-export type ConnectorState = "ready" | "attach-only" | "not-configured" | "unavailable";
+/**
+ * The MANUAL path's one line, in the vendor's own name.
+ *
+ * The vendor is the SERVER's — `vendor_display` when it sent one, otherwise the
+ * id title-cased. Nothing here is keyed on a vendor name: adding a fifth
+ * portal-only vendor to the Tier-3 table must not need a line of TypeScript.
+ *
+ * The generic path has no vendor at all, and claiming "no vendor publishes a
+ * case API" would be false — Cisco and Juniper do. So it keeps its own honest
+ * sentence.
+ */
+export function portalOnlyLine(info: TacConnectorInfo): string {
+  const vendor = connectorVendorLabel(info);
+  if (!vendor) return "Prepares the text and bundle for you to paste";
+  return `${vendor} publishes no case API; this is the shortest path`;
+}
 
-/** One chip word per state. Never a sentence. */
+/** The vendor's name as a sentence would write it, or "" when there is none. */
+export function connectorVendorLabel(info: TacConnectorInfo): string {
+  const given = (info.vendor_display ?? "").trim();
+  if (given) return given;
+  const id = (info.vendor ?? "").trim();
+  if (!id) return "";
+  return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/**
+ * The states a connector row can be in.
+ *
+ * "Unavailable" is an ERROR — the stored configuration could not be read — and
+ * is never used for a tenant that simply has no credentials (owner,
+ * 2026-09-06).
+ *
+ * "Manual" is the two states a vendor with NO case API can be in, and neither of
+ * them is Ready. A row that read "Nokia portal · Ready" promised an integration
+ * that cannot exist (owner, 2026-09-08). Once the customer has brought the
+ * portal's details on Ticket delivery the row says so — "Manual · configured" —
+ * because a configured manual path is a real, usable route and an unconfigured
+ * one is a dead link.
+ */
+export type ConnectorState =
+  | "ready" | "attach-only" | "not-configured" | "unavailable"
+  | "manual" | "manual-configured";
+
+/** One chip per state. Never a sentence. */
 export const CONNECTOR_CHIP: Record<ConnectorState, string> = {
   ready: "Ready",
   "attach-only": "Attach only",
   "not-configured": "Not configured",
   unavailable: "Unavailable",
+  manual: "Manual",
+  "manual-configured": "Manual · configured",
 };
 
 export function connectorState(info: TacConnectorInfo): ConnectorState {
+  // Portal-only comes FIRST and can never reach "Ready": what the vendor does
+  // not publish, no amount of configuration can bring.
+  if (info.portal_only) {
+    return info.configured && !info.unavailable ? "manual-configured" : "manual";
+  }
   if (info.unavailable) return "unavailable";
   if (!info.configured) return "not-configured";
   return hasCapability(info, "attach") && !hasCapability(info, "create") ? "attach-only" : "ready";
+}
+
+/** True when this row is a MANUAL path, in either of its two states. */
+export function isManualState(state: ConnectorState): boolean {
+  return state === "manual" || state === "manual-configured";
 }
 
 /** The short reason for the CURRENT state — the server's own sentence when it
@@ -563,16 +619,117 @@ export function connectorApplies(info: TacConnectorInfo, vendor: string): boolea
   return v !== "" && v === (vendor || "").trim().toLowerCase();
 }
 
-/** The connectors split into the ones this device can use and the rest. Order
- *  is preserved: the server sends them cheapest-tier first. */
+/**
+ * True when a connector really OPENS the case for this device's vendor and is
+ * ready to do it. It is what decides whether the generic manual row is worth
+ * showing at all.
+ */
+export function isNativeReady(info: TacConnectorInfo, vendor: string): boolean {
+  if (info.id === PORTAL_TEXT_ID || info.portal_only) return false;
+  if ((info.vendor || "").trim().toLowerCase() !== (vendor || "").trim().toLowerCase()) return false;
+  return connectorState(info) === "ready";
+}
+
+/**
+ * The connectors split into the ones this device can use and the rest. Order is
+ * preserved: the server sends them cheapest-tier first.
+ *
+ * THE GENERIC ROW IS CONDITIONAL (owner, 2026-09-08). "Vendor portal or email"
+ * beside a Ready Cisco integration is a second, worse way to do the thing the
+ * first row already does, and chipped Ready it read like a second integration.
+ * When the device's own vendor has a path that is ready, the generic one moves
+ * behind "Show all connectors" — where everything still is, one press away.
+ */
 export function splitConnectors(
   connectors: TacConnectorInfo[] | undefined,
   vendor: string,
 ): { rows: TacConnectorInfo[]; others: TacConnectorInfo[] } {
+  const all = connectors ?? [];
+  const nativeReady = all.some((c) => isNativeReady(c, vendor));
   const rows: TacConnectorInfo[] = [];
   const others: TacConnectorInfo[] = [];
-  for (const c of connectors ?? []) (connectorApplies(c, vendor) ? rows : others).push(c);
+  for (const c of all) {
+    const applies = connectorApplies(c, vendor) && !(c.id === PORTAL_TEXT_ID && nativeReady);
+    (applies ? rows : others).push(c);
+  }
   return { rows, others };
+}
+
+// ── "Send to vendor" (owner, 2026-09-08) ────────────────────────────────────
+//
+// "From this page when they are ready with captures, they should hit a button,
+// it will let them choose the vendor and send." So the case step is ONE button
+// and a chooser, not twelve rows: the rows are still there, behind the
+// disclosure, for the day somebody wants to read them.
+
+/** The primary control of the case step. */
+export const SEND_ACTION = "Send to vendor";
+
+/** The chooser's own heading, and why it is not a list of everything. */
+export const SEND_CHOOSER_HEADING = "Choose where this goes";
+
+/** Captures have not run, so there is nothing to send. */
+export const SEND_NEEDS_CAPTURES = "Run the captures first";
+
+/** The escape hatch, kept honest: some vendors accept a case with a description
+ *  and no outputs, and an operator who knows that should not be blocked. */
+export const SEND_WITHOUT_CAPTURES = "Send without captures";
+
+/** What that costs, in one line. It is a real option and it is a worse case. */
+export const SEND_WITHOUT_CAPTURES_NOTE =
+  "The case carries the problem statement and no device output.";
+
+/**
+ * True once the collection has actually produced something — done or partial.
+ * "Partial" counts on purpose: a capture where three of nine commands failed is
+ * still evidence, and holding the case back until everything succeeded would
+ * make the worst outages the hardest ones to escalate.
+ */
+export function capturesHaveRun(state: TacState | null | undefined): boolean {
+  if (!state) return false;
+  const s = state.progress?.status;
+  if (s === "done" || s === "partial") return true;
+  return state.job?.status === "done";
+}
+
+/**
+ * The routes the chooser offers, in the order it offers them.
+ *
+ *  1. the device vendor's own paths that are READY — they open the case;
+ *  2. MANUAL paths this tenant has configured — a real route, one human step;
+ *  3. everything else that applies, greyed, with where its details are brought.
+ *
+ * An ITSM connector (ServiceNow, Jira) appears only when the tenant has
+ * ROUTED this vendor to it — which is what `routedId` carries. A tenant's
+ * ticketing system is not a vendor support desk, and offering it beside Cisco
+ * TAC on every escalation would be offering to file the case with themselves.
+ */
+export function sendRoutes(
+  connectors: TacConnectorInfo[] | undefined,
+  vendor: string,
+  routedId: string,
+): TacConnectorInfo[] {
+  const routed = (routedId || "").trim();
+  const applies = (c: TacConnectorInfo) =>
+    ITSM_IDS.has(c.id) ? c.id === routed : connectorApplies(c, vendor);
+  const rank = (c: TacConnectorInfo): number => {
+    const st = connectorState(c);
+    if (st === "ready" || st === "attach-only") return 0;
+    if (st === "manual-configured") return 1;
+    return 2;
+  };
+  return (connectors ?? [])
+    .filter(applies)
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => (rank(a.c) === rank(b.c) ? a.i - b.i : rank(a.c) - rank(b.c)))
+    .map((x) => x.c);
+}
+
+/** True when this route can be chosen: it is ready, or it is a manual path the
+ *  tenant has actually configured. Everything else is a dead end with a link. */
+export function routeIsChoosable(info: TacConnectorInfo): boolean {
+  const st = connectorState(info);
+  return st === "ready" || st === "attach-only" || st === "manual-configured";
 }
 
 /** The size of the newest bundle built for this escalation, or 0. It is what a
@@ -1001,6 +1158,80 @@ export const CONFIRM_HEADING = "Review before sending";
 /** The one control that sends. */
 export const CONFIRM_ACTION = "Open case";
 export const CONFIRM_RUNNING = "Opening…";
+
+/**
+ * The same control on a MANUAL route, where pressing it opens nothing.
+ *
+ * "Open case" on a Nokia escalation was a button that could not do what it
+ * said: the vendor publishes no API, so what actually happens is that Correlix
+ * hands the operator the case text, the bundle and the portal. The button now
+ * says that, and the line beside it says what the next few seconds look like
+ * (owner, 2026-09-08).
+ */
+export const CONFIRM_PORTAL_ACTION = "Prepare for the portal";
+export const CONFIRM_PORTAL_RUNNING = "Preparing…";
+
+/** What pressing it does, in one line. */
+export const CONFIRM_PORTAL_NEXT =
+  "Correlix copies the case text and downloads the bundle; you submit it in the vendor portal.";
+
+/** The label on the control that sends, for the route the server chose. */
+export function confirmAction(portal: boolean | undefined, busy: boolean): string {
+  if (portal) return busy ? CONFIRM_PORTAL_RUNNING : CONFIRM_PORTAL_ACTION;
+  return busy ? CONFIRM_RUNNING : CONFIRM_ACTION;
+}
+
+/**
+ * A portal address that is safe to put in an href.
+ *
+ * The server already refuses anything but http(s) before it stores one
+ * (ticketing.ValidatePortalURL), so this is the second lock on the same door:
+ * a link on an incident screen must never be able to carry a javascript: or
+ * data: scheme, whatever reached the client. An address that fails here renders
+ * as no link at all rather than as a link that does something else.
+ */
+export function safePortalHref(url: string | undefined): string {
+  const raw = (url || "").trim();
+  if (!raw) return "";
+  try {
+    const u = new URL(raw);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+/** The box the operator pastes the vendor's case number back into. */
+export const CASE_NUMBER_LABEL = "Case number from the vendor";
+
+/** The refusal when what they pasted is not a case number for this vendor. It
+ *  is the CLIENT's copy of the server's rule, so the typo is caught at the
+ *  keyboard; the server checks again and is the authority. */
+export function caseNumberRefusal(vendorLabel: string): string {
+  const who = vendorLabel || "this vendor";
+  return `That does not look like a ${who} case number.`;
+}
+
+/**
+ * True when the typed case number matches the tenant's configured shape.
+ *
+ * An EMPTY value is accepted: the operator may not have opened the case yet,
+ * and the manual path is a complete outcome without a number. The pattern is
+ * anchored here exactly as the server anchors it, and a pattern that will not
+ * compile falls back to accepting — the server is the authority and a broken
+ * administrator setting must not become a dead end mid-incident.
+ */
+export function caseNumberLooksValid(pattern: string | undefined, value: string): boolean {
+  const v = (value || "").trim();
+  if (!v) return true;
+  if (v.length > 64) return false;
+  const p = (pattern || "").trim() || "[A-Za-z0-9][A-Za-z0-9._/-]{2,63}";
+  try {
+    return new RegExp(`^(?:${p})$`).test(v);
+  } catch {
+    return true;
+  }
+}
 
 /** The confirmation screen exists but the vendor will refuse. The blockers are
  *  listed BY NAME beneath it, each with a link to where it is set. */

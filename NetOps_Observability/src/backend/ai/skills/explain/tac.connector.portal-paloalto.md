@@ -1,14 +1,13 @@
 ---
 topic: tac.connector.portal-paloalto
-question: Why is Palo Alto a copy-and-paste path?
+question: Why does Palo Alto need the portal, and what do I configure?
 keywords: palo alto csp, tech support file, tsf, palo alto portal
 ---
 Palo Alto publishes no case API. The CSP API key is a licensing key, and
-pan.dev's catalogue lists no case or ticket API. So Correlix prepares the case
-text and the redacted bundle, and you open the case at
-support.paloaltonetworks.com. A Tech Support File is mandatory for many issue
-types, and the portal accepts only .tar, .zip, .tgz and .tar.tz — the Correlix
-bundle is a .zip, so it is an acceptable upload. Exemptions from the TSF rule
-are hard-down criticals, boot issues, and US Federal, Defense or air-gapped
-accounts. Phone is the channel for Sev 1. The portal also asks for the asset
-serial, symptoms with date and time, and a contact phone. Checked 2026-09-05.
+pan.dev lists no case or ticket API at all. Checked 2026-09-05. This path is
+chipped Manual, never Ready: configuration cannot bring an API a vendor does not
+publish. What it does bring is yours — the portal your contract routes you to, a
+support mailbox, your support account, and the shape of a case number. Set those
+on Administration → Ticket delivery. A Tech Support File is mandatory for many
+issue types and the portal accepts only .tar, .zip, .tgz or .tar.tz, so the
+bundle is built as a .zip. Phone is the channel for Sev 1.

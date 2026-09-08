@@ -164,9 +164,14 @@ export default function ConnectorSettings({ id, onChanged }: {
         <button type="button" className="btn" onClick={() => void save()} disabled={busy !== ""}>
           {busy === "save" ? "Saving…" : "Save"}
         </button>
-        <button type="button" className="btn" onClick={() => void test()} disabled={busy !== ""}>
-          {busy === "test" ? "Testing…" : "Test"}
-        </button>
+        {/* A MANUAL path has nothing to connect to, so there is nothing to
+            test. A button that could only ever answer "unsupported" is a
+            promise the vendor cannot keep (owner, 2026-09-08). */}
+        {view.section !== "portal" && (
+          <button type="button" className="btn" onClick={() => void test()} disabled={busy !== ""}>
+            {busy === "test" ? "Testing…" : "Test"}
+          </button>
+        )}
         {confirmRemove ? (
           <>
             <button type="button" className="btn" onClick={() => void remove()} disabled={busy !== ""}>

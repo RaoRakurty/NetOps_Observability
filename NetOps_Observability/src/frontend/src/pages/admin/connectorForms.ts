@@ -61,10 +61,15 @@ export type ConnectorField = {
 };
 
 /**
- * The five settings blocks twelve connectors share. `section` comes from the
+ * The six settings blocks twelve connectors share. `section` comes from the
  * server (`config_section`), so the client never guesses which form a connector
- * takes — and a connector with no section has no form at all, which is the
- * honest state of every portal-only vendor.
+ * takes — and a connector with no section has no form at all.
+ *
+ * The sixth block, `portal`, is shared by every MANUAL vendor path. Which
+ * VENDOR'S row a save lands in is the connector id the request is addressed to,
+ * which is the server's business and not this file's: the form is identical for
+ * Nokia and Fortinet, and holding one field list per vendor would be four copies
+ * of the same thing waiting to drift.
  */
 export const CONNECTOR_FORMS: Readonly<Record<string, readonly ConnectorField[]>> = Object.freeze({
   servicenow: [
@@ -178,6 +183,25 @@ export const CONNECTOR_FORMS: Readonly<Record<string, readonly ConnectorField[]>
     { name: "client_secret", label: "Client secret", kind: "secret" },
     { name: "api_key", label: "API key", kind: "secret" },
   ],
+  // The MANUAL vendor paths (owner, 2026-09-08). No credential — four facts
+  // only the customer knows. It opens on the vendor's published portal, so this
+  // is a form somebody confirms rather than a form they have to research.
+  portal: [
+    { name: "enabled", label: "Open cases with this vendor by portal", kind: "toggle" },
+    {
+      name: "portal_url", label: "Portal address", kind: "text",
+      placeholder: "https://support.example.com/",
+    },
+    {
+      name: "support_mailbox", label: "Support mailbox, if you have one", kind: "text",
+      placeholder: "tac@example.com",
+    },
+    { name: "support_account", label: "Your support account", kind: "text" },
+    {
+      name: "case_number_pattern", label: "What a case number looks like", kind: "text",
+      placeholder: "TSR\\d{6}",
+    },
+  ],
 });
 
 /** The fields of one section, or an empty list when there is no form. */
@@ -231,6 +255,7 @@ type ViewBlocks = {
   email?: Record<string, unknown>;
   cisco?: Record<string, unknown>;
   juniper?: Record<string, unknown>;
+  portal?: Record<string, unknown>;
 };
 
 /** The block the server populated for this connector. */

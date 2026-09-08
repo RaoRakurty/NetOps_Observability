@@ -306,3 +306,69 @@ func TestAuditedCreateRecordsTheApprovingHuman(t *testing.T) {
 		t.Error("a failed action must record why")
 	}
 }
+
+// A vendor PORTAL's details are the tenant's own support arrangement — which
+// portal their contract routes them to, their customer number, the desk that
+// takes their mail. They hold no credential and they are still one customer's
+// business and not another's, so the same §3a.5 assertions apply to the block
+// added on 2026-09-08.
+func TestPortalDetailsAreScopedToTheirOwnTenant(t *testing.T) {
+	s := NewTACConnectorStoreForTest()
+	for _, tenant := range []string{"org-a-tenant", "org-b-tenant"} {
+		cfg := TACConnectorConfig{Portals: map[string]PortalConnectorConfig{
+			"portal-nokia": {
+				Enabled: true, PortalURL: "https://" + tenant + ".nokia.example/",
+				SupportAccount: "acct-" + tenant, CaseNumberPattern: `TSR\d+`,
+			},
+		}}
+		if err := s.Set(tenant, false, tenant, cfg); err != nil {
+			t.Fatalf("seed %s: %v", tenant, err)
+		}
+	}
+
+	// 1. own-only: A reads A's portal, never B's.
+	a, err := s.Get("org-a-tenant", false, "org-a-tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Portals["portal-nokia"].SupportAccount; got != "acct-org-a-tenant" {
+		t.Fatalf("tenant A read %q", got)
+	}
+	// 2. cross-tenant get → not found.
+	if _, err := s.Get("org-a-tenant", false, "org-b-tenant"); !errors.Is(err, ErrTenantNotFound) {
+		t.Fatalf("reading another tenant's portal details must be not-found, got %v", err)
+	}
+	// 3. cross-tenant write → refused, and B's row is unchanged.
+	err = s.Set("org-a-tenant", false, "org-b-tenant", TACConnectorConfig{
+		Portals: map[string]PortalConnectorConfig{"portal-nokia": {Enabled: true, PortalURL: "https://evil.example/"}},
+	})
+	if err == nil {
+		t.Fatal("writing another tenant's portal details must be refused")
+	}
+	b, err := s.Get("org-b-tenant", false, "org-b-tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Portals["portal-nokia"].PortalURL != "https://org-b-tenant.nokia.example/" {
+		t.Fatalf("tenant B's portal was changed by tenant A: %+v", b.Portals)
+	}
+	// 4. and a save through the form applies to the CALLER's row only.
+	saved, err := s.Update("org-a-tenant", false, "org-a-tenant", func(prev TACConnectorConfig) (TACConnectorConfig, error) {
+		return ApplyPortalWrite("portal-nokia",
+			[]byte(`{"enabled":true,"portal_url":"https://partner.example/","support_mailbox":"","support_account":"A2","case_number_pattern":""}`),
+			prev)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Portals["portal-nokia"].SupportAccount != "A2" {
+		t.Errorf("the caller's own row was not updated: %+v", saved.Portals)
+	}
+	b2, err := s.Get("org-b-tenant", false, "org-b-tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b2.Portals["portal-nokia"].SupportAccount != "acct-org-b-tenant" {
+		t.Errorf("another tenant's row moved: %+v", b2.Portals)
+	}
+}

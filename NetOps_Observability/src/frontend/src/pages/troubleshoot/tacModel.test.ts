@@ -21,6 +21,14 @@ import type {
   TacCaptureProgress, TacCommandCapture, TacConnectorInfo, TacPlan, TacState, TacStep,
 } from "../../services/api";
 import {
+  capturesHaveRun,
+  caseNumberLooksValid,
+  caseNumberRefusal,
+  confirmAction,
+  CONFIRM_PORTAL_NEXT,
+  routeIsChoosable,
+  safePortalHref,
+  sendRoutes,
   COLLECT_FAILED,
   CONNECTOR_CHIP,
   CONNECTOR_IDS,
@@ -384,17 +392,137 @@ describe("connector honesty", () => {
   // path, the tenant's CONFIGURED ITSM, and the generic one — not all twelve.
   it("shows only the connectors a device can use", () => {
     const all = [
-      connector({ id: "portal-nokia", vendor: "nokia", configured: true, capabilities: [] }),
+      connector({ id: "portal-nokia", vendor: "nokia", configured: true, capabilities: [], portal_only: true }),
       connector({ id: "servicenow", vendor: "servicenow", configured: true, capabilities: ["create", "attach"] }),
       connector({ id: "jira", vendor: "jira", configured: false, capabilities: ["create", "attach"] }),
-      connector({ id: "portal-fortinet", vendor: "fortinet", configured: true, capabilities: [] }),
+      connector({ id: "portal-fortinet", vendor: "fortinet", configured: true, capabilities: [], portal_only: true }),
       connector({ id: "email-arista", vendor: "arista", configured: false, capabilities: ["create", "attach"] }),
       connector({ id: "cisco-cxd", vendor: "cisco", configured: false, capabilities: ["attach"] }),
-      connector({ id: "portal-text", vendor: "", configured: true, capabilities: ["link"] }),
+      connector({ id: "portal-text", vendor: "", configured: true, capabilities: ["link"], portal_only: true }),
     ];
     const { rows, others } = splitConnectors(all, dialectVendor("nokia-srlinux"));
     expect(rows.map((r) => r.id)).toEqual(["portal-nokia", "servicenow", "portal-text"]);
     expect(others.map((r) => r.id)).toEqual(["jira", "portal-fortinet", "email-arista", "cisco-cxd"]);
+  });
+
+  // …and the generic row goes AWAY the moment the device's own vendor has a path
+  // that is ready (owner, 2026-09-08). It is still reachable behind the
+  // disclosure — nothing is hidden, it is only no longer the second row.
+  it("hides the generic manual row when the vendor's own path is ready", () => {
+    const all = [
+      connector({ id: "cisco-smart-bonding", vendor: "cisco", configured: true, capabilities: ["create", "attach"] }),
+      connector({ id: "cisco-cxd", vendor: "cisco", configured: false, capabilities: ["attach"] }),
+      connector({ id: "portal-text", vendor: "", configured: true, capabilities: ["link"], portal_only: true }),
+    ];
+    const ready = splitConnectors(all, dialectVendor("cisco-iosxe"));
+    expect(ready.rows.map((r) => r.id)).toEqual(["cisco-smart-bonding", "cisco-cxd"]);
+    expect(ready.others.map((r) => r.id)).toEqual(["portal-text"]);
+
+    // With nothing configured for Cisco, the generic row is the honest floor and
+    // is shown.
+    const bare = all.map((c) => (c.id === "cisco-smart-bonding" ? { ...c, configured: false } : c));
+    const none = splitConnectors(bare, dialectVendor("cisco-iosxe"));
+    expect(none.rows.map((r) => r.id)).toEqual(["cisco-smart-bonding", "cisco-cxd", "portal-text"]);
+    expect(none.others).toEqual([]);
+  });
+
+  // The owner's complaint, verbatim: "it still shows copy paste options".
+  // A vendor with no case API can never be Ready, and its row says whose API is
+  // missing rather than describing the mechanism.
+  it("chips a portal-only path Manual and names the vendor", () => {
+    const nokia = connector({
+      id: "portal-nokia", vendor: "nokia", vendor_display: "Nokia",
+      configured: false, capabilities: [], portal_only: true,
+    });
+    expect(connectorState(nokia)).toBe("manual");
+    expect(CONNECTOR_CHIP[connectorState(nokia)]).toBe("Manual");
+    expect(connectorCapabilityLine(nokia))
+      .toBe("Nokia publishes no case API; this is the shortest path");
+
+    // Configured is a different, better state — and still never "Ready".
+    const set = { ...nokia, configured: true };
+    expect(connectorState(set)).toBe("manual-configured");
+    expect(CONNECTOR_CHIP[connectorState(set)]).toBe("Manual · configured");
+    expect(routeIsChoosable(set)).toBe(true);
+    expect(routeIsChoosable(nokia)).toBe(false);
+
+    // The vendor name is the SERVER's; nothing here is keyed on a vendor.
+    const pan = connector({ id: "portal-paloalto", vendor: "paloalto", vendor_display: "Palo Alto Networks", portal_only: true });
+    expect(connectorCapabilityLine(pan)).toBe("Palo Alto Networks publishes no case API; this is the shortest path");
+    // Without a display name the id is title-cased rather than invented.
+    const other = connector({ id: "portal-acme", vendor: "acme", portal_only: true });
+    expect(connectorCapabilityLine(other)).toBe("Acme publishes no case API; this is the shortest path");
+    // The generic path has no vendor and never claims one.
+    const generic = connector({ id: "portal-text", vendor: "", portal_only: true, capabilities: ["link"] });
+    expect(connectorCapabilityLine(generic)).toBe("Prepares the text and bundle for you to paste");
+  });
+
+  // The chooser is the ONE decision the operator makes: ready first, configured
+  // manual next, dead ends last but still visible.
+  it("orders the send-to-vendor routes ready → manual → not configured", () => {
+    const all = [
+      connector({ id: "portal-nokia", vendor: "nokia", configured: false, capabilities: [], portal_only: true }),
+      connector({ id: "jira", vendor: "jira", configured: true, capabilities: ["create", "attach"] }),
+      connector({ id: "portal-text", vendor: "", configured: true, capabilities: ["link"], portal_only: true }),
+      connector({ id: "email-arista", vendor: "arista", configured: true, capabilities: ["create", "attach"] }),
+    ];
+    // Nokia device, and the tenant has NOT routed Nokia to Jira: the ITSM is a
+    // ticketing system, not a vendor support desk, and is not offered.
+    const routes = sendRoutes(all, "nokia", "");
+    expect(routes.map((r) => r.id)).toEqual(["portal-text", "portal-nokia"]);
+
+    // The tenant HAS routed Nokia to Jira: now it is a real destination, and a
+    // ready one, so it leads.
+    const routed = sendRoutes(all, "nokia", "jira");
+    expect(routed.map((r) => r.id)).toEqual(["jira", "portal-text", "portal-nokia"]);
+
+    // A configured Nokia portal outranks the generic manual path's tie only by
+    // list order; both are choosable, the unconfigured one is not.
+    const withNokia = all.map((c) => (c.id === "portal-nokia" ? { ...c, configured: true } : c));
+    expect(sendRoutes(withNokia, "nokia", "").map((r) => r.id)).toEqual(["portal-nokia", "portal-text"]);
+  });
+
+  // Nothing to send before the captures have run — and "partial" counts, because
+  // a capture where some commands failed is still evidence.
+  it("knows when there is something to send", () => {
+    expect(capturesHaveRun(null)).toBe(false);
+    expect(capturesHaveRun({ progress: { status: "running" } } as never)).toBe(false);
+    expect(capturesHaveRun({ progress: { status: "partial" } } as never)).toBe(true);
+    expect(capturesHaveRun({ progress: { status: "done" } } as never)).toBe(true);
+    expect(capturesHaveRun({ job: { status: "done" } } as never)).toBe(true);
+    expect(capturesHaveRun({ job: { status: "running" } } as never)).toBe(false);
+  });
+
+  // The confirm button must say what pressing it does.
+  it("labels the one control for the route it is on", () => {
+    expect(confirmAction(false, false)).toBe("Open case");
+    expect(confirmAction(false, true)).toBe("Opening…");
+    expect(confirmAction(true, false)).toBe("Prepare for the portal");
+    expect(confirmAction(true, true)).toBe("Preparing…");
+    expect(CONFIRM_PORTAL_NEXT).toContain("you submit it in the vendor portal");
+  });
+
+  // A link on an incident screen can only ever be http(s) — the second lock on
+  // the door the server already validates.
+  it("refuses a portal address that is not a link", () => {
+    expect(safePortalHref("https://customer.nokia.example/s/")).toBe("https://customer.nokia.example/s/");
+    for (const bad of ["javascript:alert(1)", "data:text/html,<script>", "", "not a url", "file:///etc/passwd"]) {
+      expect(safePortalHref(bad)).toBe("");
+    }
+  });
+
+  // The number typed back off the portal is checked at the keyboard against the
+  // shape the administrator configured — the server checks it again.
+  it("checks the pasted case number against the tenant's own shape", () => {
+    expect(caseNumberLooksValid("TSR\\d{6}", "")).toBe(true);          // not opened yet
+    expect(caseNumberLooksValid("TSR\\d{6}", "TSR900123")).toBe(true);
+    expect(caseNumberLooksValid("TSR\\d{6}", "TSR90")).toBe(false);
+    expect(caseNumberLooksValid("\\d{4}", "case 1234 please")).toBe(false); // anchored
+    expect(caseNumberLooksValid("", "695123456")).toBe(true);
+    expect(caseNumberLooksValid("", "no case yet")).toBe(false);
+    expect(caseNumberLooksValid("([unclosed", "anything")).toBe(true);   // server is the authority
+    expect(caseNumberRefusal("Nokia")).toBe("That does not look like a Nokia case number.");
+    expect(caseNumberRefusal("")).toContain("this vendor");
   });
 
   it("reads the vendor off the dialect slug", () => {

@@ -179,6 +179,44 @@ type ConnectorInfo struct {
 	// "api_token", "basic", "smtp", ""), so the case chip can say so and an
 	// operator can see at a glance which paths are on the preferred OAuth path.
 	AuthMode string `json:"auth_mode,omitempty"`
+	// PortalOnly declares that the vendor behind this connector publishes NO
+	// case-creation API at all, so the prepared case text and the downloaded
+	// bundle are not a degraded fallback — they are the whole path.
+	//
+	// It is a SEPARATE fact from the capability list, and the distinction is the
+	// one the owner caught on 2026-09-08: a connector that claims neither create
+	// nor attach reads, on the step, exactly like an integration that happens to
+	// be idle. "Nokia portal (copy & paste) · Ready" promised something the
+	// vendor cannot give. A connector whose vendor HAS an API but which this
+	// tenant has not configured is a state with a next step (bring credentials);
+	// a portal-only one has no next step to offer, and the UI must chip it as
+	// manual rather than ready and must never send an operator to a settings
+	// form that could only ever refuse (which is why ConfigSection is empty for
+	// exactly these connectors).
+	//
+	// The connector declares it; this package never infers it from a vendor
+	// name, and the client never guesses it from an empty capability list.
+	PortalOnly bool `json:"portal_only,omitempty"`
+	// VendorDisplay is the vendor's name as it reads INSIDE a sentence ("Nokia",
+	// "Palo Alto Networks"), supplied by the connector because the id ("paloalto")
+	// does not title-case into anything a person would write. It exists so the
+	// UI can state the portal-only fact in the vendor's own name without holding
+	// a second copy of this platform's vendor vocabulary.
+	VendorDisplay string `json:"vendor_display,omitempty"`
+	// PortalURL is where a MANUAL case is actually opened: the tenant's own
+	// configured portal address when they have brought one, otherwise the
+	// vendor's published support portal. The UI opens it in a new tab, so it is
+	// server-validated to be an http(s) address with a host before it is ever
+	// stored — a link on an incident screen must never be able to carry a
+	// javascript: or data: scheme from an operator's keyboard (§3, LLM02's rule
+	// applied to plain operator input).
+	PortalURL string `json:"portal_url,omitempty"`
+	// CaseNumberPattern is the shape the case number the operator reads off the
+	// vendor's portal must take before Correlix will file it on the incident. It
+	// is the tenant's, configured per vendor; empty means the default shape
+	// (casenumber.go). It is published here so the confirmation screen can
+	// refuse a typo at the keyboard rather than after it is recorded.
+	CaseNumberPattern string `json:"case_number_pattern,omitempty"`
 	// Unavailable reports that this tenant's stored configuration could not be
 	// READ — a storage failure, not a state.
 	//

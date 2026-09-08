@@ -13,9 +13,14 @@ import (
 	"testing"
 )
 
-// Every connector the product ships resolves to exactly one settings block, and
-// the portal-only ones resolve to none. A new connector that forgot the mapping
-// would silently render an empty form; this is what notices.
+// Every connector the product ships resolves to exactly one settings block. A
+// new connector that forgot the mapping would silently render an empty form;
+// this is what notices.
+//
+// The portal paths used to resolve to NONE. They now resolve to SectionPortal:
+// they still store no credential, and they do store the four facts about a
+// customer's own support arrangement that only the customer knows (owner,
+// 2026-09-08 — Ticket delivery is where vendor portals are configured).
 func TestEveryRegisteredConnectorResolvesItsSettingsBlock(t *testing.T) {
 	want := map[string]ConnectorSection{
 		"servicenow":          SectionServiceNow,
@@ -36,8 +41,11 @@ func TestEveryRegisteredConnectorResolvesItsSettingsBlock(t *testing.T) {
 				t.Errorf("%s must edit the shared SMTP relay, got %q", e.ID, got)
 			}
 		case strings.HasPrefix(e.ID, "portal-"):
-			if got != SectionNone {
-				t.Errorf("%s stores no credential and must offer no form, got %q", e.ID, got)
+			if got != SectionPortal {
+				t.Errorf("%s edits the manual-path details, got %q", e.ID, got)
+			}
+			if names := SectionSecretNames(got); len(names) != 0 {
+				t.Errorf("%s must hold no secret, got %v", e.ID, names)
 			}
 		default:
 			t.Errorf("connector %q has no settings mapping — add one to SectionForConnector", e.ID)
