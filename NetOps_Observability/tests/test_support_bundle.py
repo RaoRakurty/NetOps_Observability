@@ -45,6 +45,19 @@ CANARY_ENV_JWT = "canary-jwt-secret-b71e3d"      # .env value, in compose config
 CANARY_CONFIG_ONLY = "canary-config-only-9ab4c1"  # only in compose config (key-pattern)
 KEEP_ME = "keep-me-visible-marker"                # non-secret key: must SURVIVE
 
+# H12 (2026-09-08). Every one of these is a REAL variable of this stack whose
+# name the old block list (PASSWORD/PASSWD/SECRET/KEY/TOKEN/DSN) does not
+# match, which is how a bundle stamped "redacted" shipped them:
+CANARY_SMTP_PASS = "canary-smtp-password-1d0e77"          # SMTP_PASS: no "PASSWORD"
+CANARY_SLACK_HOOK = "https://hooks.invalid/services/canary-slack-4b8f21"  # SLACK_WEBHOOK_URL
+CANARY_NTFY_TOPIC = "canary-ntfy-topic-3e7a55"            # the topic IS the credential
+# A variable nobody has classified. Under a block list it ships; under
+# deny-by-default it is a secret until somebody says otherwise.
+CANARY_UNCLASSIFIED = "canary-unclassified-value-6c19e0"
+# The other failure mode: KEYCLOAK_* contains the letters K-E-Y but is not a
+# key. Substring matching would erase this from every log line in the bundle.
+LOOKALIKE_KEEP = "keycloak-db-visible-marker"
+
 STACK_ENV = f"""\
 # Correlix stack environment (fake)
 BASE_PORT=8000
@@ -55,6 +68,19 @@ CLICKHOUSE_PASSWORD={CANARY_ENV_PW}
 JWT_SECRET={CANARY_ENV_JWT}
 ADMIN_USERNAME=admin
 CORRELIX_EDITION={KEEP_ME}
+FEATURE_EMAIL_NOTIFICATIONS=true
+SMTP_HOST=smtp.invalid
+SMTP_USER=alerts
+SMTP_PASS={CANARY_SMTP_PASS}
+FEATURE_SLACK_NOTIFICATIONS=true
+SLACK_WEBHOOK_URL={CANARY_SLACK_HOOK}
+ACME_MAGIC_STRING={CANARY_UNCLASSIFIED}
+KEYCLOAK_DB_NAME={LOOKALIKE_KEEP}
+"""
+
+WATCHDOG_ENV = f"""\
+# stack-watchdog.sh config (fake)
+NTFY_TOPIC={CANARY_NTFY_TOPIC}
 """
 
 FAKE_DOCKER = r'''#!/bin/sh
@@ -82,6 +108,12 @@ services:
       SOME_APP_KEY: __CANARY_CONFIG_ONLY__
       DATABASE_URL: postgres://netops:__CANARY_ENV_PW__@postgres:5432/netops
       CORRELIX_EDITION: __KEEP_ME__
+      SMTP_HOST: smtp.invalid
+      SMTP_USER: alerts
+      SMTP_PASS: __CANARY_SMTP_PASS__
+      SLACK_WEBHOOK_URL: __CANARY_SLACK_HOOK__
+      ACME_MAGIC_STRING: __CANARY_UNCLASSIFIED__
+      KEYCLOAK_DB_NAME: __LOOKALIKE_KEEP__
   clickhouse:
     image: clickhouse/clickhouse-server
     environment:
@@ -152,6 +184,10 @@ YAML
     # the literal-value redaction pass can catch this one.
     echo "2026-09-02T00:00:01Z api connecting to postgres with __CANARY_ENV_PW__"
     echo "2026-09-02T00:00:02Z api ready (__KEEP_ME__)"
+    echo "2026-09-02T00:00:03Z notify smtp auth as alerts/__CANARY_SMTP_PASS__ failed"
+    echo "2026-09-02T00:00:04Z notify POST __CANARY_SLACK_HOOK__ -> 404"
+    echo "2026-09-02T00:00:05Z api feature flag value __CANARY_UNCLASSIFIED__ loaded"
+    echo "2026-09-02T00:00:06Z api keycloak db __LOOKALIKE_KEEP__ reachable"
     ;;
   *) echo "fake docker: unhandled $1" >&2; exit 1 ;;
 esac
@@ -207,6 +243,10 @@ def sandbox(tmp_path: Path):
               .replace("__CANARY_ENV_JWT__", CANARY_ENV_JWT)
               .replace("__CANARY_CONFIG_ONLY__", CANARY_CONFIG_ONLY)
               .replace("__CANARY_ENV_PW__", CANARY_ENV_PW)
+              .replace("__CANARY_SMTP_PASS__", CANARY_SMTP_PASS)
+              .replace("__CANARY_SLACK_HOOK__", CANARY_SLACK_HOOK)
+              .replace("__CANARY_UNCLASSIFIED__", CANARY_UNCLASSIFIED)
+              .replace("__LOOKALIKE_KEEP__", LOOKALIKE_KEEP)
               .replace("__KEEP_ME__", KEEP_ME))
     _write_exec(bindir / "docker", docker)
     _write_exec(bindir / "curl", FAKE_CURL)
@@ -359,6 +399,92 @@ def test_url_userinfo_credentials_are_redacted(sandbox, tmp_path):
     assert run_bundle(sandbox).returncode == 0
     cfg = (extract(sandbox, tmp_path) / "compose/config.redacted.yml").read_text()
     assert "postgres://netops:***REDACTED***@postgres" in cfg
+
+
+# ── H12: the redaction policy, not the redaction list ────────────────────────
+#
+# The defect: the pass named the six secrets it knew about (PASSWORD, PASSWD,
+# SECRET, KEY, TOKEN, DSN) and shipped everything else. SMTP_PASS and
+# SLACK_WEBHOOK_URL match none of the six, so the customer's mail password and
+# Slack webhook travelled inside a bundle stamped "redacted" and addressed to
+# Correlix support. Adding two names to the list is how it comes back, so what
+# these tests pin is the POLICY: a value is secret unless its key has been
+# classified as safe to read.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("canary,why", [
+    (CANARY_SMTP_PASS, "SMTP_PASS — the name contains no PASSWORD/SECRET/KEY/TOKEN"),
+    (CANARY_SLACK_HOOK, "SLACK_WEBHOOK_URL — a webhook URL IS the credential"),
+    (CANARY_UNCLASSIFIED, "a variable nobody classified must default to secret"),
+])
+def test_h12_secret_named_outside_the_old_block_list_never_reaches_the_bundle(
+        sandbox, tmp_path, canary, why):
+    assert run_bundle(sandbox).returncode == 0
+    bundle = extract(sandbox, tmp_path)
+    hits = [str(f.relative_to(bundle)) for f in bundle.rglob("*")
+            if f.is_file() and canary in f.read_text(errors="replace")]
+    assert hits == [], f"{why}: value leaked into {hits}"
+
+
+def test_h12_the_leak_is_closed_in_every_form_the_value_takes(sandbox, tmp_path):
+    """One call site is not the fix. The same value reaches the bundle through
+    the resolved compose render AND through a raw container log line where no
+    key name sits beside it — the two need different passes, and both must
+    hold."""
+    assert run_bundle(sandbox).returncode == 0
+    bundle = extract(sandbox, tmp_path)
+    cfg = (bundle / "compose/config.redacted.yml").read_text()
+    assert CANARY_SMTP_PASS not in cfg and CANARY_SLACK_HOOK not in cfg
+    assert "SMTP_PASS: ***REDACTED***" in cfg, cfg
+    assert "SLACK_WEBHOOK_URL: ***REDACTED***" in cfg, cfg
+    log = (bundle / "logs/netops-api-1.log").read_text()
+    assert CANARY_SMTP_PASS not in log and CANARY_SLACK_HOOK not in log
+    assert "smtp auth as alerts/***REDACTED*** failed" in log, log
+    assert "POST ***REDACTED*** -> 404" in log, log
+
+
+def test_h12_watchdog_config_secrets_are_redacted_out_of_the_watchdog_log(
+        sandbox, tmp_path):
+    """The watchdog log ships in the bundle and the watchdog's own config holds
+    the ntfy topic — which on the public server IS the credential, as this
+    repo's stack-watchdog.env.example says. The stack .env alone cannot cover
+    it, so the dictionary reads that file too."""
+    (sandbox["root"] / "scripts" / "stack-watchdog.env").write_text(WATCHDOG_ENV)
+    wd_log = sandbox["tmp"] / "watchdog.log"
+    wd_log.write_text(
+        f"2026-09-02T00:00:00Z watchdog OK -> pushed to {CANARY_NTFY_TOPIC}\n")
+    r = run_bundle(sandbox, WATCHDOG_LOG_FILE=str(wd_log))
+    assert r.returncode == 0, r.stderr
+    bundle = extract(sandbox, tmp_path)
+    hits = [str(f.relative_to(bundle)) for f in bundle.rglob("*")
+            if f.is_file() and CANARY_NTFY_TOPIC in f.read_text(errors="replace")]
+    assert hits == [], f"the watchdog's ntfy topic leaked into {hits}"
+    assert "pushed to ***REDACTED***" in (bundle / "watchdog/watchdog-log.txt").read_text()
+
+
+def test_h12_deny_by_default_does_not_eat_lookalike_keys(sandbox, tmp_path):
+    """The opposite failure. Matching secret names as SUBSTRINGS would treat
+    KEYCLOAK_DB_NAME as a KEY and erase the string 'keycloak' from every log
+    line in the bundle — a bundle that redacts everything diagnoses nothing.
+    Segment matching, plus the reviewed non-secret allow list, keeps the
+    readable things readable."""
+    assert run_bundle(sandbox).returncode == 0
+    bundle = extract(sandbox, tmp_path)
+    body = "\n".join(f.read_text(errors="replace")
+                     for f in bundle.rglob("*") if f.is_file())
+    assert LOOKALIKE_KEEP in body, "KEYCLOAK_DB_NAME is not a secret key"
+    for readable in ("netops", "smtp.invalid", "alerts", "8000"):
+        assert readable in body, f"over-redaction ate {readable!r}"
+
+
+def test_h12_manifest_states_the_policy_not_a_stale_list(sandbox, tmp_path):
+    """The MANIFEST is the promise the customer reads before sending. It must
+    describe what actually ran — the old text named the six-name block list
+    that had just failed to catch two live secrets."""
+    text = (extract(sandbox, tmp_path) / "MANIFEST").read_text() \
+        if run_bundle(sandbox).returncode == 0 else ""
+    assert "DENY BY DEFAULT" in text, text
+    assert "PASSPHRASE" in text and "WEBHOOK" in text, text
 
 
 def test_env_ships_key_names_only_never_a_value(sandbox, tmp_path):

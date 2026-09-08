@@ -34,13 +34,21 @@
 #
 # REDACTION (§8, §16.5). Two independent passes run over EVERY collected file
 # before it is packed:
-#   1. key-pattern — any `KEY=value` / `KEY: value` whose key contains
-#      PASSWORD, PASSWD, SECRET, KEY, TOKEN or DSN loses its value, plus
-#      URL userinfo (scheme://user:pw@host).
-#   2. literal value — every secret-shaped value read from the stack's own
-#      .env is replaced wherever it appears, in any file, even inside a log
-#      line or a JSON body. This is the pass that makes the guarantee hold for
-#      values whose key we would not have recognised.
+#   1. key-pattern (DENY LIST) — any `KEY=value` / `KEY: value` whose key has a
+#      secret-bearing SEGMENT (PASS/PASSWORD/PASSPHRASE, SECRET, KEY, TOKEN,
+#      WEBHOOK, DSN, CRED*, AUTH, SALT, PRIVATE, SID, ... — see
+#      SECRET_KEY_SEGMENTS below) loses its value, plus URL userinfo
+#      (scheme://user:pw@host) and names that carry a bearer capability or PII
+#      without looking like it (ntfy topics, healthchecks ping URLs, addresses).
+#   2. literal value (DENY BY DEFAULT) — every value in this host's own config
+#      files (.env, the watchdog config) is replaced wherever it appears, in
+#      any file, even inside a log line or a JSON body, UNLESS its key is on
+#      the short reviewed allow list of things support must be able to read
+#      (ports, hosts, feature flags, usernames, paths). A variable nobody has
+#      classified is treated as a secret.
+# Pass 2 is what makes the guarantee hold for values whose key we would not
+# have recognised — which is exactly how SMTP_PASS and SLACK_WEBHOOK_URL used
+# to ship in a bundle labelled redacted (H12, 2026-09-08).
 # The bundle is written 0600. Read the MANIFEST before you send it.
 #
 # EXIT CODES
@@ -474,30 +482,119 @@ else
 fi
 
 # ---------- redaction --------------------------------------------------------
-# Pass 2's input: every secret-shaped VALUE this install actually holds. Read
-# straight from .env, kept in a 0600 file under the staging dir, and destroyed
-# with it on exit. Longest first so an embedded shorter value cannot leave a
-# fragment of a longer one behind.
+#
+# H12 (2026-09-08). This pass used to name the secrets it knew about —
+# PASSWORD, PASSWD, SECRET, KEY, TOKEN, DSN — and a block list is only ever as
+# current as the last person who remembered to extend it. SMTP_PASS and
+# SLACK_WEBHOOK_URL match none of those six, so a bundle stamped "redacted" and
+# addressed to Correlix support carried the customer's real mail password and
+# their real Slack webhook. Adding two more names to the list is how it recurs.
+#
+# So the two passes now have DIFFERENT policies, chosen to fit what each one
+# can see:
+#
+#   Pass 2 (literal values) is DENY BY DEFAULT. It matches on the VALUE, so it
+#   is the pass that holds in every form a secret can take inside the bundle —
+#   a compose render, a config file, a JSON body, a bare log line — and it is
+#   the only place where "everything is a secret unless stated otherwise" is
+#   affordable, because the set of names is bounded: it is the keys of this
+#   host's own config files. A variable nobody has classified is treated as a
+#   secret. NON_SECRET_KEY_ERE is the short, reviewed list of keys whose value
+#   may stay readable, and it is a list of things a support engineer needs to
+#   READ (ports, hosts, feature flags, profiles, usernames, file paths), not a
+#   list of things that happen to be harmless.
+#
+#   Pass 1 (key pattern) stays a DENY LIST, because it runs over arbitrary
+#   lines in arbitrary files — logs, JSON, YAML — where "redact every key:
+#   value I do not recognise" would delete the bundle's diagnostic value
+#   wholesale. It is the belt for secrets that are NOT in this host's config
+#   files and so cannot be in pass 2's dictionary, and its list is now derived
+#   from the repo's actual env surface (deployment/docker/*.yml, scripts/
+#   install.py's .env template, and os.Getenv in src/backend) rather than from
+#   memory.
+#
+# Matching is on UNDERSCORE-DELIMITED SEGMENTS, not substrings: `KEY` must
+# match FOO_KEY and KEY_BAR but must NOT match KEYCLOAK_DB_NAME, or the string
+# "keycloak" would vanish from every log line in the bundle. Over-redaction is
+# a real failure mode too (§14 still says safety first when they conflict —
+# CRED_CACHE_RELOAD_SEC losing its tuning integer is a price worth paying).
+SECRET_KEY_SEGMENTS='PASSPHRASE|PASSWORD|PASSWD|PASS|CREDENTIALS|CREDENTIAL|CREDS|CRED|SECRETS|SECRET|APIKEY|KEYS|KEY|TOKENS|TOKEN|WEBHOOK|SIGNATURE|SIGNING|BEARER|COOKIE|SESSION|PRIVATE|SALT|HMAC|AUTH|DSN|SID|PWD|PW'
+# Names that carry a bearer capability or PII while looking like ordinary
+# config. An ntfy topic IS the credential on the public server (this repo says
+# so itself, in scripts/stack-watchdog.env.example); a healthchecks.io ping URL
+# silences the dead-man's switch; an address is PII (§8).
+SECRET_KEY_NAMES='[A-Za-z0-9_]*NTFY[A-Za-z0-9_]*TOPIC|[A-Za-z0-9_]*PING_URL|[A-Za-z0-9_]*EMAIL'
+SECRET_KEY_ERE="(([A-Za-z0-9]+_)*(${SECRET_KEY_SEGMENTS})(_[A-Za-z0-9_]+)?|${SECRET_KEY_NAMES})"
+# The allow list for pass 2 — deny above always wins over it, so TLS_KEY_FILE
+# is still redacted even though it ends in _FILE. Anything not matched here is
+# treated as a secret, which is what makes a newly-added variable safe by
+# default instead of safe only once somebody notices it.
+NON_SECRET_KEY_ERE='^((FEATURE|ENABLE|COMPOSE)_[A-Z0-9_]+|BASE_PORT|KEYCLOAK_ADMIN|(CORRELIX|SUDO)_(UID|GID)|[A-Z0-9_]+_(PORT|PORTS|HOST|HOSTS|URL|URLS|DIR|PATH|FILE|LEVEL|INTERVAL|TTL|TIMEOUT|KEEP|VERSIONS|RETENTION|REPLICAS|PROFILE|PROFILES|MODE|VERSION|BUDGET|LIMIT|MIN|LOOKBACK|WINDOW|PASSES|RANGES|ORIGINS|SEVERITY|ROLE|ROLES|TYPE|GROUP|USER|USERS|USERNAME|SUPERUSER|NAME|BACKEND|PROVIDER|PROVIDERS|MODEL|LISTEN|SERVER|REGION|ID|CA|CERT|BUNDLES|ROOT|DOMAIN|TOPIC|REALM|ISSUER|TRANSITION|LINES|FEEDS|FIXTURES|WEIGHTING|EDITION|ENABLED))$'
+
+# Every file on THIS host that can put a secret value into the bundle. .env is
+# the stack's own; the watchdog config holds the ntfy topic, ping URL and
+# webhook token that watchdog/watchdog-log.txt (collected above) can echo. The
+# watchdog files are optional by design — a repo checkout or an install without
+# the cron simply has none — so their absence is silent; a missing .env is not.
+declare -a SECRET_SOURCE_FILES=("$ENV_FILE")
+for cand in "${WATCHDOG_ENV:-}" "$SCRIPT_DIR/stack-watchdog.env" \
+            "/etc/correlix/stack-watchdog.env"; do
+  if [ -n "$cand" ] && [ -r "$cand" ]; then
+    SECRET_SOURCE_FILES+=("$cand")
+  fi
+done
+
+# Pass 2's input: every value this install holds that is not on the allow list.
+# Kept in a 0600 file under the staging dir and destroyed with it on exit.
+# Longest first, so a value embedded inside a longer one cannot leave the tail
+# of the longer one behind. Values under 6 characters are NOT collected: a
+# three-character value replaced globally would shred the bundle, and a secret
+# that short is a different bug.
+harvest_secret_values() {  # <file>...
+  # SQ carries the single-quote character INTO awk, so the awk program itself
+  # can stay inside one unbroken single-quoted string (§16.3 quoting hygiene).
+  local SQ="'"
+  LC_ALL=C awk -v deny="^${SECRET_KEY_ERE}\$" -v allow="$NON_SECRET_KEY_ERE" -v q="$SQ" '
+    /^[[:space:]]*#/ { next }
+    {
+      if (match($0, /^[A-Za-z_][A-Za-z0-9_]*=/) != 1) next
+      k = substr($0, 1, RLENGTH - 1)
+      v = substr($0, RLENGTH + 1)
+      sub(/\r$/, "", v)
+      if (length(v) >= 2) {
+        first = substr(v, 1, 1); last = substr(v, length(v), 1)
+        if ((first == "\"" && last == "\"") || (first == q && last == q))
+          v = substr(v, 2, length(v) - 2)
+      }
+      if (length(v) < 6) next
+      if (k ~ deny || k !~ allow) print length(v) "\t" v
+    }' "$@"
+}
+
 if [ -r "$ENV_FILE" ]; then
-  sed -n 's/^[A-Za-z_][A-Za-z0-9_]*\(PASSWORD\|PASSWD\|SECRET\|KEY\|TOKEN\|DSN\)[A-Za-z0-9_]*=//p' "$ENV_FILE" \
-    | sed 's/^["'"'"']//; s/["'"'"']$//' \
-    | awk 'length($0) >= 6 { print length($0)"\t"$0 }' \
-    | sort -rn | cut -f2- | sort -u -r \
-    > "$SECRETS_FILE"
+  {
+    harvest_secret_values "${SECRET_SOURCE_FILES[@]}"
+    if [ -n "${SUPPORT_API_TOKEN:-}" ]; then
+      printf '%s\t%s\n' "${#SUPPORT_API_TOKEN}" "$SUPPORT_API_TOKEN"
+    fi
+  } | sort -rn -k1,1 | cut -f2- | awk '!seen[$0]++' > "$SECRETS_FILE"
 else
   warn "no readable $ENV_FILE — the literal-value redaction pass has nothing to match (key-pattern redaction still runs)"
-fi
-if [ -n "${SUPPORT_API_TOKEN:-}" ]; then
-  printf '%s\n' "$SUPPORT_API_TOKEN" >> "$SECRETS_FILE"
+  if [ -n "${SUPPORT_API_TOKEN:-}" ]; then
+    printf '%s\n' "$SUPPORT_API_TOKEN" >> "$SECRETS_FILE"
+  fi
 fi
 
 redact_stream() {
-  # Pass 1: key-pattern + URL userinfo.
+  # Pass 1: key-pattern (segment-matched, deny list) + URL userinfo. The
+  # userinfo rule is what keeps a DSN readable — postgres://user:***@host/db
+  # still names the host and database a support engineer needs.
   LC_ALL=C sed -E \
-    -e 's/^([[:space:]]*-?[[:space:]]*[A-Za-z0-9_]*(PASSWORD|PASSWD|SECRET|KEY|TOKEN|DSN)[A-Za-z0-9_]*)=.*/\1=***REDACTED***/' \
-    -e 's/^([[:space:]]*"?[A-Za-z0-9_]*(PASSWORD|PASSWD|SECRET|KEY|TOKEN|DSN)[A-Za-z0-9_]*"?)[[:space:]]*:[[:space:]]*.*/\1: ***REDACTED***/' \
+    -e "s/^([[:space:]]*-?[[:space:]]*${SECRET_KEY_ERE})=.*/\1=***REDACTED***/" \
+    -e "s/^([[:space:]]*\"?${SECRET_KEY_ERE}\"?)[[:space:]]*:[[:space:]]*.*/\1: ***REDACTED***/" \
     -e 's#([a-zA-Z][a-zA-Z0-9+.-]*://[^:/@[:space:]]+):[^@[:space:]]+@#\1:***REDACTED***@#g' |
-  # Pass 2: literal values from .env, replaced wherever they appear.
+  # Pass 2: literal values from this host's config, replaced wherever they
+  # appear — any file, any format, with or without a key name beside them.
   LC_ALL=C awk -v secrets="$SECRETS_FILE" '
     BEGIN {
       n = 0
@@ -557,10 +654,17 @@ done
   printf 'collectors:    %s ok, %s skipped, %s FAILED\n' "$OK_COUNT" "$SKIPPED" "$FAILED"
   printf 'exit_code:     %s\n' "$([ "$FAILED" -gt 0 ] && echo 2 || echo 0)"
   printf '\nREDACTION\n'
-  printf '  1. key-pattern: *PASSWORD*/*PASSWD*/*SECRET*/*KEY*/*TOKEN*/*DSN* values\n'
-  printf '     in KEY=value and KEY: value form, plus URL userinfo credentials.\n'
-  printf '  2. literal value: every secret-shaped value in the stack .env is\n'
-  printf '     replaced wherever it appears in ANY file of this bundle.\n'
+  printf '  1. key-pattern (deny list): a key with a secret-bearing segment\n'
+  printf '     (%s)\n' "$SECRET_KEY_SEGMENTS"
+  printf '     loses its value in KEY=value and KEY: value form, as do URL\n'
+  printf '     userinfo credentials, ntfy topics, ping URLs and addresses.\n'
+  printf '  2. literal value (DENY BY DEFAULT): every value in this host config\n'
+  printf '     (%s)\n' "${SECRET_SOURCE_FILES[*]}"
+  printf '     is replaced wherever it appears in ANY file of this bundle,\n'
+  printf '     unless its key is on the reviewed non-secret allow list (ports,\n'
+  printf '     hosts, URLs, feature flags, usernames, paths, profiles). An\n'
+  printf '     unclassified variable is treated as a secret, not as harmless.\n'
+  printf '     Values shorter than 6 characters are not matched literally.\n'
   printf '  .env is included as KEY NAMES ONLY — no value, redacted or otherwise.\n'
   printf '\nSTATUS (a FAILED collector means this bundle is PARTIAL — it is never silent)\n'
   for row in ${ROWS+"${ROWS[@]}"}; do
@@ -583,7 +687,7 @@ say ""
 say "Support bundle: $ARCHIVE  ($SIZE)"
 say "  collectors:   $OK_COUNT ok, $SKIPPED skipped, $FAILED failed"
 say "  contents:     read MANIFEST inside the archive before sending it"
-say "  redaction:    secrets removed by key pattern AND by literal .env value"
+say "  redaction:    key-pattern deny list AND deny-by-default literal values"
 if [ "$FAILED" -gt 0 ]; then
   warn "$FAILED collector(s) FAILED — the bundle was still written and every failure is named in its MANIFEST"
   exit 2

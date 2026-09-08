@@ -49,14 +49,32 @@ degraded ClickHouse cannot turn the bundle into a long-running query.
 
 Two independent passes run over **every** collected file before it is packed:
 
-1. **Key pattern** — any `KEY=value` or `KEY: value` whose key name contains
-   `PASSWORD`, `PASSWD`, `SECRET`, `KEY`, `TOKEN` or `DSN` loses its value,
-   plus URL userinfo credentials (`postgres://user:pw@host` →
-   `postgres://user:***REDACTED***@host`).
-2. **Literal value** — every secret-shaped value in the stack's own `.env` is
-   replaced **wherever it appears**, in any file, including inside a log line
-   or a JSON body where no key name would have given it away. This is the pass
-   that makes the guarantee hold for values we would not otherwise recognise.
+1. **Key pattern (deny list)** — any `KEY=value` or `KEY: value` whose key has
+   a secret-bearing *segment* — `PASS` / `PASSWORD` / `PASSPHRASE`, `SECRET`,
+   `KEY`, `TOKEN`, `WEBHOOK`, `DSN`, `CRED*`, `AUTH`, `SALT`, `PRIVATE`,
+   `SIGNATURE`, `HMAC`, `BEARER`, `COOKIE`, `SESSION`, `SID`, `PW`/`PWD` —
+   loses its value, as do URL userinfo credentials (`postgres://user:pw@host` →
+   `postgres://user:***REDACTED***@host`), ntfy topics, healthchecks.io ping
+   URLs and e-mail addresses. Segments are matched between underscores, so
+   `KEYCLOAK_DB_NAME` is *not* treated as a key.
+2. **Literal value (deny by default)** — every value in this host's own config
+   files (the stack `.env`, and the watchdog's `stack-watchdog.env` if present)
+   is replaced **wherever it appears**, in any file, including inside a log
+   line or a JSON body where no key name would have given it away — *unless*
+   its key is on a short, reviewed allow list of settings support needs to be
+   able to read (ports, hosts, URLs, feature flags, profiles, usernames, file
+   paths, sizes and intervals). A variable nobody has classified is treated as
+   a secret.
+
+Pass 2 is the one that makes the guarantee hold for values we would not
+otherwise recognise. Before 2026-09-08 it was a deny *list* too, and it missed
+`SMTP_PASS` and `SLACK_WEBHOOK_URL` — a mail password and a Slack webhook rode
+out in bundles labelled redacted. The policy was inverted rather than the two
+names added, so a variable introduced tomorrow is safe by default.
+
+Values shorter than 6 characters are not matched literally: replacing a
+three-character string everywhere would shred the bundle, and a secret that
+short is a different problem.
 
 If the redaction pass itself fails for a file, that file's content is
 **withheld** (replaced with a notice) and the failure is recorded — the bundle
@@ -66,8 +84,10 @@ never ships content that was not redacted.
 otherwise, so there is not even a length or shape to infer.
 
 Over-redaction is possible and deliberate: a non-secret setting whose key
-happens to contain `KEY` (say `SSH_KEY_PATH`) will also be masked. Tell support
-the value directly if it matters.
+happens to end in `_KEY` (say `SSH_KEY_PATH`), or one whose name nobody has
+classified yet, will also be masked. Tell support the value directly if it
+matters. The `MANIFEST` inside every bundle states the policy that actually
+ran, including the exact segment list.
 
 **Still your call.** The bundle carries operational detail — hostnames, device
 IPs, index names, log lines your services emit. Read the `MANIFEST` and skim
