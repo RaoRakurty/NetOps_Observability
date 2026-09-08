@@ -670,6 +670,25 @@ func buildTimeline(inc ExperienceIncident) []TimelineEntry {
 //     capped at `low`, whatever the miss looks like. That is Phase H's "a single
 //     flaky synthetic must not automatically create a high-severity incident",
 //     enforced here rather than left to a reviewer.
+//
+// Two things about the cap are easy to get wrong, so both are stated here.
+//
+// What DISARMS it is a second MEASUREMENT of the experience, which is exactly
+// the set MayAnchorVerdict names: a flow record, a RUM sample, a control-plane
+// or device observation. A change record does not qualify. buildIncident
+// attaches every aligned change as a supporting item BEFORE this runs, so a
+// predicate that only asked "is this item an active probe?" was disarmed by any
+// routine deploy in the window: a flapping check plus a deploy paged a human,
+// which is the precise outcome the cap exists to prevent. A business outcome
+// does not qualify either, for the same reason it cannot anchor a verdict — it
+// measures the consequence, not the mechanism.
+//
+// An UNGRADED check does not disarm it either. A definition with no runs is
+// absent from the reliability map rather than present as `unknown`, and absent
+// means "we have not established that this check can be trusted". Reading that
+// as trustworthy would let a brand-new check page someone on its first failure,
+// and it would contradict the contract written at the GradeAll call site, which
+// says a missing entry and an untrustworthy one are treated identically.
 func severityFor(subj incidentSubject,
 	reliability map[string]SyntheticReliability, items []EvidenceItem) string {
 
@@ -696,13 +715,17 @@ func severityFor(subj incidentSubject,
 		if it.Stance != StanceSupports {
 			continue
 		}
-		if it.IndependenceGroup != ModalityActiveProbe {
-			syntheticOnly = false
+		if it.IndependenceGroup == ModalityActiveProbe {
+			// A graded, trustworthy check is enough on its own.
+			if r, ok := reliability[it.Entity]; ok && r.Trustworthy() {
+				trustworthy = true
+			}
 			continue
 		}
-		r, ok := reliability[it.Entity]
-		if !ok || r.Trustworthy() {
-			trustworthy = true
+		if MayAnchorVerdict(it.IndependenceGroup) {
+			// A genuine second instrument measured the same failure, so the
+			// incident no longer rests on the synthetic alone.
+			syntheticOnly = false
 		}
 	}
 	if syntheticOnly && !trustworthy {
