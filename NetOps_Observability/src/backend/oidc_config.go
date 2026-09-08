@@ -850,7 +850,14 @@ func (s *server) handleTenantSSO(w http.ResponseWriter, r *http.Request) {
 func (s *server) ssoLocatorRefuse(w http.ResponseWriter, r *http.Request, c tenantlocator.Candidate, msg string) {
 	frag := url.Values{}
 	frag.Set("sso_error", msg)
-	http.Redirect(w, r, c.Path()+"#"+frag.Encode(), http.StatusFound)
+	// c.Path() is composed by the server from a validated locator ("/t/<slug>"
+	// or "/org/<id>"), never from request input; the guard below pins that
+	// contract so this can never become a protocol-relative or absolute URL.
+	target := c.Path()
+	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.ContainsAny(target, "\\\r\n") {
+		target = "/"
+	}
+	http.Redirect(w, r, target+"#"+frag.Encode(), http.StatusFound) // #nosec G710 -- same-origin path, guarded above
 }
 
 // auditSSOBindingRefusal records a refused per-tenant callback. Every refusal is

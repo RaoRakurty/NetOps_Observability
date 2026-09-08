@@ -51,7 +51,7 @@ var streamLine = strings.Repeat("Interface GigabitEthernet0/0/0 is up, line prot
 
 func (s *streamingFake) RunStream(ctx context.Context, dev protocoldiag.Device, cmd string, maxBytes int64, w io.Writer) (int64, error) {
 	if cmd != s.bigCmd {
-		out, err := s.fakeRunner.Run(ctx, dev, cmd)
+		out, err := s.Run(ctx, dev, cmd)
 		if err != nil {
 			return 0, err
 		}

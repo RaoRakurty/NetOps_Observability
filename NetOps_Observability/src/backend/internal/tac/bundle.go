@@ -328,8 +328,8 @@ func (f bundleFile) sum() (string, int64) {
 		return "unreadable", f.length()
 	}
 	var n int64
-	switch {
-	case f.path == "":
+	switch f.path {
+	case "":
 		n = int64(len(f.data))
 	default:
 		n = f.length()

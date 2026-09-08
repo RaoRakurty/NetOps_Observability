@@ -4,6 +4,7 @@
 package tenantlocator
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -324,7 +325,7 @@ func TestTokenRejections(t *testing.T) {
 	_, e1 := other.Verify(tok, now)
 	_, e2 := s.Verify("garbage", now)
 	_, e3 := s.Verify(tok, now.Add(2*TTL))
-	if e1 != ErrBadToken || e2 != ErrBadToken || e3 != ErrBadToken {
+	if !errors.Is(e1, ErrBadToken) || !errors.Is(e2, ErrBadToken) || !errors.Is(e3, ErrBadToken) {
 		t.Errorf("rejections must be indistinguishable: %v / %v / %v", e1, e2, e3)
 	}
 }

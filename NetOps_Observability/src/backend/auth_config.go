@@ -644,7 +644,10 @@ func (s *server) setLocatorCookie(w http.ResponseWriter, r *http.Request, c tena
 		logWarn("auth", "login locator not minted", map[string]any{"kind": c.Kind})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
+	// Secure follows the request scheme on purpose: the appliance serves the
+	// SPA over plain HTTP on loopback for its own tooling, and a browser drops
+	// a Secure cookie that arrives over http. HttpOnly and SameSite are fixed.
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is scheme-derived by design; HttpOnly+SameSite set
 		Name:     loginLocatorCookie,
 		Value:    tok,
 		Path:     "/",
@@ -660,7 +663,7 @@ func (s *server) setLocatorCookie(w http.ResponseWriter, r *http.Request, c tena
 // cookie arriving over plain HTTP), so a stale candidate cannot survive an
 // unresolvable entry URL.
 func (s *server) clearLocatorCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- same attributes as the set above, by construction
 		Name: loginLocatorCookie, Value: "", Path: "/", HttpOnly: true,
 		Secure: cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: -1,
 	})
