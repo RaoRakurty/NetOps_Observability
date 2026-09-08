@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"netops/backend/internal/ticketing/vendors/juniper"
@@ -39,9 +38,10 @@ type JuniperConnector struct {
 	client *juniper.Client
 	retry  RetryPolicy
 
-	mu      sync.Mutex
-	token   string
-	expires time.Time
+	// tokens caches minted bearers KEYED BY CREDENTIAL. One connector object
+	// serves every tenant, so an unkeyed cache would hand tenant B the bearer
+	// minted from tenant A's client id. See caseconn_tokencache.go.
+	tokens vendorTokenCache
 }
 
 // NewJuniperConnector builds the connector. Pass a test client to drive it
@@ -227,26 +227,59 @@ func (c *JuniperConnector) AddNote(context.Context, TACConnectorConfig, CaseRef,
 	return fmt.Errorf("%w: adding a note maps to /updatesr, whose request schema is not in the pinned contract", ErrUnsupported)
 }
 
-// auth resolves the per-request credential: a cached OAuth token, or the API key.
+// auth resolves the per-request credential: a cached OAuth token for THIS
+// tenant's credential, or the API key.
+//
+// Two properties this function must keep:
+//
+//	the cache is keyed by the credential, because one connector object serves
+//	every tenant (§3a). Keying it by the connector filed one tenant's case under
+//	another tenant's Juniper account, and made the Test button report success on
+//	a client secret the vendor had never seen.
+//	the pinned-host check runs BEFORE the cache is consulted, on every call, so
+//	a cache hit is never a way to skip it.
+//
+// The mint happens outside the cache lock on purpose: holding it across a
+// network call would serialize every tenant behind the slowest one, and the
+// worst a concurrent mint costs is one extra token.
 func (c *JuniperConnector) auth(ctx context.Context, cfg TACConnectorConfig) (juniper.Auth, error) {
 	if strings.EqualFold(strings.TrimSpace(cfg.Juniper.AuthMode), "apikey") {
 		return juniper.Auth{APIKey: cfg.Juniper.APIKey}, nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.token != "" && time.Now().Before(c.expires.Add(-time.Minute)) {
-		return juniper.Auth{Bearer: c.token}, nil
 	}
 	// The token endpoint is on the pinned host by construction; assert it.
 	if err := validatePinnedURL("https://"+juniper.APIHost+juniper.TokenPath, juniperHostAllowlist()); err != nil {
 		return juniper.Auth{}, PermanentDeliveryError{err}
 	}
+	key := juniperTokenCacheKey(cfg.Juniper)
+	if tok, ok := c.tokens.lookup(key); ok {
+		return juniper.Auth{Bearer: tok}, nil
+	}
 	tok, ttl, err := c.client.Token(ctx, cfg.Juniper.ClientID, cfg.Juniper.ClientSecret)
 	if err != nil {
 		return juniper.Auth{}, translateJuniperError(err)
 	}
-	c.token, c.expires = tok, time.Now().Add(ttl)
+	c.tokens.store(key, tok, ttl)
 	return juniper.Auth{Bearer: tok}, nil
+}
+
+// juniperTokenCacheKey identifies one Juniper Service Case API credential:
+//
+//	auth mode      the stored mode decides HOW the connector authenticates, and
+//	               a config that changes mode must never be served a bearer
+//	               minted under the old one. The apikey mode never reaches this
+//	               cache at all, but the mode still belongs in the key;
+//	client id      the identity the bearer represents;
+//	secret digest  a different or rotated secret must produce a different key,
+//	               and a digest names the secret without holding it.
+//
+// The token endpoint is a compile-time constant on the pinned host, so there is
+// no environment component to key on the way Cisco has.
+func juniperTokenCacheKey(j JuniperConnectorConfig) string {
+	return vendorTokenCacheKey(j.ClientSecret,
+		"juniper",
+		strings.ToLower(strings.TrimSpace(j.AuthMode)),
+		strings.TrimSpace(j.ClientID),
+	)
 }
 
 var _ CaseConnector = (*JuniperConnector)(nil)

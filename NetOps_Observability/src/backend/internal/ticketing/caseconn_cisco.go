@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"netops/backend/internal/ticketing/vendors/cisco"
@@ -164,9 +163,10 @@ type CiscoSmartBondingConnector struct {
 	cxd    *CiscoCXDConnector
 	retry  RetryPolicy
 
-	mu      sync.Mutex
-	token   string
-	expires time.Time
+	// tokens caches minted bearers KEYED BY CREDENTIAL. One connector object
+	// serves every tenant, so an unkeyed cache would hand tenant B the bearer
+	// minted from tenant A's client id. See caseconn_tokencache.go.
+	tokens vendorTokenCache
 }
 
 // NewCiscoSmartBondingConnector builds the create connector.
@@ -311,24 +311,56 @@ func (c *CiscoSmartBondingConnector) AddNote(context.Context, TACConnectorConfig
 	return fmt.Errorf("%w: the public Smart Bonding pages document no note endpoint for the customer API", ErrUnsupported)
 }
 
-// bearer returns a cached OAuth token, refreshing a minute before expiry. The
-// token itself never reaches a log or an error.
+// bearer returns a cached OAuth token for THIS tenant's credential, refreshing
+// a minute before expiry. The token itself never reaches a log or an error.
+//
+// Two properties this function must keep:
+//
+//	the cache is keyed by the credential, because one connector object serves
+//	every tenant (§3a). Keying it by the connector filed one tenant's case under
+//	another tenant's Cisco account.
+//	the pinned-host check runs BEFORE the cache is consulted, on every call. The
+//	pin is a property of the configuration in front of us, not of the mint, so a
+//	cache hit must never be a way to skip it.
+//
+// The mint happens outside the cache lock on purpose: holding it across a
+// network call would serialize every tenant behind the slowest one, and the
+// worst a concurrent mint costs is one extra token.
 func (c *CiscoSmartBondingConnector) bearer(ctx context.Context, cfg TACConnectorConfig) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.token != "" && time.Now().Before(c.expires.Add(-time.Minute)) {
-		return c.token, nil
-	}
 	tokenURL := orDefault(cfg.Cisco.TokenURL, cisco.DefaultTokenURL)
 	if err := validatePinnedURL(tokenURL, ciscoHostAllowlist(cfg.Cisco.StagingHost)); err != nil {
 		return "", PermanentDeliveryError{err}
+	}
+	key := ciscoTokenCacheKey(cfg.Cisco, tokenURL)
+	if tok, ok := c.tokens.lookup(key); ok {
+		return tok, nil
 	}
 	tok, ttl, err := c.client.Token(ctx, tokenURL, cfg.Cisco.ClientID, cfg.Cisco.ClientSecret)
 	if err != nil {
 		return "", translateCiscoError(err)
 	}
-	c.token, c.expires = tok, time.Now().Add(ttl)
+	c.tokens.store(key, tok, ttl)
 	return tok, nil
+}
+
+// ciscoTokenCacheKey identifies one Smart Bonding credential. Every component
+// earns its place:
+//
+//	client id      the identity the bearer represents;
+//	token url      a bearer minted at one token endpoint is not valid at
+//	               another, and the endpoint is per-tenant configuration;
+//	staging host   staging and production are different Cisco environments, so
+//	               two tenants sharing a client id but pointed at different ones
+//	               must not share a bearer;
+//	secret digest  a different or rotated secret must produce a different key,
+//	               and a digest names the secret without holding it.
+func ciscoTokenCacheKey(c CiscoConnectorConfig, tokenURL string) string {
+	return vendorTokenCacheKey(c.ClientSecret,
+		"cisco-smart-bonding",
+		strings.TrimSpace(tokenURL),
+		strings.ToLower(strings.TrimSpace(c.StagingHost)),
+		strings.TrimSpace(c.ClientID),
+	)
 }
 
 var _ CaseConnector = (*CiscoSmartBondingConnector)(nil)
