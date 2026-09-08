@@ -219,32 +219,54 @@ func RedactLine(v Vendor, line string) string {
 	return line
 }
 
+// blockRedactor is the block-aware line redactor: RedactLine plus the state a
+// single line cannot see (are we inside a PEM block).
+//
+// It exists so that EVERY reader of a stored configuration masks the same bytes.
+// The version endpoint reads a whole config; the unified diff reads two of them
+// interleaved. They used to mask differently, and the diff was the leaky one: it
+// applied only the single-line rules, so a rotated TLS or SSH key published both
+// key bodies to any caller allowed to read a diff. One state machine, two
+// callers, no room for the two to drift apart.
+type blockRedactor struct {
+	vendor Vendor
+	inPEM  bool
+}
+
+// newBlockRedactor starts a redactor for one SIDE of one configuration.
+func newBlockRedactor(v Vendor) *blockRedactor { return &blockRedactor{vendor: v} }
+
+// Line masks one line and advances the block state.
+//
+// Feed it EVERY line of that side, in order, including lines the caller will not
+// display. Skipping a line loses the `-----BEGIN-----` that turns the masking
+// on, and then the body prints in the clear.
+func (r *blockRedactor) Line(line string) string {
+	switch {
+	case pemBegin.MatchString(line):
+		r.inPEM = true
+		return line
+	case r.inPEM && pemEnd.MatchString(line):
+		r.inPEM = false
+		return line
+	case r.inPEM:
+		return Mask
+	case isHexBlobLine(line):
+		// A bare long hex run inside a config is key/certificate material
+		// (Cisco `crypto pki certificate chain` bodies) — never intent.
+		return Mask
+	}
+	return RedactLine(r.vendor, line)
+}
+
 // Redact masks every secret in a whole configuration, including multi-line PEM
 // and hex key blobs (which no single-line rule can see).
 func Redact(v Vendor, text string) string {
 	lines := strings.Split(text, "\n")
 	out := make([]string, 0, len(lines))
-	inPEM := false
+	r := newBlockRedactor(v)
 	for _, ln := range lines {
-		switch {
-		case pemBegin.MatchString(ln):
-			inPEM = true
-			out = append(out, ln)
-			continue
-		case inPEM && pemEnd.MatchString(ln):
-			inPEM = false
-			out = append(out, ln)
-			continue
-		case inPEM:
-			out = append(out, Mask)
-			continue
-		case isHexBlobLine(ln):
-			// A bare long hex run inside a config is key/certificate material
-			// (Cisco `crypto pki certificate chain` bodies) — never intent.
-			out = append(out, Mask)
-			continue
-		}
-		out = append(out, RedactLine(v, ln))
+		out = append(out, r.Line(ln))
 	}
 	return strings.Join(out, "\n")
 }

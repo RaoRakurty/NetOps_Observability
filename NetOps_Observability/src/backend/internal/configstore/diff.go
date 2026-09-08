@@ -238,6 +238,7 @@ func blockReplace(a, b []string) []diffOp {
 // every emitted line pushed through the redaction rules. Returns truncated=true
 // when MaxDiffOutput cut the rendering short.
 func renderUnified(v Vendor, ops []diffOp) (string, bool) {
+	shown := redactSides(v, ops)
 	// Mark which equal lines are within `diffContext` of a change.
 	keep := make([]bool, len(ops))
 	for i, op := range ops {
@@ -281,7 +282,7 @@ func renderUnified(v Vendor, ops []diffOp) (string, bool) {
 			prefix = " "
 		}
 		b.WriteString(prefix)
-		b.WriteString(RedactLine(v, op.line))
+		b.WriteString(shown[i])
 		b.WriteString("\n")
 		emitted++
 	}
@@ -289,4 +290,43 @@ func renderUnified(v Vendor, ops []diffOp) (string, bool) {
 		fmt.Fprintf(&b, "@@ diff truncated at %d lines @@\n", MaxDiffOutput)
 	}
 	return b.String(), truncated
+}
+
+// redactSides masks the whole edit script through the SAME block-aware redactor
+// the version endpoint uses, and returns what to print for each op.
+//
+// Two things force this to happen before the context window is applied, not
+// after:
+//
+//   - The block state machine has to see every line of a side, in order,
+//     INCLUDING lines the context window drops. A key rotation changes one line
+//     deep inside a PEM block, so the `-----BEGIN-----` that turns masking on is
+//     ten lines away and is never printed. Redacting only the printed lines
+//     therefore prints the key body.
+//   - The two sides need SEPARATE state. The op list interleaves them, so one
+//     shared machine would be switched on by the old config's key and switched
+//     off by the new config's END marker, and the interleaved lines in between
+//     would come out unmasked. The `+`/`-` prefixes break the hex-blob rule the
+//     same way, which is why this runs on the raw line, not on the rendered one.
+func redactSides(v Vendor, ops []diffOp) []string {
+	shown := make([]string, len(ops))
+	from, to := newBlockRedactor(v), newBlockRedactor(v)
+	for i, op := range ops {
+		switch op.kind {
+		case opDel:
+			shown[i] = from.Line(op.line)
+		case opAdd:
+			shown[i] = to.Line(op.line)
+		case opEqual:
+			// The line is on both sides, so BOTH machines must consume it or
+			// they lose track. If they disagree, the line sits inside a PEM
+			// block on one side only: mask it. The rules err toward masking.
+			a, b := from.Line(op.line), to.Line(op.line)
+			shown[i] = a
+			if a != b {
+				shown[i] = Mask
+			}
+		}
+	}
+	return shown
 }
