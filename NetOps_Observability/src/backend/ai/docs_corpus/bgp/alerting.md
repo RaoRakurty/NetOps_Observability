@@ -53,7 +53,7 @@ and the class that pages someone at 03:00 can never disagree.
      "config": {"default": {}},
      "defaults": {"max_asns_per_set": 32, "max_prefixes": 200,
                   "min_vantages": 2, "min_visibility": 0.5},
-     "note": "expected_origins empty ⇒ the origin baseline is LEARNED from the first observation and marked as such. upstreams empty ⇒ the route-leak heuristic does not run (there is nothing to call unexpected).",
+     "note": "expected_origins empty ⇒ NO baseline is stored. Each pass compares the prefix against its own dominant origin, so only a MINORITY unexpected origin is detectable: an origin change that reaches every vantage point classifies clean. Declare the expected origin AS to detect one. upstreams empty ⇒ the route-leak heuristic does not run (there is nothing to call unexpected).",
      "updated_at": "0001-01-01T00:00:00Z",
      "updated_by": ""
    }
@@ -143,10 +143,14 @@ is classified `unknown`, raises no alert, and is summarized as "Not measured".
 - **A near miss is reported, not hidden.** When a class almost fired but lacked
   corroboration, the incident carries `corroboration_shortfall` naming the AS,
   how many vantage points saw it, and how many are required.
-- **An empty expected-origin set means the baseline is learned.** Correlix takes
-  the dominant observed origin as the baseline and sets `learned_origin` on the
-  incident. The console marks it, because a learned baseline is weaker evidence
-  than a declared one.
+- **An empty expected-origin set means there is NO baseline.** Nothing is stored
+  between passes, so every check takes that pass's own dominant observed origin
+  as the baseline. Only a **minority** unexpected origin can be found that way:
+  if an origin change reaches every vantage point it becomes the baseline in the
+  same pass and the prefix classifies clean. The incident carries
+  `learned_origin` and a plain-language `baseline_note` saying exactly this, and
+  the console prints it beside the verdict. Declare the expected origin AS to
+  detect a full origin change.
 - **An empty upstream set disables the leak heuristic.** With no declared
   transit set there is nothing to call unexpected, and Correlix does not guess
   one. Full valley-free detection needs AS relationship data that no free

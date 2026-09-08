@@ -241,9 +241,11 @@ export function groupSightings(rows: BgpBogonSighting[]): { block: string; why: 
 // of its four fields carry a consequence that an empty value does not announce,
 // and the editor is where that has to be said, because the wire cannot say it:
 //
-//   * `expected_origins` empty  ⇒ the origin baseline is LEARNED from the first
-//     observation and marked as learned. That is not "no origin checking"; it
-//     is a weaker check whose baseline nobody declared.
+//   * `expected_origins` empty  ⇒ NO baseline is stored. Every check compares
+//     the prefix against its own dominant origin, so only a MINORITY
+//     unexpected origin can be found. An origin change that reaches every
+//     vantage point looks normal. That is not a weaker check on the same
+//     question; it is a different, much narrower question.
 //   * `upstreams` empty         ⇒ the route-leak heuristic DOES NOT RUN. There
 //     is nothing to call unexpected, so a quiet leak column means unmeasured,
 //     not clean.
@@ -413,8 +415,8 @@ function configBody(c: PolicyConfigForm, limits: PolicyLimits): BgpAlertPolicyCo
 
 /**
  * The exact PUT body. Empty optionals are OMITTED rather than sent as empty
- * arrays or zeros: on this wire an absent set is the meaningful state (learned
- * baseline · leak heuristic off), and there is no tenant field to fill — the
+ * arrays or zeros: on this wire an absent set is the meaningful state (no
+ * declared baseline · leak heuristic off), and there is no tenant field to fill — the
  * server stamps the owner from the token (§3a rule 2).
  */
 export function policyBody(form: PolicyForm, limits: PolicyLimits): BgpAlertPolicy {
@@ -438,7 +440,7 @@ export function policyDirty(form: PolicyForm, original: PolicyForm): boolean {
 export function emptySetConsequence(field: "expected_origins" | "upstreams", value: string): string | null {
   if (value.trim() !== "") return null;
   return field === "expected_origins"
-    ? "No AS is declared here, so the baseline is guessed from the first observation and every result built on it is marked as guessed."
+    ? "No AS is declared here, so each check compares the prefix against its own dominant origin. Only a minority unexpected origin can be found that way — an origin change that reaches every vantage point looks normal. Declare the AS to detect one."
     : "No carriers are declared here, so the unexpected-transit check does not run — a quiet result means unmeasured, not clean.";
 }
 

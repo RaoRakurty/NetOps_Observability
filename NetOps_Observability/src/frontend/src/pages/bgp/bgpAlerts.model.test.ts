@@ -324,8 +324,12 @@ describe("alert policy — the PUT body", () => {
 });
 
 describe("alert policy — what an empty set means is SAID", () => {
-  it("names the guessed baseline and the transit check that does not run", () => {
-    expect(emptySetConsequence("expected_origins", "")).toMatch(/guessed from the first observation/);
+  it("names the undeclared baseline's blind spot and the transit check that does not run", () => {
+    // H4: "guessed from the first observation" was the false part — the
+    // baseline is re-derived every pass, so the operator has to be told which
+    // hijack this check cannot see, not just that it is weaker.
+    expect(emptySetConsequence("expected_origins", "")).toMatch(/its own dominant origin/);
+    expect(emptySetConsequence("expected_origins", "")).toMatch(/reaches every vantage point looks normal/);
     expect(emptySetConsequence("upstreams", "")).toMatch(/unexpected-transit check does not run/);
     expect(emptySetConsequence("expected_origins", "AS64500")).toBeNull();
     expect(emptySetConsequence("upstreams", "AS3356")).toBeNull();

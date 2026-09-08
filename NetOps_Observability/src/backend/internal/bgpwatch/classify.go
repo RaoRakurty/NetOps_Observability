@@ -139,9 +139,13 @@ type Observation struct {
 // the API boundary before it ever reaches here.
 type PolicyConfig struct {
 	// ExpectedOrigins are the ASNs allowed to originate the prefix. EMPTY means
-	// "not declared": origin-change detection then LEARNS the origin from the
-	// first successful observation (see Incident.LearnedOrigin) and says so,
-	// rather than either alerting on everything or on nothing.
+	// "not declared", and the consequence is bigger than it reads: nothing
+	// persists a baseline between passes, so the baseline is RE-DERIVED from
+	// each pass's own dominant origin. Only a MINORITY unexpected origin can be
+	// detected that way. An origin change that reaches every vantage point
+	// becomes the baseline in the same pass and classifies clean. Incident
+	// carries that limit in BaselineNote so the operator is told, and the fix
+	// is to declare the set (or, tracker, to persist a first-seen baseline).
 	ExpectedOrigins []uint32 `json:"expected_origins,omitempty"`
 	// Upstreams are the ASNs the tenant buys transit from. EMPTY disables the
 	// route-leak heuristic entirely — with no declared transit set there is
@@ -203,9 +207,14 @@ type Incident struct {
 	Summary  string          `json:"summary"`
 	Evidence Evidence        `json:"evidence"`
 	// LearnedOrigin is set when ExpectedOrigins was NOT declared and the
-	// classifier is using the first observed origin as the baseline. The UI must
-	// say so — a learned baseline is weaker evidence than a declared one.
+	// baseline came from the observation itself. The name is historical: this
+	// is not learned once and kept, it is re-derived on EVERY pass. Read it as
+	// "there was no declared baseline"; BaselineNote says what that costs.
 	LearnedOrigin bool `json:"learned_origin,omitempty"`
+	// BaselineNote states, in the operator's words, where the origin baseline
+	// came from and what the check can therefore NOT see. It is set whenever no
+	// origin was declared. A blank note means the baseline was declared.
+	BaselineNote string `json:"baseline_note,omitempty"`
 	// Shortfall records a class that ALMOST fired but lacked corroboration. It
 	// is the honest counterpart to a suppressed alert (§10): the operator can
 	// see that something was observed and why it was not asserted.
@@ -316,13 +325,35 @@ func Classify(obs Observation, cfg PolicyConfig, bogons *BogonSet, now time.Time
 		expected[a] = true
 	}
 	learned := false
+	baselineNote := ""
 	if len(expected) == 0 {
-		// Not declared: learn the DOMINANT observed origin as the baseline and
-		// say so. Learning the dominant one (not "any observed one") is what
-		// makes the very next evaluation able to see a change at all.
+		// NOT DECLARED, and there is nowhere honest to get a baseline from.
+		// Classify is pure and nothing persists an origin between passes — the
+		// only SetPolicy caller in the backend is the operator's PUT handler —
+		// so the baseline below is RE-DERIVED from this pass's own observation,
+		// not learned once and remembered.
+		//
+		// That leaves exactly one detectable case: a MINORITY origin. An origin
+		// change that has reached every vantage point becomes the baseline in
+		// the same pass, and the prefix classifies clean. The note says so
+		// rather than letting the summary imply a check that did not happen.
+		// The real fix is a persisted first-seen baseline per (tenant, prefix);
+		// it is a tracker row, not something this pure function can do.
+		total := 0
+		for _, peers := range originVantages {
+			total += len(peers)
+		}
 		if dom, ok := dominantOrigin(originVantages); ok {
 			expected[dom] = true
 			learned = true
+			baselineNote = fmt.Sprintf(
+				"No expected origin AS is declared for %s, so the baseline is this pass's own dominant origin (AS%d, %d of %d vantage points) and it is re-derived every pass. "+
+					"Only a MINORITY unexpected origin can be seen this way: an origin change that reaches every vantage point would look normal here. "+
+					"Declare the expected origin AS to detect one.",
+				obs.Prefix, dom, len(originVantages[dom]), total)
+		} else {
+			baselineNote = "No expected origin AS is declared for " + obs.Prefix +
+				" and no AS path was observed, so no origin check ran on this prefix. This is an absent check, not a clean result."
 		}
 	}
 	if len(expected) > 0 {
@@ -365,9 +396,17 @@ func Classify(obs Observation, cfg PolicyConfig, bogons *BogonSet, now time.Time
 
 	if len(cands) == 0 {
 		inc.LearnedOrigin = learned
+		inc.BaselineNote = baselineNote
 		inc.Shortfall = strings.Join(shortfalls, "; ")
+		detail := "Announced, RPKI not invalid, visibility above threshold, no unexpected origin or transit."
+		if baselineNote != "" {
+			// Do not say "announced as expected" when nobody declared an
+			// expectation. Name what was actually checked instead.
+			inc.Summary = "RPKI clean and visibility normal. The origin was NOT checked against a declared baseline, because none is declared."
+			detail = "Announced, RPKI not invalid, visibility above threshold. " + baselineNote
+		}
 		inc.Evidence = Evidence{
-			Detail:      "Announced, RPKI not invalid, visibility above threshold, no unexpected origin or transit.",
+			Detail:      detail,
 			Origins:     originCounts(originVantages),
 			PeersSeeing: obs.PeersSeeing, PeersTotal: obs.PeersTotal,
 		}
@@ -379,6 +418,7 @@ func Classify(obs Observation, cfg PolicyConfig, bogons *BogonSet, now time.Time
 	inc.Class, inc.Summary, inc.Evidence = head.class, head.summary, head.evidence
 	inc.Severity = SeverityOf(head.class)
 	inc.LearnedOrigin = learned
+	inc.BaselineNote = baselineNote
 	inc.Shortfall = strings.Join(shortfalls, "; ")
 	for _, c := range cands[1:] {
 		inc.Also = append(inc.Also, c.class)

@@ -11,8 +11,10 @@
 // beneath the incidents it governs, and the two consequences an empty field
 // carries are printed next to that field:
 //
-//   * no expected origin ⇒ the baseline is LEARNED, and the chip in the
-//     Incidents section says "learned baseline" for exactly this reason;
+//   * no expected origin ⇒ no baseline is stored at all, so each check compares
+//     the prefix against its own dominant origin and only a minority
+//     unexpected origin can be found. The chip in the Incidents section says
+//     "no declared baseline" for exactly this reason;
 //   * no upstream set    ⇒ the route-leak check does not run at all, so its
 //     silence is unmeasured rather than clean.
 //

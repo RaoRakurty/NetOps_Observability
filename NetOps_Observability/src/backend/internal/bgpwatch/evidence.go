@@ -211,11 +211,16 @@ func EventFromIncident(tenant string, inc Incident, cfg PolicyConfig) (EvidenceE
 		attrs["bogon_reason"] = inc.Evidence.Bogon.Reason
 	}
 	if inc.LearnedOrigin {
-		// Honesty on the wire: a learned baseline is weaker than a declared one
-		// and the consumer must be able to tell them apart.
-		attrs["origin_baseline"] = "learned"
+		// Honesty on the wire. "per_pass", not "learned": nothing persists a
+		// baseline, so it is re-derived from each observation and can only see
+		// a minority unexpected origin. A consumer must be able to tell that
+		// apart from a declared baseline.
+		attrs["origin_baseline"] = "per_pass"
 	} else if len(cfg.ExpectedOrigins) > 0 {
 		attrs["origin_baseline"] = "declared"
+	}
+	if inc.BaselineNote != "" {
+		attrs["origin_baseline_note"] = clip(inc.BaselineNote, 512)
 	}
 
 	return EvidenceEvent{

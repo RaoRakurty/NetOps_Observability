@@ -12,8 +12,9 @@
 //   * "not measured" is its own chip and is never green.
 //   * a verdict names the vantage points that support it; a near-miss (a class
 //     that lacked corroboration) is SHOWN as a shortfall, not hidden.
-//   * a LEARNED origin baseline is labelled as learned — it is weaker evidence
-//     than a declared one.
+//   * an UNDECLARED origin baseline is labelled as such, and the row prints
+//     what that check cannot see. The server re-derives the baseline from
+//     every pass, so a change that reaches every vantage point looks normal.
 
 import { Chip } from "../../components/noc";
 import type { BgpAlert, BgpAlertStatus, BgpIncident, BgpWatchEntry } from "../../services/api";
@@ -103,8 +104,8 @@ export function PrefixesPanel({
                     return <Chip key={c} label={`also ${at.label}`} term={at.term} tone={at.tone} title={at.detail} />;
                   })}
                   {inc?.learned_origin && (
-                    <Chip label="guessed baseline" tone="var(--muted)"
-                      title="No expected origin AS is declared for this prefix, so the baseline was learned from the first observation. Declaring one makes the result stronger." />
+                    <Chip label="no declared baseline" tone="var(--muted)"
+                      title="No expected origin AS is declared for this prefix. Each check compares it against its own dominant origin, so only a minority unexpected origin can be found. Declare the AS to detect a full origin change." />
                   )}
                   {wentry.note && <span className="fact-line">{wentry.note}</span>}
                   {inc && (
@@ -115,6 +116,9 @@ export function PrefixesPanel({
                 </div>
 
                 {inc && <p className="fact-line" style={{ margin: 0 }}>{inc.summary}</p>}
+                {inc?.baseline_note && (
+                  <p className="fact-line fact-warn" style={{ margin: 0 }}>{inc.baseline_note}</p>
+                )}
                 {inc?.corroboration_shortfall && (
                   <p className="fact-line fact-warn" style={{ margin: 0 }}>
                     Seen but not asserted: {inc.corroboration_shortfall}.

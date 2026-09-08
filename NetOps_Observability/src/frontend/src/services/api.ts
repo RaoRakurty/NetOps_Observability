@@ -2646,9 +2646,14 @@ export type BgpIncident = {
   severity: string;
   summary: string;
   evidence: BgpIncidentEvidence;
-  /** true when the origin baseline was LEARNED rather than declared — weaker
-   *  evidence, and the UI has to say so. */
+  /** true when NO origin baseline was declared. The name is historical: the
+   *  server does not learn a baseline once, it re-derives one from every pass,
+   *  so only a minority unexpected origin is detectable. `baseline_note` says
+   *  what that costs and the UI has to show it. */
   learned_origin?: boolean;
+  /** Where the origin baseline came from and what the check therefore cannot
+   *  see. Set whenever no origin was declared; blank means it was declared. */
+  baseline_note?: string;
   /** A class that ALMOST fired but lacked corroboration. Shown, never hidden. */
   corroboration_shortfall?: string;
   first_seen: string;

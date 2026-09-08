@@ -153,15 +153,40 @@ describe("PrefixesPanel", () => {
     expect(screen.getByText(/2 are required/)).toBeTruthy();
   });
 
-  it("labels a learned origin baseline as learned", () => {
+  // H4 (review 2026-09-08): the server does not learn a baseline once, it
+  // re-derives one from every pass, so a fully propagated origin change looks
+  // normal. The row must say the baseline was never declared AND print what
+  // the check cannot see — a chip alone let the operator read it as a slightly
+  // weaker version of the same check.
+  it("says a prefix has no declared baseline and prints what that check cannot see", () => {
     render(
       <PrefixesPanel
         watch={[entry("193.0.0.0/21")]}
-        incidents={{ "193.0.0.0/21": incident({ learned_origin: true }) }}
+        incidents={{
+          "193.0.0.0/21": incident({
+            learned_origin: true,
+            baseline_note:
+              "No expected origin AS is declared for 193.0.0.0/21, so the baseline is this pass's own dominant origin and it is re-derived every pass.",
+          }),
+        }}
         status={{ enabled: true, runs: 1 }} alerts={[]} active="" onInvestigate={() => {}}
       />,
     );
-    expect(screen.getByText("guessed baseline")).toBeTruthy();
+    expect(screen.getByText("no declared baseline")).toBeTruthy();
+    expect(screen.getByText(/re-derived every pass/)).toBeTruthy();
+  });
+
+  // The over-correction guard: a declared baseline gets no chip and no hedge.
+  it("does not hedge a prefix whose origin baseline IS declared", () => {
+    render(
+      <PrefixesPanel
+        watch={[entry("193.0.0.0/21")]}
+        incidents={{ "193.0.0.0/21": incident({}) }}
+        status={{ enabled: true, runs: 1 }} alerts={[]} active="" onInvestigate={() => {}}
+      />,
+    );
+    expect(screen.queryByText("no declared baseline")).toBeNull();
+    expect(screen.queryByText(/re-derived every pass/)).toBeNull();
   });
 
   it("distinguishes a measured quiet from an unwatched one in the alert history", () => {

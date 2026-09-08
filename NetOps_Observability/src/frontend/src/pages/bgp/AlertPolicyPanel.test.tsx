@@ -4,7 +4,7 @@
 // AlertPolicyPanel.test.tsx — the render states of the BGP alert policy editor.
 //
 // Each case locks in an honesty contract, not a layout:
-//   * an empty ASN set SAYS what it costs — a learned baseline, or a leak check
+//   * an empty ASN set SAYS what it costs — no declared baseline, or a leak check
 //     that does not run. An operator must not read silence as safety.
 //   * the panel re-renders from the STORED policy, because the server dedupes,
 //     drops AS0, sorts and canonicalizes every prefix key on save.
@@ -66,7 +66,7 @@ describe("AlertPolicyPanel", () => {
 
   it("says what an empty origin set and an empty upstream set cost", async () => {
     render(<AlertPolicyPanel />);
-    expect(await screen.findByText(/guessed from the first observation/)).toBeTruthy();
+    expect(await screen.findByText(/reaches every vantage point looks normal/)).toBeTruthy();
     expect(screen.getByText(/unexpected-transit check does not run/)).toBeTruthy();
   });
 
@@ -74,7 +74,7 @@ describe("AlertPolicyPanel", () => {
     render(<AlertPolicyPanel />);
     const origins = await screen.findByLabelText("Default expected origin AS");
     fireEvent.change(origins, { target: { value: "AS64500" } });
-    await waitFor(() => expect(screen.queryByText(/guessed from the first observation/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/reaches every vantage point looks normal/)).toBeNull());
   });
 
   it("PUTs exactly the declared policy and no tenant field", async () => {

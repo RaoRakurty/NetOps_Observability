@@ -98,7 +98,7 @@ func newBGPAlertPolicyStore() bgpwatch.PolicyStore {
 	}
 	fs := bgpwatch.NewFileStore(envOr(bgpwatch.EnvConfigFile, "/data/bgp_alert_policy.json"))
 	if err := fs.LoadErr(); err != nil {
-		logError("bgp-watch", "BGP alert policy could not be read — the evaluator will use a LEARNED origin baseline and run NO route-leak heuristic for every tenant",
+		logError("bgp-watch", "BGP alert policy could not be read — no tenant has a declared origin baseline, so origin checking falls back to each pass's own dominant origin (a fully propagated origin change is undetectable) and the route-leak heuristic does not run at all",
 			map[string]any{"err": err.Error()})
 	}
 	return fs

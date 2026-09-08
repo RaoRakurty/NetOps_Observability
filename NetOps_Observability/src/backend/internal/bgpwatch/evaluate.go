@@ -633,7 +633,6 @@ func (e *Evaluator) checkSightings(ctx context.Context, tenant string, now time.
 	}
 }
 
-// resolveAlert closes the alert an incident class had opened.
 // openIncident reports the incident a destination is currently holding open for
 // this prefix, if any.
 func (e *Evaluator) openIncident(st *tenantState, prefix string) (Incident, bool) {
@@ -680,6 +679,8 @@ func (e *Evaluator) noticeMeasurementLost(st *tenantState, tenant string, open, 
 	}
 }
 
+// resolveAlert closes the alert an incident class had opened. It is reached
+// only from a MEASURED clean pass, a measured class change, or ForgetPrefix.
 func (e *Evaluator) resolveAlert(st *tenantState, tenant string, prev Incident, now time.Time) {
 	key := alertKey(tenant, prev.Prefix, prev.Class)
 	a := Alert{

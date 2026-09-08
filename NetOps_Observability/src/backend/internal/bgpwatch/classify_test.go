@@ -97,10 +97,128 @@ func TestClassifyLearnsOriginWhenNotDeclaredAndSaysSo(t *testing.T) {
 	cfg := PolicyConfig{} // nothing declared
 	inc := Classify(healthy(), cfg, NewBogonSet(), clsNow)
 	if !inc.LearnedOrigin {
-		t.Fatal("with no declared origin the baseline is LEARNED and must be marked as such")
+		t.Fatal("with no declared origin the baseline is not declared and must be marked as such")
 	}
 	if inc.Class != ClassNone {
-		t.Fatalf("the learned baseline must match the dominant observed origin, got %s", inc.Class)
+		t.Fatalf("the per-pass baseline must match the dominant observed origin, got %s", inc.Class)
+	}
+}
+
+// ── H4: an undeclared baseline must not be reported as a check that passed ──
+//
+// Review 2026-09-08. With expected_origins undeclared (the shipped default) the
+// baseline is re-derived from the CURRENT observation's dominant origin, and
+// nothing persists one between passes. So a fully propagated origin change
+// makes the hijacker the baseline in the same pass, the real origin drops below
+// MinVantages and is filed as a shortfall, and the verdict was ClassNone with
+// "Announced as expected; RPKI clean; visibility normal." That summary claims a
+// comparison that never happened.
+//
+// The honesty fix does NOT change the class — the prefix really is announced,
+// really is RPKI clean and really is visible, and inventing an incident out of
+// a missing declaration would page people over every default install. What it
+// changes is the claim.
+
+// fullyPropagatedHijack is the case the classifier cannot see: AS65001 has won
+// every vantage point except one straggler still holding the real origin.
+func fullyPropagatedHijack() Observation {
+	o := healthy()
+	o.Paths = []VantagePath{
+		vp("rrc00-1", 174, 65001),
+		vp("rrc01-2", 174, 65001),
+		vp("rrc02-9", 174, 65001),
+		vp("rrc03-4", 3356, 64500, 64496), // the tenant's own origin, outvoted
+	}
+	return o
+}
+
+func TestClassifyUndeclaredBaselineDoesNotClaimAnOriginCheck(t *testing.T) {
+	inc := Classify(fullyPropagatedHijack(), PolicyConfig{}, NewBogonSet(), clsNow)
+
+	// The claim, not the class, is the defect.
+	if strings.Contains(inc.Summary, "Announced as expected") {
+		t.Fatalf("nothing declared an expectation, so the verdict must not say the prefix is announced as expected: %q", inc.Summary)
+	}
+	if !strings.Contains(inc.Summary, "NOT checked against a declared baseline") {
+		t.Fatalf("the verdict must say the origin check did not happen: %q", inc.Summary)
+	}
+	if inc.BaselineNote == "" {
+		t.Fatal("an undeclared baseline must carry the note that says what the check cannot see")
+	}
+	for _, want := range []string{"re-derived every pass", "MINORITY", "reaches every vantage point", "Declare the expected origin AS"} {
+		if !strings.Contains(inc.BaselineNote, want) {
+			t.Fatalf("the baseline note must contain %q: %q", want, inc.BaselineNote)
+		}
+	}
+	// It names the baseline it actually used, so the operator can see it is the
+	// hijacker's ASN and not their own.
+	if !strings.Contains(inc.BaselineNote, "AS65001") {
+		t.Fatalf("the note must name the origin it took as the baseline: %q", inc.BaselineNote)
+	}
+	if !strings.Contains(inc.Evidence.Detail, "re-derived every pass") {
+		t.Fatalf("the evidence detail must carry the same limit, not the clean sentence: %q", inc.Evidence.Detail)
+	}
+}
+
+// The over-correction guard, both directions.
+func TestClassifyDeclaredBaselineIsNotHedged(t *testing.T) {
+	inc := Classify(healthy(), policy(), NewBogonSet(), clsNow)
+	if inc.Class != ClassNone {
+		t.Fatalf("class=%s, want none", inc.Class)
+	}
+	if inc.LearnedOrigin {
+		t.Fatal("a declared origin must not be reported as undeclared")
+	}
+	if inc.BaselineNote != "" {
+		t.Fatalf("a declared baseline carries no hedge: %q", inc.BaselineNote)
+	}
+	if !strings.Contains(inc.Summary, "Announced as expected") {
+		t.Fatalf("a real check that passed must still say so plainly: %q", inc.Summary)
+	}
+
+	// And the honesty fix must not invent an incident where there is none: an
+	// undeclared baseline on a healthy prefix is still class none, still info,
+	// and still pages nobody.
+	un := Classify(healthy(), PolicyConfig{}, NewBogonSet(), clsNow)
+	if un.Class != ClassNone || un.Severity != SevInfo {
+		t.Fatalf("a missing declaration is not an incident: class=%s severity=%s", un.Class, un.Severity)
+	}
+	if kindForClass(un.Class) != "" {
+		t.Fatal("a missing declaration must not ground an evidence event")
+	}
+}
+
+// The note rides along on a real incident too — a corroborated minority origin
+// IS detected without a declaration, and the operator must still know the
+// baseline it was measured against came from the same observation.
+func TestClassifyBaselineNoteRidesOnARealIncident(t *testing.T) {
+	obs := healthy()
+	obs.Paths = []VantagePath{
+		vp("rrc00-1", 3356, 64500, 64496),
+		vp("rrc01-2", 1299, 64500, 64496),
+		vp("rrc02-9", 174, 65001),
+		vp("rrc03-4", 174, 65001),
+	}
+	inc := Classify(obs, PolicyConfig{}, NewBogonSet(), clsNow)
+	if inc.Class != ClassOriginChange {
+		t.Fatalf("a corroborated minority origin must still be detected, got %s", inc.Class)
+	}
+	if inc.BaselineNote == "" {
+		t.Fatal("the incident must still say the baseline was not declared")
+	}
+}
+
+// With no path at all there is no baseline and no origin check. That is an
+// absent check, and it must not be reported as a passed one.
+func TestClassifyNoPathsMeansNoOriginCheckAndSaysSo(t *testing.T) {
+	obs := healthy()
+	obs.Paths = nil
+	inc := Classify(obs, PolicyConfig{}, NewBogonSet(), clsNow)
+	if inc.LearnedOrigin {
+		t.Fatal("no path means no baseline was derived at all")
+	}
+	if !strings.Contains(inc.BaselineNote, "no origin check ran") {
+		t.Fatalf("the missing check must be stated: %q", inc.BaselineNote)
 	}
 }
 

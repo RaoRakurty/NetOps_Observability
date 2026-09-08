@@ -133,7 +133,8 @@ INTENTIONAL_BLIND: dict[str, dict] = {
     },
     "bgp_origin_change": {
         "reason": "bgp evidence class (netops.bgp) — the prefix is announced "
-                  "from an origin AS outside its declared/learned baseline; "
+                  "from an origin AS outside its baseline (declared, or this "
+                  "pass's own dominant origin when none is declared); "
                   "grounds + corroborates, no signature requires it yet",
         "owner": "correlix", "date_added": "2026-09-02",
     },

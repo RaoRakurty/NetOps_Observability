@@ -313,7 +313,9 @@ func (a *API) HandleAlertConfig(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteJSON(w, http.StatusOK, map[string]any{
 			"config": out, "defaults": defaults,
 			"updated_by": pol.UpdatedBy, "updated_at": pol.UpdatedAt,
-			"note": "expected_origins empty ⇒ the origin baseline is LEARNED from the first observation and marked as such. " +
+			"note": "expected_origins empty ⇒ NO baseline is stored. Each pass compares the prefix against its own dominant origin, " +
+				"so only a MINORITY unexpected origin is detectable: an origin change that reaches every vantage point classifies clean. " +
+				"Declare the expected origin AS to detect one. " +
 				"upstreams empty ⇒ the route-leak heuristic does not run (there is nothing to call unexpected).",
 		})
 	case http.MethodPut:
