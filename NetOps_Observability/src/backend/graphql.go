@@ -189,9 +189,11 @@ func (s *server) resolveGQLField(f gqlparse.Field, claims jwtClaims, vars map[st
 		}
 		active := s.alerts.Active()
 		if ids, crossDev := s.visibleDeviceIDs(claims); !crossDev {
+			// Same rule as the REST twin, by calling the same function.
+			tenant, _ := principalTenant(claims)
 			filtered := active[:0:0]
 			for _, a := range active {
-				if a.DeviceID == "" || ids[a.DeviceID] {
+				if alertVisible(a, tenant, crossDev, ids) {
 					filtered = append(filtered, a)
 				}
 			}

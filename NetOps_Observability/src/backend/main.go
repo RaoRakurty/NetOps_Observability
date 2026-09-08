@@ -4152,12 +4152,13 @@ func (s *server) handleCollectors(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	claims, _ := userFrom(r.Context())
 	active := s.alerts.Active()
-	// Tenant isolation: a scoped principal only sees alerts on devices it can
-	// see (alerts with no device — e.g. stack-level — stay visible).
+	// Tenant isolation: alertVisible is the one rule (own devices, plus
+	// device-less alerts that nothing owns).
 	if ids, cross := s.visibleDeviceIDs(claims); !cross {
+		tenant, _ := principalTenant(claims)
 		filtered := make([]models.Alert, 0, len(active))
 		for _, a := range active {
-			if a.DeviceID == "" || ids[a.DeviceID] {
+			if alertVisible(a, tenant, cross, ids) {
 				filtered = append(filtered, a)
 			}
 		}

@@ -550,7 +550,9 @@ func (rs *reportScheduler) tenantAlerts(tenant string) []models.Alert {
 	}
 	out := make([]models.Alert, 0, len(active))
 	for _, a := range active {
-		if a.DeviceID == "" || ids[a.DeviceID] {
+		// alertVisible, the same rule the HTTP surfaces apply: a rendered
+		// report must not carry another tenant's device-less alerts either.
+		if alertVisible(a, t, false, ids) {
 			out = append(out, a)
 		}
 	}

@@ -90,7 +90,6 @@ var isolationCoverageBaseline = map[string]string{
 	"/api/seams/":                             "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/seams/groups":                       "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/seams/groups/":                      "store/RLS-scoped; dedicated HTTP isolation test is backlog",
-	"/api/search/global":                      "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/services":                           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/services/":                          "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/sessions":                           "store/RLS-scoped; dedicated HTTP isolation test is backlog",

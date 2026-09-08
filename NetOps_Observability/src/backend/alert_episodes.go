@@ -98,15 +98,26 @@ const experienceRulePrefix = "Experience"
 // presence of a label.
 func (s *server) alertTenant(a models.Alert) string {
 	if a.DeviceID == "" {
-		if strings.HasPrefix(a.Rule, experienceRulePrefix) {
-			return strings.ToLower(strings.TrimSpace(a.Labels["tenant"]))
-		}
-		return ""
+		return alertOwnerLabel(a)
 	}
 	if d, ok := s.discovery.Get(a.DeviceID); ok {
 		return deviceTenant(d)
 	}
 	return ""
+}
+
+// alertOwnerLabel is the S17 exception on its own, with no server behind it: the
+// owning tenant of a DEVICE-LESS alert, or "" when nothing owns it.
+//
+// It is a free function because the ALERT VISIBILITY rule needs it in places
+// that hold no *server (the report scheduler builds its own filter from a
+// tenant name). One derivation, used by everything, is the point — a second
+// copy is a second thing that can silently be wrong.
+func alertOwnerLabel(a models.Alert) string {
+	if a.DeviceID != "" || !strings.HasPrefix(a.Rule, experienceRulePrefix) {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(a.Labels["tenant"]))
 }
 
 // alertEpisodeState normalizes the severity into the episode's state facet.

@@ -49,11 +49,11 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 		}
-		// Active alerts — only on devices the principal can see (device-less
-		// alerts stay visible, matching handleAlerts).
+		// Active alerts — alertVisible, the same rule handleAlerts applies.
 		visibleIDs, crossAlerts := s.visibleDeviceIDs(claims)
+		alertTenant, _ := principalTenant(claims)
 		for _, a := range s.alerts.Active() {
-			if !crossAlerts && a.DeviceID != "" && !visibleIDs[a.DeviceID] {
+			if !alertVisible(a, alertTenant, crossAlerts, visibleIDs) {
 				continue
 			}
 			m := toMap(a)

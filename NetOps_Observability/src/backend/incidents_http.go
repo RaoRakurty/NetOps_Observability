@@ -34,15 +34,12 @@ func (s *server) ingestAlertIncident(a models.Alert) {
 	if s.incidents == nil {
 		return // Postgres backend only
 	}
-	tenant := ""
-	if a.DeviceID != "" {
-		for _, d := range s.discovery.Devices() {
-			if d.ID == a.DeviceID {
-				tenant = deviceTenant(d)
-				break
-			}
-		}
-	}
+	// One derivation of an alert's owner, shared with the episode fold and the
+	// notified set. It matters beyond tidiness: a device-less alert that DOES
+	// have an owner (the Digital Experience rules) used to land on the platform
+	// lane, so the owning tenant never saw the incident for its own outage and
+	// the target hostname went to the platform notification channel instead.
+	tenant := s.alertTenant(a)
 	title := a.Summary
 	if title == "" {
 		title = a.Rule

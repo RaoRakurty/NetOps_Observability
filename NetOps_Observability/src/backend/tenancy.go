@@ -335,16 +335,37 @@ func visibleDevices(all []models.Device, c jwtClaims) []models.Device {
 	return out
 }
 
-// alertVisibleTo reports whether a principal may see an alert: the platform
-// owner sees all; a scoped principal sees alerts on its own devices, plus
-// device-less (stack-level) alerts. Mirrors the GET /api/alerts filter so the
-// WebSocket alert feed enforces the same boundary.
-func (s *server) alertVisibleTo(a models.Alert, c jwtClaims) bool {
-	ids, cross := s.visibleDeviceIDs(c)
+// alertVisible is THE alert visibility rule. Every surface that shows alerts
+// asks this one function, so a fix here cannot be applied to some paths and
+// missed on others.
+//
+// The platform owner sees all. A scoped principal sees alerts on its own
+// devices. A DEVICE-LESS alert is platform-global ONLY when nothing owns it:
+// the Digital Experience rules aggregate by target rather than device and carry
+// no `device` label, but they DO have an owner, and their summary carries that
+// tenant's target hostname, site and app. Treating "no device" as "everybody's"
+// handed one tenant's target names to every other tenant.
+func alertVisible(a models.Alert, tenant string, cross bool, ids map[string]bool) bool {
 	if cross {
 		return true
 	}
-	return a.DeviceID == "" || ids[a.DeviceID]
+	if a.DeviceID != "" {
+		return ids[a.DeviceID]
+	}
+	owner := alertOwnerLabel(a)
+	if owner == "" {
+		return true // genuinely platform-owned: a stack-level alert
+	}
+	return sameTenantStrict(owner, tenant)
+}
+
+// alertVisibleTo applies alertVisible to a principal's claims. Used by the
+// WebSocket alert feed and the dashboard, which have claims rather than a
+// pre-resolved device set.
+func (s *server) alertVisibleTo(a models.Alert, c jwtClaims) bool {
+	ids, cross := s.visibleDeviceIDs(c)
+	tenant, _ := principalTenant(c)
+	return alertVisible(a, tenant, cross, ids)
 }
 
 // visibleDeviceIDs returns the set of device ids the principal may view, plus a

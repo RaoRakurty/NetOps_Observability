@@ -273,6 +273,19 @@ func (e *Engine) Rules() []Rule {
 	return out
 }
 
+// SeedActiveForTest installs an active set directly, without a rules file or a
+// metrics backend. It exists so the tenant-visibility rules over the active set
+// (§3a) can be proved end to end through the real router; nothing in production
+// calls it.
+func (e *Engine) SeedActiveForTest(list ...models.Alert) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.active = make(map[string]models.Alert, len(list))
+	for _, a := range list {
+		e.active[a.ID] = a
+	}
+}
+
 func (e *Engine) Active() []models.Alert {
 	e.mu.RLock()
 	defer e.mu.RUnlock()

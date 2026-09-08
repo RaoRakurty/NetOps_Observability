@@ -116,6 +116,15 @@ func episodeKey(tenant, resource, signal, state string) string {
 // sameTenant mirrors main's sameTenantStrict rule for an already-scoped
 // principal (case/space-insensitive exact match; duplicated at the boundary
 // per the no-utils rule — the cross-tenant short-circuit stays with the caller).
+// episodeVisible is the scoped-read rule: the principal's own episodes, plus
+// the device-less ones that have no owner at all.
+func episodeVisible(ep Episode, tenant string) bool {
+	if sameTenant(ep.TenantID, tenant) {
+		return true
+	}
+	return ep.Resource == "" && strings.TrimSpace(ep.TenantID) == ""
+}
+
 func sameTenant(resourceTenant, principalTenant string) bool {
 	return strings.EqualFold(strings.TrimSpace(resourceTenant), strings.TrimSpace(principalTenant))
 }
@@ -368,15 +377,21 @@ type EpisodeQuery struct {
 
 // List returns the episodes visible to the (tenant, cross) principal, most
 // recently seen first, capped with disclosure. Visibility mirrors /api/alerts:
-// cross sees all; a scoped principal sees its own tenant's episodes plus
-// device-less (platform/stack) ones.
+// cross sees all; a scoped principal sees its own tenant's episodes plus the
+// device-less ones NOTHING OWNS.
+//
+// The ownership half is load-bearing. A device-less episode used to be treated
+// as platform-global on the strength of its empty Resource alone, but the
+// Digital Experience rules fold with no resource AND a real owner, and their
+// summary carries that tenant's target hostname. Every other tenant was reading
+// it.
 func (s *EpisodeStore) List(tenant string, cross bool, q EpisodeQuery) (eps []Episode, total int, truncated bool) {
 	now := s.now().UTC()
 	s.mu.Lock()
 	s.sweepLocked(now)
 	out := make([]Episode, 0, len(s.episodes))
 	for _, ep := range s.episodes {
-		if !cross && !(sameTenant(ep.TenantID, tenant) || ep.Resource == "") {
+		if !cross && !episodeVisible(*ep, tenant) {
 			continue
 		}
 		switch q.Status {

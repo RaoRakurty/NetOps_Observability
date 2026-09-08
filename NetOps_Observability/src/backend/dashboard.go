@@ -71,14 +71,15 @@ func (s *server) currentMetricTiles(claims jwtClaims) []MetricTile {
 	}
 
 	// Critical threats: active critical alerts the principal is allowed to see
-	// (same visibility rule as GET /api/alerts; device-less alerts stay visible).
+	// (alertVisible — the same rule as GET /api/alerts).
 	threats := 0
 	if s.alerts != nil {
+		tenant, _ := principalTenant(claims)
 		for _, a := range s.alerts.Active() {
 			if !strings.EqualFold(strings.TrimSpace(a.Severity), "critical") {
 				continue
 			}
-			if !cross && !(a.DeviceID == "" || ids[a.DeviceID]) {
+			if !alertVisible(a, tenant, cross, ids) {
 				continue
 			}
 			threats++

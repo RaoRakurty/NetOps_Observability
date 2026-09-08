@@ -132,10 +132,11 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 
 	// ── active alerts, scoped to devices the caller can see (same rule as /alerts) ──
 	alerts := s.alerts.Active()
-	if ids, cross := s.visibleDeviceIDs(claims); !cross {
+	if ids, crossDev := s.visibleDeviceIDs(claims); !crossDev {
+		alertTenant, _ := principalTenant(claims)
 		filtered := alerts[:0:0]
 		for _, a := range alerts {
-			if a.DeviceID == "" || ids[a.DeviceID] {
+			if alertVisible(a, alertTenant, crossDev, ids) {
 				filtered = append(filtered, a)
 			}
 		}
