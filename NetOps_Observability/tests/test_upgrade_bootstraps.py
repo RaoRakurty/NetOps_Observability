@@ -191,9 +191,25 @@ def api_read_patterns() -> set[str]:
     every read path funnels through TenantIndexPattern) plus the quarantine
     prefix the pipeline-processor surface reads directly.
     """
-    bases = set(re.findall(r'return "(netops-[a-z]+)"', OSLOG.read_text()))
+    oslog = OSLOG.read_text()
+    # Two spellings, because IndexBase may return a literal or a named constant.
+    # It grew a constant when the log-search chokepoint started refusing the
+    # security-findings family BY BASE (review 2026-09-08, H9) rather than by a
+    # list of signal spellings. A literal-only scrape silently lost that lane and
+    # would have let the svc_api read grant be dropped from under the CTEM UI.
+    bases = set(re.findall(r'return "(netops-[a-z]+)"', oslog))
+    bases |= set(re.findall(r'^const \w*IndexBase\s*=\s*"(netops-[a-z]+)"',
+                            oslog, re.MULTILINE))
     bases.discard("netops")  # IndexBase's default for an unknown signal
     assert bases, "no index bases found in oslog.go — the derivation is stale"
+    # Every named constant IndexBase RETURNS must resolve to a netops- base here.
+    # `return SomeIndexBase` (a bare identifier, not a call) is the shape that
+    # broke this derivation once; a call like `return IndexBase(sig)` is not a
+    # base and is deliberately excluded by requiring no opening paren.
+    for const in set(re.findall(r'return (\w*IndexBase)(?!\s*\()\b', oslog)):
+        assert re.search(r'^const %s\s*=\s*"netops-' % re.escape(const),
+                         oslog, re.MULTILINE), \
+            f"IndexBase returns {const} but no const of that name declares a netops- base here"
     prefix = re.search(r'quarantineIndexPrefix\s*=\s*"(netops-[a-z]+-)"',
                        QUARANTINE.read_text())
     assert prefix, "quarantineIndexPrefix not found — the derivation is stale"
