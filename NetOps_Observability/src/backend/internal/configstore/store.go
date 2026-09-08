@@ -168,12 +168,26 @@ func (s *FileStore) insertLocked(v Version) {
 // flushLocked persists the whole register. A failure is RETURNED, never
 // swallowed: a version row the file does not hold would leave a sealed blob
 // nothing references (§10).
-func (s *FileStore) flushLocked() error {
+func (s *FileStore) flushLocked() error { return s.flushViewLocked(nil) }
+
+// flushViewLocked persists the register as it WOULD BE with `replace` applied,
+// WITHOUT touching s.rows. It exists for Prune: the in-memory register must not
+// change until the write that makes the change durable has succeeded, because a
+// prune applied in memory and then failing to flush loses the rows silently and
+// the next successful write persists that loss.
+//
+// Note that this is not a rollback. Nothing is mutated and then put back, so
+// there is no aliased backing array to restore wrongly.
+func (s *FileStore) flushViewLocked(replace map[deviceKey][]Version) error {
 	if s.path == "" {
 		return nil
 	}
 	list := []Version{}
-	for _, rows := range s.rows {
+	for k, rows := range s.rows {
+		if kept, ok := replace[k]; ok {
+			list = append(list, kept...)
+			continue
+		}
 		list = append(list, rows...)
 	}
 	sort.Slice(list, func(i, j int) bool {
@@ -306,6 +320,7 @@ func (s *FileStore) Prune(_ context.Context, tenant string, cross bool, deviceID
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	removed := []Version{}
+	survivors := map[deviceKey][]Version{}
 	for k, rows := range s.rows {
 		if k.device != deviceID || !visible(tenant, cross, k.tenant) {
 			continue
@@ -314,13 +329,21 @@ func (s *FileStore) Prune(_ context.Context, tenant string, cross bool, deviceID
 		newestFirst(ordered)
 		kept, doomed := retentionSplit(ordered, keep)
 		removed = append(removed, doomed...)
-		s.rows[k] = kept
+		survivors[k] = kept
 	}
 	if len(removed) == 0 {
 		return nil, nil
 	}
-	if err := s.flushLocked(); err != nil {
+	// Persist FIRST, adopt SECOND. The other order lost the pruned rows from
+	// memory whenever the flush failed: the caller correctly kept the blobs,
+	// because Prune returned an error and deleted nothing, but the register no
+	// longer listed the versions those blobs belong to, and the next successful
+	// write wrote that loss to disk (§10).
+	if err := s.flushViewLocked(survivors); err != nil {
 		return nil, err
+	}
+	for k, kept := range survivors {
+		s.rows[k] = kept
 	}
 	return removed, nil
 }

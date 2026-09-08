@@ -273,3 +273,72 @@ func TestPruneCountsFailureRowsSeparately(t *testing.T) {
 		t.Errorf("register holds %d failure rows, want 1..%d", failRows, maxFailedVersions)
 	}
 }
+
+// TestPruneDoesNotLoseRowsWhenTheFlushFails: the file register applied the prune
+// to its in-memory map and only then tried to persist it. On a flush failure the
+// blobs were correctly kept — Prune returns an error and the caller deletes
+// nothing — but the rows were already gone from memory, so the register silently
+// disagreed with the disk and the next successful write made that loss permanent
+// (§10, no silent failures).
+//
+// The disk is the assertion that matters: a reload has to find every row.
+func TestPruneDoesNotLoseRowsWhenTheFlushFails(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := dir + "/versions.json"
+	s := NewFileStore(path)
+	base := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+
+	seeded := []Version{}
+	for i := 0; i < 6; i++ {
+		seeded = append(seeded, seedRow(t, s, "acme", "d1", fmt.Sprintf("cfg-%d", i),
+			base.Add(time.Duration(i)*time.Hour)))
+	}
+
+	// Break the write. The register's directory is now a FILE, so the atomic
+	// write cannot create its temp file — the same shape as a full or read-only
+	// volume, without needing either.
+	s.path = path + "/versions.json"
+
+	if _, err := s.Prune(ctx, "acme", false, "d1", 2); err == nil {
+		t.Fatal("Prune must report a flush it could not complete")
+	}
+
+	// Nothing was durably removed, so nothing may be missing from the register.
+	rows, err := s.List(ctx, "acme", false, "d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != len(seeded) {
+		t.Errorf("METADATA LOST in memory: register holds %d rows after a failed prune, want %d",
+			len(rows), len(seeded))
+	}
+	// Not just the count. A rollback that puts back a slice header can put back
+	// a MUTATED backing array, so check the rows are the ones that were seeded,
+	// each with the blob reference it was stored with.
+	alive := map[string]string{}
+	for _, r := range rows {
+		alive[r.SHA] = r.BlobRef
+	}
+	for i, v := range seeded {
+		if ref, ok := alive[v.SHA]; !ok {
+			t.Errorf("METADATA LOST in memory: version %d (%s) is gone", i, v.SHA)
+		} else if ref != v.BlobRef {
+			t.Errorf("version %d came back pointing at %q, want %q", i, ref, v.BlobRef)
+		}
+	}
+
+	// The next successful write must not persist the loss either. This is where
+	// an in-memory-only loss becomes permanent.
+	s.path = path
+	if err := s.Put(ctx, "acme", false, seedRow(t, NewFileStore(""), "acme", "d1", "cfg-later",
+		base.Add(24*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewFileStore(path)
+	for i, v := range seeded {
+		if _, err := reloaded.Get(ctx, "acme", false, "d1", v.SHA); err != nil {
+			t.Errorf("METADATA LOST from disk: version %d (%s) is gone after a failed prune: %v", i, v.SHA, err)
+		}
+	}
+}
