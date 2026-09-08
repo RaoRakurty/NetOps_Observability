@@ -63,6 +63,20 @@
         "running_config_cmd": "show full-configuration",
         "show_version_cmd": "get system status"
       },
+      "identity_probe": {
+        "commands": [
+          {
+            "command": "get system status",
+            "serial_patterns": [
+              "(?im)^[ \\t]*Serial-Number:[ \\t]*([A-Za-z0-9._-]{3,40})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?im)^[ \\t]*Version:[ \\t]*([A-Za-z0-9._/+-]{3,40})[ \\t]+v[0-9]"
+            ]
+          }
+        ],
+        "notes": "HARDWARE IDENTITY PROBE (internal/deviceident). doc_claimed. `get system status` is already this profile's capture.show_version_cmd, so the identity costs NO extra command at the device; the command and its role as the platform/firmware read are grounded in the TAC research corpus and the shipped plan (ai/tac/research|plans/fortinet-fortios.yaml, intent platform.version). The serial is read from the `Serial-Number:` line and the MODEL from the leading token of the `Version: FortiGate-100F v7.2.5,build1517,…` line — anchored on the ` v<digit>` that starts the firmware half, so the firmware string can never be captured as the model. Line shapes doc_claimed."
+      },
       "advisory": {
         "provider": "offline-feed",
         "product_ids": [

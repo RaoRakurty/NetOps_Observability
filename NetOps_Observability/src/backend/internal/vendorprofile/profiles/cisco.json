@@ -2,7 +2,6 @@
   "schema_version": 1,
   "vendor": "cisco",
   "display_name": "Cisco",
-  "notes": "os_parse ranks reproduce collectors.ciscoProduct exactly: IOS-XR and IOS-XE sysDescrs also contain the bare 'ios', so the family markers must be evaluated before it. No unconditional default: a Cisco sysDescr naming no family yields product \"\" (version still parsed) \u2014 honest, not a guess. Platform-text detection for the `asa` profile (tracker 271) is DOC_CLAIMED, not device-confirmed: the markers are the ASA `show version` first line \"Cisco Adaptive Security Appliance Software Version \u2026\" (ASA Series Command Reference, \"show u - show z\") and the same phrase as it appears in sysDescr, which this profile's os_parse already keys on. It ranks 9 \u2014 BEFORE cisco/ios at 13, which owns the bare \"cisco\" \u2014 because an ASA label contains \"cisco\" too and would otherwise resolve onto IOS. Bare \"asa\" is deliberately NOT a marker: three characters that also match Casa, NASA and any hostname. Promote to live_capture when a real ASA reports.",
   "notes": "os_parse ranks reproduce collectors.ciscoProduct exactly: IOS-XR and IOS-XE sysDescrs also contain the bare 'ios', so the family markers must be evaluated before it. No unconditional default: a Cisco sysDescr naming no family yields product \"\" (version still parsed) — honest, not a guess. Platform-text detection for the `asa` profile (tracker 271) is DOC_CLAIMED, not device-confirmed: the markers are the ASA `show version` first line \"Cisco Adaptive Security Appliance Software Version …\" (ASA Series Command Reference, \"show u - show z\") and the same phrase as it appears in sysDescr, which this profile's os_parse already keys on. It ranks 9 — BEFORE cisco/ios at 13, which owns the bare \"cisco\" — because an ASA label contains \"cisco\" too and would otherwise resolve onto IOS. Bare \"asa\" is deliberately NOT a marker: three characters that also match Casa, NASA and any hostname. Promote to live_capture when a real ASA reports.",
   "detection": {
     "sysobjectid_prefixes": [
@@ -162,6 +161,20 @@
         ],
         "prompt_regex": "(?m)^RP/\\d+/RP\\d+/CPU\\d+:[A-Za-z0-9._-]+[>#]\\s*$"
       },
+      "identity_probe": {
+        "commands": [
+          {
+            "command": "show inventory",
+            "serial_patterns": [
+              "(?im)^PID:.*,[ \\t]*SN:[ \\t]*([A-Za-z0-9._/-]{3,40})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?im)^PID:[ \\t]*([A-Za-z0-9._/+-]{2,40})[ \\t]*,"
+            ]
+          }
+        ],
+        "notes": "HARDWARE IDENTITY PROBE (internal/deviceident). doc_claimed. IOS-XR's `show version` prints NEITHER a chassis serial nor a chassis PID, so this platform reads its identity from `show inventory` alone — which is exactly why the identity probe is its own block rather than a field of os_version_probe. `show inventory` prints one NAME/DESCR line followed by a `PID: <pid>, VID: <vid>, SN: <serial>` line per FRU, chassis first; the two patterns read the FIRST such line, which is the chassis. The command and the fact that it carries a PID and a serial are grounded in the TAC research corpus (ai/tac/research/cisco-iosxr.yaml, `show inventory details` with intent optics.pid.serial) and in the shipped TAC plans (ai/tac/plans/cisco-*.yaml). The line SHAPE is doc_claimed."
+      },
       "advisory": {
         "provider": "offline-feed",
         "product_ids": [
@@ -208,6 +221,31 @@
         "cli_version_pattern": "(?im)^Cisco IOS[ -]XE Software, Version ([0-9][0-9A-Za-z.()]*)",
         "version_render": "Version {version}",
         "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). doc_claimed, matching this profile's fidelity: no IOS-XE device exists in the reference lab, so neither the OpenConfig path nor the `show version` line was read off hardware by the change that authored this block. cli_version_pattern reads the `Cisco IOS XE Software, Version 17.09.04a` banner line of the profile's own capture.show_version_cmd (the second `Cisco IOS Software [Cupertino], ... Version 17.9.4a` line is the packaged IOS version and is deliberately NOT what is captured). version_render restores the `Version ` phrasing the vendor os_version_pattern is anchored on, so the value written to the row parses back to the same version. ios, ios_xr and asa are NOT authored: their show-version banners differ line by line and claiming a pattern we have not seen output for would be a false claim, not coverage."
+      },
+      "identity_probe": {
+        "commands": [
+          {
+            "command": "show version",
+            "serial_patterns": [
+              "(?im)^[ \\t]*System Serial Number[ \\t]*:[ \\t]*([A-Za-z0-9._-]{4,25})[ \\t\\r]*$",
+              "(?im)^[ \\t]*Processor board ID[ \\t]+([A-Za-z0-9._-]{4,25})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?im)^[ \\t]*Model Number[ \\t]*:[ \\t]*([A-Za-z0-9._/+-]{2,40})[ \\t\\r]*$",
+              "(?im)^[ \\t]*cisco[ \\t]+([A-Za-z0-9._/+-]{2,40})[ \\t]+\\([^()]*\\)[ \\t]+processor\\b"
+            ]
+          },
+          {
+            "command": "show inventory",
+            "serial_patterns": [
+              "(?im)^PID:.*,[ \\t]*SN:[ \\t]*([A-Za-z0-9._/-]{3,40})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?im)^PID:[ \\t]*([A-Za-z0-9._/+-]{2,40})[ \\t]*,"
+            ]
+          }
+        ],
+        "notes": "HARDWARE IDENTITY PROBE (internal/deviceident, run by the OS-version ladder's SSH rung). doc_claimed, matching this profile's fidelity: no IOS-XE device exists in the reference lab. The `cisco <PID> (<arch>) processor with …` model line is GROUNDED in the repo's own show-version fixture (internal/osprobe/sources_test.go showVersionIOSXE, a Catalyst 9300 printing `cisco C9300-48P (X86) processor with 1343803K/6147K bytes of memory.`). The `System Serial Number :` / `Model Number :` pair is the Catalyst switch-stack block and the `Processor board ID` line is the router form; both are doc_claimed. `show inventory` prints one NAME/DESCR line followed by a `PID: <pid>, VID: <vid>, SN: <serial>` line per FRU, chassis first; the two patterns read the FIRST such line, which is the chassis. The command and the fact that it carries a PID and a serial are grounded in the TAC research corpus (ai/tac/research/cisco-iosxr.yaml, `show inventory details` with intent optics.pid.serial) and in the shipped TAC plans (ai/tac/plans/cisco-*.yaml). The line SHAPE is doc_claimed."
       },
       "display_name": "Cisco IOS-XE",
       "device_class": [
@@ -332,6 +370,29 @@
         "cli_version_pattern": "(?im)^\\s*NXOS:\\s+version\\s+([0-9][0-9A-Za-z.()]*)",
         "version_render": "Version {version}",
         "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). doc_claimed, matching this profile's fidelity. cli_version_pattern reads the `  NXOS: version 10.3(4a)` line of the Software block of `show version`; the sibling `BIOS: version 05.47` line is a DIFFERENT version and is excluded by anchoring on the NXOS: label rather than on the word version. The parenthesised maintenance suffix is inside the captured class because the vendor os_version_pattern accepts it and the advisory feed's CPE versions carry it."
+      },
+      "identity_probe": {
+        "commands": [
+          {
+            "command": "show version",
+            "serial_patterns": [
+              "(?im)^[ \\t]*Processor Board ID[ \\t]+([A-Za-z0-9._-]{4,25})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?im)^[ \\t]*cisco[ \\t]+\\S+[ \\t]+([A-Za-z0-9._/+-]{2,40})[ \\t]+chassis\\b"
+            ]
+          },
+          {
+            "command": "show inventory",
+            "serial_patterns": [
+              "(?im)^PID:.*,[ \\t]*SN:[ \\t]*([A-Za-z0-9._/-]{3,40})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?im)^PID:[ \\t]*([A-Za-z0-9._/+-]{2,40})[ \\t]*,"
+            ]
+          }
+        ],
+        "notes": "HARDWARE IDENTITY PROBE (internal/deviceident). doc_claimed, matching this profile's fidelity. The model pattern reads the Hardware block's `cisco Nexus9000 C93180YC-FX3 Chassis` line, GROUNDED in the repo's own show-version fixture (internal/osprobe/sources_test.go showVersionNXOS). The `Processor Board ID` line of the same output is doc_claimed. `show inventory` prints one NAME/DESCR line followed by a `PID: <pid>, VID: <vid>, SN: <serial>` line per FRU, chassis first; the two patterns read the FIRST such line, which is the chassis. The command and the fact that it carries a PID and a serial are grounded in the TAC research corpus (ai/tac/research/cisco-iosxr.yaml, `show inventory details` with intent optics.pid.serial) and in the shipped TAC plans (ai/tac/plans/cisco-*.yaml). The line SHAPE is doc_claimed."
       },
       "display_name": "Cisco NX-OS",
       "device_class": [
@@ -543,6 +604,31 @@
           "terminal length 0"
         ],
         "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$"
+      },
+      "identity_probe": {
+        "commands": [
+          {
+            "command": "show version",
+            "serial_patterns": [
+              "(?im)^[ \\t]*System Serial Number[ \\t]*:[ \\t]*([A-Za-z0-9._-]{4,25})[ \\t\\r]*$",
+              "(?im)^[ \\t]*Processor board ID[ \\t]+([A-Za-z0-9._-]{4,25})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?im)^[ \\t]*Model Number[ \\t]*:[ \\t]*([A-Za-z0-9._/+-]{2,40})[ \\t\\r]*$",
+              "(?im)^[ \\t]*cisco[ \\t]+([A-Za-z0-9._/+-]{2,40})[ \\t]+\\([^()]*\\)[ \\t]+processor\\b"
+            ]
+          },
+          {
+            "command": "show inventory",
+            "serial_patterns": [
+              "(?im)^PID:.*,[ \\t]*SN:[ \\t]*([A-Za-z0-9._/-]{3,40})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?im)^PID:[ \\t]*([A-Za-z0-9._/+-]{2,40})[ \\t]*,"
+            ]
+          }
+        ],
+        "notes": "HARDWARE IDENTITY PROBE (internal/deviceident). doc_claimed. Classic IOS shares the `Processor board ID <serial>` line and the `cisco <model> (<arch>) processor with …` line with IOS-XE — this profile carries the SAME patterns deliberately, because they read the same two lines. NOTE that no os_version_probe is authored here (the version banners differ line by line and claiming one we have not seen output for would be a false claim); the identity fact is independent of that and is claimed on its own evidence. `show inventory` prints one NAME/DESCR line followed by a `PID: <pid>, VID: <vid>, SN: <serial>` line per FRU, chassis first; the two patterns read the FIRST such line, which is the chassis. The command and the fact that it carries a PID and a serial are grounded in the TAC research corpus (ai/tac/research/cisco-iosxr.yaml, `show inventory details` with intent optics.pid.serial) and in the shipped TAC plans (ai/tac/plans/cisco-*.yaml). The line SHAPE is doc_claimed."
       },
       "advisory": {
         "provider": "offline-feed",

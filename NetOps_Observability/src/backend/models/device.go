@@ -14,8 +14,13 @@ type Device struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
 	Vendor  string `json:"vendor,omitempty"`
-	Model   string `json:"model,omitempty"`
-	OS      string `json:"os,omitempty"`
+	// Model is the chassis model / product id. Any source may write it — a
+	// NetBox device_type, an SNMP inference, an operator — and, since the
+	// hardware-identity probe, the DEVICE ITSELF: a probe fills it when the row
+	// has none, and refreshes it only alongside a serial its own method already
+	// owns, so a value an inventory supplied is never displaced by a guess.
+	Model string `json:"model,omitempty"`
+	OS    string `json:"os,omitempty"`
 	// OSVersion is the device's software identity as the DEVICE reports it —
 	// the description line the device serves ("SRLinux-v26.3.2-426-g2b38957bbca
 	// 7220 IXR-D3L …") or the version string it prints. It exists because OS
@@ -55,6 +60,34 @@ type Device struct {
 	// probed version must not serve a 0001-01-01 timestamp that reads as a
 	// reading taken two thousand years ago.
 	OSVersionAt time.Time `json:"os_version_at,omitzero"`
+	// SerialNumber is the chassis SERIAL as the DEVICE printed it — the value
+	// read out of its own `show version` / `show inventory` /
+	// `show chassis hardware` output by internal/deviceident, or supplied by an
+	// operator or an importer.
+	//
+	// WHY IT IS A FIELD and not just labels["serial"]. The label is the
+	// IMPORTER's serial: NetBox writes it, the SoT import matches on it and
+	// discovery's identity resolution unions records that share it. This field
+	// is the DEVICE's own answer, and the two are different claims — an asset
+	// register can be wrong about a chassis that was swapped, the chassis
+	// cannot. Keeping them apart is what lets the platform say "the row says X,
+	// the device says Y" instead of silently overwriting one with the other.
+	// The label stays exactly what it was; nothing here writes to it.
+	SerialNumber string `json:"serial_number,omitempty"`
+	// SerialSource is HOW SerialNumber was learned — "ssh" (a read-only show
+	// command through the gateway), "snmp", "gnmi", or "manual" (an operator,
+	// an inventory file or an importer). It is the provenance half of the same
+	// ladder os_version_source belongs to (internal/osprobe), and the overwrite
+	// rule is expressed in terms of it: a probe never displaces a serial a
+	// person supplied, and only the SAME source refreshes its own reading.
+	//
+	// An EMPTY value on a row that carries a serial means the provenance
+	// predates this field — treated as "manual", never as "probed".
+	SerialSource string `json:"serial_source,omitempty"`
+	// SerialAt is when SerialNumber was last learned. omitzero for the same
+	// reason OSVersionAt is: a device with no read serial must not serve a
+	// 0001-01-01 timestamp that reads as a reading taken two thousand years ago.
+	SerialAt time.Time `json:"serial_at,omitzero"`
 	// Type — router|switch|firewall|load-balancer|ap|wlc|cloud-gw|generic.
 	// SNMP-inferred from vendor/model/sysDescr (InferDeviceType), operator-overridable
 	// via labels["device_type"]. Populated on-read by the devices API.

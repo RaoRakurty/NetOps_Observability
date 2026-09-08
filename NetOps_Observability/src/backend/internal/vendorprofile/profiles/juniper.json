@@ -88,7 +88,24 @@
         "gnmi_version_pattern": "(?i)^\\s*v?([0-9][0-9A-Za-z.-]*)",
         "cli_version_pattern": "(?im)^Junos:\\s+([0-9][0-9A-Za-z.-]*)",
         "version_render": "JUNOS {version}",
-        "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). doc_claimed, matching this profile's fidelity: no Junos device exists in the reference lab. cli_version_pattern reads the `Junos: 21.4R3-S5.4` line of `show version`. The hyphen IS inside the captured class here, unlike the Arista and SR Linux patterns, because a Junos service-release version genuinely contains one (21.4R3-S5.4) \u2014 dropping it would report a device on a different software than it runs. version_render restores the JUNOS phrasing the vendor os_version_pattern is anchored on."
+        "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). doc_claimed, matching this profile's fidelity: no Junos device exists in the reference lab. cli_version_pattern reads the `Junos: 21.4R3-S5.4` line of `show version`. The hyphen IS inside the captured class here, unlike the Arista and SR Linux patterns, because a Junos service-release version genuinely contains one (21.4R3-S5.4) — dropping it would report a device on a different software than it runs. version_render restores the JUNOS phrasing the vendor os_version_pattern is anchored on."
+      },
+      "identity_probe": {
+        "commands": [
+          {
+            "command": "show version",
+            "model_patterns": [
+              "(?m)^Model:[ \\t]*([A-Za-z0-9._/+-]{2,40})[ \\t\\r]*$"
+            ]
+          },
+          {
+            "command": "show chassis hardware",
+            "serial_patterns": [
+              "(?m)^Chassis[ \\t]{2,}([A-Za-z0-9._-]{4,25})[ \\t]{2,}\\S"
+            ]
+          }
+        ],
+        "notes": "HARDWARE IDENTITY PROBE (internal/deviceident). The `Model: mx204` line of `show version` is GROUNDED in the repo's own fixture (internal/osprobe/sources_test.go showVersionJunos). Junos `show version` does NOT print a chassis serial, so the serial is read from `show chassis hardware` — a command grounded in the shipped TAC plan (ai/tac/plans/juniper-junos.yaml) and the research corpus (intent inventory.hardware). Its `Hardware inventory:` table puts the chassis on a row that starts with the literal word `Chassis`, with the Version and Part number columns EMPTY for that row, so the serial is the first column-separated token after it and the description (the model) follows; the pattern requires the two-or-more-space column gap on both sides so a `Chassis` row that printed something else there cannot be read as a serial. Line shape doc_claimed."
       },
       "display_name": "Juniper Junos",
       "device_class": [

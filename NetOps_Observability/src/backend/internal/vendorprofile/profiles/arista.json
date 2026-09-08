@@ -81,6 +81,20 @@
         "version_render": "version {version}",
         "notes": "OS-VERSION SOURCE LADDER (internal/osprobe). The lab's cEOS leaves stream OpenConfig over gNMI, which is why the OpenConfig system path leads and the component path is the fallback for a chassis that publishes the version per-component. doc_claimed all the same: the change that authored this block did not Get either path or run `show version` on a leaf, and says so rather than inheriting this profile's live_validated fidelity, which was earned by its telemetry paths, not by these. cli_version_pattern reads the `Software image version: 4.32.0F` line and deliberately not `Internal build version: 4.32.0F-36993274.4320F`, which is a build id; the captured class therefore excludes the hyphen so a build suffix can never reach a CVE range comparison."
       },
+      "identity_probe": {
+        "commands": [
+          {
+            "command": "show version",
+            "serial_patterns": [
+              "(?m)^[ \\t]*Serial number:[ \\t]*([A-Za-z0-9._-]{3,40})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?m)^[ \\t]*Arista[ \\t]+([A-Za-z0-9._/+-]{3,40})[ \\t\\r]*$"
+            ]
+          }
+        ],
+        "notes": "HARDWARE IDENTITY PROBE (internal/deviceident). GROUNDED in the repo's own show-version fixture (internal/osprobe/sources_test.go showVersionEOS): EOS prints the bare model as the FIRST line, `Arista DCS-7050SX3-48YC8-F`, and the chassis serial as `Serial number: JPE19141ABC`. `show inventory` is deliberately NOT bound: its EOS form is a fixed-width COLUMN table, and reading a serial out of column positions we have not seen output for would be a guess — `show version` already carries both fields."
+      },
       "display_name": "Arista EOS",
       "device_class": [
         "switch",

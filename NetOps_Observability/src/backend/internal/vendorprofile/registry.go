@@ -450,6 +450,7 @@ func (p Profile) clone() Profile {
 		}
 	}
 	out.OSVersionProbe.GNMIPaths = cp(p.OSVersionProbe.GNMIPaths)
+	out.IdentityProbe = p.IdentityProbe.clone()
 	out.Advisory.ProductIDs = cp(p.Advisory.ProductIDs)
 	out.Threat.LogRuleIDs = cp(p.Threat.LogRuleIDs)
 	out.Threat.MnemonicPrefixes = cp(p.Threat.MnemonicPrefixes)
@@ -810,6 +811,101 @@ func (o OSVersionProbe) clone() OSVersionProbe {
 	out := o
 	out.GNMIPaths = cp(o.GNMIPaths)
 	return out
+}
+
+// ─── hardware identity probe ─────────────────────────────────────────────────
+
+// IdentityProbeForDevice resolves the HARDWARE IDENTITY probe data for a device
+// from what an inventory row actually carries: its detected vendor and its
+// free-form OS/platform label.
+//
+// Resolution is the SAME vendor-bounded rule OSVersionProbeForDevice uses, and
+// for the same reason: the answer names commands that will be RUN at a live
+// device, so a label that resolves onto another vendor's profile must never be
+// accepted. ok=false is the honest "no established identity source for this
+// device" — the caller probes nothing and the row's serial stays unset.
+func (r *Registry) IdentityProbeForDevice(vendor, osText string) (Profile, IdentityProbe, bool) {
+	v := strings.ToLower(strings.TrimSpace(vendor))
+	if v == "" || strings.TrimSpace(osText) == "" {
+		return Profile{}, IdentityProbe{}, false
+	}
+	p, ok := r.ProfileForOS(v, osText)
+	if !ok {
+		p, ok = r.ProfileForPlatformText(osText)
+		if !ok || p.Vendor != v {
+			return Profile{}, IdentityProbe{}, false
+		}
+	}
+	if !p.IdentityProbe.Declared() {
+		return Profile{}, IdentityProbe{}, false
+	}
+	return p, p.IdentityProbe.clone(), true
+}
+
+// IdentityProbeForPlatformID resolves the identity probe from a PLATFORM
+// IDENTIFIER rather than from an inventory row — the key an ALREADY-COLLECTED
+// capture carries ("cisco-iosxe", "nokia/srlinux", "junos").
+//
+// It exists because the two questions are genuinely different. A live probe
+// starts from a device row and must never cross a vendor boundary (above); a
+// capture that is already in hand starts from the platform the collection was
+// run against, and there is no device to protect — the only risk is READING the
+// text with the wrong dialect's patterns, so resolution here is EXACT first
+// (canonical profile id, then platform alias, both compared with separators
+// removed so "cisco-iosxe", "cisco_ios_xe" and "cisco/ios_xe" are one key) and
+// only then falls back to the ranked platform-text table. ok=false leaves the
+// caller with nothing parsed, never with a guess.
+func (r *Registry) IdentityProbeForPlatformID(platform string) (Profile, IdentityProbe, bool) {
+	p, ok := r.ProfileForPlatformID(platform)
+	if !ok || !p.IdentityProbe.Declared() {
+		return Profile{}, IdentityProbe{}, false
+	}
+	return p, p.IdentityProbe.clone(), true
+}
+
+// ProfileForPlatformID resolves a platform IDENTIFIER onto a profile: the
+// canonical id ("cisco/ios_xe"), a vendor+alias pair, or any spelling of either
+// that differs only in the separators between its words ("cisco-iosxe",
+// "cisco_ios_xe"). An identifier that names no profile falls back to the ranked
+// free-form platform-text table, and an unrecognized one returns false.
+func (r *Registry) ProfileForPlatformID(platform string) (Profile, bool) {
+	key := squashID(platform)
+	if key == "" {
+		return Profile{}, false
+	}
+	for _, id := range r.order {
+		if squashID(id) == key {
+			return r.profiles[id].clone(), true
+		}
+	}
+	// Aliases are walked in sorted order so two aliases that squash to the same
+	// key can never resolve differently between two runs of the same binary —
+	// reference-data lookup must be deterministic, not map-order dependent.
+	aliases := make([]string, 0, len(r.aliasToID))
+	for alias := range r.aliasToID {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	for _, alias := range aliases {
+		if squashID(alias) == key {
+			return r.profiles[r.aliasToID[alias]].clone(), true
+		}
+	}
+	return r.ProfileForPlatformText(platform)
+}
+
+// squashID normalizes a platform identifier to letters and digits only, lower
+// case. It is deliberately NOT a substring test: two identifiers are the same
+// key only when they are the same word sequence, so "cisco-iosxr" can never
+// resolve onto cisco/ios (which the substring table WOULD match, on "cisco").
+func squashID(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // ─── cli dialect ─────────────────────────────────────────────────────────────

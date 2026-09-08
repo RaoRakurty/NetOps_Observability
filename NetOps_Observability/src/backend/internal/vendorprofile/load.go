@@ -305,6 +305,9 @@ func validateProfile(name string, p Profile) error {
 	if err := validateOSVersionProbe(where, p); err != nil {
 		return err
 	}
+	if err := validateIdentityProbe(where, p); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -380,6 +383,72 @@ func validateOSVersionProbe(where string, p Profile) error {
 		}
 		if re.NumSubexp() < 1 {
 			return fmt.Errorf("vendorprofile: %s: os_version_probe.%s has no capture group — there is nothing to read out of it", where, field)
+		}
+	}
+	return nil
+}
+
+// validateIdentityProbe enforces the HARDWARE IDENTITY probe's profile contract
+// (see the IdentityProbe type doc for WHY each rule exists).
+//
+// The rules are the same shape as the OS-version probe's: a declared source
+// must be COMPLETE (a command with nothing to read out of it is a device
+// round-trip for nothing), BOUNDED (MaxIdentityCommands), and SAFE TO RUN (the
+// command is executed verbatim at a live device, so it carries no chaining
+// metacharacter and no control character — the same list a config-capture
+// command is held to).
+func validateIdentityProbe(where string, p Profile) error {
+	ip := p.IdentityProbe
+	if !ip.Declared() {
+		if strings.TrimSpace(ip.Notes) != "" {
+			return fmt.Errorf("vendorprofile: %s: identity_probe.notes set with no command", where)
+		}
+		return nil
+	}
+	if len(ip.Commands) > MaxIdentityCommands {
+		return fmt.Errorf("vendorprofile: %s: identity_probe declares %d commands, at most %d are allowed",
+			where, len(ip.Commands), MaxIdentityCommands)
+	}
+	seen := map[string]bool{}
+	for _, c := range ip.Commands {
+		cmd := strings.TrimSpace(c.Command)
+		if cmd == "" {
+			return fmt.Errorf("vendorprofile: %s: identity_probe command is empty", where)
+		}
+		if cmd != c.Command {
+			return fmt.Errorf("vendorprofile: %s: identity_probe command %q carries leading/trailing space", where, c.Command)
+		}
+		if seen[cmd] {
+			return fmt.Errorf("vendorprofile: %s: identity_probe command %q declared twice", where, cmd)
+		}
+		seen[cmd] = true
+		for _, bad := range configCaptureForbiddenBytes {
+			if strings.Contains(cmd, bad) {
+				return fmt.Errorf("vendorprofile: %s: identity_probe command %q contains %q", where, cmd, bad)
+			}
+		}
+		if len(c.SerialPatterns) == 0 && len(c.ModelPatterns) == 0 {
+			return fmt.Errorf("vendorprofile: %s: identity_probe command %q declares no pattern — it would run at a device and read nothing", where, cmd)
+		}
+		for _, pat := range []struct {
+			field string
+			exprs []string
+		}{
+			{"serial_patterns", c.SerialPatterns},
+			{"model_patterns", c.ModelPatterns},
+		} {
+			for _, expr := range pat.exprs {
+				if strings.TrimSpace(expr) == "" {
+					return fmt.Errorf("vendorprofile: %s: identity_probe.%s for %q has an empty pattern", where, pat.field, cmd)
+				}
+				re, err := regexp.Compile(expr)
+				if err != nil {
+					return fmt.Errorf("vendorprofile: %s: identity_probe.%s for %q: %w", where, pat.field, cmd, err)
+				}
+				if re.NumSubexp() < 1 {
+					return fmt.Errorf("vendorprofile: %s: identity_probe.%s for %q has no capture group — there is nothing to read out of it", where, pat.field, cmd)
+				}
+			}
 		}
 	}
 	return nil

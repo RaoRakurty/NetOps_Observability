@@ -605,6 +605,12 @@ func mergeDevices(x, y models.Device) models.Device {
 		// version was learned by a source that never read it.
 		base.OSVersion, base.OSVersionSource, base.OSVersionAt = other.OSVersion, other.OSVersionSource, other.OSVersionAt
 	}
+	if base.SerialNumber == "" {
+		// Same rule, same reason: the serial and its PROVENANCE move together or
+		// not at all, so a merge can never produce a row claiming a serial was
+		// read off a device by a source that never read it.
+		base.SerialNumber, base.SerialSource, base.SerialAt = other.SerialNumber, other.SerialSource, other.SerialAt
+	}
 	if base.Address == "" {
 		base.Address = other.Address
 	}
@@ -803,7 +809,12 @@ func (a *DiscoveryAggregator) upsertLocked(d models.Device) error {
 	//   - the version CHANGED and is non-empty → it came from this request, so
 	//     it is `manual`, stamped now;
 	//   - the version is empty → there is no provenance to state.
-	switch existing := a.cache[d.ID]; {
+	//
+	// The SERIAL half follows exactly the same rule, for exactly the same
+	// reasons: a caller may state a serial (that is how a device nothing can
+	// log into gets one) but may not claim a probe read it.
+	existing := a.cache[d.ID]
+	switch {
 	case strings.TrimSpace(d.OSVersion) == "":
 		d.OSVersionSource, d.OSVersionAt = "", time.Time{}
 	case d.OSVersion == existing.OSVersion:
@@ -812,6 +823,14 @@ func (a *DiscoveryAggregator) upsertLocked(d models.Device) error {
 		// osprobe's own constant, not a second spelling of it: the overwrite
 		// rule keys on this exact value to recognise an operator's version.
 		d.OSVersionSource, d.OSVersionAt = string(osprobe.MethodManual), time.Now().UTC()
+	}
+	switch {
+	case strings.TrimSpace(d.SerialNumber) == "":
+		d.SerialSource, d.SerialAt = "", time.Time{}
+	case d.SerialNumber == existing.SerialNumber:
+		d.SerialSource, d.SerialAt = existing.SerialSource, existing.SerialAt
+	default:
+		d.SerialSource, d.SerialAt = string(osprobe.MethodManual), time.Now().UTC()
 	}
 	// MONITORING-BEGIN — the ceiling, asked when this write turns a device that
 	// is NOT monitored into one that is: a create of a declared device, or an

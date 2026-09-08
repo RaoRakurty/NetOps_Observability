@@ -320,10 +320,23 @@ type fakeProfiles struct {
 	profile vendorprofile.Profile
 	probe   vendorprofile.OSVersionProbe
 	ok      bool
+	// identity is the hardware-identity half; identityOK=false is the honest
+	// "this platform declares no identity source", which is the state most of
+	// the version-rung tests want.
+	identity   vendorprofile.IdentityProbe
+	identityOK bool
 }
 
 func (f fakeProfiles) OSVersionProbeForDevice(string, string) (vendorprofile.Profile, vendorprofile.OSVersionProbe, bool) {
 	return f.profile, f.probe, f.ok
+}
+
+func (f fakeProfiles) IdentityProbeForDevice(string, string) (vendorprofile.Profile, vendorprofile.IdentityProbe, bool) {
+	return f.profile, f.identity, f.identityOK
+}
+
+func (f fakeProfiles) IdentityProbeForPlatformID(string) (vendorprofile.Profile, vendorprofile.IdentityProbe, bool) {
+	return f.profile, f.identity, f.identityOK
 }
 
 // ─── the gNMI rung ───────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	"netops/backend/internal/deviceident"
 	"netops/backend/internal/vendorprofile"
 )
 
@@ -30,6 +31,16 @@ type Profiles interface {
 	// profile that owns it and that profile's probe data. ok=false is the honest
 	// "no established non-SNMP version source for this device".
 	OSVersionProbeForDevice(vendor, osText string) (vendorprofile.Profile, vendorprofile.OSVersionProbe, bool)
+	// IdentityProbeForDevice resolves the same device onto that platform's
+	// HARDWARE IDENTITY commands and patterns. It is a SEPARATE resolution
+	// because the two are separately authored: a platform may declare one, the
+	// other, both or neither, and the SSH rung asks each question only of a
+	// platform that answered it.
+	IdentityProbeForDevice(vendor, osText string) (vendorprofile.Profile, vendorprofile.IdentityProbe, bool)
+	// IdentityProbeForPlatformID is deviceident.Profiles' other half; the SSH
+	// rung never calls it, but the seam is ONE interface so a deployment wires
+	// ONE registry rather than two views of it.
+	IdentityProbeForPlatformID(platform string) (vendorprofile.Profile, vendorprofile.IdentityProbe, bool)
 }
 
 // ─── (a) SNMP sysDescr ───────────────────────────────────────────────────────
@@ -179,14 +190,29 @@ type SSHSource struct {
 	Run CommandRunner
 	// Profiles resolves the command and the extraction pattern.
 	Profiles Profiles
+	// Logf is the structured-log sink for a NON-FATAL failure — an identity
+	// command that could not be run at a device whose version was read fine.
+	// Nil falls back to the stdlib logger, never to silence (§10).
+	Logf func(msg string, fields map[string]any)
 
 	mu    sync.Mutex
 	cache map[string]*regexp.Regexp
+
+	identOnce sync.Once
+	ident     *deviceident.Extractor
 }
 
 // NewSSHSource builds the read-only CLI rung.
 func NewSSHSource(run CommandRunner, profiles Profiles) *SSHSource {
 	return &SSHSource{Run: run, Profiles: profiles, cache: map[string]*regexp.Regexp{}}
+}
+
+// extractor is the identity parser, built once over the SAME injected profile
+// seam. It is lazy so a caller that never asks for an identity never builds one,
+// and so NewSSHSource keeps the signature every existing wiring passes.
+func (s *SSHSource) extractor() *deviceident.Extractor {
+	s.identOnce.Do(func() { s.ident = deviceident.NewExtractor(s.Profiles) })
+	return s.ident
 }
 
 // Method implements Source.
@@ -200,39 +226,160 @@ func (s *SSHSource) Method() Method { return MethodSSH }
 // internal/vendorprofile's config-capture validator records.
 var commandForbiddenBytes = []string{";", "&", "`", "$", "\\", "\n", "\r", ">", "<"}
 
-// Probe implements Source.
+// Probe implements Source: the VERSION half only, for a caller that did not ask
+// for the hardware identity.
 func (s *SSHSource) Probe(ctx context.Context, t Target) (string, error) {
+	version, _, err := s.probe(ctx, t, false)
+	return version, err
+}
+
+// ProbeWithIdentity implements IdentitySource: the version AND the hardware
+// identity, read on ONE visit to the device.
+func (s *SSHSource) ProbeWithIdentity(ctx context.Context, t Target) (string, deviceident.Identity, error) {
+	return s.probe(ctx, t, true)
+}
+
+// probe is the rung's body.
+//
+// ONE VISIT, TWO QUESTIONS. The version and the identity are authored
+// separately (a platform may declare either, both or neither) but they are read
+// on the same SSH session's worth of work, and — for every platform whose
+// identity commands include its own show-version command — out of the SAME
+// captured output, which is re-used rather than re-fetched. A platform that
+// needs a second command (Cisco `show inventory`, Junos `show chassis
+// hardware`) pays for exactly that one extra read-only command.
+//
+// FAILURE IS NOT SHARED. A failure of the VERSION command is the rung's error,
+// as it always was. A failure of an IDENTITY command is logged and leaves the
+// identity empty: discarding a version that was read successfully because a
+// second command timed out would make the rung less reliable than it was before
+// the identity existed.
+func (s *SSHSource) probe(ctx context.Context, t Target, wantIdentity bool) (string, deviceident.Identity, error) {
+	var id deviceident.Identity
 	if s == nil || s.Run == nil || s.Profiles == nil {
-		return "", ErrNotConfigured
+		return "", id, ErrNotConfigured
 	}
-	profile, probe, ok := s.Profiles.OSVersionProbeForDevice(t.Vendor, t.OSText)
-	if !ok || !probe.HasCLI() {
-		return "", fmt.Errorf("%w: no cli version pattern for this platform", ErrNotConfigured)
+	profile, probe, versionOK := s.Profiles.OSVersionProbeForDevice(t.Vendor, t.OSText)
+	identProfile, identProbe, identOK := vendorprofile.Profile{}, vendorprofile.IdentityProbe{}, false
+	if wantIdentity {
+		identProfile, identProbe, identOK = s.Profiles.IdentityProbeForDevice(t.Vendor, t.OSText)
 	}
-	command := strings.TrimSpace(profile.Capture.ShowVersionCmd)
-	if command == "" {
-		// The loader forbids this pairing, so reaching it means the data and the
-		// validator have drifted. Refuse rather than improvise a command.
-		return "", fmt.Errorf("%w: platform %q declares a cli version pattern but no show-version command", ErrNotConfigured, profile.ID)
+	if versionOK && !probe.HasCLI() {
+		versionOK = false
+	}
+	if !versionOK && !identOK {
+		return "", id, fmt.Errorf("%w: no cli version pattern or identity probe for this platform", ErrNotConfigured)
+	}
+
+	// outputs caches what this visit has already read, keyed by the command, so
+	// a platform whose identity is in its own show-version output costs ONE
+	// command at the device rather than two.
+	outputs := map[string]string{}
+	run := func(command string) (string, error) {
+		if out, ok := outputs[command]; ok {
+			return out, nil
+		}
+		if err := s.checkCommand(command); err != nil {
+			return "", err
+		}
+		out, err := s.Run.Run(ctx, t, command)
+		if err != nil {
+			return "", fmt.Errorf("ssh %q: %w", command, err)
+		}
+		outputs[command] = out
+		return out, nil
+	}
+
+	var version string
+	if versionOK {
+		command := strings.TrimSpace(profile.Capture.ShowVersionCmd)
+		if command == "" {
+			// The loader forbids this pairing, so reaching it means the data and
+			// the validator have drifted. Refuse rather than improvise a command.
+			return "", id, fmt.Errorf("%w: platform %q declares a cli version pattern but no show-version command", ErrNotConfigured, profile.ID)
+		}
+		re, err := s.pattern(probe.CLIVersionPattern)
+		if err != nil {
+			return "", id, err
+		}
+		out, err := run(command)
+		if err != nil {
+			return "", id, err
+		}
+		if m := re.FindStringSubmatch(out); m != nil {
+			version = probe.Render(strings.TrimSpace(m[1]))
+		}
+		// m == nil is not an error: the device answered, and nothing in the
+		// answer was a version.
+	}
+
+	if identOK {
+		id = s.readIdentity(t, identProfile, identProbe, run)
+	}
+	return version, id, nil
+}
+
+// readIdentity runs the platform's authored identity commands in order and stops
+// as soon as both fields are known. Each command's failure is reported and
+// skipped — the next command may still answer, and the version already read is
+// never put at risk by one that does not.
+func (s *SSHSource) readIdentity(t Target, profile vendorprofile.Profile, probe vendorprofile.IdentityProbe, run func(string) (string, error)) deviceident.Identity {
+	var id deviceident.Identity
+	ex := s.extractor()
+	for _, bound := range probe.Commands {
+		if id.Complete() {
+			return id
+		}
+		command := strings.TrimSpace(bound.Command)
+		out, err := run(command)
+		if err != nil {
+			s.log("identity probe command failed", map[string]any{
+				"device_id": t.DeviceID, "tenant": t.TenantID, "vendor": t.Vendor,
+				"platform": profile.ID, "command": command, "error": err.Error(),
+			})
+			continue
+		}
+		got, err := ex.FromOutput(profile.ID, bound, command, out)
+		if err != nil {
+			// An authored pattern that will not compile is a data/validator
+			// drift, not a device problem. It is SEEN, never swallowed (§10).
+			s.log("identity probe pattern unusable", map[string]any{
+				"device_id": t.DeviceID, "platform": profile.ID,
+				"command": command, "error": err.Error(),
+			})
+			continue
+		}
+		if id.Serial == "" && got.Serial != "" {
+			id.Serial, id.SerialCommand, id.ProfileID = got.Serial, got.SerialCommand, profile.ID
+		}
+		if id.Model == "" && got.Model != "" {
+			id.Model, id.ModelCommand, id.ProfileID = got.Model, got.ModelCommand, profile.ID
+		}
+	}
+	return id
+}
+
+// checkCommand re-checks an authored command's shape immediately before it is
+// put on a wire. The loader already validated it; this is the second gate that
+// makes the rung a CLOSED command source by construction — there is no caller
+// input anywhere on this path, and a profile edit can never turn it into a way
+// to execute something else at a device (§8 least privilege).
+func (s *SSHSource) checkCommand(command string) error {
+	if strings.TrimSpace(command) == "" {
+		return errors.New("osprobe: refusing an empty command")
 	}
 	for _, bad := range commandForbiddenBytes {
 		if strings.Contains(command, bad) {
-			return "", fmt.Errorf("osprobe: refusing show-version command for %q: contains %q", profile.ID, bad)
+			return fmt.Errorf("osprobe: refusing command %q: contains %q", command, bad)
 		}
 	}
-	re, err := s.pattern(probe.CLIVersionPattern)
-	if err != nil {
-		return "", err
-	}
-	out, err := s.Run.Run(ctx, t, command)
-	if err != nil {
-		return "", fmt.Errorf("ssh %q: %w", command, err)
-	}
-	m := re.FindStringSubmatch(out)
-	if m == nil {
-		return "", nil // the device answered; nothing in it was a version
-	}
-	return probe.Render(strings.TrimSpace(m[1])), nil
+	return nil
+}
+
+// log is the rung's structured-log sink, with the same never-silent fallback
+// the ladder's own logger has.
+func (s *SSHSource) log(msg string, fields map[string]any) {
+	logFields(s.Logf, "osprobe: ", msg, fields)
 }
 
 func (s *SSHSource) pattern(expr string) (*regexp.Regexp, error) {

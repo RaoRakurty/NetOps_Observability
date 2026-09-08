@@ -240,6 +240,12 @@ func (s *server) buildOSVersionLadder() {
 		return
 	}
 	reg := vendorprofile.Default()
+	// The CLI rung also reads the device's HARDWARE IDENTITY (chassis serial +
+	// model) on the same visit; its own non-fatal failures — an identity command
+	// that timed out on a device whose version was read fine — go to the SAME
+	// structured sink as the ladder's, so one operator view covers both.
+	sshRung := osprobe.NewSSHSource(osProbeSSHRunner{gw: s.configGateway()}, reg)
+	sshRung.Logf = func(msg string, fields map[string]any) { logWarn("osprobe", msg, fields) }
 	ladder, err := osprobe.NewLadder(
 		func(msg string, fields map[string]any) { logWarn("osprobe", msg, fields) },
 		osprobe.NewSNMPSource(osProbeSysDescr),
@@ -253,7 +259,7 @@ func (s *server) buildOSVersionLadder() {
 		// The profile data (paths + extraction patterns) is authored and tested,
 		// so connecting a client is the only thing left.
 		osprobe.NewGNMISource(nil, reg),
-		osprobe.NewSSHSource(osProbeSSHRunner{gw: s.configGateway()}, reg),
+		sshRung,
 	)
 	if err != nil {
 		logWarn("osprobe", "os-version ladder not wired", map[string]any{"error": err.Error()})

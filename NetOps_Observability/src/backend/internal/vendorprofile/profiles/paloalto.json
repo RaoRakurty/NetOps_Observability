@@ -70,6 +70,20 @@
           "set cli pager off"
         ]
       },
+      "identity_probe": {
+        "commands": [
+          {
+            "command": "show system info",
+            "serial_patterns": [
+              "(?im)^[ \\t]*serial:[ \\t]*([A-Za-z0-9._-]{3,40})[ \\t\\r]*$"
+            ],
+            "model_patterns": [
+              "(?im)^[ \\t]*model:[ \\t]*(\\S[^\\r\\n]*?)[ \\t\\r]*$"
+            ]
+          }
+        ],
+        "notes": "HARDWARE IDENTITY PROBE (internal/deviceident). doc_claimed. `show system info` is already this profile's capture.show_version_cmd, so the identity costs NO extra command at the device. That it carries the model and the serial beside the PAN-OS version is grounded in the TAC research corpus (ai/tac/research/paloalto-panos.yaml: \"`show system info` (model, serial, PAN-OS version, …)\"); the `key: value` line shape it prints them in is doc_claimed."
+      },
       "advisory": {
         "provider": "offline-feed",
         "product_ids": [

@@ -54,6 +54,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/deviceident"
 )
 
 // Method is the transport a version reading came from. It is also the value
@@ -97,6 +99,11 @@ const (
 	OutcomeUnavailable = "unavailable"
 	// OutcomeError — the probe failed (dial, auth, timeout, refused).
 	OutcomeError = "error"
+	// OutcomeIdentity — the rung read a HARDWARE IDENTITY (a chassis serial) on
+	// the same visit. It is counted beside, not instead of, the version outcome:
+	// one visit answers two questions and an operator has to be able to see
+	// which of them the fleet is actually getting answers to.
+	OutcomeIdentity = "identity"
 )
 
 // ErrNotConfigured is the honest "this rung cannot run for this device". It is
@@ -124,21 +131,54 @@ type Target struct {
 	TenantID string
 }
 
-// Reading is one rung's answer, already rendered into the canonical form the
-// vendor's own os_version_pattern parses.
+// Reading is one rung's answer: the software version, already rendered into the
+// canonical form the vendor's own os_version_pattern parses, AND — for a rung
+// that can read it on the same visit — the device's hardware identity.
+//
+// The two halves are INDEPENDENT. A rung may answer with a version and no
+// identity (SNMP: a sysDescr is not an inventory), an identity and no version
+// (Cisco IOS-XR's `show inventory` carries a serial and a PID, and no software
+// version at all), or both. Each half is accepted onto the device row under its
+// own rule and carries its own provenance, so a row can never claim a serial was
+// learned by the transport that only ever read a version.
 type Reading struct {
+	// Version is the software version, and Method/At its provenance.
 	Version string
 	Method  Method
 	At      time.Time
+	// Identity is the hardware identity, and IdentityMethod/IdentityAt ITS
+	// provenance. They are separate fields rather than a second use of
+	// Method/At because the two halves can genuinely come from different rungs
+	// — an SNMP sysDescr version beside an SSH-read serial is the ordinary case
+	// — and a row that stamped one rung's name on the other rung's fact would
+	// be an audit trail that lies.
+	Identity       deviceident.Identity
+	IdentityMethod Method
+	IdentityAt     time.Time
 }
+
+// Learned reports whether this reading carries anything worth writing.
+func (r Reading) Learned() bool { return r.Version != "" || !r.Identity.Empty() }
 
 // Current is what the device row already holds. Source "" means a value of
 // UNKNOWN provenance — a row written by an operator, an inventory file or an
 // importer before this field existed — and is treated exactly like MethodManual.
+//
+// The SERIAL half is carried separately and with its own provenance, because
+// the two facts are learned by different rungs at different times: a row may
+// hold an SNMP-learned version and an SSH-learned serial, and the overwrite
+// rule has to be able to reason about each without the other.
 type Current struct {
 	Version string
 	Source  Method
 	At      time.Time
+	// Serial is the chassis serial the row already holds, SerialSource how it
+	// was learned and SerialAt when. An empty SerialSource on a row that
+	// carries a serial means the provenance predates the field — treated as
+	// manual, exactly as an empty Source is for the version.
+	Serial       string
+	SerialSource Method
+	SerialAt     time.Time
 }
 
 // automatic reports whether m is a rung this package can re-run. Manual (and
@@ -203,6 +243,49 @@ func Plan(cur Current) []Method {
 	return nil
 }
 
+// AcceptIdentity is the overwrite rule for the SERIAL half, and it is the SAME
+// three rules Accept applies to the version, evaluated against the serial and
+// its own provenance:
+//
+//  1. a reading with no serial NEVER writes — a probe that could not read one
+//     must not erase a serial an importer or an operator supplied;
+//  2. a reading from the same method as the row's serial always refreshes it,
+//     which is the path that follows a chassis swap or an RMA;
+//  3. a reading from a different method writes only onto an EMPTY serial, so a
+//     value a person or a source of truth put there is never displaced by a
+//     probe.
+//
+// The MODEL deliberately has no rule of its own: it is not an identity, it
+// changes only when the chassis does, and it is written alongside an accepted
+// serial by the caller (see internal/discovery) rather than being able to
+// overwrite an inventory's model on its own.
+func AcceptIdentity(cur Current, r Reading) bool {
+	if strings.TrimSpace(r.Identity.Serial) == "" {
+		return false // rule 1
+	}
+	if !r.IdentityMethod.automatic() {
+		return false
+	}
+	if strings.TrimSpace(cur.Serial) == "" {
+		return true // rule 3, the empty case
+	}
+	return cur.SerialSource == r.IdentityMethod // rule 2
+}
+
+// PlanIdentity returns the rungs whose IDENTITY reading could possibly be
+// accepted onto a row that currently holds cur, in ladder order. It is derived
+// from AcceptIdentity exactly as Plan is derived from Accept, and for the same
+// reason: never run a transport at a live device only to throw the answer away.
+func PlanIdentity(cur Current) []Method {
+	if strings.TrimSpace(cur.Serial) == "" {
+		return append([]Method(nil), LadderOrder...)
+	}
+	if cur.SerialSource.automatic() {
+		return []Method{cur.SerialSource}
+	}
+	return nil
+}
+
 // Source is ONE rung. Probe returns the version ALREADY RENDERED into the
 // canonical form the vendor's os_version_pattern parses; ("", nil) is the
 // honest "the transport answered and carried no version", and
@@ -210,6 +293,25 @@ func Plan(cur Current) []Method {
 type Source interface {
 	Method() Method
 	Probe(ctx context.Context, t Target) (string, error)
+}
+
+// IdentitySource is the OPTIONAL second capability a rung may have: reading the
+// device's HARDWARE IDENTITY on the SAME visit that produced the version.
+//
+// It is an optional interface rather than a second method on Source because the
+// capability is genuinely optional and stating that honestly matters. SNMP's
+// sysDescr is a description line, not an inventory; the gNMI rung reads ONE
+// software-version leaf. Only the CLI rung sees output an identity can be read
+// out of, and a rung that does not implement this contributes an EMPTY identity
+// rather than a rung nobody wired pretending to have looked.
+type IdentitySource interface {
+	Source
+	// ProbeWithIdentity returns the version (same contract as Probe) and
+	// whatever hardware identity the same visit yielded. The error is the
+	// VERSION probe's error: a failure to read the identity leaves the identity
+	// empty and is reported by the rung itself, never by discarding a version
+	// that was successfully read.
+	ProbeWithIdentity(ctx context.Context, t Target) (string, deviceident.Identity, error)
 }
 
 // Ladder runs the rungs in order and records what happened. It holds no
@@ -272,75 +374,144 @@ func (l *Ladder) SetTimeout(d time.Duration) {
 	}
 }
 
-// Probe runs the rungs Plan allows for cur, top first, and returns the first
-// reading that Accept would take. ok=false means no rung produced an acceptable
-// version — the caller writes NOTHING and the device stays honestly unassessed.
+// Probe runs the rungs Plan and PlanIdentity allow for cur, top first, and
+// returns what they learned. ok=false means no rung produced anything the row
+// could accept — the caller writes NOTHING and the device stays honestly
+// unassessed and unidentified.
+//
+// TWO QUESTIONS, ONE WALK. The ladder asks each planned rung for a version and
+// (where the rung can answer it) a hardware identity, and keeps the FIRST
+// acceptable answer to EACH question independently. That is why the walk does
+// not simply stop at the first rung that answers: a device whose version came
+// from SNMP still has no serial, and the serial lives one rung further down.
+//
+// Each rung is dialled AT MOST ONCE, and only when it could still contribute: a
+// rung is skipped when the version question is already answered (or was never
+// planned for it) and it either cannot read an identity at all or the identity
+// question is answered too. A row holding an operator's version AND an
+// operator's serial plans nothing, so the device is not dialled at all.
 func (l *Ladder) Probe(ctx context.Context, t Target, cur Current) (Reading, bool) {
-	allowed := map[Method]bool{}
+	wantVersion := map[Method]bool{}
 	for _, m := range Plan(cur) {
-		allowed[m] = true
+		wantVersion[m] = true
 	}
-	if len(allowed) == 0 {
+	wantIdentity := map[Method]bool{}
+	for _, m := range PlanIdentity(cur) {
+		wantIdentity[m] = true
+	}
+	if len(wantVersion) == 0 && len(wantIdentity) == 0 {
 		return Reading{}, false
 	}
+	var out Reading
 	for _, src := range l.sources {
-		if !allowed[src.Method()] {
+		method := src.Method()
+		_, canIdentity := src.(IdentitySource)
+		versionOpen := wantVersion[method] && out.Version == ""
+		// A rung is asked the identity question ONLY if it can answer it. A
+		// transport that reads a description line or one leaf has not "failed"
+		// to find a serial — it was never able to look — and dialling it for an
+		// answer it cannot give would be the SSH storm in a different costume.
+		identityOpen := canIdentity && wantIdentity[method] && out.Identity.Serial == ""
+		if !versionOpen && !identityOpen {
 			continue
 		}
-		version, err := l.runOne(ctx, src, t)
+		version, id, err := l.runOne(ctx, src, t, identityOpen)
 		if err != nil {
 			continue
 		}
-		if version == "" {
-			continue
+		now := l.now().UTC()
+		if versionOpen && version != "" {
+			candidate := Reading{Version: version, Method: method, At: now}
+			if Accept(cur, candidate) {
+				out.Version, out.Method, out.At = version, method, now
+			} else {
+				// Plan is derived from Accept, so this is unreachable unless the
+				// two drift apart — which is a defect worth SEEING rather than a
+				// branch worth swallowing (§10).
+				l.log("os-version probe produced a reading its own plan would refuse", map[string]any{
+					"device_id": t.DeviceID, "method": string(method),
+					"current_source": string(cur.Source),
+				})
+			}
 		}
-		r := Reading{Version: version, Method: src.Method(), At: l.now().UTC()}
-		if !Accept(cur, r) {
-			// Plan is derived from Accept, so this is unreachable unless the two
-			// drift apart — which is a defect worth SEEING rather than a branch
-			// worth swallowing (§10).
-			l.log("os-version probe produced a reading its own plan would refuse", map[string]any{
-				"device_id": t.DeviceID, "method": string(src.Method()),
-				"current_source": string(cur.Source),
-			})
-			continue
+		if identityOpen && !id.Empty() {
+			candidate := Reading{Identity: id, IdentityMethod: method, IdentityAt: now}
+			switch {
+			case id.Serial != "" && AcceptIdentity(cur, candidate):
+				out.Identity, out.IdentityMethod, out.IdentityAt = id, method, now
+			case id.Serial != "":
+				// PlanIdentity is derived from AcceptIdentity, so this is
+				// unreachable unless the two drift apart — a defect worth
+				// SEEING rather than a branch worth swallowing (§10).
+				l.log("identity probe produced a reading its own plan would refuse", map[string]any{
+					"device_id": t.DeviceID, "method": string(method),
+					"current_serial_source": string(cur.SerialSource),
+				})
+			case out.Identity.Empty():
+				// A MODEL with no serial. It is kept — a platform that prints
+				// its chassis type and no serial still knows what it is — but
+				// it is never merged with another rung's serial, and whether it
+				// may displace a model an inventory supplied is the caller's
+				// decision, not this ladder's.
+				out.Identity, out.IdentityMethod, out.IdentityAt = id, method, now
+			}
 		}
-		return r, true
 	}
-	return Reading{}, false
+	if !out.Learned() {
+		return Reading{}, false
+	}
+	return out, true
 }
 
-// runOne bounds and observes one rung. It returns ("", err) on failure and
-// ("", nil) when the transport answered without a version; both are counted and
-// the failure is logged.
-func (l *Ladder) runOne(ctx context.Context, src Source, t Target) (string, error) {
+// runOne bounds and observes one rung. It returns ("", zero, err) on failure and
+// ("", zero, nil) when the transport answered without a version; both are
+// counted and the failure is logged. wantIdentity asks the rung for the
+// hardware identity too, and is honoured only by a rung that can answer it.
+func (l *Ladder) runOne(ctx context.Context, src Source, t Target, wantIdentity bool) (string, deviceident.Identity, error) {
 	pctx, cancel := context.WithTimeout(ctx, l.timeout)
 	defer cancel()
-	version, err := src.Probe(pctx, t)
+	var (
+		version string
+		id      deviceident.Identity
+		err     error
+	)
+	if ids, ok := src.(IdentitySource); ok && wantIdentity {
+		version, id, err = ids.ProbeWithIdentity(pctx, t)
+	} else {
+		version, err = src.Probe(pctx, t)
+	}
 	method := string(src.Method())
 	switch {
 	case errors.Is(err, ErrNotConfigured):
 		l.metrics.inc(method, OutcomeUnavailable)
-		return "", err
+		return "", deviceident.Identity{}, err
 	case err != nil:
 		l.metrics.inc(method, OutcomeError)
 		l.log("os-version probe failed", map[string]any{
 			"device_id": t.DeviceID, "tenant": t.TenantID, "method": method,
 			"vendor": t.Vendor, "error": err.Error(),
 		})
-		return "", err
+		return "", deviceident.Identity{}, err
 	}
 	version = boundVersion(version)
+	if id.Serial != "" {
+		l.metrics.inc(method, OutcomeIdentity)
+	}
 	if version == "" {
 		l.metrics.inc(method, OutcomeNoVersion)
-		l.log("os-version probe answered with no version", map[string]any{
-			"device_id": t.DeviceID, "tenant": t.TenantID, "method": method,
-			"vendor": t.Vendor,
-		})
-		return "", nil
+		if id.Empty() {
+			// Only silent when the visit produced NOTHING. A rung that read a
+			// serial and no version has not failed, and saying so would put a
+			// working identity probe on the "answered with nothing" line.
+			l.log("os-version probe answered with no version", map[string]any{
+				"device_id": t.DeviceID, "tenant": t.TenantID, "method": method,
+				"vendor": t.Vendor,
+			})
+		}
+		return "", id, nil
 	}
 	l.metrics.inc(method, OutcomeLearned)
-	return version, nil
+	return version, id, nil
 }
 
 // boundVersion trims and caps a reading (§9). It is the ONE place the cap is
@@ -354,8 +525,16 @@ func boundVersion(s string) string {
 }
 
 func (l *Ladder) log(msg string, fields map[string]any) {
-	if l.logf != nil {
-		l.logf(msg, fields)
+	logFields(l.logf, "osprobe: ", msg, fields)
+}
+
+// logFields is the ONE never-silent log path this package has: it prefers the
+// injected structured sink and falls back to the stdlib logger, sorting the
+// fields so a line is reproducible. A failure an operator cannot see is exactly
+// the silent failure §10 forbids, so there is no branch here that drops one.
+func logFields(logf func(msg string, fields map[string]any), prefix, msg string, fields map[string]any) {
+	if logf != nil {
+		logf(msg, fields)
 		return
 	}
 	keys := make([]string, 0, len(fields))
@@ -364,7 +543,7 @@ func (l *Ladder) log(msg string, fields map[string]any) {
 	}
 	sort.Strings(keys)
 	var b strings.Builder
-	b.WriteString("osprobe: ")
+	b.WriteString(prefix)
 	b.WriteString(msg)
 	for _, k := range keys {
 		fmt.Fprintf(&b, " %s=%v", k, fields[k])

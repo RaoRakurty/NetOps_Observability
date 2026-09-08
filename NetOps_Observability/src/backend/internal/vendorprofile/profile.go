@@ -350,6 +350,87 @@ func (o OSVersionProbe) Render(version string) string {
 	return strings.ReplaceAll(o.VersionRender, OSVersionProbeVersionToken, version)
 }
 
+// ─── hardware identity probe ─────────────────────────────────────────────────
+
+// MaxIdentityCommands bounds how many read-only commands ONE platform's
+// identity probe may name (§9). A chassis prints its serial in one place, two
+// at most (a `show version` banner and an inventory listing); a profile that
+// wanted more would be turning a version probe into a collection run.
+const MaxIdentityCommands = 3
+
+// IdentityCommand binds ONE read-only show command to the patterns that read a
+// SERIAL NUMBER and a MODEL/PID out of its output.
+//
+// The command is authored data, never caller input, and it is shape-checked at
+// load with the same forbidden-byte list a config-capture command goes through:
+// the identity probe runs it verbatim at a live device, so a profile edit can
+// never turn this into a way to execute something else there (§8).
+type IdentityCommand struct {
+	// Command is the read-only command whose output the patterns below read.
+	Command string `json:"command"`
+	// SerialPatterns extract the chassis serial number, capture group 1, tried
+	// in order — first match wins. A platform prints its serial under more than
+	// one label across its own hardware families (a Catalyst stack's `System
+	// Serial Number` line and a router's `Processor board ID` line are the same
+	// fact), which is why this is a LIST rather than one regexp with
+	// alternation: each entry is separately reviewable and separately
+	// attributable in the notes.
+	SerialPatterns []string `json:"serial_patterns,omitempty"`
+	// ModelPatterns extract the chassis model / product id, capture group 1,
+	// tried in order.
+	ModelPatterns []string `json:"model_patterns,omitempty"`
+}
+
+// IdentityProbe is a platform's contribution to HARDWARE IDENTITY discovery:
+// WHICH read-only commands print this platform's chassis serial number and
+// model, and HOW to read those two fields out of what they print.
+//
+// WHY IT IS DATA, and why it lives beside OSVersionProbe rather than inside it.
+// The serial is read on the SAME device visit the OS-version ladder's SSH rung
+// already makes — it is the same transport, the same credential and (for most
+// platforms) the same command output — so it is not a second probe. But it is a
+// DIFFERENT FACT with a different provenance: a platform may print a version
+// and no serial (Cisco IOS-XR's `show version`), or a serial and no version
+// (`show inventory`), and a row must be able to say where each of the two came
+// from independently. Two blocks, one visit.
+//
+// WHAT IT WILL NOT DO. It never invents a command: a platform with no authored
+// block is probed for nothing and its row is left UNSET, which is the honest
+// state — a device record that says "serial unknown" is auditable, one that
+// says "FOC1234ABCD" because a regexp matched a line that happened to look
+// right is not. Every shipped binding is doc_claimed (the notes name the exact
+// line each pattern reads and where that shape came from) until a real device
+// confirms it.
+type IdentityProbe struct {
+	// Commands are the read-only commands to run, in preference order. The
+	// probe stops as soon as both fields are populated, and a command whose
+	// output is already in hand (the OS-version rung's own show-version
+	// capture) is never re-run.
+	Commands []IdentityCommand `json:"commands,omitempty"`
+	// Notes records the evidence behind every pattern — the same fidelity
+	// discipline the rest of a profile carries.
+	Notes string `json:"notes,omitempty"`
+}
+
+// Declared reports whether this platform names any identity source at all.
+func (i IdentityProbe) Declared() bool { return len(i.Commands) > 0 }
+
+// clone copies the slices a caller could otherwise retain into the registry.
+func (i IdentityProbe) clone() IdentityProbe {
+	out := i
+	if i.Commands != nil {
+		out.Commands = make([]IdentityCommand, len(i.Commands))
+		for n, c := range i.Commands {
+			out.Commands[n] = IdentityCommand{
+				Command:        c.Command,
+				SerialPatterns: cp(c.SerialPatterns),
+				ModelPatterns:  cp(c.ModelPatterns),
+			}
+		}
+	}
+	return out
+}
+
 // AdvisoryBinding selects the VendorAdvisoryProvider for this platform and names
 // the product ids an advisory query carries.
 type AdvisoryBinding struct {
@@ -610,6 +691,11 @@ type Profile struct {
 	// into the canonical string the vendor's os_version_pattern parses. Empty =
 	// no non-SNMP version source is established here (see the type doc).
 	OSVersionProbe OSVersionProbe `json:"os_version_probe,omitempty"`
+	// IdentityProbe is where this platform's HARDWARE identity — chassis serial
+	// number and model/PID — can be read off the device, on the same read-only
+	// SSH visit the OS-version rung already makes. Empty = no identity source is
+	// established here, and the row's serial stays UNSET (see the type doc).
+	IdentityProbe IdentityProbe `json:"identity_probe,omitempty"`
 }
 
 // VendorRecord is the vendor-level view: identity, detection, dialect and the
