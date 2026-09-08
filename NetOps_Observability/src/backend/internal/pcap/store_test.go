@@ -230,3 +230,65 @@ func TestPruneCountsFailedCapturesSeparately(t *testing.T) {
 		t.Errorf("register holds %d failed captures, want 1..%d", failedRows, maxFailedCaptures)
 	}
 }
+
+// TestPruneDoesNotLoseCapturesWhenTheFlushFails is the configstore rule applied
+// to this register, which has the same shape. Prune applied the retention to its
+// in-memory map and only then tried to persist it. On a flush failure the sealed
+// blobs were correctly kept — Prune returns an error and the caller deletes
+// nothing — but the rows were already gone from memory, so the register silently
+// disagreed with the disk and the next successful write made that loss permanent
+// (§10). The captures would then be on disk with nothing able to reach them.
+func TestPruneDoesNotLoseCapturesWhenTheFlushFails(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := dir + "/captures.json"
+	s := NewFileStore(path)
+	base := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
+
+	seeded := []Capture{}
+	for i := 0; i < 6; i++ {
+		row := storeRow("acme", "acme-core", fmt.Sprintf("%032x", i+1), base.Add(time.Duration(i)*time.Minute))
+		if err := s.Put(ctx, "acme", false, row); err != nil {
+			t.Fatal(err)
+		}
+		seeded = append(seeded, row)
+	}
+
+	// Break the write: the register's directory is now a FILE, so the atomic
+	// write cannot create its temp file — a full or read-only volume without
+	// needing either.
+	s.path = path + "/captures.json"
+
+	if _, err := s.Prune(ctx, "acme", false, "acme-core", 2); err == nil {
+		t.Fatal("Prune must report a flush it could not complete")
+	}
+
+	rows, err := s.List(ctx, "acme", false, "acme-core", MaxListLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alive := map[string]string{}
+	for _, r := range rows {
+		alive[r.ID] = r.BlobRef
+	}
+	for i, c := range seeded {
+		if ref, ok := alive[c.ID]; !ok {
+			t.Errorf("METADATA LOST in memory: capture %d (%s) is gone after a failed prune", i, c.ID)
+		} else if ref != c.BlobRef {
+			t.Errorf("capture %d came back pointing at %q, want %q", i, ref, c.BlobRef)
+		}
+	}
+
+	// The next successful write must not persist the loss either.
+	s.path = path
+	later := storeRow("acme", "acme-core", fmt.Sprintf("%032x", 99), base.Add(time.Hour))
+	if err := s.Put(ctx, "acme", false, later); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewFileStore(path)
+	for i, c := range seeded {
+		if _, err := reloaded.Get(ctx, "acme", false, "acme-core", c.ID); err != nil {
+			t.Errorf("METADATA LOST from disk: capture %d (%s) is gone after a failed prune: %v", i, c.ID, err)
+		}
+	}
+}
