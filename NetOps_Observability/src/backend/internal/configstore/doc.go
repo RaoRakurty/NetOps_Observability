@@ -101,4 +101,11 @@ const (
 	// minKeepVersions / maxKeepVersions bound the retention knob.
 	minKeepVersions = 2
 	maxKeepVersions = 500
+	// maxFailedVersions is the SEPARATE budget for failure rows. They are a
+	// capture-outage timeline, not configuration history: they hold no config,
+	// they carry no blob, and a long outage produces one every sweep. Counting
+	// them against KeepVersions let an outage evict every real version and
+	// delete its sealed blob, so they get their own small budget instead. Ten is
+	// enough to show an operator that the device has been failing and why.
+	maxFailedVersions = 10
 )

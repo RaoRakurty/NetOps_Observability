@@ -70,6 +70,48 @@ func clampKeep(keep int) int {
 	}
 }
 
+// retentionSplit applies the per-device retention rule to a NEWEST-FIRST
+// listing and returns the rows to keep and the rows to drop.
+//
+// There are TWO budgets, and that is the point:
+//
+//   - `keep` protects CAPTURED versions. Each one owns a sealed blob, and
+//     dropping the row is what deletes the blob.
+//   - maxFailedVersions protects the outage timeline. A failed capture holds no
+//     configuration and owns no blob, and a long outage mints one every sweep.
+//
+// They used to share one budget over a newest-first ordering, so a month of
+// failed sweeps filled it and the next successful capture pruned away every real
+// version and every sealed blob with it. An outage must not be able to destroy
+// the history it merely failed to add to.
+//
+// The golden baseline is never dropped: it is the reference every drift verdict
+// is made against. It still occupies a captured-version slot, as it always has.
+func retentionSplit(ordered []Version, keep int) (kept, doomed []Version) {
+	kept = make([]Version, 0, len(ordered))
+	captured, failed := 0, 0
+	for _, v := range ordered {
+		switch {
+		case v.Golden:
+			kept = append(kept, v)
+			captured++
+		case v.Status != StatusOK:
+			if failed < maxFailedVersions {
+				kept = append(kept, v)
+				failed++
+				continue
+			}
+			doomed = append(doomed, v)
+		case captured < keep:
+			kept = append(kept, v)
+			captured++
+		default:
+			doomed = append(doomed, v)
+		}
+	}
+	return kept, doomed
+}
+
 // newestFirst orders a device listing: captured_at desc, sha asc as the
 // deterministic tiebreak for two captures in the same instant.
 func newestFirst(rows []Version) {
@@ -270,18 +312,8 @@ func (s *FileStore) Prune(_ context.Context, tenant string, cross bool, deviceID
 		}
 		ordered := append([]Version(nil), rows...)
 		newestFirst(ordered)
-		kept := make([]Version, 0, len(ordered))
-		n := 0
-		for _, v := range ordered {
-			// The golden baseline is the reference every drift verdict is made
-			// against; retention must never delete it out from under the badge.
-			if v.Golden || n < keep {
-				kept = append(kept, v)
-				n++
-				continue
-			}
-			removed = append(removed, v)
-		}
+		kept, doomed := retentionSplit(ordered, keep)
+		removed = append(removed, doomed...)
 		s.rows[k] = kept
 	}
 	if len(removed) == 0 {
@@ -447,15 +479,10 @@ func (p *pgStore) Prune(ctx context.Context, tenant string, cross bool, deviceID
 	if err != nil {
 		return nil, err
 	}
-	doomed := []Version{}
-	n := 0
-	for _, v := range all {
-		if v.Golden || n < keep {
-			n++
-			continue
-		}
-		doomed = append(doomed, v)
-	}
+	// List already returns the device NEWEST FIRST, which is the order the
+	// retention rule is written against. Both backends share it so the two can
+	// never disagree about what retention means.
+	_, doomed := retentionSplit(all, keep)
 	if len(doomed) == 0 {
 		return nil, nil
 	}

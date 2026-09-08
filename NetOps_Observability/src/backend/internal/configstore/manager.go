@@ -557,6 +557,10 @@ func (m *Manager) recordFailure(ctx context.Context, dev Device, tenant string, 
 	m.auditCapture(tenant, dev.ID, "config_backup_capture_failed", map[string]any{
 		"trigger": trigger, "job_id": job, "reason": reason,
 	})
+	// Prune here too. Every failure path returns before the capture's own prune
+	// call, so an outage that runs for weeks would otherwise grow one device's
+	// register by a row per sweep with nothing ever trimming it (§9 bounded).
+	m.prune(ctx, tenant, dev.ID)
 }
 
 // failureSHA mints the synthetic, well-formed version id a failed capture is
@@ -576,6 +580,15 @@ func (m *Manager) prune(ctx context.Context, tenant, deviceID string) {
 	}
 	for _, v := range removed {
 		if v.BlobRef == "" {
+			continue
+		}
+		// A failed capture stored no configuration, so it owns no blob. A blob
+		// reference arriving on a failed row is therefore not this row's blob,
+		// and deleting it would take a SUCCESSFUL version's sealed copy. Refuse
+		// and say so rather than trusting the row (§3, §10).
+		if v.Status != StatusOK {
+			m.deps.LogWarn("retention refused to delete a blob referenced by a failed capture row", map[string]any{
+				"device": deviceID, "sha": v.SHA})
 			continue
 		}
 		if err := m.deps.Blobs.Delete(v.BlobRef); err != nil {

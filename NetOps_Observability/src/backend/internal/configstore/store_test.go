@@ -6,6 +6,7 @@ package configstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -207,5 +208,68 @@ func TestFileStorePersistsEveryFieldItNeeds(t *testing.T) {
 	// And the tenant filter still holds after a reload.
 	if rows, _ := reloaded.List(context.Background(), "globex", false, "d1"); len(rows) != 0 {
 		t.Fatal("CROSS-TENANT LEAK after reload")
+	}
+}
+
+// TestPruneCountsFailureRowsSeparately is the store-level half of the retention
+// rule: failure rows are a capture-outage timeline, not configuration history.
+// They must never consume the budget that protects a captured version, and
+// pruning one must never hand the caller a blob reference to delete.
+func TestPruneCountsFailureRowsSeparately(t *testing.T) {
+	s := NewFileStore("")
+	ctx := context.Background()
+	base := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+
+	kept := []Version{}
+	for i := 0; i < 3; i++ {
+		kept = append(kept, seedRow(t, s, "acme", "d1", fmt.Sprintf("cfg-%d", i), base.Add(time.Duration(i)*time.Hour)))
+	}
+	// The outage lands AFTER every real version, so a newest-first budget fills
+	// with failures first. That ordering is the whole bug.
+	for i := 0; i < 4*maxFailedVersions; i++ {
+		at := base.Add(24*time.Hour + time.Duration(i)*15*time.Minute)
+		row := Version{TenantID: "acme", DeviceID: "d1", SHA: failureSHA("d1", at),
+			CapturedAt: at, Status: StatusFailed, Error: "unreachable", Drift: DriftUnknown}
+		if err := s.Put(ctx, "acme", false, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := s.Prune(ctx, "acme", false, "d1", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range removed {
+		if r.Status == StatusOK {
+			t.Errorf("HISTORY LOST: retention removed captured version %s", r.SHA)
+		}
+		if r.BlobRef != "" {
+			t.Errorf("a pruned failure row carried a blob reference (%q); the caller deletes those", r.BlobRef)
+		}
+	}
+	rows, err := s.List(ctx, "acme", false, "d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alive := map[string]bool{}
+	okRows, failRows := 0, 0
+	for _, r := range rows {
+		alive[r.SHA] = true
+		if r.Status == StatusOK {
+			okRows++
+		} else {
+			failRows++
+		}
+	}
+	for _, v := range kept {
+		if !alive[v.SHA] {
+			t.Errorf("HISTORY LOST: version %s is gone from the register", v.SHA)
+		}
+	}
+	if okRows != 3 {
+		t.Errorf("register holds %d captured versions, want 3", okRows)
+	}
+	if failRows == 0 || failRows > maxFailedVersions {
+		t.Errorf("register holds %d failure rows, want 1..%d", failRows, maxFailedVersions)
 	}
 }

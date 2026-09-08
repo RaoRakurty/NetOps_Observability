@@ -422,3 +422,118 @@ func TestCaptureBoundedByTimeout(t *testing.T) {
 		t.Fatalf("capture ran %v past its timeout", elapsed)
 	}
 }
+
+// TestCaptureOutageDoesNotDestroyConfigurationHistory walks the real outage:
+// the capture account expires, the sweep fails every 15 minutes for weeks, then
+// somebody fixes the credentials and one capture succeeds. Retention runs on
+// that success. If failure rows count against the per-device version budget,
+// the budget is full of them and every real version is evicted with its sealed
+// blob, so an outage does not merely fail to collect, it deletes the history
+// the module exists to keep.
+func TestCaptureOutageDoesNotDestroyConfigurationHistory(t *testing.T) {
+	f := newFixture(t, func(d *Deps) { d.KeepVersions = 10 })
+	dev := f.addDevice("d1", "acme", "Cisco IOS-XE")
+	ctx := context.Background()
+
+	// Three real captures, each a distinct configuration with its own blob.
+	good := []Version{}
+	for i := 0; i < 3; i++ {
+		f.now = f.now.Add(time.Hour)
+		f.gw.set("d1", sampleConfig("edge-"+string(rune('a'+i))))
+		v, err := f.mgr.Capture(ctx, dev, "acme", "scheduled")
+		if err != nil {
+			t.Fatalf("capture %d: %v", i, err)
+		}
+		if v.BlobRef == "" {
+			t.Fatalf("capture %d stored no blob", i)
+		}
+		good = append(good, v)
+	}
+
+	// The outage. 50 failed sweeps, each one a new row under its own synthetic
+	// version id.
+	f.gw.fail("d1", errors.New("permission denied"))
+	for i := 0; i < 50; i++ {
+		f.now = f.now.Add(15 * time.Minute)
+		if _, err := f.mgr.Capture(ctx, dev, "acme", "scheduled"); err == nil {
+			t.Fatalf("sweep %d should have failed", i)
+		}
+	}
+
+	// Credentials fixed. One capture succeeds and retention runs.
+	f.gw.fail("d1", nil)
+	f.now = f.now.Add(time.Hour)
+	f.gw.set("d1", sampleConfig("edge-recovered"))
+	recovered, err := f.mgr.Capture(ctx, dev, "acme", "scheduled")
+	if err != nil {
+		t.Fatalf("recovery capture: %v", err)
+	}
+
+	rows, err := f.store.List(ctx, "acme", false, "d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]Version{}
+	for _, r := range rows {
+		have[r.SHA] = r
+	}
+	for i, v := range append(append([]Version{}, good...), recovered) {
+		if got, ok := have[v.SHA]; !ok {
+			t.Errorf("HISTORY LOST: version %d (%s) was evicted by failure rows", i, v.SHA)
+		} else if got.Status != StatusOK {
+			t.Errorf("version %d came back as %q", i, got.Status)
+		}
+		// The row surviving is not enough, and the row being gone is not the
+		// whole loss either. The artifact an operator restores from is the
+		// sealed blob, so check the disk directly.
+		if _, err := f.blobs.Get(v.BlobRef); err != nil {
+			t.Errorf("SEALED BLOB LOST: version %d (%s): %v", i, v.SHA, err)
+		}
+		if _, err := os.Stat(filepath.Join(f.root, filepath.FromSlash(v.BlobRef))); err != nil {
+			t.Errorf("SEALED BLOB LOST from disk: version %d (%s): %v", i, v.SHA, err)
+		}
+	}
+
+	// The other half of the rule: an outage must not grow the register without
+	// a bound either. Failure rows get their own small budget.
+	failed := 0
+	for _, r := range rows {
+		if r.Status == StatusFailed {
+			failed++
+		}
+	}
+	if failed == 0 {
+		t.Error("the outage left no trace at all; a failed capture must stay visible")
+	}
+	if failed > maxFailedVersions {
+		t.Errorf("register holds %d failure rows, budget is %d", failed, maxFailedVersions)
+	}
+}
+
+// TestFailureRowsArePrunedDuringTheOutage: every failure path returns before the
+// capture's own prune call, so without a prune on the failure path a month-long
+// outage grows one device's register by ~2,900 rows before anything trims it.
+func TestFailureRowsArePrunedDuringTheOutage(t *testing.T) {
+	f := newFixture(t, nil) // KeepVersions: 3
+	dev := f.addDevice("d1", "acme", "Cisco IOS-XE")
+	ctx := context.Background()
+	f.gw.fail("d1", errors.New("connect: connection refused"))
+
+	for i := 0; i < 3*maxFailedVersions; i++ {
+		f.now = f.now.Add(15 * time.Minute)
+		if _, err := f.mgr.Capture(ctx, dev, "acme", "scheduled"); err == nil {
+			t.Fatalf("sweep %d should have failed", i)
+		}
+	}
+	rows, err := f.store.List(ctx, "acme", false, "d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) > maxFailedVersions {
+		t.Fatalf("an outage grew the register to %d rows with no capture in between; budget is %d",
+			len(rows), maxFailedVersions)
+	}
+	if len(rows) == 0 {
+		t.Fatal("the outage must still be visible in the timeline")
+	}
+}
