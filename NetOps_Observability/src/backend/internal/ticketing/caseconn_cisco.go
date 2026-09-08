@@ -174,6 +174,10 @@ func NewCiscoSmartBondingConnector(c *cisco.Client) *CiscoSmartBondingConnector 
 	if c == nil {
 		c = &cisco.Client{HTTP: safehttp.Client(30 * time.Second)}
 	}
+	// The CXD half deliberately shares this client: CXD's own base comes from
+	// the create response, never from StagingHost, and nothing writes to the
+	// shared client any more (see CreateCase). Keep it that way — a write here
+	// would be visible to every tenant on both halves at once.
 	return &CiscoSmartBondingConnector{client: c, cxd: NewCiscoCXDConnector(c), retry: DefaultCaseRetry()}
 }
 
@@ -236,7 +240,13 @@ func (c *CiscoSmartBondingConnector) CreateCase(ctx context.Context, cfg TACConn
 	if err := ent.Validate(); err != nil {
 		return CaseRef{}, EntitlementError{Vendor: "cisco", VendorMsg: err.Error()}
 	}
-	c.client.StagingHost = cfg.Cisco.StagingHost
+	// A COPY of the wire client, never the shared one. This connector object
+	// serves every tenant, so writing StagingHost on the client they all share
+	// was both a data race (another tenant's request reads it in sbBase while
+	// this one writes it) and a cross-tenant environment swap: one tenant's
+	// staging host could send another tenant's real case to the wrong Cisco.
+	cl := *c.client
+	cl.StagingHost = cfg.Cisco.StagingHost
 
 	fields := map[string]string{}
 	bind := func(canonical, value string) {
@@ -259,7 +269,7 @@ func (c *CiscoSmartBondingConnector) CreateCase(ctx context.Context, cfg TACConn
 		if terr != nil {
 			return cisco.CreateResponse{}, terr
 		}
-		res, cerr := c.client.CreateCase(ctx, bearer, cisco.CreateRequest{
+		res, cerr := cl.CreateCase(ctx, bearer, cisco.CreateRequest{
 			Entitlement:                 ent,
 			CustomerCaseNumber:          req.Fields["customer_case_number"],
 			CustomerUniqueTransactionID: req.IdempotencyKey,
@@ -290,12 +300,15 @@ func (c *CiscoSmartBondingConnector) FetchCase(ctx context.Context, cfg TACConne
 	if err := c.ValidateConfig(cfg); err != nil {
 		return RemoteCase{}, false, err
 	}
-	c.client.StagingHost = cfg.Cisco.StagingHost
+	// A COPY, for the reason spelled out in CreateCase: the shared client is
+	// read-only, and this tenant's environment lives on the copy.
+	cl := *c.client
+	cl.StagingHost = cfg.Cisco.StagingHost
 	bearer, err := c.bearer(ctx, cfg)
 	if err != nil {
 		return RemoteCase{}, false, err
 	}
-	st, found, err := c.client.FetchCase(ctx, bearer, orDefault(ref.Number, ref.ID))
+	st, found, err := cl.FetchCase(ctx, bearer, orDefault(ref.Number, ref.ID))
 	if err != nil {
 		return RemoteCase{}, false, translateCiscoError(err)
 	}
