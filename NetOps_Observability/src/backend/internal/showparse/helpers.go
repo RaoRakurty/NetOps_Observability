@@ -15,6 +15,7 @@ package showparse
 import (
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ── pointer constructors (absent means absent) ──────────────────────────────
@@ -338,6 +339,23 @@ func valueAfter(line, marker string) (string, bool) {
 		return "", false
 	}
 	return trim(line[end:]), true
+}
+
+// gapLine clamps one device line for inclusion in a Result gap note. The bytes
+// reaching a parser are already redacted, so the clamp is not a secrecy control:
+// it is there so one adversarially long line cannot bloat every result that
+// quotes it. The cut lands on a rune boundary, so the note is always valid UTF-8.
+func gapLine(s string) string {
+	const max = 120
+	s = trim(s)
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
 }
 
 // numberBefore returns the numeric token immediately preceding word in the

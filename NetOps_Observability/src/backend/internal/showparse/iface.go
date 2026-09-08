@@ -63,6 +63,25 @@ func parseCiscoInterfaces(lines []string) Result {
 			inputSection = false
 			continue
 		}
+		if _, _, ok := ciscoHeaderShape(ln); ok {
+			// The line IS an interface header — unindented, one-token name,
+			// "<name> is <something>" — but the state phrase is not one this
+			// parser reads. Close the previous record and start no new one.
+			//
+			// Leaving `cur` pointing at the previous interface is what caused
+			// review H5: every counter line under this header was filed against
+			// the PREVIOUS port, so an operator saw a CRC storm on the wrong
+			// link and troubleshot the wrong one. The record boundary must not
+			// depend on the state vocabulary.
+			//
+			// The lines under this header are then dropped, so the drop is
+			// RECORDED (§10). A silent discard of device output is itself a
+			// silent failure; the gap is what makes it visible.
+			flush()
+			inputSection = false
+			res.addGap("an interface header was not recognized, so the lines under it were left unattributed rather than filed under the previous interface: " + gapLine(ln))
+			continue
+		}
 		if cur == nil {
 			continue
 		}
@@ -137,19 +156,44 @@ func parseCiscoInterfaces(lines []string) Result {
 	return res
 }
 
-// ciscoIfHeader recognizes "<Name> is <admin>[, line protocol is <oper>]".
-// It is deliberately strict: the name must be the FIRST token of an unindented
-// line, so an indented prose line mentioning "is up" can never start a record.
-func ciscoIfHeader(line string) (name, admin, oper string, ok bool) {
+// ciscoHeaderShape recognizes the SHAPE of a Cisco-family interface header —
+// an unindented line whose first and only head token is a name, followed by
+// " is " and something.
+//
+// It is deliberately separate from ciscoIfHeader, and deliberately says nothing
+// about the state words. This is the RECORD BOUNDARY. If the boundary depended
+// on knowing the state phrase, a platform phrase we had not enumerated would be
+// read as body text and its interface's counters would land on the previous
+// interface (review H5). Recognizing the header and refusing its VALUES are two
+// different questions and are now answered separately.
+//
+// It stays strict about the shape: the name must be the first token of an
+// unindented line, so an indented prose line mentioning "is up" can never end a
+// record.
+func ciscoHeaderShape(line string) (name, rest string, ok bool) {
 	if line == "" || line[0] == ' ' || line[0] == '\t' {
-		return "", "", "", false
+		return "", "", false
 	}
 	head, rest, found := strings.Cut(line, " is ")
 	if !found {
-		return "", "", "", false
+		return "", "", false
 	}
 	name = trim(head)
 	if name == "" || strings.ContainsAny(name, " \t") {
+		return "", "", false
+	}
+	if trim(rest) == "" {
+		return "", "", false
+	}
+	return name, rest, true
+}
+
+// ciscoIfHeader recognizes "<Name> is <admin>[, line protocol is <oper>]" AND
+// reads its state values. ok=false means the values are not trustworthy — the
+// caller must still treat a ciscoHeaderShape line as a record boundary.
+func ciscoIfHeader(line string) (name, admin, oper string, ok bool) {
+	name, rest, shaped := ciscoHeaderShape(line)
+	if !shaped {
 		return "", "", "", false
 	}
 	adminPart, operPart, hasProto := strings.Cut(rest, ", line protocol is ")
@@ -170,13 +214,29 @@ func ciscoIfHeader(line string) (name, admin, oper string, ok bool) {
 	return name, admin, oper, true
 }
 
-// ciscoStateWord is the closed set of admin/oper state phrases the Cisco-family
-// interface header prints. Anything else is not a header (fail closed).
+// ciscoStateWord reports whether s is an admin/oper state phrase the
+// Cisco-family interface header prints: one of the base words, optionally
+// followed by the parenthesised reason the platform appends.
+//
+// The parenthesised part is matched by SHAPE rather than enumerated. The old
+// closed list knew "up (connected)" and "down (notconnect)" but not Arista's
+// "down (disabled)" or NX-OS's "down (Link not connected)", which is how those
+// headers came to be read as body text (review H5). Enumerating every vendor's
+// reason string is a list that is always one platform behind; the base word is
+// the part that carries the state, and the reason is preserved VERBATIM in
+// Admin/Oper either way, so nothing is guessed by accepting it.
+//
+// The base word set is still closed, so prose does not become a header.
 func ciscoStateWord(s string) bool {
-	switch strings.ToLower(trim(s)) {
-	case "up", "down", "administratively down", "up (connected)", "down (notconnect)",
-		"up (disabled)", "down (errdisabled)", "down (inactive)", "reset",
-		"deleted", "up (not connect)":
+	s = trim(s)
+	if open := strings.IndexByte(s, '('); open >= 0 {
+		if !strings.HasSuffix(s, ")") {
+			return false
+		}
+		s = trim(s[:open])
+	}
+	switch strings.ToLower(s) {
+	case "up", "down", "administratively down", "reset", "deleted":
 		return true
 	}
 	return false
@@ -359,6 +419,24 @@ func parseVRPInterfaces(lines []string) Result {
 			section = ""
 			continue
 		}
+		if vrpHeaderShape(t) {
+			// A VRP interface header this parser could not read (a spelling the
+			// exact cut does not know, a truncated capture that ends right after
+			// the colon). Close the previous record and start no new one.
+			//
+			// Keeping `cur` here is review H5 in its VRP form: the next
+			// "Line protocol current state :" line overwrote the PREVIOUS
+			// interface's Oper, and the Input/Output counters that followed were
+			// filed against it too. An up port then reads as down with someone
+			// else's CRC count.
+			//
+			// The lines under this header are dropped, so the drop is RECORDED
+			// (§10) rather than being a silent loss of device output.
+			flush()
+			section = ""
+			res.addGap("an interface header was not recognized, so the lines under it were left unattributed rather than filed under the previous interface: " + gapLine(t))
+			continue
+		}
 		if cur == nil {
 			continue
 		}
@@ -444,7 +522,36 @@ func parseVRPInterfaces(lines []string) Result {
 	return res
 }
 
-// vrpIfHeader recognizes "<name> current state : UP".
+// vrpHeaderShape reports whether t is a VRP interface header LINE, whatever the
+// header says. This is the RECORD BOUNDARY, and it is deliberately looser than
+// vrpIfHeader: the boundary must not depend on the exact spacing around the
+// colon or on the state text being present, because a header the value parser
+// refuses is exactly the case that used to poison the previous interface
+// (review H5).
+//
+// The shape is the "current state" marker followed by the colon VRP prints. The
+// colon is what keeps a description or a prose line that merely contains the
+// words from ending a record. The "Line protocol current state" line that
+// follows every header is NOT a boundary — it belongs to the record above it.
+func vrpHeaderShape(t string) bool {
+	idx := asciiFoldIndex(t, vrpStateMarker)
+	if idx < 0 {
+		return false
+	}
+	rest := strings.TrimLeft(t[idx+len(vrpStateMarker):], " \t")
+	if !strings.HasPrefix(rest, ":") {
+		return false
+	}
+	return !strings.EqualFold(trim(t[:idx]), "Line protocol")
+}
+
+// vrpStateMarker is the words VRP prints between the interface name and its
+// administrative state.
+const vrpStateMarker = "current state"
+
+// vrpIfHeader recognizes "<name> current state : UP" AND reads its values.
+// ok=false means the values are not trustworthy — the caller must still treat a
+// vrpHeaderShape line as a record boundary.
 func vrpIfHeader(line string) (name, state string, ok bool) {
 	head, rest, found := strings.Cut(line, " current state :")
 	if !found {

@@ -488,3 +488,91 @@ only a few lines of English prose and a stray 42 that means nothing.
 // line landed, the counter and MTU lines never did.
 const truncatedCiscoInterfaces = `GigabitEthernet0/0 is up, line protocol is up
   Hardware is CSR vNIC, address is 000c.29`
+
+// ── review H5: header boundaries and misattributed counters ─────────────────
+
+// eosAdminDownSecondInterface is the Arista capture that reproduced review H5.
+// Ethernet2's line-protocol phrase is "down (disabled)", which the old closed
+// state-word list did not carry — so the header read as body text and
+// Ethernet2's 15 000 CRC errors were reported against Ethernet1.
+const eosAdminDownSecondInterface = `Ethernet1 is up, line protocol is up (connected)
+  Hardware is Ethernet, address is 001c.7300.0001
+  MTU 1500 bytes, BW 1000000 Kbit/sec
+     0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored
+     0 output errors, 0 collisions
+Ethernet2 is administratively down, line protocol is down (disabled)
+  Hardware is Ethernet, address is 001c.7300.0002
+  MTU 1500 bytes, BW 1000000 Kbit/sec
+     15000 input errors, 15000 CRC, 0 frame, 0 overrun, 0 ignored
+     0 output errors, 0 collisions
+`
+
+// nxosLinkNotConnected is the NX-OS spelling the old list also lacked.
+const nxosLinkNotConnected = `Ethernet1/1 is up
+  admin state is up, Dedicated Interface
+  MTU 1500 bytes, BW 10000000 Kbit/sec
+     0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored
+Ethernet1/2 is down (Link not connected)
+  admin state is up, Dedicated Interface
+  MTU 1500 bytes, BW 10000000 Kbit/sec
+     4242 input errors, 4242 CRC, 0 frame, 0 overrun, 0 ignored
+`
+
+// ciscoUnknownStatePhrase carries a header whose state phrase this parser does
+// NOT read ("standby mode", the IOS phrase for a redundant serial interface).
+// The counters under it must not reach Serial0/0/0, and the fact that they were
+// read and not used must be visible.
+const ciscoUnknownStatePhrase = `Serial0/0/0 is up, line protocol is up
+  MTU 1500 bytes, BW 1544 Kbit/sec
+     0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored
+     0 output errors, 0 collisions
+Serial0/0/1 is standby mode, line protocol is down
+  MTU 1500 bytes, BW 1544 Kbit/sec
+     9999 input errors, 9999 CRC, 0 frame, 0 overrun, 0 ignored
+     7777 output errors, 0 collisions
+`
+
+// vrpTruncatedSecondHeader is the VRP form of the same defect: the second
+// header is cut off right after the colon, so the value parser refuses it. The
+// "Line protocol current state : DOWN" line and the CRC storm below it must not
+// reach GigabitEthernet0/0/1, which is up and clean.
+const vrpTruncatedSecondHeader = `GigabitEthernet0/0/1 current state : UP
+Line protocol current state : UP
+Route Port,The Maximum Transmit Unit is 1500
+    Input:
+      Unicast: 1234567, Multicast: 1000
+    Output:
+      Unicast: 2345678, Multicast: 500
+GigabitEthernet0/0/2 current state :
+Line protocol current state : DOWN
+    Input:
+      CRC: 9999, Overrun: 0, Fragment: 0
+      Total Error: 9999, Drop: 88
+`
+
+// vrpTwoInterfaces is the guard: ordinary multi-interface VRP output must still
+// parse into one row per interface, with each interface's own counters.
+const vrpTwoInterfaces = `GigabitEthernet0/0/1 current state : UP
+Line protocol current state : UP
+Route Port,The Maximum Transmit Unit is 1500
+    Input:
+      CRC: 7, Overrun: 0, Fragment: 0
+      Total Error: 12, Drop: 3
+GigabitEthernet0/0/2 current state : DOWN
+Line protocol current state : DOWN
+Route Port,The Maximum Transmit Unit is 9000
+    Input:
+      CRC: 500, Overrun: 0, Fragment: 0
+      Total Error: 600, Drop: 4
+`
+
+// vrpDescriptionMentionsState guards the header-shape predicate: a description
+// that happens to contain the marker words is NOT a record boundary.
+const vrpDescriptionMentionsState = `GigabitEthernet0/0/1 current state : UP
+Line protocol current state : UP
+Description:watch the current state of the core link
+Route Port,The Maximum Transmit Unit is 1500
+    Input:
+      CRC: 7, Overrun: 0, Fragment: 0
+      Total Error: 12, Drop: 3
+`

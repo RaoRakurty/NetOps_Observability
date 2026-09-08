@@ -18,6 +18,7 @@ package showparse
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -280,6 +281,164 @@ func TestParse_VRPInterfaces(t *testing.T) {
 	wantI64P(t, "InDrops", i.InDrops, 3)
 	wantI64P(t, "OutErrors", i.OutErrors, 0)
 	wantI64P(t, "OutDrops", i.OutDrops, 4)
+}
+
+// ── review H5: one port's counters must never land on another port ──────────
+
+// TestParse_UnrecognizedHeader_DoesNotMergeCounters is the H5 regression.
+//
+// Before the fix, an interface header the parser did not recognize was read as
+// body text, so `cur` still pointed at the PREVIOUS interface and every counter
+// line underneath was filed against it. The Arista capture below produced ONE
+// row — "Ethernet1 up/up, inErr=15000, crc=15000" — and those were Ethernet2's
+// numbers. An operator troubleshoots the wrong link, and the RCA verdict and
+// the vendor case are opened against the wrong port.
+func TestParse_UnrecognizedHeader_DoesNotMergeCounters(t *testing.T) {
+	t.Run("arista admin-down second interface", func(t *testing.T) {
+		res := mustParse(t, CmdInterfaceDetail, DialectAristaEOS, eosAdminDownSecondInterface)
+		if len(res.Interfaces) != 2 {
+			t.Fatalf("got %d interfaces, want 2 — %q must be recognized as a header", len(res.Interfaces), "down (disabled)")
+		}
+		e1, e2 := res.Interfaces[0], res.Interfaces[1]
+		wantStr(t, "Name", &e1.Name, "Ethernet1")
+		wantI64P(t, "Ethernet1 InErrors", e1.InErrors, 0)
+		wantI64P(t, "Ethernet1 CRC", e1.CRC, 0)
+		wantStr(t, "Name", &e2.Name, "Ethernet2")
+		wantStrP(t, "Ethernet2 Admin", e2.Admin, "administratively down")
+		wantStrP(t, "Ethernet2 Oper", e2.Oper, "down (disabled)")
+		wantI64P(t, "Ethernet2 InErrors", e2.InErrors, 15000)
+		wantI64P(t, "Ethernet2 CRC", e2.CRC, 15000)
+	})
+
+	t.Run("nxos link not connected", func(t *testing.T) {
+		res := mustParse(t, CmdInterfaceDetail, DialectCiscoNXOS, nxosLinkNotConnected)
+		if len(res.Interfaces) != 2 {
+			t.Fatalf("got %d interfaces, want 2", len(res.Interfaces))
+		}
+		wantI64P(t, "Ethernet1/1 CRC", res.Interfaces[0].CRC, 0)
+		wantStr(t, "Name", &res.Interfaces[1].Name, "Ethernet1/2")
+		wantI64P(t, "Ethernet1/2 CRC", res.Interfaces[1].CRC, 4242)
+		wantI64P(t, "Ethernet1/2 InErrors", res.Interfaces[1].InErrors, 4242)
+	})
+
+	// The phrase this parser genuinely does not read. The record must still be
+	// CLOSED at the header, the orphan counters must reach nobody, and the fact
+	// that device output was read and not used must be visible (§10).
+	t.Run("unknown state phrase yields no row and a visible gap", func(t *testing.T) {
+		res := mustParse(t, CmdInterfaceDetail, DialectCiscoIOS, ciscoUnknownStatePhrase)
+		if len(res.Interfaces) != 1 {
+			t.Fatalf("got %d interfaces, want 1 — an unreadable header must yield no row", len(res.Interfaces))
+		}
+		s0 := res.Interfaces[0]
+		wantStr(t, "Name", &s0.Name, "Serial0/0/0")
+		wantI64P(t, "Serial0/0/0 InErrors", s0.InErrors, 0)
+		wantI64P(t, "Serial0/0/0 CRC", s0.CRC, 0)
+		wantI64P(t, "Serial0/0/0 OutErrors", s0.OutErrors, 0)
+		if len(res.Gaps) != 1 {
+			t.Fatalf("Gaps = %v, want exactly one — dropping device output silently is itself a silent failure", res.Gaps)
+		}
+		if !strings.Contains(res.Gaps[0], "Serial0/0/1 is standby mode") {
+			t.Errorf("the gap must quote the header it could not read, got %q", res.Gaps[0])
+		}
+	})
+
+	// The VRP form. The old code let the NEXT header's line-protocol line
+	// overwrite the previous interface's Oper, so an up port read as down.
+	t.Run("vrp truncated second header", func(t *testing.T) {
+		res := mustParse(t, CmdInterfaceDetail, DialectHuaweiVRP, vrpTruncatedSecondHeader)
+		if len(res.Interfaces) != 1 {
+			t.Fatalf("got %d interfaces, want 1", len(res.Interfaces))
+		}
+		i := res.Interfaces[0]
+		wantStr(t, "Name", &i.Name, "GigabitEthernet0/0/1")
+		wantStrP(t, "Admin", i.Admin, "UP")
+		wantStrP(t, "Oper", i.Oper, "UP") // NOT the DOWN that belongs to Gi0/0/2
+		if i.CRC != nil {
+			t.Errorf("CRC = %d, want nil — 9999 is GigabitEthernet0/0/2's counter", *i.CRC)
+		}
+		if i.InErrors != nil {
+			t.Errorf("InErrors = %d, want nil — that counter belongs to another port", *i.InErrors)
+		}
+		if i.InDrops != nil {
+			t.Errorf("InDrops = %d, want nil — that counter belongs to another port", *i.InDrops)
+		}
+		if len(res.Gaps) != 1 || !strings.Contains(res.Gaps[0], "GigabitEthernet0/0/2 current state") {
+			t.Fatalf("Gaps = %v, want one entry quoting the refused header", res.Gaps)
+		}
+	})
+}
+
+// TestParse_MultiInterface_StillParses is the guard on the fix: closing a record
+// at every header-SHAPED line must not stop ordinary multi-interface output from
+// parsing, and must not turn a description into a record boundary.
+func TestParse_MultiInterface_StillParses(t *testing.T) {
+	t.Run("vrp two interfaces", func(t *testing.T) {
+		res := mustParse(t, CmdInterfaceDetail, DialectHuaweiVRP, vrpTwoInterfaces)
+		if len(res.Interfaces) != 2 {
+			t.Fatalf("got %d interfaces, want 2", len(res.Interfaces))
+		}
+		if len(res.Gaps) != 0 {
+			t.Errorf("Gaps = %v, want none — both headers are readable", res.Gaps)
+		}
+		a, b := res.Interfaces[0], res.Interfaces[1]
+		wantStr(t, "Name", &a.Name, "GigabitEthernet0/0/1")
+		wantStrP(t, "Oper", a.Oper, "UP")
+		wantI64P(t, "Gi0/0/1 CRC", a.CRC, 7)
+		wantI64P(t, "Gi0/0/1 InErrors", a.InErrors, 12)
+		wantIntP(t, "Gi0/0/1 MTU", a.MTU, 1500)
+		wantStr(t, "Name", &b.Name, "GigabitEthernet0/0/2")
+		wantStrP(t, "Oper", b.Oper, "DOWN")
+		wantI64P(t, "Gi0/0/2 CRC", b.CRC, 500)
+		wantI64P(t, "Gi0/0/2 InErrors", b.InErrors, 600)
+		wantIntP(t, "Gi0/0/2 MTU", b.MTU, 9000)
+	})
+
+	t.Run("vrp description mentioning the marker words", func(t *testing.T) {
+		res := mustParse(t, CmdInterfaceDetail, DialectHuaweiVRP, vrpDescriptionMentionsState)
+		if len(res.Interfaces) != 1 {
+			t.Fatalf("got %d interfaces, want 1 — a description is not a record boundary", len(res.Interfaces))
+		}
+		i := res.Interfaces[0]
+		wantStrP(t, "Description", i.Description, "watch the current state of the core link")
+		wantI64P(t, "CRC", i.CRC, 7)
+		if len(res.Gaps) != 0 {
+			t.Errorf("Gaps = %v, want none", res.Gaps)
+		}
+	})
+
+	// The two-interface IOS fixture the package already ships must be unchanged
+	// by the boundary rewrite.
+	t.Run("cisco fixture unchanged", func(t *testing.T) {
+		res := mustParse(t, CmdInterfaceDetail, DialectCiscoIOSXE, ciscoShowInterfaces)
+		if len(res.Interfaces) != 2 || len(res.Gaps) != 0 {
+			t.Fatalf("got %d interfaces and gaps %v, want 2 and none", len(res.Interfaces), res.Gaps)
+		}
+	})
+}
+
+// TestParse_GapsAreBounded proves the gap list cannot grow without limit on an
+// adversarial capture (§9), and that the truncation is itself reported.
+func TestParse_GapsAreBounded(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < maxGaps*4; i++ {
+		fmt.Fprintf(&b, "Ethernet%d is wedged, line protocol is wedged\n", i)
+	}
+	res, err := Parse(CmdInterfaceDetail, DialectCiscoIOS, b.String())
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(res.Interfaces) != 0 {
+		t.Fatalf("got %d interfaces, want 0 — no header here is readable", len(res.Interfaces))
+	}
+	if len(res.Gaps) != maxGaps+1 {
+		t.Fatalf("len(Gaps) = %d, want %d (the cap plus the truncation marker)", len(res.Gaps), maxGaps+1)
+	}
+	if res.Gaps[maxGaps] != gapsTruncatedNote {
+		t.Errorf("the last gap must say the list was truncated, got %q", res.Gaps[maxGaps])
+	}
+	if !res.Skipped {
+		t.Error("a capture that produced only gaps must still report the honest inconclusive")
+	}
 }
 
 func TestParse_SROSPortDetail(t *testing.T) {

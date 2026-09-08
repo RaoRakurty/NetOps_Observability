@@ -172,6 +172,20 @@ type Result struct {
 	// Reason explains a Skipped result, or a recognized-but-empty one.
 	Reason string
 
+	// Gaps names the parts of the capture the parser recognized as real device
+	// output but could NOT attribute to a row — today, an interface header whose
+	// state phrase this parser does not know.
+	//
+	// It exists because dropping those lines quietly would be its own silent
+	// failure (§10). The alternative the code used to have was worse: it kept
+	// filing the lines under the PREVIOUS interface, so one port's CRC storm was
+	// reported against another port. A gap says "these bytes were read and not
+	// used", which is an honest inconclusive in the same spirit as Reason.
+	//
+	// A gap is NOT a row: Rows() ignores it, so a capture that produced nothing
+	// but gaps is still the honest Skipped outcome.
+	Gaps []string
+
 	Interfaces   []InterfaceState
 	IGPNeighbors []IGPNeighbor
 	BGPPeers     []BGPPeer
@@ -181,6 +195,26 @@ type Result struct {
 	Logs         []LogLine
 	// Platform is nil unless a platform-health parser populated it.
 	Platform *PlatformHealth
+}
+
+// maxGaps bounds how many parse gaps one Result carries (§9 — every list is
+// bounded). Past the bound the list gets ONE marker entry instead of a copy of
+// every further line: the fact that more of the capture went unread is what an
+// operator acts on, and an adversarial capture of 20 000 header-shaped lines
+// must not be able to grow the result without limit.
+const maxGaps = 32
+
+// gapsTruncatedNote is the marker appended once the gap list is full.
+const gapsTruncatedNote = "more of this capture was read and not attributed, but the remaining gaps are not listed one by one"
+
+// addGap records one parse gap, bounded.
+func (r *Result) addGap(note string) {
+	switch {
+	case len(r.Gaps) < maxGaps:
+		r.Gaps = append(r.Gaps, note)
+	case len(r.Gaps) == maxGaps:
+		r.Gaps = append(r.Gaps, gapsTruncatedNote)
+	}
 }
 
 // Rows reports how many typed rows of any kind the result carries.
