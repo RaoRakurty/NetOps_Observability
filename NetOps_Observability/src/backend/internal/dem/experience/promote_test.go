@@ -85,6 +85,15 @@ func failingTarget(tenant string) dem.Target {
 // promotion path can act on.
 func promoteAPI(t *testing.T, promoter IncidentPromoter, store Store, tenant string) (*API, *Counters) {
 	t.Helper()
+	return promoteAPIAt(t, promoter, store, tenant, func() time.Time { return testNow })
+}
+
+// promoteAPIAt is promoteAPI with the clock left to the caller. A frozen clock
+// hides every bug that only shows up when time moves, so the id-stability tests
+// hand it a clock that advances.
+func promoteAPIAt(t *testing.T, promoter IncidentPromoter, store Store, tenant string,
+	now func() time.Time) (*API, *Counters) {
+	t.Helper()
 	policy, err := EmbeddedScorePolicy()
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +112,7 @@ func promoteAPI(t *testing.T, promoter IncidentPromoter, store Store, tenant str
 		Promoter: promoter,
 		Policy:   policy,
 		Enabled:  true,
-		Now:      func() time.Time { return testNow },
+		Now:      now,
 		WriteJSON: func(w http.ResponseWriter, status int, body any) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)

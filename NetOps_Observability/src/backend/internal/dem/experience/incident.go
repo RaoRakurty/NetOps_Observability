@@ -387,14 +387,34 @@ func buildIncident(b Bundle, subj incidentSubject, items []EvidenceItem) Experie
 	return inc
 }
 
+// IncidentIDQuantum is the bucket the window start is rounded DOWN to before
+// it becomes part of an incident id.
+//
+// It exists because a derived incident has no stored identity. Its id is
+// recomputed from the live clock on every request, and the window slides with
+// that clock, so any id that hashes the raw window start changes every time the
+// clock ticks. An hour is the coarsest bucket that still keeps one incident per
+// subject per window: both windows the API serves (1h and 24h) are whole
+// multiples of it, so an id changes at most once an hour, on the hour.
+const IncidentIDQuantum = time.Hour
+
 // IncidentID is the deterministic identity of a derived incident: the same
-// tenant, subject and window always produce the same id, so a link an operator
-// shares keeps working and two API calls never disagree about which incident is
-// which.
+// tenant, subject and window HOUR always produce the same id, so a link an
+// operator shares keeps working and two API calls never disagree about which
+// incident is which.
+//
+// The window start is truncated to IncidentIDQuantum before hashing, and that
+// truncation is the whole guarantee. Without it the id was stable for exactly
+// one wall-clock second: the list route handed out an id that the detail,
+// evidence, timeline, path and promote routes then answered 404 for, and a
+// promotion stored against that id lost its "promoted" stamp on the next
+// second. What the id promises now is precise: it is stable for the clock hour
+// the window starts in, and it changes on the hour boundary because at that
+// point it genuinely describes a different span of time.
 func IncidentID(tenant, kind, subject string, windowStart time.Time) string {
 	h := sha256.Sum256([]byte(strings.Join([]string{
 		strings.ToLower(tenant), kind, strings.ToLower(subject),
-		windowStart.UTC().Format(time.RFC3339),
+		windowStart.UTC().Truncate(IncidentIDQuantum).Format(time.RFC3339),
 	}, "|")))
 	return "exp-" + hex.EncodeToString(h[:10])
 }
