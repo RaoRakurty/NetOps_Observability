@@ -308,7 +308,11 @@ func (o *TACOpener) PrepareCase(ctx context.Context, req tac.CaseRequest) (tac.C
 	// The STRUCTURED refusal, so the confirmation screen can name the field, the
 	// vendor's reason and where it is set — and link there — instead of printing
 	// a sentence the operator has to decode.
-	have := caseFormValues(form, req)
+	cfg, cerr := o.tenantConfig(ctx, req.TenantID)
+	if cerr != nil {
+		cfg = TACConnectorConfig{} // an unreadable config makes NOTHING configured
+	}
+	have := caseFormValuesWith(form, req, cfg)
 	for _, m := range MissingRequired(o.Connector.Name(), have) {
 		form.MissingRequired = append(form.MissingRequired, tac.RequiredField{
 			Key: m.Key, Label: m.Label, Why: m.Why,
@@ -319,10 +323,37 @@ func (o *TACOpener) PrepareCase(ctx context.Context, req tac.CaseRequest) (tac.C
 	return form, nil
 }
 
-// caseFormValues renders the seam's form as the key→value map the required-field
-// check reads. The device's own platform stands in for the product/PID when the
-// form carries none, because that is what the inventory actually knows.
-func caseFormValues(form tac.CaseForm, req tac.CaseRequest) map[string]string {
+// caseFormValuesWith is caseFormValues plus the values the TENANT'S CONNECTOR
+// CONFIGURATION supplies rather than the case form.
+//
+// Several of the fields a vendor demands are not case fields at all — Juniper's
+// appId, customerSourceID, userId and accountID are issued at onboarding and
+// live in the connector's settings; the software version is the device's own,
+// from the inventory row. Checking those against the form alone reported them
+// missing on a fully-configured tenant, which is the opposite of the honesty
+// this refusal exists to give: it named fields the operator had already set.
+func caseFormValuesWith(form tac.CaseForm, req tac.CaseRequest, cfg TACConnectorConfig) map[string]string {
+	have := caseFormBaseValues(form, req)
+	// Juniper's onboarding identifiers.
+	putIfSet(have, "app_id", cfg.Juniper.AppID)
+	putIfSet(have, "customer_source_id", cfg.Juniper.CustomerSourceID)
+	putIfSet(have, "user_id", cfg.Juniper.UserID)
+	putIfSet(have, "account_id", cfg.Juniper.AccountID)
+	// Cisco's entitlement account.
+	putIfSet(have, "cco_id", cfg.Cisco.CCOID)
+	// The device's software version, which is the platform string the inventory
+	// resolved for it.
+	putIfSet(have, "software_version", orDefault(form.Product, req.Platform))
+	return have
+}
+
+func putIfSet(m map[string]string, key, value string) {
+	if v := strings.TrimSpace(value); v != "" {
+		m[key] = v
+	}
+}
+
+func caseFormBaseValues(form tac.CaseForm, req tac.CaseRequest) map[string]string {
 	return map[string]string{
 		"title":                form.Title,
 		"description":          form.Description,

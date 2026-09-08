@@ -2158,6 +2158,58 @@ func (s *server) handleTACEscalatePrepare(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"proposal": p, "state": svc.Get(inc.Tenant, inc.ID).View()})
 }
 
+// POST /api/incidents/{id}/tac/escalate/dry-run — PROVE THE SETUP.
+//
+// It authenticates against the configured endpoint with the stored credential
+// and describes the exact request(s) a submit would make, with every secret
+// redacted, and creates NOTHING. It is what a customer runs the day they paste a
+// client secret in, instead of finding out at three in the morning.
+func (s *server) handleTACEscalateDryRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
+		return
+	}
+	// It makes a real (read-only) call to a vendor with the tenant's credential,
+	// so it is the write gate — the same one the connector Test button uses.
+	inc, claims, ok := s.tacResolveIncident(w, r, LevelWrite)
+	if !ok {
+		return
+	}
+	var req tacEscalateRequest
+	if !tacDecode(w, r, &req) {
+		return
+	}
+	svc := s.tacSvc()
+	st := svc.Get(inc.Tenant, inc.ID)
+	connector := strings.TrimSpace(req.ConnectorID)
+	if connector == "" && st != nil && st.Route != nil {
+		connector = st.Route.ConnectorID
+	}
+	if connector == "" {
+		writeError(w, http.StatusConflict, errors.New("escalate the incident first, or send connector_id"))
+		return
+	}
+	caseReq := tac.CaseRequest{TenantID: inc.Tenant, IncidentID: inc.ID, Actor: claims.Sub}
+	if st != nil && st.Proposal != nil {
+		caseReq.Form = st.Proposal.Form
+		caseReq.ClassID = st.Proposal.Form.ConnectorID
+	}
+	if st != nil && st.Capture != nil {
+		caseReq.ClassID = st.Capture.ClassID
+		caseReq.DeviceID, caseReq.Hostname, caseReq.Platform = st.Capture.DeviceID, st.Capture.Hostname, st.Capture.Platform
+	}
+	rep, err := svc.DryRun(r.Context(), inc.Tenant, connector, caseReq)
+	if err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	s.pdAudit(r, claims, inc.Tenant, "tac.escalate.dry_run", map[string]any{
+		"incident_id": inc.ID, "connector": connector, "outcome": string(rep.Outcome),
+		"blockers": len(rep.Blockers),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"dry_run": rep})
+}
+
 // tacConfirmRequest is the edited form the human approved, plus the ephemeral
 // per-case upload credential where a vendor mints one.
 type tacConfirmRequest struct {

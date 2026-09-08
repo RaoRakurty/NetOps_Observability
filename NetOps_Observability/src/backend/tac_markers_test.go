@@ -74,7 +74,7 @@ func TestTACRoutesLiveInsideTheirMarkers(t *testing.T) {
 	// main.go: every /tac route registration, and the server field, and the
 	// construction call, are inside the markers.
 	in, out := markerBlocks(t, "main.go", "TAC-ROUTES")
-	routeRE := regexp.MustCompile(`mux\.HandleFunc\("(/api/[^"]*/tac(?:/[a-z]+){0,2})"`)
+	routeRE := regexp.MustCompile(`mux\.HandleFunc\("(/api/[^"]*/tac(?:/[a-z-]+){0,2})"`)
 	if got := routeRE.FindAllStringSubmatch(out, -1); len(got) > 0 {
 		t.Errorf("TAC routes registered OUTSIDE the markers in main.go: %v", got)
 	}
@@ -93,6 +93,7 @@ func TestTACRoutesLiveInsideTheirMarkers(t *testing.T) {
 		"/api/incidents/{id}/tac/escalate":         false,
 		"/api/incidents/{id}/tac/escalate/prepare": false,
 		"/api/incidents/{id}/tac/escalate/confirm": false,
+		"/api/incidents/{id}/tac/escalate/dry-run": false,
 		// The case's own status refresh, floored at one per case per minute.
 		"/api/incidents/{id}/tac/case/refresh": false,
 	}

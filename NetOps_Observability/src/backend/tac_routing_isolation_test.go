@@ -6,6 +6,7 @@
 //   "/api/incidents/{id}/tac/escalate"
 //   "/api/incidents/{id}/tac/escalate/prepare"
 //   "/api/incidents/{id}/tac/escalate/confirm"
+//   "/api/incidents/{id}/tac/escalate/dry-run"
 //   "/api/incidents/{id}/tac/case/refresh"
 
 package backend
@@ -198,6 +199,7 @@ func TestTACEscalationRoutesAreNotAnExistenceOracle(t *testing.T) {
 			"/api/incidents/" + id + "/tac/escalate",
 			"/api/incidents/" + id + "/tac/escalate/prepare",
 			"/api/incidents/" + id + "/tac/escalate/confirm",
+			"/api/incidents/" + id + "/tac/escalate/dry-run",
 			"/api/incidents/" + id + "/tac/case/refresh",
 		} {
 			stA, _ := tacConnRequest(t, srv.URL, "POST", path, a.token, "", []byte(`{}`))

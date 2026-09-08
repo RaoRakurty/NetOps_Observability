@@ -209,6 +209,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/incidents/{id}/tac/escalate":         "scoped",
 	"/api/incidents/{id}/tac/escalate/prepare": "scoped",
 	"/api/incidents/{id}/tac/escalate/confirm": "scoped",
+	"/api/incidents/{id}/tac/escalate/dry-run": "scoped",
 	// The case's own status refresh. The case link is keyed on (tenant,
 	// incident) in an in-memory tracker with no cross-tenant listing at all, so
 	// another tenant's incident id simply has no case under this caller's key —

@@ -2985,6 +2985,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/incidents/{id}/tac/escalate", s.handleTACEscalate)
 	mux.HandleFunc("/api/incidents/{id}/tac/escalate/prepare", s.handleTACEscalatePrepare)
 	mux.HandleFunc("/api/incidents/{id}/tac/escalate/confirm", s.elevatedOnly(s.handleTACEscalateConfirm))
+	// Dry run: authenticate against the configured endpoint with the stored
+	// credential and describe the exact request a submit would make, secrets
+	// redacted, creating NOTHING. It is what a customer runs the day they bring
+	// credentials, instead of finding out during an outage.
+	mux.HandleFunc("/api/incidents/{id}/tac/escalate/dry-run", s.handleTACEscalateDryRun)
 	mux.HandleFunc("/api/incidents/{id}/tac/case/refresh", s.handleTACCaseRefresh)
 	// The vendor-coverage view behind Iris → Knowledge: version-pinned reference
 	// data, identical for every tenant, revealing no tenant's devices.
