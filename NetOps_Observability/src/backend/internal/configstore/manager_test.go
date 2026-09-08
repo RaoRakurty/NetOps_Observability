@@ -537,3 +537,104 @@ func TestFailureRowsArePrunedDuringTheOutage(t *testing.T) {
 		t.Fatal("the outage must still be visible in the timeline")
 	}
 }
+
+// failingPutStore is the real register with ONE seam: a Put that can be made to
+// fail on demand, the way a Postgres write fails when the transaction rolls
+// back. Everything else, including the reads, goes to the real store.
+type failingPutStore struct {
+	Store
+	failPut error
+}
+
+func (s *failingPutStore) Put(ctx context.Context, tenant string, cross bool, v Version) error {
+	if s.failPut != nil {
+		return s.failPut
+	}
+	return s.Store.Put(ctx, tenant, cross, v)
+}
+
+// TestAFailedRollbackWriteKeepsTheExistingVersionsBlob covers the narrow shape
+// of H7: a device is rolled back to a configuration it held before.
+//
+// The new sha matches a row the register ALREADY holds, but that row is not the
+// latest, so the capture takes the new-version branch: it re-seals and writes
+// the blob to the same content-addressed path, which OVERWRITES the existing
+// row's sealed copy. If the register write then fails, the orphan cleanup used
+// to delete that blob. The pre-existing row survives the failed write (a
+// Postgres transaction rolls back; the file backend has already updated its
+// map), so the register is left holding a version whose configuration is gone:
+// its text, its diff and any rollback from it all fail.
+func TestAFailedRollbackWriteKeepsTheExistingVersionsBlob(t *testing.T) {
+	var flaky *failingPutStore
+	f := newFixture(t, func(d *Deps) {
+		flaky = &failingPutStore{Store: d.Store}
+		d.Store = flaky
+	})
+	dev := f.addDevice("d1", "acme", "Cisco IOS-XE")
+	ctx := context.Background()
+
+	// Version A — the configuration the device will later be rolled back to.
+	f.gw.set("d1", sampleConfig("edge-A"))
+	a, err := f.mgr.Capture(ctx, dev, "acme", "scheduled")
+	if err != nil {
+		t.Fatalf("capture A: %v", err)
+	}
+	// Version B, so A is no longer the latest.
+	f.now = f.now.Add(time.Hour)
+	f.gw.set("d1", sampleConfig("edge-B"))
+	if _, err := f.mgr.Capture(ctx, dev, "acme", "scheduled"); err != nil {
+		t.Fatalf("capture B: %v", err)
+	}
+
+	// The rollback, with the register refusing the write.
+	f.now = f.now.Add(time.Hour)
+	f.gw.set("d1", sampleConfig("edge-A"))
+	flaky.failPut = errors.New("write to the version register failed")
+	if _, err := f.mgr.Capture(ctx, dev, "acme", "scheduled"); err == nil {
+		t.Fatal("the capture must fail when its version row cannot be written")
+	}
+	flaky.failPut = nil
+
+	// Version A's row survived the failed write, so its configuration must have
+	// survived with it.
+	row, err := f.store.Get(ctx, "acme", false, "d1", a.SHA)
+	if err != nil {
+		t.Fatalf("version A's row is gone, so this test is no longer testing the bug: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, filepath.FromSlash(row.BlobRef))); err != nil {
+		t.Errorf("SEALED BLOB LOST from disk: the orphan cleanup deleted a LIVE version's configuration: %v", err)
+	}
+	if _, err := f.mgr.Open(row); err != nil {
+		t.Errorf("version A can no longer be opened, so its text, diff and rollback are all gone: %v", err)
+	}
+}
+
+// TestAFailedFirstWriteStillRemovesItsOrphanBlob is the other half of the same
+// rule. Keeping a blob nothing references would leave sealed configuration on
+// the volume that no row can ever reach or delete, so when the register clearly
+// holds no row for this sha the orphan must still go.
+func TestAFailedFirstWriteStillRemovesItsOrphanBlob(t *testing.T) {
+	var flaky *failingPutStore
+	f := newFixture(t, func(d *Deps) {
+		flaky = &failingPutStore{Store: d.Store}
+		d.Store = flaky
+	})
+	dev := f.addDevice("d1", "acme", "Cisco IOS-XE")
+	ctx := context.Background()
+
+	f.gw.set("d1", sampleConfig("edge-first"))
+	flaky.failPut = errors.New("write to the version register failed")
+	if _, err := f.mgr.Capture(ctx, dev, "acme", "scheduled"); err == nil {
+		t.Fatal("the capture must fail when its version row cannot be written")
+	}
+	flaky.failPut = nil
+
+	sha := SHA256Hex(Normalize(VendorCisco, sampleConfig("edge-first")))
+	if _, err := f.store.Get(ctx, "acme", false, "d1", sha); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a row exists for the failed write, so this test is not testing the orphan case: %v", err)
+	}
+	blob := filepath.Join(f.root, "acme", "d1", sha+".sealed")
+	if _, err := os.Stat(blob); !os.IsNotExist(err) {
+		t.Errorf("ORPHAN LEFT ON DISK: sealed configuration no row can reach or delete (%v)", err)
+	}
+}

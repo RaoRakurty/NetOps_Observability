@@ -449,8 +449,7 @@ func (m *Manager) captureClaimed(ctx context.Context, dev Device, tenant, trigge
 		}
 		ver.BlobRef = ref
 		if err := m.deps.Store.Put(ctx, tenant, false, ver); err != nil {
-			// The row is the index; a blob with no row is unreachable garbage.
-			_ = m.deps.Blobs.Delete(ref) // best-effort cleanup of the orphan
+			m.dropOrphanBlob(ctx, tenant, dev.ID, sha, ref)
 			return Version{}, err
 		}
 		m.deps.Metrics.RecordVersion(int64(len(sealed)))
@@ -568,6 +567,40 @@ func (m *Manager) recordFailure(ctx context.Context, dev Device, tenant string, 
 // collide and so it can never be mistaken for a content address of real config.
 func failureSHA(deviceID string, at time.Time) string {
 	return SHA256Hex("capture-failure\x00" + deviceID + "\x00" + at.UTC().Format(time.RFC3339Nano))
+}
+
+// dropOrphanBlob removes the sealed blob a FAILED version write left behind —
+// but only once it is sure no surviving row still references it.
+//
+// The row is the index, so a blob with no row is unreachable garbage and worth
+// removing. The catch is that the blob path is CONTENT-ADDRESSED. When a device
+// is rolled back to a configuration it held before, the capture's sha matches a
+// row the register already holds, and the write we just made overwrote THAT
+// row's sealed copy. Deleting it on a failed write would leave a live version
+// with no configuration behind it: no text, no diff, no rollback.
+//
+// So the blob only goes when the register says clearly that nothing references
+// it. A register that cannot answer keeps the blob: an unreferenced blob wastes
+// disk, a deleted one destroys a configuration, and those are not the same size
+// of mistake (§10 — and the outcome is logged either way, never silent).
+func (m *Manager) dropOrphanBlob(ctx context.Context, tenant, deviceID, sha, ref string) {
+	if ref == "" {
+		return
+	}
+	switch existing, err := m.deps.Store.Get(ctx, tenant, false, deviceID, sha); {
+	case err == nil:
+		m.deps.LogWarn("kept the sealed configuration of an existing version after a failed capture write",
+			map[string]any{"device": deviceID, "sha": sha, "status": existing.Status})
+		return
+	case !errors.Is(err, ErrNotFound):
+		m.deps.LogWarn("could not confirm whether a capture blob is still referenced, so it was kept",
+			map[string]any{"device": deviceID, "sha": sha, "error": m.deps.Scrub(err.Error())})
+		return
+	}
+	if err := m.deps.Blobs.Delete(ref); err != nil {
+		m.deps.LogWarn("orphaned configuration blob was not deleted", map[string]any{
+			"device": deviceID, "sha": sha, "error": m.deps.Scrub(err.Error())})
+	}
 }
 
 // prune enforces per-device retention and deletes the pruned blobs.
