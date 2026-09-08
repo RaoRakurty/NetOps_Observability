@@ -20,6 +20,13 @@ const tacConnectorConfig = vi.fn();
 const tacConnectorSave = vi.fn();
 const tacConnectorRemove = vi.fn();
 const tacConnectorTest = vi.fn();
+// TAC routing (the section beside the connector configuration). This file
+// covers the outbox, the audit trail and the credential forms; the routing
+// section has its own file, and these stubs keep it out of the way here.
+const tacRouting = vi.fn();
+const tacRoutingSave = vi.fn();
+const tacRoutingDelete = vi.fn();
+const tacCaptures = vi.fn();
 
 vi.mock("../../services/api", () => ({
   api: {
@@ -32,6 +39,10 @@ vi.mock("../../services/api", () => ({
     tacConnectorSave: (...a: unknown[]) => tacConnectorSave(...a),
     tacConnectorRemove: (...a: unknown[]) => tacConnectorRemove(...a),
     tacConnectorTest: (...a: unknown[]) => tacConnectorTest(...a),
+    tacRouting: (...a: unknown[]) => tacRouting(...a),
+    tacRoutingSave: (...a: unknown[]) => tacRoutingSave(...a),
+    tacRoutingDelete: (...a: unknown[]) => tacRoutingDelete(...a),
+    tacCaptures: (...a: unknown[]) => tacCaptures(...a),
   },
 }));
 
@@ -126,7 +137,13 @@ const EMAIL_CONFIG = {
 afterEach(cleanup);
 beforeEach(() => {
   for (const m of [ticketsOutbox, ticketsAudit, integrationsReconcile, correlationTicketSync, tacConnectors,
-    tacConnectorConfig, tacConnectorSave, tacConnectorRemove, tacConnectorTest]) m.mockReset();
+    tacConnectorConfig, tacConnectorSave, tacConnectorRemove, tacConnectorTest,
+    tacRouting, tacRoutingSave, tacRoutingDelete, tacCaptures]) m.mockReset();
+  tacRouting.mockResolvedValue({
+    routing: { contact: { name: "", email: "", phone: "" } },
+    configured: false, connectors: CONNECTORS, dialects: [],
+  });
+  tacCaptures.mockResolvedValue({ captures: [], count: 0, limit: 200, formats: [], note: "" });
   tacConnectorConfig.mockResolvedValue(EMAIL_CONFIG);
   tacConnectorSave.mockResolvedValue(EMAIL_CONFIG);
   tacConnectorRemove.mockResolvedValue({ ...EMAIL_CONFIG, configured: false, secrets: {}, email: undefined });

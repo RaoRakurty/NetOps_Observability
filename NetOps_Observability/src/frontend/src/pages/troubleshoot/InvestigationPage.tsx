@@ -43,6 +43,7 @@ import {
   type Incident,
   type Seam,
   type SeamOwnerEntry,
+  type TacCaseLink,
   type TicketStatus,
 } from "../../services/api";
 import { ShellContext } from "../../context/shell";
@@ -50,6 +51,8 @@ import AskIris from "../../components/AskIris";
 import RcaCaseHeader from "../../components/rca/RcaCaseHeader";
 import { buildRcaCase, type RcaCase } from "../../components/rca/rcaCase";
 import TacEscalationPanel from "./TacEscalationPanel";
+import TacCaseChip from "../../components/tac/TacCaseChip";
+import { caseLinkFromIncident } from "./tacModel";
 import IrisLane from "./IrisLane";
 import { LANE_COMPONENT, type LaneScope } from "./InvestigationLanes";
 import { operatorError } from "../../lib/errors";
@@ -105,6 +108,11 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [irisOpen, setIrisOpen] = useState(false);
   const [escalateOpen, setEscalateOpen] = useState(false);
+  // The vendor case this incident carries. It arrives one of two ways: the
+  // escalation panel reports the case it just opened, or — after a reload — the
+  // incident record itself carries what MarkSync wrote. Either way the chip
+  // renders the SAME sentence, from the same mirror of Go's StatusLine.
+  const [tacCase, setTacCase] = useState<TacCaseLink | null>(null);
 
   // Block 1 — every open case, however it was opened.
   const [cases, setCases] = useState<CorrObject[]>([]);
@@ -159,7 +167,7 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
   useEffect(() => {
     let alive = true;
     setObj(null); setTimeline(null); setTicket(null); setCaseErr(""); setLaneStates({});
-    setEscalateOpen(false); setIrisOpen(false); setHandoffNote("");
+    setEscalateOpen(false); setIrisOpen(false); setHandoffNote(""); setTacCase(null);
     if (!corrId) return;
     // The case read is the one fetch that is NOT best-effort: if it fails the
     // page says so verbatim instead of spinning on "Loading…" forever (§10 —
@@ -187,6 +195,16 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
 
   const rows: PickRow[] = useMemo(() => pickRows(cases, mine), [cases, mine]);
   const row = rows.find((r) => r.id === picked?.id) ?? null;
+  // What the incident RECORD knows about a vendor case, for a picked
+  // investigation that was escalated in an earlier session. A ticket that did
+  // not come from a TAC connector maps to null — the ITSM projection files its
+  // own through the same fields, and painting one as a vendor case would be a
+  // claim nobody made.
+  const recordedCase = useMemo(() => {
+    const inc = mine.find((i) => i.id === picked?.id);
+    return inc ? caseLinkFromIncident(inc) : null;
+  }, [mine, picked?.id]);
+  const shownCase = tacCase ?? recordedCase;
   const scope: LaneScope = useMemo(
     () => ({ device: caseDevice(obj), minutes: rangeMinutes, caseId: picked?.id }),
     [obj, rangeMinutes, picked?.id],
@@ -333,6 +351,15 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
               {escalateOpen ? "Close TAC escalation" : "Escalate to TAC"}
             </button>
           </div>
+          {shownCase && (
+            <p className="ts-answer-f fact-line" data-testid="ts-tac-case">
+              <TacCaseChip
+                link={shownCase}
+                incidentId={picked.id}
+                onRefreshed={setTacCase}
+              />
+            </p>
+          )}
           {!corrId && <p className="ts-answer-f fact-line">A ticket needs a correlated case.</p>}
           {handoffNote && <p className="ts-answer-f fact-line" role="status">{handoffNote}</p>}
 
@@ -344,7 +371,12 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
               onOpenDrawer={shell ? () => shell.setCopilotOpen(true) : undefined}
             />
           )}
-          {escalateOpen && <TacEscalationPanel incidentId={picked.id} />}
+          {/* The SAME action, not a second implementation: pressing Escalate
+              here mounts the panel with the one-action flow already in flight,
+              so the operator never presses two identical buttons. */}
+          {escalateOpen && (
+            <TacEscalationPanel incidentId={picked.id} autoStart onCaseOpened={setTacCase} />
+          )}
         </section>
       )}
 

@@ -11,6 +11,8 @@ import { useWorkspace } from "../context/workspace";
 import { friendlyIncidentId } from "../components/rca/labels";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import AskIris from "../components/AskIris";
+import TacCaseChip from "../components/tac/TacCaseChip";
+import { caseLinkFromIncident } from "../pages/troubleshoot/tacModel";
 
 // Incidents — the actionable system-of-record view. Lists incidents (deduped from
 // alerts/anomalies), drives the lifecycle in-platform (ack → investigate →
@@ -98,7 +100,15 @@ export default function Incidents() {
   // "Slack is a notification, not a ticket": distinct chip, same cell).
   const notifiedCell = (i: Incident) => {
     const chips: React.ReactNode[] = [];
-    if (i.external_ticket_id) {
+    // A TAC escalation's vendor case renders as the case chip: the number, the
+    // vendor's own status, and — when the last read failed — "status unknown
+    // since …" rather than the status it last saw. Everything else keeps the
+    // ITSM pill it has always had; the two are different objects and a shared
+    // pill would flatten them into one.
+    const tacCase = caseLinkFromIncident(i);
+    if (tacCase) {
+      chips.push(<TacCaseChip key="tac" link={tacCase} compact />);
+    } else if (i.external_ticket_id) {
       const label = `${ITSM_SHORT[i.external_system ?? ""] ?? channelLabel(i.external_system ?? "")} ${i.external_ticket_id}`;
       const pill = notifyPill(label, "#2563EB", true);
       chips.push(i.external_url

@@ -46,6 +46,11 @@ const mocks = vi.hoisted(() => ({
   tacCaseSubmit: vi.fn(), devices: vi.fn(),
   // Captures (docs/design/TAC_CAPTURES_2026-09-06.md).
   tacCaptures: vi.fn(), tacCaptureUpload: vi.fn(), tacCaptureSave: vi.fn(),
+  // The ONE ACTION (internal/tac/escalate.go). The flow itself is covered in
+  // TacEscalationOneAction.test.tsx; these stubs exist so the escalate leg of
+  // the primary button is a real call here rather than a missing function.
+  tacEscalate: vi.fn(), tacEscalatePrepare: vi.fn(), tacEscalateConfirm: vi.fn(),
+  tacCaseRefresh: vi.fn(),
 }));
 vi.mock("../../services/api", () => ({ api: { ...mocks } }));
 
@@ -245,6 +250,11 @@ beforeEach(() => {
     captures: [], count: 0, limit: 200,
     formats: ["txt", "csv", "json", "yaml", "docx"], note: "",
   });
+  // A deployment with no case connector at all: the escalation is still real —
+  // it classifies, plans and collects — and the route is the honest portal
+  // floor. The one-action flow's own states live in their own file.
+  mocks.tacEscalate.mockRejectedValue(new Error("503: no route on this build"));
+  mocks.tacEscalatePrepare.mockRejectedValue(new Error("409: nothing collected"));
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 

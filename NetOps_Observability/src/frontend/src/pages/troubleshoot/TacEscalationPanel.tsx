@@ -54,18 +54,24 @@ import {
   type TacCaptureRefusal,
   type TacCaptureStatus,
   type TacCaseForm,
+  type TacCaseLink,
   type TacCaseResult,
   type TacClassifyResponse,
   type TacCommandCapture,
   type TacCommandStatus,
   type TacConnectorInfo,
   type TacCollectRequest,
+  type TacDryRunCall,
+  type TacDryRunReport,
+  type TacEscalationRoute,
   type TacPlan,
+  type TacProposal,
   type TacState,
   type TacStateResponse,
   type TacStep,
   type TacTarget,
 } from "../../services/api";
+import TacCaseChip from "../../components/tac/TacCaseChip";
 import {
   BEHIND_LABEL,
   BUNDLE_FAILED,
@@ -81,8 +87,20 @@ import {
   CASE_HUMAN_APPROVED,
   CASE_SUBMIT_FAILED,
   CLASSIFY_FAILED,
+  CONFIRM_ACTION,
+  CONFIRM_BLOCKED,
+  CONFIRM_FAILED,
+  CONFIRM_HEADING,
+  CONFIRM_RUNNING,
   CONNECTOR_CHIP,
   DEVICES_FAILED,
+  DRY_RUN_ACTION,
+  DRY_RUN_CREATED_NOTHING,
+  DRY_RUN_FAILED,
+  DRY_RUN_RUNNING,
+  DRY_RUN_SENTENCE,
+  ESCALATE_FAILED,
+  ESCALATE_RUNNING,
   MAX_PASTE_CHARS,
   NOT_ESCALATED_NOTE,
   NO_AUTHORED_PLAN_NOTE,
@@ -92,7 +110,10 @@ import {
   PASTE_INVITE,
   PLAN_FAILED,
   PLAN_LEGEND,
+  PREPARE_FAILED,
+  PREPARING_NOTE,
   REDACTION_SHORT,
+  ROUTE_LABEL,
   ROW_RENDER_CAP,
   SECTION_ORDER,
   STATE_READ_FAILED,
@@ -102,8 +123,11 @@ import {
   TICKET_DELIVERY_ROUTE,
   UPLOAD_FAILED,
   UPLOAD_FORMATS_LINE,
+  blockerLine,
   boundSteps,
   buildCaptureWrite,
+  buildConfirmRequest,
+  buildEscalateRequest,
   buildPlanRequest,
   bundleFileName,
   cappedNote,
@@ -119,6 +143,9 @@ import {
   connectorStatusNote,
   connectorTopic,
   dialectVendor,
+  dryRunCallLine,
+  dryRunElapsed,
+  dryRunTone,
   evidenceLine,
   failedCommandLine,
   failedCommands,
@@ -128,6 +155,7 @@ import {
   isMissingField,
   missingOutputs,
   missingOutputsLine,
+  needsExistingCase,
   newestBundleBytes,
   parseCaptureRefusals,
   pasteOffered,
@@ -138,6 +166,8 @@ import {
   reasonLine,
   refusalLine,
   selectedCapture,
+  settingsHref,
+  severityChoices,
   showAllConnectorsLabel,
   splitConnectors,
   stepReference,
@@ -155,12 +185,38 @@ import AskIris from "../../components/AskIris";
 type CaseFields = {
   title: string; severity: string; product: string; serial_number: string;
   contract_id: string; contact_name: string; contact_email: string;
+  existing_case_number: string;
 };
 
 const EMPTY_FIELDS: CaseFields = {
   title: "", severity: "", product: "", serial_number: "",
-  contract_id: "", contact_name: "", contact_email: "",
+  contract_id: "", contact_name: "", contact_email: "", existing_case_number: "",
 };
+
+/** What the ONE confirmation screen lets a person change. Everything else on it
+ *  — the route, the bundle, the problem statement — is what the SERVER built and
+ *  what the screen showed, and the server refuses an edit to any of it. */
+const CONFIRM_FIELDS: { key: keyof CaseFields; label: string }[] = [
+  { key: "title", label: "Title" },
+  { key: "contact_name", label: "Contact name" },
+  { key: "contact_email", label: "Contact email" },
+  { key: "serial_number", label: "Serial number" },
+  { key: "contract_id", label: "Contract" },
+];
+
+/** The fields of the prepared form the operator's edits start from. */
+function fieldsFromForm(form: TacCaseForm): CaseFields {
+  return {
+    title: form.title ?? "",
+    severity: form.severity ?? "",
+    product: form.product ?? "",
+    serial_number: form.serial_number ?? "",
+    contract_id: form.contract_id ?? "",
+    contact_name: form.contact_name ?? "",
+    contact_email: form.contact_email ?? "",
+    existing_case_number: form.existing_case_number ?? "",
+  };
+}
 
 const CASE_FIELD_LABEL: { key: keyof CaseFields; label: string }[] = [
   { key: "title", label: "Title" },
@@ -175,7 +231,17 @@ const CASE_FIELD_LABEL: { key: keyof CaseFields; label: string }[] = [
 /** The formats the file picker offers, from the parser's own list. */
 const UPLOAD_ACCEPT = ".txt,.text,.list,.csv,.json,.yaml,.yml,.docx";
 
-export default function TacEscalationPanel({ incidentId }: { incidentId: string }) {
+export default function TacEscalationPanel({ incidentId, autoStart = false, onCaseOpened }: {
+  incidentId: string;
+  /** Open the panel with the ONE ACTION already in flight. The investigation
+   *  answer card presses Escalate and mounts this; asking the operator to press
+   *  a second, identical button would be the extra click the whole feature
+   *  exists to remove (owner, 2026-09-06). */
+  autoStart?: boolean;
+  /** The case this panel just opened, so the host's own answer card can carry
+   *  the chip without re-reading it. */
+  onCaseOpened?: (link: TacCaseLink) => void;
+}) {
   const [info, setInfo] = useState<TacStateResponse | null>(null);
   const [infoErr, setInfoErr] = useState("");
   const [devices, setDevices] = useState<Device[]>([]);
@@ -233,6 +299,36 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   const [caseResult, setCaseResult] = useState<TacCaseResult | null>(null);
   const [caseBusy, setCaseBusy] = useState(false);
 
+  // ── the ONE ACTION (internal/tac/escalate.go) ─────────────────────────────
+  // Escalate → (the server classifies, plans, routes and collects) → prepare →
+  // ONE confirmation screen → Open case. `route` is what the server chose and
+  // WHY; `proposal` is exactly what will be sent, and nothing has been sent
+  // while it is on screen.
+  const [route, setRoute] = useState<TacEscalationRoute | null>(null);
+  const [routeNote, setRouteNote] = useState("");
+  const [escalating, setEscalating] = useState(false);
+  const [escalateErr, setEscalateErr] = useState("");
+  const [proposal, setProposal] = useState<TacProposal | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [prepareErr, setPrepareErr] = useState("");
+  const [confirmFields, setConfirmFields] = useState<CaseFields>(EMPTY_FIELDS);
+  const [confirmErr, setConfirmErr] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [caseLink, setCaseLink] = useState<TacCaseLink | null>(null);
+  // The confirm reply's own rendering of the chip. Kept beside the link so the
+  // panel shows the SERVER's sentence rather than recomputing one.
+  const [caseLineFromConfirm, setCaseLineFromConfirm] = useState("");
+  const [caseTipFromConfirm, setCaseTipFromConfirm] = useState("");
+  // The per-case upload credential a vendor's portal mints (Cisco CXD). It is
+  // typed here, sent once and never stored or echoed back.
+  const [uploadToken, setUploadToken] = useState("");
+  const [uploadHost, setUploadHost] = useState("");
+  // The dry run (internal/tac/dryrun.go): authenticate for real, describe the
+  // rest, create nothing. Secondary to Open case, always.
+  const [dryRun, setDryRun] = useState<TacDryRunReport | null>(null);
+  const [dryRunErr, setDryRunErr] = useState("");
+  const [dryRunning, setDryRunning] = useState(false);
+
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -254,6 +350,43 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     }
   }, [incidentId]);
 
+  /**
+   * SEED FROM THE SERVER'S OWN STATE.
+   *
+   * The route, the confirmation screen and the opened case all live on the
+   * escalation the api holds, and the panel is only one window onto it. Without
+   * this, an operator who REFRESHED THE BROWSER mid-escalation — or who came
+   * back to an incident a colleague escalated an hour ago — saw the captures and
+   * nothing else: `route` is local state that only the escalate leg sets, so the
+   * confirmation screen could never return and the auto-prepare effect below
+   * could never fire.
+   *
+   * It seeds only what the panel does not already have, so a value this session
+   * produced always wins over a re-read.
+   */
+  useEffect(() => {
+    if (!state) return;
+    if (!route && state.route) setRoute(state.route);
+    if (!proposal && !prepareErr && state.proposal) {
+      setProposal(state.proposal);
+      // The editable half of the screen is seeded HERE too. Rendering a
+      // confirmation screen whose device line says FTX2447ABCD while its serial
+      // BOX is empty would be the worst of both: it looks pre-filled and submits
+      // blank.
+      setConfirmFields(fieldsFromForm(state.proposal.form));
+    }
+    if (!caseLink && info?.case) {
+      setCaseLink(info.case);
+      // The chip renders the SERVER's own two strings whenever it has them, and
+      // the render below reads them from here once a link is in hand — so they
+      // are seeded together with the link. Seeding one without the other would
+      // hand the chip an empty sentence and let it fall back to the mirror for a
+      // case the server had already worded.
+      setCaseLineFromConfirm(info.case_status_line ?? "");
+      setCaseTipFromConfirm(info.case_tooltip ?? "");
+    }
+  }, [state, route, proposal, prepareErr, caseLink, info?.case, info?.case_status_line, info?.case_tooltip]);
+
   // The escalation's state, and the caller's own inventory for the device picker.
   useEffect(() => {
     setInfo(null); setInfoErr(""); setClassify(null); setClassErr("");
@@ -261,6 +394,11 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     setSaved([]); setSavedErr(""); setUploaded(null); setUploadErr(""); setRefusals([]);
     setSelectedId(""); setExpanded({}); setSaveName(""); setSaveErr(""); setSaveNote("");
     setCaseForm(null); setCaseConnector(null); setCaseResult(null); setCaseErr("");
+    setRoute(null); setRouteNote(""); setEscalateErr(""); setProposal(null); setPrepareErr("");
+    setConfirmFields(EMPTY_FIELDS); setConfirmErr(""); setCaseLink(null);
+    setCaseLineFromConfirm(""); setCaseTipFromConfirm("");
+    setUploadToken(""); setUploadHost("");
+    setDryRun(null); setDryRunErr("");
     void readState();
   }, [incidentId, readState]);
 
@@ -302,6 +440,137 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     }
   };
 
+  /**
+   * THE ONE ACTION (owner, 2026-09-06: "open the case with one or two clicks").
+   *
+   * One press does the whole first half: it classifies (which is also what
+   * gives the panel the class list an override picks from), then asks the
+   * server to escalate — which plans, chooses the capture, decides the ROUTE
+   * from the tenant's settings and starts collecting. Nothing leaves the
+   * platform: neither call has a path to a vendor.
+   *
+   * The escalate leg is allowed to fail WITHOUT taking the classification with
+   * it. A deployment that cannot route still classifies, still plans and still
+   * builds the bundle, and the operator is told which half did not happen.
+   */
+  const runEscalate = async () => {
+    setClassErr(""); setEscalateErr(""); setPrepareErr(""); setProposal(null);
+    setClassifying(true); setEscalating(true);
+    let classId = "";
+    try {
+      const c = await api.tacClassify(incidentId);
+      if (!alive.current) return;
+      setClassify(c);
+      classId = c.classification?.class_id ?? "";
+      setClassOverride(classId);
+    } catch (e) {
+      if (alive.current) { setClassErr(tacError(e, CLASSIFY_FAILED)); setEscalating(false); }
+      return;
+    } finally {
+      if (alive.current) setClassifying(false);
+    }
+    const dev = (deviceId || info?.devices?.[0] || "").trim();
+    try {
+      if (dev) {
+        const r = await api.tacEscalate(
+          incidentId,
+          buildEscalateRequest(dev, classId, includeOptional, target),
+        );
+        if (!alive.current) return;
+        setRoute(r.route);
+        setRouteNote(r.capture_note ?? "");
+        if (!deviceId) setDeviceId(dev);
+      }
+      await readState();
+    } catch (e) {
+      if (alive.current) setEscalateErr(tacError(e, ESCALATE_FAILED));
+    } finally {
+      if (alive.current) setEscalating(false);
+    }
+  };
+
+  /**
+   * The step BETWEEN the two clicks, and it is not a click.
+   *
+   * Once the collection has finished the confirmation screen is built without
+   * anybody pressing anything — the whole point of the one-action flow is that
+   * the operator presses Escalate and then reads. Prepare still sends nothing:
+   * it builds the redacted bundle and fills the form, and says whether Confirm
+   * could succeed.
+   */
+  const runPrepare = useCallback(async (connectorId?: string) => {
+    const dev = (deviceId || info?.devices?.[0] || "").trim();
+    if (!dev) return;
+    setPrepareErr(""); setPreparing(true);
+    try {
+      const r = await api.tacEscalatePrepare(
+        incidentId,
+        buildEscalateRequest(dev, classOverride || classification?.class_id || "", includeOptional, target, {
+          connectorId: connectorId ?? "",
+          severity: confirmFields.severity,
+          title: confirmFields.title,
+        }),
+      );
+      if (!alive.current) return;
+      setProposal(r.proposal);
+      setRoute(r.proposal.route);
+      setConfirmFields(fieldsFromForm(r.proposal.form));
+    } catch (e) {
+      if (alive.current) setPrepareErr(tacError(e, PREPARE_FAILED));
+    } finally {
+      if (alive.current) setPreparing(false);
+    }
+    // `target` and the edited fields are applied when the screen is (re)built,
+    // not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incidentId, deviceId, info?.devices, classOverride, classification?.class_id, includeOptional]);
+
+  /**
+   * CLICK TWO. The ONLY call in this panel that can cause a case to exist, and
+   * it carries the operator's own edits — so filling a blocked field on the
+   * screen works, and leaving it blank is still refused BY NAME.
+   */
+  const runConfirm = async () => {
+    if (!proposal) return;
+    setConfirmErr(""); setConfirming(true);
+    try {
+      const r = await api.tacEscalateConfirm(
+        incidentId,
+        buildConfirmRequest(confirmFields, { token: uploadToken, host: uploadHost }),
+      );
+      if (!alive.current) return;
+      setCaseResult(r.result);
+      setCaseLink(r.case);
+      setCaseLineFromConfirm((r.status_line ?? "").trim());
+      setCaseTipFromConfirm((r.tooltip ?? "").trim());
+      onCaseOpened?.(r.case);
+      setUploadToken(""); setUploadHost("");
+      await readState();
+    } catch (e) {
+      if (alive.current) setConfirmErr(tacError(e, CONFIRM_FAILED));
+    } finally {
+      if (alive.current) setConfirming(false);
+    }
+  };
+
+  /**
+   * The dry run. It authenticates against the configured endpoint with the
+   * stored credential — a real, read-only call — and describes every other
+   * request a submit would make, field by field, with the secrets already
+   * redacted by the connector. It creates NOTHING, and the report says so.
+   */
+  const runDryRun = async () => {
+    setDryRunErr(""); setDryRun(null); setDryRunning(true);
+    try {
+      const r = await api.tacEscalateDryRun(incidentId, route?.connector_id);
+      if (alive.current) setDryRun(r.dry_run);
+    } catch (e) {
+      if (alive.current) setDryRunErr(tacError(e, DRY_RUN_FAILED));
+    } finally {
+      if (alive.current) setDryRunning(false);
+    }
+  };
+
   const runPlan = useCallback(async () => {
     if (!deviceId.trim()) return;
     setPlanErr(""); setPlanning(true);
@@ -318,6 +587,30 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
     // presses Rebuild, not on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incidentId, deviceId, classOverride, classification?.class_id, includeOptional, readState]);
+
+  // The answer card presses Escalate and mounts this panel; pressing an
+  // identical button again is the click the one-action flow exists to remove.
+  // It fires ONCE per incident: `autoRan` is what stops a re-render restarting
+  // an escalation that is already under way.
+  const autoRan = useRef("");
+  useEffect(() => {
+    if (!autoStart || !info || autoRan.current === incidentId) return;
+    if (state?.classification || classify) return;
+    autoRan.current = incidentId;
+    void runEscalate();
+    // runEscalate is re-created on every render; the ref is the guard, not the
+    // dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart, info, incidentId, state?.classification, classify]);
+
+  // The confirmation screen is built WITHOUT a second press: once the server has
+  // stopped collecting and there is a capture to bundle, prepare runs on its
+  // own. It still sends nothing — that is what makes this safe to do silently.
+  useEffect(() => {
+    if (!route || preparing || proposal || prepareErr || caseLink) return;
+    if (running || !state?.capture) return;
+    void runPrepare();
+  }, [route, preparing, proposal, prepareErr, caseLink, running, state?.capture, runPrepare]);
 
   // THE EXTRACTION IS SILENT (owner, 2026-09-06). Once the class is known and a
   // device is chosen, the plan is built without anybody pressing anything: the
@@ -473,11 +766,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
       if (!alive.current) return;
       setCaseConnector(r.connector ?? connector);
       setCaseForm(r.form);
-      setCaseFields({
-        title: r.form.title ?? "", severity: r.form.severity ?? "", product: r.form.product ?? "",
-        serial_number: r.form.serial_number ?? "", contract_id: r.form.contract_id ?? "",
-        contact_name: r.form.contact_name ?? "", contact_email: r.form.contact_email ?? "",
-      });
+      setCaseFields(fieldsFromForm(r.form));
     } catch (e) {
       if (alive.current) { setCaseForm(null); setCaseErr(tacError(e, CASE_FORM_FAILED)); }
     } finally {
@@ -492,6 +781,7 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
       const r = await api.tacCaseSubmit(incidentId, caseConnector.id, { ...caseFields });
       if (!alive.current) return;
       setCaseResult(r.result);
+      if (r.case) { setCaseLink(r.case); onCaseOpened?.(r.case); }
       setCaseNote(
         r.result.case_id
           ? `Case ${r.result.case_id} recorded with ${caseConnector.display}.`
@@ -533,6 +823,13 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
   const caseRows = splitConnectors(info.connectors, dialectVendor(plan?.dialect ?? capture?.dialect ?? ""));
   const bundleBytes = newestBundleBytes(bundles);
   const activeCaptureId = progress?.capture_id ?? "";
+  // The connector the SERVER routed this case to. Its declared severity
+  // vocabulary and its capabilities are what the confirmation screen renders —
+  // the client never guesses either.
+  const routedConnector = (info.connectors ?? []).find((c) => c.id === route?.connector_id);
+  // The case as it stands. What this panel just opened wins; otherwise the
+  // state read carries it, so a reload still shows the number and its status.
+  const shownCase = caseLink ?? info.case ?? null;
 
   return (
     <section className="tac-panel card" aria-label="Escalate to TAC">
@@ -541,16 +838,36 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
         <span className="mini-meta tac-ver">Issue catalogue {info.catalog_version}</span>
       </div>
 
-      {/* ── step 1: start ────────────────────────────────────────────────── */}
+      {/* ── step 1: THE ONE ACTION ───────────────────────────────────────────
+          One press classifies, plans, chooses the capture, decides the route
+          and starts collecting. Nothing leaves the platform until the person
+          presses Open case on the confirmation screen below. */}
       {!started && (
         <div className="tac-start">
           <p className="mini-meta">{info.state_note || NOT_ESCALATED_NOTE}</p>
-          <button type="button" className="btn accent" onClick={() => { void runClassify(); }} disabled={classifying}>
-            {classifying ? "Classifying…" : "Escalate to TAC"}
+          <button
+            type="button"
+            className="btn accent"
+            onClick={() => { void runEscalate(); }}
+            disabled={classifying || escalating}
+            data-testid="tac-escalate"
+          >
+            {classifying || escalating ? ESCALATE_RUNNING : "Escalate to TAC"}
           </button>
           {classErr && <p className="tac-bad" role="alert">{classErr}</p>}
         </div>
       )}
+      {escalateErr && <p className="tac-bad" role="alert" data-testid="tac-escalate-error">{escalateErr}</p>}
+
+      {/* The route, and the server's own sentence saying WHY it was chosen. It
+          is rendered as soon as the escalation exists, so the operator reads
+          where this is going while the collection is still running. */}
+      {route && !proposal && (
+        <p className="fact-line" data-testid="tac-route">
+          {ROUTE_LABEL}: <b>{route.display}</b> — {route.note}
+        </p>
+      )}
+      {routeNote && <p className="fact-line" data-testid="tac-capture-note">{routeNote}</p>}
 
       {/* ── step 2: captures ─────────────────────────────────────────────── */}
       {started && (
@@ -716,6 +1033,210 @@ export default function TacEscalationPanel({ incidentId }: { incidentId: string 
                 </div>
               )}
             </>
+          )}
+        </section>
+      )}
+
+      {/* ── THE ONE CONFIRMATION SCREEN ──────────────────────────────────────
+          Exactly what will be sent, and nothing has been sent. The route and
+          the server's own sentence saying why it was chosen, the case title,
+          the severity, the named human, the serial and model, the contract, the
+          bundle and its size, Correlix's problem statement — and, immediately
+          above the button, the two standing claims verbatim: the redaction
+          promise and the approval sentence.
+
+          §15 LLM02: every value here is remote- or model-authored text and is
+          rendered as escaped React text. The problem statement is a read-only
+          textarea for the same reason. */}
+      {route && (
+        <section className="tac-step" aria-labelledby="tac-confirm-h" data-testid="tac-confirm">
+          <h3 id="tac-confirm-h" className="tac-step-h">{CONFIRM_HEADING}</h3>
+          {prepareErr && <p className="tac-bad" role="alert" data-testid="tac-prepare-error">{prepareErr}</p>}
+          {!proposal && !prepareErr && (
+            <p className="fact-line" role="status" data-testid="tac-preparing">{PREPARING_NOTE}</p>
+          )}
+
+          {proposal && (
+            <div className="tac-confirm">
+              <p className="fact-line" data-testid="tac-confirm-route">
+                {ROUTE_LABEL}: <b>{proposal.route.display}</b> — {proposal.route.note}
+              </p>
+
+              <div className="tac-form">
+                <label className="tac-field">
+                  <span>Title</span>
+                  <input
+                    type="text"
+                    maxLength={200}
+                    value={confirmFields.title}
+                    data-testid="tac-confirm-title"
+                    onChange={(e) => setConfirmFields((f) => ({ ...f, title: e.target.value }))}
+                  />
+                </label>
+                <label className="tac-field">
+                  <span>Severity</span>
+                  {/* The vendor's own vocabulary when it publishes one; free text
+                      when it does not. An empty list is a FACT about the vendor,
+                      not a gap, so nothing is invented to fill the select. */}
+                  {severityChoices(routedConnector).length > 0 ? (
+                    <select
+                      value={confirmFields.severity}
+                      data-testid="tac-confirm-severity"
+                      onChange={(e) => setConfirmFields((f) => ({ ...f, severity: e.target.value }))}
+                    >
+                      <option value="">Choose…</option>
+                      {severityChoices(routedConnector).map((v) => (
+                        <option key={v} value={v}>{v}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      maxLength={64}
+                      value={confirmFields.severity}
+                      data-testid="tac-confirm-severity"
+                      onChange={(e) => setConfirmFields((f) => ({ ...f, severity: e.target.value }))}
+                    />
+                  )}
+                </label>
+                {CONFIRM_FIELDS.filter((f) => f.key !== "title").map(({ key, label }) => (
+                  <label className="tac-field" key={key}>
+                    <span>{label}</span>
+                    <input
+                      type="text"
+                      maxLength={200}
+                      value={confirmFields[key]}
+                      data-testid={`tac-confirm-${key}`}
+                      onChange={(e) => setConfirmFields((f) => ({ ...f, [key]: e.target.value }))}
+                    />
+                  </label>
+                ))}
+                {needsExistingCase(routedConnector, proposal) && (
+                  <label className="tac-field">
+                    <span>Case number</span>
+                    <input
+                      type="text"
+                      maxLength={64}
+                      value={confirmFields.existing_case_number}
+                      data-testid="tac-confirm-existing-case"
+                      onChange={(e) => setConfirmFields((f) => ({ ...f, existing_case_number: e.target.value }))}
+                    />
+                  </label>
+                )}
+              </div>
+
+              <p className="fact-line" data-testid="tac-confirm-device">
+                {proposal.form.product || "Model not stated"}
+                {proposal.form.serial_number ? ` · ${proposal.form.serial_number}` : ""}
+              </p>
+              <p className="fact-line" data-testid="tac-confirm-bundle">
+                {proposal.bundle.name} · {humanBytes(proposal.bundle.bytes)}
+              </p>
+              <label className="tac-field">
+                <span>Problem statement</span>
+                <textarea
+                  className="tac-portal"
+                  rows={8}
+                  readOnly
+                  data-testid="tac-confirm-statement"
+                  value={proposal.form.description}
+                />
+              </label>
+
+              {(proposal.warnings ?? []).length > 0 && (
+                <ul className="tac-warnings" data-testid="tac-warnings">
+                  {(proposal.warnings ?? []).slice(0, ROW_RENDER_CAP).map((w, i) => (
+                    <li key={`warn-${i}`} className="fact-line">{w}</li>
+                  ))}
+                </ul>
+              )}
+
+              {(proposal.blockers ?? []).length > 0 && (
+                <ul className="tac-blockers" role="alert" data-testid="tac-blockers">
+                  {(proposal.blockers ?? []).slice(0, ROW_RENDER_CAP).map((b, i) => (
+                    <li key={`blk-${b.key}-${i}`} data-testid={`tac-blocker-${b.key}`}>
+                      {blockerLine(b)}{" "}
+                      {settingsHref(b.settings_hint) ? (
+                        <a className="tac-conn-link" href={settingsHref(b.settings_hint)}>{b.settings_hint}</a>
+                      ) : (
+                        <span className="fact-line">{b.settings_hint}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {/* The two standing claims, verbatim, immediately above the button
+                  that sends. They are the server's own strings: if either ever
+                  stops being true it is deleted there, with the code that made
+                  it false. */}
+              <p className="fact-line" data-testid="tac-redaction-promise">{proposal.redaction}</p>
+              <p className="fact-line" data-testid="tac-approval">{proposal.approval}</p>
+
+              <div className="tac-actions">
+                <button
+                  type="button"
+                  className="btn accent"
+                  disabled={!proposal.ready || confirming}
+                  aria-disabled={!proposal.ready}
+                  data-testid="tac-confirm-btn"
+                  onClick={() => { void runConfirm(); }}
+                >
+                  {confirming ? CONFIRM_RUNNING : CONFIRM_ACTION}
+                </button>
+                {/* SECONDARY, deliberately: Open case is what this screen is
+                    for, and a dry run is what you do the day you bring
+                    credentials rather than mid-incident. */}
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={dryRunning}
+                  data-testid="tac-dry-run-btn"
+                  onClick={() => { void runDryRun(); }}
+                >
+                  {dryRunning ? DRY_RUN_RUNNING : DRY_RUN_ACTION}
+                </button>
+                {proposal.route.portal && (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-testid="tac-confirm-copy"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(proposal.form.portal_text);
+                      setCaseNote("The case text was copied.");
+                    }}
+                  >
+                    Copy the case text
+                  </button>
+                )}
+                {proposal.form.portal_url && (
+                  <a className="btn" href={proposal.form.portal_url} target="_blank" rel="noreferrer noopener">
+                    Open the vendor portal
+                  </a>
+                )}
+              </div>
+              {!proposal.ready && (
+                <p className="tac-bad" role="status" data-testid="tac-confirm-blocked">
+                  {proposal.blocker_note || CONFIRM_BLOCKED}
+                </p>
+              )}
+              {confirmErr && <p className="tac-bad" role="alert" data-testid="tac-confirm-error">{confirmErr}</p>}
+              {dryRunErr && <p className="tac-bad" role="alert" data-testid="tac-dry-run-error">{dryRunErr}</p>}
+              {dryRun && <DryRunReport report={dryRun} />}
+            </div>
+          )}
+
+          {/* The case comes BACK to the incident: the number, the vendor's own
+              status, and how often it refreshes. A failed read renders "status
+              unknown since …", never the status it last saw. */}
+          {shownCase && (
+            <TacCaseChip
+              link={shownCase}
+              incidentId={incidentId}
+              onRefreshed={setCaseLink}
+              statusLine={caseLink ? caseLineFromConfirm : info.case_status_line}
+              tooltip={caseLink ? caseTipFromConfirm : info.case_tooltip}
+            />
           )}
         </section>
       )}
@@ -1279,5 +1800,97 @@ function PlanRow({ step, n }: { step: TacStep; n: number }) {
         ) : null}
       </td>
     </tr>
+  );
+}
+
+/**
+ * The dry run's report (internal/tac/dryrun.go).
+ *
+ * The outcome and the server's own note first, because that is the answer. Then
+ * the call sequence as a COLLAPSED list — an operator checking a staging host
+ * against their onboarding paperwork expands one row; everybody else reads the
+ * outcome and stops. Each row expands to the field table: what Correlix calls
+ * the field, what the vendor calls it where the tenant's onboarding bound a
+ * name, and the value that would be sent.
+ *
+ * A `secret` field renders its `value` AS-IS: the connector already redacted it
+ * before it crossed the wire, and re-masking a mask would only hide whether the
+ * redaction happened. It is marked so nobody reads the mark as the value.
+ *
+ * "Nothing was created" is the SERVER'S claim (`created_nothing`), rendered
+ * rather than asserted here — a client that decided it for itself would be
+ * vouching for code it cannot see.
+ */
+function DryRunReport({ report }: { report: TacDryRunReport }) {
+  const elapsed = dryRunElapsed(report);
+  return (
+    <div className="tac-dryrun" data-testid="tac-dry-run">
+      <p className="fact-line">
+        <span className={`tac-chip ${dryRunTone(report.outcome)}`} data-testid="tac-dry-run-outcome">
+          {report.outcome}
+        </span>{" "}
+        {DRY_RUN_SENTENCE[report.outcome]} {report.note}
+      </p>
+      <p className="fact-line" data-testid="tac-dry-run-created-nothing">
+        {report.created_nothing ? DRY_RUN_CREATED_NOTHING : ""}
+        {report.auth_mode ? ` ${report.auth_mode}` : ""}
+        {elapsed ? ` · ${elapsed}` : ""}
+        {report.limits ? ` · ${report.limits}` : ""}
+      </p>
+      {(report.blockers ?? []).length > 0 && (
+        <ul className="tac-blockers" role="alert" data-testid="tac-dry-run-blockers">
+          {(report.blockers ?? []).slice(0, ROW_RENDER_CAP).map((b, i) => (
+            <li key={`drb-${b.key}-${i}`}>
+              {blockerLine(b)}{" "}
+              {settingsHref(b.settings_hint) ? (
+                <a className="tac-conn-link" href={settingsHref(b.settings_hint)}>{b.settings_hint}</a>
+              ) : (
+                <span className="fact-line">{b.settings_hint}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <ul className="tac-dryrun-calls" data-testid="tac-dry-run-calls">
+        {(report.calls ?? []).slice(0, ROW_RENDER_CAP).map((c, i) => (
+          <li key={`drc-${i}`}>
+            <DryRunCallRow call={c} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** One call, collapsed. Nothing expands by default. */
+function DryRunCallRow({ call }: { call: TacDryRunCall }) {
+  return (
+    <details className="tac-fold">
+      <summary>{dryRunCallLine(call)}</summary>
+      {call.note && <p className="fact-line">{call.note}</p>}
+      {(call.fields ?? []).length > 0 && (
+        <table className="tac-dryrun-fields">
+          <thead>
+            <tr>
+              <th scope="col">Field</th>
+              <th scope="col">Vendor</th>
+              <th scope="col">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(call.fields ?? []).slice(0, ROW_RENDER_CAP).map((f, i) => (
+              <tr key={`drf-${f.name}-${i}`} title={f.note}>
+                <td><code className="tac-id">{f.name}</code></td>
+                <td>{f.vendor_name ?? ""}</td>
+                <td>
+                  {f.value}
+                  {f.secret && <span className="tac-chip tac-chip-queued">redacted</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </details>
   );
 }

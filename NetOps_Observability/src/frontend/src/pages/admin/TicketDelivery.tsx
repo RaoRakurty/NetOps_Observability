@@ -37,6 +37,7 @@ import { httpFailure, operatorError } from "../../lib/errors";
 import { Stat, StatStrip } from "../../components/ui";
 import AskIris from "../../components/AskIris";
 import ConnectorSettings from "./ConnectorSettings";
+import TacRoutingSection from "./TacRoutingSection";
 import {
   CONNECTOR_CHIP,
   connectorCapabilityLine,
@@ -458,6 +459,11 @@ export default function TicketDelivery() {
           })}
         </ul>
       ) : null}
+
+      {/* Beside the credentials, not inside them: this is the tenant's CHOICES
+          and entitlement identifiers, and it is what lets a one-click
+          escalation arrive at its confirmation screen already complete. */}
+      <TacRoutingSection />
     </div>
   );
 }

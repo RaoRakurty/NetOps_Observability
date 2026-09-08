@@ -6982,3 +6982,24 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
 .rsc-table th::first-letter {
   text-transform: uppercase;
 }
+
+/* TAC routing (Administration → Ticket delivery). The tenant's CHOICES and
+   entitlement identifiers, beside — never inside — the credential forms. */
+.adm .tdr { margin-top: var(--sp-3); }
+.adm .tdr-h { margin: var(--sp-3) 0 var(--sp-1); font-size: 14px; }
+
+/* The vendor case chip. It renders in three places — the escalation panel, the
+   investigation answer card and the Operations incident list — from one
+   sentence, so they cannot word it differently. */
+.tac-case-chip { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.tac-case-chip > a { color: var(--accent); text-decoration: none; }
+.tac-case-chip > a:hover, .tac-case-chip > a:focus-visible { text-decoration: underline; }
+.tac-case-chip .tac-chip {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--border); font-size: 11.5px; font-weight: 600;
+  white-space: normal;
+}
+.tac-case-chip .tac-chip-done { border-color: var(--good); color: var(--good); }
+.tac-case-chip .tac-chip-failed { border-color: var(--bad); color: var(--bad); }
+.tac-case-chip .tac-chip-queued { border-color: var(--border); color: var(--muted); }
+.tac-case-chip .tac-chip-not-configured { border-color: var(--border); color: var(--muted); }

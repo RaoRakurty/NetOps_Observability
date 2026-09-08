@@ -3786,6 +3786,14 @@ export type TacState = {
   capture?: TacCapture;
   bundles: TacStoredBundle[];
   case?: TacCaseResult;
+  /** The connector this escalation will use and WHY (internal/tac/escalate.go).
+   *  It is on the STATE, not only on the escalate response, so a browser refresh
+   *  mid-escalation does not lose the route — and with it the confirmation
+   *  screen. */
+  route?: TacEscalationRoute;
+  /** The confirmation screen's content: the exact case that would be opened.
+   *  Present once prepare has run; the panel seeds from it on a re-read. */
+  proposal?: TacProposal;
   updated_at: string;
   /** The vendor default capture, derived from the plan's BOUND steps. Derived
    *  silently: the customer is never asked to review a plan. */
@@ -3808,6 +3816,13 @@ export type TacStateResponse = {
   state: TacState | null;
   /** Present only when there is no escalation yet — the server's own wording. */
   state_note?: string;
+  /** The case this incident carries, when one has been opened. The two chip
+   *  strings are computed SERVER-side from the same functions confirm and
+   *  refresh use, so the panel, the answer card and the incident list cannot
+   *  word one case differently. */
+  case?: TacCaseLink;
+  case_status_line?: string;
+  case_tooltip?: string;
 };
 
 /** POST /api/incidents/{id}/tac/classify */
@@ -3852,7 +3867,13 @@ export type TacCaseFormResponse = {
   bundle: TacStoredBundle;
 };
 /** POST … with submit:true — the human-approved action's result. */
-export type TacCaseSubmitResponse = { result: TacCaseResult; bundle: TacStoredBundle };
+export type TacCaseSubmitResponse = {
+  result: TacCaseResult;
+  bundle: TacStoredBundle;
+  /** The case as the incident now records it — the older two-step flow files it
+   *  on the same register the one-action flow does. */
+  case?: TacCaseLink;
+};
 
 // ── the ONE ACTION: escalate → prepare → confirm ────────────────────────────
 //
@@ -3968,7 +3989,13 @@ export type TacConfirmRequest = {
   upload_host?: string;
 };
 
-export type TacConfirmResponse = { result: TacCaseResult; case: TacCaseLink };
+export type TacConfirmResponse = {
+  result: TacCaseResult;
+  case: TacCaseLink;
+  /** The chip's two strings, computed server-side. */
+  status_line?: string;
+  tooltip?: string;
+};
 
 /** The cadence class a case earns from the severity ACTUALLY SENT to the vendor.
  *  An unrecognised severity tiers DOWN, never up. */
@@ -4007,6 +4034,7 @@ export type TacCaseLink = {
  *  429 when the 60-second floor has not passed; the body says how long. */
 export type TacCaseRefreshResponse = {
   case: TacCaseLink;
+  /** The chip's sentence and hover text, computed server-side. */
   status_line: string;
   tooltip: string;
 };
@@ -4058,6 +4086,63 @@ export type TacRoutingResponse = {
 };
 
 export type TacRoutingSaveResponse = { routing: TacRoutingConfig; configured: boolean };
+
+// ── POST /api/incidents/{id}/tac/escalate/dry-run ───────────────────────────
+// PROVE THE SETUP BEFORE THE FIRST REAL CASE (internal/tac/dryrun.go). It
+// AUTHENTICATES against the configured endpoint with the stored credential — a
+// real, read-only call — and then DESCRIBES the request a submit would make,
+// field by field, with every secret redacted. It creates nothing, and
+// `created_nothing` is on the wire so the screen can say so without the client
+// asserting it.
+
+/** The closed set of answers a dry run can give. It deliberately mirrors the
+ *  connector-test vocabulary: one screen's words, not two. */
+export type TacDryRunOutcome =
+  | "ok" | "incomplete" | "not_configured" | "refused" | "unreachable" | "unsupported";
+
+/** One field of the payload as it would be sent. `value` is ALWAYS safe to
+ *  render — the connector redacted anything sensitive before it got here, and
+ *  `secret` says a value exists without carrying it. */
+export type TacDryRunField = {
+  name: string;
+  /** The field as the VENDOR names it, where the tenant's onboarding bound one. */
+  vendor_name?: string;
+  value: string;
+  secret?: boolean;
+  note?: string;
+};
+
+/** One HTTP call the submit would make — described rather than made, except
+ *  the authenticate step. `performed` is on the record so nobody has to take
+ *  that on trust. */
+export type TacDryRunCall = {
+  step: string;
+  method: string;
+  url: string;
+  fields?: TacDryRunField[];
+  note?: string;
+  performed: boolean;
+};
+
+export type TacDryRunReport = {
+  connector_id: string;
+  display?: string;
+  outcome: TacDryRunOutcome;
+  auth_mode?: string;
+  /** The outcome in one sentence, in the vendor's own words where they gave any. */
+  note: string;
+  calls: TacDryRunCall[];
+  /** What is still missing, by name, with where it is set. */
+  blockers?: TacRequiredField[];
+  elapsed_ms?: number;
+  /** What this path would refuse on size, so a 40 MB bundle meets the ceiling
+   *  here rather than at the vendor's mail gateway. */
+  limits?: string;
+  created_nothing: boolean;
+  at: string;
+};
+
+export type TacDryRunResponse = { dry_run: TacDryRunReport };
 
 // ── Iris → Knowledge (GET /api/troubleshoot/tac/knowledge) ──────────────────
 // Version-pinned REFERENCE data, identical for every tenant: what Correlix knows
@@ -6584,6 +6669,7 @@ export const api = {
     form: {
       title: string; severity: string; product?: string; serial_number?: string;
       contract_id?: string; contact_name?: string; contact_email?: string;
+      existing_case_number?: string;
     },
   ) =>
     request<TacCaseSubmitResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/case`, {
@@ -6619,6 +6705,14 @@ export const api = {
     request<TacConfirmResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/escalate/confirm`, {
       method: "POST",
       body: JSON.stringify(body),
+    }),
+  /** Authenticate with the stored credential and describe the request a submit
+   *  would make. Creates NOTHING — there is no path from this route to a
+   *  create. Omit the connector and the escalation's routed one is used. */
+  tacEscalateDryRun: (incidentId: string, connectorId?: string) =>
+    request<TacDryRunResponse>(`/api/incidents/${encodeURIComponent(incidentId)}/tac/escalate/dry-run`, {
+      method: "POST",
+      body: JSON.stringify(connectorId ? { connector_id: connectorId } : {}),
     }),
   /** The operator's "Refresh now" on an opened case. 429 while the 60-second
    *  floor holds — a person hammering the button must not be the thing that

@@ -37,8 +37,16 @@ import type {
   TacCaptureRefusal,
   TacCaptureSource,
   TacCaptureStatus,
+  TacCaseLink,
   TacCommandCapture,
   TacCommandStatus,
+  TacConfirmRequest,
+  TacDryRunCall,
+  TacDryRunOutcome,
+  TacDryRunReport,
+  TacEscalateRequest,
+  TacProposal,
+  TacRequiredField,
   TacTemplate,
   TacTemplateWrite,
   TacVerified,
@@ -960,4 +968,388 @@ export function collectErrorMessage(e: unknown, serverNote: string): string {
     if (note) return note;
   }
   return operatorError(e, COLLECT_FAILED);
+}
+
+// ── the ONE ACTION (internal/tac/escalate.go, owner 2026-09-06) ─────────────
+//
+// The owner's goal, verbatim: "We are just trying to close that initial time
+// lag, so ease of collecting data and open the case with one or two clicks,
+// that's the goal."
+//
+// So the panel has ONE primary action and ONE confirmation screen. Everything
+// between them — classify, plan, capture, route, collect, bundle, fill the form
+// — is the server's, and the client never decides any of it. In particular the
+// ROUTE is not computed here: the fallback ladder, the connector capabilities
+// and the tenant's settings all live server-side, and a client that recomputed
+// them would get it subtly different from the server that then acts.
+
+/** The primary action's label. One button, one press, no second decision. */
+export const ESCALATE_ACTION = "Escalate to TAC";
+
+/** What the button is doing while the server classifies, plans and collects. */
+export const ESCALATE_RUNNING = "Escalating…";
+
+export const ESCALATE_FAILED = "The escalation could not be started.";
+export const PREPARE_FAILED = "The case could not be prepared for review.";
+export const CONFIRM_FAILED = "The case could not be opened.";
+export const REFRESH_FAILED = "The case status could not be read.";
+
+/** Nothing has been sent yet, and the button is what sends it. Stated above
+ *  the button on the confirmation screen, beside the server's own sentence. */
+export const CONFIRM_HEADING = "Review before sending";
+
+/** The one control that sends. */
+export const CONFIRM_ACTION = "Open case";
+export const CONFIRM_RUNNING = "Opening…";
+
+/** The confirmation screen exists but the vendor will refuse. The blockers are
+ *  listed BY NAME beneath it, each with a link to where it is set. */
+export const CONFIRM_BLOCKED = "This case is missing what the vendor requires.";
+
+/** A route that opens nothing is a COMPLETE outcome, not a failure. */
+export const ROUTE_PORTAL_ACTION = "Copy the case text";
+
+/** How the route's own sentence is introduced. The server writes the sentence;
+ *  this is only the word before it. */
+export const ROUTE_LABEL = "Route";
+
+/** The escalation is running and the confirmation screen is not ready yet. */
+export const PREPARING_NOTE = "Collecting, then building the case for review.";
+
+/** The escalate body. Empty fields are omitted, never sent blank, and the
+ *  tenant is NEVER a field — ownership is stamped from the token server-side. */
+export function buildEscalateRequest(
+  deviceId: string,
+  classId: string,
+  includeOptional: boolean,
+  target: TacTarget,
+  over: {
+    connectorId?: string; captureId?: string; severity?: string; title?: string;
+  } = {},
+): TacEscalateRequest {
+  const t: TacTarget = {};
+  (Object.keys(target) as (keyof TacTarget)[]).forEach((k) => {
+    const v = (target[k] ?? "").trim();
+    if (v) t[k] = v;
+  });
+  const req: TacEscalateRequest = { device_id: deviceId.trim(), include_optional: includeOptional };
+  if (classId.trim()) req.class_id = classId.trim();
+  if ((over.connectorId ?? "").trim()) req.connector_id = over.connectorId!.trim();
+  if ((over.captureId ?? "").trim()) req.capture_id = over.captureId!.trim();
+  if ((over.severity ?? "").trim()) req.severity = over.severity!.trim();
+  if ((over.title ?? "").trim()) req.title = over.title!.trim();
+  if (Object.keys(t).length > 0) req.target = t;
+  return req;
+}
+
+/** The confirm body from the operator's edited fields. Trimmed, never padded:
+ *  a field the person cleared is sent empty and the server refuses it by name
+ *  rather than quietly reusing what it prepared. */
+export function buildConfirmRequest(
+  fields: TacConfirmRequest["form"],
+  upload: { token?: string; host?: string } = {},
+): TacConfirmRequest {
+  const body: TacConfirmRequest = {
+    form: {
+      title: (fields.title ?? "").trim(),
+      severity: (fields.severity ?? "").trim(),
+      product: (fields.product ?? "").trim(),
+      serial_number: (fields.serial_number ?? "").trim(),
+      contract_id: (fields.contract_id ?? "").trim(),
+      contact_name: (fields.contact_name ?? "").trim(),
+      contact_email: (fields.contact_email ?? "").trim(),
+      existing_case_number: (fields.existing_case_number ?? "").trim(),
+    },
+  };
+  if ((upload.token ?? "").trim()) body.upload_token = upload.token!.trim();
+  if ((upload.host ?? "").trim()) body.upload_host = upload.host!.trim();
+  return body;
+}
+
+/** One blocker, as the operator reads it: what is missing and the vendor's own
+ *  reason. The settings destination is a LINK beside it, never inside the
+ *  sentence — an operator acts on a control, not on a paragraph. */
+export function blockerLine(f: TacRequiredField): string {
+  const label = (f.label || f.key || "").trim();
+  const why = (f.why || "").trim();
+  return why ? `${label} — ${why}` : label;
+}
+
+/** Where a blocker is set. The server names the destination in words
+ *  ("Administration → Ticket delivery → Vendor contracts"); the route is ours,
+ *  and an unrecognised hint gets NO link rather than a guessed one. */
+export const SETTINGS_ROUTES: Readonly<Record<string, string>> = Object.freeze({
+  "ticket delivery": TICKET_DELIVERY_ROUTE,
+  "vendor contracts": TICKET_DELIVERY_ROUTE,
+  "case connectors": TICKET_DELIVERY_ROUTE,
+  "tac routing": TICKET_DELIVERY_ROUTE,
+  inventory: "#/inventory/devices",
+});
+
+/** The href for a settings hint, or "" when nothing in it is recognised. */
+export function settingsHref(hint: string): string {
+  const h = (hint || "").toLowerCase();
+  for (const key of Object.keys(SETTINGS_ROUTES)) {
+    if (h.includes(key)) return SETTINGS_ROUTES[key];
+  }
+  return "";
+}
+
+/** The severity control: the vendor's own vocabulary when it publishes one,
+ *  free text when it does not. Empty is a FACT about the vendor, not a gap. */
+export function severityChoices(info: TacConnectorInfo | undefined): string[] {
+  return (info?.severity_values ?? []).filter((v) => (v || "").trim() !== "");
+}
+
+/** Does this connector need the case it is attaching to? Cisco CXD and an
+ *  email thread's reference id do; nothing else may ask for one. */
+export function needsExistingCase(
+  info: TacConnectorInfo | undefined,
+  proposal: TacProposal | null,
+): boolean {
+  if ((proposal?.blockers ?? []).some((b) => b.key === "existing_case_number")) return true;
+  if ((proposal?.form.missing_fields ?? []).includes("existing_case_number")) return true;
+  if (!info) return false;
+  return hasCapability(info, "attach") && !hasCapability(info, "create");
+}
+
+// ── the case chip (internal/tac/caselink.go) ────────────────────────────────
+//
+// This is a MIRROR of Go's CaseLink.StatusLine and CaseLink.Tooltip, and it is
+// tested against the same cases caselink_test.go asserts. It exists on the
+// client for one reason: the chip renders in three places (the escalation
+// panel, the answer card and the Operations incident list) from data that is
+// already on the page, and a round-trip per chip to fetch a sentence the server
+// already computed would be three reads per row.
+//
+// The rule it carries is the file's whole point: a FAILED read is never a stale
+// status. "2026-0907-1234 · status unknown since 09:41 UTC on 7 Sep — the vendor
+// returned 503" is honest; yesterday's "Open" rendered as current is the failure
+// mode this mirror must reproduce exactly.
+
+const UTC_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Go's zero time, as encoding/json renders it. A field carrying it is absent. */
+const GO_ZERO_TIME = "0001-01-01T00:00:00Z";
+
+/** True when a timestamp field carries nothing — absent, blank, or Go's zero. */
+export function isZeroTime(iso: string | undefined | null): boolean {
+  const v = (iso ?? "").trim();
+  if (v === "" || v === GO_ZERO_TIME) return true;
+  return Number.isNaN(new Date(v).getTime());
+}
+
+/** `time.Format("15:04 MST on 2 Jan")` in UTC, character for character. */
+export function utcStamp(iso: string | undefined | null): string {
+  if (isZeroTime(iso)) return "";
+  const d = new Date((iso ?? "").trim());
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${hh}:${mm} UTC on ${d.getUTCDate()} ${UTC_MONTHS[d.getUTCMonth()]}`;
+}
+
+/** Go's clip(s, n): the same ellipsis at the same byte count. */
+export function clipText(s: string, n: number): string {
+  const v = s ?? "";
+  return v.length <= n ? v : `${v.slice(0, n)}…`;
+}
+
+/** The four states a case chip can be in. Each is a different SENTENCE and a
+ *  different tone, so the two must be decided once and read from here. */
+export type CaseChipState = "pending-number" | "not-opened" | "unknown" | "open";
+
+/** Which state a link is in. `unknown` outranks a known status: a failed read
+ *  must never be painted as the status it last saw. */
+export function caseChipState(link: TacCaseLink | null | undefined): CaseChipState {
+  if (!link) return "not-opened";
+  const id = (link.case_id ?? "").trim();
+  if (id === "") {
+    return (link.connector ?? "").startsWith("email-") ? "pending-number" : "not-opened";
+  }
+  return (link.last_error ?? "").trim() !== "" ? "unknown" : "open";
+}
+
+/** The chip's sentence — the mirror of Go's CaseLink.StatusLine. */
+export function caseStatusLine(link: TacCaseLink | null | undefined): string {
+  if (!link) return "prepared · not yet opened";
+  const id = (link.case_id ?? "").trim();
+  const connector = (link.connector ?? "").trim();
+  const lastError = (link.last_error ?? "").trim();
+  const status = (link.status ?? "").trim();
+  if (id === "" && connector !== "" && connector.startsWith("email-")) {
+    return "opened by email · number pending";
+  }
+  if (id === "") return "prepared · not yet opened";
+  if (lastError !== "") {
+    const since = isZeroTime(link.last_checked_at) ? "just now" : utcStamp(link.last_checked_at);
+    return `${id} · status unknown since ${since} — ${clipText(lastError, 120)}`;
+  }
+  if (status === "") return `${id} · opened`;
+  return `${id} · ${status}`;
+}
+
+/** The chip's hover text — the mirror of Go's CaseLink.Tooltip: how it
+ *  authenticated and how often it refreshes, which is exactly what an operator
+ *  asks when the number stops moving. */
+export function caseTooltip(link: TacCaseLink | null | undefined): string {
+  if (!link) return "";
+  const parts: string[] = [];
+  if ((link.connector ?? "").trim() !== "") parts.push(`via ${link.connector}`);
+  if ((link.auth_mode ?? "").trim() !== "") parts.push(`authenticated with ${link.auth_mode}`);
+  if (link.closed) {
+    parts.push("closed — no longer refreshing");
+  } else if (!link.pollable) {
+    parts.push("this path publishes no status read; refresh it in the vendor's portal");
+  } else if ((link.cadence_label ?? "").trim() !== "") {
+    const note = (link.cadence_note ?? "").trim();
+    parts.push(`refreshing every ${link.cadence_label}${note ? ` · ${note}` : ""}`);
+  }
+  if (!isZeroTime(link.last_checked_at)) parts.push(`last refreshed ${utcStamp(link.last_checked_at)}`);
+  return parts.join(" · ");
+}
+
+/** The chip's tone class. A failed read is bad news; a closed case is quiet. */
+export const CASE_CHIP_TONE: Record<CaseChipState, string> = {
+  "pending-number": "tac-chip-queued",
+  "not-opened": "tac-chip-not-configured",
+  unknown: "tac-chip-failed",
+  open: "tac-chip-done",
+};
+
+/** A path that publishes no status read offers no refresh control — a button
+ *  that could only ever fail is worse than the sentence saying why. */
+export function canRefresh(link: TacCaseLink | null | undefined): boolean {
+  return Boolean(link && (link.case_id ?? "").trim() !== "" && link.pollable && !link.closed);
+}
+
+/** The 60-second floor, as the operator reads it. The SERVER decides; this only
+ *  renders its answer, and falls back to the floor when it named no number. */
+export function refreshWaitMessage(e: unknown): string {
+  const f = httpFailure(e);
+  if (!f || f.status !== 429) return "";
+  const body = f.body.startsWith("{") ? serverErrorText(f.body) : f.body.trim();
+  return body || "This case was refreshed less than a minute ago.";
+}
+
+/**
+ * The case the INCIDENT RECORD carries, as a CaseLink.
+ *
+ * The Operations list reads incidents, not the escalation's case register, and
+ * an incident row keeps only what MarkSync writes: the connector, the number,
+ * the deep link and a status word. So a failed read arrives here as the literal
+ * word "unknown" WITHOUT the vendor's own sentence — the register holds that,
+ * this row does not — and the chip says exactly that much and no more.
+ *
+ * Returns null for a row whose ticket did not come from a TAC connector: the
+ * ITSM projection files its own tickets through the same fields, and painting
+ * one of those as a vendor case would be a claim nobody made.
+ */
+export function caseLinkFromIncident(row: {
+  external_system?: string;
+  external_ticket_id?: string;
+  external_url?: string;
+  sync_status?: string;
+  last_synced_at?: string;
+}): TacCaseLink | null {
+  const connector = (row.external_system ?? "").trim();
+  if (connector === "" || !TAC_CONNECTOR_ID_SET.has(connector)) return null;
+  const status = (row.sync_status ?? "").trim();
+  const unknown = status.toLowerCase() === "unknown";
+  return {
+    connector,
+    case_id: (row.external_ticket_id ?? "").trim(),
+    case_url: (row.external_url ?? "").trim(),
+    opened_at: row.last_synced_at ?? "",
+    status: unknown || status === "opened" ? "" : status,
+    tier: "routine",
+    attached: false,
+    last_checked_at: row.last_synced_at ?? "",
+    last_error: unknown ? CASE_UNKNOWN_ON_RECORD : "",
+    pollable: false,
+    closed: !unknown && caseStatusReadsClosed(status),
+  };
+}
+
+/** The cause a failed read leaves on an INCIDENT ROW. The vendor's own sentence
+ *  stays in the escalation's case register; the row knows only that the read
+ *  did not answer, and says so rather than borrowing a cause it never saw. */
+export const CASE_UNKNOWN_ON_RECORD = "the last status read did not answer";
+
+/**
+ * The connector ids an INCIDENT ROW may be read as a vendor case.
+ *
+ * It is CONNECTOR_IDS minus the two ITSM ones. ServiceNow and Jira open TAC
+ * cases too, but the auto-ticketing projection files its own tickets through
+ * the very same three incident fields under the very same system names — so a
+ * "servicenow" row is genuinely ambiguous, and the honest reading of an
+ * ambiguous row is the ITSM pill it has always had. The vendor paths are not
+ * ambiguous: nothing else writes them.
+ */
+const TAC_CONNECTOR_ID_SET = new Set<string>(
+  CONNECTOR_IDS.filter((id) => id !== "servicenow" && id !== "jira"),
+);
+
+/** Mirrors internal/tac.CaseStatusClosed: generous about the vocabulary,
+ *  conservative about the answer — an unrecognised status is OPEN. */
+export function caseStatusReadsClosed(status: string): boolean {
+  const s = (status || "").trim().toLowerCase();
+  if (s === "") return false;
+  return ["closed", "resolved", "complete", "cancelled", "canceled", "done"].some((w) => s.includes(w));
+}
+
+// ── the dry run (internal/tac/dryrun.go) ────────────────────────────────────
+//
+// Owner, 2026-09-07: "I don't have vendor smart contracts to login. If there is
+// any way to ensure API calls work that should be good for now."
+//
+// A customer who has just pasted a client secret has, otherwise, exactly one way
+// to find out whether it works: open a real case at three in the morning during
+// an outage. So the confirmation screen carries a SECONDARY control that
+// authenticates for real and then DESCRIBES the request a submit would make,
+// with every secret redacted. It stays secondary: Open case is the action this
+// screen exists for, and a dry run is what you do before the outage.
+//
+// The claim the screen makes — "Nothing was created" — is the SERVER'S
+// (`created_nothing`), not a client-side assertion about code it cannot see.
+
+export const DRY_RUN_ACTION = "Dry run";
+export const DRY_RUN_RUNNING = "Checking…";
+export const DRY_RUN_FAILED = "The dry run could not be made.";
+
+/** The whole point, in three words. Rendered from the server's own flag. */
+export const DRY_RUN_CREATED_NOTHING = "Nothing was created.";
+
+/** One sentence per outcome. The server's own note follows it — this is the
+ *  word Correlix puts on the state, that is what the vendor said. */
+export const DRY_RUN_SENTENCE: Readonly<Record<TacDryRunOutcome, string>> = Object.freeze({
+  ok: "The vendor accepted the credential.",
+  incomplete: "This case is missing what the vendor requires.",
+  not_configured: "Nothing to check yet.",
+  refused: "The vendor refused these credentials.",
+  unreachable: "The vendor could not be reached.",
+  unsupported: "This path has nothing to check.",
+});
+
+/** Chip tone per outcome. Only a real refusal or outage is bad news; a path
+ *  that publishes nothing to check is a complete answer, not a failure. */
+export function dryRunTone(outcome: TacDryRunOutcome): string {
+  if (outcome === "ok") return "tac-chip-done";
+  if (outcome === "refused" || outcome === "unreachable") return "tac-chip-failed";
+  if (outcome === "incomplete") return "tac-chip-partial";
+  return "tac-chip-queued";
+}
+
+/** One call's summary line: what it is, how it would go out, and whether the
+ *  dry run ACTUALLY made it. Only the authenticate step is ever performed, and
+ *  the row says which it was rather than leaving it to be assumed. */
+export function dryRunCallLine(c: TacDryRunCall): string {
+  const made = c.performed ? "made" : "described";
+  return `${c.step} · ${c.method} ${c.url} · ${made}`;
+}
+
+/** How long the authenticate call took, when one was made. */
+export function dryRunElapsed(report: TacDryRunReport): string {
+  const ms = Number(report.elapsed_ms);
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
