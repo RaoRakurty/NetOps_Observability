@@ -6528,40 +6528,92 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
 }
 
 /* ── Data Protection console (pages/DataProtection.tsx) ──────────────────────
-   The backup & recovery surface: protection health, the coverage matrix, the
-   recovery-point table with its restore wizard, the policies and the audit
-   trail. Two conventions carry the meaning here and are worth stating:
+   The backup & recovery surface. Rebuilt 2026-09-08 (owner: "bring that to
+   PROD level page … not clear about the goal of the page") around ONE question
+   stated at the top — can this appliance be recovered, and how much would be
+   lost — with three sections under it: Protect, Recover, Storage.
 
-   1. ABSENCE IS STYLED AS ABSENCE, NOT AS FAILURE. `.dp-unmeasured` is muted
+   Four conventions carry the meaning here and are worth stating:
+
+   1. ONE GRID, EQUAL GUTTERS. `.dp-page` is a two-column grid with a single
+      gap. The answer card and Protect span it; Recover and Storage share the
+      last row, which is what lets the whole page land inside one 1440 screen
+      before any disclosure is opened. It collapses to one column under 1120px.
+   2. TYPE SCALE. 14px body, 18px section headings, 26px verdict; NOTHING under
+      12.5px, in either theme (owner, 2026-09-06).
+   3. ABSENCE IS STYLED AS ABSENCE, NOT AS FAILURE. `.dp-unmeasured` is muted
       and italic — never red. "Nobody measured this" is a different fact from
       "this is broken", and colouring them the same trains an operator to
       ignore both.
-   2. NO LAYOUT SHIFT. The header's stat grid, the section frame and the
-      recovery-point table all reserve their box before their data lands, so a
-      slow panel does not push the buttons under the operator's cursor.
+   4. NO LAYOUT SHIFT. The answer card, the fact grid and the section frames all
+      reserve their box before their data lands, so a slow panel does not push
+      the one action out from under the cursor.
 
-   Tokens only (theme-safe in light and dark); density matches the dense admin
-   surfaces (ds-*) rather than the roomier dashboards. */
-.dp-page { display: flex; flex-direction: column; gap: var(--sp-3, 12px); font-size: 12.5px; }
+   Tokens only (theme-safe in light and dark). */
+.dp-page {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3, 12px); align-items: start; font-size: 14px; min-width: 0;
+}
+/* The answer, its consequences and Protect are full width; Recover and Storage
+   share the last row. */
+.dp-page > .dp-answer,
+.dp-page > .dp-honest,
+.dp-page > .dp-op,
+.dp-sec[data-section="protect"] { grid-column: 1 / -1; }
+@media (max-width: 1120px) {
+  .dp-page { grid-template-columns: 1fr; }
+}
 
-/* section frame */
+/* ── 1 · the answer ────────────────────────────────────────────────────────── */
+.dp-answer {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0;
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--dp-tone, var(--border)) 40%, var(--panel-border));
+  border-left: 4px solid var(--dp-tone, var(--border));
+  border-radius: var(--r-4, 12px); padding: 14px 16px;
+}
+.dp-answer-q { margin: 0; font-size: 14px; color: var(--muted); }
+.dp-answer-hd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.dp-answer-k {
+  font-size: 14px; font-weight: 600; color: var(--muted);
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.dp-answer-v { font-size: 26px; font-weight: 700; line-height: 1.1; color: var(--dp-tone, var(--fg)); }
+.dp-answer-why { margin: 0; font-size: 14px; line-height: 1.5; color: var(--fg); }
+.dp-do { white-space: nowrap; }
+
+.dp-facts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px; min-width: 0;
+}
+.dp-fact {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
+  border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px);
+  padding: 7px 10px; min-height: 56px;   /* reserved: no shift when the value lands */
+}
+.dp-fact-k {
+  font-size: 12.5px; color: var(--muted); font-weight: 600;
+  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+}
+.dp-fact-v { font-size: 14px; overflow-wrap: anywhere; min-width: 0; }
+
+/* ── section frame ─────────────────────────────────────────────────────────── */
 .dp-sec {
   background: var(--panel); border: 1px solid var(--panel-border);
-  border-radius: var(--r-4, 12px); padding: 10px 12px; min-width: 0;
+  border-radius: var(--r-4, 12px); padding: 12px 14px; min-width: 0;
 }
 .dp-sec-hd {
   display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; margin-bottom: 8px;
+  border-bottom: 1px solid var(--panel-border); padding-bottom: 8px; margin-bottom: 10px;
 }
-.dp-sec-hd h2 {
-  margin: 0; font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em;
-  color: var(--fg);
-}
+.dp-sec-hd h2 { margin: 0; font-size: 18px; font-weight: 700; color: var(--fg); }
 .dp-sec-note { font-size: 12.5px; color: var(--muted); }
 .dp-sp { flex: 1 1 auto; }
 .dp-sec-bd { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.dp-sub-h { margin: 0 0 6px; font-size: 12.5px; font-weight: 600; color: var(--muted);
-  letter-spacing: 0.04em; }
+.dp-sub-h {
+  margin: 10px 0 4px; font-size: 16px; font-weight: 600; color: var(--fg);
+  display: flex; align-items: center; gap: 4px;
+}
 
 /* tone ramp — one place, so a pill, a banner and a bar agree on what warn means */
 .dp-good  { --dp-tone: var(--ok); }
@@ -6576,23 +6628,23 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
   background: color-mix(in srgb, var(--dp-tone, var(--fg-subtle)) 12%, transparent);
   white-space: nowrap;
 }
-.dp-sub { font-size: 12.5px; color: var(--muted); }
+/* Same sentence-case rule as the Security pages (owner, 2026-09-06): a pill
+   carries an authored word or a server enum, and both read as a sentence. */
+.dp-pill { text-transform: none; }
+.dp-pill::first-letter { text-transform: uppercase; }
 /* `.dp-fine` is fine print that states a VALUE — a duration, a locator, "none
    reported". `.dp-sub` (still used by pages/WanCircuits.tsx) reads as an
    explanatory note to the word-budget guard, and this console states facts, so
    the two are deliberately different names for the same ink. Explanations live
    in ai/skills/explain/ behind an <AskIris/>. */
+.dp-sub { font-size: 12.5px; color: var(--muted); }
 .dp-fine { font-size: 12.5px; color: var(--muted); }
-/* Same sentence-case rule as the Security pages (owner, 2026-09-06): a pill
-   carries an authored word or a server enum, and both read as a sentence. */
-.dp-pill { text-transform: none; }
-.dp-pill::first-letter { text-transform: uppercase; }
 .dp-block { display: block; }
 /* absence, not failure */
 .dp-unmeasured { font-size: 12.5px; color: var(--fg-subtle); font-style: italic; }
-.dp-bad-text { color: var(--bad); }
+.dp-bad-text { color: var(--bad); font-size: 12.5px; }
 .dp-nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dp-loading { color: var(--muted); padding: 10px 2px; }
+.dp-loading { color: var(--muted); font-size: 14px; padding: 10px 2px; }
 .dp-more {
   border: 0; background: transparent; color: var(--accent); font-size: 12.5px;
   cursor: pointer; padding: 4px 2px; align-self: flex-start;
@@ -6600,107 +6652,92 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
 .dp-more:hover { text-decoration: underline; }
 .dp-more:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 
-/* 1 — protection health hero */
-.dp-hero {
-  display: flex; flex-direction: column; gap: 10px;
-  border: 1px solid color-mix(in srgb, var(--dp-tone, var(--border)) 40%, var(--panel-border));
-  border-left: 4px solid var(--dp-tone, var(--border));
-  border-radius: var(--r-2, 8px); padding: 10px 12px; background: var(--surface);
-}
-.dp-hero-head { display: flex; align-items: center; gap: 10px; color: var(--dp-tone, var(--fg)); }
-.dp-hero-verdict { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.dp-hero-state { font-size: 18px; font-weight: 700; color: var(--dp-tone, var(--fg)); }
-.dp-hero-reason { font-size: 12.5px; color: var(--fg); }
-
-.dp-stats {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px; margin: 0;
-}
-.dp-stat {
-  border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px);
-  padding: 6px 9px; min-height: 52px;   /* reserved: no shift when the value lands */
-  display: flex; flex-direction: column; gap: 3px; min-width: 0;
-}
-.dp-stat dt { font-size: 12.5px; letter-spacing: 0.04em; color: var(--muted); }
-.dp-stat dd { margin: 0; font-size: 12.5px; overflow-wrap: anywhere; }
-
-.dp-rpo { display: flex; flex-direction: column; gap: 4px; }
-.dp-rpo-h { font-size: 12.5px; letter-spacing: 0.04em; color: var(--muted); }
-.dp-rpo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
-.dp-rpo-item { display: flex; align-items: center; gap: 6px; }
-.dp-rpo-name { font-size: 12.5px; color: var(--fg); }
-
 /* honest states — what is wrong, the exact next action, the procedure */
 .dp-honest {
   display: flex; flex-direction: column; gap: 4px;
   border: 1px solid color-mix(in srgb, var(--dp-tone, var(--border)) 35%, var(--panel-border));
   border-left: 3px solid var(--dp-tone, var(--border));
-  border-radius: var(--r-1, 6px); padding: 8px 10px; background: var(--surface);
-  font-size: 12.5px; line-height: 1.5;
+  border-radius: var(--r-1, 6px); padding: 9px 11px; background: var(--surface);
+  font-size: 12.5px; line-height: 1.55; min-width: 0;
 }
-.dp-honest strong { color: var(--dp-tone, var(--fg)); font-weight: 650; }
+.dp-honest strong { color: var(--dp-tone, var(--fg)); font-weight: 650; font-size: 14px; }
 .dp-doclink { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: 12.5px; }
 .dp-msg { margin: 0; font-size: 12.5px; color: var(--dp-tone, var(--fg)); }
 
-/* 2 — coverage matrix */
-.dp-tblwrap { overflow-x: auto; }
-.dp-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+/* ── 2 · protect: the short table and the three editable lines ─────────────── */
+.dp-tblwrap { overflow-x: auto; min-width: 0; }
+.dp-tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .dp-tbl th, .dp-tbl td {
-  padding: 5px 8px; text-align: left; vertical-align: top;
+  padding: 6px 10px; text-align: left; vertical-align: top;
   border-bottom: 1px solid var(--panel-border);
 }
 .dp-tbl thead th {
   position: sticky; top: 0; background: var(--surface); z-index: 1;
-  font-size: 12.5px; letter-spacing: 0.04em; color: var(--muted); font-weight: 600;
+  font-size: 12.5px; color: var(--muted); font-weight: 600;
 }
 .dp-tbl tbody th { font-weight: 650; color: var(--fg); white-space: nowrap; }
 .dp-tbl td.num, .dp-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
-.dp-row-na td { color: var(--muted); }
+.dp-row-na td, .dp-row-na th { color: var(--muted); }
 .dp-badges { display: inline-flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
 
-/* 2b — bytes on disk: the per-store breakdown behind a disclosure. The rows are
-   the same .dp-tbl as the coverage matrix; only the expander is new. */
+.dp-lines { display: flex; flex-direction: column; gap: 2px; }
+.dp-line {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 6px 2px; border-bottom: 1px solid var(--panel-border); min-width: 0;
+}
+.dp-line:last-child { border-bottom: 0; }
+.dp-line > .dp-fact-k { min-width: 130px; }
+.dp-line > .dp-fact-v { flex: 1 1 220px; }
+
+/* ── disclosures: the evidence a short answer demoted ─────────────────────── */
+.dp-details {
+  border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px);
+  padding: 6px 10px; min-width: 0;
+}
 .dp-details > summary {
-  cursor: pointer; font-size: 12.5px; color: var(--accent); padding: 2px 0;
+  cursor: pointer; font-size: 14px; color: var(--accent); padding: 2px 0;
   list-style-position: outside;
 }
 .dp-details > summary:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.dp-details[open] > summary { margin-bottom: 8px; }
+.dp-rowhead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 .dp-parts-row > td { background: var(--surface); }
 .dp-parts { list-style: none; margin: 4px 0 2px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .dp-part { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; flex-wrap: wrap; }
 .dp-part-n { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
 
-/* 3 — recovery points: async progress + per-row actions */
+.dp-rpo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.dp-rpo-item { display: flex; align-items: center; gap: 6px; }
+.dp-rpo-name { font-size: 14px; color: var(--fg); }
+
+/* ── 3 · recover: async progress + per-row actions ────────────────────────── */
 .dp-op {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
   border: 1px solid color-mix(in srgb, var(--dp-tone, var(--border)) 35%, var(--panel-border));
   border-left: 3px solid var(--dp-tone, var(--border));
-  border-radius: var(--r-1, 6px); padding: 7px 10px; font-size: 12.5px;
+  border-radius: var(--r-1, 6px); padding: 8px 11px; font-size: 12.5px;
 }
-.dp-op strong { color: var(--dp-tone, var(--fg)); text-transform: capitalize; }
+.dp-op strong { color: var(--dp-tone, var(--fg)); text-transform: capitalize; font-size: 14px; }
 .dp-op-bar { flex: 1 1 160px; min-width: 120px; }
 .dp-op-bar progress { width: 100%; height: 8px; }
 .dp-audit { font-size: 12.5px; color: var(--muted); font-family: var(--font-mono); }
 .dp-rowacts { display: inline-flex; gap: 4px; }
 .dp-filter { max-width: 220px; }
 
-/* 4/5 — forms, feeds, wizard */
+/* ── forms, feeds, wizard ─────────────────────────────────────────────────── */
 .dp-form { display: flex; flex-direction: column; gap: 10px; }
-.dp-policy {
-  display: flex; flex-direction: column; gap: 10px;
-  border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px); padding: 10px 12px;
-}
+.dp-policy { display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
 .dp-policy-hd { display: flex; align-items: baseline; gap: 8px; }
 .dp-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
 .dp-grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
-.dp-field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; min-width: 0; }
-.dp-field > span:first-child { font-weight: 600; color: var(--muted); }
+.dp-field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; min-width: 0; }
+.dp-field > span:first-child { font-weight: 600; color: var(--muted); font-size: 12.5px; }
 .dp-input {
   background: var(--surface); border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px);
-  color: var(--fg); font: inherit; font-size: 12.5px; padding: 6px 9px; width: 100%;
+  color: var(--fg); font: inherit; font-size: 14px; padding: 6px 9px; width: 100%;
 }
 .dp-input:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
-.dp-check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
+.dp-check { display: flex; align-items: center; gap: 7px; font-size: 14px; }
 .dp-check.dp-danger { color: var(--bad); font-weight: 600; }
 .dp-fieldset {
   border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px); padding: 8px 10px;
@@ -6710,20 +6747,19 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
 .dp-preview ul { margin: 4px 0 0; padding-left: 16px; font-size: 12.5px; }
 .dp-review { display: grid; gap: 6px; margin: 0; }
 .dp-review > div { display: grid; grid-template-columns: minmax(120px, 180px) 1fr; gap: 8px; }
-.dp-review dt { font-size: 12.5px; letter-spacing: 0.04em; color: var(--muted); }
-.dp-review dd { margin: 0; font-size: 12.5px; overflow-wrap: anywhere; }
+.dp-review dt { font-size: 12.5px; color: var(--muted); }
+.dp-review dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
 .dp-actions { display: flex; gap: 8px; justify-content: flex-end; }
-.dp-kv { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.dp-kv { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 14px; }
 .dp-kv > li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.dp-kv > li > span:first-child { min-width: 90px; color: var(--muted); }
-.dp-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; align-items: start; }
+.dp-kv > li > span:first-child { min-width: 110px; color: var(--muted); font-size: 12.5px; font-weight: 600; }
 .dp-feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
 .dp-feed > li {
-  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
-  padding: 4px 7px; border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px); font-size: 12.5px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 5px 8px; border: 1px solid var(--panel-border); border-radius: var(--r-1, 6px); font-size: 12.5px;
 }
 .dp-feed-t { color: var(--muted); white-space: nowrap; }
-.dp-feed-a { font-weight: 600; }
+.dp-feed-a { font-weight: 600; font-size: 14px; }
 
 /* ── Licence (pages/Licence.tsx + components/licence/UpgradeCard.tsx) ────────
    The platform's commercial surface: what this deployment is licensed to run,

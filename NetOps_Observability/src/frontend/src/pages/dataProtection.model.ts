@@ -25,7 +25,10 @@
 // "Metrics history", never the name of the database underneath it.
 
 import type {
+  BackupConfig,
   BackupCoverageView,
+  BackupOperation,
+  CoverageRetention,
   CoverageTargetKind,
   CoverageVerdict,
   EngineCoverage,
@@ -241,17 +244,23 @@ export function coverageTone(v: CoverageVerdict): Tone {
   }
 }
 
-/** Coverage verdict → the word on screen. */
+/**
+ * Coverage verdict → the word on screen.
+ *
+ * Plain OUTCOMES (owner, 2026-09-08): the operator's question is "is this
+ * copied", not "what is its coverage verdict". "Covered"/"Coverage unknown"
+ * were the engine's vocabulary wearing an operator's coat.
+ */
 export function coverageLabel(v: CoverageVerdict): string {
   switch (v) {
     case "yes":
-      return "Covered";
+      return "Copied";
     case "no":
-      return "Not covered";
+      return "Not copied";
     case "not_applicable":
       return "Not protected here";
     default:
-      return "Coverage unknown";
+      return "Unknown";
   }
 }
 
@@ -302,42 +311,49 @@ export type RepositoryAdvice = { headline: string; remedy: string; doc: string; 
 /** Where the backup and restore procedure lives in the bundled documentation. */
 export const BACKUP_DOC = "/docs/deploy/back-up-and-restore";
 
-/** The remedy for each repository state. Returns null when there is nothing wrong. */
+/**
+ * The remedy for each copy-store state. Returns null when there is nothing
+ * wrong.
+ *
+ * The HEADLINES are the operator's words (owner, 2026-09-08): "the copy store",
+ * not "the snapshot repository"; "not been checked", not "unverified"; and
+ * never "restorability". The engine's own nouns stay in the per-store details
+ * and in ai/skills/explain/backup.repository.md, one click away. The remedies
+ * keep every FACT — the bootstrap to run, the volume to check, the 2026-08-27
+ * failure — because a remedy is an action, not an explanation.
+ */
 export function repositoryAdvice(state: RepositoryState, detail: string): RepositoryAdvice | null {
   switch (state) {
     case "unregistered":
       return {
-        headline: "The snapshot repository is not registered.",
+        headline: "The copy store is not set up.",
         remedy:
-          "Nothing is being snapshotted and there is nothing to restore from. Run the storage " +
-          "bootstrap on the host (scripts/opensearch-init) so the repository exists, then take a " +
-          "restore point here.",
+          "Nothing is being copied and there is nothing to restore from. Run the storage bootstrap " +
+          "on the host (scripts/opensearch-init), then back up from here.",
         doc: BACKUP_DOC, tone: "bad",
       };
     case "unreachable":
       return {
-        headline: "The snapshot repository cannot be read.",
+        headline: "The copy store cannot be read.",
         remedy:
           detail ||
-          "Existing restore points are neither listable nor restorable right now. Check that the " +
-          "search tier is running and that its snapshot volume is still mounted, then read this page again.",
+          "Existing copies can neither be listed nor restored right now. Check that the search tier " +
+          "is running and that its volume is still mounted, then read this page again.",
         doc: BACKUP_DOC, tone: "bad",
       };
     case "damaged":
       return {
-        headline: "The repository failed verification.",
+        headline: "The copy store failed its check.",
         remedy:
-          "This is the 2026-08-27 state: a repository that still lists restore points but cannot " +
-          "produce them. Treat every restore point in it as unproven, take a fresh one to a healthy " +
-          "repository, and delete nothing until a verification passes.",
+          "This is the 2026-08-27 state: a store that still lists copies but cannot produce them. " +
+          "Treat every copy in it as unproven, take a fresh one somewhere healthy, and delete " +
+          "nothing until a check passes.",
         doc: BACKUP_DOC, tone: "bad",
       };
     case "unverified":
       return {
-        headline: "The repository has not been verified on this read.",
-        remedy:
-          "Registration is not restorability. Run a restore drill to prove the newest restore point " +
-          "can actually be restored.",
+        headline: "The copy store has not been checked.",
+        remedy: "Being set up is not the same as working. Run a drill to prove the newest copy restores.",
         doc: BACKUP_DOC, tone: "warn",
       };
     default:
@@ -720,4 +736,237 @@ export function retentionHint(
     return `Clearing is not a change. Saving keeps ${stored}.`;
   }
   return retentionSentence(typed);
+}
+
+// ── THE ANSWER (owner, 2026-09-08) ──────────────────────────────────────────
+//
+// The page has one question at the top: "can this appliance be recovered, and
+// how much would be lost?" Everything in this block is that answer, and only
+// that answer. It is DERIVED from the same facts `posture()` reads — the
+// arithmetic stays here, in the open, rather than becoming an unauditable
+// server field.
+//
+// Three states, never four, and never green from nothing: `unknown` is what an
+// unreadable coverage table produces, and `yes` requires a proved restore.
+
+export type Recoverable = "yes" | "not_yet" | "unknown";
+
+export type Recoverability = {
+  state: Recoverable;
+  /** The specific condition that decided it — never a mood. */
+  reason: string;
+  /** Severity carried through from the posture, so "not yet" can still be red. */
+  tone: Tone;
+};
+
+/** The word on screen. */
+export function recoverableLabel(state: Recoverable): string {
+  switch (state) {
+    case "yes":
+      return "Yes";
+    case "not_yet":
+      return "Not yet";
+    default:
+      return "Unknown";
+  }
+}
+
+/**
+ * Can this appliance be recovered?
+ *
+ * `protected` is the ONLY thing that answers yes, and `posture()` grants it
+ * only to a platform where every engine has a recent copy AND at least one
+ * restore has actually been proved. An unreadable coverage table answers
+ * "unknown" and is styled as absence: the absence of bad news is not good news.
+ */
+export function recoverability(
+  coverage: BackupCoverageView | null,
+  repoState: RepositoryState,
+): Recoverability {
+  const p = posture(coverage, repoState);
+  const state: Recoverable =
+    p.state === "protected" ? "yes" : p.state === "unknown" ? "unknown" : "not_yet";
+  return { state, reason: p.reason, tone: postureTone(p.state) };
+}
+
+/** The newest SUCCESSFUL copy across every engine, or why there is none. */
+export function lastGoodCopy(
+  coverage: BackupCoverageView | null,
+): Measured<{ at: string; engine: string }> {
+  if (!coverage) return { measured: false, reason: "the coverage table could not be read" };
+  let best: { at: string; engine: string } | null = null;
+  for (const e of coverage.engines) {
+    if (e.covered === "not_applicable") continue;
+    if (!e.last_success_at) continue;
+    if (!best || e.last_success_at > best.at) best = { at: e.last_success_at, engine: engineLabel(e) };
+  }
+  if (!best) return { measured: false, reason: "no store has ever reported a successful copy" };
+  return { measured: true, value: best };
+}
+
+/** How much work is between the last good copy and now, per the WORST store. */
+export type LossWindow = {
+  hours: number;
+  engine: string;
+  /** True when at least one store did not report an age — the window is a floor. */
+  partial: boolean;
+};
+
+/**
+ * "Would lose" comes from REALITY, not from the target.
+ *
+ * `rpo_hours` is the measured age of each engine's last good copy; the target
+ * and the declared objective are what somebody hoped for. The worst measured
+ * age is what an outage right now would actually cost, and a store that
+ * reported no age at all makes that number a LOWER BOUND, said out loud.
+ */
+export function lossWindow(coverage: BackupCoverageView | null): Measured<LossWindow> {
+  if (!coverage) return { measured: false, reason: "the coverage table could not be read" };
+  const relevant = coverage.engines.filter((e) => e.covered !== "not_applicable");
+  if (relevant.length === 0) {
+    return { measured: false, reason: "the platform reported no store it is responsible for protecting" };
+  }
+  let worst: { hours: number; engine: string } | null = null;
+  let partial = false;
+  for (const e of relevant) {
+    const m = measured(e.rpo_hours, e.rpo_detail);
+    if (!m.measured) { partial = true; continue; }
+    if (!worst || m.value > worst.hours) worst = { hours: m.value, engine: engineLabel(e) };
+  }
+  if (!worst) return { measured: false, reason: "no store reported the age of its last good copy" };
+  return { measured: true, value: { ...worst, partial } };
+}
+
+/** "up to 3d 04h", or "at least 3d 04h" while any store reported no age. */
+export function lossWindowText(v: LossWindow): string {
+  return `${v.partial ? "at least " : "up to "}${fmtHours(v.hours)}`;
+}
+
+/** The one action that matters right now. */
+export type NextActionKind = "backup" | "drill" | "fix" | "reread";
+export type NextAction = { kind: NextActionKind; label: string };
+
+/**
+ * ONE action, chosen by the same worst-first order the verdict uses, so the
+ * button and the reason beside it can never disagree.
+ */
+export function nextAction(
+  coverage: BackupCoverageView | null,
+  repoState: RepositoryState,
+  proven: Measured<{ at: string; engine: string }>,
+  lastCopy: Measured<{ at: string; engine: string }>,
+): NextAction {
+  if (!coverage) return { kind: "reread", label: "Read it again" };
+  if (repoState === "unregistered" || repoState === "unreachable" || repoState === "damaged") {
+    return { kind: "fix", label: "Fix the copy store" };
+  }
+  const relevant = coverage.engines.filter((e) => e.covered !== "not_applicable");
+  if (relevant.length === 0) return { kind: "reread", label: "Read it again" };
+  const broken = relevant.find((e) => e.covered === "no") ?? relevant.find((e) => e.covered === "unknown");
+  if (broken) return { kind: "fix", label: `Fix ${engineLabel(broken)}` };
+  if (!lastCopy.measured) return { kind: "backup", label: "Run a backup" };
+  if (!proven.measured) return { kind: "drill", label: "Run a drill" };
+  return { kind: "drill", label: "Run a drill" };
+}
+
+// ── plain words for what the contract says in engine vocabulary ─────────────
+
+/** Free space where the copies land, or the reason nobody weighed it. */
+export function headroom(
+  repo: SnapshotRepositoryView | null | undefined,
+): Measured<{ free: number; total: number; freePct: number }> {
+  const free = repo?.disk_free_bytes;
+  const total = repo?.disk_total_bytes;
+  const why = repo?.disk_detail || "the platform did not report the volume the copies land on";
+  if (free === null || free === undefined || total === null || total === undefined || total <= 0) {
+    return { measured: false, reason: why };
+  }
+  return { measured: true, value: { free, total, freePct: (free / total) * 100 } };
+}
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/**
+ * A cron expression as a sentence an operator reads, or null when it is not
+ * one of the three shapes this platform actually schedules. NULL, never a
+ * guess: a mis-read cron on a backup screen is worse than the raw expression,
+ * which the details disclosure still prints verbatim.
+ */
+export function scheduleWords(cron: string | null | undefined, timezone?: string | null): string | null {
+  const c = (cron ?? "").trim();
+  if (!c) return null;
+  const f = c.split(/\s+/);
+  if (f.length !== 5) return null;
+  const [mi, hh, dom, mon, dow] = f;
+  if (!/^\d{1,2}$/.test(mi) || !/^\d{1,2}$/.test(hh)) return null;
+  if (Number(mi) > 59 || Number(hh) > 23) return null;
+  const at = `${hh.padStart(2, "0")}:${mi.padStart(2, "0")}`;
+  const tz = (timezone ?? "").trim() || "UTC";
+  if (mon !== "*") return null;
+  if (dom === "*" && dow === "*") return `Daily at ${at} ${tz}`;
+  if (dom === "*" && /^[0-6]$/.test(dow)) return `Weekly on ${WEEKDAYS[Number(dow)]} at ${at} ${tz}`;
+  if (dow === "*" && /^\d{1,2}$/.test(dom) && Number(dom) >= 1 && Number(dom) <= 31) {
+    return `Monthly on day ${Number(dom)} at ${at} ${tz}`;
+  }
+  return null;
+}
+
+/** How long copies are kept, in plain words, or the reason there is no rule. */
+export function keptForText(r: CoverageRetention | null | undefined): Measured<string> {
+  const m = measured(r, "the platform did not report how long copies are kept");
+  if (!m.measured) return m;
+  const v = m.value;
+  const parts: string[] = [];
+  if (v.max_count !== null && v.max_count !== undefined) {
+    parts.push(v.max_count === 1 ? "1 copy" : `${v.max_count} copies`);
+  }
+  if (v.max_age_days) parts.push(v.max_age_days === 1 ? "1 day" : `${v.max_age_days} days`);
+  if (parts.length === 0) {
+    return { measured: false, reason: v.detail || "no rule bounds how long copies are kept" };
+  }
+  return { measured: true, value: parts.join(" · ") };
+}
+
+/** The recovery-point policy's retention, in the same words as the table. */
+export function policyRetentionWords(maxCount: number, maxAgeDays: number): string {
+  const parts = [maxCount === 1 ? "1 copy" : `${maxCount} copies`];
+  if (maxAgeDays > 0) parts.push(maxAgeDays === 1 ? "1 day" : `${maxAgeDays} days`);
+  return `Keep ${parts.join(" · ")}`;
+}
+
+/** Whether there is a copy anywhere but this host, in two words. */
+export function offHostState(cfg: BackupConfig | null | undefined): { word: string; tone: Tone } {
+  if (!cfg) return { word: "Unknown", tone: "muted" };
+  return (cfg.remote_url ?? "").trim()
+    ? { word: "Set", tone: "good" }
+    : { word: "Not set", tone: "bad" };
+}
+
+/** The copy store's state as a plain outcome, never as its engine's noun. */
+export function copyStoreWord(s: RepositoryState): string {
+  switch (s) {
+    case "unregistered":
+      return "Not set up";
+    case "damaged":
+      return "Failed its check";
+    case "unverified":
+      return "Not checked";
+    case "unreachable":
+      return "Could not be read";
+    default:
+      return "Ready";
+  }
+}
+
+/** A drill's outcome in the operator's words — never a state enum. */
+export function drillWord(op: BackupOperation): string {
+  if (op.verify) return op.verify.match ? "Drill passed" : "Drill failed";
+  if (op.state === "succeeded") return "Drill passed";
+  if (op.state === "failed") return "Drill failed";
+  return "Drill running";
+}
+
+export function drillTone(op: BackupOperation): Tone {
+  if (op.verify) return op.verify.match ? "good" : "bad";
+  return operationTone(op.state);
 }

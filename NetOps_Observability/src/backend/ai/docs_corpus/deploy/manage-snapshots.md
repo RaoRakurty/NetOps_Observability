@@ -24,7 +24,7 @@ Read [Back up and restore](/deploy/back-up-and-restore) first for how the search
 **To read the snapshot inventory:**
 
 1. Go to **Platform → Security → Data Protection**.
-2. Read **Disaster-recovery status**. It is computed live at request time, so an unregistered repository or a missing off-host copy reads as a problem rather than as a blank.
+2. Read the answer card at the top — **Recoverable: Yes / Not yet / Unknown**, the last good copy, what would be lost, the last drill. It is computed live at request time, so an unregistered repository or a missing off-host copy reads as a problem rather than as a blank. The copies themselves are under **Recover → Restore from a copy**.
 3. Read the same state from the command line:
 
    ```bash
@@ -32,7 +32,7 @@ Read [Back up and restore](/deploy/back-up-and-restore) first for how the search
      http://localhost:8000/api/system/backup/snapshots/list
    ```
 
-   Each entry carries the snapshot name, its state, its shard counts, and the restorable-verified verdict. An entry that has never been probed reports as unverified. Unverified is a different fact from good, and the page never collapses the two.
+   Each entry carries the snapshot name, its state, its shard counts, and the restorable-verified verdict. An entry that has never been probed reports as unverified — the page reads that as **Never proved**. Never proved is a different fact from good, and the page never collapses the two.
 
 4. Read the policy and the repository state with the companion route:
 

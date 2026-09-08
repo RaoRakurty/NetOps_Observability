@@ -1413,6 +1413,8 @@ export type SnapshotPolicy = {
   disabled_at?: string;
   disabled_by?: string;
   managed_by?: string;         // "gui" = the intent stored here is authoritative
+  /** Who owns it and how the platform knows — shown beside `managed_by`. */
+  managed_by_detail?: string;
 };
 export type SnapshotPolicyUpdate = {
   enabled?: boolean;
@@ -1439,6 +1441,14 @@ export type SnapshotRepositoryView = {
   /** null = no verification was attempted on this read (verification writes). */
   verified: boolean | null;
   verified_detail: string;
+  // Headroom on the volume the copies land on. Nullable, with the sibling
+  // detail saying WHERE it was read (in the shipped deployment the api cannot
+  // mount the repository path, so these are the search tier's own filesystem
+  // totals for the same volume). Null + disk_detail = not measured.
+  // contract: openapi.go GET /api/system/backup/snapshots
+  disk_free_bytes?: number | null;
+  disk_total_bytes?: number | null;
+  disk_detail?: string;
   detail?: string;
 };
 

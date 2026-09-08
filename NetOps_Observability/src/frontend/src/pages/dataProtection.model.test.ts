@@ -56,6 +56,20 @@ import {
   retentionHint,
   retentionSentence,
   rpoVerdict,
+  copyStoreWord,
+  drillTone,
+  drillWord,
+  headroom,
+  keptForText,
+  lastGoodCopy,
+  lossWindow,
+  lossWindowText,
+  nextAction,
+  offHostState,
+  policyRetentionWords,
+  recoverability,
+  recoverableLabel,
+  scheduleWords,
   scopeLabel,
   shardSummary,
   snapshotStateLabel,
@@ -191,10 +205,12 @@ describe("vocabulary — rows are named for the data, not the engine", () => {
   });
 
   it("tones and labels the four coverage verdicts; unknown is never a pass", () => {
-    expect([coverageTone("yes"), coverageLabel("yes")]).toEqual(["good", "Covered"]);
-    expect([coverageTone("no"), coverageLabel("no")]).toEqual(["bad", "Not covered"]);
+    // Plain OUTCOMES (owner, 2026-09-08): the operator asks "is it copied",
+    // not "what is its coverage verdict".
+    expect([coverageTone("yes"), coverageLabel("yes")]).toEqual(["good", "Copied"]);
+    expect([coverageTone("no"), coverageLabel("no")]).toEqual(["bad", "Not copied"]);
     expect([coverageTone("not_applicable"), coverageLabel("not_applicable")]).toEqual(["muted", "Not protected here"]);
-    expect([coverageTone("unknown"), coverageLabel("unknown")]).toEqual(["warn", "Coverage unknown"]);
+    expect([coverageTone("unknown"), coverageLabel("unknown")]).toEqual(["warn", "Unknown"]);
   });
 
   it("an engine the GUI does not govern is external", () => {
@@ -299,7 +315,11 @@ describe("repository state — four states, four first actions", () => {
   it("gives each broken state its own remedy and the procedure link", () => {
     expect(repositoryAdvice("unregistered", "")?.remedy).toMatch(/opensearch-init/);
     expect(repositoryAdvice("damaged", "")?.remedy).toMatch(/2026-08-27/);
-    expect(repositoryAdvice("unverified", "")?.remedy).toMatch(/Registration is not restorability/);
+    // Plain words (owner, 2026-09-08): the fact survives, the engine noun does not.
+    expect(repositoryAdvice("unverified", "")?.remedy).toMatch(/Being set up is not the same as working/);
+    for (const st of ["unregistered", "unreachable", "damaged", "unverified"] as const) {
+      expect(repositoryAdvice(st, "")?.headline.toLowerCase(), st).not.toMatch(/repositor|restorability/);
+    }
     expect(repositoryAdvice("unregistered", "")?.doc).toBe(BACKUP_DOC);
     expect(repositoryAdvice("unverified", "")?.tone).toBe("warn");
     expect(repositoryAdvice("damaged", "")?.tone).toBe("bad");
@@ -602,5 +622,246 @@ describe("retentionHint", () => {
   it("falls through to the plain sentence when nothing is stored either", () => {
     expect(retentionHint(null, null)).toBe("Not set. The host keeps 7.");
     expect(retentionHint(30, 21)).toBe("The host keeps the 30 newest copies.");
+  });
+});
+
+// ── THE ANSWER (owner, 2026-09-08) ──────────────────────────────────────────
+//
+// The page now leads with "can this appliance be recovered, and how much would
+// be lost?" These are the rules behind that card. The one that matters most is
+// the last: NEVER GREEN FROM NOTHING — every path that lacks a fact answers
+// Unknown, and Yes is reachable only through a restore somebody proved.
+
+describe("recoverability — three answers, never green from nothing", () => {
+  it("answers Yes only for a covered platform with a PROVED restore", () => {
+    const r = recoverability(coverage(), "ok");
+    expect([r.state, recoverableLabel(r.state), r.tone]).toEqual(["yes", "Yes", "good"]);
+  });
+
+  it("answers Unknown — never Yes — when the coverage table could not be read", () => {
+    const r = recoverability(null, "ok");
+    expect([r.state, recoverableLabel(r.state), r.tone]).toEqual(["unknown", "Unknown", "muted"]);
+    expect(r.reason).toContain("could not be read");
+  });
+
+  it("answers Unknown when the platform lists no store it protects", () => {
+    expect(recoverability(coverage({ engines: [] }), "ok").state).toBe("unknown");
+  });
+
+  it("answers Not yet — and keeps the severity — for an uncovered store", () => {
+    const r = recoverability(
+      coverage({ engines: [engine({ covered: "no", covered_reason: "no job copies it" })] }),
+      "ok",
+    );
+    expect([r.state, recoverableLabel(r.state), r.tone]).toEqual(["not_yet", "Not yet", "bad"]);
+    expect(r.reason).toContain("no job copies it");
+  });
+
+  it("answers Not yet when copies exist but no restore was ever proved", () => {
+    const r = recoverability(coverage({ engines: [engine({ last_verified: null })] }), "ok");
+    expect([r.state, r.tone]).toEqual(["not_yet", "warn"]);
+    expect(r.reason).toContain("no restore has been proved");
+  });
+
+  it("answers Not yet when the copy store itself is broken", () => {
+    for (const st of ["unregistered", "unreachable", "damaged"] as const) {
+      expect(recoverability(coverage(), st).state, st).toBe("not_yet");
+    }
+  });
+});
+
+describe("lastGoodCopy — the newest copy that actually succeeded", () => {
+  it("takes the newest success across stores and names it", () => {
+    const m = lastGoodCopy(coverage({
+      engines: [
+        engine({ id: "opensearch", last_success_at: "2026-09-04T01:33:00Z" }),
+        engine({ id: "postgres", last_success_at: "2026-09-04T03:00:00Z" }),
+      ],
+    }));
+    expect(m).toEqual({ measured: true, value: { at: "2026-09-04T03:00:00Z", engine: "Application state" } });
+  });
+
+  it("is ABSENT, not zero, when nothing has ever succeeded", () => {
+    const m = lastGoodCopy(coverage({ engines: [engine({ last_success_at: "" })] }));
+    expect(m).toEqual({ measured: false, reason: "no store has ever reported a successful copy" });
+  });
+
+  it("ignores a store the platform does not protect here", () => {
+    const m = lastGoodCopy(coverage({
+      engines: [engine({ covered: "not_applicable", last_success_at: "2030-01-01T00:00:00Z" })],
+    }));
+    expect(m.measured).toBe(false);
+  });
+
+  it("is absent when the coverage table could not be read", () => {
+    expect(lastGoodCopy(null).measured).toBe(false);
+  });
+});
+
+describe("lossWindow — what an outage right now would cost", () => {
+  it("takes the WORST measured age and names the store it belongs to", () => {
+    const m = lossWindow(coverage({
+      engines: [engine({ id: "opensearch", rpo_hours: 5 }), engine({ id: "postgres", rpo_hours: 75.8 })],
+    }));
+    expect(m.measured).toBe(true);
+    if (!m.measured) return;
+    expect(m.value.engine).toBe("Application state");
+    expect(m.value.partial).toBe(false);
+    expect(lossWindowText(m.value)).toBe("up to 3d 03h");
+  });
+
+  it("says AT LEAST when a store reported no age — a floor is not a maximum", () => {
+    const m = lossWindow(coverage({
+      engines: [engine({ id: "opensearch", rpo_hours: 5 }), engine({ id: "secrets_tls", rpo_hours: null })],
+    }));
+    expect(m.measured).toBe(true);
+    if (!m.measured) return;
+    expect(m.value.partial).toBe(true);
+    expect(lossWindowText(m.value)).toBe("at least 5h 00m");
+  });
+
+  it("is ABSENT, never 0, when no store reported an age at all", () => {
+    const m = lossWindow(coverage({ engines: [engine({ rpo_hours: null, rpo_detail: "" })] }));
+    expect(m).toEqual({ measured: false, reason: "no store reported the age of its last good copy" });
+  });
+
+  it("is absent when there is nothing to protect, or nothing to read", () => {
+    expect(lossWindow(coverage({ engines: [] })).measured).toBe(false);
+    expect(lossWindow(null).measured).toBe(false);
+  });
+});
+
+describe("nextAction — the one action, ordered worst-first", () => {
+  const proven = { measured: true as const, value: { at: "2026-09-01T04:00:00Z", engine: "x" } };
+  const copy = { measured: true as const, value: { at: "2026-09-04T01:33:00Z", engine: "x" } };
+  const none = { measured: false as const, reason: "never" };
+
+  it("asks for a re-read when nothing could be read", () => {
+    expect(nextAction(null, "ok", none, none)).toEqual({ kind: "reread", label: "Read it again" });
+  });
+
+  it("points at the copy store before anything else", () => {
+    expect(nextAction(coverage(), "damaged", proven, copy)).toEqual({ kind: "fix", label: "Fix the copy store" });
+  });
+
+  it("names the failing store, so the button and the reason agree", () => {
+    const cov = coverage({ engines: [engine({ id: "postgres", covered: "no" })] });
+    expect(nextAction(cov, "ok", proven, copy)).toEqual({ kind: "fix", label: "Fix Application state" });
+  });
+
+  it("asks for a backup when no copy has ever succeeded", () => {
+    expect(nextAction(coverage(), "ok", none, none)).toEqual({ kind: "backup", label: "Run a backup" });
+  });
+
+  it("asks for a drill when copies exist but none was ever proved", () => {
+    expect(nextAction(coverage(), "ok", none, copy)).toEqual({ kind: "drill", label: "Run a drill" });
+  });
+
+  it("keeps the drill as the standing action once everything is healthy", () => {
+    expect(nextAction(coverage(), "ok", proven, copy).kind).toBe("drill");
+  });
+});
+
+describe("headroom — free space where the copies land", () => {
+  it("reads the volume the server reports, with a percentage", () => {
+    const m = headroom(repo({ disk_free_bytes: 1 << 30, disk_total_bytes: 4 * (1 << 30) }));
+    expect(m).toEqual({ measured: true, value: { free: 1 << 30, total: 4 * (1 << 30), freePct: 25 } });
+  });
+
+  it("is ABSENT with the server's reason when the volume was not weighed", () => {
+    expect(headroom(repo({ disk_detail: "the api does not mount that path" }))).toEqual({
+      measured: false, reason: "the api does not mount that path",
+    });
+    expect(headroom(null).measured).toBe(false);
+  });
+
+  it("refuses to divide by a zero total rather than printing Infinity", () => {
+    expect(headroom(repo({ disk_free_bytes: 0, disk_total_bytes: 0 })).measured).toBe(false);
+  });
+
+  it("keeps a real ZERO free as a measurement — it is a fact and an emergency", () => {
+    const m = headroom(repo({ disk_free_bytes: 0, disk_total_bytes: 100 }));
+    expect(m).toEqual({ measured: true, value: { free: 0, total: 100, freePct: 0 } });
+  });
+});
+
+describe("scheduleWords — a cron as a sentence, or nothing at all", () => {
+  it("reads the three shapes this platform actually schedules", () => {
+    expect(scheduleWords("30 1 * * *")).toBe("Daily at 01:30 UTC");
+    expect(scheduleWords("0 2 * * 0")).toBe("Weekly on Sunday at 02:00 UTC");
+    expect(scheduleWords("5 3 15 * *")).toBe("Monthly on day 15 at 03:05 UTC");
+  });
+
+  it("names the timezone it was told, not an assumed one", () => {
+    expect(scheduleWords("30 1 * * *", "Europe/London")).toBe("Daily at 01:30 Europe/London");
+  });
+
+  it("returns NULL rather than guessing at anything else", () => {
+    for (const bad of ["", "*/15 * * * *", "30 1 * *", "30 1 1 1 1", "99 1 * * *", "30 99 * * *", "every 24h"]) {
+      expect(scheduleWords(bad), bad).toBeNull();
+    }
+  });
+});
+
+describe("keptForText — how long copies survive, in plain words", () => {
+  it("renders a count, an age, or both", () => {
+    expect(keptForText({ max_count: 14, max_age_days: null, detail: "" })).toEqual({ measured: true, value: "14 copies" });
+    expect(keptForText({ max_count: null, max_age_days: 30, detail: "" })).toEqual({ measured: true, value: "30 days" });
+    expect(keptForText({ max_count: 14, max_age_days: 30, detail: "" })).toEqual({ measured: true, value: "14 copies · 30 days" });
+    expect(keptForText({ max_count: 1, max_age_days: 1, detail: "" })).toEqual({ measured: true, value: "1 copy · 1 day" });
+  });
+
+  it("is ABSENT with the server's reason when no rule bounds it", () => {
+    expect(keptForText({ max_count: null, max_age_days: null, detail: "it dies with the bundle" })).toEqual({
+      measured: false, reason: "it dies with the bundle",
+    });
+    expect(keptForText(null).measured).toBe(false);
+  });
+
+  it("keeps a deliberate ZERO count as a measurement, not as absence", () => {
+    expect(keptForText({ max_count: 0, max_age_days: null, detail: "" })).toEqual({ measured: true, value: "0 copies" });
+  });
+});
+
+describe("the remaining plain words", () => {
+  it("says how many copies the schedule keeps", () => {
+    expect(policyRetentionWords(14, 0)).toBe("Keep 14 copies");
+    expect(policyRetentionWords(14, 30)).toBe("Keep 14 copies · 30 days");
+    expect(policyRetentionWords(1, 1)).toBe("Keep 1 copy · 1 day");
+  });
+
+  it("says whether a copy exists anywhere but this host", () => {
+    expect(offHostState({ remote_url: "", schedule_enabled: false })).toEqual({ word: "Not set", tone: "bad" });
+    expect(offHostState({ remote_url: "  ", schedule_enabled: false })).toEqual({ word: "Not set", tone: "bad" });
+    expect(offHostState({ remote_url: "rsync://nas/", schedule_enabled: false })).toEqual({ word: "Set", tone: "good" });
+    expect(offHostState(null)).toEqual({ word: "Unknown", tone: "muted" });
+  });
+
+  it("names the copy store's state as an outcome, never as its engine's noun", () => {
+    expect(copyStoreWord("ok")).toBe("Ready");
+    expect(copyStoreWord("unregistered")).toBe("Not set up");
+    expect(copyStoreWord("damaged")).toBe("Failed its check");
+    expect(copyStoreWord("unverified")).toBe("Not checked");
+    expect(copyStoreWord("unreachable")).toBe("Could not be read");
+    for (const s of ["ok", "unregistered", "damaged", "unverified", "unreachable"] as const) {
+      expect(copyStoreWord(s).toLowerCase(), s).not.toContain("repositor");
+    }
+  });
+
+  it("reads a drill by its EVIDENCE first, and its state only as a fallback", () => {
+    const base = {
+      id: "op-1", kind: "snapshot_verify" as const, state: "succeeded" as const, actor: "root",
+      started_at: "2026-09-04T01:00:00Z", ended_at: "2026-09-04T01:01:00Z", target: {},
+    };
+    const v = { snapshot: "s", index: "i", temp_index: "t", source_docs: 10, restored_docs: 10, match: true, temp_deleted: true, duration_seconds: 1 };
+    expect([drillWord({ ...base, verify: v }), drillTone({ ...base, verify: v })]).toEqual(["Drill passed", "good"]);
+    // Succeeded as an OPERATION, but the counts did not match: that is a failed drill.
+    expect([
+      drillWord({ ...base, verify: { ...v, restored_docs: 3, match: false } }),
+      drillTone({ ...base, verify: { ...v, restored_docs: 3, match: false } }),
+    ]).toEqual(["Drill failed", "bad"]);
+    expect(drillWord(base)).toBe("Drill passed");
+    expect(drillWord({ ...base, state: "failed" })).toBe("Drill failed");
+    expect(drillWord({ ...base, state: "running" })).toBe("Drill running");
   });
 });

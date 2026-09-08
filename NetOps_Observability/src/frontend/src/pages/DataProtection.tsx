@@ -3,56 +3,56 @@
 
 // DataProtection.tsx — the Correlix backup & recovery console.
 //
-// WHAT CHANGED AND WHY. This surface used to be two forms and a status card: it
-// told an operator whether a remote was configured and how old the newest
-// snapshot was. That answers "is a backup running", which is the easy half. It
-// did not answer the question that matters at 3am — "can I get the data back,
-// from what point in time, for which engine, and has anyone ever proved it" —
-// and it deliberately refused to expose restore at all ("runbook-only").
+// THE PAGE ANSWERS ONE QUESTION, AT THE TOP, IN PLAIN WORDS:
 //
-// The console answers the hard half. Its information architecture is taken from
-// the enterprise backup products; the study, and what was taken from each, is
-// docs/design/DATA_PROTECTION_PAGE_2026-09-04.md.
+//     "Can this appliance be recovered, and how much would be lost?"
 //
-//   1 PROTECTION HEALTH  — one verdict with the specific condition that decided
-//     it, the achieved recovery point per engine, the time since the last copy
-//     anyone actually PROVED restorable, the next scheduled run, and the
-//     repository's own state. (Veeam's SLA view; Rubrik's last/next snapshot.)
-//   2 COVERAGE MATRIX    — one row per engine: covered, schedule, last attempt,
-//     last success, last verified restore, size, retention, destination class,
-//     immutability and encryption. A row the platform does not protect says WHY,
-//     and a job a host cron owns is named as external rather than claimed.
-//     (Cohesity/Rubrik policy-centric coverage.)
-//   3 RESTORE POINTS     — the copies a restore can come from, with state,
-//     duration, index count, shard failures with their reason text, and the
-//     three-way restorability verdict; per row a restore wizard, a drill and a
-//     delete, plus "take one now". (Elastic's snapshot list and restore wizard;
-//     NetBackup's type-to-confirm on destructive actions.)
-//   4 POLICIES           — the recovery-point policy and the full-bundle policy,
-//     each with the CONSEQUENCE of turning it off written next to the switch.
-//   5 ACTIVITY & DRILLS  — every operation the platform ran, who ran it and what
-//     it returned, with the drill history and its document-count evidence split
-//     out. (NetBackup/Commvault audit trail.)
+// Owner direction, 2026-09-08, verbatim: "Can you revise Data Protection page
+// and clean up the jargon, and bring that to PROD level page. It's looking too
+// messy and not clear about the goal of the page."
 //
-// THE HONESTY RULE IS THE PRODUCT. The server encodes an unmeasured value as
-// null plus a sibling `*_detail`; `measured()` in dataProtection.model.ts is the
-// only door those come through, and nothing here turns an absent value into a 0,
-// a dash or a green tick. The page also keeps "not measured" (nobody looked)
-// visually distinct from "never" (we looked, and it has not happened) — the
-// second is a gap, the first is only silence.
+// WHAT THAT CHANGED. The console used to open with five peer sections — a
+// posture hero, a nine-column coverage matrix, a seventy-row footprint table, a
+// restore-point grid, two policy forms and an audit feed — every one of them at
+// the same visual weight. All of it was true; none of it was an answer. The
+// page now leads with the ANSWER CARD (recoverable · last good copy · what an
+// outage right now would cost · last drill · the one action that matters), and
+// everything else is arranged behind three plain headings:
 //
-// WORD SWEEP (2026-09-06, tracker 270). The honesty rule above did not move —
-// only the words did. Every paragraph that TAUGHT what a posture verdict, a
-// proven restore, a measured byte count or an external job means now lives in
-// ai/skills/explain/backup.*.md, one click away on the `(i)`. What is left on
-// screen is the verdict, the number, the reason it is absent, and the action.
-// The destructive-path warnings (in-place restore, delete) stay ON SCREEN in
-// full: a consequence you must read before typing a confirmation is not an
-// explanation, it is part of the action.
+//   PROTECT  — what is copied, when, and for how long. One short table
+//              (store · copied · last copy · kept for), the schedule and the
+//              retention as two editable lines, and whether a copy exists
+//              anywhere but this host.
+//   RECOVER  — restore from a copy, prove a copy with a drill, and the drill
+//              history. The restore-point grid and the audit trail moved behind
+//              disclosures: they are evidence, not the answer.
+//   STORAGE  — bytes on disk, measured. Collapsed, because a footprint is a
+//              capacity question, not a recovery one.
 //
-// GATING. Every route behind this page is platform-global and requirePlatformAdmin
-// on the server. A tenant admin sees the posture read-only and is told why the
-// controls are absent, rather than being shown buttons that 403.
+// NOTHING WAS DELETED FROM THE CONTRACT. The nine-column matrix, the
+// recovery-point objectives, the destination classes, the immutability and
+// encryption badges, the external host jobs, the operations ring capacity and
+// the applier's ownership are all still rendered — one disclosure down, where
+// an operator goes when the short answer is not enough.
+//
+// THE HONESTY RULE IS STILL THE PRODUCT. The server encodes an unmeasured value
+// as null plus a sibling `*_detail`; `measured()` in dataProtection.model.ts is
+// the only door those come through, and nothing here turns an absent value into
+// a 0, a dash or a green tick. "Not measured" (nobody looked) stays visually
+// distinct from "Never" (we looked, and it has not happened). And the answer is
+// never green from nothing: an unreadable coverage table reads Unknown, and
+// Recoverable: Yes requires a restore somebody actually proved.
+//
+// WORDS. Headings are one or two words; a card carries at most one short note;
+// no chip or heading speaks engine ("snapshot repository", "ring", "applier",
+// "restorability") — those live in ai/skills/explain/backup.*.md behind the
+// `(i)`. The destructive-path text (in-place restore, delete) is UNCHANGED and
+// stays on screen in full: a consequence you must read before typing a
+// confirmation is not an explanation, it is part of the action.
+//
+// GATING. Every route behind this page is platform-global and
+// requirePlatformAdmin on the server. A tenant admin sees the answer read-only
+// and is told why the controls are absent, rather than buttons that 403.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -80,32 +80,43 @@ import {
   DEFAULT_RESTORE_PREFIX,
   confirmMatches,
   compressionRatio,
+  copyStoreWord,
   coverageLabel,
   coverageTone,
+  drillTone,
+  drillWord,
   engineLabel,
   fmtAgo,
   fmtBytes,
   fmtDuration,
   fmtRatio,
   fmtUntil,
+  headroom,
   isDrill,
   isExternal,
   isRestorable,
+  keptForText,
+  lastGoodCopy,
   lastProvenRestore,
+  lossWindow,
+  lossWindowText,
   measured,
   measuredTotalLabel,
+  nextAction,
   notMeasuredText,
+  offHostState,
   operationLabel,
   operationTone,
-  posture,
-  postureLabel,
-  postureTone,
+  policyRetentionWords,
   prefixUsable,
+  recoverability,
+  recoverableLabel,
   repositoryAdvice,
   repositoryStateFrom,
   restorableVerdict,
   restorePreview,
   rpoVerdict,
+  scheduleWords,
   scopeLabel,
   shardSummary,
   snapshotStateLabel,
@@ -118,6 +129,7 @@ import {
   unmeasuredBytesText,
   verifyEvidence,
   type Measured,
+  type NextAction,
   type RepositoryState,
   type Tone,
 } from "./dataProtection.model";
@@ -127,11 +139,9 @@ const OP_POLL_MS = 2000;
 
 /** Rows shown before the operator asks for the rest (the ShowAll convention). */
 const ACTIVITY_CAP = 8;
-const DRILL_CAP = 5;
+const DRILL_CAP = 4;
 const INDEX_CAP = 12;
-
-/** Reason shown for the one header number the platform does not publish yet. */
-const HEADROOM_UNREPORTED = "the platform does not report the repository volume's capacity";
+const STORE_CAP = 12;
 
 // ── panel plumbing ──────────────────────────────────────────────────────────
 
@@ -183,7 +193,7 @@ function Pill({ tone, children, title }: { tone: Tone; children: ReactNode; titl
 
 /** A section of the console: a landmark, a stable id, and its own header. */
 function Section({ id, title, note, topic, actions, children }: {
-  id: string; title: string; note?: ReactNode;
+  id: string; title: string; note?: string;
   /** The authored explanation for this section (ai/skills/explain/<topic>.md). */
   topic?: string;
   actions?: ReactNode; children: ReactNode;
@@ -244,147 +254,310 @@ function PanelError({ text, onRetry }: { text: string; onRetry: () => void }) {
   return (
     <div className="dp-honest dp-bad" role="alert">
       <strong>{text}</strong>
-      <span>Nothing here is a posture statement until it loads.</span>
       <button type="button" className="dp-more" onClick={onRetry}>Read it again</button>
     </div>
   );
 }
 
-// ── 1 · protection health ───────────────────────────────────────────────────
-
-function ProtectionHealth({ coverage, list, repoBroken, policy, now }: {
-  coverage: BackupCoverageView | null;
-  list: SnapshotListView | null;
-  repoBroken: boolean;
-  policy: SnapshotPolicy | null;
-  now: number;
-}) {
-  const repoState = repositoryStateFrom(list?.repository, policy?.repository, repoBroken);
-  const p = posture(coverage, repoState);
-  const tone = postureTone(p.state);
-  const proven = lastProvenRestore(coverage);
-  const nextRun = measured(
-    policy?.enabled ? policy.next_run || null : null,
-    policy ? (policy.enabled ? "the policy did not report a next trigger" : "the recovery-point policy is disabled")
-           : "the policy could not be read",
-  );
-  const rpoRows = (coverage?.engines ?? []).filter((e) => e.covered !== "not_applicable");
-
+/** One labelled fact in the answer card or on an editable line. */
+function Fact({ label, topic, children }: { label: string; topic?: string; children: ReactNode }) {
   return (
-    <div className={`dp-hero dp-${tone}`}>
-      <div className="dp-hero-head">
-        <Icon name="shield" size={22} />
-        <div className="dp-hero-verdict">
-          <span className="dp-hero-state">{postureLabel(p.state)}</span>
-          <span className="dp-hero-reason">{p.reason}</span>
-        </div>
-      </div>
-
-      <dl className="dp-stats">
-        <div className="dp-stat">
-          <dt>Proven restorable<AskIris topic="backup.proven-restore" label="Proven restorable" /></dt>
-          <dd>
-            <Value
-              m={proven}
-              render={(v) => (
-                <>
-                  <Pill tone="good">Proved</Pill>{" "}
-                  <span className="mono">{fmtAgo(v.at, now) ?? v.at}</span>
-                  <span className="dp-fine"> · {v.engine}</span>
-                </>
-              )}
-            />
-          </dd>
-        </div>
-
-        <div className="dp-stat">
-          <dt>Next scheduled run</dt>
-          <dd>
-            <Value
-              m={nextRun}
-              render={(v) => (
-                <>
-                  <span className="mono">{fmtUntil(v, now) ?? v}</span>
-                  <span className="dp-fine"> · {v}</span>
-                </>
-              )}
-            />
-          </dd>
-        </div>
-
-        <div className="dp-stat">
-          <dt>Headroom<AskIris topic="backup.repository" label="Repository headroom" /></dt>
-          {/* The one header number the contract does not carry yet. It is named
-              as unreported rather than dropped, so the gap is visible to the
-              operator and to whoever closes it. */}
-          <dd><span className="dp-unmeasured">{notMeasuredText(HEADROOM_UNREPORTED)}</span></dd>
-        </div>
-
-        <div className="dp-stat">
-          <dt>Repository</dt>
-          <dd>
-            <Pill tone={repoState === "ok" ? "good" : repoState === "unverified" ? "warn" : "bad"}>
-              {repoState === "ok" ? "Registered and verified" : repositoryStateWord(repoState)}
-            </Pill>{" "}
-            {list?.repository && (
-              <span className="dp-fine">
-                {list.repository.name}
-                {list.total > 0 ? ` · ${list.total} restore points` : ""}
-              </span>
-            )}
-          </dd>
-        </div>
-      </dl>
-
-      <div className="dp-rpo">
-        <span className="dp-rpo-h">
-          Recovery point
-          <AskIris topic="backup.recovery-point" label="Recovery point" />
-        </span>
-        {rpoRows.length === 0 ? (
-          <span className="dp-unmeasured">{notMeasuredText("the coverage table reported no engines")}</span>
-        ) : (
-          <ul className="dp-rpo-list">
-            {rpoRows.map((e) => {
-              const v = rpoVerdict(e);
-              return (
-                <li key={e.id} className="dp-rpo-item">
-                  <span className="dp-rpo-name">{engineLabel(e)}</span>
-                  {v.state === "unmeasured" ? (
-                    <span className="dp-unmeasured">{notMeasuredText(v.reason)}</span>
-                  ) : v.state === "achieved_only" ? (
-                    <Pill tone="muted" title={v.reason}>{v.text} · objective not set</Pill>
-                  ) : (
-                    <Pill tone={v.state === "met" ? "good" : "warn"}>
-                      {v.state === "met" ? "Objective met" : "Objective missed"} · {v.text}
-                    </Pill>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
+    <div className="dp-fact">
+      <span className="dp-fact-k">
+        {label}
+        {topic && <AskIris topic={topic} label={label} />}
+      </span>
+      <span className="dp-fact-v">{children}</span>
     </div>
   );
 }
 
-function repositoryStateWord(s: RepositoryState): string {
-  switch (s) {
-    case "unregistered":
-      return "Not registered";
-    case "damaged":
-      return "Failed verification";
-    case "unverified":
-      return "Not verified";
-    case "unreachable":
-      return "Could not be read";
-    default:
-      return "Registered and verified";
-  }
+// ── 1 · the answer ──────────────────────────────────────────────────────────
+
+/**
+ * The whole point of the page, in one card.
+ *
+ * Every value comes from the contract the other sections render — nothing here
+ * is a second opinion. An absent value reads "not measured — <reason>", and the
+ * verdict is Unknown rather than green whenever the facts behind it are missing.
+ */
+function AnswerCard({ coverage, repoState, now, action, onAct, canAct, busy }: {
+  coverage: BackupCoverageView | null;
+  repoState: RepositoryState;
+  now: number;
+  action: NextAction;
+  onAct: () => void;
+  /** False = the action mutates and this caller may not. Never a button that 403s. */
+  canAct: boolean;
+  busy: boolean;
+}) {
+  const rec = recoverability(coverage, repoState);
+  const copy = lastGoodCopy(coverage);
+  const lose = lossWindow(coverage);
+  const proven = lastProvenRestore(coverage);
+
+  return (
+    <section className={`dp-answer dp-${rec.tone}`} data-section="answer" role="region" aria-label="Recovery">
+      <p className="dp-answer-q">Can this appliance be recovered, and how much would be lost?</p>
+      <div className="dp-answer-hd">
+        <span className="dp-answer-k">
+          Recoverable
+          <AskIris topic="backup.recoverable" label="Recoverable" />
+        </span>
+        <span className="dp-answer-v" data-state={rec.state}>{recoverableLabel(rec.state)}</span>
+        <span className="dp-sp" />
+        {canAct && (
+          <button type="button" className="btn accent dp-do" onClick={onAct} disabled={busy}>
+            {busy ? "Working…" : action.label}
+          </button>
+        )}
+      </div>
+      <p className="dp-answer-why">{rec.reason}</p>
+
+      <div className="dp-facts">
+        <Fact label="Last good copy">
+          <Value
+            m={copy}
+            render={(v) => (
+              <>
+                <span className="mono">{fmtAgo(v.at, now) ?? v.at}</span>
+                <span className="dp-fine"> · {v.engine}</span>
+              </>
+            )}
+          />
+        </Fact>
+        <Fact label="Would lose" topic="backup.loss-window">
+          <Value
+            m={lose}
+            render={(v) => (
+              <>
+                <span className="mono">{lossWindowText(v)}</span>
+                <span className="dp-fine"> · {v.engine}</span>
+              </>
+            )}
+          />
+        </Fact>
+        <Fact label="Last drill" topic="backup.proven-restore">
+          {proven.measured ? (
+            <>
+              <Pill tone="good">Drill passed</Pill>{" "}
+              <span className="mono">{fmtAgo(proven.value.at, now) ?? proven.value.at}</span>
+            </>
+          ) : (
+            <Pill tone="warn" title={proven.reason}>Never</Pill>
+          )}
+        </Fact>
+      </div>
+    </section>
+  );
 }
 
-// ── 2 · coverage matrix ─────────────────────────────────────────────────────
+// ── 2 · protect ─────────────────────────────────────────────────────────────
+
+/**
+ * Absence in the SHORT table. The reason is a server sentence and is often a
+ * paragraph — printing it in a four-column table is what made this page a wall
+ * of text. It is carried here on hover and IN FULL, unabridged, one disclosure
+ * down in the per-store matrix. Nothing is invented and nothing becomes a zero;
+ * only the paragraph moves.
+ */
+function ShortAbsence({ reason }: { reason: string }) {
+  return <span className="dp-unmeasured" title={notMeasuredText(reason)}>Not measured</span>;
+}
+
+/** The short table: what is copied, when it last was, and how long it is kept. */
+function ProtectTable({ engines, now }: { engines: readonly EngineCoverage[]; now: number }) {
+  const rows = useMemo(() => sortedEngines(engines), [engines]);
+  if (rows.length === 0) {
+    return (
+      <HonestState
+        tone="warn"
+        headline="Nothing was listed to protect."
+        remedy="Read it again; if the list stays empty, the data-protection service is not answering."
+        doc={BACKUP_DOC}
+      />
+    );
+  }
+  return (
+    <div className="dp-tblwrap">
+      <table className="dp-tbl" aria-label="What is copied">
+        <thead>
+          <tr>
+            <th scope="col">Store</th>
+            <th scope="col">Copied</th>
+            <th scope="col">Last copy</th>
+            <th scope="col">Kept for</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((e) => {
+            const kept = keptForText(e.retention);
+            return (
+              <tr key={e.id} className={e.covered === "not_applicable" ? "dp-row-na" : undefined}>
+                <th scope="row">{engineLabel(e)}</th>
+                <td>
+                  <Pill tone={coverageTone(e.covered)} title={e.covered_reason}>{coverageLabel(e.covered)}</Pill>
+                </td>
+                <td>
+                  {e.covered === "not_applicable" ? (
+                    <span className="dp-fine">{e.covered_reason}</span>
+                  ) : e.last_success_at ? (
+                    <span className="mono">{fmtAgo(e.last_success_at, now) ?? e.last_success_at}</span>
+                  ) : (
+                    <Pill tone="bad" title={e.covered_reason}>Not copied yet</Pill>
+                  )}
+                </td>
+                <td>
+                  {kept.measured
+                    ? <span>{kept.value}</span>
+                    : <ShortAbsence reason={kept.reason} />}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** One editable line: a plain sentence, and the control that changes it. */
+function Line({ label, topic, value, onEdit, canEdit }: {
+  label: string; topic?: string; value: ReactNode; onEdit: () => void; canEdit: boolean;
+}) {
+  return (
+    <div className="dp-line">
+      <span className="dp-fact-k">
+        {label}
+        {topic && <AskIris topic={topic} label={label} />}
+      </span>
+      <span className="dp-fact-v">{value}</span>
+      {canEdit && <button type="button" className="btn sm" onClick={onEdit}>Edit</button>}
+    </div>
+  );
+}
+
+/**
+ * Everything the short table demoted, one disclosure down: the full matrix, the
+ * recovery-point objectives, the destination classes and the host jobs this
+ * page does not govern. Closed by default — this is evidence, not the answer.
+ */
+function ProtectDetails({ coverage, repoState, list, now, open, onToggle, anchor }: {
+  coverage: BackupCoverageView;
+  repoState: RepositoryState;
+  list: SnapshotListView | null;
+  now: number;
+  open: boolean;
+  onToggle: (v: boolean) => void;
+  /** A mutable box, not a `ref=` prop: the parent scrolls to it after "Fix …". */
+  anchor: { current: HTMLDetailsElement | null };
+}) {
+  const rows = useMemo(() => sortedEngines(coverage.engines), [coverage.engines]);
+  const rpoRows = rows.filter((e) => e.covered !== "not_applicable");
+  const space = headroom(list?.repository);
+  return (
+    <details
+      className="dp-details" open={open}
+      ref={(el) => { anchor.current = el; }}
+      onToggle={(ev) => onToggle((ev.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary>Per-store details</summary>
+
+      <ul className="dp-kv">
+        <li>
+          <span>Copy store</span>
+          <Pill tone={repoState === "ok" ? "good" : repoState === "unverified" ? "warn" : "bad"}>
+            {copyStoreWord(repoState)}
+          </Pill>
+          {list?.repository && (
+            <span className="dp-fine">
+              {list.repository.name}
+              {list.repository.location ? ` · ${list.repository.location}` : ""}
+            </span>
+          )}
+          <AskIris topic="backup.repository" label="Copy store" />
+        </li>
+        <li>
+          <span>Free space</span>
+          <Value
+            m={space}
+            render={(v) => (
+              <span className="mono">
+                {fmtBytes(v.free)} free of {fmtBytes(v.total)} ({v.freePct.toFixed(0)}%)
+              </span>
+            )}
+          />
+        </li>
+      </ul>
+
+      <div className="dp-tblwrap">
+        <table className="dp-tbl" aria-label="Protection coverage by store">
+          <thead>
+            <tr>
+              <th scope="col">Store</th>
+              <th scope="col">Copied</th>
+              <th scope="col">Schedule</th>
+              <th scope="col">Last attempt</th>
+              <th scope="col">Last success</th>
+              <th scope="col">Last proved</th>
+              <th scope="col" className="num">Size</th>
+              <th scope="col">Kept for</th>
+              <th scope="col">Where it lands</th>
+            </tr>
+          </thead>
+          <tbody>{rows.map((e) => <CoverageRow key={e.id} e={e} now={now} />)}</tbody>
+        </table>
+      </div>
+
+      <h3 className="dp-sub-h">
+        Recovery point
+        <AskIris topic="backup.recovery-point" label="Recovery point" />
+      </h3>
+      {rpoRows.length === 0 ? (
+        <span className="dp-unmeasured">{notMeasuredText("the coverage table reported no stores")}</span>
+      ) : (
+        <ul className="dp-rpo-list">
+          {rpoRows.map((e) => {
+            const v = rpoVerdict(e);
+            return (
+              <li key={e.id} className="dp-rpo-item">
+                <span className="dp-rpo-name">{engineLabel(e)}</span>
+                {v.state === "unmeasured" ? (
+                  <span className="dp-unmeasured">{notMeasuredText(v.reason)}</span>
+                ) : v.state === "achieved_only" ? (
+                  <Pill tone="muted" title={v.reason}>{v.text} · objective not set</Pill>
+                ) : (
+                  <Pill tone={v.state === "met" ? "good" : "warn"}>
+                    {v.state === "met" ? "Objective met" : "Objective missed"} · {v.text}
+                  </Pill>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <h3 className="dp-sub-h">
+        Outside jobs
+        <AskIris topic="backup.external-job" label="Outside jobs" />
+      </h3>
+      {coverage.external.length === 0 ? (
+        <span className="dp-fine">None reported.</span>
+      ) : (
+        <ul className="dp-feed">
+          {coverage.external.map((x) => (
+            <li key={`${x.source}:${x.name}`}>
+              <span className="dp-feed-a">{x.name}</span>
+              <span className="dp-fine">{x.source}{x.schedule ? ` · ${x.schedule}` : ""}</span>
+              <span className="dp-fine">{x.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {coverage.detail && <p className="dp-fine">{coverage.detail}</p>}
+    </details>
+  );
+}
 
 function BoolBadge({ on, onLabel, offLabel, detail }: {
   on: boolean | null | undefined; onLabel: string; offLabel: string; detail?: string;
@@ -407,10 +580,10 @@ function CoverageRow({ e, now }: { e: EngineCoverage; now: number }) {
     );
   }
   const schedule = measured(e.schedule, e.detail || e.covered_reason);
-  const attempt = measured(e.last_attempt, e.detail || "no attempt has been recorded for this engine");
-  const verified = measured(e.last_verified, e.detail || "no restorability probe has been recorded for this engine");
+  const attempt = measured(e.last_attempt, e.detail || "no attempt has been recorded for this store");
+  const verified = measured(e.last_verified, e.detail || "no restore has been proved for this store");
   const size = measured(e.size_bytes, e.size_detail);
-  const retention = measured(e.retention, e.detail || "the platform did not report a retention rule");
+  const kept = keptForText(e.retention);
 
   return (
     <tr>
@@ -419,7 +592,6 @@ function CoverageRow({ e, now }: { e: EngineCoverage; now: number }) {
         {isExternal(e) && (
           <span className="dp-fine dp-block" title={e.schedule?.detail}>
             External{e.schedule?.detail ? ` — ${e.schedule.detail}` : ""}
-            <AskIris topic="backup.external-job" label="External" />
           </span>
         )}
       </th>
@@ -432,7 +604,7 @@ function CoverageRow({ e, now }: { e: EngineCoverage; now: number }) {
           m={schedule}
           render={(v) => (
             <>
-              <span className="mono">{v.cron || "no schedule expression"}</span>
+              <span>{scheduleWords(v.cron, v.timezone) ?? <span className="mono">{v.cron || "no schedule expression"}</span>}</span>
               {!v.enabled && <span className="dp-fine dp-block">off — {v.detail}</span>}
             </>
           )}
@@ -462,28 +634,16 @@ function CoverageRow({ e, now }: { e: EngineCoverage; now: number }) {
           m={verified}
           render={(v) => (
             <>
-              <Pill tone={v.result === "pass" || v.result === "success" ? "good" : "bad"}>{v.result}</Pill>{" "}
+              <Pill tone={v.result === "pass" || v.result === "success" ? "good" : "bad"}>
+                {v.result === "pass" || v.result === "success" ? "Drill passed" : "Drill failed"}
+              </Pill>{" "}
               <span className="mono">{fmtAgo(v.at, now) ?? v.at}</span>
             </>
           )}
         />
       </td>
       <td className="num"><Value m={size} render={(v) => fmtBytes(v)} /></td>
-      <td>
-        <Value
-          m={retention}
-          render={(v) => (
-            <>
-              <span>
-                {v.max_count === null ? "" : `${v.max_count} copies`}
-                {v.max_count !== null && v.max_age_days ? " · " : ""}
-                {v.max_age_days ? `${v.max_age_days} days` : ""}
-                {v.max_count === null && !v.max_age_days ? v.detail : ""}
-              </span>
-            </>
-          )}
-        />
-      </td>
+      <td><Value m={kept} render={(v) => <span>{v}</span>} /></td>
       <td>
         <Pill tone={e.target.kind === "none" ? "bad" : e.target.kind === "local" ? "warn" : "good"}
               title={targetMeaning(e.target.kind)}>
@@ -499,48 +659,15 @@ function CoverageRow({ e, now }: { e: EngineCoverage; now: number }) {
   );
 }
 
-function CoverageMatrix({ engines, now }: { engines: readonly EngineCoverage[]; now: number }) {
-  const rows = useMemo(() => sortedEngines(engines), [engines]);
-  if (rows.length === 0) {
-    return (
-      <HonestState
-        tone="warn"
-        headline="The platform listed no engines to protect."
-        remedy="Read it again; if the list stays empty, check the data-protection service."
-        doc={BACKUP_DOC}
-      />
-    );
-  }
-  return (
-    <div className="dp-tblwrap">
-      <table className="dp-tbl" aria-label="Protection coverage by engine">
-        <thead>
-          <tr>
-            <th scope="col">Engine</th>
-            <th scope="col">Covered</th>
-            <th scope="col">Schedule</th>
-            <th scope="col">Last attempt</th>
-            <th scope="col">Last success</th>
-            <th scope="col">Last verified restore</th>
-            <th scope="col" className="num">Size</th>
-            <th scope="col">Retention</th>
-            <th scope="col">Destination</th>
-          </tr>
-        </thead>
-        <tbody>{rows.map((e) => <CoverageRow key={e.id} e={e} now={now} />)}</tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── 2b · bytes on disk, measured ────────────────────────────────────────────
+// ── 4 · storage ─────────────────────────────────────────────────────────────
 //
-// Every storage number this platform has published until now was DERIVED — a
-// row rate times an assumed bytes-per-row. This table is the other kind: each
+// Every storage number this platform published until 2026-09-06 was DERIVED — a
+// row rate times an assumed bytes-per-row. This section is the other kind: each
 // figure was read back from the store that owns the bytes, and each row carries
-// the query it came from and the moment it was taken, so a stale number reads
-// as stale rather than as current. A store nobody could weigh keeps the same
-// contract as the rest of this page: the reason, in words, never a zero.
+// the query it came from and the moment it was taken. A store nobody could weigh
+// keeps the same contract as the rest of the page: the reason, in words, never a
+// zero. It is collapsed because a footprint is a capacity question, not a
+// recovery one.
 
 /** One store's size, or the sentence explaining why there is not one. */
 function ReadingSize({ r }: { r: StorageReading }) {
@@ -601,74 +728,73 @@ function StorageRow({ r, now }: { r: StorageReading; now: number }) {
   );
 }
 
-function StorageMeasured({ report, now }: { report: StorageMeasuredReport; now: number }) {
-  const partial = report.unmeasured_stores.length > 0;
+function StorageSection({ report, space, now }: {
+  report: StorageMeasuredReport;
+  space: Measured<{ free: number; total: number; freePct: number }>;
+  now: number;
+}) {
   const readings = report.readings ?? [];
+  const sorted = useMemo(
+    () => [...readings].sort((a, b) => (b.bytes_on_disk ?? -1) - (a.bytes_on_disk ?? -1)),
+    [readings],
+  );
+  const cap = useCap(sorted, STORE_CAP);
   return (
     <>
-      <dl className="dp-stats">
-        <div className="dp-stat">
-          <dt>{measuredTotalLabel(report.unmeasured_stores)}</dt>
-          <dd>
-            <span className="mono">{fmtBytes(report.total_measured_bytes)}</span>
-            <span className="dp-fine dp-block">
-              {scopeLabel(report.scope)}
-              {report.cross_tenant ? " · every tenant" : ""}
-              {" · taken "}
-              {fmtAgo(report.generated_at, now) ?? report.generated_at}
-            </span>
-          </dd>
-        </div>
-        <div className="dp-stat">
-          <dt>Stores contributing nothing</dt>
-          <dd>
-            {partial ? (
-              <span className="dp-badges">
-                {report.unmeasured_stores.map((s) => (
-                  <Pill key={s} tone="warn">{storeLabel(s)}</Pill>
-                ))}
-              </span>
-            ) : (
-              <Pill tone="good">Every store was weighed</Pill>
+      <div className="dp-facts">
+        <Fact label={measuredTotalLabel(report.unmeasured_stores)} topic="backup.measured-bytes">
+          <span className="mono">{fmtBytes(report.total_measured_bytes)}</span>
+          <span className="dp-fine"> · taken {fmtAgo(report.generated_at, now) ?? report.generated_at}</span>
+        </Fact>
+        <Fact label="Free space">
+          <Value
+            m={space}
+            render={(v) => (
+              <span className="mono">{fmtBytes(v.free)} free ({v.freePct.toFixed(0)}%)</span>
             )}
-          </dd>
-        </div>
-      </dl>
-
-      <p className="dp-msg">
-        {report.measurement_note}
-        <AskIris topic="backup.measured-bytes" label="Bytes on disk" />
-      </p>
+          />
+        </Fact>
+        <Fact label="Not weighed">
+          {report.unmeasured_stores.length === 0 ? (
+            <Pill tone="good">Every store weighed</Pill>
+          ) : (
+            <span className="dp-badges">
+              {report.unmeasured_stores.map((s) => <Pill key={s} tone="warn">{storeLabel(s)}</Pill>)}
+            </span>
+          )}
+        </Fact>
+      </div>
 
       {readings.length === 0 ? (
-        <HonestState
-          tone="warn"
-          headline="Nothing was weighed."
-          remedy={report.measurement_note}
-        />
+        <HonestState tone="warn" headline="Nothing was weighed." remedy={report.measurement_note} />
       ) : (
-        <div className="dp-tblwrap">
-          <table className="dp-tbl" aria-label="Bytes on disk by store">
-            <thead>
-              <tr>
-                <th scope="col">Store</th>
-                <th scope="col">Scope</th>
-                <th scope="col" className="num">Bytes on disk</th>
-                <th scope="col">Taken</th>
-                <th scope="col">Read from</th>
-              </tr>
-            </thead>
-            <tbody>
-              {readings.map((r) => <StorageRow key={`${r.store}:${r.scope}`} r={r} now={now} />)}
-            </tbody>
-          </table>
-        </div>
+        <details className="dp-details">
+          <summary>Bytes by store · {readings.length}</summary>
+          <p className="dp-fine">{report.measurement_note}</p>
+          <div className="dp-tblwrap">
+            <table className="dp-tbl" aria-label="Bytes on disk by store">
+              <thead>
+                <tr>
+                  <th scope="col">Store</th>
+                  <th scope="col">Scope</th>
+                  <th scope="col" className="num">Bytes on disk</th>
+                  <th scope="col">Taken</th>
+                  <th scope="col">Read from</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cap.rows.map((r) => <StorageRow key={`${r.store}:${r.scope}`} r={r} now={now} />)}
+              </tbody>
+            </table>
+          </div>
+          <ShowAll cap={cap} noun="stores" />
+        </details>
       )}
     </>
   );
 }
 
-// ── 3 · restore points ──────────────────────────────────────────────────────
+// ── 3 · recover ─────────────────────────────────────────────────────────────
 
 /** The live state of one long-running action, polled until it settles. */
 function OperationProgress({ op, onDismiss }: { op: BackupOperation; onDismiss: () => void }) {
@@ -715,7 +841,7 @@ function RestoreWizard({ draft, setDraft, onCancel, onFinish }: {
     {
       id: "scope",
       title: "Scope",
-      hint: "Restore the whole restore point, or only the indices you name.",
+      hint: "Restore the whole copy, or only the indices you name.",
       isValid: () => draft.indices.length === 0 || draft.indices.length > 0,
       render: () => (
         <div className="dp-form">
@@ -725,7 +851,7 @@ function RestoreWizard({ draft, setDraft, onCancel, onFinish }: {
               checked={draft.indices.length === 0}
               onChange={(ev) => setDraft({ ...draft, indices: ev.target.checked ? [] : [...all] })}
             />
-            Whole restore point ({all.length} indices)
+            Whole copy ({all.length} indices)
           </label>
           {draft.indices.length > 0 && (
             <fieldset className="dp-fieldset">
@@ -778,7 +904,7 @@ function RestoreWizard({ draft, setDraft, onCancel, onFinish }: {
           </label>
           {!draft.inPlace && (
             <div className="dp-preview">
-              <span className="dp-sec-note">New names</span>
+              <span className="dp-fine">New names</span>
               <ul>
                 {chosen.slice(0, 5).map((n) => {
                   const to = restorePreview(n, draft.prefix);
@@ -844,9 +970,9 @@ function RestoreWizard({ draft, setDraft, onCancel, onFinish }: {
       isValid: () => true,
       render: () => (
         <dl className="dp-review">
-          <div><dt>Restore point</dt><dd className="mono">{draft.snap.name}</dd></div>
+          <div><dt>Copy</dt><dd className="mono">{draft.snap.name}</dd></div>
           <div><dt>Taken</dt><dd className="mono">{draft.snap.ended_at || draft.snap.started_at || "start time not reported"}</dd></div>
-          <div><dt>Indices</dt><dd>{draft.indices.length === 0 ? `whole restore point (${all.length})` : `${draft.indices.length} selected`}</dd></div>
+          <div><dt>Indices</dt><dd>{draft.indices.length === 0 ? `whole copy (${all.length})` : `${draft.indices.length} selected`}</dd></div>
           <div>
             <dt>Destination</dt>
             <dd>
@@ -915,7 +1041,7 @@ export default function DataProtection() {
 
   const [coverage, reloadCoverage] = usePanel<BackupCoverageView>(
     () => api.backupCoverage(),
-    "The coverage table could not be read.",
+    "The list of what is copied could not be read.",
   );
   const [list, reloadList] = usePanel<SnapshotListView>(
     readList,
@@ -928,11 +1054,11 @@ export default function DataProtection() {
   );
   const [policy, reloadPolicy] = usePanel<SnapshotPolicy>(
     () => api.snapshotPolicy(),
-    "The recovery-point policy could not be read.",
+    "The schedule could not be read.",
   );
   const [bundle, reloadBundle] = usePanel(
     () => api.backupConfig(),
-    "The backup destination could not be read.",
+    "The off-host destination could not be read.",
   );
   const [ops, reloadOps] = usePanel(
     () => api.backupOperations(),
@@ -943,7 +1069,10 @@ export default function DataProtection() {
   const [opError, setOpError] = useState<string | null>(null);
   const [restore, setRestore] = useState<RestoreDraft | null>(null);
   const [toDelete, setToDelete] = useState<SnapshotView | null>(null);
+  const [editing, setEditing] = useState<null | "schedule" | "offhost">(null);
   const [filter, setFilter] = useState("");
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
 
   const refreshAll = useCallback(() => {
     setNow(Date.now());
@@ -996,9 +1125,34 @@ export default function DataProtection() {
   const repoState = repositoryStateFrom(list.data?.repository, policy.data?.repository, repoBroken);
   const advice = repositoryAdvice(repoState, list.error ?? list.data?.repository?.detail ?? "");
 
+  // The ONE action. It is derived from exactly the facts the answer card reads,
+  // so the button and the sentence beside it can never disagree.
+  const action = useMemo(
+    () => nextAction(coverage.data, repoState, lastProvenRestore(coverage.data), lastGoodCopy(coverage.data)),
+    [coverage.data, repoState],
+  );
+  const runAction = useCallback(() => {
+    switch (action.kind) {
+      case "backup":
+        if (platformAdmin) start(() => api.createSnapshot());
+        return;
+      case "drill":
+        if (platformAdmin) start(() => api.verifySnapshot());
+        return;
+      case "fix":
+        // "Fix" is not something a page can do for you: it opens the evidence
+        // that names the failing part, rather than pretending to repair it.
+        setDetailsOpen(true);
+        requestAnimationFrame(() => detailsRef.current?.scrollIntoView({ block: "start" }));
+        return;
+      default:
+        refreshAll();
+    }
+  }, [action.kind, platformAdmin, start, refreshAll]);
+
   const columns: Column<SnapshotView>[] = useMemo(() => [
     {
-      key: "name", header: "Restore point", width: "1.6fr", sortable: true,
+      key: "name", header: "Copy", width: "1.6fr", sortable: true,
       text: (r) => r.name,
       render: (r) => <span className="mono dp-nowrap" title={r.name}>{r.name}</span>,
     },
@@ -1029,14 +1183,14 @@ export default function DataProtection() {
       render: (r) => <Value m={measured(r.size_bytes, r.size_detail)} render={(v) => fmtBytes(v)} />,
     },
     {
-      key: "verified", header: "Restorable", width: 230,
+      key: "verified", header: "Proved", width: 210,
       text: (r) => String(r.restorable_verified),
       render: (r) => {
         const v = restorableVerdict(r);
-        if (v.state === "never") return <Pill tone="warn" title={v.detail}>Never verified</Pill>;
+        if (v.state === "never") return <Pill tone="warn" title={v.detail}>Never proved</Pill>;
         return (
           <Pill tone={v.state === "verified" ? "good" : "bad"} title={v.detail}>
-            {v.state === "verified" ? "Verified" : "Verification failed"}
+            {v.state === "verified" ? "Drill passed" : "Drill failed"}
             {v.at ? ` · ${fmtAgo(v.at, now) ?? v.at}` : ""}
           </Pill>
         );
@@ -1073,7 +1227,7 @@ export default function DataProtection() {
           type="button" className="btn sm" disabled={!isRestorable(r)}
           onClick={() => start(() => api.verifySnapshot(r.name))}
         >
-          Verify now
+          Run a drill
         </button>
         <button type="button" className="btn sm danger" onClick={() => setToDelete(r)}>
           Delete…
@@ -1086,242 +1240,297 @@ export default function DataProtection() {
   const drills = useMemo(() => opRows.filter((o) => isDrill(o.kind)), [opRows]);
   const activityCap = useCap(opRows, ACTIVITY_CAP);
   const drillCap = useCap(drills, DRILL_CAP);
-  const external = coverage.data?.external ?? [];
+  const proven = lastProvenRestore(coverage.data);
+  const space = headroom(list.data?.repository ?? policy.data?.repository);
+  const offHost = offHostState(bundle.data?.config);
+  const schedule = policy.data
+    ? (policy.data.enabled
+        ? (scheduleWords(policy.data.schedule_cron) ?? policy.data.schedule_cron)
+        : "Off")
+    : null;
+  const nextRun = measured(
+    policy.data?.enabled ? policy.data.next_run || null : null,
+    policy.data
+      ? (policy.data.enabled ? "the schedule did not report its next run" : "the schedule is off")
+      : "the schedule could not be read",
+  );
 
   return (
     <div className="dp-page">
-      {/* ── 1 · protection health ── */}
-      <Section
-        id="health"
-        title="Protection health"
-        note="Platform-wide"
-        topic="backup.posture"
-        actions={<button type="button" className="btn sm" onClick={refreshAll}><Icon name="refresh" size={13} /> Re-read</button>}
-      >
-        {coverage.error ? (
+      {/* ── the answer ── */}
+      {coverage.error ? (
+        <div className="dp-answer dp-bad" data-section="answer" role="region" aria-label="Recovery">
+          <p className="dp-answer-q">Can this appliance be recovered, and how much would be lost?</p>
           <PanelError text={coverage.error} onRetry={reloadCoverage} />
-        ) : coverage.loading && !coverage.data ? (
-          <Loading what="the protection posture" />
-        ) : (
-          <ProtectionHealth
-            coverage={coverage.data}
-            list={list.data}
-            repoBroken={repoBroken}
-            policy={policy.data}
-            now={now}
-          />
-        )}
+        </div>
+      ) : coverage.loading && !coverage.data ? (
+        <div className="dp-answer dp-muted" data-section="answer" role="region" aria-label="Recovery">
+          <p className="dp-answer-q">Can this appliance be recovered, and how much would be lost?</p>
+          <Loading what="the recovery answer" />
+        </div>
+      ) : (
+        <AnswerCard
+          coverage={coverage.data}
+          repoState={repoState}
+          now={now}
+          action={action}
+          onAct={runAction}
+          canAct={platformAdmin || action.kind === "fix" || action.kind === "reread"}
+          busy={op?.state === "running"}
+        />
+      )}
 
-        {advice && <HonestState tone={advice.tone} headline={advice.headline} remedy={advice.remedy} doc={advice.doc} />}
-        {!authLoading && !platformAdmin && (
-          <HonestState
-            tone="muted"
-            headline="This posture is read-only for you."
-            remedy="Taking, restoring, verifying and deleting requires a platform administrator."
-            topic="backup.read-only"
-          />
-        )}
-      </Section>
+      {opError && <HonestState tone="bad" headline="The action did not complete." remedy={opError} />}
+      {op && <OperationProgress op={op} onDismiss={() => setOp(null)} />}
+      {advice && <HonestState tone={advice.tone} headline={advice.headline} remedy={advice.remedy} doc={advice.doc} />}
+      {!authLoading && !platformAdmin && (
+        <HonestState
+          tone="muted"
+          headline="This page is read-only for you."
+          remedy="Backing up, restoring and drills need a platform administrator."
+          topic="backup.read-only"
+        />
+      )}
 
-      {/* ── 2 · coverage ── */}
+      {/* ── protect ── */}
       <Section
-        id="coverage"
-        title="Coverage"
-        note="One row per engine"
-      >
-        {coverage.error ? (
-          <PanelError text={coverage.error} onRetry={reloadCoverage} />
-        ) : coverage.data ? (
-          <>
-            {coverage.data.detail && (
-              <HonestState
-                tone="warn"
-                headline="The coverage table is incomplete."
-                remedy={coverage.data.detail}
-                doc={BACKUP_DOC}
-              />
-            )}
-            <CoverageMatrix engines={coverage.data.engines} now={now} />
-          </>
-        ) : (
-          <Loading what="the coverage matrix" />
-        )}
-      </Section>
-
-      {/* ── 2b · bytes on disk ── */}
-      <Section
-        id="bytes-on-disk"
-        title="Bytes on disk"
-        note="Measured, not derived"
-        topic="backup.measured-bytes"
-      >
-        {storage.error ? (
-          <PanelError text={storage.error} onRetry={reloadStorage} />
-        ) : storage.data ? (
-          <StorageMeasured report={storage.data} now={now} />
-        ) : (
-          <Loading what="the measured bytes on disk" />
-        )}
-      </Section>
-
-      {/* ── 3 · restore points ── */}
-      <Section
-        id="restore-points"
-        title="Restore points"
-        note="Copies a restore can use"
+        id="protect"
+        title="Protect"
+        note="What is copied, and how long it is kept."
         actions={
           <>
-            <input
-              className="dp-input dp-filter"
-              placeholder="Filter restore points"
-              aria-label="Filter restore points"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            />
-            <button
-              type="button" className="btn sm" aria-pressed={withSizes}
-              title="Measuring sizes costs one repository call per restore point"
-              onClick={() => setWithSizes((v) => !v)}
-            >
-              {withSizes ? "Stop measuring sizes" : "Measure sizes"}
+            <button type="button" className="btn sm" onClick={refreshAll}>
+              <Icon name="refresh" size={13} /> Re-read
             </button>
             {platformAdmin && (
-              <button type="button" className="btn sm accent" onClick={() => start(() => api.createSnapshot())}>
-                Take restore point now
+              <button type="button" className="btn sm" onClick={() => start(() => api.createSnapshot())}>
+                Back up now
               </button>
             )}
           </>
         }
       >
-        {opError && <HonestState tone="bad" headline="The action did not complete." remedy={opError} />}
-        {op && <OperationProgress op={op} onDismiss={() => setOp(null)} />}
-
-        {list.error ? (
-          <PanelError text={list.error} onRetry={reloadList} />
-        ) : list.loading && !list.data ? (
-          <Loading what="the restore points" />
-        ) : list.data?.detail && snapshots.length === 0 ? (
-          <HonestState
-            tone="bad"
-            headline="The restore points could not be listed."
-            remedy={list.data.detail}
-            doc={BACKUP_DOC}
-          />
-        ) : snapshots.length === 0 ? (
-          <HonestState
-            tone="warn"
-            headline="No restore point exists yet."
-            remedy="Take one now, then run a restore drill."
-            topic="backup.no-restore-point"
-            doc={BACKUP_DOC}
-          />
-        ) : (
+        {coverage.data ? (
           <>
-            {list.data?.detail && <p className="dp-fine">{list.data.detail}</p>}
-            <DataTable
-              rows={snapshots}
-              columns={columns}
-              rowKey={(r) => r.name}
-              filter={filter}
-              height={420}
-              rowActions={rowActions}
-              ariaLabel="Restore points"
-              empty={<span className="dp-fine">No restore point matches that filter.</span>}
+            <ProtectTable engines={coverage.data.engines} now={now} />
+
+            <div className="dp-lines">
+              <Line
+                label="Schedule" canEdit={platformAdmin} onEdit={() => setEditing("schedule")}
+                value={
+                  policy.error ? <span className="dp-bad-text">{policy.error}</span>
+                  : schedule === null ? <span className="dp-fine">Reading…</span>
+                  : (
+                    <>
+                      <span>{schedule}</span>
+                      <Value m={nextRun} render={(v) => <span className="dp-fine"> · next {fmtUntil(v, now) ?? v}</span>} />
+                    </>
+                  )
+                }
+              />
+              <Line
+                label="Retention" canEdit={platformAdmin} onEdit={() => setEditing("schedule")}
+                topic="backup.kept-for"
+                value={
+                  policy.data
+                    ? <span>{policyRetentionWords(policy.data.retention_max_count, policy.data.retention_max_age_days)}</span>
+                    : <span className="dp-fine">Reading…</span>
+                }
+              />
+              <Line
+                label="Off-host copy" canEdit={platformAdmin} onEdit={() => setEditing("offhost")}
+                topic="backup.off-host"
+                value={
+                  bundle.error ? <span className="dp-bad-text">{bundle.error}</span> : (
+                    <>
+                      <Pill tone={offHost.tone}>{offHost.word}</Pill>{" "}
+                      {bundle.data?.config.remote_url
+                        ? <span className="mono">{bundle.data.config.remote_url}</span>
+                        : <span className="dp-fine">One disk failure would lose both copies.</span>}
+                    </>
+                  )
+                }
+              />
+            </div>
+
+            <ProtectDetails
+              coverage={coverage.data}
+              repoState={repoState}
+              list={list.data}
+              now={now}
+              open={detailsOpen}
+              onToggle={setDetailsOpen}
+              anchor={detailsRef}
             />
           </>
+        ) : coverage.error ? null : (
+          <Loading what="what is copied" />
         )}
       </Section>
 
-      {/* ── 4 · policies ── */}
-      <Section id="policies" title="Policies" note="What creates copies, and for how long">
-        <SnapshotPolicyForm panel={policy} onReload={reloadPolicy} canEdit={platformAdmin} onSaved={refreshAll} />
-        <BundlePolicyForm panel={bundle} onReload={reloadBundle} canEdit={platformAdmin} />
-        {external.map((x) => (
-          <HonestState
-            key={`${x.source}:${x.name}`}
-            tone="muted"
-            headline={`${x.name} is external, not governed here.`}
-            remedy={`${x.detail} Source: ${x.source}${x.schedule ? ` · ${x.schedule}` : ""}.`}
-          />
-        ))}
-      </Section>
-
-      {/* ── 5 · activity and drills ── */}
+      {/* ── recover ── */}
       <Section
-        id="activity"
-        title="Activity and drills"
-        note={ops.data ? `Newest ${ops.data.capacity} operations` : "Who ran what"}
+        id="recover"
+        title="Recover"
+        note="Prove a restore works before you need it."
         actions={
           platformAdmin ? (
-            <button type="button" className="btn sm" onClick={() => start(() => api.verifySnapshot())}>
-              Run restore drill
+            <button type="button" className="btn sm accent" onClick={() => start(() => api.verifySnapshot())}>
+              Run a drill
             </button>
           ) : null
         }
       >
-        <div className="dp-two">
-          <div>
-            <h3 className="dp-sub-h">Audit trail</h3>
-            {ops.error ? (
-              <PanelError text={ops.error} onRetry={reloadOps} />
-            ) : ops.loading && !ops.data ? (
-              <Loading what="the activity trail" />
-            ) : opRows.length === 0 ? (
-              <HonestState
-                tone="muted"
-                headline="No action has been recorded."
-                remedy={ops.data?.detail || "Nothing has run since the platform last started."}
-              />
-            ) : (
-              <>
-                <ul className="dp-feed">
-                  {activityCap.rows.map((a) => (
-                    <li key={a.id}>
-                      <span className="mono dp-feed-t">{a.started_at}</span>
-                      <Pill tone={operationTone(a.state)}>{a.state}</Pill>
-                      <span className="dp-feed-a">{a.actor}</span>
-                      <span>{operationLabel(a.kind)}{a.target?.snapshot ? ` · ${a.target.snapshot}` : ""}</span>
-                      {a.error && <span className="dp-bad-text">{a.error}</span>}
-                    </li>
-                  ))}
-                </ul>
-                <ShowAll cap={activityCap} noun="entries" />
-              </>
-            )}
+        {drills.length === 0 && proven.measured ? (
+          // The answer card says a restore WAS proved; this list is the drills
+          // this page ran, and it is empty. Saying "never proved" here would
+          // contradict the card two inches above it.
+          <HonestState
+            tone="muted"
+            headline="No drill has run from here."
+            remedy={`The last proof came from ${proven.value.engine}, ${fmtAgo(proven.value.at, now) ?? proven.value.at}.`}
+            topic="backup.proven-restore"
+          />
+        ) : drills.length === 0 ? (
+          <HonestState
+            tone="warn"
+            headline="No restore has ever been proved."
+            remedy="Run a drill; its result is recorded here."
+            topic="backup.proven-restore"
+            doc={BACKUP_DOC}
+          />
+        ) : (
+          <>
+            <ul className="dp-feed">
+              {drillCap.rows.map((a) => (
+                <li key={a.id}>
+                  <Pill tone={drillTone(a)}>{drillWord(a)}</Pill>
+                  <span className="mono dp-feed-t">{fmtAgo(a.started_at, now) ?? a.started_at}</span>
+                  <span className="dp-fine">{a.target?.snapshot ?? a.verify?.snapshot ?? "target not recorded"}</span>
+                  {a.error && <span className="dp-bad-text">{a.error}</span>}
+                </li>
+              ))}
+            </ul>
+            <ShowAll cap={drillCap} noun="drills" />
+          </>
+        )}
+
+        <details className="dp-details">
+          <summary>Restore from a copy · {list.data?.total ?? snapshots.length}</summary>
+          <div className="dp-rowhead">
+            <input
+              className="dp-input dp-filter"
+              placeholder="Filter copies"
+              aria-label="Filter copies"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+            <button
+              type="button" className="btn sm" aria-pressed={withSizes}
+              title="Measuring sizes costs one repository call per copy"
+              onClick={() => setWithSizes((v) => !v)}
+            >
+              {withSizes ? "Stop measuring sizes" : "Measure sizes"}
+            </button>
           </div>
-          <div>
-            <h3 className="dp-sub-h">Restore drills</h3>
-            {drills.length === 0 ? (
-              <HonestState
-                tone="warn"
-                headline="No restore has ever been proved."
-                remedy="Run a restore drill; its result is recorded here."
-                topic="backup.proven-restore"
-                doc={BACKUP_DOC}
+          {list.error ? (
+            <PanelError text={list.error} onRetry={reloadList} />
+          ) : list.loading && !list.data ? (
+            <Loading what="the copies" />
+          ) : list.data?.detail && snapshots.length === 0 ? (
+            <HonestState
+              tone="bad"
+              headline="The copies could not be listed."
+              remedy={list.data.detail}
+              doc={BACKUP_DOC}
+            />
+          ) : snapshots.length === 0 ? (
+            <HonestState
+              tone="warn"
+              headline="No copy exists yet."
+              remedy="Back up now, then run a drill."
+              topic="backup.no-restore-point"
+              doc={BACKUP_DOC}
+            />
+          ) : (
+            <>
+              {list.data?.detail && <p className="dp-fine">{list.data.detail}</p>}
+              <DataTable
+                rows={snapshots}
+                columns={columns}
+                rowKey={(r) => r.name}
+                filter={filter}
+                height={360}
+                rowActions={rowActions}
+                ariaLabel="Copies"
+                empty={<span className="dp-fine">No copy matches that filter.</span>}
               />
-            ) : (
-              <>
-                <ul className="dp-feed">
-                  {drillCap.rows.map((a) => (
-                    <li key={a.id}>
-                      <span className="mono dp-feed-t">{a.started_at}</span>
-                      <Pill tone={a.verify ? (a.verify.match ? "good" : "bad") : operationTone(a.state)}>
-                        {a.verify ? (a.verify.match ? "documents matched" : "documents did not match") : a.state}
-                      </Pill>
-                      <span>{a.target?.snapshot ?? a.verify?.snapshot ?? "target not recorded"}</span>
-                      {verifyEvidence(a) && <span className="dp-fine">{verifyEvidence(a)}</span>}
-                      {a.error && <span className="dp-bad-text">{a.error}</span>}
-                    </li>
-                  ))}
-                </ul>
-                <ShowAll cap={drillCap} noun="drills" />
-              </>
-            )}
-          </div>
-        </div>
+            </>
+          )}
+        </details>
+
+        <details className="dp-details">
+          <summary>Activity · {opRows.length}</summary>
+          {ops.error ? (
+            <PanelError text={ops.error} onRetry={reloadOps} />
+          ) : ops.loading && !ops.data ? (
+            <Loading what="the activity trail" />
+          ) : opRows.length === 0 ? (
+            <p className="dp-fine">{ops.data?.detail || "Nothing has run since the platform last started."}</p>
+          ) : (
+            <>
+              <ul className="dp-feed">
+                {activityCap.rows.map((a) => (
+                  <li key={a.id}>
+                    <span className="mono dp-feed-t">{a.started_at}</span>
+                    <Pill tone={operationTone(a.state)}>{a.state}</Pill>
+                    <span className="dp-feed-a">{a.actor}</span>
+                    <span>{operationLabel(a.kind)}{a.target?.snapshot ? ` · ${a.target.snapshot}` : ""}</span>
+                    {a.error && <span className="dp-bad-text">{a.error}</span>}
+                  </li>
+                ))}
+              </ul>
+              <ShowAll cap={activityCap} noun="entries" />
+              {ops.data && <p className="dp-fine">The platform keeps the newest {ops.data.capacity} entries.</p>}
+            </>
+          )}
+        </details>
+      </Section>
+
+      {/* ── storage ── */}
+      <Section
+        id="storage"
+        title="Storage"
+        note="Measured from each store, never estimated."
+        topic="backup.measured-bytes"
+      >
+        {storage.error ? (
+          <PanelError text={storage.error} onRetry={reloadStorage} />
+        ) : storage.data ? (
+          <StorageSection report={storage.data} space={space} now={now} />
+        ) : (
+          <Loading what="the bytes on disk" />
+        )}
       </Section>
 
       {/* ── modals ── */}
+      {editing === "schedule" && (
+        <Modal title="Schedule and retention" onClose={() => setEditing(null)} wide>
+          <SnapshotPolicyForm
+            panel={policy}
+            onReload={reloadPolicy}
+            canEdit={platformAdmin}
+            onSaved={refreshAll}
+          />
+        </Modal>
+      )}
+
+      {editing === "offhost" && (
+        <Modal title="Off-host copy" onClose={() => setEditing(null)} wide>
+          <BundlePolicyForm panel={bundle} onReload={reloadBundle} canEdit={platformAdmin} />
+        </Modal>
+      )}
+
       {restore && (
         <Modal
           title={`Restore from ${restore.snap.name}`}
@@ -1361,16 +1570,16 @@ export default function DataProtection() {
   );
 }
 
-// ── 4a · recovery-point policy ──────────────────────────────────────────────
+// ── schedule and retention (modal) ──────────────────────────────────────────
 
 function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
   panel: Panel<SnapshotPolicy>; onReload: () => void; canEdit: boolean; onSaved: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: Tone; text: string } | null>(null);
-  // Turning the policy OFF is an intent the platform records with its reason, so
-  // a stopped schedule can never be mistaken for an accident later. The reason is
-  // asked for BEFORE the write, not after.
+  // Turning the schedule OFF is an intent the platform records with its reason,
+  // so a stopped schedule can never be mistaken for an accident later. The
+  // reason is asked for BEFORE the write, not after.
   const [disableReason, setDisableReason] = useState<string | null>(null);
   const snap = panel.data;
 
@@ -1378,7 +1587,7 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
     setBusy(true); setMsg(null);
     try {
       await api.setSnapshotPolicy(upd);
-      setMsg({ tone: "good", text: "Recovery-point policy updated." });
+      setMsg({ tone: "good", text: "Saved." });
       onReload();
       onSaved();
     } catch (e: unknown) {
@@ -1387,13 +1596,11 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
   };
 
   if (panel.error) return <PanelError text={panel.error} onRetry={onReload} />;
-  if (!snap) return <Loading what="the recovery-point policy" />;
+  if (!snap) return <Loading what="the schedule" />;
 
   return (
     <div className="dp-policy">
       <div className="dp-policy-hd">
-        <h3 className="dp-sub-h">Recovery-point policy</h3>
-        <span className="dp-sp" />
         <label className="dp-check">
           <input
             type="checkbox" checked={snap.enabled} disabled={busy || !canEdit}
@@ -1402,18 +1609,18 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
               setDisableReason("");
             }}
           />
-          Enabled
+          Copies run on this schedule
         </label>
       </div>
 
       {disableReason !== null && (
         <div className="dp-honest dp-warn" role="note">
-          <strong>Turning this off stops new restore points being created.</strong>
+          <strong>Turning this off stops new copies being made.</strong>
           <span>Say why, so whoever finds it off later knows it was deliberate.</span>
           <label className="dp-field">
             <span>Reason</span>
             <input
-              className="dp-input" aria-label="Reason for turning the recovery-point policy off"
+              className="dp-input" aria-label="Reason for turning the schedule off"
               value={disableReason} onChange={(e) => setDisableReason(e.target.value)}
             />
           </label>
@@ -1430,15 +1637,15 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
       )}
 
       {snap.detail && (
-        <HonestState tone="warn" headline="The policy could not be read in full." remedy={snap.detail} doc={BACKUP_DOC} />
+        <HonestState tone="warn" headline="The schedule could not be read in full." remedy={snap.detail} doc={BACKUP_DOC} />
       )}
       {!snap.enabled && (
         <HonestState
           tone="bad"
-          headline="The recovery-point policy is disabled."
+          headline="The schedule is off."
           topic="backup.recovery-point"
           remedy={
-            "No new restore points will be created. " +
+            "No new copies will be made. " +
             (snap.disabled_reason
               ? `Turned off by ${snap.disabled_by || "an unrecorded operator"}${snap.disabled_at ? ` on ${snap.disabled_at}` : ""}: ${snap.disabled_reason}`
               : "The platform recorded no reason for it being off, so this may not have been deliberate.")
@@ -1450,7 +1657,7 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
         <HonestState
           tone="warn"
           headline="This switch is not authoritative."
-          remedy={`The enabled flag is owned by ${snap.managed_by}, so a change made here can be overwritten by it.`}
+          remedy={`The on/off state is owned by ${snap.managed_by}, so a change made here can be overwritten by it.`}
         />
       )}
 
@@ -1459,12 +1666,12 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
           <span>Window (cron, UTC)</span>
           <input
             className="dp-input mono" defaultValue={snap.schedule_cron} disabled={busy || !canEdit}
-            aria-label="Recovery-point window, cron in UTC"
+            aria-label="Copy window, cron in UTC"
             onBlur={(e) => { if (e.target.value !== snap.schedule_cron) save({ schedule_cron: e.target.value }); }}
           />
         </label>
         <label className="dp-field">
-          <span>Retention — keep newest</span>
+          <span>Keep newest</span>
           <input
             className="dp-input" type="number" min={1} max={365} defaultValue={snap.retention_max_count}
             disabled={busy || !canEdit} aria-label="Retention, keep newest count"
@@ -1472,7 +1679,7 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
           />
         </label>
         <label className="dp-field">
-          <span>Retention — maximum age (days)</span>
+          <span>Maximum age (days)</span>
           <input
             className="dp-input" type="number" min={0} max={3650} placeholder="no age limit"
             defaultValue={snap.retention_max_age_days || ""} disabled={busy || !canEdit}
@@ -1497,7 +1704,7 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
               </span>
             </>
           ) : (
-            <span className="dp-unmeasured">{notMeasuredText("the policy has not reported a run")}</span>
+            <span className="dp-unmeasured">{notMeasuredText("the schedule has not reported a run")}</span>
           )}
         </li>
         <li>
@@ -1505,20 +1712,26 @@ function SnapshotPolicyForm({ panel, onReload, canEdit, onSaved }: {
           <Value
             m={measured(
               snap.enabled ? snap.next_run || null : null,
-              snap.enabled ? "the policy did not report a next trigger" : "the policy is disabled",
+              snap.enabled ? "the schedule did not report its next run" : "the schedule is off",
             )}
             render={(v) => <span className="mono">{v}</span>}
           />
         </li>
+        {snap.managed_by && (
+          <li>
+            <span>Owned by</span>
+            <span className="dp-fine">{snap.managed_by}{snap.managed_by_detail ? ` — ${snap.managed_by_detail}` : ""}</span>
+          </li>
+        )}
       </ul>
 
       {msg && <p className={`dp-msg dp-${msg.tone}`} role="status">{msg.text}</p>}
-      {!canEdit && <p className="dp-fine">Changing the policy requires a platform administrator.</p>}
+      {!canEdit && <p className="dp-fine">Changing this needs a platform administrator.</p>}
     </div>
   );
 }
 
-// ── 4b · full-bundle policy ─────────────────────────────────────────────────
+// ── off-host copy (modal) ───────────────────────────────────────────────────
 
 function BundlePolicyForm({ panel, onReload, canEdit }: {
   panel: Panel<{ config: BackupConfig }>; onReload: () => void; canEdit: boolean;
@@ -1530,14 +1743,14 @@ function BundlePolicyForm({ panel, onReload, canEdit }: {
   useEffect(() => { if (panel.data) setCfg(panel.data.config); }, [panel.data]);
 
   if (panel.error) return <PanelError text={panel.error} onRetry={onReload} />;
-  if (!cfg) return <Loading what="the backup destination" />;
+  if (!cfg) return <Loading what="the off-host destination" />;
 
   const save = async () => {
     setBusy(true); setMsg(null);
     try {
       const r = await api.setBackupConfig(cfg);
       setCfg(r.config);
-      setMsg({ tone: "good", text: "Saved. The host-side applier picks it up on its next run." });
+      setMsg({ tone: "good", text: "Saved. The host applier picks it up on its next run." });
     } catch (e: unknown) {
       setMsg({ tone: "bad", text: operatorError(e, "The change could not be saved.") });
     } finally { setBusy(false); }
@@ -1545,18 +1758,17 @@ function BundlePolicyForm({ panel, onReload, canEdit }: {
 
   return (
     <div className="dp-policy">
-      <h3 className="dp-sub-h">Full-bundle policy</h3>
       {!cfg.remote_url && (
         <HonestState
           tone="warn"
-          headline="The bundle has no off-host destination."
+          headline="There is no off-host copy."
           remedy="One disk failure would lose both copies — name a destination below."
           doc={BACKUP_DOC}
         />
       )}
       <div className="dp-grid2">
         <label className="dp-field">
-          <span>Off-host destination</span>
+          <span>Destination</span>
           <input
             className="dp-input" aria-label="Off-host destination" disabled={!canEdit}
             placeholder="rsync://host/correlix/ · s3://bucket/ · /mnt/nas/correlix/"
@@ -1577,13 +1789,13 @@ function BundlePolicyForm({ panel, onReload, canEdit }: {
           type="checkbox" checked={cfg.schedule_enabled} disabled={!canEdit}
           onChange={(e) => setCfg({ ...cfg, schedule_enabled: e.target.checked })}
         />
-        Run the full bundle on a schedule
+        Copy off-host on a schedule
       </label>
       <div className="dp-grid2">
         <label className="dp-field">
           <span>Schedule (cron)</span>
           <input
-            className="dp-input mono" aria-label="Bundle schedule, cron" disabled={!canEdit}
+            className="dp-input mono" aria-label="Off-host schedule, cron" disabled={!canEdit}
             placeholder="30 2 * * *  (02:30 daily)"
             value={cfg.schedule_cron ?? ""} onChange={(e) => setCfg({ ...cfg, schedule_cron: e.target.value })}
           />
@@ -1592,7 +1804,7 @@ function BundlePolicyForm({ panel, onReload, canEdit }: {
           <span>Copies kept<AskIris topic="backup.copies-kept" label="Copies kept" /></span>
           <input
             className="dp-input" type="number" min={0} max={365} step={1} inputMode="numeric"
-            aria-label="Bundle copies kept" disabled={!canEdit}
+            aria-label="Off-host copies kept" disabled={!canEdit}
             placeholder="unset"
             value={cfg.retain_count ?? ""}
             onChange={(e) => {
@@ -1609,7 +1821,7 @@ function BundlePolicyForm({ panel, onReload, canEdit }: {
       {canEdit && (
         <div className="dp-actions">
           <button type="button" className="btn accent" disabled={busy} onClick={save}>
-            {busy ? "Saving…" : "Save bundle policy"}
+            {busy ? "Saving…" : "Save"}
           </button>
         </div>
       )}

@@ -22,11 +22,11 @@ That default is deliberate. A nightly full backup on the same disk fills the vol
 
 1. Go to **Platform → Security → Data Protection**.
 
-2. Read **Disaster-recovery status** before changing anything. It is computed live, never stored, so an unregistered repository or an absent remote reads as a problem rather than as a blank.
+2. Read the card at the top before changing anything. The page answers one question — *can this appliance be recovered, and how much would be lost?* — and the card carries the answer (**Recoverable: Yes / Not yet / Unknown**), the age of the last good copy, what an outage right now would cost, the last drill, and the one action that matters. Every value is computed live from the contract, never stored, so an unregistered repository or an absent remote reads as a problem rather than as a blank. **Recoverable: Yes** requires a restore somebody actually proved with a drill; an unreadable read answers **Unknown**, never green.
 
-3. Check the search-tier snapshot policy. Snapshots are on by default, daily, with a retention count. Disabling them is an explicit act and the page says so.
+3. Check the schedule and the retention in **Protect**. They are two plain lines with an **Edit** beside each; copies are on by default, daily, with a retention count. Turning the schedule off asks for a reason first and records it, so a stopped schedule can never look like an accident.
 
-4. Set the off-host remote and the push command.
+4. Set the off-host remote and the push command. On the page that is the **Off-host copy** line in Protect; its **Edit** opens the destination, the push command, the schedule and how many copies the host keeps.
 
    ```
    BACKUP_REMOTE="rsync://backup.example.com/correlix/"
@@ -37,7 +37,7 @@ That default is deliberate. A nightly full backup on the same disk fills the vol
 
 5. Enable the scheduled full backup. The default schedule is `30 2 * * *`, which is 02:30 daily.
 
-6. Prove the restore works. The drill writes a canary into each live store, backs it up through the real path, restores into a disposable empty container, and asserts the canary came back with the correct content.
+6. Prove the restore works. **Recover → Run a drill** does it from the console against the newest good copy and records the result in the drill history there. From a shell, the drill writes a canary into each live store, backs it up through the real path, restores into a disposable empty container, and asserts the canary came back with the correct content.
 
    ```bash
    scripts/restore-drill.sh
@@ -49,7 +49,7 @@ That default is deliberate. A nightly full backup on the same disk fills the vol
 
 ## Result
 
-The Data Protection page shows the off-host copy as configured, the schedule as enabled, and the last drill result with its timestamp. The snapshot policy reads back through the API:
+The answer card reads **Recoverable: Yes** with the drill's timestamp beside it, **Protect** shows the off-host copy as **Set** and the schedule as a sentence ("Daily at 01:30 UTC"), and the drill result is at the top of **Recover**. The evidence behind all of that — the per-store matrix with its schedules, sizes, destinations and objectives; the list of copies you can restore from; the audit trail; and the measured bytes on disk — sits one disclosure down under **Per-store details**, **Restore from a copy**, **Activity** and **Bytes by store**. The snapshot policy reads back through the API:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
@@ -96,7 +96,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 }
 ```
 
-That response is an honest one, and worth reading closely. The search tier has a registered repository and a snapshot, but the newest is 184 hours old, there is no off-host copy, and `on_host_only_warning` is true. Backups and primary data share a disk, so one disk failure loses both.
+That response is an honest one, and worth reading closely. The search tier has a registered repository and a snapshot, but the newest is 184 hours old, there is no off-host copy, and `on_host_only_warning` is true. Backups and primary data share a disk, so one disk failure loses both. On the page that same state reads **Recoverable: Not yet**, with **Would lose: at least 7d 16h** and **Off-host copy: Not set**.
 
 ## Two behaviours that will surprise you if nobody says them
 
@@ -151,6 +151,8 @@ The backend stores your intent in its own state, and a host-side applier enforce
 5. Restore OpenSearch from the snapshot repository, or from the copied repository directory.
 6. Bring the stack up against the restored volumes.
 7. Run `scripts/restore-drill.sh` to confirm the result, and `bash scripts/deploy-qualify.sh` to confirm the pipeline is working.
+
+Definitions for anything on the page — what decides the verdict, what "Would lose" measures, why an off-host copy matters, how long copies are kept — are behind the `(i)` beside each label: it asks Iris, which answers from the authored file and cites it.
 
 ## Known gaps, stated rather than hidden
 

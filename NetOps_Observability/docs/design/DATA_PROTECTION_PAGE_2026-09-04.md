@@ -285,3 +285,123 @@ behind a server field would make it unauditable:
   documentation link, the landmarks and labels, and copy-denylist and vocabulary
   guards aimed at this page's own sources.
 - `perf/render.perf.tsx` — the `data-protection` budget scenario.
+
+---
+
+## 6. Addendum — 2026-09-08: the page answers one question
+
+Owner feedback, verbatim: *"Can you revise Data Protection page and clean up the
+jargon, and bring that to PROD level page. It's looking too messy and not clear
+about the goal of the page."*
+
+### What was wrong
+
+Everything §1–§5 describes was true and none of it was an **answer**. The
+console opened with five peer sections at the same visual weight — a posture
+hero carrying four stats and a seven-row recovery-point list, a nine-column
+coverage matrix, a footprint table that renders **70 rows** against the lab api
+(one per tenant per store, each with its own disclosure row), a restore-point
+grid, two policy forms and a split audit feed. Measured against the lab: the
+page was **22,242 px tall at 1440**, body type was 12.5 px throughout and the
+section headings were 12.5 px too — so nothing on it was bigger than anything
+else. An operator arriving at 3am had to assemble the answer themselves out of
+six true statements.
+
+### The rule now
+
+The page states its question at the top, in the operator's words, and answers
+it:
+
+> **Can this appliance be recovered, and how much would be lost?**
+
+**The answer card** (`data-section="answer"`) carries:
+
+| Field | Source | Honesty rule |
+|---|---|---|
+| Recoverable — **Yes / Not yet / Unknown** | `recoverability()`, which maps `posture()`: `protected` → Yes, `unknown` → Unknown, everything else → Not yet, carrying the posture's TONE so "not yet" can still be red | Yes requires a **proved** restore. An unreadable coverage table is Unknown, never green from nothing. |
+| Last good copy | newest `last_success_at` across engines (`lastGoodCopy()`) | Absent → "not measured — no store has ever reported a successful copy" |
+| Would lose | the **worst measured `rpo_hours`** (`lossWindow()`), named | "up to X" when every store reported an age; **"at least X"** when one did not. Deliberately NOT the target or the declared objective — reality, not intent. |
+| Last drill | `lastProvenRestore()` | "Never" when nothing has ever been proved |
+| The one action | `nextAction()`, worst-first: re-read → fix the copy store → `Fix <store>` → Run a backup → Run a drill | Same order as the verdict, so the button and the reason can never disagree. `Fix …` opens the evidence that names the failing part rather than pretending to repair it; the mutating actions are hidden, not disabled, from a non-platform-admin. |
+
+**Three sections, in this order**, each a `role="region"` with a stable
+`data-section`:
+
+- **Protect** — one short table (**store · copied · last copy · kept for**),
+  then the schedule, the retention and the off-host copy as three plain lines,
+  each with an **Edit** that opens the existing form in a dialog.
+- **Recover** — the drill history in plain outcomes (`Drill passed` /
+  `Drill failed`), a `Run a drill` control, and two disclosures:
+  *Restore from a copy* (the restore-point grid, the filter, "Measure sizes",
+  and the unchanged restore wizard and delete confirmation) and *Activity*.
+- **Storage** — three facts (measured total, free space, stores not weighed)
+  with the 70-row per-store table behind *Bytes by store*, capped at 12 with the
+  ShowAll convention.
+
+**Nothing was deleted from the API.** What moved behind a disclosure: the
+nine-column matrix, the per-engine recovery-point objectives (`rpo_target_hours`
+vs `rpo_objective_hours` and which one was judged against), the destination
+class with its immutability and encryption badges, the external host jobs, the
+copy store's own state and free space, the operations ring capacity, and
+`managed_by` with its detail (now inside the schedule dialog).
+
+### Words
+
+Headings are one or two words (Protect · Recover · Storage · Outside jobs), one
+`dp-sec-note` of ≤ 12 words per section, and no engine noun in a heading or a
+chip: "Covered" → **Copied**, "Coverage unknown" → **Unknown**, "Never
+verified" → **Never proved**, "Verified · 3d ago" → **Drill passed · 3d ago**,
+`repositoryStateWord` → `copyStoreWord` (**Ready / Not set up / Failed its check
+/ Not checked / Could not be read**). A cron becomes a sentence through
+`scheduleWords()` — *"Daily at 01:30 UTC"* — which returns **null** rather than
+guessing at anything but the three shapes this platform schedules, and the raw
+expression is printed verbatim in that case. Four new authored files carry what
+left the screen: `backup.recoverable`, `backup.loss-window`, `backup.off-host`,
+`backup.kept-for` (≤ 120 words each, loader-validated).
+
+The destructive-path text is **unchanged, word for word**: the in-place restore
+consequence, the delete consequence, both type-to-confirm gates, and the
+"turning this off stops new copies being made" reason prompt.
+
+### Layout
+
+One grid, one gutter (`.dp-page`, `repeat(2, minmax(0,1fr))`, 12 px): the
+answer card and Protect span it, Recover and Storage share the last row, and it
+collapses to one column under 1120 px. Body 14 px, section headings 18 px, the
+verdict 26 px, **nothing under 12.5 px**, both themes, no horizontal scroll at
+1366 or 1920. Measured after: **1,095 px** tall at 1440 with every disclosure
+closed (from 22,242), and the answer card plus all three section headers land
+above the fold.
+
+### Contract gap closed
+
+`SnapshotRepositoryView.disk_free_bytes` / `disk_total_bytes` / `disk_detail`
+have been on the wire since 2026-09-04 (`internal/dataprotect/contract.go`),
+but the frontend type never carried them and the page hard-coded
+`HEADROOM_UNREPORTED = "the platform does not report the repository volume's
+capacity"`. That was a **stale lie**: the platform does report it. The fields
+are now typed and rendered as free space (Protect details and the Storage
+section), through `headroom()`, which still answers "not measured — <reason>"
+from `disk_detail` when the volume genuinely was not weighed and refuses to
+divide by a zero total. §4 "What the backend must still provide" item **2 is
+closed**; item 1 (`rpo_target_hours`) is also live on the lab and the page
+judges against it, naming it as *scheduled* rather than *declared*.
+
+### Tests
+
+`dataProtection.model.test.ts` — 99 tests (45 → 99): every branch of
+`recoverability`, `lastGoodCopy`, `lossWindow` (including the at-least floor),
+`nextAction`, `headroom` (including a real 0 free staying measured and a zero
+total refusing to divide), `scheduleWords` (including the seven shapes it
+returns null for), `keptForText`, `policyRetentionWords`, `offHostState`,
+`copyStoreWord` and `drillWord`/`drillTone`.
+`DataProtection.test.tsx` — 116 tests over the rebuilt console: one per
+recoverability state including Unknown-never-green, the three facts and their
+honest absences, each of the four next actions, the Protect table and its three
+lines, every disclosure asserted **closed by default**, the demoted evidence
+still present when opened, the storage summary, admin gating, and the unchanged
+destructive confirmations.
+`perf/render.perf.tsx` — the `data-protection` budget scenario now verifies
+"Recoverable" instead of a phrase that had drifted out of the page, and measures
+**1,162 nodes** against the 1,300 ceiling with the 500-row grid inside its
+closed disclosure (closed is not unrendered).

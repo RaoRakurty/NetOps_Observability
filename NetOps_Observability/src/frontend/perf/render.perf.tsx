@@ -331,13 +331,14 @@ describe("frontend render budgets (high-EPS payloads)", () => {
           () => <DataProtection />,
           {
             update: () => <DataProtection />,
-            // Proves the whole console assembled: the coverage matrix under the
-            // operator's vocabulary, the honest "not measured" cell for the
-            // engine with no successful run, and the full 500-row table behind a
-            // windowed viewport.
+            // Proves the whole console assembled: the answer card at the top,
+            // the Protect table under the operator's vocabulary, the honest
+            // "not measured" cell for the store with no successful run, and the
+            // full 500-row table behind its windowed viewport (which now sits
+            // inside a closed disclosure — closed is not unrendered).
             verify: (host: HTMLElement) =>
               hasRows(500)(host) ??
-              showsAll("Metrics history", "Recovery point per engine", "not measured —")(host),
+              showsAll("Recoverable", "Metrics history", "not measured —")(host),
           },
         )();
       } finally {
