@@ -290,7 +290,11 @@ func collectRange(byDay map[string]DailyRecord, from, to string, out *[]DailyRec
 		if d < from || d > to {
 			continue
 		}
-		*out = append(*out, r.Seal())
+		// Seal, then Clone: the caller reads these rows long after List has
+		// released s.mu, and the next hourly snapshot folds into the very same
+		// day. A shared Meters map here is a fatal "concurrent map read and map
+		// write" in the usage handler, which takes the api down with it.
+		*out = append(*out, r.Seal().Clone())
 	}
 }
 

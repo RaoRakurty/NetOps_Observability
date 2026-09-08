@@ -155,8 +155,42 @@ func (r DailyRecord) MeterList() []MeterValue {
 }
 
 // Seal drops the open-day accumulator state. Idempotent.
+//
+// Seal copies the STRUCT, not the maps behind it. A record that leaves the
+// store must be Cloned as well, or the caller ends up holding the store's live
+// Meters map.
 func (r DailyRecord) Seal() DailyRecord {
 	r.Open = nil
+	return r
+}
+
+// Clone returns a record that shares no mutable state with the receiver: its
+// own Meters map, its own Open sets, and its own copy of every meter value.
+//
+// This is what makes a DailyRecord safe to hold once the store's mutex is
+// released. Sharing the map instead is not merely stale data — the hourly
+// snapshot writing into a map an HTTP handler is ranging over is an
+// unrecoverable "concurrent map read and map write" throw that kills the whole
+// api process.
+func (r DailyRecord) Clone() DailyRecord {
+	if r.Meters != nil {
+		m := make(map[string]MeterValue, len(r.Meters))
+		for name, mv := range r.Meters {
+			if mv.Value != nil {
+				v := *mv.Value
+				mv.Value = &v
+			}
+			m[name] = mv
+		}
+		r.Meters = m
+	}
+	if r.Open != nil {
+		o := make(map[string][]string, len(r.Open))
+		for name, ids := range r.Open {
+			o[name] = append([]string(nil), ids...)
+		}
+		r.Open = o
+	}
 	return r
 }
 
@@ -205,6 +239,11 @@ func Fold(row DailyRecord, readings []Reading, at time.Time) (DailyRecord, error
 	if row.Day != day {
 		return row, fmt.Errorf("metering: refusing to fold a %s sample into the %s row", day, row.Day)
 	}
+	// Fold is PURE, and that has to be true of the maps too. Writing into the
+	// caller's Meters map would mutate a row somebody else may still be
+	// reading, and a half-applied fold is visible to them the moment an early
+	// reading fails validation.
+	row = row.Clone()
 	if row.Meters == nil {
 		row.Meters = map[string]MeterValue{}
 	}

@@ -1,0 +1,167 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package metering
+
+// store_concurrent_test.go — the file backend hands out rows that share NOTHING
+// with the rows it keeps.
+//
+// This is the invariant behind a crash we shipped: List released the mutex and
+// returned records whose Meters map was still the store's live map, so the
+// hourly snapshot wrote into a map the usage handler was iterating and the Go
+// runtime killed the process with "concurrent map read and map write". The
+// api dies, and every collector and the alert receiver die with it.
+//
+// The detachment test below fails WITHOUT the race detector, deterministically,
+// because a shared map is observable in one goroutine. The concurrency test is
+// what CI's `-race` run aims at the same defect.
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"sync"
+	"testing"
+	"time"
+)
+
+// TestFileStoreListHandsOutDetachedRows pins the store contract: a row a caller
+// already holds does not change when the next snapshot lands.
+func TestFileStoreListHandsOutDetachedRows(t *testing.T) {
+	s := NewFileStore("")
+	ctx := context.Background()
+	snapshot(t, s, day("2026-09-05T01:00:00Z"), map[string][]Reading{
+		"acme": {Measured(MeterMonitoredDevicesPeak, "acme", 2)},
+	})
+
+	rows, err := s.List(ctx, "acme", false, "2026-09-05", "2026-09-05")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("list returned %d rows, want 1", len(rows))
+	}
+	before := meterValue(t, rows[0], MeterMonitoredDevicesPeak)
+
+	// The next hourly snapshot raises the peak. It must not reach back into the
+	// slice the previous reader is still holding.
+	snapshot(t, s, day("2026-09-05T02:00:00Z"), map[string][]Reading{
+		"acme": {Measured(MeterMonitoredDevicesPeak, "acme", 9)},
+	})
+
+	if after := meterValue(t, rows[0], MeterMonitoredDevicesPeak); after != before {
+		t.Fatalf("a row already handed to a caller changed from %v to %v when the snapshot landed — List is sharing the store's live map", before, after)
+	}
+
+	// And the other direction: a caller scribbling on its own copy must not
+	// reach the store.
+	rows[0].Meters[MeterMonitoredDevicesPeak] = MeterValue{Meter: MeterMonitoredDevicesPeak}
+	again, err := s.List(ctx, "acme", false, "2026-09-05", "2026-09-05")
+	if err != nil {
+		t.Fatalf("list again: %v", err)
+	}
+	if got := meterValue(t, again[0], MeterMonitoredDevicesPeak); got != 9 {
+		t.Fatalf("the store's row reads %v after a caller edited its own copy, want 9", got)
+	}
+}
+
+// TestFoldDoesNotMutateTheRowItWasGiven holds Fold to the purity its doc
+// comment claims. A fold that writes into the caller's map is how the store's
+// live rows leaked into a reader's hands in the first place.
+func TestFoldDoesNotMutateTheRowItWasGiven(t *testing.T) {
+	row, err := Fold(DailyRecord{Day: "2026-09-05", TenantID: "acme"},
+		[]Reading{Measured(MeterMonitoredDevicesPeak, "acme", 2)}, day("2026-09-05T01:00:00Z"))
+	if err != nil {
+		t.Fatalf("fold: %v", err)
+	}
+	next, err := Fold(row, []Reading{Measured(MeterMonitoredDevicesPeak, "acme", 9)}, day("2026-09-05T02:00:00Z"))
+	if err != nil {
+		t.Fatalf("fold again: %v", err)
+	}
+	if got := meterValue(t, row, MeterMonitoredDevicesPeak); got != 2 {
+		t.Fatalf("the row handed to Fold now reads %v, want the 2 it went in with — Fold mutated its input", got)
+	}
+	if got := meterValue(t, next, MeterMonitoredDevicesPeak); got != 9 {
+		t.Fatalf("the folded row reads %v, want 9", got)
+	}
+}
+
+// TestFileStoreConcurrentRecordAndList is the shape that crashed: the hourly
+// snapshot folding while the usage handler encodes what List gave it.
+//
+// Without the fix the Go runtime throws "concurrent map read and map write" and
+// takes the test binary down; under CI's `-race` the detector reports it first.
+func TestFileStoreConcurrentRecordAndList(t *testing.T) {
+	s := NewFileStore("")
+	ctx := context.Background()
+	at := day("2026-09-05T01:00:00Z")
+	snapshot(t, s, at, map[string][]Reading{
+		"acme":            {Unique(MeterMonitoredDevicesUnique, "acme", []string{"d1"}), Measured(MeterMonitoredDevicesPeak, "acme", 1)},
+		ScopeInstallation: {Measured(MeterTenants, ScopeInstallation, 1)},
+	})
+
+	const rounds = 500
+	var readers, writer sync.WaitGroup
+	stop := make(chan struct{})
+
+	writer.Add(1)
+	go func() {
+		defer writer.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// Same day, same tenant: this is the hourly fold rewriting the row
+			// a reader may be holding.
+			if err := s.Record(ctx, at.Add(time.Duration(i)*time.Millisecond), map[string][]Reading{
+				"acme":            {Unique(MeterMonitoredDevicesUnique, "acme", []string{"d1", "d2"}), Measured(MeterMonitoredDevicesPeak, "acme", float64(i%97))},
+				ScopeInstallation: {Measured(MeterTenants, ScopeInstallation, 1)},
+			}); err != nil {
+				t.Errorf("record: %v", err)
+				return
+			}
+		}
+	}()
+
+	for r := 0; r < 4; r++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for i := 0; i < rounds; i++ {
+				rows, err := s.List(ctx, "", true, "2026-09-05", "2026-09-05")
+				if err != nil {
+					t.Errorf("list: %v", err)
+					return
+				}
+				// What GET /api/system/licence/usage does with the answer: walk
+				// every meter map and encode it, with the store's mutex long
+				// released.
+				for _, row := range rows {
+					for _, mv := range row.Meters {
+						_ = mv.Samples
+					}
+					_ = RollUp([]DailyRecord{row})
+				}
+				if err := json.NewEncoder(io.Discard).Encode(rows); err != nil {
+					t.Errorf("encode: %v", err)
+					return
+				}
+			}
+		}()
+	}
+
+	readers.Wait()
+	close(stop)
+	writer.Wait()
+}
+
+func meterValue(t *testing.T, r DailyRecord, meter string) float64 {
+	t.Helper()
+	mv, ok := r.Meters[meter]
+	if !ok || mv.Value == nil {
+		t.Fatalf("row %s/%s has no value for %s", r.Day, r.TenantID, meter)
+	}
+	return *mv.Value
+}
