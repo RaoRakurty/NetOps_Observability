@@ -576,3 +576,41 @@ Route Port,The Maximum Transmit Unit is 1500
       CRC: 7, Overrun: 0, Fragment: 0
       Total Error: 12, Drop: 3
 `
+
+// ── tracker 282(e): a value the device did not print ───────────────────────
+
+// vrpEmptyDuplex is tracker 282(e): VRP printed the key and no value, and the
+// " x" sentinel turned that into Duplex = "x" — a field the device never gave.
+const vrpEmptyDuplex = `GigabitEthernet0/0/1 current state : UP
+Line protocol current state : UP
+Route Port,The Maximum Transmit Unit is 1500
+Speed : ,  Loopback: NONE
+Duplex: ,  Negotiation: ENABLE
+`
+
+// vrpEmptyLineProtocol is the same fabrication one line up: a truncated
+// line-protocol line must leave Oper absent, not set it to the empty string.
+const vrpEmptyLineProtocol = `GigabitEthernet0/0/1 current state : UP
+Line protocol current state :
+Route Port,The Maximum Transmit Unit is 1500
+`
+
+// ciscoEmptyVersionToken is the platform-uptime form: a version line that
+// carries only punctuation must leave Version absent.
+const ciscoEmptyVersionToken = `Cisco IOS Software, IOSv Software, Version ,  RELEASE SOFTWARE
+router uptime is 5 days, 4 hours, 3 minutes
+System returned to ROM by reload
+`
+
+// ciscoRoutingEntryNoPrefix is the route.go sentinel site: "Routing entry for "
+// with nothing after it must start no route, not a route named "x".
+const ciscoRoutingEntryNoPrefix = `Routing entry for 
+  Known via "ospf 1", distance 110, metric 20
+`
+
+// ciscoEmptyInternetAddress is the iface.go IPv4 sentinel site: a line that
+// ends right after the marker must leave IPv4 absent, not set it to "x".
+const ciscoEmptyInternetAddress = `GigabitEthernet0/0 is up, line protocol is up
+  Internet address is 
+  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec,
+`

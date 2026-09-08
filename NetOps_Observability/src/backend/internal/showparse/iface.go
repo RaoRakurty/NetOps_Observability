@@ -441,7 +441,13 @@ func parseVRPInterfaces(lines []string) Result {
 			continue
 		}
 		if v, ok := strings.CutPrefix(t, "Line protocol current state :"); ok {
-			cur.Oper = strPtr(trim(v))
+			// Same fabrication class: a capture cut off right after the colon
+			// must leave Oper ABSENT. A pointer to "" is not "we did not read
+			// it", it is "the device said nothing", and downstream renders it
+			// as a blank state rather than as unknown.
+			if o := trim(v); o != "" {
+				cur.Oper = strPtr(o)
+			}
 			continue
 		}
 		switch {
@@ -482,7 +488,15 @@ func parseVRPInterfaces(lines []string) Result {
 					cur.SpeedMbps = i64Ptr(n)
 				}
 			case "duplex":
-				if cur.Duplex == nil {
+				// The `v != ""` guard is what stops the " x" sentinel from
+				// BECOMING the value (tracker 282e). At the numeric sites below
+				// the sentinel is harmless because atoiOK/atofOK reject the
+				// token "x"; at a STRING site nothing rejects it, so a VRP line
+				// reading "Duplex:" with no value used to yield Duplex = "x" —
+				// a field the device never reported. The sentinel stays: it is
+				// what keeps Fields(...)[0] from panicking on its own, rather
+				// than because of a check somewhere else that an edit could drop.
+				if v != "" && cur.Duplex == nil {
 					cur.Duplex = strPtr(strings.Fields(v + " x")[0])
 				}
 			case "crc":

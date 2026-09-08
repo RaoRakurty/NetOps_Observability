@@ -441,6 +441,94 @@ func TestParse_GapsAreBounded(t *testing.T) {
 	}
 }
 
+// ── tracker 282(e): the parser must not invent a value it did not read ──────
+
+// TestParse_NoFabricatedField_EmptyValue covers EVERY string-typed " x"
+// sentinel site in the package, plus the two other places a truncated line used
+// to produce a present-but-empty field.
+//
+// The sentinel exists so `strings.Fields("")[0]` cannot panic on device bytes.
+// It is harmless at a numeric site, where atoiOK/atofOK reject the token "x".
+// At a string site nothing rejects it, so "Duplex:" with no value became
+// Duplex = "x" — a field the device never printed, which is the one thing the
+// package header promises never to happen.
+func TestParse_NoFabricatedField_EmptyValue(t *testing.T) {
+	t.Run("vrp duplex with no value", func(t *testing.T) {
+		res := mustParse(t, CmdInterfaceDetail, DialectHuaweiVRP, vrpEmptyDuplex)
+		if len(res.Interfaces) != 1 {
+			t.Fatalf("got %d interfaces, want 1", len(res.Interfaces))
+		}
+		i := res.Interfaces[0]
+		if i.Duplex != nil {
+			t.Errorf("Duplex = %q, want nil — the device printed the key and no value", *i.Duplex)
+		}
+		// The numeric sibling on the same fixture: "Speed : ," is rejected by
+		// atoiOK, which is why the sentinel was safe there all along.
+		if i.SpeedMbps != nil {
+			t.Errorf("SpeedMbps = %d, want nil", *i.SpeedMbps)
+		}
+	})
+
+	t.Run("vrp line protocol with no value", func(t *testing.T) {
+		res := mustParse(t, CmdInterfaceDetail, DialectHuaweiVRP, vrpEmptyLineProtocol)
+		if len(res.Interfaces) != 1 {
+			t.Fatalf("got %d interfaces, want 1", len(res.Interfaces))
+		}
+		if o := res.Interfaces[0].Oper; o != nil {
+			t.Errorf("Oper = %q, want nil — a pointer to the empty string reads downstream as a blank state, not as unknown", *o)
+		}
+	})
+
+	t.Run("cisco internet address with no value", func(t *testing.T) {
+		res := mustParse(t, CmdInterfaceDetail, DialectCiscoIOSXE, ciscoEmptyInternetAddress)
+		if len(res.Interfaces) != 1 {
+			t.Fatalf("got %d interfaces, want 1", len(res.Interfaces))
+		}
+		if ip := res.Interfaces[0].IPv4; ip != nil {
+			t.Errorf("IPv4 = %q, want nil", *ip)
+		}
+	})
+
+	t.Run("cisco version token that trims away", func(t *testing.T) {
+		res, err := Parse(CmdPlatformUptime, DialectCiscoIOSXE, ciscoEmptyVersionToken)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if res.Platform == nil {
+			t.Fatal("the uptime line is readable, so Platform must be populated")
+		}
+		if v := res.Platform.Version; v != nil {
+			t.Errorf("Version = %q, want nil — the line carried no version token", *v)
+		}
+	})
+
+	t.Run("cisco routing entry with no prefix", func(t *testing.T) {
+		res, err := Parse(CmdRoutePrefix, DialectCiscoIOSXE, ciscoRoutingEntryNoPrefix)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		for _, r := range res.Routes {
+			t.Errorf("got route %q, want none — looksPrefix is what refuses the sentinel here", r.Prefix)
+		}
+	})
+}
+
+// TestSentinelSites_NumericOnly is the audit made mechanical: the token the " x"
+// sentinel appends must be rejected by both numeric parsers, which is the whole
+// reason the sentinel is safe at a numeric site. If this ever stops holding,
+// every numeric sentinel site becomes a fabrication site too.
+func TestSentinelSites_NumericOnly(t *testing.T) {
+	if _, ok := atoiOK("x"); ok {
+		t.Error("atoiOK accepted the sentinel token")
+	}
+	if _, ok := atofOK("x"); ok {
+		t.Error("atofOK accepted the sentinel token")
+	}
+	if got := strings.Fields("" + " x"); len(got) != 1 || got[0] != "x" {
+		t.Fatalf("Fields of an empty value plus the sentinel = %v, want [x]", got)
+	}
+}
+
 func TestParse_SROSPortDetail(t *testing.T) {
 	res := mustParse(t, CmdInterfaceDetail, DialectNokiaSROS, srosShowPortDetail)
 	if len(res.Interfaces) != 1 {

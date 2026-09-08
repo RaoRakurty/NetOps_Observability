@@ -18,6 +18,23 @@ import (
 	"unicode/utf8"
 )
 
+// THE " x" SENTINEL, AND WHERE IT IS SAFE.
+//
+// Several parsers write `strings.Fields(v + " x")[0]`. The sentinel is there
+// because a device line that ends right after its marker leaves v empty, and
+// `strings.Fields("")[0]` PANICS on caller-supplied device bytes inside a bare
+// worker goroutine.
+//
+// It is safe at a NUMERIC site — atoiOK and atofOK both reject the token "x",
+// so the sentinel can never become a value. It is NOT safe at a STRING site:
+// nothing there rejects it, so the parser reports a field the device never
+// printed, which is the one thing this package promises never to do (tracker
+// 282e, where a VRP line reading "Duplex:" yielded Duplex = "x").
+//
+// So: every STRING-typed sentinel site must carry its own `v != ""` guard. The
+// sentinel stays either way — it is what makes the index safe on its own rather
+// than because of a check somewhere else that a later edit could drop.
+
 // ── pointer constructors (absent means absent) ──────────────────────────────
 
 func strPtr(s string) *string   { v := s; return &v }

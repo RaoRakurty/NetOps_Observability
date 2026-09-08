@@ -277,8 +277,15 @@ func parseVersionUptime(lines []string) Result {
 		}
 		if ph.Version == nil {
 			if v, ok := valueAfter(t, ", Version "); ok && v != "" {
-				ph.Version = strPtr(strings.TrimRight(strings.Fields(v + " x")[0], ","))
-				found = true
+				// The `v != ""` guard already stops the " x" sentinel becoming
+				// the value here. TrimRight can still empty the token on its own
+				// (a version field of nothing but a comma), and an empty Version
+				// is as much a fabricated field as a wrong one — so it is only
+				// recorded when something survives the trim.
+				if ver := strings.TrimRight(strings.Fields(v + " x")[0], ","); ver != "" {
+					ph.Version = strPtr(ver)
+					found = true
+				}
 			} else if v, ok := strings.CutPrefix(t, "Software image version:"); ok && trim(v) != "" {
 				ph.Version = strPtr(trim(v))
 				found = true
