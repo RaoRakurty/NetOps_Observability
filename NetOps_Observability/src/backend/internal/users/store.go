@@ -49,6 +49,12 @@ type Repo interface {
 	Update(username string, patch User) (User, error)
 	Delete(username string) error
 	UpsertFederated(username, email, displayName, role, source, tenant string) (User, error)
+	// UpsertFederatedInRealm is UpsertFederated bounded by the login realm the
+	// flow came in on. The realm is checked INSIDE the store's lock/transaction,
+	// beside the merge, because the merge write is itself the damage: it rewrites
+	// the account's role and auth source. A caller-side pre-check would leave
+	// that write racing.
+	UpsertFederatedInRealm(username, email, displayName, role, source, tenant string, realm Realm) (User, error)
 	ChangePassword(username, newPassword string) error
 	ResetPassword(username, newPassword string) error
 	// RehashPassword re-wraps the SAME secret at the current cost (SR-029). It
@@ -311,6 +317,15 @@ func (s *FileStore) CreateFull(u User, password string) (User, error) {
 // rows predating the stamp; see load()'s migration).
 
 func (s *FileStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
+	return s.UpsertFederatedInRealm(username, email, displayName, role, source, tenant, Realm{})
+}
+
+// UpsertFederatedInRealm is UpsertFederated with the flow's login realm applied.
+// An EXISTING federated account whose tenant the realm does not reach is refused
+// with ErrForeignTenant BEFORE the merge, inside the same lock, so a sign-in
+// from another tenant's IdP cannot rewrite the account's role or auth source on
+// its way to being refused.
+func (s *FileStore) UpsertFederatedInRealm(username, email, displayName, role, source, tenant string, realm Realm) (User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return User{}, errors.New("username required")
@@ -325,6 +340,11 @@ func (s *FileStore) UpsertFederated(username, email, displayName, role, source, 
 		if IsLocalSource(u.AuthSource) {
 			return User{}, ErrLocalAccount
 		}
+		// The account must live in the realm this flow came in on. Refused here,
+		// before MergeFederated, so the record is left exactly as it was.
+		if !realm.Permits(u.TenantID) {
+			return User{}, ErrForeignTenant
+		}
 		// Federated account — keep it in sync with the IdP (SR-025: guard the
 		// IdP-mapped role against silent platform-owner escalation, using the
 		// account's existing tenant).
@@ -337,6 +357,12 @@ func (s *FileStore) UpsertFederated(username, email, displayName, role, source, 
 	}
 	if tenant == "" {
 		tenant = s.deps.DefaultTenant
+	}
+	// A new account is provisioned into the realm the flow is bound to. The
+	// caller already proved the connection belongs to that realm; this is the
+	// same rule applied one layer down, so the two can never disagree.
+	if !realm.Permits(tenant) {
+		return User{}, ErrForeignTenant
 	}
 	role = s.deps.GuardRole(role, tenant, username, source)
 	u := User{
@@ -521,7 +547,38 @@ var (
 	// username collides with a LOCALLY-managed account (H1). The caller decides
 	// the HTTP shape; the store only guarantees the local record is untouched.
 	ErrLocalAccount = errors.New("account is managed locally; federated sign-in refused")
+	// ErrForeignTenant is UpsertFederatedInRealm's typed refusal when the
+	// existing account belongs to a tenant the flow's realm does not reach. The
+	// store guarantees the account is untouched; the caller decides the HTTP
+	// shape, and must not repeat this reason to the browser (it would be a
+	// cross-tenant username-existence oracle).
+	ErrForeignTenant = errors.New("account belongs to another realm; federated sign-in refused")
 )
+
+// Realm bounds which accounts a federated sign-in may act on.
+//
+// The ZERO VALUE CARRIES NO CONSTRAINT, and that is deliberate. A platform-realm
+// connection keeps the generic callback and legitimately signs in users of every
+// tenant, so a blanket "flow tenant == account tenant" would lock out every
+// deployment that predates per-tenant sign-in URLs. Only a flow whose URL names
+// one realm hands a constraint down.
+//
+// The predicate is supplied by the caller rather than computed here because org
+// membership lives in the tenant directory, which this package must not import.
+type Realm struct {
+	// Reaches reports whether an account in accountTenant belongs to this realm.
+	// Nil means unconstrained.
+	Reaches func(accountTenant string) bool
+}
+
+// Permits is the fail-closed read of the constraint: no predicate means no
+// constraint, otherwise the predicate decides.
+func (rl Realm) Permits(accountTenant string) bool {
+	if rl.Reaches == nil {
+		return true
+	}
+	return rl.Reaches(accountTenant)
+}
 
 // IsLocalSource reports whether an auth_source marks a LOCALLY-managed account
 // (password + MFA owned by us, not an IdP). Mirrors the integrator's

@@ -28,6 +28,7 @@ import (
 	"netops/backend/internal/oidc"
 	"netops/backend/internal/ssoidp"
 	"netops/backend/internal/tenantlocator"
+	"netops/backend/internal/users"
 )
 
 // oidc_config.go — runtime-configurable, kv-persisted overlay for the SSO/OIDC
@@ -814,8 +815,7 @@ func (s *server) handleTenantSSO(w http.ResponseWriter, r *http.Request) {
 	bound, isBound := s.connectionLocator(alias)
 	if !isBound || !cand.Reaches(bound.TenantID, bound.OrgID) {
 		s.auditSSOBindingRefusal(r, "provider not registered for this realm", alias, cand.TenantID)
-		s.ssoLocatorRefuse(w, r, cand,
-			"“"+alias+"” is not an identity provider for "+cand.DisplayName+". Ask your administrator for this organization's sign-in link.")
+		s.ssoLocatorRefuse(w, r, cand, ssoBindingRefusalMessage(alias, cand))
 		return
 	}
 	switch leaf {
@@ -858,6 +858,79 @@ func (s *server) ssoLocatorRefuse(w http.ResponseWriter, r *http.Request, c tena
 		target = "/"
 	}
 	http.Redirect(w, r, target+"#"+frag.Encode(), http.StatusFound) // #nosec G710 -- same-origin path, guarded above
+}
+
+// ssoBindingRefusalMessage is the ONE sentence every realm refusal says. It is
+// one function so the two refusals that must be indistinguishable stay so: a
+// provider that is not registered for this realm, and an account that does not
+// belong to it. Anything more specific on the second case would hand a tenant
+// administrator a cross-tenant username-existence oracle — type a name, read
+// the error, learn whether another customer has that user. The real reason is
+// recorded in the audit trail, which only an operator can read.
+func ssoBindingRefusalMessage(alias string, c tenantlocator.Candidate) string {
+	return "“" + alias + "” is not an identity provider for " + c.DisplayName + ". Ask your administrator for this organization's sign-in link."
+}
+
+// ssoCallbackRealm is the realm constraint a federated sign-in runs under.
+//
+// ONLY a tenant-bound callback carries one. A platform-realm connection keeps
+// the generic /api/auth/sso/callback and legitimately signs in users of every
+// tenant, so the zero Realm — no constraint — is what those flows get, exactly
+// as before.
+func (s *server) ssoCallbackRealm(r *http.Request) users.Realm {
+	kind, ref, _, leaf, ok := tenantlocator.ParseCallbackPath(r.URL.Path)
+	if !ok || leaf != "callback" {
+		return users.Realm{}
+	}
+	cand, resolved := tenantlocator.Resolve(s.locatorDir(), kind, ref)
+	if !resolved {
+		// handleTenantSSO 404s an unresolvable locator before the callback runs,
+		// so this is belt and braces — but the answer to "the URL names a realm I
+		// cannot resolve" is to refuse, never to drop the constraint.
+		return users.Realm{Reaches: func(string) bool { return false }}
+	}
+	return users.Realm{Reaches: func(accountTenant string) bool {
+		return s.realmReachesAccount(cand, accountTenant)
+	}}
+}
+
+// realmReachesAccount answers the question the user store cannot: does an
+// account in this tenant belong to the realm the URL names? It uses the SAME
+// Reaches helper the connection binding uses, so an /org/{id} locator still
+// reaches every tenant its org owns.
+func (s *server) realmReachesAccount(c tenantlocator.Candidate, accountTenant string) bool {
+	t := strings.TrimSpace(accountTenant)
+	if t == "" {
+		// Reaches reads a BLANK tenant as the platform realm — right for a
+		// provider registration (a shared front door), wrong for an ACCOUNT: it
+		// would let any tenant's URL capture a tenant-less record. Fail closed.
+		return false
+	}
+	// The account's org is known only to the tenant directory. An account whose
+	// tenant no longer resolves (deleted, or suspended) reaches no realm.
+	owner, ok := tenantlocator.ResolveID(s.locatorDir(), tenantlocator.KindTenant, t)
+	if !ok {
+		return false
+	}
+	return c.Reaches(t, owner.OrgID)
+}
+
+// ssoRefuseForeignRealm answers a sign-in whose ACCOUNT is not in the realm the
+// URL names. The browser is told exactly what a mis-registered provider is told
+// and not one byte more (see ssoBindingRefusalMessage); the real reason goes to
+// the audit trail. The refusal deliberately lands AFTER the code exchange, so
+// the two cases do not separate on timing either.
+func (s *server) ssoRefuseForeignRealm(w http.ResponseWriter, r *http.Request, username string) {
+	kind, ref, alias, _, parsed := tenantlocator.ParseCallbackPath(r.URL.Path)
+	cand, resolved := tenantlocator.Resolve(s.locatorDir(), kind, ref)
+	if !parsed || !resolved {
+		// No realm to name. Refuse generically rather than inventing a message.
+		s.ssoFail(w, r, "sign-in refused")
+		return
+	}
+	logWarn("auth", "sso login refused — account is not in this realm", map[string]any{"user": username, "idp": alias, "src": "oidc"})
+	s.auditSSOBindingRefusal(r, "account does not belong to the realm this connection is bound to", alias, cand.TenantID)
+	s.ssoLocatorRefuse(w, r, cand, ssoBindingRefusalMessage(alias, cand))
 }
 
 // auditSSOBindingRefusal records a refused per-tenant callback. Every refusal is

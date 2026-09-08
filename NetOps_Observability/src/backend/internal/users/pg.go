@@ -384,6 +384,13 @@ func (s *PGStore) TouchLogin(username string) {
 }
 
 func (s *PGStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
+	return s.UpsertFederatedInRealm(username, email, displayName, role, source, tenant, Realm{})
+}
+
+// UpsertFederatedInRealm is the pg twin of the FileStore method: the realm is
+// checked inside the SAME transaction that holds the row FOR UPDATE, so the
+// refusal and the merge write can never interleave.
+func (s *PGStore) UpsertFederatedInRealm(username, email, displayName, role, source, tenant string, realm Realm) (User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return User{}, errors.New("username required")
@@ -405,6 +412,12 @@ func (s *PGStore) UpsertFederated(username, email, displayName, role, source, te
 			if IsLocalSource(u.AuthSource) {
 				return ErrLocalAccount
 			}
+			// The account must live in the realm this flow came in on. Refused
+			// before MergeFederated and inside the row lock, so a sign-in from
+			// another tenant's IdP rewrites nothing on its way to being refused.
+			if !realm.Permits(u.TenantID) {
+				return ErrForeignTenant
+			}
 			// Federated account — keep it in sync with the IdP (SR-025: guard the
 			// IdP-mapped role against silent platform-owner escalation, using the
 			// account's existing tenant).
@@ -419,6 +432,11 @@ func (s *PGStore) UpsertFederated(username, email, displayName, role, source, te
 			// so SSO never locks out at MAX_USERS.
 			if tenant == "" {
 				tenant = s.deps.DefaultTenant
+			}
+			// Same rule as the FileStore: a new account is provisioned into the
+			// realm the flow is bound to, never outside it.
+			if !realm.Permits(tenant) {
+				return ErrForeignTenant
 			}
 			role = s.deps.GuardRole(role, tenant, username, source)
 			nu := User{

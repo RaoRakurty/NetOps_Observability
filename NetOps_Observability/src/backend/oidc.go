@@ -262,8 +262,22 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		s.completeElevationSSO(w, r, p, pol, username, role, txn.FEState, claims)
 		return
 	}
-	user, err := s.users.UpsertFederated(username, claims.Email, firstNonEmpty(claims.Name, username), role, "oidc", s.ssoProvisionTenant(r, p))
+	// THE REALM TRAVELS WITH THE SIGN-IN. Until now only the CONNECTION was
+	// checked against the URL's realm; the ACCOUNT the token names was not, so a
+	// tenant that registers its own IdP could name any username in the platform
+	// and be handed a session in that account's tenant (and rewrite its role and
+	// auth source on the way through). The store applies this beside the merge,
+	// which is where it has to be: the merge write is itself the damage.
+	// A generic (unbound, platform-realm) callback carries no constraint.
+	user, err := s.users.UpsertFederatedInRealm(username, claims.Email, firstNonEmpty(claims.Name, username), role, "oidc", s.ssoProvisionTenant(r, p), s.ssoCallbackRealm(r))
 	if err != nil {
+		// The account exists, in a realm this URL does not reach. Say only what
+		// a mis-registered provider is told — naming the real reason would be a
+		// cross-tenant username-existence oracle.
+		if errors.Is(err, users.ErrForeignTenant) {
+			s.ssoRefuseForeignRealm(w, r, username)
+			return
+		}
 		// H1: the username names a LOCALLY-managed account — the IdP's verdict
 		// must not be accepted against it (that would bypass the local password
 		// AND its MFA enrollment, and used to let the IdP re-role/re-source the
@@ -330,10 +344,25 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 // mint the grant, and then open an ordinary session so the operator is simply
 // signed in with elevated access held beside their standing rights.
 func (s *server) completeElevationSSO(w http.ResponseWriter, r *http.Request, p *oidcProvider, pol elevation.Policy, username, mappedRole, feState string, claims jwks.Claims) {
+	// The realm the URL names, if this is a tenant-bound callback. An elevation
+	// provider registered by one tenant must not reach another tenant's account
+	// any more than a standing one may.
+	realm := s.ssoCallbackRealm(r)
+	bound := realm.Reaches != nil
 	user, ok := s.users.Get(username)
 	if !ok {
+		if bound {
+			// In a tenant-bound flow "no such account" and "not your account"
+			// must answer identically, or the pair is an existence oracle.
+			s.ssoRefuseForeignRealm(w, r, username)
+			return
+		}
 		logWarn("auth", "elevation login refused — no such account", map[string]any{"user": username, "provider": pol.Provider})
 		s.ssoFail(w, r, elevation.UnknownAccountRefusal)
+		return
+	}
+	if !realm.Permits(user.TenantID) {
+		s.ssoRefuseForeignRealm(w, r, username)
 		return
 	}
 	// H1 parity: an elevation IdP must not act against a LOCALLY-managed
