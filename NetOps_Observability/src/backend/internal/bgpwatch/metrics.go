@@ -27,8 +27,13 @@ type Metrics struct {
 	AlertsNotified    atomic.Int64
 	AlertsResolved    atomic.Int64
 	AlertsSuppressed  atomic.Int64 // held back by the cool-down (NOT lost: visible here)
-	BogonSightings    atomic.Int64
-	BogonFeedErrors   atomic.Int64
+	// MeasurementLost counts the notices sent because an OPEN incident stopped
+	// being measured. It is NOT a resolution: the incident is still open and
+	// still unproven, and this counter is how an operator sees the difference
+	// between "it cleared" and "we went blind" (review 2026-09-08).
+	MeasurementLost atomic.Int64
+	BogonSightings  atomic.Int64
+	BogonFeedErrors atomic.Int64
 
 	// Evidence is the bus producer's own counter block.
 	Evidence EvidenceMetrics
@@ -55,6 +60,7 @@ func (m *Metrics) Snapshot() map[string]int64 {
 		"alerts_notified_total":    m.AlertsNotified.Load(),
 		"alerts_resolved_total":    m.AlertsResolved.Load(),
 		"alerts_suppressed_total":  m.AlertsSuppressed.Load(),
+		"measurement_lost_total":   m.MeasurementLost.Load(),
 		"bogon_sightings_total":    m.BogonSightings.Load(),
 		"bogon_feed_errors_total":  m.BogonFeedErrors.Load(),
 		"evidence_published_total": ev.Published,
@@ -77,6 +83,7 @@ var metricHelp = [][2]string{
 	{"alerts_notified_total", "BGP alerts dispatched to the notification channels"},
 	{"alerts_resolved_total", "BGP alerts resolved (the condition cleared)"},
 	{"alerts_suppressed_total", "BGP alerts held back by the per-incident cool-down"},
+	{"measurement_lost_total", "Open BGP incidents that stopped being measured (a notice went out; the incident was NOT resolved)"},
 	{"bogon_sightings_total", "Distinct bogon prefixes observed on a tenant's live feeds"},
 	{"bogon_feed_errors_total", "Full-bogons feed refreshes that failed (the embedded set still stands)"},
 	{"evidence_published_total", "BGP evidence records accepted by the bus"},

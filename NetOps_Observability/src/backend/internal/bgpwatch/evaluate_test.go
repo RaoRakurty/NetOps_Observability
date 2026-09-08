@@ -651,3 +651,218 @@ func TestForgetPrefixIsTenantScopedAndFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// ── H3: an unmeasurable pass is not a clear ─────────────────────────────────
+//
+// Review 2026-09-08 found applyIncident treating ClassUnknown (we could not
+// measure) exactly like ClassNone (we measured and it is fine). One upstream
+// 502 therefore dispatched Alert{Resolved: true, "Cleared: … is no longer
+// classified origin_change."} on the OPEN incident's dedup id, closing a live
+// hijack on the destination, and resolveAlert dropped the cool-down stamp with
+// it, so a flapping upstream re-fired past the 60-minute floor.
+
+// hijacked is `healthy` with two vantage points agreeing on a foreign origin —
+// the corroborated origin_change the evaluator pages on.
+func hijacked() Observation {
+	o := healthy()
+	o.Paths = []VantagePath{
+		vp("rrc00-1", 174, 65001),
+		vp("rrc03-4", 174, 65001),
+	}
+	return o
+}
+
+func TestEvaluatorUnmeasurablePassDoesNotClearALiveIncident(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	h.setObs("193.0.0.0/21", hijacked())
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	fired, resolved, _ := h.snapshot()
+	if len(fired) != 1 || fired[0].Class != ClassOriginChange {
+		t.Fatalf("want one origin_change alert, got %+v", fired)
+	}
+	if len(resolved) != 0 {
+		t.Fatalf("nothing may resolve on the opening pass: %+v", resolved)
+	}
+	openID := fired[0].ID
+
+	// The upstream goes down. The hijack is still live; we simply cannot see it.
+	h.mu.Lock()
+	h.obsErr["193.0.0.0/21"] = errors.New("upstream 502")
+	h.mu.Unlock()
+	h.advance(time.Minute)
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+
+	fired, resolved, _ = h.snapshot()
+	if len(resolved) != 0 {
+		t.Fatalf("a failed lookup must NEVER resolve a live incident: %+v", resolved)
+	}
+	for _, a := range h.eval.mustHistory(t, "acme") {
+		if a.Resolved {
+			t.Fatalf("no record of an unmeasurable pass may carry Resolved: %+v", a)
+		}
+	}
+	// Whatever is emitted must be a DISTINCT notice, not a clear on the open id.
+	if len(fired) != 2 {
+		t.Fatalf("an open incident going unmeasured must be announced once, got %+v", fired)
+	}
+	notice := fired[1]
+	if notice.Resolved || notice.ResolvedAt != nil {
+		t.Fatalf("the notice must not be a resolution: %+v", notice)
+	}
+	if notice.ID == openID {
+		t.Fatal("the notice must carry its own dedup id, or a dedup destination overwrites the open incident")
+	}
+	if notice.Class != ClassUnknown || notice.Rule != "bgp_measurement_lost" {
+		t.Fatalf("the notice must name itself as unmeasured: %+v", notice)
+	}
+	if !strings.Contains(notice.Summary, "NO LONGER BEING MEASURED") ||
+		!strings.Contains(notice.Summary, "stays open") {
+		t.Fatalf("the notice must say the incident is still open: %q", notice.Summary)
+	}
+	if h.eval.Metrics().MeasurementLost.Load() != 1 {
+		t.Fatal("going blind on an open incident must be counted (§10)")
+	}
+
+	// The page must not lose the open incident either. The class is honestly
+	// "unknown" for this pass, and the verdict says what is still open.
+	incs, err := h.eval.Incidents("acme")
+	if err != nil {
+		t.Fatalf("incidents: %v", err)
+	}
+	if len(incs) != 1 || incs[0].Class != ClassUnknown {
+		t.Fatalf("the blind pass must classify unknown, got %+v", incs)
+	}
+	if !strings.Contains(incs[0].Summary, "origin_change incident opened at") ||
+		!strings.Contains(incs[0].Summary, "stays open") {
+		t.Fatalf("the blind verdict must still name the open incident: %q", incs[0].Summary)
+	}
+}
+
+// The second half of the same defect: resolveAlert also DELETES the cool-down
+// stamp, so a false clear on every failed lookup let a flapping upstream page
+// past the 60-minute floor — fire, false clear, fire, up to 288 times a day on
+// one prefix. An unmeasurable pass must leave the stamp alone.
+func TestEvaluatorUnmeasurablePassKeepsTheCoolDown(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	h.setObs("193.0.0.0/21", hijacked())
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+
+	// Five flaps of the upstream, well inside the harness's 30-minute cool-down.
+	for i := 0; i < 5; i++ {
+		h.mu.Lock()
+		h.obsErr["193.0.0.0/21"] = errors.New("upstream 502")
+		h.mu.Unlock()
+		h.advance(time.Minute)
+		if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+			t.Fatalf("blind pass %d: %v", i, err)
+		}
+		h.mu.Lock()
+		delete(h.obsErr, "193.0.0.0/21")
+		h.mu.Unlock()
+		h.advance(time.Minute)
+		if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+			t.Fatalf("measured pass %d: %v", i, err)
+		}
+	}
+
+	fired, resolved, _ := h.snapshot()
+	if len(resolved) != 0 {
+		t.Fatalf("a flapping upstream must not produce a single false clear: %+v", resolved)
+	}
+	pages := 0
+	for _, a := range fired {
+		if a.Class == ClassOriginChange {
+			pages++
+		}
+	}
+	if pages != 1 {
+		t.Fatalf("the cool-down was bypassed: the same live hijack paged %d times in 10 minutes", pages)
+	}
+	// The blind stretch is announced ONCE per episode too, not once per flap.
+	notices := 0
+	for _, a := range fired {
+		if a.Rule == "bgp_measurement_lost" {
+			notices++
+		}
+	}
+	if notices != 1 {
+		t.Fatalf("the measurement-lost notice must be cooled down like any other emission, got %d", notices)
+	}
+}
+
+// The other half of the fix: the guard must not turn into "never resolves". A
+// genuine measured clear still closes the incident, even across a blind pass.
+func TestEvaluatorResolvesOnAMeasuredClearAfterABlindPass(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	h.setObs("193.0.0.0/21", hijacked())
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+
+	h.mu.Lock()
+	h.obsErr["193.0.0.0/21"] = errors.New("upstream 502")
+	h.mu.Unlock()
+	h.advance(time.Minute)
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+
+	// Measured, and genuinely clean.
+	h.mu.Lock()
+	delete(h.obsErr, "193.0.0.0/21")
+	h.mu.Unlock()
+	h.setObs("193.0.0.0/21", healthy())
+	h.advance(time.Minute)
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 3: %v", err)
+	}
+	_, resolved, _ := h.snapshot()
+	if len(resolved) != 1 {
+		t.Fatalf("a measured clear must still resolve, even after a blind pass: %+v", resolved)
+	}
+	if !resolved[0].Resolved || resolved[0].Class != ClassOriginChange {
+		t.Fatalf("the resolution must close the origin_change that was opened: %+v", resolved[0])
+	}
+	if h.eval.Metrics().AlertsResolved.Load() != 1 {
+		t.Fatal("the resolution must be counted exactly once")
+	}
+
+	// And the episode is over, so the hijack returning pages again at once.
+	h.setObs("193.0.0.0/21", hijacked())
+	h.advance(time.Minute)
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 4: %v", err)
+	}
+	fired, _, _ := h.snapshot()
+	got := 0
+	for _, a := range fired {
+		if a.Class == ClassOriginChange {
+			got++
+		}
+	}
+	if got != 2 {
+		t.Fatalf("a new episode after a real clear must page again: %+v", fired)
+	}
+}
+
+// mustHistory reads one tenant's alert ring or fails the test.
+func (e *Evaluator) mustHistory(t *testing.T, tenant string) []Alert {
+	t.Helper()
+	a, err := e.Alerts(tenant, AlertHistoryMax)
+	if err != nil {
+		t.Fatalf("alerts: %v", err)
+	}
+	return a
+}

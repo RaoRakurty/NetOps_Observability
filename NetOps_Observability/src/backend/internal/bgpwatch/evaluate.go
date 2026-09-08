@@ -18,9 +18,14 @@ package bgpwatch
 // HONESTY (§10):
 //   - The evaluator alerts on TRANSITIONS, and it emits a RESOLUTION when a
 //     class clears — a channel that opened an incident is told it closed.
-//   - An unmeasurable prefix produces ClassUnknown and NO alert. "We could not
-//     look" is never rendered, notified or grounded as "we looked and it is
-//     fine"; the failure is counted (evaluate_errors_total) instead.
+//   - ONLY a MEASURED clean pass resolves an incident. An unmeasurable pass is
+//     not a clear and never sends Resolved: true. The open incident and its
+//     cool-down both survive it, and if an incident was open the operator gets
+//     a separate "no longer being measured" notice that says the incident is
+//     still open.
+//   - An unmeasurable prefix produces ClassUnknown and NO incident alert. "We
+//     could not look" is never rendered, notified or grounded as "we looked and
+//     it is fine"; the failure is counted (observe_errors_total) instead.
 
 import (
 	"context"
@@ -180,12 +185,19 @@ func (d Deps) validate() error {
 // construction — there is no cross-tenant collection anywhere in the evaluator.
 type tenantState struct {
 	incidents map[string]Incident // prefix → current verdict
-	history   []Alert             // bounded, newest last
-	cooldown  map[string]time.Time
-	peerDown  map[string]time.Time // "device|peer" → when it was first seen down
-	lastRun   time.Time
-	lastErr   string
-	runs      int64
+	// open is the prefix → incident an alert is currently OPEN for. It is NOT
+	// the same thing as incidents[prefix], and the difference is the whole
+	// point: incidents[prefix] is what the LAST pass measured, open[prefix] is
+	// what a destination is still holding. A pass that could not measure
+	// overwrites the first and must not touch the second, otherwise a failed
+	// lookup closes a live hijack (found by review, 2026-09-08).
+	open     map[string]Incident
+	history  []Alert // bounded, newest last
+	cooldown map[string]time.Time
+	peerDown map[string]time.Time // "device|peer" → when it was first seen down
+	lastRun  time.Time
+	lastErr  string
+	runs     int64
 	// counters is THIS tenant's slice of the counter set. It exists because the
 	// per-tenant API body must never carry process-wide aggregates: "runs" and
 	// "run_errors" summed across every tenant tell a scoped reader how busy the
@@ -209,6 +221,7 @@ var tenantCounterNames = []string{
 	"alerts_notified_total",
 	"alerts_resolved_total",
 	"alerts_suppressed_total",
+	"measurement_lost_total",
 	"bogon_sightings_total",
 	"evidence_skipped_total",
 }
@@ -434,21 +447,47 @@ func (e *Evaluator) applyIncident(st *tenantState, tenant string, inc Incident, 
 			inc.Since = prev.Since // same episode — keep its start
 		}
 	}
+	// A blind pass must not make the open incident disappear from the page.
+	// The class stays "unknown" — that is honestly what this pass measured —
+	// but the verdict the operator reads says what is still open.
+	if op, isOpen := st.open[inc.Prefix]; isOpen && inc.Class == ClassUnknown {
+		inc.Summary += fmt.Sprintf(" The %s incident opened at %s stays open: it is unproven, not cleared.",
+			op.Class, op.Since.UTC().Format(time.RFC3339))
+	}
 	st.incidents[inc.Prefix] = inc
 	e.mu.Unlock()
 
-	// Nothing to alert on: a clean or unmeasured prefix. If a class CLEARED,
-	// resolve the alert that opened it.
-	if inc.Class == ClassNone || inc.Class == ClassUnknown {
-		if had && prev.Class != ClassNone && prev.Class != ClassUnknown {
-			e.resolveAlert(st, tenant, prev, now)
+	// NOT MEASURED. This pass learned nothing, so it may not clear anything.
+	//
+	// Before 2026-09-08 this branch fell in with ClassNone and dispatched
+	// Alert{Resolved: true, Summary: "Cleared: … is no longer classified
+	// origin_change."}. One upstream 502 therefore closed a live hijack on
+	// PagerDuty, and because resolveAlert also drops the cool-down stamp, a
+	// flapping upstream produced fire / false clear / fire with the 60-minute
+	// floor bypassed. The open incident and its cool-down both SURVIVE an
+	// unmeasurable pass now; what goes out is a distinct notice that says we
+	// stopped measuring, and it is never Resolved.
+	if inc.Class == ClassUnknown {
+		if op, isOpen := e.openIncident(st, inc.Prefix); isOpen {
+			e.noticeMeasurementLost(st, tenant, op, inc, now)
+		}
+		return nil
+	}
+
+	op, isOpen := e.openIncident(st, inc.Prefix)
+
+	// Measured and clean: the condition really did clear, so close whatever is
+	// open. This is the ONLY path that resolves a prefix incident.
+	if inc.Class == ClassNone {
+		if isOpen {
+			e.resolveAlert(st, tenant, op, now)
 		}
 		return nil
 	}
 	// The class CHANGED from one incident to another: resolve the old one first
 	// so a destination is never left holding a stale open incident.
-	if had && prev.Class != inc.Class && prev.Class != ClassNone && prev.Class != ClassUnknown {
-		e.resolveAlert(st, tenant, prev, now)
+	if isOpen && op.Class != inc.Class {
+		e.resolveAlert(st, tenant, op, now)
 	}
 
 	key := alertKey(tenant, inc.Prefix, inc.Class)
@@ -468,6 +507,11 @@ func (e *Evaluator) applyIncident(st *tenantState, tenant string, inc Incident, 
 		a.Labels["vantages"] = fmt.Sprintf("%d", len(inc.Evidence.Vantages))
 	}
 	e.recordAlert(st, a)
+	// Remember WHAT is open before notifying: the destination now holds this
+	// incident and only a measured clear (or ForgetPrefix) may close it.
+	e.mu.Lock()
+	st.open[inc.Prefix] = inc
+	e.mu.Unlock()
 	if e.deps.Notify != nil {
 		e.deps.Notify(a)
 		e.bump(st, "alerts_notified_total", &e.metrics.AlertsNotified)
@@ -590,6 +634,52 @@ func (e *Evaluator) checkSightings(ctx context.Context, tenant string, now time.
 }
 
 // resolveAlert closes the alert an incident class had opened.
+// openIncident reports the incident a destination is currently holding open for
+// this prefix, if any.
+func (e *Evaluator) openIncident(st *tenantState, prefix string) (Incident, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	op, ok := st.open[prefix]
+	return op, ok
+}
+
+// noticeMeasurementLost tells the operator that an OPEN incident stopped being
+// measured. It is deliberately NOT a resolution:
+//
+//   - Resolved stays false, so a destination that dedups does not close the
+//     incident. The incident it names is still open and still unproven.
+//   - It carries its OWN id (the prefix's "unknown" key), so it can never
+//     overwrite or close the open incident's own notification.
+//   - It is cooled down like any other emission, and its stamp lives exactly as
+//     long as the episode: resolveAlert drops it when the incident really
+//     clears, so the next outage says so again.
+func (e *Evaluator) noticeMeasurementLost(st *tenantState, tenant string, open, unmeasured Incident, now time.Time) {
+	key := alertKey(tenant, open.Prefix, ClassUnknown)
+	if !e.coolDownPassed(st, key, now) {
+		e.bump(st, "alerts_suppressed_total", &e.metrics.AlertsSuppressed)
+		return
+	}
+	a := Alert{
+		ID: key, Rule: "bgp_measurement_lost", Severity: SevWarning,
+		Tenant: tenant, Resource: open.Prefix, Class: ClassUnknown,
+		Summary: fmt.Sprintf("%s is NO LONGER BEING MEASURED while it is classified %s. "+
+			"The incident stays open: this is an absent measurement, not a clear.",
+			open.Prefix, open.Class),
+		Detail:  clip(unmeasured.Error, 200),
+		FiredAt: now,
+		Labels: map[string]string{
+			"prefix": open.Prefix, "class": string(ClassUnknown),
+			"open_class": string(open.Class), "source": "bgp-watch",
+		},
+	}
+	e.recordAlert(st, a)
+	e.bump(st, "measurement_lost_total", &e.metrics.MeasurementLost)
+	if e.deps.Notify != nil {
+		e.deps.Notify(a)
+		e.bump(st, "alerts_notified_total", &e.metrics.AlertsNotified)
+	}
+}
+
 func (e *Evaluator) resolveAlert(st *tenantState, tenant string, prev Incident, now time.Time) {
 	key := alertKey(tenant, prev.Prefix, prev.Class)
 	a := Alert{
@@ -608,6 +698,10 @@ func (e *Evaluator) resolveAlert(st *tenantState, tenant string, prev Incident, 
 	e.bump(st, "alerts_resolved_total", &e.metrics.AlertsResolved)
 	e.mu.Lock()
 	delete(st.cooldown, key)
+	// The episode is over, so both its stamps go: the incident's own cool-down
+	// and the "we stopped measuring" notice that belongs to the same episode.
+	delete(st.cooldown, alertKey(tenant, prev.Prefix, ClassUnknown))
+	delete(st.open, prev.Prefix)
 	e.mu.Unlock()
 }
 
@@ -686,7 +780,8 @@ func (e *Evaluator) tenantState(tenant string) *tenantState {
 	st := e.state[tenant]
 	if st == nil {
 		st = &tenantState{
-			incidents: map[string]Incident{}, cooldown: map[string]time.Time{},
+			incidents: map[string]Incident{}, open: map[string]Incident{},
+			cooldown: map[string]time.Time{},
 			peerDown: map[string]time.Time{},
 		}
 		e.state[tenant] = st
@@ -745,6 +840,13 @@ func (e *Evaluator) ForgetPrefix(tenant, prefix string) (bool, error) {
 	if had {
 		delete(st.incidents, key)
 	}
+	// The OPEN incident is what a destination is still holding; an unwatched
+	// prefix has none. Resolved below with the "removed from the watchlist"
+	// wording, which is not a claim that the condition cleared.
+	if op, isOpen := st.open[key]; isOpen {
+		prev, had = op, true
+	}
+	delete(st.open, key)
 	// classRank is the ONE enumeration of every class (classify.go), so a class
 	// added later is covered here automatically rather than by a second list
 	// that would silently drift out of date.
