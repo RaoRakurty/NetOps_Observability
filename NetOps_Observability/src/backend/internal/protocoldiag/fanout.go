@@ -36,12 +36,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/internal/showparse"
+	"netops/backend/safego"
 )
 
 const (
@@ -57,6 +60,24 @@ const (
 	// the bound are REPORTED as not-run rather than silently dropped (§10).
 	MaxBatteryDevices = 64
 )
+
+// collectorPanics counts device collections that ended in a recovered panic.
+//
+// Package-level for the same reason main.jsonEncodeFailures and
+// metricval.nonFinite are: the collector is built PER REQUEST (main's
+// aiBatteryCollector), so a counter living on the instance would be thrown away
+// before anything could scrape it. It is a write-only atomic with no
+// configuration — there is no mutable global state to race on or reconfigure at
+// a distance — and it is read back through CollectorPanics() for the operator
+// metrics endpoint.
+var collectorPanics atomic.Uint64
+
+// CollectorPanics reports how many device collections have ended in a recovered
+// panic since the process started. The api renders it as
+// netops_protocoldiag_collector_panics_total, EVERY scrape including as a zero:
+// a series that vanishes must mean a scrape failure, not that the parsers got
+// healthy. Any non-zero value is a bug in a parser reached by real device bytes.
+func CollectorPanics() uint64 { return collectorPanics.Load() }
 
 // DeviceStatus is one device's outcome in a battery run.
 type DeviceStatus string
@@ -130,6 +151,11 @@ type BatteryCollector struct {
 	concurrency   int
 	deviceTimeout time.Duration
 	totalTimeout  time.Duration
+	// panicLog receives a recovered panic with its stack. Injected rather than
+	// package-level so there is no global sink to race on: the api passes its
+	// structured JSON logger, everything else gets safego.Stderr, which emits
+	// the same field names.
+	panicLog safego.Logger
 }
 
 // BatteryOption configures a BatteryCollector.
@@ -178,6 +204,18 @@ func WithTotalTimeout(d time.Duration) BatteryOption {
 	}
 }
 
+// WithPanicLogger injects where a recovered collector panic is reported. A nil
+// logger is ignored: the default (safego.Stderr) stands, because a recovered
+// panic that is reported NOWHERE is the silent failure the recovery exists to
+// avoid (§10).
+func WithPanicLogger(log safego.Logger) BatteryOption {
+	return func(c *BatteryCollector) {
+		if log != nil {
+			c.panicLog = log
+		}
+	}
+}
+
 // NewBatteryCollector builds a collector. Both dependencies are REQUIRED: a nil
 // battery or runner is a fail-closed error, never a silent no-op that would
 // report every device healthy.
@@ -195,6 +233,7 @@ func NewBatteryCollector(b *StateBattery, runner CommandRunner, opts ...BatteryO
 		concurrency:   MaxBatteryConcurrency,
 		deviceTimeout: DefaultDeviceTimeout,
 		totalTimeout:  DefaultBatteryTimeout,
+		panicLog:      safego.Stderr,
 	}
 	for _, o := range opts {
 		o(c)
@@ -238,7 +277,7 @@ func (c *BatteryCollector) RunBattery(ctx context.Context, devices []Device, are
 					// Each worker writes ONLY results[i] for the index it pulled,
 					// so the slice needs no lock and the run is deterministic in
 					// output order regardless of completion order.
-					results[i] = c.collectOne(runCtx, unique[i], area, tgt)
+					results[i] = c.collectOneGuarded(runCtx, unique[i], area, tgt)
 				}
 			}()
 		}
@@ -288,6 +327,66 @@ func (c *BatteryCollector) notRun(dev Device, area Area, cause error) DeviceStat
 		Area: area, Status: DeviceStatusTimedOut, Note: note, RulesetVersion: RulesetVersion,
 		StartedAt: now, FinishedAt: now,
 	}
+}
+
+// collectOneGuarded runs collectOne with panic recovery.
+//
+// WHY THIS EXISTS. collectOne runs inside the BARE worker goroutine above, and
+// it feeds showparse — eleven files of string slicing over device bytes nobody
+// in this process authored. Go recovers a panic only on the goroutine net/http
+// runs a handler on. Everywhere else a panic takes the WHOLE PROCESS down, so
+// one malformed capture from one router would kill the api, the in-process
+// correlation engine and alert delivery together, for every tenant. The C1 fix
+// removed the one panic we had found; this removes the class.
+//
+// RECOVERING IS NOT SWALLOWING (§10). A bare recover that returned a zero
+// DeviceState would be WORSE than the crash: a loud death becomes silent wrong
+// data, and a device whose parse blew up reads as a device with nothing to
+// report. So the recovery does three things, all of them:
+//
+//  1. reports the panic value AND debug.Stack() through the injected logger, at
+//     error level, so the bug stays as findable as the crash was;
+//  2. marks THIS device failed, with a note that says a collector panicked on
+//     its output — never OK, never empty-and-healthy;
+//  3. bumps CollectorPanics(), which the api renders on /metrics so the
+//     engine-liveness layer can alert on a parser that is dying in the field.
+//
+// Only the panicking device is affected. Each worker writes its own results
+// slot, so the fan-out's isolation property holds through a panic exactly as it
+// holds through a timeout.
+func (c *BatteryCollector) collectOneGuarded(ctx context.Context, dev Device, area Area, tgt Target) (st DeviceState) {
+	started := c.now().UTC()
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		collectorPanics.Add(1)
+		c.reportPanic(r, debug.Stack())
+		// The state collectOne was building is discarded on purpose. It is half
+		// written by definition, and half-written state is the fabrication this
+		// whole tree is built to refuse.
+		st = DeviceState{
+			TenantID: dev.TenantID, DeviceID: dev.ID, Hostname: dev.Hostname, Platform: dev.Platform,
+			Area: area, Status: DeviceStatusFailed, RulesetVersion: RulesetVersion,
+			Note:      "a collector panicked while reading this device's output — nothing it produced can be trusted, so this device is reported failed rather than healthy. The panic and its stack are in the application log.",
+			StartedAt: started, FinishedAt: c.now().UTC(),
+		}
+	}()
+	return c.collectOne(ctx, dev, area, tgt)
+}
+
+// reportPanic routes a recovered collector panic to the injected logger. It can
+// never itself take the process down: a logger with a bug would otherwise
+// re-panic inside the deferred recover and kill the process anyway, which is
+// exactly what the caller was defending against.
+func (c *BatteryCollector) reportPanic(recovered any, stack []byte) {
+	defer func() { _ = recover() }() // nowhere left to report to; see above
+	log := c.panicLog
+	if log == nil {
+		log = safego.Stderr
+	}
+	log("protocoldiag.collectOne", recovered, stack)
 }
 
 // collectOne runs one device's battery under its own deadline. It never returns

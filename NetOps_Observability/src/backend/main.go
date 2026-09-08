@@ -4474,6 +4474,15 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# HELP netops_json_write_failures_total Response bodies that encoded but could not be written (client disconnected mid-response).\n")
 	fmt.Fprintf(w, "# TYPE netops_json_write_failures_total counter\n")
 	fmt.Fprintf(w, "netops_json_write_failures_total %d\n", jsonWriteFailures.Load())
+	// Tracker 282(f): a parser that panics on device output no longer kills the
+	// api. The recovery marks that device failed, but a failed device looks like
+	// an unreachable device from the outside — this counter is the only place a
+	// PARSER BUG reached by real device bytes is distinguishable from a router
+	// that did not answer. Always written, including as a zero, so a vanished
+	// series means a scrape failure rather than "the parsers got healthy".
+	fmt.Fprintf(w, "# HELP netops_protocoldiag_collector_panics_total Device collections that ended in a recovered parser panic. Any non-zero value is a bug in a show-output parser.\n")
+	fmt.Fprintf(w, "# TYPE netops_protocoldiag_collector_panics_total counter\n")
+	fmt.Fprintf(w, "netops_protocoldiag_collector_panics_total %d\n", protocoldiag.CollectorPanics())
 	fmt.Fprintf(w, "# HELP netops_metric_nonfinite_total Metric samples dropped because the store returned NaN/±Inf.\n")
 	fmt.Fprintf(w, "# TYPE netops_metric_nonfinite_total counter\n")
 	fmt.Fprintf(w, "netops_metric_nonfinite_total %d\n", metricval.NonFinite())

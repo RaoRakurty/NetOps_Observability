@@ -690,3 +690,166 @@ func TestBatteryOptions_AndHelpers(t *testing.T) {
 		t.Errorf("vendorTokenOf = %q, want nokia", got)
 	}
 }
+
+// ── tracker 282(f): a panicking parser must not take the process with it ────
+
+// panicRunner panics for one named device and answers normally for the rest. It
+// stands in for a slice bug in showparse: the collector cannot tell the two
+// apart, and neither may be allowed to kill the process.
+type panicRunner struct {
+	panicOn string
+	output  string
+}
+
+func (r *panicRunner) Run(_ context.Context, dev Device, _ string) (string, error) {
+	if dev.ID == r.panicOn {
+		panic("simulated parser bug on device " + dev.ID)
+	}
+	return r.output, nil
+}
+
+// recordingPanicLogger captures what the guard reported.
+type recordingPanicLogger struct {
+	mu    sync.Mutex
+	names []string
+	vals  []string
+	stack []string
+}
+
+func (l *recordingPanicLogger) log(name string, recovered any, stack []byte) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.names = append(l.names, name)
+	l.vals = append(l.vals, fmt.Sprint(recovered))
+	l.stack = append(l.stack, string(stack))
+}
+
+func (l *recordingPanicLogger) snapshot() (names, vals, stacks []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.names...), append([]string(nil), l.vals...), append([]string(nil), l.stack...)
+}
+
+// TestRunBattery_PanicIsContained is the 282(f) regression.
+//
+// Before the guard, `go func() { results[i] = c.collectOne(...) }` was a bare
+// goroutine: a panic anywhere under it terminated the process — api, in-process
+// correlation engine and alert delivery together. Reaching this test's
+// assertions AT ALL is the first half of the proof; the test binary would have
+// died instead.
+//
+// The second half is that the recovery is not a swallow (§10). A bare recover
+// that returned a zero DeviceState would turn a loud crash into silent wrong
+// data, so all four of these must hold.
+func TestRunBattery_PanicIsContained(t *testing.T) {
+	before := CollectorPanics()
+	logger := &recordingPanicLogger{}
+	bad := devN(1, "Cisco IOS-XE 17.9")
+	good := devN(2, "Cisco IOS-XE 17.9")
+	r := &panicRunner{panicOn: bad.ID, output: bgpSummaryOutput}
+	c := newBatteryCollector(t, r, WithPanicLogger(logger.log))
+
+	run, err := c.RunBattery(context.Background(), []Device{bad, good}, AreaBGP, Target{})
+	if err != nil {
+		t.Fatalf("RunBattery: %v", err)
+	}
+	if len(run.Devices) != 2 {
+		t.Fatalf("got %d device states, want 2 — a panicking device must still get one", len(run.Devices))
+	}
+
+	// 1. the panicking device is FAILED, with a note that says why.
+	got := run.Devices[0]
+	if got.DeviceID != bad.ID {
+		t.Fatalf("device order changed: %q", got.DeviceID)
+	}
+	if got.Status != DeviceStatusFailed {
+		t.Errorf("status = %q, want %q — a device whose collector blew up is not healthy and not empty", got.Status, DeviceStatusFailed)
+	}
+	if !strings.Contains(got.Note, "panicked") {
+		t.Errorf("note = %q, want it to say a collector panicked on this device's output", got.Note)
+	}
+	if got.TenantID != bad.TenantID {
+		t.Errorf("tenant = %q, want %q — the owner is stamped from the device even on this path (§3a)", got.TenantID, bad.TenantID)
+	}
+	if len(got.Parsed) != 0 {
+		t.Errorf("the half-built state must be discarded, got %d parsed results", len(got.Parsed))
+	}
+
+	// 2. the OTHER device in the same fan-out is untouched.
+	ok := run.Devices[1]
+	if ok.Status != DeviceStatusOK {
+		t.Fatalf("the healthy device's status = %q, want %q — one device's panic must change nothing for the others", ok.Status, DeviceStatusOK)
+	}
+	rows, skipped := ok.TypedRows()
+	if rows != 2 || len(skipped) != 0 {
+		t.Errorf("the healthy device: rows=%d skipped=%v, want 2/none", rows, skipped)
+	}
+
+	// 3. the panic was REPORTED, with its value and its stack.
+	names, vals, stacks := logger.snapshot()
+	if len(names) != 1 {
+		t.Fatalf("the logger saw %d panics, want 1 — a recovered panic reported nowhere is the silent failure the recovery exists to avoid", len(names))
+	}
+	if names[0] != "protocoldiag.collectOne" {
+		t.Errorf("goroutine name = %q, want protocoldiag.collectOne", names[0])
+	}
+	if !strings.Contains(vals[0], "simulated parser bug") {
+		t.Errorf("the panic VALUE must be reported, got %q", vals[0])
+	}
+	if !strings.Contains(stacks[0], "protocoldiag") {
+		t.Errorf("the STACK must be reported, got %q", stacks[0])
+	}
+
+	// 4. the counter the engine-liveness layer scrapes moved by exactly one.
+	if delta := CollectorPanics() - before; delta != 1 {
+		t.Errorf("CollectorPanics moved by %d, want 1", delta)
+	}
+}
+
+// TestRunBattery_PanicDoesNotPoisonAWholeFanout widens the previous test: one
+// poisoned device among many must cost that device and nothing else, at full
+// concurrency.
+func TestRunBattery_PanicDoesNotPoisonAWholeFanout(t *testing.T) {
+	before := CollectorPanics()
+	var devices []Device
+	for i := 1; i <= 6; i++ {
+		devices = append(devices, devN(i, "Cisco IOS-XE 17.9"))
+	}
+	r := &panicRunner{panicOn: devices[3].ID, output: bgpSummaryOutput}
+	c := newBatteryCollector(t, r, WithPanicLogger(func(string, any, []byte) {}))
+
+	run, err := c.RunBattery(context.Background(), devices, AreaBGP, Target{})
+	if err != nil {
+		t.Fatalf("RunBattery: %v", err)
+	}
+	if len(run.Devices) != len(devices) {
+		t.Fatalf("got %d states, want %d", len(run.Devices), len(devices))
+	}
+	for i, st := range run.Devices {
+		if i == 3 {
+			if st.Status != DeviceStatusFailed {
+				t.Errorf("device %d status = %q, want %q", i, st.Status, DeviceStatusFailed)
+			}
+			continue
+		}
+		if st.Status != DeviceStatusOK {
+			t.Errorf("device %d status = %q, want %q — it shares nothing with the poisoned one", i, st.Status, DeviceStatusOK)
+		}
+		if rows, _ := st.TypedRows(); rows != 2 {
+			t.Errorf("device %d parsed %d rows, want 2", i, rows)
+		}
+	}
+	if delta := CollectorPanics() - before; delta != 1 {
+		t.Errorf("CollectorPanics moved by %d, want 1", delta)
+	}
+}
+
+// TestWithPanicLogger_NilIsRefused pins the fail-safe: a nil logger must leave
+// the default in place, because a recovered panic reported NOWHERE is exactly
+// the silent failure §10 forbids.
+func TestWithPanicLogger_NilIsRefused(t *testing.T) {
+	c := newBatteryCollector(t, newScriptedRunner(), WithPanicLogger(nil))
+	if c.panicLog == nil {
+		t.Fatal("a nil panic logger must be ignored, not installed")
+	}
+}

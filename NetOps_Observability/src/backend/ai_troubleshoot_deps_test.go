@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,6 +37,7 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/alerts"
 	"netops/backend/internal/bgpdepth"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/protocoldiag"
@@ -1022,5 +1024,28 @@ func TestAIBGPWatchlistAndRPKIAreHonestAndScoped(t *testing.T) {
 	}
 	if got := aiBGPScopeLabel("", true); got != "platform (cross-tenant)" {
 		t.Errorf("a cross-tenant scope must be labelled as such, got %q", got)
+	}
+}
+
+// TestCollectorPanicMetricExposed: tracker 282(f)'s counter must actually reach
+// /metrics. A recovered panic marks that one device failed, and a failed device
+// looks exactly like an unreachable device from the outside — this series is
+// the only place a PARSER BUG is distinguishable from a router that did not
+// answer, so an unexported counter would be no observability at all. It is
+// written on every scrape, including as a zero: a vanished series must mean a
+// scrape failure, not that the parsers got healthy.
+func TestCollectorPanicMetricExposed(t *testing.T) {
+	_, srv := newTestServerState(t)
+	srv.alerts = alerts.NewEngine("", nil)
+	w := httptest.NewRecorder()
+	srv.handlePromMetrics(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	out := w.Body.String()
+	for _, want := range []string{
+		"# TYPE netops_protocoldiag_collector_panics_total counter",
+		fmt.Sprintf("netops_protocoldiag_collector_panics_total %d", protocoldiag.CollectorPanics()),
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("/metrics is missing %q — a parser dying in the field would be invisible to the engine-liveness layer", want)
+		}
 	}
 }

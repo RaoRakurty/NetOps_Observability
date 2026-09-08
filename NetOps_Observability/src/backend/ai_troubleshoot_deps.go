@@ -784,6 +784,11 @@ func (s *server) aiBatteryCollector(battery *protocoldiag.StateBattery) *protoco
 		protocoldiag.WithConcurrency(1), // the assistant reads ONE device at a time
 		protocoldiag.WithDeviceTimeout(aiStateDeviceTimeout),
 		protocoldiag.WithTotalTimeout(aiStateTotalTimeout),
+		// A recovered parser panic goes to the SAME structured log as every
+		// other goroutine panic (tracker 282f). Without this it would land on
+		// stderr with the right field names but outside the app log the
+		// operator searches.
+		protocoldiag.WithPanicLogger(apiPanicLogger),
 	)
 	if err != nil {
 		logWarn("ai", "state battery collector not built", map[string]any{"error": err.Error()})
