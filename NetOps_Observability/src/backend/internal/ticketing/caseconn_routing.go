@@ -44,6 +44,7 @@ import (
 
 	"netops/backend/internal/applog"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/tac"
 )
 
 // Bounds. Every one is a §9 ceiling enforced server-side.
@@ -199,6 +200,32 @@ func normalizeVendorKey(v string) string { return strings.ToLower(strings.TrimSp
 // mixed case on labels and typed in either, and a lookup that missed because of
 // that would silently lose a contract the customer configured.
 func normalizeSerialKey(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
+
+// EscalationSettingsFor resolves ONE tenant's routing record for ONE device,
+// folding in the contract that covers it.
+//
+// It lives here, next to the record, rather than in the api: the mapping is a
+// decision about which contract applies (the per-serial override wins over the
+// vendor row) and what "expired" means, and this package owns both. The api
+// supplies only the device's vendor and serial, which it resolved from the
+// inventory row that authorised the escalation.
+func EscalationSettingsFor(cfg TACRoutingConfig, vendor, serial string, now time.Time) tac.EscalationSettings {
+	out := tac.EscalationSettings{
+		ContactName:      cfg.Contact.Name,
+		ContactEmail:     cfg.Contact.Email,
+		ContactPhone:     cfg.Contact.Phone,
+		RouteByVendor:    cfg.RouteByVendor,
+		CaptureByDialect: cfg.CaptureByDialect,
+	}
+	c, found := cfg.ContractFor(vendor, serial)
+	if !found {
+		return out
+	}
+	out.ContractID, out.AccountID = c.ContractID, c.AccountID
+	out.SiteID, out.SupportLevel, out.ContractExpires = c.SiteID, c.SupportLevel, c.ExpiresOn
+	out.ContractExpired = c.Expired(now)
+	return out
+}
 
 // ── validation ──────────────────────────────────────────────────────────────
 

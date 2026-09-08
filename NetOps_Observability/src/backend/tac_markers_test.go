@@ -188,11 +188,21 @@ func TestTACAdapterLivesInsideItsMarkers(t *testing.T) {
 		"handleTACKnowledge", "buildTACService",
 		// tracker 250 — the command-review + template wiring.
 		"handleTACTemplates", "handleTACTemplateItem", "handleTACTemplateDefaults",
-		"handleTACTemplateValidate", "tacTemplateAuthz", "tacApplyReview", "newTACTemplateStore",
+		// `tacApplyReview` moved into tac.EscalateAPI with the rest of the
+		// collect handler on 2026-09-07: what it does — resolving a template id
+		// in the caller's own scope and refusing the WHOLE list on one bad line
+		// — is the engine's judgement, not the api's rendering of it.
+		"handleTACTemplateValidate", "tacTemplateAuthz", "newTACTemplateStore",
 		// tracker 243 — the learning backlog wiring.
 		"handleTACLearning", "handleTACLearningSubtree", "newTACLearningStore",
 		// the Captures surface — two entry points, everything else internal/tac.
 		"handleTACCaptures", "handleTACCaptureSubtree",
+		// The ONE ACTION and the routing settings (2026-09-07). Each is a
+		// one-line delegator: the surfaces themselves are tac.EscalateAPI and
+		// ticketing.TACRoutingAPI, in the same injectable shape the template and
+		// learning surfaces already use.
+		"handleTACEscalate", "handleTACEscalatePrepare", "handleTACEscalateDryRun",
+		"handleTACEscalateConfirm", "handleTACCaseRefresh", "handleTACRouting",
 	} {
 		if !strings.Contains(in, "func (s *server) "+want) && !strings.Contains(in, "func "+want) {
 			t.Errorf("%s is not inside the TAC-ROUTES markers", want)

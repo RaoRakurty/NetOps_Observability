@@ -836,15 +836,6 @@ func pdSlug(s string) string {
 // resolved through the principal-scoped inventory the same way; the escalation's
 // tenant is stamped from those resolved records and NEVER from a request body.
 
-// tacMaxBody bounds every TAC request body (§3/§9).
-const tacMaxBody = 1 << 20
-
-// tacMaxSuppliedOutputs / tacMaxSuppliedBytes bound the paste fallback.
-const (
-	tacMaxSuppliedOutputs = 40
-	tacMaxSuppliedBytes   = 256 << 10
-)
-
 // tacMaxLogExcerpts bounds how many timeline lines become classification input
 // and bundle evidence.
 const tacMaxLogExcerpts = 200
@@ -1045,144 +1036,6 @@ func operatorSafeErr(err error) string {
 	return clampString(err.Error(), 160)
 }
 
-// ── GET /api/incidents/{id}/tac ─────────────────────────────────────────────
-
-func (s *server) handleTACState(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
-		return
-	}
-	inc, claims, ok := s.tacResolveIncident(w, r, LevelRead)
-	if !ok {
-		return
-	}
-	svc := s.tacSvc()
-	st := svc.Get(inc.Tenant, inc.ID)
-	body := map[string]any{
-		"incident_id":     inc.ID,
-		"incident_ref":    inc.Ref,
-		"title":           inc.Title,
-		"can_collect":     svc.CanCollect(),
-		"collect_note":    tac.CollectNote(svc.CanCollect()),
-		"catalog_version": svc.Catalog().Version,
-		"connectors":      svc.Connectors(r.Context(), inc.Tenant),
-		"devices":         inc.Devices,
-		"state":           st.View(),
-	}
-	if st == nil {
-		body["state_note"] = "This incident has not been escalated in this api process. " +
-			"Classify it to start; an escalation started before a restart is not resumed."
-	}
-	_ = claims
-	writeJSON(w, http.StatusOK, body)
-}
-
-// ── POST /api/incidents/{id}/tac/classify ───────────────────────────────────
-
-func (s *server) handleTACClassify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return
-	}
-	inc, claims, ok := s.tacResolveIncident(w, r, LevelRead)
-	if !ok {
-		return
-	}
-	ev, sources, missing := s.tacEvidence(r, claims, inc)
-	res := s.tacSvc().Classify(inc.Tenant, inc.ID, ev)
-	s.pdAudit(r, claims, inc.Tenant, "tac.classify", map[string]any{
-		"incident_id": inc.ID, "class_id": res.ClassID, "classified": res.Classified,
-	})
-	writeJSON(w, http.StatusOK, map[string]any{
-		"incident_id":      inc.ID,
-		"classification":   res,
-		"evidence_sources": sources,
-		"evidence_missing": missing,
-		"classes":          s.tacSvc().Catalog().ClassSummaries(),
-	})
-}
-
-// ── POST /api/incidents/{id}/tac/plan ───────────────────────────────────────
-
-type tacPlanRequest struct {
-	DeviceID        string `json:"device_id"`
-	ClassID         string `json:"class_id"`
-	IncludeOptional bool   `json:"include_optional"`
-	// Consent names the intents the operator has explicitly approved, for the
-	// commands a vendor documents as not-routine (a core dump, a control-plane
-	// load, a file written on the device). Approval is per command and is a
-	// human act; it is never implied by include_optional.
-	Consent []string `json:"consent"`
-	Target  struct {
-		Interface string `json:"interface"`
-		Peer      string `json:"peer"`
-		Prefix    string `json:"prefix"`
-		VRF       string `json:"vrf"`
-		RouterID  string `json:"router_id"`
-		Area      string `json:"area"`
-	} `json:"target"`
-}
-
-func (s *server) handleTACPlan(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return
-	}
-	inc, claims, ok := s.tacResolveIncident(w, r, LevelRead)
-	if !ok {
-		return
-	}
-	var req tacPlanRequest
-	if !tacDecode(w, r, &req) {
-		return
-	}
-	dev, ok := s.tacResolveDevice(w, r, inc, strings.TrimSpace(req.DeviceID))
-	if !ok {
-		return
-	}
-	classID := strings.TrimSpace(req.ClassID)
-	if classID == "" {
-		if st := s.tacSvc().Get(inc.Tenant, inc.ID); st != nil && st.Classification != nil {
-			classID = st.Classification.ClassID
-		}
-	}
-	if classID == "" {
-		writeError(w, http.StatusBadRequest, errors.New("classify the incident first, or send class_id"))
-		return
-	}
-	plan, err := s.tacSvc().Plan(inc.Tenant, inc.ID, classID, dev, tac.PlanOptions{
-		IncludeOptional: req.IncludeOptional,
-		Target: tac.Target{
-			Interface: clampString(req.Target.Interface, pdMaxTargetField),
-			Peer:      clampString(req.Target.Peer, pdMaxTargetField),
-			Prefix:    clampString(req.Target.Prefix, pdMaxTargetField),
-			VRF:       clampString(req.Target.VRF, pdMaxTargetField),
-			RouterID:  clampString(req.Target.RouterID, pdMaxTargetField),
-			Area:      clampString(req.Target.Area, pdMaxTargetField),
-		},
-		Topology: s.tacTopology(r, claims, dev.ID),
-		Consent:  tac.ConsentSet(req.Consent),
-	})
-	if err != nil {
-		if errors.Is(err, tac.ErrUnknownClass) {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	s.pdAudit(r, claims, inc.Tenant, "tac.plan", map[string]any{
-		"incident_id": inc.ID, "device_id": dev.ID, "class_id": classID,
-		"commands": len(plan.Steps), "unbound": len(plan.Unbound), "has_plan": plan.HasPlan,
-	})
-	writeJSON(w, http.StatusOK, map[string]any{
-		"plan": plan, "can_collect": s.tacSvc().CanCollect(), "collect_note": tac.CollectNote(s.tacSvc().CanCollect()),
-	})
-}
-
-// tacResolveDevice resolves the subject device in the CALLER'S OWN inventory. A
-// device the caller cannot see and a device that does not exist answer the same
-// 404 (§3a rule 1); the device's tenant becomes the escalation's owner.
 func (s *server) tacResolveDevice(w http.ResponseWriter, r *http.Request, inc tacIncident, deviceID string) (tac.Device, bool) {
 	if deviceID == "" {
 		writeError(w, http.StatusBadRequest, errors.New("device_id is required"))
@@ -1236,83 +1089,6 @@ func (s *server) tacTopology(r *http.Request, claims jwtClaims, deviceID string)
 		out = append(out, tac.TopologyNote{Kind: "link", Ref: p.ID, Detail: p.Label + " " + p.Health})
 	}
 	return out
-}
-
-// ── POST /api/incidents/{id}/tac/collect ────────────────────────────────────
-
-type tacCollectRequest struct {
-	Outputs []struct {
-		Intent  string `json:"intent"`
-		Command string `json:"command"`
-		Output  string `json:"output"`
-	} `json:"outputs"`
-	Cancel bool `json:"cancel"`
-	// Steps is the operator's REVIEWED command list (tracker 250). It is
-	// UNTRUSTED: internal/tac re-validates every line against the output-only
-	// policy and the read-only grammar before anything runs, and one refusal
-	// fails the whole collection naming the line.
-	Steps []struct {
-		Command string `json:"command"`
-		Note    string `json:"note"`
-	} `json:"steps"`
-	// TemplateID names the template the list was loaded from. Only the ID is
-	// accepted: the name, source and version are looked up server-side, so a
-	// client cannot forge the provenance a bundle records.
-	TemplateID string `json:"template_id"`
-}
-
-func (s *server) handleTACCollect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return
-	}
-	// A collection operates against a device → write level.
-	inc, claims, ok := s.tacResolveIncident(w, r, LevelWrite)
-	if !ok {
-		return
-	}
-	var req tacCollectRequest
-	if !tacDecode(w, r, &req) {
-		return
-	}
-	svc := s.tacSvc()
-	if req.Cancel {
-		stopped := svc.Cancel(inc.Tenant, inc.ID)
-		s.pdAudit(r, claims, inc.Tenant, "tac.collect.cancel", map[string]any{"incident_id": inc.ID, "stopped": stopped})
-		writeJSON(w, http.StatusOK, map[string]any{"cancelled": stopped, "state": svc.Get(inc.Tenant, inc.ID).View()})
-		return
-	}
-	if len(req.Outputs) > tacMaxSuppliedOutputs {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("at most %d pasted outputs per request", tacMaxSuppliedOutputs))
-		return
-	}
-	if len(req.Steps) > 0 && !s.tacApplyReview(w, r, claims, inc, req) {
-		return
-	}
-	supplied := make([]tac.SuppliedOutput, 0, len(req.Outputs))
-	for _, o := range req.Outputs {
-		supplied = append(supplied, tac.SuppliedOutput{
-			Intent:  clampString(strings.TrimSpace(o.Intent), 128),
-			Command: clampString(strings.TrimSpace(o.Command), 512),
-			Output:  clampString(o.Output, tacMaxSuppliedBytes),
-		})
-	}
-	job, err := svc.StartCollect(inc.Tenant, inc.ID, supplied)
-	switch {
-	case errors.Is(err, tac.ErrNoRunner):
-		writeError(w, http.StatusServiceUnavailable, errors.New(tac.CollectNote(false)))
-		return
-	case errors.Is(err, tac.ErrCollectBusy):
-		writeError(w, http.StatusConflict, err)
-		return
-	case err != nil:
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	s.pdAudit(r, claims, inc.Tenant, "tac.collect", map[string]any{
-		"incident_id": inc.ID, "job_id": job.ID, "commands": job.Total, "pasted": len(supplied),
-	})
-	writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "state": svc.Get(inc.Tenant, inc.ID).View()})
 }
 
 // ── GET /api/incidents/{id}/tac/bundle ──────────────────────────────────────
@@ -1404,127 +1180,6 @@ func (s *server) tacBundleInput(r *http.Request, claims jwtClaims, inc tacIncide
 	return in
 }
 
-// ── POST /api/incidents/{id}/tac/case ───────────────────────────────────────
-
-type tacCaseRequest struct {
-	ConnectorID string `json:"connector_id"`
-	// Submit=false returns the pre-filled form for a human to review; true
-	// performs the (human-approved) action. Case creation is NEVER automatic.
-	Submit bool `json:"submit"`
-	Form   struct {
-		Title        string `json:"title"`
-		Severity     string `json:"severity"`
-		Product      string `json:"product"`
-		SerialNumber string `json:"serial_number"`
-		ContractID   string `json:"contract_id"`
-		ContactName  string `json:"contact_name"`
-		ContactEmail string `json:"contact_email"`
-		// ExistingCaseNumber is the SR/case an attach-to-existing connector
-		// attaches to. It is a reference, not a credential: echoed and logged.
-		ExistingCaseNumber string `json:"existing_case_number"`
-	} `json:"form"`
-	// UploadToken and UploadHost are the EPHEMERAL per-case credential the
-	// operator copies out of the vendor's portal (Cisco SCM mints one per SR).
-	// They are read straight into tac.CaseSecrets and never stored, never
-	// echoed and never logged — CaseSecrets redacts itself under every
-	// rendering Go has, which is why they do not live on the form above.
-	UploadToken string `json:"upload_token"`
-	UploadHost  string `json:"upload_host"`
-}
-
-func (s *server) handleTACCase(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return
-	}
-	inc, claims, ok := s.tacResolveIncident(w, r, LevelWrite)
-	if !ok {
-		return
-	}
-	var req tacCaseRequest
-	if !tacDecode(w, r, &req) {
-		return
-	}
-	connector := strings.TrimSpace(req.ConnectorID)
-	if connector == "" {
-		connector = tac.PortalTextConnectorID
-	}
-	svc := s.tacSvc()
-	st := svc.Get(inc.Tenant, inc.ID)
-	if st == nil || st.Capture == nil {
-		writeError(w, http.StatusConflict, errors.New("collect the evidence before opening a case"))
-		return
-	}
-	// The bundle is built to THE CHOSEN CONNECTOR'S limits, not to this
-	// package's defaults. An email path caps well below the profile constant
-	// because base64 expands the attachment on the wire, and trimming to the
-	// wrong number produces a case the vendor's mail gateway silently rejects.
-	in := s.tacBundleInput(r, claims, inc, "")
-	for _, info := range svc.Connectors(r.Context(), inc.Tenant) {
-		if info.ID != connector {
-			continue
-		}
-		in.Profile = tac.ProfileForConnector(info)
-		in.MaxBytes = info.MaxAttachmentBytes
-	}
-	b, meta, err := svc.Bundle(r.Context(), inc.Tenant, inc.ID, in)
-	if err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	caseReq := tac.CaseRequest{
-		TenantID: inc.Tenant, IncidentID: inc.ID, ClassID: b.Manifest.Classification.ClassID,
-		DeviceID: st.Capture.DeviceID, Hostname: st.Capture.Hostname, Platform: st.Capture.Platform,
-		Actor: claims.Sub,
-		Form: tac.CaseForm{
-			Title:        clampString(strings.TrimSpace(req.Form.Title), 200),
-			Description:  b.Statement.Text,
-			Severity:     clampString(strings.TrimSpace(req.Form.Severity), 32),
-			Product:      clampString(strings.TrimSpace(req.Form.Product), 128),
-			SerialNumber: clampString(strings.TrimSpace(req.Form.SerialNumber), 64),
-			ContractID:   clampString(strings.TrimSpace(req.Form.ContractID), 64),
-			ContactName:  clampString(strings.TrimSpace(req.Form.ContactName), 128),
-			ContactEmail: clampString(strings.TrimSpace(req.Form.ContactEmail), 200),
-			BundleName:   meta.Name, BundleBytes: meta.Bytes,
-			ExistingCaseNumber: clampString(strings.TrimSpace(req.Form.ExistingCaseNumber), 64),
-		},
-		Secrets: tac.CaseSecrets{
-			UploadToken: clampString(strings.TrimSpace(req.UploadToken), 512),
-			UploadHost:  clampString(strings.TrimSpace(req.UploadHost), 253),
-		},
-		// The bundle the connector will stream, addressed inside THIS tenant's
-		// own bundle tree. The store validates both segments, so a connector can
-		// never be handed a path from anywhere else.
-		BundlePath: inc.ID + "/" + meta.Name,
-	}
-	if !req.Submit {
-		form, info, ferr := svc.PrepareCase(r.Context(), inc.Tenant, connector, caseReq)
-		if ferr != nil {
-			writeError(w, http.StatusConflict, ferr)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"form": form, "connector": info, "bundle": meta})
-		return
-	}
-	res, serr := svc.SubmitCase(r.Context(), inc.Tenant, inc.ID, connector, caseReq)
-	if serr != nil {
-		writeError(w, http.StatusConflict, serr)
-		return
-	}
-	s.pdAudit(r, claims, inc.Tenant, "tac.case", map[string]any{
-		"incident_id": inc.ID, "connector": connector, "case_id": res.CaseID, "attached": res.Attached,
-	})
-	// The escalation is recorded as an investigation Iris recalls, so the next
-	// operator asking about this device is told it was escalated and how.
-	if s.tacSvc().MarkRemembered(inc.Tenant, inc.ID) || res.CaseID != "" {
-		// A case id is worth a SECOND memory row even when the bundle already
-		// wrote one: "escalated" and "escalated, case 12345" are different facts
-		// and the later one is what the next operator needs.
-		s.tacRememberEscalation(r, claims, inc, b, res)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"result": res, "bundle": meta})
-}
-
 // tacRememberEscalation writes the escalation into the SAME investigation memory
 // Iris recalls from (ai.InvestigationStore). It is best-effort: a memory that
 // could not be written is logged, never a reason to fail a case the operator
@@ -1557,17 +1212,6 @@ func (s *server) tacRememberEscalation(r *http.Request, claims jwtClaims, inc ta
 		logError("tac", "escalation memory not written", map[string]any{"incident_id": inc.ID, "error": err.Error()})
 	}
 	_ = claims
-}
-
-// tacDecode reads a bounded, unknown-field-rejecting request body.
-func tacDecode(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, tacMaxBody))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("bad body: %w", err))
-		return false
-	}
-	return true
 }
 
 // ── GET /api/troubleshoot/tac/knowledge ─────────────────────────────────────
@@ -1802,6 +1446,13 @@ func (s *server) buildTACService() error {
 		return fmt.Errorf("tac case poller: %w", perr)
 	}
 	s.tacPoller = poller
+
+	// The ONE-ACTION surface and the routing-settings surface, both injectable
+	// modules in their own packages. They are built LAST because they take the
+	// tracker and the poller above.
+	if err := s.buildTACEscalateAPI(svc); err != nil {
+		return fmt.Errorf("tac escalate surface: %w", err)
+	}
 	return nil
 }
 
@@ -1947,361 +1598,111 @@ func (s *server) handleTACCaptureSubtree(w http.ResponseWriter, r *http.Request)
 	s.tacTemplates.HandleCaptureSubtree(w, r)
 }
 
-// tacApplyReview folds the operator's chosen capture into the escalation's plan
-// before the collection starts. Everything that matters is internal/tac's:
-// ApplyCapture resolves the id in the caller's own scope (server-derived
-// provenance) and refuses the WHOLE list on one bad line. This renders it.
-func (s *server) tacApplyReview(w http.ResponseWriter, r *http.Request, claims jwtClaims, inc tacIncident, req tacCollectRequest) bool {
-	steps := make([]tac.ReviewedStep, 0, len(req.Steps))
-	for _, st := range req.Steps {
-		steps = append(steps, tac.ReviewedStep{
-			Command: clampString(strings.TrimSpace(st.Command), 512),
-			Note:    clampString(st.Note, 800),
-		})
-	}
-	plan, ref, res, err := s.tacSvc().ApplyCapture(r.Context(), s.tacTemplateStore,
-		inc.Tenant, inc.ID, strings.TrimSpace(req.TemplateID), steps)
-	switch {
-	case errors.Is(err, tac.ErrTemplateInvalid):
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": "the reviewed command list was refused; nothing ran", "validation": res,
-		})
-		return false
-	case errors.Is(err, tac.ErrCollectBusy):
-		writeError(w, http.StatusConflict, err)
-		return false
-	case err != nil:
-		writeError(w, http.StatusBadRequest, err)
-		return false
-	}
-	s.pdAudit(r, claims, inc.Tenant, "tac.collect.review", map[string]any{
-		"incident_id": inc.ID, "commands": len(plan.Steps), "edits": len(plan.Edits),
-		"template_id": ref.ID, "template_version": ref.Version,
-	})
-	return true
-}
-
-// ── the ONE ACTION: escalate → prepare → confirm ────────────────────────────
+// ── the ONE ACTION ──────────────────────────────────────────────────────────
 //
 // Owner's goal (2026-09-06): "ease of collecting data and open the case with one
-// or two clicks". These three routes are that, and the split is the safety
-// property rather than a convenience: escalate and prepare have NO path to a
-// vendor, so the claim on the confirmation screen — "Correlix never opens a case
-// on its own" — is true by construction and not by discipline.
+// or two clicks". The whole surface — escalate, prepare, dry-run, confirm and
+// the case refresh — is tac.EscalateAPI, in the same injectable shape the
+// template and learning surfaces already have. What stays HERE is the only part
+// the api can do: resolving the caller's own incident and device through the
+// principal-scoped stores, gathering the evidence they can already read, and
+// resolving the tenant's routing record. Every decision is the package's.
 
-// tacEscalateRequest is what the Escalate button sends. Everything else (the
-// tenant, the device's ownership, the evidence, the contracts) is server-derived.
-type tacEscalateRequest struct {
-	DeviceID        string   `json:"device_id"`
-	ClassID         string   `json:"class_id"`
-	ConnectorID     string   `json:"connector_id"`
-	CaptureID       string   `json:"capture_id"`
-	Severity        string   `json:"severity"`
-	Title           string   `json:"title"`
-	IncludeOptional bool     `json:"include_optional"`
-	Consent         []string `json:"consent"`
-	Target          struct {
-		Interface string `json:"interface"`
-		Peer      string `json:"peer"`
-		Prefix    string `json:"prefix"`
-		VRF       string `json:"vrf"`
-		RouterID  string `json:"router_id"`
-		Area      string `json:"area"`
-	} `json:"target"`
+func (s *server) handleTACState(w http.ResponseWriter, r *http.Request) {
+	s.tacEscalate.HandleState(w, r)
 }
 
-func (r tacEscalateRequest) toEscalateRequest() tac.EscalateRequest {
-	return tac.EscalateRequest{
-		ClassID:         clampString(strings.TrimSpace(r.ClassID), 64),
-		ConnectorID:     clampString(strings.TrimSpace(r.ConnectorID), 64),
-		CaptureID:       clampString(strings.TrimSpace(r.CaptureID), 128),
-		Severity:        clampString(strings.TrimSpace(r.Severity), 64),
-		Title:           clampString(strings.TrimSpace(r.Title), 200),
-		IncludeOptional: r.IncludeOptional,
-		Consent:         r.Consent,
-		Target: tac.Target{
-			Interface: clampString(r.Target.Interface, pdMaxTargetField),
-			Peer:      clampString(r.Target.Peer, pdMaxTargetField),
-			Prefix:    clampString(r.Target.Prefix, pdMaxTargetField),
-			VRF:       clampString(r.Target.VRF, pdMaxTargetField),
-			RouterID:  clampString(r.Target.RouterID, pdMaxTargetField),
-			Area:      clampString(r.Target.Area, pdMaxTargetField),
-		},
+func (s *server) handleTACClassify(w http.ResponseWriter, r *http.Request) {
+	s.tacEscalate.HandleClassify(w, r)
+}
+
+func (s *server) handleTACPlan(w http.ResponseWriter, r *http.Request) {
+	s.tacEscalate.HandlePlan(w, r)
+}
+
+func (s *server) handleTACCollect(w http.ResponseWriter, r *http.Request) {
+	s.tacEscalate.HandleCollect(w, r)
+}
+
+func (s *server) handleTACCase(w http.ResponseWriter, r *http.Request) {
+	s.tacEscalate.HandleCase(w, r)
+}
+
+func (s *server) handleTACEscalate(w http.ResponseWriter, r *http.Request) {
+	s.tacEscalate.HandleEscalate(w, r)
+}
+
+func (s *server) handleTACEscalatePrepare(w http.ResponseWriter, r *http.Request) {
+	s.tacEscalate.HandlePrepare(w, r)
+}
+
+func (s *server) handleTACEscalateDryRun(w http.ResponseWriter, r *http.Request) {
+	s.tacEscalate.HandleDryRun(w, r)
+}
+
+func (s *server) handleTACEscalateConfirm(w http.ResponseWriter, r *http.Request) {
+	s.tacEscalate.HandleConfirm(w, r)
+}
+
+func (s *server) handleTACCaseRefresh(w http.ResponseWriter, r *http.Request) {
+	s.tacEscalate.HandleRefresh(w, r)
+}
+
+// handleTACRouting is the tenant's TAC ROUTING record (contact, per-vendor
+// route, preferred capture, vendor contracts), served by ticketing.TACRoutingAPI
+// — the same module shape, and the same gate, the connector settings use.
+func (s *server) handleTACRouting(w http.ResponseWriter, r *http.Request) {
+	s.tacRoutingAPI.HandleRouting(w, r)
+}
+
+// tacEscalateSubject adapts tacResolveIncident onto the package's Subject.
+func (s *server) tacEscalateSubject(w http.ResponseWriter, r *http.Request, write bool) (tac.Subject, bool) {
+	level := LevelRead
+	if write {
+		level = LevelWrite
 	}
+	inc, claims, ok := s.tacResolveIncident(w, r, level)
+	if !ok {
+		return tac.Subject{}, false
+	}
+	return tac.Subject{
+		IncidentID: inc.ID, Ref: inc.Ref, Title: inc.Title, Devices: inc.Devices,
+		Tenant: inc.Tenant, Cross: inc.Cross, Actor: claims.Sub,
+	}, true
+}
+
+// tacSubjectIncident rebuilds the adapter's own incident record from a Subject,
+// for the helpers that were written against it.
+func (s *server) tacSubjectIncident(r *http.Request, subj tac.Subject) tacIncident {
+	inc, _ := s.tacLookupIncident(r, subj.Tenant, subj.Cross, subj.IncidentID)
+	inc.ID, inc.Tenant, inc.Cross = subj.IncidentID, subj.Tenant, subj.Cross
+	if inc.Ref == "" {
+		inc.Ref = subj.Ref
+	}
+	return inc
 }
 
 // tacSettingsFor resolves the tenant's routing record for ONE device and folds
-// in the contract that covers it.
-//
-// The serial comes from the DEVICE RECORD and the contract from the tenant's own
-// settings, which is the whole reason the confirmation screen can arrive
-// complete. A tenant with no record is not an error: every field is simply
-// blank, and the connector's own required-field list is what refuses, by name.
+// in the contract that covers it. The serial comes from the DEVICE RECORD and
+// the contract from the tenant's own settings, which is what lets the
+// confirmation screen arrive complete.
 func (s *server) tacSettingsFor(tenant string, cross bool, vendor, serial string) tac.EscalationSettings {
-	out := tac.EscalationSettings{}
 	if s.tacRouting == nil {
-		return out
+		return tac.EscalationSettings{}
 	}
 	cfg, ok, err := s.tacRouting.Get(tenant, cross, tenant)
 	if err != nil {
 		// A store that could not answer is an ERROR, not an empty record. The
-		// visible consequence of both is the same blank confirmation screen, so
-		// the difference has to live in the log or it lives nowhere (§10): an
-		// operator whose contracts vanished must not be told, silently, that
-		// they never configured any.
+		// visible consequence of both is the same blank screen, so the
+		// difference has to live in the log or it lives nowhere (§10).
 		logWarn("tac", "this tenant's TAC routing record could not be read — the escalation continues with nothing pre-filled",
 			map[string]any{"tenant": tenant, "error": err.Error()})
-		return out
+		return tac.EscalationSettings{}
 	}
 	if !ok {
-		return out // a tenant that has configured nothing: a state, not a failure
+		return tac.EscalationSettings{} // configured nothing: a state, not a failure
 	}
-	out.ContactName, out.ContactEmail, out.ContactPhone = cfg.Contact.Name, cfg.Contact.Email, cfg.Contact.Phone
-	out.RouteByVendor = cfg.RouteByVendor
-	out.CaptureByDialect = cfg.CaptureByDialect
-	if c, found := cfg.ContractFor(vendor, serial); found {
-		out.ContractID, out.AccountID = c.ContractID, c.AccountID
-		out.SiteID, out.SupportLevel, out.ContractExpires = c.SiteID, c.SupportLevel, c.ExpiresOn
-		out.ContractExpired = c.Expired(time.Now().UTC())
-	}
-	return out
-}
-
-// POST /api/incidents/{id}/tac/escalate — CLICK ONE.
-func (s *server) handleTACEscalate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return
-	}
-	// It runs commands against a device, so it is the write gate — the same one
-	// collect has always used.
-	inc, claims, ok := s.tacResolveIncident(w, r, LevelWrite)
-	if !ok {
-		return
-	}
-	var req tacEscalateRequest
-	if !tacDecode(w, r, &req) {
-		return
-	}
-	dev, ok := s.tacResolveDevice(w, r, inc, strings.TrimSpace(req.DeviceID))
-	if !ok {
-		return
-	}
-	ev, sources, missing := s.tacEvidence(r, claims, inc)
-	settings := s.tacSettingsFor(inc.Tenant, inc.Cross, dev.Vendor, dev.Serial)
-	svc := s.tacSvc()
-	infos := svc.Connectors(r.Context(), inc.Tenant)
-	er := req.toEscalateRequest()
-	er.Topology = s.tacTopology(r, claims, dev.ID)
-	st, route, err := svc.Escalate(r.Context(), inc.Tenant, inc.ID, dev, ev, er, settings, infos)
-	switch {
-	case errors.Is(err, tac.ErrUnknownClass):
-		writeError(w, http.StatusBadRequest, err)
-		return
-	case errors.Is(err, tac.ErrCollectBusy):
-		writeError(w, http.StatusConflict, err)
-		return
-	case err != nil:
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	// The tenant's preferred capture for this platform, applied over the vendor
-	// default. A preferred id this tenant cannot resolve is NOT silently
-	// ignored: the escalation says the default ran instead.
-	captureNote := ""
-	if id, want := tac.PreferredCaptureID(settings, dev.Platform); want && strings.TrimSpace(req.CaptureID) == "" {
-		captureNote = "your team's preferred capture for this platform (" + id + ") is configured; " +
-			"it is applied when you review the capture list."
-	}
-	s.pdAudit(r, claims, inc.Tenant, "tac.escalate", map[string]any{
-		"incident_id": inc.ID, "device_id": dev.ID, "connector": route.ConnectorID,
-		"route_reason": string(route.Reason), "class_id": er.ClassID,
-	})
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"incident_id": inc.ID, "route": route, "state": st.View(),
-		"can_collect": svc.CanCollect(), "collect_note": tac.CollectNote(svc.CanCollect()),
-		"capture_note":     captureNote,
-		"evidence_sources": sources, "evidence_missing": missing,
-		"connectors": infos,
-	})
-}
-
-// POST /api/incidents/{id}/tac/escalate/prepare — the confirmation screen.
-//
-// It is a POST because it BUILDS a bundle and stores it; a GET that wrote to the
-// bundle store would be a GET with side effects. It still sends nothing.
-func (s *server) handleTACEscalatePrepare(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return
-	}
-	inc, claims, ok := s.tacResolveIncident(w, r, LevelWrite)
-	if !ok {
-		return
-	}
-	var req tacEscalateRequest
-	if !tacDecode(w, r, &req) {
-		return
-	}
-	svc := s.tacSvc()
-	in := s.tacBundleInput(r, claims, inc, "")
-	p, err := svc.Prepare(r.Context(), inc.Tenant, inc.ID, in, req.toEscalateRequest(),
-		claims.Sub, svc.Connectors(r.Context(), inc.Tenant))
-	if err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	s.pdAudit(r, claims, inc.Tenant, "tac.escalate.prepare", map[string]any{
-		"incident_id": inc.ID, "connector": p.Route.ConnectorID, "bundle": p.Bundle.Name,
-		"ready": p.Ready, "blockers": len(p.Blockers),
-	})
-	writeJSON(w, http.StatusOK, map[string]any{"proposal": p, "state": svc.Get(inc.Tenant, inc.ID).View()})
-}
-
-// POST /api/incidents/{id}/tac/escalate/dry-run — PROVE THE SETUP.
-//
-// It authenticates against the configured endpoint with the stored credential
-// and describes the exact request(s) a submit would make, with every secret
-// redacted, and creates NOTHING. It is what a customer runs the day they paste a
-// client secret in, instead of finding out at three in the morning.
-func (s *server) handleTACEscalateDryRun(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return
-	}
-	// It makes a real (read-only) call to a vendor with the tenant's credential,
-	// so it is the write gate — the same one the connector Test button uses.
-	inc, claims, ok := s.tacResolveIncident(w, r, LevelWrite)
-	if !ok {
-		return
-	}
-	var req tacEscalateRequest
-	if !tacDecode(w, r, &req) {
-		return
-	}
-	svc := s.tacSvc()
-	st := svc.Get(inc.Tenant, inc.ID)
-	connector := strings.TrimSpace(req.ConnectorID)
-	if connector == "" && st != nil && st.Route != nil {
-		connector = st.Route.ConnectorID
-	}
-	if connector == "" {
-		writeError(w, http.StatusConflict, errors.New("escalate the incident first, or send connector_id"))
-		return
-	}
-	caseReq := tac.CaseRequest{TenantID: inc.Tenant, IncidentID: inc.ID, Actor: claims.Sub}
-	if st != nil && st.Proposal != nil {
-		caseReq.Form = st.Proposal.Form
-		caseReq.ClassID = st.Proposal.Form.ConnectorID
-	}
-	if st != nil && st.Capture != nil {
-		caseReq.ClassID = st.Capture.ClassID
-		caseReq.DeviceID, caseReq.Hostname, caseReq.Platform = st.Capture.DeviceID, st.Capture.Hostname, st.Capture.Platform
-	}
-	rep, err := svc.DryRun(r.Context(), inc.Tenant, connector, caseReq)
-	if err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	s.pdAudit(r, claims, inc.Tenant, "tac.escalate.dry_run", map[string]any{
-		"incident_id": inc.ID, "connector": connector, "outcome": string(rep.Outcome),
-		"blockers": len(rep.Blockers),
-	})
-	writeJSON(w, http.StatusOK, map[string]any{"dry_run": rep})
-}
-
-// tacConfirmRequest is the edited form the human approved, plus the ephemeral
-// per-case upload credential where a vendor mints one.
-type tacConfirmRequest struct {
-	Form struct {
-		Title              string `json:"title"`
-		Severity           string `json:"severity"`
-		Product            string `json:"product"`
-		SerialNumber       string `json:"serial_number"`
-		ContractID         string `json:"contract_id"`
-		ContactName        string `json:"contact_name"`
-		ContactEmail       string `json:"contact_email"`
-		ExistingCaseNumber string `json:"existing_case_number"`
-	} `json:"form"`
-	UploadToken string `json:"upload_token"`
-	UploadHost  string `json:"upload_host"`
-}
-
-// POST /api/incidents/{id}/tac/escalate/confirm — CLICK TWO. The ONLY route in
-// this file that can cause a vendor case to exist.
-func (s *server) handleTACEscalateConfirm(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return
-	}
-	inc, claims, ok := s.tacResolveIncident(w, r, LevelWrite)
-	if !ok {
-		return
-	}
-	var req tacConfirmRequest
-	if !tacDecode(w, r, &req) {
-		return
-	}
-	svc := s.tacSvc()
-	form := tac.CaseForm{
-		Title:              clampString(strings.TrimSpace(req.Form.Title), 200),
-		Severity:           clampString(strings.TrimSpace(req.Form.Severity), 64),
-		Product:            clampString(strings.TrimSpace(req.Form.Product), 128),
-		SerialNumber:       clampString(strings.TrimSpace(req.Form.SerialNumber), 64),
-		ContractID:         clampString(strings.TrimSpace(req.Form.ContractID), 64),
-		ContactName:        clampString(strings.TrimSpace(req.Form.ContactName), 128),
-		ContactEmail:       clampString(strings.TrimSpace(req.Form.ContactEmail), 200),
-		ExistingCaseNumber: clampString(strings.TrimSpace(req.Form.ExistingCaseNumber), 64),
-	}
-	res, err := svc.Confirm(r.Context(), inc.Tenant, inc.ID, claims.Sub, form, tac.CaseSecrets{
-		UploadToken: clampString(strings.TrimSpace(req.UploadToken), 512),
-		UploadHost:  clampString(strings.TrimSpace(req.UploadHost), 253),
-	})
-	if err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	link := s.tacRecordCase(r, inc, res, form.Severity)
-	s.pdAudit(r, claims, inc.Tenant, "tac.escalate.confirm", map[string]any{
-		"incident_id": inc.ID, "connector": res.ConnectorID, "case_id": res.CaseID,
-		"attached": res.Attached, "severity": form.Severity, "tier": string(link.Tier),
-	})
-	// The escalation becomes an investigation Iris recalls, with the case id on
-	// it, so the next operator asking about this device is told it was escalated
-	// and how.
-	if st := svc.Get(inc.Tenant, inc.ID); st != nil && st.Proposal != nil {
-		if b, _, berr := svc.Bundle(r.Context(), inc.Tenant, inc.ID, s.tacBundleInput(r, claims, inc, "")); berr == nil {
-			s.tacRememberEscalation(r, claims, inc, b, res)
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"result": res, "case": link})
-}
-
-// tacRecordCase files the opened case on the incident and starts its
-// severity-tiered refresh schedule.
-func (s *server) tacRecordCase(r *http.Request, inc tacIncident, res tac.CaseResult, severity string) tac.CaseLink {
-	link := tac.CaseLink{
-		Connector: res.ConnectorID, CaseID: res.CaseID, CaseURL: res.CaseURL,
-		Status: res.Status, Severity: severity, Attached: res.Attached, AttachNote: res.AttachNote,
-		OpenedAt: res.SubmittedAt,
-	}
-	svc := s.tacSvc()
-	for _, info := range svc.Connectors(r.Context(), inc.Tenant) {
-		if info.ID != res.ConnectorID {
-			continue
-		}
-		link.Vendor, link.AuthMode = info.Vendor, info.AuthMode
-		// A path that can read a status back, OR one that can at least learn the
-		// case NUMBER from the vendor's reply, is worth refreshing. Nothing else
-		// is, and saying so is what stops the chip promising a status that can
-		// never arrive.
-		link.Pollable = info.Can(tac.CapPollStatus) || (info.NumberLookup && res.CaseID == "")
-	}
-	if s.tacCases != nil {
-		link = s.tacCases.Record(inc.Tenant, inc.ID, link)
-	}
-	s.tacPersistCase(r.Context(), inc.Tenant, inc.ID, link)
-	return link
+	return ticketing.EscalationSettingsFor(cfg, vendor, serial, time.Now().UTC())
 }
 
 // tacPersistCase writes the case link onto the incident record, so it survives a
@@ -2315,166 +1716,94 @@ func (s *server) tacPersistCase(ctx context.Context, tenant, incidentID string, 
 		at = link.OpenedAt
 	}
 	if err := s.incidents.MarkSync(ctx, incidentID, link.Connector, link.CaseID, link.CaseURL,
-		tacSyncStatus(link), at); err != nil {
+		tac.CaseSyncStatus(link), at); err != nil {
 		logWarn("tac", "the vendor case could not be written onto the incident record",
 			map[string]any{"tenant": tenant, "incident_id": incidentID, "case_id": link.CaseID, "error": err.Error()})
 	}
 }
 
-// tacSyncStatus renders a case link as the incident record's sync status. A
-// failed status read is "unknown", never the last known value: the incident list
-// must not show a stale green either.
-func tacSyncStatus(link tac.CaseLink) string {
-	switch {
-	case link.LastError != "":
-		return "unknown"
-	case strings.TrimSpace(link.Status) != "":
-		return link.Status
-	default:
-		return "opened"
-	}
-}
-
-// POST /api/incidents/{id}/tac/case/refresh — the operator's "Refresh now".
-func (s *server) handleTACCaseRefresh(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return
-	}
-	inc, claims, ok := s.tacResolveIncident(w, r, LevelRead)
-	if !ok {
-		return
-	}
-	if s.tacCases == nil || s.tacPoller == nil {
-		writeError(w, http.StatusServiceUnavailable, errors.New("case status polling is not wired on this deployment"))
-		return
-	}
-	link, found := s.tacCases.Get(inc.Tenant, inc.ID)
-	if !found {
-		http.NotFound(w, r)
-		return
-	}
-	if allowed, wait := s.tacCases.AllowManual(inc.Tenant, inc.ID); !allowed {
-		writeError(w, http.StatusTooManyRequests,
-			fmt.Errorf("this case was refreshed less than a minute ago; try again in %d seconds", int(wait.Seconds())+1))
-		return
-	}
-	out := s.tacPoller.Poll(r.Context(), inc.Tenant, inc.ID, link)
-	s.tacPersistCase(r.Context(), inc.Tenant, inc.ID, out)
-	s.pdAudit(r, claims, inc.Tenant, "tac.case.refresh", map[string]any{
-		"incident_id": inc.ID, "case_id": out.CaseID, "status": out.Status,
+// buildTACEscalateAPI wires the one-action surface. Every dependency it takes is
+// something only the api can supply — a principal-scoped read, a platform writer
+// or a clock — and nothing it takes is a decision.
+func (s *server) buildTACEscalateAPI(svc *tac.Service) error {
+	api, err := tac.NewEscalateAPI(tac.EscalateAPIDeps{
+		Service: svc,
+		Resolve: s.tacEscalateSubject,
+		ResolveDevice: func(w http.ResponseWriter, r *http.Request, subj tac.Subject, id string) (tac.Device, bool) {
+			return s.tacResolveDevice(w, r, s.tacSubjectIncident(r, subj), id)
+		},
+		Evidence: func(r *http.Request, subj tac.Subject) (tac.Evidence, []string, []string) {
+			claims, _ := userFrom(r.Context())
+			return s.tacEvidence(r, claims, s.tacSubjectIncident(r, subj))
+		},
+		Topology: func(r *http.Request, deviceID string) []tac.TopologyNote {
+			claims, _ := userFrom(r.Context())
+			return s.tacTopology(r, claims, deviceID)
+		},
+		BundleInput: func(r *http.Request, subj tac.Subject) tac.BundleInput {
+			claims, _ := userFrom(r.Context())
+			return s.tacBundleInput(r, claims, s.tacSubjectIncident(r, subj), "")
+		},
+		Settings: func(_ *http.Request, subj tac.Subject, vendor, serial string) tac.EscalationSettings {
+			return s.tacSettingsFor(subj.Tenant, subj.Cross, vendor, serial)
+		},
+		Tracker: s.tacCases, Poller: s.tacPoller,
+		Templates:   func() tac.TemplateStore { return s.tacTemplateStore },
+		PersistCase: s.tacPersistCase,
+		Remember: func(r *http.Request, subj tac.Subject, b *tac.Bundle, res tac.CaseResult) {
+			claims, _ := userFrom(r.Context())
+			s.tacRememberEscalation(r, claims, s.tacSubjectIncident(r, subj), b, res)
+		},
+		Audit: func(r *http.Request, tenant, action string, detail map[string]any) {
+			claims, _ := userFrom(r.Context())
+			s.pdAudit(r, claims, tenant, action, detail)
+		},
+		WriteJSON: writeJSON, WriteError: writeError,
+		Now: func() time.Time { return time.Now().UTC() },
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"case": out, "status_line": out.StatusLine(time.Now().UTC()),
-		"tooltip": out.Tooltip()})
+	if err != nil {
+		return err
+	}
+	s.tacEscalate = api
+
+	routing, rerr := ticketing.NewTACRoutingAPI(ticketing.TACRoutingAPIDeps{
+		Authz: s.tacRoutingAuthz,
+		Store: func() *ticketing.TACRoutingStore { return s.tacRouting },
+		Connectors: func(ctx context.Context, tenant string) []tac.ConnectorInfo {
+			return svc.Connectors(ctx, tenant)
+		},
+		Dialects: func() []ticketing.RoutingDialect {
+			out := []ticketing.RoutingDialect{}
+			for _, d := range svc.DialectChoices() {
+				out = append(out, ticketing.RoutingDialect{Dialect: d.Dialect, Display: d.Display})
+			}
+			return out
+		},
+		Audit:     ticketing.DefaultCaseAuditSink(),
+		WriteJSON: writeJSON, WriteError: writeError,
+		Now: func() time.Time { return time.Now().UTC() },
+	})
+	if rerr != nil {
+		return rerr
+	}
+	s.tacRoutingAPI = routing
+	return nil
 }
 
-// ── GET/PUT/DELETE /api/tac/routing ─────────────────────────────────────────
-//
-// The tenant's TAC routing record. It is PER-TENANT DATA — a customer's own
-// support agreement and the people on it — so the gate is requirePerm plus the
-// store's own tenant filter, and a cross-tenant caller must scope in first.
-
-func (s *server) handleTACRouting(w http.ResponseWriter, r *http.Request) {
+// tacRoutingAuthz maps the routing surface's abstract gate onto the platform's
+// RBAC model. It is the SAME mapping the connector settings use, because it is
+// the same class of data: one tenant's own commercial relationship with a vendor.
+func (s *server) tacRoutingAuthz(w http.ResponseWriter, r *http.Request, gate ticketing.ConnectorGate) (ticketing.ConnectorPrincipal, bool) {
 	level := LevelRead
-	if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+	if gate == ticketing.ConnectorGateWrite {
 		level = LevelWrite
 	}
 	claims, ok := s.requirePerm(w, r, "infrastructure", level)
 	if !ok {
-		return
-	}
-	if s.tacRouting == nil {
-		writeError(w, http.StatusServiceUnavailable, errors.New("TAC routing settings are not available on this build"))
-		return
+		return ticketing.ConnectorPrincipal{}, false
 	}
 	tenant, cross := principalTenant(claims)
-	// A non-cross caller's as_tenant is IGNORED outright; a cross-tenant caller
-	// may narrow. The token is the only source of ownership (§3a.2).
-	target := ticketing.ResolveTACTenant(tenant, cross, r.URL.Query().Get("as_tenant"))
-	switch r.Method {
-	case http.MethodGet:
-		cfg, found, err := s.tacRouting.Get(tenant, cross, target)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"routing": cfg, "configured": found,
-			"connectors": s.tacRoutingConnectorChoices(r.Context(), tenant),
-			"dialects":   s.tacRoutingDialects(),
-		})
-	case http.MethodPut:
-		var in ticketing.TACRoutingConfig
-		if !tacDecode(w, r, &in) {
-			return
-		}
-		known := s.tacKnownConnector(r.Context(), tenant)
-		saved, err := s.tacRouting.Set(tenant, cross, target, in, known)
-		if err != nil {
-			if errors.Is(err, ticketing.ErrTenantNotFound) {
-				http.NotFound(w, r)
-				return
-			}
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		s.pdAudit(r, claims, tenant, "tac.routing.save", map[string]any{
-			"routes": len(saved.RouteByVendor), "contracts": len(saved.ContractByVendor),
-			"overrides": len(saved.ContractBySerial), "captures": len(saved.CaptureByDialect),
-		})
-		writeJSON(w, http.StatusOK, map[string]any{"routing": saved, "configured": !saved.IsEmpty()})
-	case http.MethodDelete:
-		if err := s.tacRouting.Delete(tenant, cross, target); err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		s.pdAudit(r, claims, tenant, "tac.routing.delete", map[string]any{})
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, errors.New("GET, PUT or DELETE"))
-	}
-}
-
-// tacKnownConnector answers "does this platform have a connector with this id",
-// so a route cannot be saved pointing at nothing.
-func (s *server) tacKnownConnector(ctx context.Context, tenant string) func(string) bool {
-	svc := s.tacSvc()
-	if svc == nil {
-		return nil
-	}
-	ids := map[string]bool{}
-	for _, in := range svc.Connectors(ctx, tenant) {
-		ids[in.ID] = true
-	}
-	return func(id string) bool { return ids[id] }
-}
-
-// tacRoutingConnectorChoices is what the settings screen offers per vendor: the
-// connectors that exist, grouped, with whether this tenant has credentials.
-func (s *server) tacRoutingConnectorChoices(ctx context.Context, tenant string) []tac.ConnectorInfo {
-	svc := s.tacSvc()
-	if svc == nil {
-		return []tac.ConnectorInfo{}
-	}
-	return svc.Connectors(ctx, tenant)
-}
-
-// tacRoutingDialects lists the platforms a preferred capture can be set for.
-func (s *server) tacRoutingDialects() []map[string]string {
-	svc := s.tacSvc()
-	if svc == nil {
-		return []map[string]string{}
-	}
-	cat := svc.Catalog()
-	out := make([]map[string]string, 0, len(cat.Dialects()))
-	for _, d := range cat.Dialects() {
-		display := d
-		if dp, ok := cat.PlanFor(d); ok && dp.Display != "" {
-			display = dp.Display
-		}
-		out = append(out, map[string]string{"dialect": d, "display": display})
-	}
-	return out
+	return ticketing.ConnectorPrincipal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
 }
 
 // TAC-ROUTES-END

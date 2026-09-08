@@ -257,6 +257,23 @@ func (c CaseLink) Tooltip() string {
 	return strings.Join(parts, " · ")
 }
 
+// CaseSyncStatus renders a case link as the incident record's sync status.
+//
+// A FAILED status read is "unknown", never the last known value: the incident
+// list must not show a stale green any more than the chip may. It is here rather
+// than at the call site because the chip and the list must say the same thing
+// about the same case.
+func CaseSyncStatus(link CaseLink) string {
+	switch {
+	case link.LastError != "":
+		return "unknown"
+	case strings.TrimSpace(link.Status) != "":
+		return link.Status
+	default:
+		return "opened"
+	}
+}
+
 // ── the schedule ────────────────────────────────────────────────────────────
 
 // PollBudget is the outer bound: what a tenant may spend against one vendor in

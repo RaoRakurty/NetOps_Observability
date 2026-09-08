@@ -295,6 +295,13 @@ type server struct {
 	// deployment with no case connector simply never records a case.
 	tacCases  *tac.CaseTracker
 	tacPoller *tac.CasePoller
+	// tacEscalate is the ONE-ACTION surface (escalate → prepare → dry run →
+	// confirm → refresh) and tacRoutingAPI the routing-settings surface. Both
+	// are injectable modules in their own packages, in the shape the template
+	// and connector surfaces already use, so this file holds one line per route
+	// and no decision.
+	tacEscalate   *tac.EscalateAPI
+	tacRoutingAPI *ticketing.TACRoutingAPI
 	// TAC-ROUTES-END
 	tenants          tenantRepo
 	orgs             *tenant.OrgStore
