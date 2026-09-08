@@ -897,6 +897,14 @@ func TestParse_Adversarial(t *testing.T) {
 		"many tiny lines":       strings.Repeat("a b c d e f g h\n", 5000),
 		"prefix-shaped repeats": strings.Repeat("10.0.0.1/24 ", 20000),
 		"mac-shaped repeats":    strings.Repeat("000c.29ab.cdef ", 20000),
+		// Past ASCII. These three carry the bytes that make strings.ToLower
+		// GROW a string: U+023A and U+023E lower to three-byte runes, and every
+		// invalid UTF-8 byte lowers to a three-byte U+FFFD. Any parser that
+		// measures an offset on a lower-cased copy and then slices the original
+		// panics on input of this shape.
+		"growing-fold storm":  strings.Repeat("\u023a\u023e", 2000),
+		"invalid utf-8 storm": strings.Repeat("\x81\xfe\xff", 2000),
+		"mixed fold storm":    strings.Repeat("\u023aA\x81b\u023e ", 500),
 	}
 	l := NewLibrary()
 	start := time.Now()
@@ -915,6 +923,165 @@ func TestParse_Adversarial(t *testing.T) {
 		t.Fatalf("adversarial batch took %v — suspect superlinear scanning", d)
 	}
 	t.Logf("adversarial batch over %d bindings in %v", len(l.Bindings()), time.Since(start))
+}
+
+// ── non-ASCII device output ─────────────────────────────────────────────────
+
+// TestParse_NonASCIIDeviceOutput is the regression for the valueAfter slice
+// panic. valueAfter used to find its marker in strings.ToLower(line) and then
+// slice the ORIGINAL line at that offset. ToLower is not length-preserving:
+// U+023A and U+023E each grow from two bytes to three, and every invalid UTF-8
+// byte becomes a three-byte U+FFFD. The offset therefore did not address the
+// string being sliced.
+//
+// This matters because nothing upstream sanitizes: splitLines only caps length,
+// RedactOutput preserves invalid bytes, and the SSH runner hands device bytes
+// through verbatim. Parse runs inside a bare worker goroutine with no recover,
+// so a hostname carrying one of two code points used to take the process down.
+func TestParse_NonASCIIDeviceOutput(t *testing.T) {
+	t.Run("invalid utf-8 hostname does not panic", func(t *testing.T) {
+		// Seven invalid bytes ahead of the marker: the lower-cased copy is 14
+		// bytes longer, so the old offset ran off the end of the original line
+		// and panicked with "slice bounds out of range".
+		res := mustParse(t, CmdPlatformUptime, DialectCiscoIOS,
+			"Cisco IOS Software\nR\x81\x81\x81\x81\x81\x81\x81 uptime is 1w\n")
+		if res.Platform == nil {
+			t.Fatal("no platform health")
+		}
+		wantStrP(t, "Uptime", res.Platform.Uptime, "1w")
+	})
+
+	t.Run("growing code points do not shift the value", func(t *testing.T) {
+		// The silent-wrong-answer case. Two U+023A shift the offset by two
+		// bytes, which used to eat "4 " and report the uptime as "days".
+		res := mustParse(t, CmdPlatformUptime, DialectCiscoIOS,
+			"Cisco IOS Software\nR\u023a\u023a uptime is 4 days\n")
+		if res.Platform == nil {
+			t.Fatal("no platform health")
+		}
+		wantStrP(t, "Uptime", res.Platform.Uptime, "4 days")
+	})
+
+	t.Run("U+023E shifts too", func(t *testing.T) {
+		res := mustParse(t, CmdPlatformUptime, DialectCiscoIOS,
+			"Cisco IOS Software\nR\u023e\u023e\u023e uptime is 3 weeks, 1 day\n")
+		if res.Platform == nil {
+			t.Fatal("no platform health")
+		}
+		wantStrP(t, "Uptime", res.Platform.Uptime, "3 weeks, 1 day")
+	})
+
+	t.Run("shifted VRP MTU line does not panic", func(t *testing.T) {
+		// The same offset shift reached iface.go through a second door: a value
+		// short enough that the shift consumed all of it left valueAfter
+		// returning an empty string with ok=true, and strings.Fields("")[0]
+		// panicked with "index out of range".
+		res := mustParse(t, CmdInterfaceDetail, DialectHuaweiVRP,
+			"GigabitEthernet0/0/1 current state : UP\n"+
+				"Line protocol current state : UP\n"+
+				"\u023a The Maximum Transmit Unit is 1\n")
+		if len(res.Interfaces) != 1 {
+			t.Fatalf("got %d interfaces, want 1", len(res.Interfaces))
+		}
+		if res.Interfaces[0].MTU == nil || *res.Interfaces[0].MTU != 1 {
+			t.Errorf("MTU = %v, want 1", res.Interfaces[0].MTU)
+		}
+	})
+
+	t.Run("every binding survives non-ASCII output", func(t *testing.T) {
+		// Breadth, not depth: no parser may panic on any of these, whatever it
+		// decides to report. The assertion is that the loop finishes at all.
+		mutants := []string{
+			"R\x81\x81\x81\x81\x81\x81\x81 uptime is 1w",
+			"\u023a\u023a\u023a\u023a is up, line protocol is up",
+			"\u023e The Maximum Transmit Unit is 1",
+			"\u023a Internet address is 1",
+			"\u023a\u023a Description: x",
+			"\xff\xfe current state : UP",
+			"Interface \u023a, Version 1",
+			"\x81 uptime is ",
+			" uptime is \x81",
+			"\u023a\u023e\x81\xff uptime is \u023a",
+		}
+		l := NewLibrary()
+		for _, m := range mutants {
+			for _, pair := range l.Bindings() {
+				if _, err := l.Parse(pair[0], Dialect(pair[1]), m+"\n"); err != nil {
+					t.Fatalf("%q on %s/%s: %v", m, pair[0], pair[1], err)
+				}
+			}
+		}
+	})
+}
+
+// TestValueAfter_FoldIsNotLengthPreserving pins valueAfter directly: the offset
+// it computes must always be valid for the string it slices, and the text it
+// returns must be the text that actually follows the marker.
+func TestValueAfter_FoldIsNotLengthPreserving(t *testing.T) {
+	cases := []struct {
+		name   string
+		line   string
+		marker string
+		want   string
+		wantOK bool
+	}{
+		{"plain ascii", "Router uptime is 1w2d", " uptime is ", "1w2d", true},
+		{"marker case differs", "Router UPTIME IS 1w2d", " uptime is ", "1w2d", true},
+		{"U+023A before the marker", "RȺȺ uptime is 4 days", " uptime is ", "4 days", true},
+		{"U+023E before the marker", "RȾȾȾ uptime is 4 days", " uptime is ", "4 days", true},
+		{"invalid utf-8 before the marker", "R\x81\x81\x81\x81\x81\x81\x81 uptime is 1w", " uptime is ", "1w", true},
+		{"invalid utf-8 after the marker", "R uptime is \x81\x81", " uptime is ", "\x81\x81", true},
+		// The bound case: the marker ends the line, so the value is empty but
+		// the marker WAS present. ok stays true and the slice must not panic.
+		{"marker at end of line", "Router uptime is ", " uptime is ", "", true},
+		{"marker at end after growth", "RȺȺ uptime is ", " uptime is ", "", true},
+		{"marker absent", "Router is up", " uptime is ", "", false},
+		{"marker longer than line", "up", " uptime is ", "", false},
+		{"empty line", "", " uptime is ", "", false},
+		{"non-ascii only", "ȺȾ\x81", " uptime is ", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := valueAfter(tc.line, tc.marker)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v (got %q)", ok, tc.wantOK, got)
+			}
+			if got != tc.want {
+				t.Errorf("value = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestASCIIFoldIndex pins the scan valueAfter is built on. Every offset it
+// returns must be a valid index into the string it was given, and it must fold
+// ASCII only: a non-ASCII byte is never rewritten on the way past.
+func TestASCIIFoldIndex(t *testing.T) {
+	cases := []struct {
+		s, marker string
+		want      int
+	}{
+		{"", "", 0},
+		{"abc", "", 0},
+		{"abc", "abc", 0},
+		{"abc", "ABC", 0},
+		{"ABC", "abc", 0},
+		{"xxabc", "AbC", 2},
+		{"abc", "abcd", -1},
+		{"abc", "d", -1},
+		{"Ⱥ uptime is x", " uptime is ", 2},
+		{"\x81\x81 uptime is x", " uptime is ", 2},
+		{"aab", "ab", 1},
+	}
+	for _, tc := range cases {
+		got := asciiFoldIndex(tc.s, tc.marker)
+		if got != tc.want {
+			t.Errorf("asciiFoldIndex(%q, %q) = %d, want %d", tc.s, tc.marker, got, tc.want)
+		}
+		if got >= 0 && got+len(tc.marker) > len(tc.s) {
+			t.Errorf("asciiFoldIndex(%q, %q) = %d runs past the string", tc.s, tc.marker, got)
+		}
+	}
 }
 
 // TestSplitLines_Bounds proves the line and count caps.

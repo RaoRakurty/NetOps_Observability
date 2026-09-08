@@ -79,7 +79,11 @@ func parseCiscoInterfaces(lines []string) Result {
 			}
 		case strings.HasPrefix(trim(low), "internet address is "):
 			if v, ok := valueAfter(ln, "internet address is "); ok && v != "" {
-				cur.IPv4 = strPtr(strings.Fields(v)[0])
+				// Same " x" sentinel as every sibling site. The `v != ""` guard
+				// above already makes Fields non-empty today; the sentinel means
+				// the index is safe on its own, not because of a check three
+				// lines away that a later edit could drop.
+				cur.IPv4 = strPtr(strings.Fields(v + " x")[0])
 			}
 		case strings.Contains(low, "input errors"):
 			inputSection = true
@@ -376,7 +380,11 @@ func parseVRPInterfaces(lines []string) Result {
 			}
 		}
 		if v, ok := valueAfter(t, "The Maximum Transmit Unit is "); ok && cur.MTU == nil {
-			if n, ok := atoiOK(strings.Fields(v)[0]); ok && n > 0 {
+			// The " x" sentinel guarantees Fields returns at least one element:
+			// a device line that ends right after the marker leaves v empty, and
+			// Fields("")[0] would panic. atoiOK rejects "x", so the sentinel can
+			// never become a value.
+			if n, ok := atoiOK(strings.Fields(v + " x")[0]); ok && n > 0 {
 				cur.MTU = intPtr(int(n))
 			}
 		}
