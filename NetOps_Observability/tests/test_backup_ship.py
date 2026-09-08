@@ -705,7 +705,14 @@ SEALED_PASS = "test-sealed-passphrase-0123456789"
 
 
 def _real_backup_tree(tmp_path: Path, sign_key=SIGN_KEY, sealed_pass=SEALED_PASS,
-                      sealed_material=None, extra_env=None):
+                      sealed_material=None, extra_env=None,
+                      sealed_pass_in_env_file=None):
+    """sealed_pass_in_env_file writes BACKUP_SEALED_PASSPHRASE into the stack
+    .env instead of exporting it — which is the DOCUMENTED way to configure it
+    (a cron has no environment of its own; backup.sh's load_env_default reads
+    .env for exactly that reason). H11 lived in the gap between the two: only
+    the environment path was ever exercised, and the .env path shipped the
+    passphrase inside the archive it encrypts."""
     tmp_path.mkdir(parents=True, exist_ok=True)  # callers pass sub-trees too
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -718,6 +725,8 @@ def _real_backup_tree(tmp_path: Path, sign_key=SIGN_KEY, sealed_pass=SEALED_PASS
     env_lines = "DB_PASSWORD=super-secret\nBACKUP_KEEP=3\n"
     if sign_key:
         env_lines += f"BACKUP_SIGN_KEY={sign_key}\n"
+    if sealed_pass_in_env_file:
+        env_lines += f"BACKUP_SEALED_PASSPHRASE={sealed_pass_in_env_file}\n"
     (tmp_path / "deployment" / "docker" / ".env").write_text(env_lines)
 
     data = tmp_path / "data"
@@ -768,6 +777,14 @@ def _member_bytes(out: Path, name: str) -> bytes:
                         capture_output=True, timeout=120)
     assert tr.returncode == 0, tr.stderr.decode()
     return tr.stdout
+
+
+def _raw_tar(out: Path) -> bytes:
+    """Every byte of the archive, member names and contents alike. A per-member
+    assertion can only look where you thought to look; this looks everywhere."""
+    zs = subprocess.run(["zstd", "-dc", str(out)], capture_output=True, timeout=120)
+    assert zs.returncode == 0, zs.stderr
+    return zs.stdout
 
 
 def _hmac(path: Path, key: str) -> str:
@@ -854,7 +871,7 @@ def test_m26_artifact_sidecar_and_dir_are_private(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _restore_tree(tmp_path: Path, archive: Path, sig: Path | None,
-                  env_key=SIGN_KEY, force=False):
+                  env_key=SIGN_KEY, force=False, env_sealed_pass=None):
     """A separate 'target host' tree; only real tools run (restore.sh needs no
     docker). The live tree carries custody material and old backups that a
     correct restore must never touch."""
@@ -870,6 +887,8 @@ def _restore_tree(tmp_path: Path, archive: Path, sig: Path | None,
     env_lines = "OLD_HOST_KEY=1\n"
     if env_key:
         env_lines += f"BACKUP_SIGN_KEY={env_key}\n"
+    if env_sealed_pass:
+        env_lines += f"BACKUP_SEALED_PASSPHRASE={env_sealed_pass}\n"
     (host / "deployment" / "docker" / ".env").write_text(env_lines)
     data = host / "data"
     (data / "swtpm").mkdir(parents=True, exist_ok=True)
@@ -1171,6 +1190,78 @@ def test_s4_sealed_material_is_encrypted_and_verifiable(tmp_path):
     # And the passphrase is nowhere in the archive it protects.
     assert SEALED_PASS.encode() not in _member_bytes(out, "./env.backup"), \
         "the custody passphrase leaked into env.backup"
+
+
+# ---------------------------------------------------------------------------
+# H11 (2026-09-08) — the custody passphrase is not a MEMBER of the archive it
+# protects.
+#
+# The envelope is only worth something while the key to it lives somewhere else.
+# backup.sh's load_env_default reads BACKUP_SEALED_PASSPHRASE out of
+# deployment/docker/.env, which is the documented way to configure it (cron has
+# no environment of its own) — and the whole of .env ships as ./env.backup.
+# Until this fix env.backup was stripped of BACKUP_SIGN_KEY only, so a host
+# configured the documented way put the passphrase in the same tarball as the
+# ciphertext it opens: one stolen artifact yielded the swtpm state that
+# re-derives the KEK, the wrapped DEKs and the .env those DEKs protect.
+#
+# The pre-existing sealed test asserts the same property but hands the
+# passphrase to the script through the ENVIRONMENT, where it was never at risk
+# — which is exactly why the defect survived it. These two exercise the .env
+# path, and the restore side that the strip makes necessary.
+# ---------------------------------------------------------------------------
+
+# Deliberately different from SEALED_PASS: the restore assertion below has to
+# prove the value came from the RESTORING host, not from the archive.
+HOST_SEALED_PASS = "test-target-host-passphrase-9f31"
+
+
+def test_h11_custody_passphrase_from_dot_env_is_never_a_member_of_the_archive(tmp_path):
+    r, out, host = _real_backup_tree(tmp_path / "src-host", sealed_pass=None,
+                                     sealed_pass_in_env_file=SEALED_PASS)
+    assert r.returncode == 0, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+
+    # The .env fallback really did configure it — the envelope was captured,
+    # so this is not passing by simply having no custody material at all.
+    members = _members(out)
+    assert "./sealed/sealed-material.tar.gz.enc" in members, "\n".join(members)
+
+    env_backup = _member_bytes(out, "./env.backup").decode()
+    assert "BACKUP_SEALED_PASSPHRASE" not in env_backup, \
+        "the archive carries the passphrase that decrypts the custody envelope inside it"
+    assert SEALED_PASS not in env_backup
+
+    # Not merely absent from env.backup — absent from every byte of the tar,
+    # member names included.
+    assert SEALED_PASS.encode() not in _raw_tar(out), \
+        "the custody passphrase appears somewhere else in the archive"
+
+    # The strip is surgical: a restore still gets the rest of .env back.
+    assert "DB_PASSWORD=super-secret" in env_backup
+    assert "BACKUP_KEEP=3" in env_backup
+
+
+def test_h11_restore_carries_this_hosts_custody_passphrase_forward(tmp_path):
+    """A backup nobody can restore is worse than the bug. The strip means the
+    restored .env has no passphrase, so restore.sh must put the TARGET host's
+    own value back — otherwise a restore silently disarms the next nightly run,
+    which fails closed with no custody capture at all."""
+    r, out, _ = _real_backup_tree(tmp_path / "src-host", sealed_pass=None,
+                                  sealed_pass_in_env_file=SEALED_PASS)
+    assert r.returncode == 0, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    sig = Path(str(out) + ".sig")
+
+    rr, host, _ = _restore_tree(tmp_path, out, sig=sig,
+                                env_sealed_pass=HOST_SEALED_PASS)
+    assert rr.returncode == 0, f"stdout:\n{rr.stdout}\nstderr:\n{rr.stderr}"
+    env_text = (host / "deployment" / "docker" / ".env").read_text()
+    assert f"BACKUP_SEALED_PASSPHRASE={HOST_SEALED_PASS}" in env_text, \
+        "restore.sh dropped this host's custody passphrase — the next backup fails closed"
+    assert f"BACKUP_SIGN_KEY={SIGN_KEY}" in env_text, \
+        "the H4 sign-key carry-forward must keep working alongside it"
+    # The SOURCE host's passphrase must not have travelled in the archive.
+    assert SEALED_PASS not in env_text
+    assert "DB_PASSWORD=super-secret" in env_text
 
 
 def test_s4_sealed_material_fails_closed_without_a_passphrase(tmp_path):

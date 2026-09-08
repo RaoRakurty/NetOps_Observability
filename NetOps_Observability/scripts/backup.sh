@@ -84,6 +84,11 @@
 #   * The passphrase is NOT the KEK and NOT in the archive: an attacker with the
 #     tarball still needs it, which is what keeps the custody model intact.
 #     Keep it where the KEK ceremony keeps its material, not on the backup host.
+#     ENFORCED, not merely intended (H11, 2026-09-08): BACKUP_SEALED_PASSPHRASE
+#     is stripped out of the env.backup member alongside BACKUP_SIGN_KEY, and
+#     the run ABORTS if either survives the strip. Until that fix a passphrase
+#     configured the documented way — in deployment/docker/.env, because cron
+#     has no environment — travelled inside the very tarball it encrypts.
 #   * data/backups and data/restore-staging are EXCLUDED: the artifact is
 #     written INTO data/backups, so including it nested every previous backup
 #     inside tonight's (night N contained nights 1..N-1 — exponential growth).
@@ -183,6 +188,14 @@ load_env_default BACKUP_SEALED_MATERIAL
 load_env_default BACKUP_EXCLUDE
 load_env_default BACKUP_VICTORIA
 load_env_default BACKUP_REMOTE_VERIFY
+
+# H4 + H11: the variables whose values PROTECT this artifact. Every one of them
+# is read from the environment or .env by the writer, and every one of them is
+# stripped out of the env.backup member so the artifact can never carry the
+# credential that guards it. restore.sh reads the SAME list to carry this
+# host's live values forward across the .env it overwrites — keep the two in
+# step, and never add a variable here that a restore genuinely needs back.
+declare -a ARCHIVE_SELF_PROTECTING_VARS=(BACKUP_SIGN_KEY BACKUP_SEALED_PASSPHRASE)
 
 # --verify <file>: check a previously written backup instead of taking one.
 # Lives AFTER load_env_default so the HMAC check finds BACKUP_SIGN_KEY in .env
@@ -1090,16 +1103,45 @@ fi
 echo "→ Snapshotting .env and configs"
 CURRENT_STEP=".env + config snapshot"
 if [[ -f "$COMPOSE_DIR/.env" ]]; then
-    # H4: BACKUP_SIGN_KEY must NOT ride inside the artifact it authenticates —
-    # an archive carrying its own MAC key is tamper-evident to nobody. Strip
-    # that one line; every other .env line ships (0600 preserved by tar).
+    # The archive must NEVER carry the credentials that PROTECT the archive.
+    # $ARCHIVE_SELF_PROTECTING_VARS is that list, and it is the ONLY thing
+    # stripped out of env.backup — every other .env line ships (0600 preserved
+    # by tar), because a restore needs them.
+    #
+    #   BACKUP_SIGN_KEY (H4) — the HMAC key in $OUT.sig. An artifact that
+    #     carries the key it is signed with is tamper-evident to nobody.
+    #
+    #   BACKUP_SEALED_PASSPHRASE (H11, 2026-09-08) — the passphrase for
+    #     ./sealed/sealed-material.tar.gz.enc, which rides INSIDE this same tar.
+    #     load_env_default() reads the passphrase out of .env (the documented
+    #     cron fallback — cron has no environment of its own), so on any host
+    #     configured that way the passphrase shipped in env.backup, in the same
+    #     file as the ciphertext it opens. One stolen tarball then yielded the
+    #     swtpm state that re-derives the KEK, the wrapped DEKs, and the .env
+    #     those DEKs protect: exactly the "one file holds everything" collapse
+    #     the header block above says this design prevents, and the opposite of
+    #     what that block and docs/runbooks/backup-restore.md claimed.
+    #     restore.sh carries this host's live value forward after it overwrites
+    #     .env, the same way it already does for BACKUP_SIGN_KEY — without that
+    #     the next nightly run would fail closed with no custody capture.
+    env_strip_re="^($(IFS='|'; printf '%s' "${ARCHIVE_SELF_PROTECTING_VARS[*]}"))="
     env_grep_rc=0
-    grep -v '^BACKUP_SIGN_KEY=' "$COMPOSE_DIR/.env" > "$STAGE/env.backup" || env_grep_rc=$?
-    # grep rc=1 = zero lines survived (a .env holding only the sign key) — an
+    grep -vE "$env_strip_re" "$COMPOSE_DIR/.env" > "$STAGE/env.backup" || env_grep_rc=$?
+    # grep rc=1 = zero lines survived (a .env holding only those keys) — an
     # empty env.backup is then the correct content. rc>=2 is a real read error.
     if [[ $env_grep_rc -ge 2 ]]; then
         fail ".env snapshot failed (grep rc=$env_grep_rc reading $COMPOSE_DIR/.env)"
     fi
+    # Belt and braces: the strip is the whole security property here, so PROVE
+    # it rather than trusting one regex. A survivor is a hard failure — better
+    # a loudly missing backup than one that hands over the custody root.
+    for _pv in "${ARCHIVE_SELF_PROTECTING_VARS[@]}"; do
+        if grep -qE "^${_pv}=" "$STAGE/env.backup"; then
+            fail "REFUSING: $_pv survived the env.backup strip — the archive would carry the credential that protects it"
+            rm -f "$STAGE/env.backup"
+            exit 1
+        fi
+    done
 fi
 mkdir -p "$STAGE/src-config"
 if [[ -d "$ROOT/src/config" ]]; then

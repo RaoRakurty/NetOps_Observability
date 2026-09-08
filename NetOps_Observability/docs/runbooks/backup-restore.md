@@ -84,6 +84,20 @@ artifact. The whole point of the separate envelope is that the tarball plus the
 `.env` inside it still cannot unseal the vault. Keep it where the KEK ceremony
 keeps its material.
 
+That property is **enforced by the writer**, not left to the operator: setting
+`BACKUP_SEALED_PASSPHRASE` in `deployment/docker/.env` is the supported way to
+configure it (cron has no environment of its own), and `backup.sh` strips both
+`BACKUP_SEALED_PASSPHRASE` and `BACKUP_SIGN_KEY` out of the `env.backup` member
+before the tar is written — then re-checks and **aborts** if either survived.
+Before 2026-09-08 (H11) it stripped only the sign key, so a passphrase
+configured that way rode inside the very archive it encrypts and anyone holding
+the tarball could open the custody envelope.
+
+Because those two lines are absent from `env.backup`, `restore.sh` **carries the
+restoring host's own values forward** after it overwrites `.env`, and says so on
+stdout. Nothing is lost by the strip: without that carry-forward the next
+nightly run would be unsigned and would fail closed with no custody capture.
+
 **It is NOT scheduled by default**, on purpose: a nightly full backup on the same
 disk fills the volume it needs (this is the F-55 disk-pressure failure). Enable
 it only with an off-host destination.

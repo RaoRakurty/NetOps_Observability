@@ -186,19 +186,39 @@ rsync -a --delete "${RESTORE_EXCLUDES[@]}" "$STAGE/data/" "$DATA_DIR/"
 
 if [[ -f "$STAGE/env.backup" ]]; then
   echo "→ Restoring .env"
-  # backup.sh strips BACKUP_SIGN_KEY out of env.backup on purpose (the archive
-  # must not carry the key that authenticates it). Carry the live host's key
-  # forward so the NEXT backup is still signed after this restore.
-  CUR_SIGN_KEY=""
+  # backup.sh strips the archive's OWN protection credentials out of env.backup
+  # on purpose — see ARCHIVE_SELF_PROTECTING_VARS there, and keep this list in
+  # step with it:
+  #   BACKUP_SIGN_KEY (H4)          the archive must not carry the key that
+  #                                 authenticates it;
+  #   BACKUP_SEALED_PASSPHRASE (H11) the archive must not carry the passphrase
+  #                                 that decrypts the custody envelope riding
+  #                                 inside it.
+  # Neither is therefore in the .env we are about to install, so carry this
+  # host's live values forward. Without the sign key the NEXT backup is
+  # unsigned; without the passphrase the next nightly run FAILS CLOSED with no
+  # custody capture at all — a restore must not silently disarm the next backup.
+  CARRY="$STAGE/.env-carry"
+  : > "$CARRY"
+  chmod 0600 "$CARRY"
   if [[ -f "$COMPOSE_DIR/.env" ]]; then
-    CUR_SIGN_KEY="$(sed -n 's/^BACKUP_SIGN_KEY=//p' "$COMPOSE_DIR/.env" | head -1)"
-    CUR_SIGN_KEY="${CUR_SIGN_KEY%\"}"; CUR_SIGN_KEY="${CUR_SIGN_KEY#\"}"
-    CUR_SIGN_KEY="${CUR_SIGN_KEY%\'}"; CUR_SIGN_KEY="${CUR_SIGN_KEY#\'}"
+    for var in BACKUP_SIGN_KEY BACKUP_SEALED_PASSPHRASE; do
+      val="$(sed -n "s/^${var}=//p" "$COMPOSE_DIR/.env" | head -1)"
+      val="${val%\"}"; val="${val#\"}"
+      val="${val%\'}"; val="${val#\'}"
+      if [[ -n "$val" ]]; then
+        printf '%s=%s\n' "$var" "$val" >> "$CARRY"
+      fi
+    done
   fi
   install -m 0600 "$STAGE/env.backup" "$COMPOSE_DIR/.env"
-  if [[ -n "$CUR_SIGN_KEY" ]] && ! grep -q '^BACKUP_SIGN_KEY=' "$COMPOSE_DIR/.env"; then
-    printf 'BACKUP_SIGN_KEY=%s\n' "$CUR_SIGN_KEY" >> "$COMPOSE_DIR/.env"
-  fi
+  while IFS='=' read -r var val; do
+    [[ -n "$var" ]] || continue
+    if ! grep -q "^${var}=" "$COMPOSE_DIR/.env"; then
+      printf '%s=%s\n' "$var" "$val" >> "$COMPOSE_DIR/.env"
+      echo "   carried this host's $var forward (the archive deliberately does not carry it)"
+    fi
+  done < "$CARRY"
 fi
 
 if [[ -d "$STAGE/src-config" ]]; then
