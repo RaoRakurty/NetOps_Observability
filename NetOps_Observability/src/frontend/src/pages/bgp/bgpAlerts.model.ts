@@ -16,7 +16,15 @@ import type {
   PromInstantResponse,
 } from "../../services/api";
 
-export type ClassTone = { label: string; tone: string; detail: string };
+export type ClassTone = {
+  label: string;
+  /** The standard term for the same state, when the class IS a standard state.
+   *  Only origin validation has one (RFC 6811); the rest are our own vocabulary
+   *  and must not be given a protocol name they do not have. */
+  term?: string;
+  tone: string;
+  detail: string;
+};
 
 /**
  * Map an incident class onto its chip. Worst-first ordering is the API's; this
@@ -37,7 +45,7 @@ export function incidentTone(c: BgpIncidentClass | undefined): ClassTone {
       };
     case "rpki_invalid":
       return {
-        label: "Origin not authorised", tone: "var(--crit)",
+        label: "Origin not authorised", term: "RPKI invalid", tone: "var(--crit)",
         detail: "RPKI invalid — the announcement breaks a published ROA. A stale ROA and a hijack look identical here.",
       };
     case "bogon":

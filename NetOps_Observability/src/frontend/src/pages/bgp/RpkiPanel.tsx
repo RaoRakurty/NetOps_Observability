@@ -61,7 +61,7 @@ export function RpkiPanel({ resource }: { resource?: string }) {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
             {ORDER.filter((s) => summary[s] > 0).map((s) => {
               const t = rpkiStateTone(s);
-              return <Chip key={s} label={`${summary[s]} ${t.label}`} tone={t.tone} title={t.detail} />;
+              return <Chip key={s} label={`${summary[s]} ${t.label}`} term={t.term} tone={t.tone} title={t.detail} />;
             })}
             {data.from_watchlist && <Chip label="from your watchlist" title="These are the prefixes this tenant watches." />}
           </div>
@@ -87,7 +87,7 @@ export function RpkiPanel({ resource }: { resource?: string }) {
                 return (
                   <div key={r.prefix} className="bgp-row">
                     <span className="mono" style={{ minWidth: 160 }}>{r.prefix}</span>
-                    <Chip label={t.label} tone={t.tone} title={t.detail} />
+                    <Chip label={t.label} term={t.term} tone={t.tone} title={t.detail} />
                     {r.origin && <span className="fact-line">announced by {r.origin}</span>}
                     {r.roas?.length ? (
                       <span className="fact-line" title={r.roas.map((a) => `${a.prefix} → AS${a.origin} (maxLen ${a.max_length}, ${a.validity})`).join(" · ")}>

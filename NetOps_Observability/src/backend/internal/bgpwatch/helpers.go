@@ -48,6 +48,12 @@ func clip(s string, max int) string {
 // prefix, matching the API boundary's bgpNormalizeResource.
 func parsePrefix(s string) (netip.Prefix, error) {
 	s = strings.TrimSpace(s)
+	// Same refusal as the API boundary's bgpNormalizeResource: a zone id is not
+	// a routable resource, and netip would accept it as a bare address while
+	// dropping the zone and any mask beside it.
+	if strings.ContainsRune(s, '%') {
+		return netip.Prefix{}, errors.New("not a prefix: a zone id is not routable address space")
+	}
 	if p, err := netip.ParsePrefix(s); err == nil {
 		return p.Masked(), nil
 	}

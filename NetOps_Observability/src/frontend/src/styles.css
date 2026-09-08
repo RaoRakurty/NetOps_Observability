@@ -4623,6 +4623,12 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
 .cc-badge { font-family: var(--font-display); font-size: 12.5px; font-weight: 650; letter-spacing: 0.02em;
   text-transform: uppercase; padding: 3px 9px; border-radius: 6px; border: 1px solid currentColor; background: color-mix(in srgb, currentColor 11%, transparent); white-space: nowrap; }
 .cc-board .cc-badge { text-transform: none; }
+/* The standard term beside a plain-language state, inside the same chip
+   (owner, 2026-09-08: "Origin authorised · RPKI valid"). Quieter than the
+   label and never uppercased — it is a name to quote to an upstream, not a
+   second verdict — but it is ON the chip, not in a tooltip. */
+.cc-badge-term { font-size: 11.5px; font-weight: 550; letter-spacing: 0.01em; text-transform: none;
+  opacity: 0.72; font-family: var(--font-display); }
 .cc-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-muted); }
 .cc-h1-row { display: flex; align-items: center; gap: 2px; }
 .cc-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
@@ -6218,7 +6224,12 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
   background: var(--panel); border: 1px solid var(--panel-border);
   border-radius: var(--r-4); padding: 10px 12px; margin: 12px 0;
 }
-.bgp-find { display: flex; gap: 8px; flex: 1 1 340px; }
+/* The lookup and, under it, what the entry was actually checked as (or why
+   it was refused). The note belongs under the input it is about, so the
+   column — not the form — is the flex child of the selector row. */
+.bgp-find-wrap { display: flex; flex-direction: column; gap: 4px; flex: 1 1 340px; min-width: 0; }
+.bgp-find-wrap .fact-line { margin: 0; }
+.bgp-find { display: flex; gap: 8px; }
 /* Form controls come from the shared kit at 13px; on this page they are read,
    typed into and re-read at 2am, so they join the page's 14px body scale. */
 .bgp-page .input,

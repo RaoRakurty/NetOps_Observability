@@ -70,7 +70,7 @@ export function PrefixesPanel({
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
             {ORDER.filter((c) => summary[c] > 0).map((c) => {
               const t = incidentTone(c);
-              return <Chip key={c} label={`${summary[c]} ${t.label}`} tone={t.tone} title={t.detail} />;
+              return <Chip key={c} label={`${summary[c]} ${t.label}`} term={t.term} tone={t.tone} title={t.detail} />;
             })}
           </div>
         )}
@@ -96,11 +96,11 @@ export function PrefixesPanel({
                     onClick={() => onInvestigate(wentry.resource)}>
                     {wentry.resource}
                   </button>
-                  {inc ? <Chip label={t.label} tone={t.tone} title={t.detail} />
+                  {inc ? <Chip label={t.label} term={t.term} tone={t.tone} title={t.detail} />
                        : <Chip label="Not checked yet" tone="var(--muted)" title="No automatic check has run on this prefix yet — this is not a clean result." />}
                   {inc?.also?.map((c) => {
                     const at = incidentTone(c);
-                    return <Chip key={c} label={`also ${at.label}`} tone={at.tone} title={at.detail} />;
+                    return <Chip key={c} label={`also ${at.label}`} term={at.term} tone={at.tone} title={at.detail} />;
                   })}
                   {inc?.learned_origin && (
                     <Chip label="guessed baseline" tone="var(--muted)"
@@ -178,7 +178,7 @@ export function PrefixesPanel({
                       <td>
                         {a.resolved
                           ? <Chip label="Cleared" tone="var(--ok)" title="The condition no longer holds." />
-                          : <Chip label={t.label} tone={t.tone} title={t.detail} />}
+                          : <Chip label={t.label} term={t.term} tone={t.tone} title={t.detail} />}
                       </td>
                       <td className="fact-line">{a.severity}</td>
                       <td className="fact-line">{a.summary}</td>

@@ -207,6 +207,16 @@ var bgpASNRe = regexp.MustCompile(`^[Aa][Ss]([0-9]{1,10})$`)
 // URLs and the store.
 func bgpNormalizeResource(raw string) (resource, kind string) {
 	r := strings.TrimSpace(raw)
+	// A zone id ("fe80::1%eth0") is never a routable BGP resource, and netip is
+	// lopsided about it: ParsePrefix refuses a zone outright, while ParseAddr
+	// accepts one and then silently drops BOTH the zone and anything after it —
+	// so "fe80::1%eth0/64" would fall through to the bare-address branch and be
+	// stored as "fe80::1/128", an answer about a different thing than was typed.
+	// Refuse it here instead, which also keeps the client's normalisation
+	// (pages/bgp/prefix.ts) an exact mirror of this one.
+	if strings.ContainsRune(r, '%') {
+		return "", ""
+	}
 	if m := bgpASNRe.FindStringSubmatch(r); m != nil {
 		n, err := strconv.ParseUint(m[1], 10, 32)
 		if err != nil {

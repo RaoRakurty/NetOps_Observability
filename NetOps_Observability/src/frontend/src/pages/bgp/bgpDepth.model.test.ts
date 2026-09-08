@@ -42,6 +42,30 @@ describe("rpkiStateTone", () => {
   it("valid is the only state that reads as protected", () => {
     expect(rpkiStateTone("valid").tone).toBe("var(--ok)");
   });
+
+  // Owner, 2026-09-08: BOTH words. The plain sentence leads, and the RFC 6811
+  // term rides beside it in the same chip — it is the interoperable name an
+  // admin quotes to an upstream, and a name you must hover to find is a name you
+  // do not have on an outage call.
+  it("carries the RFC 6811 term beside the plain label, in the chip", () => {
+    expect(rpkiStateTone("valid")).toMatchObject({ label: "Origin authorised", term: "RPKI valid" });
+    expect(rpkiStateTone("invalid", "origin_as")).toMatchObject({ label: "Wrong origin AS", term: "RPKI invalid" });
+    expect(rpkiStateTone("invalid", "max_length")).toMatchObject({ label: "Too specific", term: "RPKI invalid" });
+    expect(rpkiStateTone("invalid")).toMatchObject({ label: "Not authorised", term: "RPKI invalid" });
+    expect(rpkiStateTone("unknown")).toMatchObject({ label: "Not protected", term: "no ROA (RPKI not found)" });
+  });
+
+  it("gives 'could not check' no RFC 6811 term — it is not one of the three states", () => {
+    expect(rpkiStateTone("unavailable").term).toBeUndefined();
+    expect(rpkiStateTone(undefined).term).toBeUndefined();
+  });
+
+  it("keeps the plain label free of the acronym — the term is a separate span", () => {
+    for (const t of [rpkiStateTone("valid"), rpkiStateTone("invalid", "origin_as"), rpkiStateTone("unknown")]) {
+      expect(t.label).not.toMatch(/RPKI|ROA/);
+      expect(t.term).toMatch(/RPKI|ROA/);
+    }
+  });
 });
 
 describe("rpkiSummary", () => {

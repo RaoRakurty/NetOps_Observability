@@ -78,6 +78,30 @@ describe("RpkiPanel", () => {
     expect(screen.queryByText(/Authorised/)).toBeNull();
   });
 
+  // Owner, 2026-09-08: "which is better, 'RPKI valid' or 'Origin authorised'?"
+  // — BOTH, plain words first with the standard term beside them, because RFC
+  // 6811's vocabulary is the interoperable name a NOC admin needs when talking
+  // to an upstream. It is IN the chip, not in a tooltip.
+  it("pairs the plain state with its RFC 6811 term in every row", async () => {
+    bgpRpki.mockResolvedValue({
+      from_watchlist: true, truncated: false, max_prefixes: 50,
+      results: [
+        { prefix: "203.0.113.0/24", origin: "AS64500", state: "invalid", reason: "origin_as", fetched_at: "" },
+        { prefix: "198.51.100.0/24", state: "unknown", fetched_at: "" },
+        { prefix: "193.0.0.0/21", origin: "AS3333", state: "valid", fetched_at: "" },
+        { prefix: "192.0.2.0/24", state: "unavailable", error: "validator 503", fetched_at: "" },
+      ],
+    });
+    render(<RpkiPanel />);
+    await waitFor(() => expect(screen.getByText("Wrong origin AS")).toBeInTheDocument());
+    const chip = (label: string) => screen.getAllByText(label)[0].closest(".cc-badge") as HTMLElement;
+    expect(chip("Wrong origin AS").textContent).toBe("Wrong origin AS · RPKI invalid");
+    expect(chip("Not protected").textContent).toBe("Not protected · no ROA (RPKI not found)");
+    expect(chip("Origin authorised").textContent).toBe("Origin authorised · RPKI valid");
+    // "Could not check" is not an RFC 6811 state and is never dressed as one.
+    expect(chip("Could not check").textContent).toBe("Could not check");
+  });
+
   it("says the sweep was truncated when the watchlist is past the cap", async () => {
     bgpRpki.mockResolvedValue({ from_watchlist: true, truncated: true, max_prefixes: 50, results: [] });
     render(<RpkiPanel />);

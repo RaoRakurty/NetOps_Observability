@@ -77,6 +77,7 @@ import AskIris from "../components/AskIris";
 import { operatorError } from "../lib/errors";
 import { Kpi, Kpis, Section, SubBlock } from "./bgp/Section";
 import { incidentTone } from "./bgp/bgpAlerts.model";
+import { normalizeResource } from "./bgp/prefix";
 // Each panel owns its own fetch and its own failure, so a dead geofeed or an
 // unreachable validator never blanks the page. Lazy so the React Flow graph and
 // the heavy tables never ride in this route's first chunk.
@@ -102,41 +103,58 @@ function PanelFallback({ label }: { label: string }) {
 
 // ── small pure helpers (exported for tests) ──────────────────────────────────
 
-export type RpkiTone = { label: string; tone: string; detail: string };
+export type RpkiTone = {
+  label: string;
+  /**
+   * The RFC 6811 term for the same state ("RPKI valid" / "RPKI invalid" /
+   * "no ROA (RPKI not found)"), rendered as small secondary text INSIDE the
+   * chip. Absent for "we could not check", which is not an RFC 6811 state and
+   * must never be dressed as one.
+   */
+  term?: string;
+  tone: string;
+  detail: string;
+};
 
 /**
  * Map a RIPEstat rpki-validation status onto the page's health chip.
  *
- * The LABEL is the NOC admin's sentence; "RPKI" and "ROA" live in the tooltip.
- * The wire status strings are untouched — only the wording an operator reads.
+ * BOTH WORDS, PLAIN ONE FIRST (owner, 2026-09-08). The label is the NOC admin's
+ * sentence — "Origin authorised" says what happened without a protocol lesson.
+ * The `term` beside it is the RFC 6811 vocabulary (valid / invalid / not
+ * found), and it is on the chip rather than in a tooltip because it is the
+ * INTEROPERABLE name: it is the word an admin has to say to an upstream, a RIR
+ * or a TAC engineer, and a name you have to hover to find is a name you do not
+ * have during an outage call. The longer explanation stays in the tooltip and
+ * behind AskIris; the wire status strings are untouched.
  */
 export function rpkiVerdict(status: string | undefined, origin?: string): RpkiTone {
   switch ((status || "").toLowerCase()) {
     case "valid":
       return {
-        label: "Origin authorised", tone: "var(--ok)",
+        label: "Origin authorised", term: "RPKI valid", tone: "var(--ok)",
         detail: `RPKI valid — a ROA authorises this announcement${origin ? ` by ${origin}` : ""}.`,
       };
     case "invalid":
       return {
-        label: "Origin not authorised", tone: "var(--crit)",
+        label: "Origin not authorised", term: "RPKI invalid", tone: "var(--crit)",
         detail: "RPKI invalid — the announcement breaks a published ROA. Possible hijack, or a stale ROA of your own.",
       };
     case "invalid_asn":
       return {
-        label: "Wrong origin AS", tone: "var(--crit)",
+        label: "Wrong origin AS", term: "RPKI invalid", tone: "var(--crit)",
         detail: "RPKI invalid — a ROA exists but authorises a different origin AS.",
       };
     case "invalid_length":
       return {
-        label: "Prefix too specific", tone: "var(--crit)",
+        label: "Prefix too specific", term: "RPKI invalid", tone: "var(--crit)",
         detail: "RPKI invalid — more specific than the ROA's maxLength allows.",
       };
     case "unknown":
     case "not-found":
     case "notfound":
       return {
-        label: "Not protected", tone: "var(--muted)",
+        label: "Not protected", term: "no ROA (RPKI not found)", tone: "var(--muted)",
         detail: "No ROA covers this prefix — publishing one is what lets the internet drop a hijack of it.",
       };
     default:
@@ -402,6 +420,11 @@ export default function BgpOps() {
   const [whoisAt, setWhoisAt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // What the typed entry was actually checked as, when that is not what was
+  // typed (1.1.1.1/24 → 1.1.1.0/24), and the refusal when it was neither a
+  // prefix nor an AS. Both sit under the input, where the entry is.
+  const [checkedAs, setCheckedAs] = useState("");
+  const [queryErr, setQueryErr] = useState("");
 
   const loadWatch = useCallback(() => {
     // The watchlist call carries the incident class per prefix (tracker #5), so
@@ -459,6 +482,28 @@ export default function BgpOps() {
       .catch((e: Error) => { if (fresh()) setErr(operatorError(e, "The lookup could not be completed.")); })
       .finally(() => { if (fresh()) setBusy(false); });
   }, []);
+
+  /**
+   * The INPUT BOUNDARY. Everything an operator types passes through here, and
+   * nothing reaches the API that has not been normalised the way the server
+   * normalises it (`bgpNormalizeResource`, src/backend/bgp_ops.go).
+   *
+   * A host address carrying a mask (`1.1.1.1/24`) is checked as its network
+   * address (`1.1.1.0/24`) and the page SAYS so — answering about a different
+   * string than the one on screen is how an outage call goes wrong. Anything
+   * that is neither a prefix nor an AS is refused BY NAME rather than sent
+   * upstream to fail there.
+   */
+  const runQuery = useCallback((raw: string) => {
+    const n = normalizeResource(raw);
+    if (n.kind === "invalid") {
+      setCheckedAs(""); setQueryErr(n.error);
+      return;
+    }
+    setQueryErr("");
+    setCheckedAs(n.changed ? n.resource : "");
+    investigate(n.resource);
+  }, [investigate]);
 
   // Open on the worst watched resource, ONCE. After that the selection is the
   // operator's — a later poll must never move them off what they are reading.
@@ -523,22 +568,31 @@ export default function BgpOps() {
       {/* Selector: the watchlist as chips plus the free-form lookup. Picking a
           chip drives EVERY section below — that is the whole point of the page. */}
       <div className="bgp-selector">
-        <form
-          className="bgp-find"
-          onSubmit={(e) => { e.preventDefault(); investigate(query); }}
-        >
-          <input
-            className="input"
-            style={{ flex: 1, fontFamily: "var(--font-mono)" }}
-            placeholder="203.0.113.0/24 · 2001:db8::/32 · AS64500"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label="Prefix or ASN"
-          />
-          <button className="btn-accent" type="submit" disabled={busy}>
-            <Icon name="search" size={14} /> {busy ? "Checking…" : "Check it"}
-          </button>
-        </form>
+        <div className="bgp-find-wrap">
+          <form
+            className="bgp-find"
+            onSubmit={(e) => { e.preventDefault(); runQuery(query); }}
+          >
+            <input
+              className="input"
+              style={{ flex: 1, fontFamily: "var(--font-mono)" }}
+              placeholder="203.0.113.0/24 · 2001:db8::/32 · AS64500"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Prefix or ASN"
+            />
+            <button className="btn-accent" type="submit" disabled={busy}>
+              <Icon name="search" size={14} /> {busy ? "Checking…" : "Check it"}
+            </button>
+          </form>
+          {/* What the entry was actually checked as, or why it was refused —
+              under the box it is about, never instead of the entry itself. */}
+          {queryErr
+            ? <p className="fact-line fact-bad" role="alert">{queryErr}</p>
+            : checkedAs
+              ? <p className="fact-line">Checked as <span className="mono">{checkedAs}</span></p>
+              : null}
+        </div>
         <div className="bgp-chips" aria-label="Watched resources">
           {watch.length === 0 && (
             <span className="fact-line">Nothing is watched yet. Check a prefix, then Watch it.</span>
@@ -547,7 +601,7 @@ export default function BgpOps() {
             const t = incidents[w.resource] ? incidentTone(incidents[w.resource].class) : null;
             return (
               <button key={w.resource} className={`chip-btn ${w.resource === active ? "chip-btn-on" : ""}`}
-                title={w.note || w.resource} onClick={() => { setQuery(w.resource); investigate(w.resource); }}>
+                title={w.note || w.resource} onClick={() => { setQuery(w.resource); runQuery(w.resource); }}>
                 <span className="mono">{w.resource}</span>
                 {t && t.label !== "Healthy" && <span className="bgp-chip-dot" style={{ background: t.tone }} title={t.detail} />}
               </button>
@@ -617,7 +671,7 @@ export default function BgpOps() {
                     <AskIris topic="bgp.visibility" label="Seen by collectors" />
                   </>
                 )}
-                {status.kind === "prefix" && <Chip label={rpki.label} tone={rpki.tone} title={rpki.detail} />}
+                {status.kind === "prefix" && <Chip label={rpki.label} term={rpki.term} tone={rpki.tone} title={rpki.detail} />}
               </div>
               {activeIncident?.summary && <p className="fact-line" style={{ margin: "6px 0 0" }}>{activeIncident.summary}</p>}
               {(status.routing_status_error || status.rpki_error) && (
@@ -813,7 +867,7 @@ export default function BgpOps() {
           <PrefixesPanel
             watch={watch} incidents={incidents} incidentsNote={incidentsNote}
             status={alertStatus} alerts={alerts} active={active} updatedAt={watchAt}
-            onInvestigate={(r) => { setQuery(r); investigate(r); }}
+            onInvestigate={(r) => { setQuery(r); runQuery(r); }}
           />
         </Suspense>
 

@@ -99,6 +99,44 @@ describe("PrefixesPanel", () => {
     expect(screen.getByText(/Seen by 40 of 320/)).toBeTruthy();
   });
 
+  // Owner, 2026-09-08: plain words first, the RFC 6811 term beside them, in the
+  // chip. The watched-prefix row reads the same way the health headline does —
+  // one state must not have two spellings on one screen.
+  it("pairs the plain state with its RFC 6811 term in a watched-prefix row", () => {
+    render(
+      <PrefixesPanel
+        watch={[entry("193.0.0.0/21")]}
+        incidents={{
+          "193.0.0.0/21": incident({
+            class: "rpki_invalid", severity: "critical",
+            summary: "193.0.0.0/21 is announced by an AS no ROA authorises.",
+          }),
+        }}
+        status={{ enabled: true, runs: 1 }} alerts={[]} active="" onInvestigate={() => {}}
+      />,
+    );
+    const chip = screen.getAllByText("Origin not authorised")[0].closest(".cc-badge") as HTMLElement;
+    expect(chip.textContent).toBe("Origin not authorised · RPKI invalid");
+    // The classes that are OUR vocabulary get no protocol name they do not have.
+    expect(screen.queryByText(/Origin changed ·/)).toBeNull();
+  });
+
+  it("carries the same pairing into the alert history", () => {
+    render(
+      <PrefixesPanel
+        watch={[entry("193.0.0.0/21")]} incidents={{}} status={{ enabled: true, runs: 1 }}
+        alerts={[{
+          id: "a1", resource: "193.0.0.0/21", class: "rpki_invalid", severity: "critical",
+          summary: "No ROA authorises the announcing AS.", fired_at: "2026-09-08T09:00:00Z",
+          resolved: false,
+        }]}
+        active="" onInvestigate={() => {}}
+      />,
+    );
+    const chip = screen.getAllByText("Origin not authorised")[0].closest(".cc-badge") as HTMLElement;
+    expect(chip.textContent).toBe("Origin not authorised · RPKI invalid");
+  });
+
   it("shows a corroboration shortfall rather than hiding the near-miss", () => {
     render(
       <PrefixesPanel

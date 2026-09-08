@@ -19,27 +19,38 @@ import type {
 
 // ── RPKI ────────────────────────────────────────────────────────────────────
 
-export type RpkiTone = { label: string; tone: string; detail: string };
+export type RpkiTone = {
+  label: string;
+  /** The RFC 6811 term for the same state, small and beside the label in the
+   *  chip. Omitted for "could not check", which is not an RFC 6811 state. */
+  term?: string;
+  tone: string;
+  detail: string;
+};
 
 /**
  * Map an API RPKI state (+reason) onto the page's chip. `unavailable` is its
  * OWN presentation — it is not a verdict and must never look like one.
  *
- * Labels are the NOC admin's words; "RPKI", "ROA" and "maxLength" live in the
- * tooltip (owner, 2026-09-06). The wire state is untouched.
+ * BOTH WORDS (owner, 2026-09-08): the label is the NOC admin's sentence, and
+ * `term` carries the RFC 6811 vocabulary (valid / invalid / not found) beside
+ * it in the same chip — the interoperable name an admin quotes to an upstream.
+ * The same pairing as the health headline's `rpkiVerdict`, so a row and the
+ * verdict above it read alike. The longer explanation stays in the tooltip; the
+ * wire state is untouched.
  */
 export function rpkiStateTone(state: BgpRpkiState | undefined, reason?: string, error?: string): RpkiTone {
   switch (state) {
     case "valid":
-      return { label: "Authorised", tone: "var(--ok)", detail: "RPKI valid — a ROA authorises this origin AS to announce this prefix." };
+      return { label: "Origin authorised", term: "RPKI valid", tone: "var(--ok)", detail: "RPKI valid — a ROA authorises this origin AS to announce this prefix." };
     case "invalid":
       if (reason === "origin_as")
-        return { label: "Wrong origin AS", tone: "var(--crit)", detail: "RPKI invalid — a ROA exists but authorises a DIFFERENT origin AS. Hijack, or a stale ROA of your own." };
+        return { label: "Wrong origin AS", term: "RPKI invalid", tone: "var(--crit)", detail: "RPKI invalid — a ROA exists but authorises a DIFFERENT origin AS. Hijack, or a stale ROA of your own." };
       if (reason === "max_length")
-        return { label: "Too specific", tone: "var(--crit)", detail: "RPKI invalid — more specific than the ROA's maxLength allows, often an accidental de-aggregation." };
-      return { label: "Not authorised", tone: "var(--crit)", detail: "RPKI invalid — the announcement breaks a published ROA." };
+        return { label: "Too specific", term: "RPKI invalid", tone: "var(--crit)", detail: "RPKI invalid — more specific than the ROA's maxLength allows, often an accidental de-aggregation." };
+      return { label: "Not authorised", term: "RPKI invalid", tone: "var(--crit)", detail: "RPKI invalid — the announcement breaks a published ROA." };
     case "unknown":
-      return { label: "Not protected", tone: "var(--muted)", detail: "No ROA covers this prefix. Publishing one is what lets the internet drop a hijack of it." };
+      return { label: "Not protected", term: "no ROA (RPKI not found)", tone: "var(--muted)", detail: "No ROA covers this prefix. Publishing one is what lets the internet drop a hijack of it." };
     default:
       return { label: "Could not check", tone: "var(--warn)", detail: error || "The validator could not be reached — this is not a verdict." };
   }

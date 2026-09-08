@@ -34,6 +34,21 @@ func TestBGPNormalizeResource(t *testing.T) {
 		{"193.0.0.0/21", "193.0.0.0/21", "prefix"},
 		{" 193.0.0.0/21 ", "193.0.0.0/21", "prefix"},
 		{"193.0.7.7/21", "193.0.0.0/21", "prefix"}, // canonicalized to the masked network
+		// Owner, 2026-09-08: a host address carrying a mask is checked as its
+		// NETWORK address, and the page says so ("Checked as 1.1.1.0/24"). The
+		// client mirrors this table in src/frontend/src/pages/bgp/prefix.test.ts,
+		// so the string an operator is shown is the string this boundary answers
+		// about.
+		{"1.1.1.1/24", "1.1.1.0/24", "prefix"},
+		{"2001:db8::1/32", "2001:db8::/32", "prefix"},
+		{"::ffff:1.1.1.1/120", "::ffff:1.1.1.0/120", "prefix"},
+		{"10.1.2.3/31", "10.1.2.2/31", "prefix"},
+		{"10.1.2.3/0", "0.0.0.0/0", "prefix"},
+		// A zone id is not routable address space. netip would take it as a bare
+		// address and DROP both the zone and the mask beside it, so it is refused
+		// here rather than silently answered about as something else.
+		{"fe80::1%eth0", "", ""},
+		{"fe80::1%eth0/64", "", ""},
 		{"2001:db8::/32", "2001:db8::/32", "prefix"},
 		{"203.0.113.9", "203.0.113.9/32", "prefix"}, // bare address → host prefix
 		{"2001:db8::1", "2001:db8::1/128", "prefix"},

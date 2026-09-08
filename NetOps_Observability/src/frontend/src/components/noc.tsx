@@ -35,8 +35,19 @@ export function NocHeader({ title, subtitle, topic, chips, children }: {
 }
 
 // ── Status chip ─────────────────────────────────────────────────────────────────
-export function Chip({ label, tone = "var(--fg-subtle)", title }: { label: string; tone?: string; title?: string }) {
-  return <span className="cc-badge" style={{ color: tone, borderColor: tone }} title={title}>{label}</span>;
+// `term` is the standard/protocol name for the SAME state, carried inside the
+// chip as small secondary text (owner, 2026-09-08: plain words first, with the
+// interoperable term beside them — "Origin authorised · RPKI valid"). It is not
+// a tooltip: a name you must hover to find is a name you do not have on an
+// outage call. Callers that have no standard term simply omit it.
+export function Chip({ label, tone = "var(--fg-subtle)", title, term }: {
+  label: string; tone?: string; title?: string; term?: string;
+}) {
+  return (
+    <span className="cc-badge" style={{ color: tone, borderColor: tone }} title={title}>
+      {label}{term ? <span className="cc-badge-term">{` · ${term}`}</span> : null}
+    </span>
+  );
 }
 
 // ── Live pulse chip ─────────────────────────────────────────────────────────────

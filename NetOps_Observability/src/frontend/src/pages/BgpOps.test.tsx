@@ -24,6 +24,23 @@ describe("rpkiVerdict", () => {
     expect(rpkiVerdict("unknown").label).toBe("Not protected");
     expect(rpkiVerdict("unknown").detail).toMatch(/ROA/);
   });
+  // Owner, 2026-09-08, asked which is better — "RPKI valid" or "Origin
+  // authorised". The answer on record is BOTH: plain words first, with the
+  // standard term beside them, because RFC 6811's vocabulary (valid / invalid /
+  // not found) is the interoperable name a NOC admin needs the moment they pick
+  // up the phone to an upstream. The term is a field of its own so the chip can
+  // render it as small secondary text rather than a tooltip.
+  it("carries the RFC 6811 term beside every state that has one", () => {
+    expect(rpkiVerdict("valid")).toMatchObject({ label: "Origin authorised", term: "RPKI valid" });
+    expect(rpkiVerdict("invalid")).toMatchObject({ label: "Origin not authorised", term: "RPKI invalid" });
+    expect(rpkiVerdict("invalid_asn")).toMatchObject({ label: "Wrong origin AS", term: "RPKI invalid" });
+    expect(rpkiVerdict("invalid_length")).toMatchObject({ label: "Prefix too specific", term: "RPKI invalid" });
+    expect(rpkiVerdict("unknown")).toMatchObject({ label: "Not protected", term: "no ROA (RPKI not found)" });
+    expect(rpkiVerdict("not-found").term).toBe("no ROA (RPKI not found)");
+    // "We could not check" is not an RFC 6811 state and never borrows its words.
+    expect(rpkiVerdict(undefined).term).toBeUndefined();
+  });
+
   it("no chip label shouts a protocol acronym at the operator", () => {
     for (const s of ["valid", "invalid", "invalid_asn", "invalid_length", "unknown", undefined]) {
       expect(rpkiVerdict(s).label).not.toMatch(/RPKI|ROA/);
@@ -566,6 +583,105 @@ describe("verdict bar", () => {
       return el;
     });
     expect(within(verdict).queryByText(/Origin authorised/)).toBeNull();
+  });
+});
+
+describe("origin validation reads in both vocabularies", () => {
+  it.each([
+    ["valid", "Origin authorised · RPKI valid"],
+    ["invalid_asn", "Wrong origin AS · RPKI invalid"],
+    ["unknown", "Not protected · no ROA (RPKI not found)"],
+  ])("renders %s as ONE chip reading %s", async (status, text) => {
+    bgpStatus.mockResolvedValue({ resource: "203.0.113.0/24", kind: "prefix", rpki: { status } });
+    const { container } = render(<BgpOps />);
+    submitQuery("203.0.113.0/24");
+    const verdict = await waitFor(() => {
+      const el = container.querySelector('[data-section="verdict"]') as HTMLElement;
+      expect(within(el).getByText("203.0.113.0/24", { selector: "span.device-name" })).toBeTruthy();
+      return el;
+    });
+    const chips = [...verdict.querySelectorAll(".cc-badge")].map((c) => c.textContent);
+    expect(chips).toContain(text);
+  });
+
+  it("keeps the tooltip explanation the term does not replace", async () => {
+    bgpStatus.mockResolvedValue({ resource: "203.0.113.0/24", kind: "prefix", rpki: { status: "unknown" } });
+    const { container } = render(<BgpOps />);
+    submitQuery("203.0.113.0/24");
+    const chip = await waitFor(() => {
+      const el = container.querySelector('[data-section="verdict"]') as HTMLElement;
+      const c = [...el.querySelectorAll(".cc-badge")].find((x) => x.textContent?.startsWith("Not protected"));
+      expect(c).toBeTruthy();
+      return c as HTMLElement;
+    });
+    expect(chip.getAttribute("title")).toMatch(/No ROA covers this prefix/);
+  });
+});
+
+// ── THE INPUT BOUNDARY (owner, 2026-09-08) ──────────────────────────────────
+//
+// "1.1.1.1/24" is how an operator writes down "this address, in that block".
+// The thing the internet routes is the network address, so the page checks
+// 1.1.1.0/24 — and SAYS it did, because a screen that answers about a different
+// string than the one in the box is how an outage call goes wrong. The same
+// normalisation the API applies (bgpNormalizeResource, src/backend/bgp_ops.go);
+// the case table lives in src/pages/bgp/prefix.test.ts.
+
+describe("the prefix input is normalised before anything is checked", () => {
+  beforeEach(() => bgpStatus.mockImplementation((r: string) => Promise.resolve({ resource: r, kind: "prefix" as const })));
+
+  it("checks a host address carrying a mask as its network address, and says so", async () => {
+    render(<BgpOps />);
+    await screen.findByLabelText("Prefix or ASN");
+    submitQuery("1.1.1.1/24");
+    await waitFor(() => expect(bgpStatus).toHaveBeenCalledWith("1.1.1.0/24"));
+    expect(screen.getByText(/Checked as/).textContent).toBe("Checked as 1.1.1.0/24");
+    // What the operator typed stays in the box; the note is what changed.
+    expect((screen.getByLabelText("Prefix or ASN") as HTMLInputElement).value).toBe("1.1.1.1/24");
+  });
+
+  it("does the same for IPv6, in the canonical text form", async () => {
+    render(<BgpOps />);
+    await screen.findByLabelText("Prefix or ASN");
+    submitQuery("2001:0DB8::1/32");
+    await waitFor(() => expect(bgpStatus).toHaveBeenCalledWith("2001:db8::/32"));
+    expect(screen.getByText(/Checked as/).textContent).toBe("Checked as 2001:db8::/32");
+  });
+
+  it("reads a bare address as the host prefix it is", async () => {
+    render(<BgpOps />);
+    await screen.findByLabelText("Prefix or ASN");
+    submitQuery("203.0.113.9");
+    await waitFor(() => expect(bgpStatus).toHaveBeenCalledWith("203.0.113.9/32"));
+    expect(screen.getByText(/Checked as/).textContent).toBe("Checked as 203.0.113.9/32");
+  });
+
+  it("says nothing when the entry is already the thing that was checked", async () => {
+    render(<BgpOps />);
+    await screen.findByLabelText("Prefix or ASN");
+    submitQuery("203.0.113.0/24");
+    await waitFor(() => expect(bgpStatus).toHaveBeenCalledWith("203.0.113.0/24"));
+    expect(screen.queryByText(/Checked as/)).toBeNull();
+  });
+
+  it("refuses an entry that is neither a prefix nor an AS, BY NAME, without asking the API", async () => {
+    render(<BgpOps />);
+    await screen.findByLabelText("Prefix or ASN");
+    submitQuery("1.1.1.1/33");
+    const refusal = await screen.findByRole("alert");
+    expect(refusal.textContent).toContain("1.1.1.1/33");
+    expect(refusal.textContent).toMatch(/not a prefix or an AS number/);
+    expect(bgpStatus).not.toHaveBeenCalled();
+  });
+
+  it("clears the refusal once a readable entry is typed", async () => {
+    render(<BgpOps />);
+    await screen.findByLabelText("Prefix or ASN");
+    submitQuery("3333");
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    submitQuery("1.1.1.1/24");
+    await waitFor(() => expect(bgpStatus).toHaveBeenCalledWith("1.1.1.0/24"));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 
