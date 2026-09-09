@@ -48,6 +48,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"netops/backend/internal/asciifold"
 )
 
 // sqlPlaceholder stands in for a runtime fragment (a variable, a helper call, a
@@ -243,10 +245,13 @@ func splitSQLScopes(sql string) []string {
 // the statement — the text an alias would be substituted into.
 func aliasResolvingText(sql string) string {
 	var b strings.Builder
-	upper := strings.ToUpper(sql)
+	// asciifold, not strings.Index(strings.ToUpper(sql), …): the offset is used
+	// to slice sql, and ToUpper is not length preserving (every byte of invalid
+	// UTF-8 becomes a three-byte U+FFFD). A guard that reads the wrong clause
+	// text passes statements it should have failed.
 	for _, kw := range aliasResolvingClauses {
-		for i := 0; ; {
-			j := strings.Index(upper[i:], kw)
+		for i := 0; i < len(sql); {
+			j := asciifold.Index(sql[i:], kw)
 			if j < 0 {
 				break
 			}
@@ -380,6 +385,29 @@ func TestNoSQLBuilderShadowsATypedColumn(t *testing.T) {
 	if total > 0 {
 		t.Logf("%d alias-shadowing site(s) — see dda24f37 / 1c402b5c for the two sanctioned fixes "+
 			"(rename the alias when the name is internal; table-qualify the clause when the name is the wire field)", total)
+	}
+}
+
+// The guard reads clause text by INDEX, so its offsets must be measured on the
+// statement it slices. It used to index a strings.ToUpper copy, and ToUpper is
+// not length preserving: every byte of invalid UTF-8 becomes a three-byte
+// U+FFFD. A guard that slices at the wrong offset reads the wrong clause and
+// passes a statement it should have failed, which is the one failure mode a
+// guard is not allowed to have.
+func TestAliasResolvingTextReadsTheClauseAtTheRightOffset(t *testing.T) {
+	// The invalid byte sits in a string literal, which is where a byte like
+	// this legitimately reaches a rendered statement.
+	sql := "SELECT toString(ts) AS ts FROM t WHERE note = '\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff' AND ts >= now() ORDER BY ts"
+	got := aliasResolvingText(sql) // must not panic
+	if !strings.Contains(got, "ts >= now()") {
+		t.Fatalf("the WHERE clause was read from the wrong offset: %q", got)
+	}
+	if !strings.Contains(got, "ts") {
+		t.Fatalf("the ORDER BY clause was lost: %q", got)
+	}
+	// And the guard still reaches its verdict on this statement.
+	if len(aliasShadowFindings(sql)) == 0 {
+		t.Errorf("the guard went blind on a statement that shadows ts: %q", sql)
 	}
 }
 

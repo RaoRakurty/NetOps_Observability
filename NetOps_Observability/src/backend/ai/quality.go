@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"netops/backend/internal/asciifold"
 )
 
 // quality.go — the reusable AI Response Quality Layer. It turns the engine's raw
@@ -122,9 +124,19 @@ func FormatMissingEvidence(lines []string) []string {
 	for _, l := range lines {
 		// Prefer the key after "needs <key>"; else the first snake_case token.
 		key := ""
-		if i := strings.LastIndex(strings.ToLower(l), "needs "); i >= 0 {
-			key = strings.TrimSpace(l[i+6:])
-			key = strings.Fields(key + " ")[0]
+		// asciifold, not strings.LastIndex(strings.ToLower(l), …): ToLower is
+		// not length preserving, so an offset measured on the lower-cased copy
+		// does not address l. It panicked on a line carrying U+023A, U+023E or
+		// invalid UTF-8, and short of a panic it cut the key at the wrong byte.
+		if i := asciifold.LastIndex(l, "needs "); i >= 0 {
+			// strings.Fields, then a length check. The old form was
+			// Fields(key + " ")[0], and a line ending exactly at "needs "
+			// makes that whole string whitespace: Fields returns nothing and
+			// the [0] panics. A one-space sentinel cannot make an index safe,
+			// because a space is not a field.
+			if f := strings.Fields(l[i+len("needs "):]); len(f) > 0 {
+				key = f[0]
+			}
 		}
 		if !reEvidenceKey.MatchString(key) {
 			if m := reEvidenceKey.FindString(strings.ToLower(l)); m != "" {

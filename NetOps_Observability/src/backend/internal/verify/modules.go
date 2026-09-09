@@ -39,6 +39,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/internal/asciifold"
 )
 
 // ---- case context: what a run knows about the case it verifies --------------
@@ -547,8 +549,16 @@ var (
 
 // stripBySuffix drops trailing " by <user>[ via <method>]" from cisco/juniper
 // change lines so the remainder is a bare timestamp.
+//
+// The offset comes from asciifold, not from strings.Index(strings.ToLower(s)).
+// ToLower is not length preserving — U+023A and U+023E grow by a byte each, and
+// every byte of invalid UTF-8 becomes a three-byte U+FFFD — so an offset taken
+// on the lower-cased copy does not address s. It PANICKED here: this runs on
+// untrusted device output inside the bare worker goroutine engine.go starts per
+// target, where a panic takes the whole process down. Same defect, same place
+// it bit internal/showparse.
 func stripBySuffix(s string) string {
-	if i := strings.Index(strings.ToLower(s), " by "); i >= 0 {
+	if i := asciifold.Index(s, " by "); i >= 0 {
 		return strings.TrimSpace(s[:i])
 	}
 	return strings.TrimSpace(s)
