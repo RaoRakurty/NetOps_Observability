@@ -4525,7 +4525,7 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
 
 /* theme picker (Operations Overview) — segmented control in the masthead */
 .fp-theme-pick { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; border: 1px solid var(--border); }
-.fp-theme-pick button { font: 600 11px/1 var(--fp-disp, inherit); letter-spacing: .04em; text-transform: uppercase;
+.fp-theme-pick button { font: 500 11px/1 var(--fp-disp, inherit); letter-spacing: .04em; text-transform: uppercase;
   padding: 5px 9px; border-radius: 6px; border: 0; background: transparent; color: var(--fg-subtle); cursor: pointer; }
 .fp-theme-pick button.on { background: var(--accent-soft); color: var(--accent); }
 
