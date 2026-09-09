@@ -1095,6 +1095,72 @@ type tenantIdPBody struct {
 	GroupsAttr     string               `json:"groups_attr,omitempty"`
 	AttrMappings   []ssoidp.AttrMapping `json:"attr_mappings,omitempty"`
 	RoleMappings   []ssoidp.RoleMapping `json:"role_mappings,omitempty"`
+
+	// Kind and Elevation are the ACCESS MODEL, and it is PLATFORM-GOVERNED
+	// (§3a rule 3): a platform administrator may bind an elevation door to one
+	// tenant, and this surface must never be able to turn it back into an
+	// ordinary standing door. They are POINTERS so an absent field is
+	// distinguishable from a submitted one: absent is carried forward from the
+	// stored record, and a submitted value that DISAGREES with the stored one
+	// is refused by name rather than ignored. Nothing here is ever written from
+	// the body — these fields exist only so a round-tripped record can be saved
+	// and a real change can be refused out loud.
+	Kind      *string           `json:"kind,omitempty"`
+	Elevation *ssoidp.Elevation `json:"elevation,omitempty"`
+}
+
+// tenantIdPAccessModel settles the access model of a tenant-admin save: the
+// STORED one, always, plus a loud refusal when the body asks for another.
+//
+// A blank/absent kind reads as standing, exactly as the stored record does, so
+// a client that never heard of the field saves normally. found=false is a
+// creation, and a creation is standing: making an elevation door is a platform
+// administrator's privilege, and the refusal for "you asked to create one" is
+// word-for-word the refusal for "you asked to convert a standing one", so the
+// answer never says whether the alias already exists.
+func tenantIdPAccessModel(in tenantIdPBody, existing ssoidp.Config, found bool) (string, ssoidp.Elevation, error) {
+	kind, elev := ssoidp.KindStanding, ssoidp.Elevation{}.Normalize()
+	if found {
+		kind, elev = existing.KindOrStanding(), existing.Elevation.Normalize()
+	}
+	if in.Kind != nil {
+		want := strings.ToLower(strings.TrimSpace(*in.Kind))
+		if want == "" {
+			want = ssoidp.KindStanding
+		}
+		if want != kind {
+			if kind == ssoidp.KindElevation {
+				return "", ssoidp.Elevation{}, errors.New("this is a just-in-time elevation connection: only a platform administrator can change its access model. Send the save without \"kind\" to keep the rest of your changes, or set \"enabled\" to false to switch the connection off")
+			}
+			return "", ssoidp.Elevation{}, errors.New("only a platform administrator can make a just-in-time elevation connection. Send the save without \"kind\" to store this as an ordinary sign-in connection")
+		}
+	}
+	if in.Elevation != nil && in.Elevation.Normalize() != elev {
+		return "", ssoidp.Elevation{}, errors.New("the time limits of a just-in-time elevation connection are set by a platform administrator. Send the save without \"elevation\" to keep the rest of your changes")
+	}
+	return kind, elev, nil
+}
+
+// auditTenantIdPRefusal records a refused tenant-admin write. A refusal is
+// evidence: an attempt to convert an elevation door into a standing one, or to
+// delete it so the alias can be re-made as one, is exactly the event an
+// investigator needs to see (§10 — no silent failures).
+func (s *server) auditTenantIdPRefusal(r *http.Request, c jwtClaims, action, reason, alias, tenantID string) {
+	logWarn("auth", "tenant sso idp write refused", map[string]any{
+		"reason": reason, "idp": alias, "path": r.URL.Path,
+	})
+	if s.audit == nil {
+		return
+	}
+	s.audit.Record(AuditEvent{
+		Actor:    c.Sub,
+		Tenant:   tenantID,
+		Method:   r.Method,
+		Path:     r.URL.Path,
+		Decision: "deny",
+		Remote:   auditClientIP(r),
+		Detail:   map[string]any{"action": action, "reason": reason, "idp": alias},
+	})
 }
 
 // tenantIdPScope resolves the realm a tenant-admin request acts in: the caller's
@@ -1196,7 +1262,7 @@ func (s *server) handleTenantIdPItem(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		s.handleTenantIdPPut(w, r, claims, alias)
 	case http.MethodDelete:
-		s.handleTenantIdPDelete(w, r, alias, tenantID, cross)
+		s.handleTenantIdPDelete(w, r, claims, alias, tenantID, cross)
 	default:
 		w.Header().Set("Allow", "GET, PUT, DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1243,8 +1309,19 @@ func (s *server) handleTenantIdPPut(w http.ResponseWriter, r *http.Request, clai
 	// An alias is a Keycloak-wide path segment: it can name only ONE connection
 	// on the whole broker. Taking one another tenant already holds answers 404,
 	// the same as editing theirs would — the caller learns nothing either way.
-	if existing, found := s.ssoIdPCfg.Get(alias); found && !s.tenantOwnsIdP(existing, tenantID, cross) {
+	existing, found := s.ssoIdPCfg.Get(alias)
+	if found && !s.tenantOwnsIdP(existing, tenantID, cross) {
 		http.NotFound(w, r)
+		return
+	}
+	// The access model comes from the STORED record, never from the body. Set()
+	// is a full replace, so a field this surface does not carry forward is a
+	// field this surface silently DELETES — which is how an elevation door
+	// became a standing one that hands out permanent roles.
+	kind, elev, err := tenantIdPAccessModel(in, existing, found)
+	if err != nil {
+		s.auditTenantIdPRefusal(r, claims, "sso.tenant_idp.access_model_refused", err.Error(), alias, tenantID)
+		writeError(w, http.StatusForbidden, err)
 		return
 	}
 	cfg := ssoidp.Config{
@@ -1252,6 +1329,7 @@ func (s *server) handleTenantIdPPut(w http.ResponseWriter, r *http.Request, clai
 		MetadataURL: in.MetadataURL, MetadataXML: in.MetadataXML, SigningCertPEM: in.SigningCertPEM,
 		DiscoveryURL: in.DiscoveryURL, ClientID: in.ClientID, ClientSecret: in.ClientSecret,
 		GroupsAttr: in.GroupsAttr, AttrMappings: in.AttrMappings, RoleMappings: in.RoleMappings,
+		Kind: kind, Elevation: elev, // carried forward — platform-governed, see above
 		TenantID: tenantID, // stamped from the token — the body cannot say otherwise
 	}
 	// LICENCE-BEGIN — SAML is in the LOCKED Enterprise set; OIDC is core. Gates
@@ -1270,8 +1348,14 @@ func (s *server) handleTenantIdPPut(w http.ResponseWriter, r *http.Request, clai
 		return
 	}
 	warnings, err := s.applySSOIdP(r, out)
+	if out.IsElevation() {
+		// Say it, rather than let the record quietly disagree with whoever just
+		// saved it: the response also carries kind and elevation in full.
+		warnings = append(warnings, "this is a just-in-time elevation connection: its access model and time limits are set by a platform administrator and were kept unchanged by this save")
+	}
 	s.recordIdentityAudit(r, claims, "sso.tenant_idp.save", map[string]any{
-		"idp": out.Alias, "protocol": out.Protocol, "enabled": out.Enabled, "tenant_id": out.TenantID,
+		"idp": out.Alias, "protocol": out.Protocol, "enabled": out.Enabled,
+		"tenant_id": out.TenantID, "kind": out.KindOrStanding(),
 	})
 	logInfo("auth", "tenant sso idp saved", map[string]any{
 		"alias": out.Alias, "protocol": out.Protocol, "enabled": out.Enabled, "applied": err == nil,
@@ -1291,15 +1375,24 @@ func (s *server) handleTenantIdPPut(w http.ResponseWriter, r *http.Request, clai
 }
 
 // handleTenantIdPDelete removes one of the caller's own connections.
-func (s *server) handleTenantIdPDelete(w http.ResponseWriter, r *http.Request, alias, tenantID string, cross bool) {
+func (s *server) handleTenantIdPDelete(w http.ResponseWriter, r *http.Request, claims jwtClaims, alias, tenantID string, cross bool) {
 	reg, found := s.tenantIdPOwned(alias, tenantID, cross)
 	if !found {
 		http.NotFound(w, r)
 		return
 	}
-	if claims, ok := userFrom(r.Context()); ok {
-		s.recordIdentityAudit(r, claims, "sso.tenant_idp.delete", map[string]any{"idp": alias, "tenant_id": reg.Realm()})
+	// Delete is the OTHER way to change an access model: remove the elevation
+	// door and re-create the same alias as a standing one, in two calls, with
+	// the same result the carry-forward above refuses in one. An elevation
+	// connection is a platform administrator's to remove; a tenant admin who
+	// needs it stopped can still set enabled=false on it.
+	if reg.IsElevation() {
+		reason := "this is a just-in-time elevation connection: a platform administrator manages it. Set \"enabled\" to false if you need it switched off"
+		s.auditTenantIdPRefusal(r, claims, "sso.tenant_idp.delete_refused", reason, alias, reg.Realm())
+		writeError(w, http.StatusForbidden, errors.New(reason))
+		return
 	}
+	s.recordIdentityAudit(r, claims, "sso.tenant_idp.delete", map[string]any{"idp": alias, "tenant_id": reg.Realm()})
 	// Ownership is settled; the removal itself (Keycloak, the store, the
 	// login-page button) is the SAME operation the platform surface performs —
 	// delegate rather than keep a second copy that can drift out of step.

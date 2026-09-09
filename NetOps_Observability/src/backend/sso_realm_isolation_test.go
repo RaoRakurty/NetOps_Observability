@@ -59,6 +59,10 @@ type realmHarness struct {
 	f      *signinFixture
 	key    *rsa.PrivateKey
 	claims map[string]any // what the next token exchange will assert
+	// The fake IdP's two endpoints. Kept because ANY save rebuilds the live
+	// provider (and with it the JWKS cache), so a test that saves after the
+	// harness is built has to seed the discovery again — see seedDiscovery.
+	jwksURL, tokenURL string
 }
 
 func newRealmHarness(t *testing.T) *realmHarness {
@@ -104,17 +108,26 @@ func newRealmHarness(t *testing.T) *realmHarness {
 		t.Fatalf("seed elevation connection: %v", err)
 	}
 
-	p := f.s.oidcProvider()
+	h.jwksURL, h.tokenURL = jwksSrv, tokenSrv
+	h.seedDiscovery(t)
+	return h
+}
+
+// seedDiscovery points the LIVE provider at the fake IdP. Every save of the
+// OIDC config swaps that provider, so a test that saves must call this again
+// before it signs anyone in.
+func (h *realmHarness) seedDiscovery(t *testing.T) {
+	t.Helper()
+	p := h.f.s.oidcProvider()
 	p.JWKS().SeedDiscoveryForTest(&jwks.Discovery{
 		Issuer:        p.Issuer(),
 		AuthEndpoint:  p.Issuer() + "/protocol/openid-connect/auth",
-		TokenEndpoint: tokenSrv,
-		JWKSURI:       jwksSrv,
+		TokenEndpoint: h.tokenURL,
+		JWKSURI:       h.jwksURL,
 	})
 	if !p.Ready() {
 		t.Fatal("the test provider is not ready — the SSO handlers cannot run")
 	}
-	return h
 }
 
 // fakeIdPEndpoint starts one endpoint of the fake IdP and returns its URL.
