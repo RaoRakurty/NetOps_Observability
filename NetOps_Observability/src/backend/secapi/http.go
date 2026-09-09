@@ -167,8 +167,15 @@ type osHit struct {
 	Sort   []any           `json:"sort"`
 }
 
+// osResponse is the slice of a search reply this package reads.
+//
+// TimedOut and Shards are the COMPLETENESS report, and they are read (see
+// partialAnswer). OpenSearch answers a query that ran out of time, or that
+// could not reach a shard, with HTTP 200 and whatever it managed to fold — so
+// the status code alone cannot tell a whole answer from a piece of one.
 type osResponse struct {
-	TimedOut bool `json:"timed_out"`
+	TimedOut bool     `json:"timed_out"`
+	Shards   osShards `json:"_shards"`
 	Hits     struct {
 		Total struct {
 			Value int64 `json:"value"`
@@ -176,6 +183,88 @@ type osResponse struct {
 		Hits []osHit `json:"hits"`
 	} `json:"hits"`
 	Aggregations json.RawMessage `json:"aggregations"`
+}
+
+// osShards is the per-query shard tally. Failed is the one that matters:
+// Skipped is the can_match pre-filter doing its job (a date-partitioned index
+// the window cannot contain is skipped on every healthy query) and must never
+// be read as a loss.
+//
+// Reachability, checked rather than assumed: every shipped index template sets
+// number_of_shards: 1, so one INDEX is one shard — but every read here names a
+// WILDCARD over the tenant's daily indices (oslog.TenantIndexPattern), so a
+// 30-day window is 30 shards and a single unassigned, relocating or red daily
+// index makes Failed > 0. The leg is live in a shipped single-node deployment,
+// not just in a multi-shard one.
+type osShards struct {
+	Total      int `json:"total"`
+	Successful int `json:"successful"`
+	Skipped    int `json:"skipped"`
+	Failed     int `json:"failed"`
+}
+
+// PartialAnswerError reports that OpenSearch answered 200 with an INCOMPLETE
+// result: it ran out of time (`timed_out`), or one or more shards of the
+// caller's index pattern failed (`_shards.failed`).
+//
+// It is an error rather than a flag on the response because of what this API
+// answers. Every read here feeds a security VERDICT — the CTEM funnel, coverage,
+// the facet counts, the trend, the compliance score. Those are claims about a
+// WHOLE: "3 criticals" and "78% passing" carry no meaning as a fragment, and a
+// fold that lost buckets reads as an IMPROVEMENT in posture, which is the false
+// clear the rest of this package is written to prevent. There is no honest way
+// to render half of a score.
+//
+// The findings LIST was considered for a rendered "this answer is partial"
+// state instead, since its rows are individually true. It gets the same error,
+// because the parts of that answer that are NOT rows — `total` and
+// `next_cursor` — are themselves claims about the whole result set, and the
+// page prints the total as "N current detections". A short page with a truthful
+// total is not what a timeout produces: `hits.total` shrinks WITH the result,
+// so the list would report a smaller estate rather than a truncated read.
+//
+// So the refusal lives in search() and every caller inherits it: a caller added
+// later cannot forget to check, which is the same default-closed reasoning that
+// makes a non-2xx an error here rather than an empty result. The response is
+// returned ALONGSIDE the error so a future caller that does have an honest
+// partial rendering can opt in with errors.As, deliberately, in one place.
+type PartialAnswerError struct {
+	TimedOut     bool
+	ShardsTotal  int
+	ShardsFailed int
+}
+
+func (e *PartialAnswerError) Error() string {
+	switch {
+	case e.TimedOut && e.ShardsFailed > 0:
+		return fmt.Sprintf("the security store answered only part of this query: it ran out of time after %s "+
+			"and %d of %d shards failed — the numbers on this screen would be lower than the truth, so none are shown. "+
+			"Narrow the time range or the filters and try again", searchTimeout, e.ShardsFailed, e.ShardsTotal)
+	case e.TimedOut:
+		return fmt.Sprintf("the security store ran out of time after %s and answered only part of this query — "+
+			"the numbers on this screen would be lower than the truth, so none are shown. "+
+			"Narrow the time range or the filters and try again", searchTimeout)
+	default:
+		return fmt.Sprintf("the security store could not read %d of %d shards, so this answer is incomplete — "+
+			"the numbers on this screen would be lower than the truth, so none are shown. "+
+			"Check the search tier's health and try again", e.ShardsFailed, e.ShardsTotal)
+	}
+}
+
+// partialAnswer returns the refusal for an incomplete reply, or nil when the
+// cluster answered the whole question.
+func (r *osResponse) partialAnswer() error {
+	if r == nil {
+		return nil
+	}
+	if !r.TimedOut && r.Shards.Failed <= 0 {
+		return nil
+	}
+	return &PartialAnswerError{
+		TimedOut:     r.TimedOut,
+		ShardsTotal:  r.Shards.Total,
+		ShardsFailed: r.Shards.Failed,
+	}
 }
 
 type termsBucket struct {
@@ -190,6 +279,12 @@ type termsAgg struct {
 // search issues one query and decodes it, bounding the response read. A non-2xx
 // upstream status is an ERROR with the status in it — never a zero-result
 // success, which would render as "you have no findings".
+//
+// A 200 carrying `timed_out: true` or a failed shard is the SAME condition
+// wearing a success code, and gets the same answer: a *PartialAnswerError,
+// returned alongside the decoded response so nothing is thrown away. Every
+// caller already refuses on err, so no read in this package can present a piece
+// of an answer as the whole of one (CLAUDE.md §10: no silent failures).
 func (a *API) search(index string, body any) (*osResponse, error) {
 	resp, err := a.d.Search("POST", "/"+index+"/_search?timeout="+searchTimeout, body)
 	if err != nil {
@@ -216,7 +311,7 @@ func (a *API) search(index string, body any) (*osResponse, error) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
-	return &out, nil
+	return &out, out.partialAnswer()
 }
 
 // ---- shared request plumbing ------------------------------------------------
