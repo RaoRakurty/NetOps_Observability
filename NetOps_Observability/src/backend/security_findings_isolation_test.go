@@ -58,6 +58,53 @@ type secOSCall struct {
 // caller must have used to see them: a request that names a DIFFERENT pattern
 // gets zero hits, which is precisely how at-rest separation turns a
 // cross-tenant lookup into a 404 upstream.
+//
+// WHAT IT HONOURS, AND WHAT IT DOES NOT (read this before trusting a green).
+// A double that answers every question with the same canned rows cannot tell a
+// working filter from a broken one, so a test written against it proves only
+// that the handler returned 200. That is not a hypothetical: it is how H2
+// stayed invisible (a query asking for findings between 0001-01-01 and
+// 0001-01-01 read as a full result set) and how D-09 stayed invisible (a by-id
+// query on a field no document carries answered 200 in tests and 404 in
+// production). Tracker 283 is the fix.
+//
+// HONOURED — the double reads the emitted body and answers it:
+//   - the index pattern (as before): only `docs[pattern]` is visible;
+//   - `term` / `terms` on any _source field, including the dotted paths
+//     (attrs.status, attrs.standards) — so severity, status, seam type/id,
+//     framework and device/entity_tokens all NARROW;
+//   - `ids` (the by-id resolution, D-09) and `exists`;
+//   - `bool` with should / must / must_not / filter, so the nested tenant
+//     clause and the seam+device anyOf pairs are evaluated, not skipped;
+//   - `match_none` (the fail-closed branch) and `match_all`;
+//   - `simple_query_string` (the free-text `q`) — see secSQSMatches for the
+//     approximation it makes;
+//   - `sort`, read off the body, over the same _source paths;
+//   - `collapse`, as the cluster does it: the FIRST hit per group in sort
+//     order, i.e. the newest verdict per native_id;
+//   - `search_after` (keyset paging), `from` (offset paging) and `size`
+//     (`size: 0` returns no hits at all, as an aggregation-only read does);
+//   - `range` on `ts`, but ONLY when windowAware is set (see below).
+//
+// NOT HONOURED — a test that depends on any of these is still only reading a
+// canned answer, and must say so:
+//   - AGGREGATIONS. `aggs` is echoed back verbatim from the `aggs` field
+//     regardless of the query, so facets, the CTEM funnel, coverage, the trend
+//     histogram and the compliance fold are canned. Nothing here proves an
+//     aggregation narrows.
+//   - `track_total_hits`: `hits.total` is always the exact number of matched
+//     documents, never the 10k cap the cluster would apply without it.
+//   - Lucene analysis: `simple_query_string` is matched as lowercase substrings
+//     (see secSQSMatches), not tokenised text with wildcards, phrases or
+//     operators. `lenient` is implicit — an unmapped field simply contributes
+//     nothing.
+//   - `range` on anything but `ts`, scoring/relevance, `_source` includes
+//     projection, and index-time mapping behaviour of any kind.
+//
+// An emitted clause this double does NOT recognise fails the test rather than
+// being skipped: a new filter shipped in production without teaching the double
+// would otherwise quietly restore the false green this whole change exists to
+// remove.
 type secFakeOS struct {
 	mu    sync.Mutex
 	calls []secOSCall
@@ -71,20 +118,280 @@ type secFakeOS struct {
 	// (review 2026-09-08) stayed invisible: the assistant's read emitted `ts`
 	// between 0001-01-01 and 0001-01-01 and every test was green.
 	//
-	// It is OPT-IN because the shared canned documents are stamped at a fixed
-	// past instant most tests do not line up with their default window. Switch
-	// it on wherever the WINDOW is the thing under test.
-	//
-	// HONEST ABOUT WHAT IT STILL IGNORES: severity/status/seam/framework/device
-	// terms, the free-text `q` clause, `collapse`, `sort`, paging and the
-	// per-doc tenant clause. The tenant boundary is proven here by the index
-	// PATTERN instead (see the file header); a test that needs any of the other
-	// clauses honoured needs a double that reads them.
+	// It is the ONE clause that stayed OPT-IN, because the shared canned
+	// documents are stamped at a fixed instant (secDoc) that is far outside the
+	// 30-day default window every other test uses: honouring it by default
+	// would empty every fixture rather than sharpen it. Switch it on wherever
+	// the WINDOW is the thing under test, and stamp the fixture with secDocAt.
 	windowAware bool
+	// t reports an emitted clause the double cannot evaluate. It is set by
+	// secStartFakeOS.
+	t *testing.T
 }
 
-// tsWindow reads the `ts` range clause out of an emitted body, in millis. ok is
-// false when the body carries no such clause.
+// secHit is one canned document, decoded far enough to answer a query about it.
+type secHit struct {
+	raw json.RawMessage // the fixture's own hit object, returned verbatim
+	id  string          // `_id`
+	src map[string]any  // `_source`
+}
+
+// secDecodeHits parses a canned `hits.hits` array. A fixture the test author
+// cannot parse is a broken fixture, so a parse failure yields no hits rather
+// than a silently unfiltered set.
+func secDecodeHits(body string) []secHit {
+	var rows []json.RawMessage
+	if err := json.Unmarshal([]byte(body), &rows); err != nil {
+		return nil
+	}
+	out := make([]secHit, 0, len(rows))
+	for _, row := range rows {
+		var doc struct {
+			ID     string         `json:"_id"`
+			Source map[string]any `json:"_source"`
+		}
+		if err := json.Unmarshal(row, &doc); err != nil {
+			continue
+		}
+		out = append(out, secHit{raw: row, id: doc.ID, src: doc.Source})
+	}
+	return out
+}
+
+// secFieldRaw reads the value a document carries at a dotted _source path.
+// `attrs.status` walks into the object; a path that no document carries reads
+// as absent, which is what an unmapped field does in the cluster too.
+//
+// The one accommodation to the mapping: a trailing `.text` names the ANALYSED
+// sub-field of a keyword parent (attrs.status_detail.text), which is stored
+// under the parent's own name — so a miss retries the parent path.
+func secFieldRaw(src map[string]any, path string) (any, bool) {
+	lookup := func(p string) (any, bool) {
+		var cur any = src
+		for _, seg := range strings.Split(p, ".") {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			cur, ok = m[seg]
+			if !ok {
+				return nil, false
+			}
+		}
+		return cur, true
+	}
+	if v, ok := lookup(path); ok {
+		return v, true
+	}
+	if parent, cut := strings.CutSuffix(path, ".text"); cut {
+		return lookup(parent)
+	}
+	return nil, false
+}
+
+// secFieldValues flattens the value at a path to the strings a `terms` clause
+// compares against — a scalar is one value, an array is each of its elements
+// (which is exactly how attrs.standards or entity_tokens match).
+func secFieldValues(src map[string]any, path string) []string {
+	v, ok := secFieldRaw(src, path)
+	if !ok {
+		return nil
+	}
+	switch t := v.(type) {
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			out = append(out, secScalarString(e))
+		}
+		return out
+	default:
+		return []string{secScalarString(v)}
+	}
+}
+
+// secScalarString renders one JSON scalar the way a keyword comparison sees it.
+func secScalarString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(t)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(t)
+	}
+}
+
+// secMatches reports whether one document satisfies the whole query body. A
+// body with no `query` matches everything, as the cluster's default does.
+func (f *secFakeOS) secMatches(body map[string]any, h secHit) bool {
+	q, ok := body["query"].(map[string]any)
+	if !ok {
+		return true
+	}
+	return f.clauseMatches(q, h)
+}
+
+// clauseMatches evaluates ONE query clause against one document. Several keys
+// on one clause are ANDed, which is what the DSL means.
+func (f *secFakeOS) clauseMatches(clause map[string]any, h secHit) bool {
+	for key, val := range clause {
+		if !f.oneClause(key, val, h) {
+			return false
+		}
+	}
+	return true
+}
+
+// oneClause is the clause vocabulary this double speaks. An unknown key FAILS
+// the test: silently ignoring a clause is precisely the defect tracker 283 is
+// about, and a production filter added later must not be able to reintroduce it.
+func (f *secFakeOS) oneClause(key string, val any, h secHit) bool {
+	switch key {
+	case "match_all":
+		return true
+	case "match_none":
+		return false
+	case "term":
+		fields, _ := val.(map[string]any)
+		for field, want := range fields {
+			if !secContains(secFieldValues(h.src, field), secScalarString(want)) {
+				return false
+			}
+		}
+		return true
+	case "terms":
+		fields, _ := val.(map[string]any)
+		for field, want := range fields {
+			list, _ := want.([]any)
+			hit := false
+			for _, w := range list {
+				if secContains(secFieldValues(h.src, field), secScalarString(w)) {
+					hit = true
+					break
+				}
+			}
+			if !hit {
+				return false
+			}
+		}
+		return true
+	case "ids":
+		spec, _ := val.(map[string]any)
+		list, _ := spec["values"].([]any)
+		for _, v := range list {
+			if secScalarString(v) == h.id {
+				return true
+			}
+		}
+		return false
+	case "exists":
+		spec, _ := val.(map[string]any)
+		field := secScalarString(spec["field"])
+		return len(secFieldValues(h.src, field)) > 0
+	case "range":
+		return f.rangeMatches(val, h)
+	case "simple_query_string":
+		spec, _ := val.(map[string]any)
+		return secSQSMatches(spec, h)
+	case "bool":
+		return f.boolMatches(val, h)
+	default:
+		if f.t != nil {
+			f.t.Errorf("secFakeOS cannot evaluate the emitted clause %q — teach the double or a test asserting this filter narrows proves nothing", key)
+		}
+		return true
+	}
+}
+
+// boolMatches evaluates must / filter / must_not / should. minimum_should_match
+// is read off the clause; every body this API emits sets it to 1.
+func (f *secFakeOS) boolMatches(val any, h secHit) bool {
+	spec, _ := val.(map[string]any)
+	sub := func(key string) []map[string]any {
+		list, _ := spec[key].([]any)
+		out := make([]map[string]any, 0, len(list))
+		for _, c := range list {
+			if m, ok := c.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	for _, c := range append(sub("must"), sub("filter")...) {
+		if !f.clauseMatches(c, h) {
+			return false
+		}
+	}
+	for _, c := range sub("must_not") {
+		if f.clauseMatches(c, h) {
+			return false
+		}
+	}
+	should := sub("should")
+	if len(should) == 0 {
+		return true
+	}
+	need := 1
+	if n, ok := spec["minimum_should_match"].(float64); ok {
+		need = int(n)
+	}
+	got := 0
+	for _, c := range should {
+		if f.clauseMatches(c, h) {
+			got++
+		}
+	}
+	return got >= need
+}
+
+// rangeMatches honours the `ts` window, and ONLY when windowAware is set (see
+// the field's comment for why it stayed opt-in). A range on any other field is
+// not evaluated — nothing in this API emits one.
+func (f *secFakeOS) rangeMatches(val any, h secHit) bool {
+	fields, _ := val.(map[string]any)
+	for field, spec := range fields {
+		if field != secFieldTS {
+			continue
+		}
+		if !f.windowAware {
+			continue
+		}
+		bounds, _ := spec.(map[string]any)
+		lo, err := time.Parse(time.RFC3339, secScalarString(bounds["gte"]))
+		if err != nil {
+			return false
+		}
+		hi, err := time.Parse(time.RFC3339, secScalarString(bounds["lte"]))
+		if err != nil {
+			return false
+		}
+		raw, ok := secFieldRaw(h.src, field)
+		if !ok {
+			return false
+		}
+		ms, ok := raw.(float64)
+		if !ok {
+			return false
+		}
+		if int64(ms) < lo.UnixMilli() || int64(ms) > hi.UnixMilli() {
+			return false
+		}
+	}
+	return true
+}
+
+// secFieldTS is the one field name the double compares ranges on. It is
+// spelled out here rather than imported so the double stays readable next to
+// the fixtures it answers.
+const secFieldTS = "ts"
+
+// tsWindow reads the `ts` range clause out of an emitted body, in millis, for
+// the tests that assert on the WINDOW the API asked for rather than on the rows
+// that came back. ok is false when the body carries no such clause.
 func (f *secFakeOS) tsWindow(body string) (lo, hi int64, ok bool) {
 	var q struct {
 		Query struct {
@@ -102,7 +409,7 @@ func (f *secFakeOS) tsWindow(body string) (lo, hi int64, ok bool) {
 		return 0, 0, false
 	}
 	for _, clause := range q.Query.Bool.Filter {
-		r, has := clause.Range["ts"]
+		r, has := clause.Range[secFieldTS]
 		if !has {
 			continue
 		}
@@ -116,31 +423,134 @@ func (f *secFakeOS) tsWindow(body string) (lo, hi int64, ok bool) {
 	return 0, 0, false
 }
 
-// inWindow drops canned hits whose `_source.ts` falls outside [lo, hi].
-func (f *secFakeOS) inWindow(hits string, lo, hi int64) string {
-	var rows []json.RawMessage
-	if err := json.Unmarshal([]byte(hits), &rows); err != nil {
-		return hits
-	}
-	kept := make([]json.RawMessage, 0, len(rows))
-	for _, row := range rows {
-		var doc struct {
-			Source struct {
-				TS int64 `json:"ts"`
-			} `json:"_source"`
+// secSQSMatches approximates simple_query_string with default_operator "and":
+// EVERY whitespace-separated term must appear, case-insensitively, somewhere in
+// the listed fields of this document.
+//
+// It is a SUBSTRING match, not Lucene analysis — no wildcards, phrases,
+// prefixes, +/- operators or stemming. That is enough to prove a `q` NARROWS
+// (the property a test can assert), and deliberately not enough to pretend the
+// double is a search engine.
+func secSQSMatches(spec map[string]any, h secHit) bool {
+	fields, _ := spec["fields"].([]any)
+	var hay strings.Builder
+	for _, f := range fields {
+		for _, v := range secFieldValues(h.src, secScalarString(f)) {
+			hay.WriteString(strings.ToLower(v))
+			hay.WriteString("\n")
 		}
-		if err := json.Unmarshal(row, &doc); err != nil {
+	}
+	text := hay.String()
+	for _, term := range strings.Fields(strings.ToLower(secScalarString(spec["query"]))) {
+		if !strings.Contains(text, term) {
+			return false
+		}
+	}
+	return true
+}
+
+func secContains(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// secSortKey is one entry of the emitted `sort` array.
+type secSortKey struct {
+	field string
+	desc  bool
+}
+
+// secSortSpec reads the sort the body asked for. No sort means the fixture's
+// own order is kept.
+func secSortSpec(body map[string]any) []secSortKey {
+	list, _ := body["sort"].([]any)
+	out := make([]secSortKey, 0, len(list))
+	for _, entry := range list {
+		m, ok := entry.(map[string]any)
+		if !ok {
 			continue
 		}
-		if doc.Source.TS >= lo && doc.Source.TS <= hi {
-			kept = append(kept, row)
+		for field, spec := range m {
+			desc := true
+			if opts, ok := spec.(map[string]any); ok {
+				desc = secScalarString(opts["order"]) != "asc"
+			}
+			out = append(out, secSortKey{field: field, desc: desc})
 		}
 	}
-	out, err := json.Marshal(kept)
-	if err != nil {
-		return "[]"
+	return out
+}
+
+// secCmpScalar orders two sort values. Numbers compare numerically, everything
+// else lexically — the two kinds this API's sort keys actually carry (an epoch
+// millis and two keywords).
+func secCmpScalar(a, b any) int {
+	an, aNum := secAsFloat(a)
+	bn, bNum := secAsFloat(b)
+	if aNum && bNum {
+		switch {
+		case an < bn:
+			return -1
+		case an > bn:
+			return 1
+		default:
+			return 0
+		}
 	}
-	return string(out)
+	return strings.Compare(secScalarString(a), secScalarString(b))
+}
+
+func secAsFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case int64:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	}
+	return 0, false
+}
+
+// secSortValues is the document's sort tuple under the emitted sort spec — the
+// same tuple search_after is compared against.
+func secSortValues(h secHit, spec []secSortKey) []any {
+	out := make([]any, 0, len(spec))
+	for _, key := range spec {
+		v, ok := secFieldRaw(h.src, key.field)
+		if !ok {
+			v = nil
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// secCmpTuple orders two sort tuples the way the cluster's sort does, so that a
+// negative result means "sorts earlier in the answer".
+func secCmpTuple(a, b []any, spec []secSortKey) int {
+	for i := range spec {
+		var x, y any
+		if i < len(a) {
+			x = a[i]
+		}
+		if i < len(b) {
+			y = b[i]
+		}
+		c := secCmpScalar(x, y)
+		if c == 0 {
+			continue
+		}
+		if spec[i].desc {
+			return -c
+		}
+		return c
+	}
+	return 0
 }
 
 func (f *secFakeOS) record(c secOSCall) {
@@ -157,25 +567,100 @@ func (f *secFakeOS) all() []secOSCall {
 	return out
 }
 
+// secAnswer is the whole of the double's query engine: match, sort, collapse,
+// page. It returns the hits to serve and the number of DOCUMENTS that matched
+// (which is what hits.total counts — collapse groups are counted by the
+// cardinality aggregation instead, and that one is canned).
+func (f *secFakeOS) secAnswer(raw string, hits []secHit) (served []secHit, total int) {
+	var body map[string]any
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		if f.t != nil {
+			f.t.Errorf("the API sent a body OpenSearch could not parse: %v", err)
+		}
+		return nil, 0
+	}
+	matched := make([]secHit, 0, len(hits))
+	for _, h := range hits {
+		if f.secMatches(body, h) {
+			matched = append(matched, h)
+		}
+	}
+	total = len(matched)
+
+	spec := secSortSpec(body)
+	if len(spec) > 0 {
+		sort.SliceStable(matched, func(i, j int) bool {
+			return secCmpTuple(secSortValues(matched[i], spec), secSortValues(matched[j], spec), spec) < 0
+		})
+	}
+
+	// collapse: the FIRST hit per group in sort order — with the listSort that
+	// is the newest verdict per native_id, which is what current=true means.
+	if collapse, ok := body["collapse"].(map[string]any); ok {
+		field := secScalarString(collapse["field"])
+		seen := map[string]bool{}
+		kept := matched[:0:0]
+		for _, h := range matched {
+			vals := secFieldValues(h.src, field)
+			key := ""
+			if len(vals) > 0 {
+				key = vals[0]
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			kept = append(kept, h)
+		}
+		matched = kept
+	}
+
+	// search_after: keep what sorts strictly after the cursor's tuple.
+	if after, ok := body["search_after"].([]any); ok && len(after) > 0 {
+		cut := 0
+		for cut < len(matched) && secCmpTuple(secSortValues(matched[cut], spec), after, spec) <= 0 {
+			cut++
+		}
+		matched = matched[cut:]
+	}
+	// from: the collapsed list's offset paging.
+	if from, ok := body["from"].(float64); ok && int(from) > 0 {
+		if int(from) >= len(matched) {
+			matched = nil
+		} else {
+			matched = matched[int(from):]
+		}
+	}
+	// size: 0 is an aggregation-only read and returns no hits at all.
+	size := -1
+	if n, ok := body["size"].(float64); ok {
+		size = int(n)
+	}
+	if size >= 0 && len(matched) > size {
+		matched = matched[:size]
+	}
+	return matched, total
+}
+
 // secStartFakeOS wires the stand-in into the env the real client reads.
 func secStartFakeOS(t *testing.T, fake *secFakeOS) {
 	t.Helper()
+	fake.t = t
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // test double: a short read is a failed assertion below
 		index := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/_search")
 		fake.record(secOSCall{Index: index, Body: string(body)})
-		hits := fake.docs[index]
-		if hits == "" {
-			hits = "[]"
+		canned := fake.docs[index]
+		if canned == "" {
+			canned = "[]"
 		}
-		if fake.windowAware {
-			if lo, hi, ok := fake.tsWindow(string(body)); ok {
-				hits = fake.inWindow(hits, lo, hi)
-			}
+		served, total := fake.secAnswer(string(body), secDecodeHits(canned))
+		rows := make([]string, 0, len(served))
+		for _, h := range served {
+			rows = append(rows, string(h.raw))
 		}
-		n := strings.Count(hits, `"_id"`)
 		out := `{"took":1,"timed_out":false,"hits":{"total":{"value":` +
-			strconv.Itoa(n) + `,"relation":"eq"},"hits":` + hits + `}`
+			strconv.Itoa(total) + `,"relation":"eq"},"hits":[` + strings.Join(rows, ",") + `]}`
 		if fake.aggs != "" {
 			out += `,"aggregations":` + fake.aggs
 		}
