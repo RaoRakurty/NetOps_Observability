@@ -188,8 +188,21 @@ export const PLAIN_LADDER: PlainLayer[] = [
  * a fault, so the rung may honestly say "Problem found here". Every other lane
  * returns observations, and rows on it earn the weaker "Evidence to review" —
  * we never upgrade "we have data" into "we found the fault".
+ *
+ * A row on one of these lanes only says something about THIS case when the
+ * query that fetched it was pinned to the case's own device. See
+ * `healthQuery` / `routingQuery` and the `deviceScoped` argument below.
  */
 export const ANOMALY_LANES: LaneId[] = ["health", "routing"];
+
+/**
+ * The note a rung carries when an anomaly lane returned rows but the case named
+ * no device, so the query had to read the whole fleet. The rung keeps the weaker
+ * "Evidence to review" and says why, rather than pointing at a layer that may be
+ * broken on somebody else's device.
+ */
+export const UNSCOPED_ANOMALY_NOTE =
+  "This case names no device, so we read every device. What is out of state may be somewhere else.";
 
 export type PlainRungState = "found" | "checking" | "ok" | "blind" | "skipped";
 
@@ -238,10 +251,16 @@ const PLAIN_OF: Record<RungState, PlainRungState> = {
  * the most informative state of the engine layers under it (evidence beats
  * "still checking" beats "clean" beats "blind" beats "not needed"), and only an
  * ANOMALY lane may promote "Evidence to review" to "Problem found here".
+ *
+ * `deviceScoped` says whether the anomaly lanes asked about THIS case's device.
+ * It is required, not defaulted, so no caller can promote a rung without saying
+ * that it earned the right to. When it is false the anomaly rows came from the
+ * whole fleet, the promotion is refused, and the rung says so in words.
  */
 export function buildPlainLadder(
   openLanes: LaneId[],
   states: Partial<Record<LaneId, LaneState>>,
+  deviceScoped: boolean,
 ): PlainRung[] {
   const engine = new Map(buildLadder(openLanes, states).map((r) => [r.id, r.state]));
   const open = new Set(openLanes);
@@ -250,14 +269,19 @@ export function buildPlainLadder(
     const worst = PLAIN_PRECEDENCE.find((c) => sub.includes(c)) ?? "not_opened";
     const state = PLAIN_OF[worst];
     const lanes = p.layers.flatMap((l) => LADDER.find((x) => x.id === l)?.lanes ?? []);
-    const problem = state === "found"
+    const anomaly = state === "found"
       && lanes.some((l) => open.has(l) && ANOMALY_LANES.includes(l) && states[l] === "ready");
+    const problem = anomaly && deviceScoped;
     return {
       id: p.id,
       label: p.label,
       state,
       status: problem ? PLAIN_PROBLEM_STATUS : PLAIN_STATUS[state],
-      note: problem ? "Something on this layer is out of state right now." : PLAIN_NOTE[state],
+      note: problem
+        ? "Something on this layer is out of state right now."
+        : anomaly
+          ? UNSCOPED_ANOMALY_NOTE
+          : PLAIN_NOTE[state],
     };
   });
 }
@@ -335,6 +359,63 @@ export function classifyChangeLane(items: FeedItem[]): LaneResult<FeedItem> {
 }
 
 // ── Metric-backed lanes (device/protocol health, routing) ────────────────────
+//
+// THE QUERY IS PINNED TO THE CASE'S DEVICE. These two lanes are the only ones
+// that can promote a rung to "Problem found here", so what they ask for decides
+// what the answer card names. They used to ask fleet-wide questions, which meant
+// a down interface on ANY device promoted the rung: an operator working device A
+// could be told the fault was on a layer only device B was broken at.
+//
+// The label is `device`. Every family these queries name carries it (the metric
+// reference lists `device` on every family, and `device_if_*` adds `index`,
+// `ifName` and `ifAlias`), the api already selects on it for the same families
+// (`device_if_oper_status{device=...}` in the datasource ops helper), and the
+// device pages already read BGP and OSPF with `device_bgp_peer_state{device=...}`.
+// Its value is the device id, which is what a case's affected list carries.
+
+/**
+ * promLabelValue — a device id reaches us inside a correlation record, so it is
+ * remote-authored text and is escaped like any other untrusted input (§3). A
+ * value carrying a quote or a backslash lands in the selector as characters
+ * instead of changing the query we send.
+ */
+function promLabelValue(v: string): string {
+  return v
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, "\\\"")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r");
+}
+
+/**
+ * deviceSelector — the PromQL selector that pins a metric to one device, or ""
+ * when the case named none. An empty selector is a FLEET-WIDE read: the caller
+ * that gets one must also tell the ladder it is unscoped, so nothing it returns
+ * is promoted into an answer about this case.
+ */
+export function deviceSelector(device: string): string {
+  const d = String(device || "").trim();
+  return d ? `{device="${promLabelValue(d)}"}` : "";
+}
+
+/** The Devices & links query: interfaces that are operationally down. */
+export function healthQuery(device: string): string {
+  return `device_if_oper_status${deviceSelector(device)} == 0`;
+}
+
+/** The Routing query: neighbours that are not in the established state. */
+export function routingQuery(device: string): string {
+  const s = deviceSelector(device);
+  return `device_bgp_peer_state${s} != 6 or device_ospf_nbr_state${s} != 8 or device_isis_adj_state${s} != 3`;
+}
+
+/**
+ * The line a metric lane adds under its rows when the case named no device. The
+ * rows are real and still worth reading, so the lane is not blanked; what it
+ * must not do is let an operator read them as facts about their own case.
+ */
+export const UNSCOPED_LANE_NOTE =
+  "This case names no device, so these are from every device we watch.";
 
 /**
  * classifyMetricLane — a metric family that has NEVER been scraped is a
@@ -574,9 +655,18 @@ export const BREAKING_UNKNOWN = "Unknown";
  * is evidence to read, not a located fault, and naming a layer off it would be
  * exactly the "we have data" → "we found it" upgrade the model forbids
  * everywhere else. Everything short of that is honestly Unknown.
+ *
+ * `deviceScoped` is the second half of that rule. An anomaly lane only earns a
+ * layer when its query was pinned to this case's device; when the case named no
+ * device the lanes read the whole fleet, so the rows belong to somebody, but not
+ * necessarily to the operator reading this card. That case is Unknown too, and
+ * the rung under it says why in words rather than going quiet.
  */
-export function breakingAt(states: Partial<Record<LaneId, LaneState>>): string {
-  const found = buildPlainLadder(ALL_LANES, states).find((r) => r.status === PLAIN_PROBLEM_STATUS);
+export function breakingAt(
+  states: Partial<Record<LaneId, LaneState>>,
+  deviceScoped: boolean,
+): string {
+  const found = buildPlainLadder(ALL_LANES, states, deviceScoped).find((r) => r.status === PLAIN_PROBLEM_STATUS);
   return found ? found.label : BREAKING_UNKNOWN;
 }
 

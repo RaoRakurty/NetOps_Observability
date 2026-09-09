@@ -303,6 +303,37 @@ describe("the investigation scope is passed to the source", () => {
     expect(mocks.eventsFeed).toHaveBeenCalledWith({ from: "1h", limit: "25" });
   });
 
+  it("the health lane asks about the case's device, never the whole fleet", async () => {
+    // finding 3.11-01: a fleet-wide query let a down interface on ANOTHER device
+    // promote this case's rung to "Problem found here".
+    render(<HealthLane scope={scoped} />);
+    await waitFor(() => expect(mocks.metricsQuery).toHaveBeenCalled());
+    expect(mocks.metricsQuery).toHaveBeenCalledWith('device_if_oper_status{device="wan-r1"} == 0');
+  });
+
+  it("the routing lane pins every protocol family to the case's device", async () => {
+    render(<RoutingLane scope={scoped} />);
+    await waitFor(() => expect(mocks.metricsQuery).toHaveBeenCalled());
+    expect(mocks.metricsQuery).toHaveBeenCalledWith(
+      'device_bgp_peer_state{device="wan-r1"} != 6'
+      + ' or device_ospf_nbr_state{device="wan-r1"} != 8'
+      + ' or device_isis_adj_state{device="wan-r1"} != 3',
+    );
+  });
+
+  it("a case with no device reads the fleet and SAYS the rows are fleet-wide", async () => {
+    render(<HealthLane scope={scope} />);
+    await waitFor(() => expect(mocks.metricsQuery).toHaveBeenCalled());
+    expect(mocks.metricsQuery).toHaveBeenCalledWith("device_if_oper_status == 0");
+    expect(within(card("health")).getByText(/every device we watch/)).toBeInTheDocument();
+  });
+
+  it("does not repeat the fleet-wide caveat once the case names a device", async () => {
+    render(<RoutingLane scope={scoped} />);
+    await waitFor(() => expect(mocks.metricsQuery).toHaveBeenCalled());
+    expect(within(card("routing")).queryByText(/every device we watch/)).toBeNull();
+  });
+
   it("the flow lane scopes top talkers to the device", async () => {
     render(<FlowsLane scope={scoped} />);
     await waitFor(() => expect(mocks.topTalkers).toHaveBeenCalled());

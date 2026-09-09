@@ -321,7 +321,11 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
 
           <div className="ts-answer" data-answer={answer.state} data-testid="ts-answer">
             <p className="ts-answer-h">{answer.headline}</p>
-            <p className="ts-answer-f fact-line">Breaking at: <b>{breakingAt(laneStates)}</b></p>
+            {/* The layer is named only when the anomaly lanes asked about THIS
+                case's device. A case that names none reads the whole fleet, and
+                a fleet-wide row is somebody's fault but not provably this
+                one's, so the line stays Unknown and the lane says why. */}
+            <p className="ts-answer-f fact-line">Breaking at: <b>{breakingAt(laneStates, Boolean(scope.device))}</b></p>
             <p className="ts-answer-f fact-line">
               Affects: <b>{corrId ? affectsLine(obj?.affected) : affectsLine("")}</b>
             </p>

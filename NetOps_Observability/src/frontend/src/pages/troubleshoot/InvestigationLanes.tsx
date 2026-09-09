@@ -45,17 +45,25 @@ import {
   classifyFlowLane,
   classifyMetricLane,
   classifyPathLane,
+  healthQuery,
   isConfigChangeKind,
   laneError,
   laneLoading,
   laneSummary,
+  routingQuery,
+  UNSCOPED_LANE_NOTE,
   type LaneId,
   type LaneResult,
   type LaneState,
 } from "./investigationModel";
 
 /** The entity an investigation is scoped to. All fields are optional: an
- *  unscoped investigation reads the fleet-wide view of every lane. */
+ *  unscoped investigation reads the fleet-wide view of every lane.
+ *
+ *  EVERY lane that can filter by device does. The three feed-backed lanes pass
+ *  it as an entity filter, and the two metric lanes put it in the PromQL. A
+ *  fleet-wide read is what an unscoped case gets, and the page then tells the
+ *  ladder it is unscoped so nothing fleet-wide is named as this case's fault. */
 export interface LaneScope {
   /** Device id / name taken from the case (never from a URL the user typed). */
   device?: string;
@@ -196,7 +204,6 @@ export function ChangedLane({ scope, report }: { scope: LaneScope; report?: Lane
 // ── Device / protocol health ─────────────────────────────────────────────────
 
 const HEALTH_METRICS = ["device_if_oper_status", "device_sysuptime", "device_resource_cpu_pct"];
-const HEALTH_QUERY = 'device_if_oper_status == 0';
 
 // No `protocolSlot` any more: the manual protocol-diagnostics bench was retired
 // on 2026-09-05 (TAC_ESCALATION_2026-09-05 §5) and nothing has supplied the slot
@@ -208,7 +215,7 @@ export function HealthLane({ scope, report }: {
   const res = useLane<PromInstantSeries>(
     "health",
     async () => {
-      const [names, q] = await Promise.all([api.metricNames(), api.metricsQuery(HEALTH_QUERY)]);
+      const [names, q] = await Promise.all([api.metricNames(), api.metricsQuery(healthQuery(scope.device ?? ""))]);
       return classifyMetricLane(
         names?.data ?? [],
         HEALTH_METRICS,
@@ -231,6 +238,7 @@ export function HealthLane({ scope, report }: {
           </li>
         ))}
       </ul>
+      {!scope.device && <p className="mini-meta tsl-foot">{UNSCOPED_LANE_NOTE}</p>}
     </LaneCard>
   );
 }
@@ -263,13 +271,12 @@ export function PathLane({ scope, report }: { scope: LaneScope; report?: LaneSta
 // ── Routing / BGP ────────────────────────────────────────────────────────────
 
 const ROUTING_METRICS = ["device_bgp_peer_state", "device_ospf_nbr_state", "device_isis_adj_state"];
-const ROUTING_QUERY = "device_bgp_peer_state != 6 or device_ospf_nbr_state != 8 or device_isis_adj_state != 3";
 
 export function RoutingLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
   const res = useLane<PromInstantSeries>(
     "routing",
     async () => {
-      const [names, q] = await Promise.all([api.metricNames(), api.metricsQuery(ROUTING_QUERY)]);
+      const [names, q] = await Promise.all([api.metricNames(), api.metricsQuery(routingQuery(scope.device ?? ""))]);
       return classifyMetricLane(
         names?.data ?? [],
         ROUTING_METRICS,
@@ -292,6 +299,7 @@ export function RoutingLane({ scope, report }: { scope: LaneScope; report?: Lane
           </li>
         ))}
       </ul>
+      {!scope.device && <p className="mini-meta tsl-foot">{UNSCOPED_LANE_NOTE}</p>}
     </LaneCard>
   );
 }

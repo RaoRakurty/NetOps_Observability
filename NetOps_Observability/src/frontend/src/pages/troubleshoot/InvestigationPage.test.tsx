@@ -320,6 +320,75 @@ describe("block 2 — the answer", () => {
     await waitFor(() => expect(answer()).toHaveTextContent("Breaking at: Physical link"));
   });
 
+  // ── finding 3.11-01: the layer must belong to the device under investigation ──
+  //
+  // The health and routing lanes are the only two that can promote a rung, and
+  // they used to ask fleet-wide questions. A down interface anywhere in the
+  // tenant named a layer on THIS card. An operator working wan-r2 was told the
+  // fault was physical when only wan-r9 had a down port.
+
+  /** A stand-in metrics store that answers the query it was actually asked.
+   *  One interface is down, on `down`, and nowhere else. */
+  const vmWithDownPortOn = (down: string) => (q: string) => {
+    const asked = /\{device="([^"]*)"\}/.exec(q)?.[1] ?? "";   // "" = a fleet-wide read
+    const hit = q.startsWith("device_if_oper_status") && (asked === "" || asked === down);
+    return Promise.resolve({
+      status: "success",
+      data: {
+        resultType: "vector",
+        result: hit ? [{ metric: { device: down, ifName: "Gi0/2" }, value: [0, "0"] }] : [],
+      },
+    });
+  };
+
+  it("never names a layer that is broken on some OTHER device", async () => {
+    mocks.metricsQuery.mockImplementation(vmWithDownPortOn("wan-r9"));   // the case is wan-r2
+    await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    await waitFor(() => expect(answer()).toHaveTextContent("Breaking at: Unknown"));
+    expect(answer()).not.toHaveTextContent("Breaking at: Physical link");
+  });
+
+  it("still names the layer when the case's OWN device is the broken one", async () => {
+    mocks.metricsQuery.mockImplementation(vmWithDownPortOn("wan-r2"));
+    await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    await waitFor(() => expect(answer()).toHaveTextContent("Breaking at: Physical link"));
+  });
+
+  it("asks the metric lanes about the case's device and no other", async () => {
+    // The first paint happens before the case record arrives, so the lanes do
+    // open with a fleet-wide read. The card reads Unknown for that whole window
+    // — the promotion gate refuses an unscoped row — and the lanes re-ask the
+    // moment the device is known. What must never happen is a query naming a
+    // device that is not the one under investigation.
+    mocks.metricsQuery.mockImplementation(vmWithDownPortOn("wan-r2"));
+    await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    await waitFor(() => expect(answer()).toHaveTextContent("Breaking at: Physical link"));
+    const asked = mocks.metricsQuery.mock.calls.map(([q]) => String(q));
+    expect(asked).toContain('device_if_oper_status{device="wan-r2"} == 0');
+    for (const q of asked) {
+      for (const m of q.matchAll(/\{device="([^"]*)"\}/g)) expect(m[1]).toBe("wan-r2");
+    }
+  });
+
+  it("a described case names no device, so it names no layer either", async () => {
+    // No correlation object means no affected device: the lanes can only read
+    // the fleet, and a fleet row is not this operator's answer.
+    mocks.listIncidents.mockResolvedValue([investigation()]);
+    mocks.metricsQuery.mockImplementation(vmWithDownPortOn("wan-r9"));
+    await show(<InvestigationPage />);
+    await click(/Branch users cannot reach the CRM/);
+    await waitFor(() => expect(answer()).toHaveTextContent("Breaking at: Unknown"));
+  });
+
+  it("a described case says on the lane itself that it read every device", async () => {
+    mocks.listIncidents.mockResolvedValue([investigation()]);
+    mocks.metricsQuery.mockImplementation(vmWithDownPortOn("wan-r9"));
+    await show(<InvestigationPage />);
+    await click(/Branch users cannot reach the CRM/);
+    await click("Show the evidence");
+    expect(await screen.findByText(/every device we watch/)).toBeInTheDocument();
+  });
+
   it("says Unknown rather than guessing a layer nothing points at", async () => {
     mocks.pathsHealth.mockResolvedValue({ paths: [], count: 0 });
     await show(<InvestigationPage initialCaseId={CASE_ID} />);

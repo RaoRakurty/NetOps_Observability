@@ -20,6 +20,8 @@ import {
   PLAIN_LADDER,
   LANE_SOURCE,
   LANE_TITLE,
+  PLAIN_PROBLEM_STATUS,
+  UNSCOPED_ANOMALY_NOTE,
   affectsLine,
   affectedEntities,
   breakingAt,
@@ -34,7 +36,9 @@ import {
   classifyPathLane,
   confidenceChip,
   describedTitle,
+  deviceSelector,
   hashWithoutSection,
+  healthQuery,
   isConfigChangeKind,
   isLiveInvestigation,
   laneError,
@@ -46,6 +50,7 @@ import {
   plainAnswer,
   plainOwner,
   quietLaneLine,
+  routingQuery,
   tierChip,
   type LaneId,
   type LaneState,
@@ -362,12 +367,18 @@ describe("parseInvestigationHash", () => {
 // The engine's seven-rung bisection ladder stays exactly as it was; this is the
 // four-rung reading a NOC admin can act on, with plain status words.
 
+// Whether the anomaly lanes asked about THIS case's device. A case built from a
+// correlation object names one; a described investigation does not, and then the
+// metric lanes can only read the whole fleet (finding 3.11-01).
+const SCOPED = true;
+const UNSCOPED = false;
+
 describe("buildPlainLadder", () => {
   const byId = (rungs: ReturnType<typeof buildPlainLadder>) =>
     Object.fromEntries(rungs.map((r) => [r.id, r]));
 
   it("renders exactly four rungs, in operator language, in bottom-up order", () => {
-    expect(buildPlainLadder(ALL_LANES, {}).map((r) => r.label))
+    expect(buildPlainLadder(ALL_LANES, {}, SCOPED).map((r) => r.label))
       .toEqual(["Physical link", "Routing", "Overlay / Service", "Application"]);
     expect(PLAIN_LADDER.map((l) => l.id)).toEqual(["link", "routing", "overlay", "application"]);
   });
@@ -377,7 +388,7 @@ describe("buildPlainLadder", () => {
       health: "ready", routing: "not_connected", path: "empty", dem: "loading", flows: "empty",
       events: "ready", changed: "empty",
     };
-    for (const r of buildPlainLadder(ALL_LANES, states)) {
+    for (const r of buildPlainLadder(ALL_LANES, states, SCOPED)) {
       expect(r.status.trim().length).toBeGreaterThan(0);
       expect(r.note.trim().length).toBeGreaterThan(0);
       expect(`${r.label} ${r.status} ${r.note}`.toLowerCase())
@@ -387,36 +398,117 @@ describe("buildPlainLadder", () => {
 
   it("says 'Problem found here' only when an ANOMALY lane answered", () => {
     // the health lane's query returns only out-of-state interfaces — a row IS a fault
-    expect(byId(buildPlainLadder(ALL_LANES, { health: "ready" })).link.status)
+    expect(byId(buildPlainLadder(ALL_LANES, { health: "ready" }, SCOPED)).link.status)
       .toBe("Problem found here");
     // the flow lane returns observations; rows there are evidence, not a verdict
-    expect(byId(buildPlainLadder(ALL_LANES, { flows: "ready" })).application.status)
+    expect(byId(buildPlainLadder(ALL_LANES, { flows: "ready" }, SCOPED)).application.status)
       .toBe("Evidence to review");
   });
 
   it("says OK only after a lane looked and saw nothing", () => {
-    expect(byId(buildPlainLadder(ALL_LANES, { routing: "empty" })).routing.status).toBe("OK");
+    expect(byId(buildPlainLadder(ALL_LANES, { routing: "empty" }, SCOPED)).routing.status).toBe("OK");
     // still in flight is NOT "OK" — that would be a claim we have not earned
-    expect(byId(buildPlainLadder(ALL_LANES, { routing: "loading" })).routing.status).toBe("Checking…");
-    expect(byId(buildPlainLadder(ALL_LANES, {})).routing.status).toBe("Checking…");
+    expect(byId(buildPlainLadder(ALL_LANES, { routing: "loading" }, SCOPED)).routing.status).toBe("Checking…");
+    expect(byId(buildPlainLadder(ALL_LANES, {}, SCOPED)).routing.status).toBe("Checking…");
   });
 
   it("says it cannot check when nothing feeds the layer", () => {
-    const r = byId(buildPlainLadder(["path", "dem"], { path: "not_connected", dem: "not_connected" })).overlay;
+    const r = byId(buildPlainLadder(["path", "dem"], { path: "not_connected", dem: "not_connected" }, SCOPED)).overlay;
     expect(r.status).toBe("Can't check");
     expect(r.state).toBe("blind");
   });
 
   it("says a layer this problem does not need was not checked", () => {
     // routing_adjacency opens routing/health/changed/events — no path, no dem
-    const r = byId(buildPlainLadder(ROUTING_LANES, {})).overlay;
+    const r = byId(buildPlainLadder(ROUTING_LANES, {}, SCOPED)).overlay;
     expect(r.status).toBe("Not checked yet");
     expect(r.state).toBe("skipped");
   });
 
   it("takes the most informative state of the engine layers beneath it", () => {
     // physical (health) is clean, L2 (health OR events) has rows → the rung reports the finding
-    expect(byId(buildPlainLadder(ALL_LANES, { health: "empty", events: "ready" })).link.state).toBe("found");
+    expect(byId(buildPlainLadder(ALL_LANES, { health: "empty", events: "ready" }, SCOPED)).link.state).toBe("found");
+  });
+});
+
+// ── the metric lanes ask about ONE device (finding 3.11-01) ──────────────────
+//
+// The health and routing lanes are the only two that can promote a rung to
+// "Problem found here", so what they ASK decides what the answer card names.
+// They used to be fleet-wide constants. An operator investigating device A could
+// be told the fault was at a layer only device B was broken at.
+
+describe("the metric lanes ask about the case's own device", () => {
+  it("pins the health query to the device the case named", () => {
+    expect(healthQuery("wan-r2")).toBe('device_if_oper_status{device="wan-r2"} == 0');
+  });
+
+  it("pins EVERY routing family to the device the case named", () => {
+    expect(routingQuery("wan-r2")).toBe(
+      'device_bgp_peer_state{device="wan-r2"} != 6'
+      + ' or device_ospf_nbr_state{device="wan-r2"} != 8'
+      + ' or device_isis_adj_state{device="wan-r2"} != 3',
+    );
+  });
+
+  it("reads the whole fleet only when the case named no device", () => {
+    expect(deviceSelector("")).toBe("");
+    expect(deviceSelector("   ")).toBe("");
+    expect(healthQuery("")).toBe("device_if_oper_status == 0");
+    expect(routingQuery("")).toBe(
+      "device_bgp_peer_state != 6 or device_ospf_nbr_state != 8 or device_isis_adj_state != 3",
+    );
+  });
+
+  it("trims the device id rather than sending a selector that matches nothing", () => {
+    expect(deviceSelector("  wan-r2  ")).toBe('{device="wan-r2"}');
+  });
+
+  it("escapes a device id so remote text cannot rewrite the query", () => {
+    // a case record is remote-authored: a quote or a backslash is a character,
+    // never a way out of the selector.
+    expect(deviceSelector('a" or up{job="x')).toBe('{device="a\\" or up{job=\\"x"}');
+    expect(deviceSelector("back\\slash")).toBe('{device="back\\\\slash"}');
+    expect(deviceSelector("two\nlines")).toBe('{device="two\\nlines"}');
+  });
+});
+
+// ── an unscoped case never promotes a fleet-wide row ─────────────────────────
+
+describe("a case that names no device cannot be told where it breaks", () => {
+  const byId = (rungs: ReturnType<typeof buildPlainLadder>) =>
+    Object.fromEntries(rungs.map((r) => [r.id, r]));
+
+  it("refuses to promote a rung when the anomaly lanes read the whole fleet", () => {
+    const rung = byId(buildPlainLadder(ALL_LANES, { health: "ready" }, UNSCOPED)).link;
+    expect(rung.status).not.toBe(PLAIN_PROBLEM_STATUS);
+    expect(rung.status).toBe("Evidence to review");
+  });
+
+  it("says WHY it did not promote, instead of going quiet about it", () => {
+    const rung = byId(buildPlainLadder(ALL_LANES, { routing: "ready" }, UNSCOPED)).routing;
+    expect(rung.note).toBe(UNSCOPED_ANOMALY_NOTE);
+    expect(rung.note).toContain("names no device");
+  });
+
+  it("still promotes the same rung once the case names a device", () => {
+    expect(byId(buildPlainLadder(ALL_LANES, { health: "ready" }, SCOPED)).link.status)
+      .toBe(PLAIN_PROBLEM_STATUS);
+  });
+
+  it("leaves the observation lanes reading exactly as they did", () => {
+    // flows was never promotable, so the scoping rule changes nothing for it
+    for (const scoped of [SCOPED, UNSCOPED]) {
+      const rung = byId(buildPlainLadder(ALL_LANES, { flows: "ready" }, scoped)).application;
+      expect(rung.status).toBe("Evidence to review");
+      expect(rung.note).toBe("We found something here worth reading.");
+    }
+  });
+
+  it("names no layer at all on the answer card", () => {
+    expect(breakingAt({ health: "ready" }, UNSCOPED)).toBe("Unknown");
+    expect(breakingAt({ routing: "ready" }, UNSCOPED)).toBe("Unknown");
+    expect(breakingAt({ health: "ready", routing: "ready" }, UNSCOPED)).toBe("Unknown");
   });
 });
 
@@ -585,25 +677,25 @@ describe("pickRows", () => {
 
 describe("breakingAt", () => {
   it("names the layer whose ANOMALY lane actually returned rows", () => {
-    expect(breakingAt({ routing: "ready" })).toBe("Routing");
-    expect(breakingAt({ health: "ready" })).toBe("Physical link");
+    expect(breakingAt({ routing: "ready" }, SCOPED)).toBe("Routing");
+    expect(breakingAt({ health: "ready" }, SCOPED)).toBe("Physical link");
   });
 
   it("never names a layer off an observation lane — that is evidence, not a fault", () => {
     // the event feed reports what happened, not that a layer is out of state
-    expect(breakingAt({ events: "ready" })).toBe("Unknown");
-    expect(breakingAt({ dem: "ready", flows: "ready", path: "ready", changed: "ready" })).toBe("Unknown");
+    expect(breakingAt({ events: "ready" }, SCOPED)).toBe("Unknown");
+    expect(breakingAt({ dem: "ready", flows: "ready", path: "ready", changed: "ready" }, SCOPED)).toBe("Unknown");
   });
 
   it("names the LOWEST layer with evidence when more than one has it", () => {
-    expect(breakingAt({ health: "ready", routing: "ready" })).toBe("Physical link");
+    expect(breakingAt({ health: "ready", routing: "ready" }, SCOPED)).toBe("Physical link");
   });
 
   it("says Unknown while nothing has been found — never a reassuring guess", () => {
-    expect(breakingAt({})).toBe("Unknown");
-    expect(breakingAt({ routing: "loading" })).toBe("Unknown");
-    expect(breakingAt({ routing: "empty", health: "empty" })).toBe("Unknown");
-    expect(breakingAt({ routing: "not_connected" })).toBe("Unknown");
+    expect(breakingAt({}, SCOPED)).toBe("Unknown");
+    expect(breakingAt({ routing: "loading" }, SCOPED)).toBe("Unknown");
+    expect(breakingAt({ routing: "empty", health: "empty" }, SCOPED)).toBe("Unknown");
+    expect(breakingAt({ routing: "not_connected" }, SCOPED)).toBe("Unknown");
   });
 });
 
