@@ -153,7 +153,20 @@ func (p HTTPProvider) ASPA(ctx context.Context, asn string) (ASPAResult, error) 
 	u.RawQuery = q.Encode()
 	body, err := p.F.Get(ctx, u.String(), ASPARespCap)
 	if err != nil {
-		return ASPAResult{}, fmt.Errorf("aspa provider: %w", err)
+		// NEVER wrap the transport error verbatim. net/http wraps every
+		// transport failure in a *url.Error whose Error() prints the FULL
+		// request URL, and p.Base is an operator-configured endpoint that may
+		// authenticate with a query-string token. handleBGPASPA returns this
+		// string in a 200 body to any infrastructure:read caller, so a verbatim
+		// wrap publishes the operator's credential (CLAUDE.md §8). ASPAStatus
+		// two screens down already publishes the HOSTNAME only, for this exact
+		// reason; this is the same rule applied at the same boundary.
+		//
+		// The scrub runs here rather than at the caller because the Fetcher is
+		// an interface: an implementation can format the URL into its own error
+		// text, and the next caller of ASPA has not been written yet.
+		return ASPAResult{}, fmt.Errorf("aspa provider %s: %s",
+			aspaBaseHost(p.Base), SafeErrorText(err, p.Base, u.String()))
 	}
 	var raw struct {
 		CustomerASN json.RawMessage `json:"customer_asn"`

@@ -759,11 +759,20 @@ func (f *bgpFetcher) Get(ctx context.Context, rawURL string, maxBytes int64) ([]
 	req.Header.Set("Accept", "text/csv, application/json;q=0.8, */*;q=0.1")
 	resp, err := f.webClient.Do(req)
 	if err != nil {
-		return nil, err
+		// net/http wraps every transport failure in a *url.Error, and its
+		// Error() prints the FULL request URL. The URLs that reach this method
+		// are operator-configured (BGP_ASPA_PROVIDER_URL) or discovered in
+		// untrusted registry data, and an operator's validator endpoint may
+		// authenticate with a query-string token. SafeOutboundURL refuses
+		// userinfo already; it cannot refuse a query parameter. Callers publish
+		// these errors — the ASPA route puts one in a 200 body for any
+		// infrastructure:read caller — so the URL is stripped HERE, at the
+		// boundary that creates it, and not at each caller that must remember.
+		return nil, bgpdepth.SafeFetchError(err, rawURL, u.String())
 	}
 	defer func() { _ = resp.Body.Close() }() // body is read through a cap; close error is not actionable
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream answered %d", resp.StatusCode)
+		return nil, fmt.Errorf("upstream %s answered %d", u.Hostname(), resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 }

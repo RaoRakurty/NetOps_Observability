@@ -138,3 +138,151 @@ func clip(s string, max int) string {
 	}
 	return strings.ToValidUTF8(s[:cut], "")
 }
+
+// ── error text that cannot carry a URL ──────────────────────────────────────
+
+// SafeErrorText renders err as text that cannot contain any of the given URLs.
+//
+// WHY THIS EXISTS. Go's http.Client wraps every transport failure in a
+// *url.Error, and its Error() prints the FULL request URL. The URLs this
+// package fetches are operator-configured (BGP_ASPA_PROVIDER_URL) or discovered
+// in untrusted registry data, and an operator's own validator endpoint may
+// authenticate with a query-string token. SafeOutboundURL already refuses
+// userinfo for exactly that reason; it cannot refuse a query parameter, because
+// that is how the query is legitimately carried. So the credential rides inside
+// the error, and these errors are handed to readers: the ASPA route puts one in
+// a 200 body for any infrastructure:read caller (CLAUDE.md §8).
+//
+// TWO MECHANISMS, because one is not enough:
+//
+//  1. *url.Error is rebuilt as "<op> <hostname>: <cause>". The hostname is kept
+//     deliberately — an operator has to be able to tell WHICH upstream failed,
+//     which is the same trade ASPAStatus.Host already makes. The cause names a
+//     dial address or a TLS fault, never a query.
+//  2. Every supplied URL is then removed from whatever text is left, along with
+//     its raw query and any query value long enough to be a credential. A
+//     Fetcher implementation is free to format the URL into its own error text
+//     and no interface can stop it, so the boundary must survive that too.
+//
+// The result is clipped: an upstream does not get to write an unbounded string
+// into a response body.
+func SafeErrorText(err error, urls ...string) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		op := strings.ToLower(strings.TrimSpace(ue.Op))
+		if op == "" {
+			op = "request"
+		}
+		cause := "the request failed"
+		if ue.Err != nil {
+			cause = ue.Err.Error()
+		}
+		if host := urlHostname(ue.URL); host != "" {
+			msg = op + " " + host + ": " + cause
+		} else {
+			msg = op + ": " + cause
+		}
+		// The URL that produced the error is itself something to scrub from the
+		// cause text, whether or not the caller thought to pass it in.
+		urls = append(urls, ue.URL)
+	}
+	for _, raw := range urls {
+		msg = scrubURL(msg, raw)
+	}
+	return clip(strings.TrimSpace(msg), 200)
+}
+
+// SafeFetchError is SafeErrorText as an error, for returning from a fetch.
+//
+// It deliberately does NOT wrap the original: an Unwrap would hand the
+// *url.Error, and its URL, straight back to any caller that reached for
+// errors.As. Nothing in this package matches on a fetch error's identity, so
+// there is nothing to lose and a leak to close.
+func SafeFetchError(err error, urls ...string) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New(SafeErrorText(err, urls...))
+}
+
+// urlHostname returns raw's hostname, or "" when it has none.
+func urlHostname(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// scrubURL removes one URL — and any query hung off the same origin — from a
+// message, leaving the hostname in its place.
+func scrubURL(msg, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return msg
+	}
+	repl := "the configured URL"
+	u, err := url.Parse(raw)
+	if err == nil && u.Hostname() != "" {
+		repl = u.Hostname()
+	}
+	if err == nil && u.Scheme != "" && u.Host != "" {
+		// The big hammer: anything in the message that STARTS with this origin
+		// is a URL, whatever query an implementation hung off it, so the whole
+		// token goes. This is what makes the scrub independent of the exact
+		// string we happened to request.
+		msg = stripURLToken(msg, u.Scheme+"://"+u.Host, repl)
+	}
+	msg = strings.ReplaceAll(msg, raw, repl)
+	if err != nil {
+		return msg
+	}
+	if q := u.RawQuery; q != "" {
+		msg = strings.ReplaceAll(msg, q, "...")
+	}
+	for _, vs := range u.Query() {
+		for _, v := range vs {
+			// Short values are identifiers (an ASN, a version); anything longer
+			// is the shape a token takes and is removed on sight.
+			if len(v) >= 8 {
+				msg = strings.ReplaceAll(msg, v, "[redacted]")
+			}
+		}
+	}
+	return msg
+}
+
+// stripURLToken replaces every whitespace-delimited token in msg that begins
+// with origin ("https://host") by repl.
+//
+// The offsets here are measured on msg and used on msg, which is the whole
+// point: see internal/asciifold for what happens when they are not.
+func stripURLToken(msg, origin, repl string) string {
+	if origin == "" || strings.Contains(repl, origin) {
+		return msg // a replacement containing the origin would never terminate
+	}
+	for {
+		i := strings.Index(msg, origin)
+		if i < 0 {
+			return msg
+		}
+		j := i + len(origin)
+		for j < len(msg) && !isURLBreak(msg[j]) {
+			j++
+		}
+		msg = msg[:i] + repl + msg[j:]
+	}
+}
+
+// isURLBreak reports whether c ends a URL inside a sentence.
+func isURLBreak(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '"', '\'', ',', ';', ')', '}', ']', '>':
+		return true
+	}
+	return false
+}
