@@ -11,7 +11,7 @@ import { Group, Panel } from "../../components/board/panels";
 import { Segmented } from "../../components/ui";
 import { fmtDateTime } from "../../lib/time";
 import { FindingDetail, SeverityBadge } from "./parts";
-import { THREAT_EVIDENCE_CLASS, severityRank, subjectLine } from "./model";
+import { THREAT_EVIDENCE_ALIASES, severityRank, subjectLine } from "./model";
 import { operatorError } from "../../lib/errors";
 import AskIris from "../../components/AskIris";
 // WORD SWEEP (2026-09-06, tracker 270): what the two sub-views look at, and why
@@ -34,36 +34,53 @@ import AskIris from "../../components/AskIris";
 
 type SubView = "detections" | "behavior";
 
+// DETECTION_PAGE is how many detections the table holds. When the lane has more
+// than this the header SAYS so, rather than letting a full page read as the
+// whole list.
+const DETECTION_PAGE = 200;
+
 export default function ThreatDetectionView({ sinceSeconds }: { sinceSeconds?: number } = {}) {
   const ws = useWorkspace();
   const [tab, setTab] = useState<SubView>("detections");
   const [rows, setRows] = useState<SecFinding[]>([]);
   const [total, setTotal] = useState(0);
+  const [limit] = useState(DETECTION_PAGE);
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState<SecFinding | null>(null);
 
   useEffect(() => {
     let alive = true;
-    api.securityFindings({ current: true, limit: 200, framework: undefined })
+    // THE LANE IS SELECTED AT THE STORE (review 2026-09-08, 3.3-03). This used
+    // to fetch the newest 200 current findings of EVERY lane and keep the threat
+    // ones in the browser. A posture scan is a burst — one pass over a few
+    // hundred devices writes thousands of verdicts, all newer than a detection
+    // that fired an hour ago — so page one held no detection at all, the filter
+    // kept nothing, and the screen printed "No detection fired in this window"
+    // over a live detection. next_cursor was ignored, so nothing went looking.
+    //
+    // `evidence_class` asks OpenSearch for the lane in one terms clause. Both
+    // spellings are sent because the store emits "signal" and the contract says
+    // "threat"; the server folds them onto one lane. The rows that come back are
+    // the lane, so nothing is filtered again here — a second filter over a
+    // server-narrowed page can only ever hide rows, never find one.
+    api.securityFindings({
+      current: true,
+      limit,
+      evidence_class: THREAT_EVIDENCE_ALIASES.join(","),
+    })
       .then((p) => {
         if (!alive) return;
-        // The lane filter is applied on the SERVER-supplied evidence_class; the
-        // dedicated query param is not part of the T8 contract, so the page
-        // narrows the current set it is already entitled to rather than
-        // inventing an endpoint.
-        const lane = (p.items ?? []).filter(
-          (f) => (f.evidence_class ?? "").toLowerCase() === THREAT_EVIDENCE_CLASS
-            || (f.evidence_class ?? "").toLowerCase() === "signal",
-        );
-        setRows(lane);
-        setTotal(lane.length);
+        setRows(p.items ?? []);
+        // The COUNT is the server's total for the lane, not the length of what
+        // fits on one page.
+        setTotal(typeof p.total === "number" ? p.total : (p.items ?? []).length);
         setErr(null);
       })
       .catch((e: unknown) => { if (alive) setErr(operatorError(e, "Threat detections could not be loaded.")); })
       .finally(() => { if (alive) setLoaded(true); });
     return () => { alive = false; };
-  }, []);
+  }, [limit]);
 
   const open = (f: SecFinding) => {
     setSelected(f);
@@ -117,7 +134,10 @@ export default function ThreatDetectionView({ sinceSeconds }: { sinceSeconds?: n
         />
         <span className="sec-line" role="status" aria-live="polite">
           {tab === "detections"
-            ? (loaded ? `${total.toLocaleString()} current detection${total === 1 ? "" : "s"}` : "Loading…")
+            ? (loaded
+              ? `${total.toLocaleString()} current detection${total === 1 ? "" : "s"}`
+              + (total > rows.length ? ` · showing the newest ${rows.length.toLocaleString()}` : "")
+              : "Loading…")
             : "Flow-derived behavior"}
           <AskIris topic="threats.what-we-detect" label="Threat detection" />
         </span>

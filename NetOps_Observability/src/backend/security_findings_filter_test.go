@@ -56,6 +56,9 @@ type secFilterDoc struct {
 	NativeID     string
 	ScanID       string
 	TS           int64
+	// EvidenceClass is the lane the finding belongs to. Empty means "posture",
+	// which is what every document in the shared corpus is.
+	EvidenceClass string
 }
 
 // render writes the document in the shape the router indexes and the shape
@@ -69,11 +72,15 @@ func (d secFilterDoc) render() string {
 		return "[" + strings.Join(out, ",") + "]"
 	}
 	ts := strconv.FormatInt(d.TS, 10)
+	class := d.EvidenceClass
+	if class == "" {
+		class = "posture"
+	}
 	return `{"_index":"netops-secfindings-` + d.Tenant + `-2026.09.01","_id":"` + d.ID + `",` +
 		`"_source":{"tenant_id":"` + d.Tenant + `","ts":` + ts + `,"severity":"` + d.Severity + `",` +
 		`"entity_id":"` + d.Device + `","entity_tokens":` + list(d.Tokens) + `,` +
 		`"native_id":"` + d.NativeID + `","seam_type":"` + d.SeamType + `","seam_id":"` + d.SeamID + `",` +
-		`"attrs":{"status":"` + d.Status + `","scan_id":"` + d.ScanID + `","evidence_class":"posture",` +
+		`"attrs":{"status":"` + d.Status + `","scan_id":"` + d.ScanID + `","evidence_class":"` + class + `",` +
 		`"control_id":"AC-17","control_title":"` + d.ControlTitle + `",` +
 		`"raw_rule_id":"` + d.RuleID + `","status_detail":"` + d.StatusDetail + `",` +
 		`"standards":` + list(d.Standards) + `}},` +
@@ -302,5 +309,109 @@ func TestSecurityFindingsCurrentCollapsesToTheNewestVerdict(t *testing.T) {
 	seam, _ := secListIDs(t, s, "current=true&seam=seam-isp-1")
 	if !secSameSet(seam, []string{"d1"}) {
 		t.Fatalf("current=true&seam=seam-isp-1 returned %v, want [d1]", seam)
+	}
+}
+
+// ── 3.3-03: the threat lane is selected at the STORE, not in the browser ─────
+//
+// The Detections tab used to fetch the newest 200 CURRENT findings of every lane
+// and keep the threat ones in JavaScript. A posture scan is a burst: one pass
+// over a few hundred devices writes thousands of posture verdicts, all newer
+// than the detection that fired an hour ago. Page one is then entirely posture,
+// the browser filter keeps nothing, and the screen prints "No detection fired in
+// this window" over a live detection. next_cursor was ignored, so nothing ever
+// went looking for it, and the count above the table was the size of the kept
+// slice rather than the number of detections.
+//
+// The fix is one terms clause on evidence_class, asked of OpenSearch. This is
+// the test that proves the clause selects: 250 posture findings, every one newer
+// than the single detection, and the detection must still come back.
+
+// secBurstCorpus is one threat detection buried under `posture` newer posture
+// findings — the shape of a posture scan burst.
+func secBurstCorpus(now time.Time, posture int) []secFilterDoc {
+	docs := []secFilterDoc{{
+		ID: "detection-1", Tenant: "acme", Severity: "high", Status: "Fail",
+		SeamType: "internet", SeamID: "seam-inet-9", Device: "acme-edge",
+		Tokens: []string{"device:acme-edge"}, Standards: []string{"ATTACK:T1071"},
+		ControlTitle: "Outbound beacon to a rare destination", RuleID: "beacon-rare-dst",
+		StatusDetail: "periodic outbound connections to a destination seen nowhere else",
+		NativeID:     "n-detect-1", ScanID: "scan-t1", TS: now.Add(-time.Hour).UnixMilli(),
+		EvidenceClass: "signal",
+	}}
+	for i := 0; i < posture; i++ {
+		docs = append(docs, secFilterDoc{
+			ID: "p" + strconv.Itoa(i), Tenant: "acme", Severity: "medium", Status: "Fail",
+			SeamType: "ISP", SeamID: "seam-isp-1", Device: "acme-core",
+			Tokens: []string{"device:acme-core"}, Standards: []string{"CIS:1.2"},
+			ControlTitle: "Remote access over telnet", RuleID: "telnet-vty-enabled",
+			StatusDetail: "telnet is enabled on the VTY lines",
+			NativeID:     "n-p" + strconv.Itoa(i), ScanID: "scan-p1",
+			// Every posture row is NEWER than the detection.
+			TS: now.Add(-time.Duration(i+1) * time.Second).UnixMilli(),
+		})
+	}
+	return docs
+}
+
+func TestThreatLaneSurvivesAPostureBurst(t *testing.T) {
+	now := time.Now().UTC()
+	secStartFilterOS(t, secBurstCorpus(now, 250))
+	s := secTestServer(t)
+
+	// The failure this replaces, pinned so the fixture is known to reproduce it:
+	// the newest 200 findings of ALL lanes hold no detection at all, so a browser
+	// filter over that page keeps nothing.
+	unfiltered, _ := secListIDs(t, s, "current=true&limit=200")
+	if len(unfiltered) != 200 {
+		t.Fatalf("the burst fixture served %d rows, want a full page of 200", len(unfiltered))
+	}
+	for _, id := range unfiltered {
+		if id == "detection-1" {
+			t.Fatal("the fixture does not reproduce the burst: the detection is still on page one")
+		}
+	}
+
+	// Asked of the STORE, the detection comes back — and it is the only row.
+	for _, query := range []string{
+		"current=true&limit=200&evidence_class=threat",
+		"current=true&limit=200&evidence_class=signal",
+		"current=true&limit=200&evidence_class=threat,signal",
+		"limit=200&evidence_class=threat",
+	} {
+		ids, total := secListIDs(t, s, query)
+		if !secSameSet(ids, []string{"detection-1"}) {
+			t.Errorf("?%s returned %d rows %v, want just the detection — "+
+				"a real detection is invisible behind the posture burst", query, len(ids), ids)
+		}
+		if total != 1 {
+			t.Errorf("?%s total = %d, want 1 — the count above the table must be the number of "+
+				"detections, not the size of a slice the browser kept", query, total)
+		}
+	}
+}
+
+// The lane filter must also EXCLUDE, or "evidence_class=posture" would be a
+// parameter accepted and ignored (the F-61 failure this API refuses elsewhere).
+func TestEvidenceClassFilterExcludesTheOtherLanes(t *testing.T) {
+	now := time.Now().UTC()
+	secStartFilterOS(t, secBurstCorpus(now, 3))
+	s := secTestServer(t)
+
+	ids, _ := secListIDs(t, s, "evidence_class=posture")
+	if !secSameSet(ids, []string{"p0", "p1", "p2"}) {
+		t.Errorf("?evidence_class=posture returned %v, want the three posture rows", ids)
+	}
+	ids, _ = secListIDs(t, s, "evidence_class=exposure")
+	if len(ids) != 0 {
+		t.Errorf("?evidence_class=exposure returned %v, want nothing", ids)
+	}
+
+	// An unknown lane is a 400, never 200-with-nothing: an empty answer to
+	// "?evidence_class=thret" reads exactly like "nothing has been detected".
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings?evidence_class=thret", "", acme()))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("an unknown evidence_class = %d (%s), want 400", w.Code, w.Body.String())
 	}
 }

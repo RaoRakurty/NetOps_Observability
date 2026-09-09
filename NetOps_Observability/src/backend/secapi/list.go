@@ -100,6 +100,14 @@ func validateFilters(f *Filters, now time.Time) error {
 			}
 		}
 	}
+	if len(f.EvidenceClass) > MaxFilterValues {
+		return fmt.Errorf("evidence_class accepts at most %d values", MaxFilterValues)
+	}
+	classes, err := resolveEvidenceClasses(f.EvidenceClass)
+	if err != nil {
+		return err
+	}
+	f.EvidenceClass = classes
 	if len(f.Q) > MaxQueryLen {
 		return fmt.Errorf("q must be at most %d characters", MaxQueryLen)
 	}

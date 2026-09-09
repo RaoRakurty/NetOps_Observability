@@ -2215,6 +2215,7 @@ export function secFindingParams(q: SecFindingQuery): string {
   if (q.seam) p.set("seam", q.seam);
   if (q.framework) p.set("framework", q.framework);
   if (q.device) p.set("device", q.device);
+  if (q.evidence_class) p.set("evidence_class", q.evidence_class);
   if (q.q) p.set("q", q.q);
   if (q.since) p.set("since", q.since);
   if (q.until) p.set("until", q.until);
@@ -9341,6 +9342,13 @@ export type SecFindingQuery = {
   seam?: string;
   framework?: string;
   device?: string;
+  /**
+   * Comma-separated evidence lanes (posture / exposure / signal / threat). The
+   * server folds "threat" and "signal" onto the one threat lane, so a page that
+   * wants detections asks for the lane HERE rather than keeping the ones it
+   * recognises out of a page of every lane.
+   */
+  evidence_class?: string;
   q?: string;
   since?: string;
   until?: string;

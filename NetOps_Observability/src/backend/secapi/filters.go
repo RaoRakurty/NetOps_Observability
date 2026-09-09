@@ -116,6 +116,58 @@ var StatusFacetKeys = map[string]string{
 	"Unknown":       "unknown",
 }
 
+// EvidenceClassThreat is the word the T8 contract uses for the threat lane. The
+// STORED model spells the same lane "signal" (secfindings.EvidenceSignal), and
+// both spellings exist in indexed documents, so the two are treated as one lane
+// here rather than as two filters that each miss half the rows.
+const EvidenceClassThreat = "threat"
+
+// EvidenceClassAliases maps the API's evidence-class vocabulary onto the tokens
+// STORED in the index. It is a list per key for the one lane that has two
+// spellings: asking for the threat lane by either word must find every detection
+// in it, or the Detections page asks a question the store answers with silence.
+//
+// A token outside this table is a 400, for the reason severity and status are:
+// "?evidence_class=thret" answering 200 with nothing reads exactly like "nothing
+// has been detected".
+var EvidenceClassAliases = map[string][]string{
+	secfindings.EvidencePosture:  {secfindings.EvidencePosture},
+	secfindings.EvidenceExposure: {secfindings.EvidenceExposure},
+	secfindings.EvidenceSignal:   {secfindings.EvidenceSignal, EvidenceClassThreat},
+	EvidenceClassThreat:          {secfindings.EvidenceSignal, EvidenceClassThreat},
+}
+
+// evidenceClassOrder pins the vocabulary order in the 400 message.
+var evidenceClassOrder = []string{
+	secfindings.EvidencePosture, secfindings.EvidenceExposure,
+	secfindings.EvidenceSignal, EvidenceClassThreat,
+}
+
+// resolveEvidenceClasses folds caller tokens onto the stored vocabulary,
+// deduping after expansion so `threat,signal` is one terms clause, not two
+// copies of the same pair.
+func resolveEvidenceClasses(tokens []string) ([]string, error) {
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(tokens)+1)
+	seen := map[string]bool{}
+	for _, t := range tokens {
+		stored, ok := EvidenceClassAliases[strings.ToLower(strings.TrimSpace(t))]
+		if !ok {
+			return nil, fmt.Errorf("evidence_class must be one of %s (got %q)",
+				strings.Join(evidenceClassOrder, ", "), t)
+		}
+		for _, v := range stored {
+			if !seen[v] {
+				seen[v] = true
+				out = append(out, v)
+			}
+		}
+	}
+	return out, nil
+}
+
 // statusFacetOrder pins the response key order (map iteration is random; a
 // byte-pinned test and a stable UI both need determinism).
 var statusFacetOrder = []string{"pass", "warn", "fail", "not_applicable", "error", "unknown"}
@@ -129,9 +181,13 @@ type Filters struct {
 	Seam      []string // seam type or seam id
 	Framework []string // standards tag (CIS/800-53/PCI/ATT&CK…)
 	Device    []string // entity id / device uid / hostname
-	Q         string   // free text over the narrative + title fields
-	Since     time.Time
-	Until     time.Time
+	// EvidenceClass holds the STORED evidence-class tokens (already resolved
+	// through EvidenceClassAliases), so the threat lane can be selected AT THE
+	// STORE instead of after the fact in a browser.
+	EvidenceClass []string
+	Q             string // free text over the narrative + title fields
+	Since         time.Time
+	Until         time.Time
 	// Current selects the latest verdict per native_id (query-time collapse)
 	// instead of every retained verdict.
 	Current bool
@@ -141,7 +197,7 @@ type Filters struct {
 // are declared once so RejectUnknownQuery cannot drift from the parser (an
 // accepted-but-unparsed parameter is the F-61 failure: a 200 for a request that
 // was never honoured).
-var FilterQueryKeys = []string{"severity", "status", "seam", "framework", "device", "q", "since", "until", "current"}
+var FilterQueryKeys = []string{"severity", "status", "seam", "framework", "device", "evidence_class", "q", "since", "until", "current"}
 
 // isSafeToken reports whether a caller-supplied filter token is a plain
 // identifier we are willing to put in a terms clause. It is deliberately
@@ -256,6 +312,14 @@ func ParseFilters(r *http.Request, now time.Time) (Filters, error) {
 		return Filters{}, err
 	}
 	if f.Device, err = splitTokens("device", q.Get("device"), MaxFilterValues); err != nil {
+		return Filters{}, err
+	}
+
+	classes, err := splitTokens("evidence_class", q.Get("evidence_class"), MaxFilterValues)
+	if err != nil {
+		return Filters{}, err
+	}
+	if f.EvidenceClass, err = resolveEvidenceClasses(classes); err != nil {
 		return Filters{}, err
 	}
 

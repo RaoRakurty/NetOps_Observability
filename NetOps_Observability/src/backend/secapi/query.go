@@ -195,6 +195,13 @@ func BuildFilters(f Filters, tenantClause map[string]any) []any {
 	if len(f.Framework) > 0 {
 		clauses = append(clauses, map[string]any{"terms": map[string]any{FieldFramework: f.Framework}})
 	}
+	if len(f.EvidenceClass) > 0 {
+		// ONE terms clause selects the lane at the store. It replaced a browser
+		// filter over the newest 200 findings of every lane, which lost a real
+		// detection behind any posture burst and then printed "No detection
+		// fired in this window" (review 2026-09-08, 3.3-03).
+		clauses = append(clauses, map[string]any{"terms": map[string]any{FieldEvidenceClass: f.EvidenceClass}})
+	}
 	if len(f.Device) > 0 {
 		// The subject is grounded as entity_id; entity_tokens additionally
 		// carries the device:/host: co-location keys, so a caller may filter by

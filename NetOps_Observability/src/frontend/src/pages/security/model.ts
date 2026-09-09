@@ -81,7 +81,7 @@ export function evidenceClassLabel(c?: string): string {
  * contract's word. Kept as one constant so the divergence lives in one line.
  */
 export const THREAT_EVIDENCE_CLASS = "threat";
-export const THREAT_EVIDENCE_ALIASES = ["threat", "signal"] as const;
+export const THREAT_EVIDENCE_ALIASES = [THREAT_EVIDENCE_CLASS, "signal"] as const;
 export const isThreatLane = (c?: string): boolean =>
   (THREAT_EVIDENCE_ALIASES as readonly string[]).includes((c ?? "").toLowerCase());
 
