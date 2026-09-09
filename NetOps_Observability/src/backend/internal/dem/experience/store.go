@@ -197,7 +197,19 @@ func NewFileStore(path string) *FileStore {
 // LoadErr reports a corrupt-file condition for the integrator to log.
 func (s *FileStore) LoadErr() error { return s.loadErr }
 
-func (s *FileStore) flushLocked() error {
+// flushLocked persists the whole store as it currently stands.
+func (s *FileStore) flushLocked() error { return s.flushViewLocked(nil) }
+
+// flushViewLocked persists the store as it WOULD BE with the change log of each
+// tenant in `replace` swapped for the supplied one, WITHOUT touching s.changes.
+// It exists for RecordChange: the in-memory log must not change until the write
+// that makes the change durable has succeeded.
+//
+// This is deliberately not a rollback. Nothing is mutated and then put back, so
+// there is no shared backing array to restore wrongly. The old order did the
+// other thing and corrupted the log every time the write failed (see
+// RecordChange).
+func (s *FileStore) flushViewLocked(replace map[string][]ChangeEvent) error {
 	if s.path == "" {
 		return nil
 	}
@@ -211,7 +223,13 @@ func (s *FileStore) flushLocked() error {
 		out.Journeys[tenant] = list
 	}
 	for tenant, list := range s.changes {
+		if _, ok := replace[tenant]; ok {
+			continue
+		}
 		out.Changes[tenant] = list
+	}
+	for tenant, view := range replace {
+		out.Changes[tenant] = view
 	}
 	if len(s.promotions) > 0 {
 		out.Promotions = map[string][]Promotion{}
@@ -349,19 +367,28 @@ func (s *FileStore) RecordChange(_ context.Context, in ChangeEvent) (ChangeEvent
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := in.TenantID
-	prev := s.changes[t]
-	for _, c := range prev {
+	for _, c := range s.changes[t] {
 		if c.ID == in.ID {
 			// Changes are IMMUTABLE facts. A repeat of the same id is accepted
 			// idempotently and does not rewrite the recorded one.
 			return c, nil
 		}
 	}
-	s.changes[t] = trimChanges(append(prev, in))
-	if err := s.flushLocked(); err != nil {
-		s.changes[t] = prev
+	// Build the next log in ITS OWN array. `append` on the live slice would
+	// write into any spare capacity, and trimChanges sorts in place, so both
+	// would reorder the log the store is still serving before we know the write
+	// will succeed.
+	next := make([]ChangeEvent, 0, len(s.changes[t])+1)
+	next = append(next, s.changes[t]...)
+	next = trimChanges(append(next, in))
+	// Persist FIRST, adopt SECOND. The other order put a SAVED SLICE HEADER back
+	// on failure, which restores a mutated array under the old length: the
+	// refused change stayed in the log and the oldest kept change fell out of
+	// it, and the next successful write made both durable (§10).
+	if err := s.flushViewLocked(map[string][]ChangeEvent{t: next}); err != nil {
 		return ChangeEvent{}, err
 	}
+	s.changes[t] = next
 	return in, nil
 }
 

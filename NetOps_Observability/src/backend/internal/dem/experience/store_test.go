@@ -10,8 +10,10 @@ package experience
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -126,4 +128,91 @@ func TestIDShapesAreCheckedBeforeAnyLookup(t *testing.T) {
 	if !ValidJourneyID("jny-" + "0123456789abcdef0123456789abcdef") {
 		t.Fatal("a well-formed journey id was refused")
 	}
+}
+
+// TestRecordChangeDoesNotCorruptTheChangeLogWhenTheFlushFails: RecordChange
+// appended to the live slice, trimmed it, and put the SAVED SLICE HEADER back
+// when the flush failed. That is not a rollback. trimChanges sorts in place, and
+// an append with spare capacity writes in place, so both of them mutate the very
+// array the saved header points into: restoring the header restores a MUTATED
+// array under the old length. Three changes leave len 3 cap 4, so a fourth
+// append writes into the spare slot, the sort moves it to the front, and the
+// restored log reads [c4 c3 c2]. The change the producer was told FAILED is in
+// the log, and c1, which had been persisted, is gone.
+//
+// It does not stay in memory. The producer retries after its 500, RecordChange
+// mints a fresh id, and the next successful flush writes the whole map, so the
+// phantom and the deletion both become durable. The disk is therefore the
+// assertion that matters (§10, no silent failures).
+func TestRecordChangeDoesNotCorruptTheChangeLogWhenTheFlushFails(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exp.json")
+	s := NewFileStore(path)
+
+	// Three, deliberately: a nil slice grown by three appends is len 3 cap 4, so
+	// the fourth append has a spare slot to scribble into.
+	for i := 0; i < 3; i++ {
+		if _, err := s.RecordChange(ctx, ChangeEvent{
+			TenantID: "acme", Type: ChangeConfig,
+			Object:     fmt.Sprintf("sw-%d", i+1),
+			Summary:    fmt.Sprintf("change %d", i+1),
+			Provenance: prov(SourceConfigDrift, time.Duration(i-30)*time.Minute),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Break the write. The store's file now has a FILE for a parent directory,
+	// so the atomic write cannot create its temp file — the same shape as a full
+	// or read-only volume, without needing either.
+	s.path = filepath.Join(path, "exp.json")
+	if _, err := s.RecordChange(ctx, ChangeEvent{
+		TenantID: "acme", Type: ChangeConfig,
+		Object: "sw-4-phantom", Summary: "the change that was refused",
+		Provenance: prov(SourceConfigDrift, -1*time.Minute),
+	}); err == nil {
+		t.Fatal("RecordChange must report a flush it could not complete")
+	}
+
+	assertLog := func(where string, got []ChangeEvent, want []string) {
+		t.Helper()
+		have := make([]string, 0, len(got))
+		for _, c := range got {
+			if c.Object == "sw-4-phantom" {
+				t.Errorf("PHANTOM %s: the change RecordChange refused is in the log", where)
+			}
+			have = append(have, c.Object)
+		}
+		if strings.Join(have, ",") != strings.Join(want, ",") {
+			t.Errorf("CHANGE LOG CORRUPT %s: log reads [%s], want [%s]",
+				where, strings.Join(have, " "), strings.Join(want, " "))
+		}
+	}
+
+	inMem, err := s.ListChanges(ctx, "acme", ChangeQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLog("in memory", inMem, []string{"sw-3", "sw-2", "sw-1"})
+
+	// The next successful write is where an in-memory corruption becomes
+	// permanent: it serialises the whole map as it then stands.
+	s.path = path
+	if _, err := s.RecordChange(ctx, ChangeEvent{
+		TenantID: "acme", Type: ChangeConfig,
+		Object: "sw-5", Summary: "a later change that does persist",
+		Provenance: prov(SourceConfigDrift, -30*time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewFileStore(path)
+	if err := reloaded.LoadErr(); err != nil {
+		t.Fatalf("the store wrote a file it cannot read back: %v", err)
+	}
+	onDisk, err := reloaded.ListChanges(ctx, "acme", ChangeQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLog("on disk", onDisk, []string{"sw-5", "sw-3", "sw-2", "sw-1"})
 }
