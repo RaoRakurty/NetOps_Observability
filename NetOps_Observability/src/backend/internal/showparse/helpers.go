@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"netops/backend/internal/asciifold"
 )
 
 // THE " x" SENTINEL, AND WHERE IT IS SAFE.
@@ -295,50 +297,18 @@ func cutAtLastGap(s string) (before, after string, ok bool) {
 	return s[:idx], s[end:], true
 }
 
-// asciiLower folds one byte the ASCII way. Bytes outside A-Z are returned
-// unchanged, which is exactly what a marker scan wants: a byte of a multi-byte
-// rune must never be rewritten.
-func asciiLower(b byte) byte {
-	if b >= 'A' && b <= 'Z' {
-		return b + ('a' - 'A')
-	}
-	return b
-}
-
-// asciiFoldIndex returns the byte offset in s of the first case-insensitive
+// asciiFoldIndex returns the byte offset in line of the first case-insensitive
 // ASCII match of marker, or -1 when there is none.
 //
-// WHY this rather than strings.Index(strings.ToLower(s), marker): ToLower is NOT
-// length-preserving. U+023A and U+023E each grow from two bytes to three, and
-// every invalid UTF-8 byte becomes a three-byte U+FFFD. An offset measured on
-// the lower-cased COPY therefore does not address the original string: it can
-// run past the end of it (a slice panic) or land mid-rune (a silently wrong
-// answer). Device output is attacker-shaped, and a hostname is enough to carry
-// either code point. So the scan runs over the original bytes. The offset it
-// returns is always valid for the string the caller will slice.
-//
-// Every marker this package searches for is ASCII, so a byte-wise fold is both
-// correct here and cheaper than allocating a lower-cased copy.
-func asciiFoldIndex(s, marker string) int {
-	if marker == "" {
-		return 0
-	}
-	if len(marker) > len(s) {
-		return -1
-	}
-	for i := 0; i <= len(s)-len(marker); i++ {
-		j := 0
-		for ; j < len(marker); j++ {
-			if asciiLower(s[i+j]) != asciiLower(marker[j]) {
-				break
-			}
-		}
-		if j == len(marker) {
-			return i
-		}
-	}
-	return -1
-}
+// It is internal/asciifold.Index under this package's own name. The scan lives
+// in its own package because the defect it exists to prevent — measuring an
+// offset on a strings.ToLower COPY, which is not length-preserving, and then
+// slicing the ORIGINAL — was found in more than one package: it panicked this
+// parser on device output carrying U+023A/U+023E or invalid UTF-8, and it
+// leaked a bearer token out of the pipeline debugger's redactor. One
+// implementation, one set of tests, no second chance to get it wrong. Read
+// internal/asciifold for the full rationale.
+func asciiFoldIndex(s, marker string) int { return asciifold.Index(s, marker) }
 
 // valueAfter returns the text following the first occurrence of marker, trimmed,
 // and whether the marker was present. The match is ASCII case-insensitive.
