@@ -44,9 +44,13 @@
   "overrides": {
     "brace-expansion": "^5.0.8",
     "fast-uri": "^3.1.6",
+    "gray-matter": {
+      "js-yaml": "^3.15.2"
+    },
+    "js-yaml": "^4.3.2",
     "qs": "^6.16.0",
     "serialize-javascript": "^7.0.5",
-    "svgo": "^3.3.4",
+    "svgo": "^3.3.5",
     "uuid": "^11.1.1",
     "webpack": "^5.104.1",
     "webpack-dev-server": "^5.2.6",
