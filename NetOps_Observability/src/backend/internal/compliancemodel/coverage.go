@@ -40,18 +40,27 @@ type ControlResult struct {
 // framework's controls only. Two frameworks over the same findings yield two
 // independent FrameworkCoverage values — the basis of per-framework independence.
 type FrameworkCoverage struct {
-	Framework         string               `json:"framework"`
-	Version           string               `json:"version"`
-	ControlsInScope   int                  `json:"controls_in_scope"`   // coverage denominator
-	ControlsWithCheck int                  `json:"controls_with_check"` // coverage numerator
-	CoveragePercent   float64              `json:"coverage_percent"`    // 100 * withCheck / inScope
-	Assessed          int                  `json:"assessed"`            // in-scope controls with ≥1 finding this run
-	Passed            int                  `json:"passed"`
-	Warned            int                  `json:"warned"`
-	Failed            int                  `json:"failed"`
-	Unassessed        int                  `json:"unassessed"` // in-scope controls with a check but no finding
-	Verdict           secfindings.StatusID `json:"verdict_id"` // worst assessed control status; Unknown = nothing assessed
-	VerdictName       string               `json:"verdict"`
+	Framework         string  `json:"framework"`
+	Version           string  `json:"version"`
+	ControlsInScope   int     `json:"controls_in_scope"`   // coverage denominator
+	ControlsWithCheck int     `json:"controls_with_check"` // coverage numerator
+	CoveragePercent   float64 `json:"coverage_percent"`    // 100 * withCheck / inScope
+	// Assessed counts in-scope controls that reached a real VERDICT this run —
+	// not controls that merely have a finding. A finding whose worst status is
+	// Unknown is the producer SAYING it could not assess the control
+	// ("running-config unavailable — control not assessed (fail-closed)"), so
+	// counting it here would report a measurement that never happened.
+	Assessed int `json:"assessed"`
+	Passed   int `json:"passed"`
+	Warned   int `json:"warned"`
+	Failed   int `json:"failed"`
+	// Unassessed counts in-scope controls this platform can speak to but has no
+	// verdict for: a control with a check and no finding, and a control whose
+	// only finding is a stated non-verdict (Unknown). The second group used to
+	// fall outside BOTH counts.
+	Unassessed  int                  `json:"unassessed"`
+	Verdict     secfindings.StatusID `json:"verdict_id"` // worst assessed control status; Unknown = nothing assessed
+	VerdictName string               `json:"verdict"`
 	// ScorePercent is 100 * Passed / (Passed+Warned+Failed) over the controls
 	// that were actually ASSESSED. It is a POINTER so "nothing was assessed"
 	// serializes as null and can never be rendered as 0 % (which reads as a
@@ -70,6 +79,14 @@ type FrameworkCoverage struct {
 // on an estate whose findings all map to controls PCI does not cover must read
 // as "nothing here speaks to PCI yet", never as 0 %.
 const unassessedNote = "No assessed control maps to this framework yet — this is an absence of assessment, not a passing or failing result."
+
+// unscoredNote is what a framework says when controls WERE assessed but none of
+// them produced a passing, warning or failing result — every one came back not
+// applicable, or the check itself errored. It exists because unassessedNote
+// would be a lie in that case, and the panel prints the sentence directly above
+// the assessed count.
+const unscoredNote = "Controls in this framework's scope were assessed, but none produced a passing, warning or failing result — " +
+	"each one came back not applicable on this estate, or the check itself could not complete, so there is no score to report."
 
 // notInstalledNote is what an enabled framework whose CROSSWALK is not part of
 // this deployment says. It deliberately mirrors unassessedNote rather than
@@ -187,10 +204,20 @@ func ProjectFramework(findings []secfindings.Finding, cat *Catalog, fp Framework
 			cov.ControlsWithCheck++
 		}
 
-		if a := byControl[id]; a != nil {
+		a := byControl[id]
+		if a != nil {
 			res.Findings = a.count
 			res.StatusID = a.worst
 			res.Status = a.worst.String()
+		}
+		// COUNT BY VERDICT, NOT BY THE PRESENCE OF A FINDING (review 2026-09-08,
+		// 3.3-05). A control whose worst status is Unknown has a finding that
+		// says, in the producer's own words, that it was NOT assessed. It used
+		// to increment Assessed, sit outside Unassessed, score nothing, and then
+		// be described by a note saying no control was assessed — the panel
+		// printed the count and the contradicting sentence together.
+		switch {
+		case a != nil && worstRank(a.worst) > worstRank(secfindings.StatusUnknown):
 			cov.Assessed++
 			switch a.worst {
 			case secfindings.StatusFail:
@@ -203,8 +230,10 @@ func ProjectFramework(findings []secfindings.Finding, cat *Catalog, fp Framework
 			if worstRank(a.worst) > worstRank(cov.Verdict) {
 				cov.Verdict = a.worst
 			}
-		} else if hasCheck {
-			// A control Correlix CAN evidence but no finding touched this run.
+		case a != nil || hasCheck:
+			// Either a control Correlix CAN evidence that no finding touched
+			// this run, or one whose only finding is a stated non-verdict.
+			// Both are "no answer", which is what Unassessed means.
 			cov.Unassessed++
 		}
 		results = append(results, res)
@@ -216,10 +245,16 @@ func ProjectFramework(findings []secfindings.Finding, cat *Catalog, fp Framework
 		cov.CoveragePercent = 100 * float64(cov.ControlsWithCheck) / float64(cov.ControlsInScope)
 	}
 	cov.VerdictName = cov.Verdict.String()
-	if scored := cov.Passed + cov.Warned + cov.Failed; scored > 0 {
+	// A null score always carries the sentence that explains it, and the
+	// sentence must match the COUNTS printed beside it: "nothing was assessed"
+	// is only true when Assessed is 0.
+	switch scored := cov.Passed + cov.Warned + cov.Failed; {
+	case scored > 0:
 		pct := 100 * float64(cov.Passed) / float64(scored)
 		cov.ScorePercent = &pct
-	} else {
+	case cov.Assessed > 0:
+		cov.Note = unscoredNote
+	default:
 		cov.Note = unassessedNote
 	}
 	return cov

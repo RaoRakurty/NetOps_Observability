@@ -249,3 +249,100 @@ func statusOf(c FrameworkCoverage, control string) secfindings.StatusID {
 	}
 	return secfindings.StatusUnknown
 }
+
+// ── 3.3-05: an unassessed control must not be counted as an assessed one ─────
+//
+// The hardening engine emits a REAL finding for a control it could not evaluate:
+// StatusUnknown, with "running-config unavailable — control not assessed
+// (fail-closed)" on it. That is the honest producer behaviour and it must stay.
+//
+// The projection used to count by the PRESENCE of a finding, so that control
+// landed in Assessed, was excluded from Unassessed, contributed to no pass/warn/
+// fail, left the score null — and was then described by a note saying no control
+// was assessed. The frameworks panel prints "1 of 2 in scope assessed" directly
+// above "Nothing assessed for this framework yet." Both cannot be true.
+
+// unknownOnlyFinding is one control the platform TRIED to assess and could not,
+// in the shape internal/hardening produces it.
+func unknownOnlyFinding(cat *Catalog) secfindings.Finding {
+	f := cat.Convert(compliance.Finding{Check: "snmp-v3-strength"}, EmitOptions{TenantID: "acme"}) // → SC-8
+	f.SetStatus(secfindings.StatusUnknown)
+	f.Detail = "running-config unavailable — control not assessed (fail-closed)"
+	return f
+}
+
+func TestUnknownOnlyControlIsNotCountedAsAssessed(t *testing.T) {
+	cat := DefaultCatalog()
+	cov := ProjectFramework([]secfindings.Finding{unknownOnlyFinding(cat)}, cat, newNarrowProvider())
+
+	if statusOf(cov, ControlSC8) != secfindings.StatusUnknown {
+		t.Fatalf("the fixture is wrong: SC-8 status = %v, want Unknown", statusOf(cov, ControlSC8))
+	}
+	if cov.Assessed != 0 {
+		t.Errorf("assessed = %d, want 0: the only finding on SC-8 says the control was NOT assessed "+
+			"(running-config unavailable, fail-closed), so counting it as assessed states a measurement "+
+			"that never happened", cov.Assessed)
+	}
+	if cov.Unassessed != cov.ControlsWithCheck {
+		t.Errorf("unassessed = %d, want %d: a control whose only verdict is Unknown belongs with the "+
+			"controls nobody has a verdict for, not outside both counts",
+			cov.Unassessed, cov.ControlsWithCheck)
+	}
+	if cov.ScorePercent != nil {
+		t.Errorf("score_percent = %v, want null", *cov.ScorePercent)
+	}
+	if cov.Verdict != secfindings.StatusUnknown {
+		t.Errorf("verdict = %v, want Unknown", cov.Verdict)
+	}
+	// Nothing is hidden: the control row still carries its finding and its
+	// non-verdict, so the operator can see WHY there is no answer.
+	for _, c := range cov.Controls {
+		if c.ControlID == ControlSC8 && c.Findings != 1 {
+			t.Errorf("SC-8 findings = %d, want 1 — the finding must still be reported", c.Findings)
+		}
+	}
+}
+
+// The note and the numbers must agree. This is the half an operator actually
+// reads: the panel prints the note and the counts side by side.
+func TestTheNoteAndTheCountsAgree(t *testing.T) {
+	cat := DefaultCatalog()
+
+	unknownOnly := ProjectFramework([]secfindings.Finding{unknownOnlyFinding(cat)}, cat, newNarrowProvider())
+	if unknownOnly.Note != unassessedNote {
+		t.Errorf("note = %q, want the nothing-was-assessed sentence", unknownOnly.Note)
+	}
+	if unknownOnly.Note != "" && unknownOnly.Assessed != 0 {
+		t.Errorf("the panel would print %q above %d assessed controls",
+			unknownOnly.Note, unknownOnly.Assessed)
+	}
+
+	// The other way round: a control WAS assessed and came back not applicable,
+	// so there is no passing share to report — but the note must not claim
+	// nothing was assessed, because something was.
+	na := cat.Convert(compliance.Finding{Check: "snmp-v3-strength"}, EmitOptions{TenantID: "acme"})
+	na.SetStatus(secfindings.StatusNotApplicable)
+	naOnly := ProjectFramework([]secfindings.Finding{na}, cat, newNarrowProvider())
+	if naOnly.Assessed != 1 {
+		t.Fatalf("assessed = %d, want 1: NotApplicable is a verdict — the control WAS looked at", naOnly.Assessed)
+	}
+	if naOnly.ScorePercent != nil {
+		t.Errorf("score_percent = %v, want null: nothing passed, warned or failed", *naOnly.ScorePercent)
+	}
+	if naOnly.Note == unassessedNote {
+		t.Errorf("note = %q, but %d control was assessed — the sentence contradicts the number",
+			naOnly.Note, naOnly.Assessed)
+	}
+	if naOnly.Note == "" {
+		t.Error("a null score must always carry the sentence that explains it")
+	}
+
+	// And the ordinary case is untouched: a real verdict is assessed and scored.
+	scored := ProjectFramework(sharedFindings(cat), cat, newNarrowProvider())
+	if scored.Assessed != 1 || scored.Failed != 1 {
+		t.Errorf("assessed/failed = %d/%d, want 1/1", scored.Assessed, scored.Failed)
+	}
+	if scored.Note != "" {
+		t.Errorf("a scored framework must carry no empty-state sentence, got %q", scored.Note)
+	}
+}
