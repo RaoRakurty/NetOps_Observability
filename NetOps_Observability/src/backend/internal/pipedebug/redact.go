@@ -18,8 +18,7 @@ package pipedebug
 // about isolation, and they are identifiers, not credentials.
 
 import (
-	"strings"
-
+	"netops/backend/internal/asciifold"
 	"netops/backend/internal/protocoldiag"
 )
 
@@ -57,29 +56,43 @@ func RedactString(s string) string {
 
 // stripBearer replaces the value that follows any known credential prefix,
 // keeping the prefix so a reader still sees WHICH credential was present.
+//
+// THE OFFSET MUST BE MEASURED ON THE STRING WE ARE GOING TO SLICE. This used to
+// find the prefix in strings.ToLower(s) and then slice s. strings.ToLower is not
+// length preserving: U+023A and U+023E each grow from two bytes to three, and
+// every byte of invalid UTF-8 becomes a three-byte U+FFFD. One such byte
+// anywhere earlier in the line moved every later offset, so the cut landed
+// inside — or past the end of — the credential and part or all of the token was
+// written out in the clear. A debug session captures container logs, which is
+// exactly where an attacker-influenced hostname or a mangled UTF-8 chunk turns
+// up, and the session directory is what a support bundle ships: the bundle
+// deliberately does not redact again, because redaction happens at write time.
+//
+// internal/asciifold scans the ORIGINAL bytes, so the offset it returns always
+// addresses this string. Every prefix above is ASCII, which is what makes an
+// ASCII fold the right and cheapest answer.
 func stripBearer(s string) string {
-	lower := strings.ToLower(s)
 	for _, p := range bearerPrefixes {
-		for idx := 0; ; {
-			i := strings.Index(lower[idx:], p)
+		for idx := 0; idx < len(s); {
+			i := asciifold.Index(s[idx:], p)
 			if i < 0 {
 				break
 			}
+			// start is an offset into s because i was measured on s[idx:].
 			start := idx + i + len(p)
 			end := start
 			for end < len(s) && !isTokenBreak(s[end]) {
 				end++
 			}
 			if end == start {
+				// The prefix is there but nothing follows it (end of line, or a
+				// break character). Nothing to redact; resume after it. start is
+				// strictly greater than idx, so this always makes progress.
 				idx = start
 				continue
 			}
 			s = s[:start] + mark + s[end:]
-			lower = strings.ToLower(s)
 			idx = start + len(mark)
-			if idx >= len(s) {
-				break
-			}
 		}
 	}
 	return s
