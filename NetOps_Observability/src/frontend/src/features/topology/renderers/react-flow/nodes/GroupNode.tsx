@@ -71,7 +71,7 @@ function GroupNodeBase(props: NodeProps) {
         <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
         <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
         <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-          <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", color: "var(--fg-subtle)" }}>
+          <span style={{ fontSize: 9.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".06em", color: "var(--fg-subtle)" }}>
             {kindLabel}
           </span>
           <button onClick={toggle} title="Expand group" aria-label="Expand group"
@@ -83,11 +83,11 @@ function GroupNodeBase(props: NodeProps) {
         <div style={{ marginTop: 3, display: "flex", alignItems: "center", gap: 7 }}>
           <span title={HEALTH_LABEL[health]} style={{ width: 16, height: 16, borderRadius: "50%", flex: "0 0 auto",
             display: "inline-flex", alignItems: "center", justifyContent: "center", border: `2px solid ${color}`,
-            background: HEALTH_TINT[health], color, fontSize: 9, fontWeight: 700 }}>{HEALTH_GLYPH[health]}</span>
-          <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: "-0.01em", color: "var(--fg)", overflow: "hidden",
+            background: HEALTH_TINT[health], color, fontSize: 9, fontWeight: 600 }}>{HEALTH_GLYPH[health]}</span>
+          <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--fg)", overflow: "hidden",
             textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{group.label}</span>
         </div>
-        <div style={{ marginTop: 7, display: "flex", gap: 6, flexWrap: "wrap", fontSize: 10.5, fontWeight: 600 }}>
+        <div style={{ marginTop: 7, display: "flex", gap: 6, flexWrap: "wrap", fontSize: 10.5, fontWeight: 500 }}>
           <span style={{ color: "var(--fg-muted)" }}>{counts.total} nodes</span>
           {counts.critical > 0 && <span style={{ color: HEALTH_COLOR.critical }}>{counts.critical} crit</span>}
           {counts.warning > 0 && <span style={{ color: HEALTH_COLOR.warning }}>{counts.warning} warn</span>}
@@ -129,8 +129,8 @@ function GroupNodeBase(props: NodeProps) {
         boxShadow: "0 1px 3px rgba(16,24,40,0.10)", pointerEvents: "auto" }}>
         <span title={HEALTH_LABEL[health]} style={{ width: 8, height: 8, borderRadius: "50%", background: color,
           boxShadow: `0 0 0 2px ${HEALTH_TINT[health]}`, flex: "0 0 auto" }} />
-        <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--fg-subtle)" }}>{kindLabel}</span>
-        <span style={{ fontSize: 11.5, fontWeight: 650, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis",
+        <span style={{ fontSize: 9.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--fg-subtle)" }}>{kindLabel}</span>
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis",
           whiteSpace: "nowrap", maxWidth: 220 }}>{group.label}</span>
         <span style={{ fontSize: 10, color: "var(--fg-subtle)" }}>· {counts.total}</span>
         <button onClick={toggle} title="Collapse group" aria-label="Collapse group"

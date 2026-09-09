@@ -37,7 +37,7 @@ function BogonGroup({ g }: { g: ReturnType<typeof groupSightings>[number] }) {
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <span className="mono" style={{ fontWeight: 600 }}>{g.block}</span>
+        <span className="mono" style={{ fontWeight: 500 }}>{g.block}</span>
         <Chip label={`${g.rows.length} prefix${g.rows.length === 1 ? "" : "es"}`} tone="var(--crit)" />
         <span className="fact-line">{g.why}</span>
       </div>

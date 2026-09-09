@@ -121,7 +121,7 @@ export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
                     <tr key={u.seq}>
                       <td className="mono">{u.time ? new Date(u.time).toISOString().slice(11, 19) : "—"}</td>
                       <td>
-                        <span style={{ color: u.type === "W" ? "var(--crit)" : "var(--accent)", fontWeight: 600 }}>
+                        <span style={{ color: u.type === "W" ? "var(--crit)" : "var(--accent)", fontWeight: 500 }}>
                           {u.type === "W" ? "withdrawn" : "learned"}
                         </span>
                       </td>

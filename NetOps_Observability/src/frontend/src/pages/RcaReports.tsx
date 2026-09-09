@@ -74,7 +74,7 @@ export default function RcaReports() {
     { key: "title", header: "Report", width: "2fr", sortable: true, text: (r) => `${r.report_type} ${r.title}`,
       render: (r) => (
         <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.3, minWidth: 0 }}>
-          <span style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</span>
+          <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</span>
           <span style={{ fontSize: 11, color: "var(--muted)" }}>{r.report_type}</span>
         </span>
       ) },

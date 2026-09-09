@@ -18,7 +18,7 @@ const taStyle: React.CSSProperties = {
   borderRadius: 8, color: "var(--fg)", font: "inherit", fontSize: 13, padding: "8px 10px",
   resize: "vertical", width: "100%",
 };
-const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "var(--muted)" };
+const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 500, color: "var(--muted)" };
 const hintStyle: React.CSSProperties = { fontSize: 11.5, color: "var(--muted)" };
 
 type Kind = "dns" | "ntp";
@@ -35,7 +35,7 @@ export default function SystemNetworkCards() {
         <Icon name={icon} size={20} />
       </div>
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 700 }}>{title}</div>
+        <div style={{ fontWeight: 600 }}>{title}</div>
         <div style={{ fontSize: 12, color: "var(--muted)" }}>
           {desc} {count > 0 && <span style={{ color: "var(--fg)" }}>· {count} configured</span>}
         </div>
@@ -142,9 +142,9 @@ function ConfigureForm({ kind, cfg, onSaved, onClose }: { kind: Kind; cfg: Syste
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
               <tr style={{ color: "var(--muted)", textAlign: "left" }}>
-                <th style={{ fontWeight: 600, padding: "2px 6px" }}>Query</th>
-                <th style={{ fontWeight: 600, padding: "2px 6px", textAlign: "center" }}>Result</th>
-                <th style={{ fontWeight: 600, padding: "2px 6px" }}>Answer</th>
+                <th style={{ fontWeight: 500, padding: "2px 6px" }}>Query</th>
+                <th style={{ fontWeight: 500, padding: "2px 6px", textAlign: "center" }}>Result</th>
+                <th style={{ fontWeight: 500, padding: "2px 6px" }}>Answer</th>
               </tr>
             </thead>
             <tbody>
@@ -169,11 +169,11 @@ function ConfigureForm({ kind, cfg, onSaved, onClose }: { kind: Kind; cfg: Syste
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead>
                 <tr style={{ color: "var(--muted)", textAlign: "left" }}>
-                  <th style={{ fontWeight: 600, padding: "2px 6px" }}>Server</th>
-                  <th style={{ fontWeight: 600, padding: "2px 6px", textAlign: "center" }}>Reachable</th>
-                  <th style={{ fontWeight: 600, padding: "2px 6px", textAlign: "center" }}>Stratum</th>
-                  <th style={{ fontWeight: 600, padding: "2px 6px", textAlign: "right" }}>Offset</th>
-                  <th style={{ fontWeight: 600, padding: "2px 6px", textAlign: "right" }}>RTT</th>
+                  <th style={{ fontWeight: 500, padding: "2px 6px" }}>Server</th>
+                  <th style={{ fontWeight: 500, padding: "2px 6px", textAlign: "center" }}>Reachable</th>
+                  <th style={{ fontWeight: 500, padding: "2px 6px", textAlign: "center" }}>Stratum</th>
+                  <th style={{ fontWeight: 500, padding: "2px 6px", textAlign: "right" }}>Offset</th>
+                  <th style={{ fontWeight: 500, padding: "2px 6px", textAlign: "right" }}>RTT</th>
                 </tr>
               </thead>
               <tbody>

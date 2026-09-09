@@ -87,7 +87,7 @@ export default function AccessExplorer() {
                 <tbody>
                   {reaches.map((r) => (
                     <tr key={r.tenant_id}>
-                      <td style={{ fontWeight: 600 }}>{r.tenant_name}</td>
+                      <td style={{ fontWeight: 500 }}>{r.tenant_name}</td>
                       <td style={{ color: "var(--muted)", fontSize: 12.5 }}>{r.org_name}</td>
                       <td>
                         {r.granted_by.map((g, i) => (

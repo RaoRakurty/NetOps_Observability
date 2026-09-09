@@ -521,7 +521,7 @@ export default function Opsis({ split, onToggleSplit, ask, onAskHandled }: {
               the assistant, and which may run AI Investigations (tool lookups). */}
           {tenantRows && tenantRows.length > 0 && (
             <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 2 }}>Workspace access</div>
+              <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 2 }}>Workspace access</div>
               <p style={{ color: "var(--muted)", fontSize: 12.5, margin: "0 0 8px" }}>
                 Assistant answers are always scoped to each workspace&apos;s own data. Investigations
                 let the AI run governed, read-only lookups before answering.

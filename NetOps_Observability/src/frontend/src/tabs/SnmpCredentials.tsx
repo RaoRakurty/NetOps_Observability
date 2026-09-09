@@ -72,7 +72,7 @@ export default function SnmpCredentials() {
           <tbody>
             {creds.map((c) => (
               <tr key={c.id}>
-                <td style={{ fontWeight: 600 }}>{c.name}</td>
+                <td style={{ fontWeight: 500 }}>{c.name}</td>
                 <td><span className="badge">{c.version}</span></td>
                 <td className="mono">{c.version === "v3" ? "—" : (c.community || (c.has_community ? "••••••" : "—"))}</td>
                 <td>{c.port}</td>

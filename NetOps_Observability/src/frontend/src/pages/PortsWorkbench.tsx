@@ -84,7 +84,7 @@ function columnsFor(preset: PresetKey): Column<PortRow>[] {
 function Drawer({ row, onClose }: { row: PortRow; onClose: () => void }) {
   const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
     <div style={{ borderTop: "1px solid var(--line)", padding: "10px 0" }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 11, fontWeight: 500, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>{title}</div>
       {children}
     </div>
   );
@@ -97,7 +97,7 @@ function Drawer({ row, onClose }: { row: PortRow; onClose: () => void }) {
     <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 420, maxWidth: "90vw", background: "var(--panel,#14161a)", borderLeft: "1px solid var(--line)", boxShadow: "-8px 0 24px rgba(0,0,0,0.3)", overflowY: "auto", zIndex: 50, padding: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <div style={{ fontWeight: 600 }}>{row.device} · {row.port_name}</div>
+          <div style={{ fontWeight: 500 }}>{row.device} · {row.port_name}</div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>{dash(row.if_alias)}</div>
         </div>
         <button className="op-hd-btn" onClick={onClose} title="Close" style={{ fontSize: 14 }}>×</button>

@@ -1124,7 +1124,7 @@ function CanvasInner({
           // auto-collapsed AGGREGATE (group cards) — see aggregateAtScale.
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <div style={{ maxWidth: 520, textAlign: "center", padding: "18px 22px", border: "1px dashed var(--border)", borderRadius: 10, background: "var(--panel)" }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>
                 {view.nodes.length.toLocaleString()} nodes — too many for the interactive canvas
               </div>
               <div style={{ fontSize: 12.5, color: "var(--fg-muted)", lineHeight: 1.5, marginBottom: 10 }}>
@@ -1257,7 +1257,7 @@ function CanvasInner({
                   <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                     <div style={{ maxWidth: 460, textAlign: "center", padding: "18px 22px", border: `1px dashed ${cloudFailed ? "var(--bad)" : "var(--border)"}`, borderRadius: 10, background: "var(--panel)", pointerEvents: "auto" }}
                       role={cloudFailed ? "alert" : undefined}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: cloudFailed ? "var(--bad)" : "var(--fg)", marginBottom: 6 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: cloudFailed ? "var(--bad)" : "var(--fg)", marginBottom: 6 }}>
                         {cloudStatus === "loading"
                           ? "Loading the cloud network…"
                           : cloudFailed
@@ -1285,7 +1285,7 @@ function CanvasInner({
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <div style={{ maxWidth: 440, textAlign: "center", padding: "18px 22px", border: `1px dashed ${readFailed ? "var(--bad)" : "var(--border)"}`, borderRadius: 10, background: "var(--panel)", pointerEvents: "auto" }}
                   role={readFailed ? "alert" : undefined}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: readFailed ? "var(--bad)" : "var(--fg)", marginBottom: 6 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: readFailed ? "var(--bad)" : "var(--fg)", marginBottom: 6 }}>
                     {readFailed
                       ? "The topology could not be read"
                       : mode === "dependency" ? "No service dependencies in this window" : "Nothing to show for this view yet"}

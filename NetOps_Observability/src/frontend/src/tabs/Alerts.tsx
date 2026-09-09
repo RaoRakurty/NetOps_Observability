@@ -309,7 +309,7 @@ export function EpisodeDetailBody({
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         <span className={`badge ${severityClass(ep.state)}`}>{ep.state}</span>
-        <span style={{ fontWeight: 600 }}>{ep.signal}</span>
+        <span style={{ fontWeight: 500 }}>{ep.signal}</span>
         <Chip label={statusLabel(ep.status)} tone={statusTone(ep.status)} />
         {ep.flapping && <Chip label="Flapping" tone="var(--warn)" title={`Rapid state changes detected (${ep.flip_count ?? 0} flips)`} />}
       </div>

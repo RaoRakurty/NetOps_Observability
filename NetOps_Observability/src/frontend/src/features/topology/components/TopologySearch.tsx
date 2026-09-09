@@ -153,7 +153,7 @@ export default function TopologySearch({
                   padding: "7px 11px",
                 }}
               >
-                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{node.label}</div>
+                <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg)" }}>{node.label}</div>
                 <div
                   style={{
                     fontSize: 12.5,

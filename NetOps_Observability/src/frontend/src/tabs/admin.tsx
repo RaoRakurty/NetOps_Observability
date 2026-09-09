@@ -384,7 +384,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
                 <td>
                   <input type="checkbox" checked={selected.has(u.username)} onChange={() => toggle(u.username)} aria-label={`Select ${u.username}`} />
                 </td>
-                <td style={{ fontWeight: 600 }}>{u.display_name || u.username}</td>
+                <td style={{ fontWeight: 500 }}>{u.display_name || u.username}</td>
                 <td className="mono">{u.email || "—"}</td>
                 <td>
                   <select className="inline-select" value={u.role} onChange={(e) => changeRole(u, e.target.value)}>
@@ -474,7 +474,7 @@ export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: str
             {roles.map((r) => (
               <tr key={r.id}>
                 <td>
-                  <div style={{ fontWeight: 700 }}>{r.name} {!r.builtin && <span className="badge accent-badge">custom</span>}</div>
+                  <div style={{ fontWeight: 600 }}>{r.name} {!r.builtin && <span className="badge accent-badge">custom</span>}</div>
                   <div className="adm-line">{r.description || (r.builtin ? "built-in" : "custom role")}</div>
                 </td>
                 {modules.map((m) => {
@@ -656,7 +656,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                 const isParent = t.id === "global";
                 return (
                   <tr key={t.id}>
-                    <td style={{ fontWeight: 600 }}>
+                    <td style={{ fontWeight: 500 }}>
                       {t.name}
                       <div className="adm-line mono" title={t.id}>{t.slug}</div>
                     </td>
@@ -887,7 +887,7 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
                 const isRoot = o.id === "global";
                 return (
                   <tr key={o.id}>
-                    <td style={{ fontWeight: 600 }}>
+                    <td style={{ fontWeight: 500 }}>
                       {onManageOrg
                         ? <button className="ia-linkname" onClick={() => onManageOrg(o.id, o.name)}>{o.name}</button>
                         : o.name}
@@ -1028,7 +1028,7 @@ export function RegionsAdmin() {
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
-                <td style={{ fontWeight: 600 }}>{r.label}</td>
+                <td style={{ fontWeight: 500 }}>{r.label}</td>
                 <td><span className={`badge ${r.data_plane.local ? "" : "accent"}`}>{r.data_plane.local ? "Local" : "Dedicated"}</span></td>
                 <td style={{ color: "var(--muted)" }}>{r.tenants}</td>
                 <td style={{ color: "var(--muted)" }}>{r.orgs}</td>
@@ -1281,7 +1281,7 @@ export function BindingsAdmin() {
             <tbody>
               {list.map((b) => (
                 <tr key={b.id}>
-                  <td style={{ fontWeight: 600 }}>{b.principal_id}</td>
+                  <td style={{ fontWeight: 500 }}>{b.principal_id}</td>
                   <td><span className="badge">{b.role_id}</span></td>
                   <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{labelScope(b.scope_id)}</td>
                   <td>{b.effect === "deny" ? <span className="badge" style={{ color: "var(--bad)" }}>Deny</span> : <span className="badge accent">Allow</span>}</td>
@@ -1404,7 +1404,7 @@ function OrgAccessPanel({ orgId, orgName }: { orgId: string; orgName?: string })
             <tbody>
               {list.map((b) => (
                 <tr key={b.id}>
-                  <td style={{ fontWeight: 600 }}>{b.principal_id}</td>
+                  <td style={{ fontWeight: 500 }}>{b.principal_id}</td>
                   <td><span className="badge">{b.role_id}</span></td>
                   <td style={{ textAlign: "right" }}><button className="dash-btn" onClick={() => revoke(b)}>Revoke</button></td>
                 </tr>
@@ -1553,7 +1553,7 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
           }}>
             <input type="radio" name="add-mode" checked={mode === m.id} onChange={() => setMode(m.id)} style={{ marginTop: 3 }} />
             <span style={{ display: "grid", gap: 2 }}>
-              <span style={{ fontWeight: 650 }}>{m.name}</span>
+              <span style={{ fontWeight: 600 }}>{m.name}</span>
               <span className="adm-line">{m.desc}</span>
             </span>
           </label>
@@ -1841,7 +1841,7 @@ export function SessionsAdmin() {
             <tbody>
               {shown.map((s) => (
                 <tr key={s.id}>
-                  <td style={{ fontWeight: 600 }}>{s.display_name || s.user_id}</td>
+                  <td style={{ fontWeight: 500 }}>{s.display_name || s.user_id}</td>
                   <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{s.tenant_id || "—"}</td>
                   <td className="mono">{s.issued_ip || "—"}</td>
                   <td>{statusBadge(s.status)}</td>
@@ -2168,7 +2168,7 @@ export function ApiAccessAdmin() {
               const near = cap > 0 && k.window_used >= cap * 0.8;
               return (
               <tr key={k.id}>
-                <td style={{ fontWeight: 600 }}>{k.client_uri ? <a href={k.client_uri} target="_blank" rel="noreferrer">{k.label}</a> : k.label}</td>
+                <td style={{ fontWeight: 500 }}>{k.client_uri ? <a href={k.client_uri} target="_blank" rel="noreferrer">{k.label}</a> : k.label}</td>
                 <td className="mono">{k.prefix}</td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>
                   {(k.scopes || []).some(isAdministrativeScope) && <span className="badge warn" style={{ marginRight: 6 }}>admin</span>}
@@ -2407,7 +2407,7 @@ function OpenAPIReference({ embedded = false }: { embedded?: boolean }) {
               <tbody>
                 {rows.map((r, i) => (
                   <tr key={i}>
-                    <td className="mono" style={{ color: METHOD_COLOR[r.method] || "var(--muted)", fontWeight: 700, width: 70 }}>{r.method}</td>
+                    <td className="mono" style={{ color: METHOD_COLOR[r.method] || "var(--muted)", fontWeight: 600, width: 70 }}>{r.method}</td>
                     <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{r.path}</td>
                   </tr>
                 ))}
@@ -3201,7 +3201,7 @@ export function IntegrationsAdmin() {
             <tbody>
               {sn.open!.map((t) => (
                 <tr key={t.fingerprint}>
-                  <td className="mono" style={{ fontWeight: 600 }}>{t.number}</td>
+                  <td className="mono" style={{ fontWeight: 500 }}>{t.number}</td>
                   <td><span className="badge">{t.severity}</span></td>
                   <td className="mono">{t.device || "—"}</td>
                   <td>{t.summary || "—"}</td>
@@ -3220,7 +3220,7 @@ export function IntegrationsAdmin() {
             <tbody>
               {jira.open!.map((t) => (
                 <tr key={t.fingerprint}>
-                  <td className="mono" style={{ fontWeight: 600 }}>{t.key}</td>
+                  <td className="mono" style={{ fontWeight: 500 }}>{t.key}</td>
                   <td><span className="badge">{t.severity}</span></td>
                   <td className="mono">{t.device || "—"}</td>
                   <td>{t.summary || "—"}</td>

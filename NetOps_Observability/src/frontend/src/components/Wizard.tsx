@@ -111,7 +111,7 @@ const footer: React.CSSProperties = { display: "flex", justifyContent: "space-be
 function stepCircle(state: "done" | "active" | "todo"): React.CSSProperties {
   const bg = state === "done" ? "var(--good)" : state === "active" ? "var(--accent)" : "var(--hover)";
   const color = state === "todo" ? "var(--muted)" : "#fff";
-  return { width: 22, height: 22, borderRadius: 999, background: bg, color, fontSize: 12, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" };
+  return { width: 22, height: 22, borderRadius: 999, background: bg, color, fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" };
 }
 function stepBar(done: boolean): React.CSSProperties {
   return { width: 28, height: 2, background: done ? "var(--good)" : "var(--panel-border, #e2e6ee)", margin: "0 4px" };

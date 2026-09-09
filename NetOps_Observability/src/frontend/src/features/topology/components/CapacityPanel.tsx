@@ -21,7 +21,7 @@ import AskIris from "../../../components/AskIris";
 
 const SECTION_LABEL: CSSProperties = {
   fontSize: 12.5,
-  fontWeight: 600,
+  fontWeight: 500,
   letterSpacing: 0.4,
   color: "var(--fg-subtle)",
   marginBottom: 8,
@@ -49,10 +49,10 @@ function HotRow({ link }: { link: HotLink }) {
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)", fontFamily: MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg)", fontFamily: MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {link.sourceLabel} → {link.targetLabel}
         </span>
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: utilColor(u), fontFamily: MONO, flex: "0 0 auto" }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: utilColor(u), fontFamily: MONO, flex: "0 0 auto" }}>
           {fmtUtil(u)}
         </span>
       </div>
@@ -81,7 +81,7 @@ function Badge({ tone, children }: { tone: "danger" | "warning" | "muted"; child
     muted: { fg: "var(--fg-subtle)", bg: "var(--panel)" },
   }[tone];
   return (
-    <span style={{ fontSize: 12.5, fontWeight: 600, color: map.fg, background: map.bg, padding: "1px 6px", borderRadius: 999 }}>
+    <span style={{ fontSize: 12.5, fontWeight: 500, color: map.fg, background: map.bg, padding: "1px 6px", borderRadius: 999 }}>
       {children}
     </span>
   );
@@ -123,12 +123,12 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
             return (
               <li key={h.edge.id} style={{ padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", display: "grid", gap: 5 }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)", fontFamily: MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg)", fontFamily: MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {nodeName(h.edge.source)} ↔ {nodeName(h.edge.target)}
                   </span>
                   <span style={{ display: "inline-flex", gap: 6, alignItems: "baseline", flex: "0 0 auto" }}>
                     {h.spof ? <Badge tone="warning">no equal-cost backup</Badge> : null}
-                    <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: MONO, color: utilColor(SATURATION_THRESHOLD - h.headroom) }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, fontFamily: MONO, color: utilColor(SATURATION_THRESHOLD - h.headroom) }}>
                       {Math.round(h.headroom)}% headroom
                     </span>
                   </span>
@@ -136,7 +136,7 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
                 <button
                   type="button"
                   onClick={() => setDrainId(open ? null : h.edge.id)}
-                  style={{ justifySelf: "start", fontSize: 12.5, fontWeight: 600, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                  style={{ justifySelf: "start", fontSize: 12.5, fontWeight: 500, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
                 >
                   {open ? "▾ hide" : "▸ what if this drains?"}
                 </button>
@@ -144,7 +144,7 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
                   <div style={{ display: "grid", gap: 4, borderTop: "1px dashed var(--border)", paddingTop: 5 }}>
                     {drain.map((d) =>
                       d.stranded ? (
-                        <div key={d.node} style={{ fontSize: 12.5, color: "var(--danger, #e5484d)", fontWeight: 600 }}>
+                        <div key={d.node} style={{ fontSize: 12.5, color: "var(--danger, #e5484d)", fontWeight: 500 }}>
                           {d.nodeLabel}: STRANDED — no surviving path
                         </div>
                       ) : (
@@ -178,8 +178,8 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
                 style={{ padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)" }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)", fontFamily: MONO }}>{g.nodeLabel}</span>
-                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--warning, #f5a524)", fontFamily: MONO }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg)", fontFamily: MONO }}>{g.nodeLabel}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--warning, #f5a524)", fontFamily: MONO }}>
                     Δ{g.spread}%
                   </span>
                 </div>

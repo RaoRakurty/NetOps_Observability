@@ -863,7 +863,7 @@ function Resources({ ctl }: { ctl: CloudScopeControl }) {
             { key: "name", header: "Resource", width: 180, sortable: true, text: (r) => r.name, render: (r) => <><strong>{r.name}</strong>{r.consoleUrl && <ConsoleLink compact href={r.consoleUrl} label={`Open in ${consoleName(r.provider)}`} />}</> },
             { key: "type", header: "Type", width: 120, sortValue: (r) => r.type, render: (r) => r.type },
             { key: "power", header: "State", width: 90, sortable: true, sortValue: (r) => r.powerState, render: (r) => r.powerState === "—" ? DASH : (
-              <span style={{ color: r.powerState === "running" ? "var(--ok)" : "var(--warn)", fontWeight: 600 }}>
+              <span style={{ color: r.powerState === "running" ? "var(--ok)" : "var(--warn)", fontWeight: 500 }}>
                 {r.powerState.charAt(0).toUpperCase() + r.powerState.slice(1)}
               </span>
             ) },

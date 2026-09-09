@@ -100,7 +100,7 @@ function BundledEdgeBase(props: EdgeProps) {
               borderRadius: 999,
               padding: "1px 7px",
               fontSize: 10,
-              fontWeight: 700,
+              fontWeight: 600,
               letterSpacing: 0.2,
               color: "var(--fg)",
               fontVariantNumeric: "tabular-nums",

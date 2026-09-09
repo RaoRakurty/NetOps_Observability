@@ -273,7 +273,7 @@ function TunnelOverlay() {
       </StatStrip>
       <Panel
         title="Tunnels — current state"
-        action={<a href="#/investigate/tunnels" style={{ color: "var(--accent)", fontWeight: 600, fontSize: 12 }}>Full tunnels view →</a>}
+        action={<a href="#/investigate/tunnels" style={{ color: "var(--accent)", fontWeight: 500, fontSize: 12 }}>Full tunnels view →</a>}
       >
         <DataTable<Tunnel>
           rows={rows}
@@ -356,7 +356,7 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
       <Group title="Traffic insights (NetFlow)" hue="#8B5CF6">
         <FlowInsights since={m * 60} />
         <p className="fact-line" style={{ margin: 0 }}>
-          Fleet traffic from flow records. Full breakdowns: <a href="#/explore/flows" style={{ color: "var(--accent)", fontWeight: 600 }}>Flows</a>.
+          Fleet traffic from flow records. Full breakdowns: <a href="#/explore/flows" style={{ color: "var(--accent)", fontWeight: 500 }}>Flows</a>.
         </p>
       </Group>
 
@@ -378,7 +378,7 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
         <p className="mini-meta" style={{ margin: 0 }}>
           Checks and path SLA come from the probe runners.
           <AskIris topic="monitoring.probe-sources" label="Network Path &amp; synthetics" />
-          {" "}Hop-by-hop paths: <a href="#/investigate/flowtrace" style={{ color: "var(--accent)", fontWeight: 600 }}>Flow Trace</a>.
+          {" "}Hop-by-hop paths: <a href="#/investigate/flowtrace" style={{ color: "var(--accent)", fontWeight: 500 }}>Flow Trace</a>.
         </p>
       </Group>
 
@@ -394,7 +394,7 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
         <GeomapSection />
         <p className="fact-line" style={{ margin: 0 }}>
           Sites and coordinates come from the Source of Truth (intent data, not GeoIP). Full map at{" "}
-          <a href="#/infrastructure/sites/map" style={{ color: "var(--accent)", fontWeight: 600 }}>Device Geomap</a>.
+          <a href="#/infrastructure/sites/map" style={{ color: "var(--accent)", fontWeight: 500 }}>Device Geomap</a>.
         </p>
       </Group>
     </div>

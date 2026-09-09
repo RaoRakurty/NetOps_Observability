@@ -206,7 +206,7 @@ export default function ServiceMap({ ctl }: { ctl: CloudScopeControl }) {
         // Blocked evidence is the ONE always-on canvas label (it is evidence,
         // not decoration); volume/pairs/providers explain themselves on click.
         label: e.blocked ? `⊘ ${e.blockedCount.toLocaleString()}` : undefined,
-        labelStyle: { fill: "var(--crit)", fontWeight: 800, fontSize: 11 },
+        labelStyle: { fill: "var(--crit)", fontWeight: 600, fontSize: 11 },
         labelBgStyle: { fill: "var(--panel)", fillOpacity: 0.9 },
         markerEnd: { type: MarkerType.ArrowClosed, color, width: 14, height: 14 },
         style: {

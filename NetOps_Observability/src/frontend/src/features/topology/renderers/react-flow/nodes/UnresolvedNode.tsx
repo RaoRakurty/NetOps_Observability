@@ -83,7 +83,7 @@ function UnresolvedNodeBase(props: NodeProps) {
         <span
           style={{
             fontSize: 10,
-            fontWeight: 700,
+            fontWeight: 600,
             letterSpacing: ".04em",
             textTransform: "uppercase",
             color: SLATE,
@@ -98,7 +98,7 @@ function UnresolvedNodeBase(props: NodeProps) {
           <span
             style={{
               fontSize: 13,
-              fontWeight: 600,
+              fontWeight: 500,
               color: "var(--fg-muted)",
               overflow: "hidden",
               textOverflow: "ellipsis",

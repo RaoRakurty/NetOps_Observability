@@ -41,7 +41,7 @@ const WINDOWS: { id: string; label: string }[] = [
 
 const th: React.CSSProperties = {
   textAlign: "left", fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em",
-  color: "var(--fg-muted)", padding: "4px 12px", fontWeight: 600,
+  color: "var(--fg-muted)", padding: "4px 12px", fontWeight: 500,
 };
 const td: React.CSSProperties = {
   padding: "5px 12px", fontSize: 12.5, borderTop: "1px solid var(--panel-border, var(--border))",

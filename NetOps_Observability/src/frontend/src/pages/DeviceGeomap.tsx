@@ -491,7 +491,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
                     <tr key={i}>
                       <td className="mini-meta">{r.line}</td>
                       <td className="mono">{r.key || "—"}</td>
-                      <td style={{ color: ACTION_TONE[r.action] ?? "var(--fg)", fontWeight: 600 }}>{r.action}</td>
+                      <td style={{ color: ACTION_TONE[r.action] ?? "var(--fg)", fontWeight: 500 }}>{r.action}</td>
                       <td className="mini-meta">{r.detail || ""}</td>
                     </tr>
                   ))}
@@ -550,8 +550,8 @@ export default function DeviceGeomap({ view: viewProp, onViewChange }: {
       key: "health", header: "Health", width: 120,
       render: (s) => (
         <span>
-          <span style={{ color: "var(--good, #059669)", fontWeight: 600 }}>{s.up} up</span>
-          {s.down > 0 && <span style={{ color: "var(--bad, #dc2626)", fontWeight: 600 }}> · {s.down} down</span>}
+          <span style={{ color: "var(--good, #059669)", fontWeight: 500 }}>{s.up} up</span>
+          {s.down > 0 && <span style={{ color: "var(--bad, #dc2626)", fontWeight: 500 }}> · {s.down} down</span>}
         </span>
       ),
     },

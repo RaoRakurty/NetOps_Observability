@@ -358,7 +358,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       // payoff of the fusion engine: app traffic named, not a raw 5-tuple.
       key: "app", header: "Application", width: 150, sortable: true, text: (l) => l.app,
       render: (l) => l.app
-        ? <span title={l.app} style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 12.5, fontWeight: 600, color: "var(--accent, #2563eb)" }}>{l.app.replace(/_/g, " · ")}</span>
+        ? <span title={l.app} style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 12.5, fontWeight: 500, color: "var(--accent, #2563eb)" }}>{l.app.replace(/_/g, " · ")}</span>
         : <span style={{ color: "var(--muted, #8a94a6)" }}>—</span>,
     },
     {

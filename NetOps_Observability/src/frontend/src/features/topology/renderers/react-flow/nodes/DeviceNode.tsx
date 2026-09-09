@@ -58,7 +58,7 @@ function HealthRing({ health }: { health: RFNodeData["node"]["health"] }) {
         background: tint,
         color,
         fontSize: 10,
-        fontWeight: 700,
+        fontWeight: 600,
         lineHeight: 1,
       }}
     >
@@ -91,7 +91,7 @@ function RcaMarker({ state }: { state: NonNullable<RFNodeData["node"]["rca_statu
         background: s.hollow ? "transparent" : `color-mix(in srgb, ${s.color} 16%, transparent)`,
         color: s.color,
         fontSize: 10,
-        fontWeight: 700,
+        fontWeight: 600,
         lineHeight: 1,
       }}
     >
@@ -207,7 +207,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
             style={{
               maxWidth: CARD_W - 6,
               fontSize: 9,
-              fontWeight: 600,
+              fontWeight: 500,
               lineHeight: 1.1,
               color: "var(--topo-node-fg, var(--fg))",
               overflow: "hidden",
@@ -264,7 +264,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         <span
           style={{
             fontSize: 12,
-            fontWeight: 600,
+            fontWeight: 500,
             lineHeight: 1.25,
             // Bright label — pure white on dark canvases, dark ink on light ones
             // (theme-aware token). Hostname must read crisply, not tinted/muted.

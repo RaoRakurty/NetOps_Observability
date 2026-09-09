@@ -49,7 +49,7 @@ export default function ConfidencePanel({
           alignItems: "center",
           gap: 4,
           fontSize: 12.5,
-          fontWeight: 600,
+          fontWeight: 500,
           color: "var(--fg-subtle)",
           marginBottom: 8,
         }}
@@ -59,7 +59,7 @@ export default function ConfidencePanel({
       </div>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color }}>{band.label}</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color }}>{band.label}</span>
         <span
           style={{
             marginLeft: "auto",

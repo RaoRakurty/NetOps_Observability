@@ -57,7 +57,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
             </span>
           </div>
           <div className="ddp-sub">
-            <span style={{ color: t.color, fontWeight: 600 }}>{t.label}</span>
+            <span style={{ color: t.color, fontWeight: 500 }}>{t.label}</span>
             <span>·</span><span style={{ fontFamily: "var(--font-mono)" }}>{d.address}</span>
             {d.vendor && <><span>·</span><span style={{ textTransform: "capitalize" }}>{d.vendor}</span></>}
             <span>·</span><span>last seen {seen ? fmtDateTime(seen) : "—"}</span>

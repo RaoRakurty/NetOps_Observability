@@ -91,7 +91,7 @@ function PostureTable({ rows, identity }: { rows: PostureRow[]; identity: boolea
       <tbody>
         {rows.map((r) => (
           <tr key={`${r.edge}:${r.channel}`}>
-            <td style={{ fontWeight: 600 }}>
+            <td style={{ fontWeight: 500 }}>
               {r.edge}
               {r.trust_domain === "device" && <span className="badge" style={{ marginLeft: 6 }}>device lane</span>}
             </td>

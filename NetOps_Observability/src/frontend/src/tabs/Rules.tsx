@@ -94,7 +94,7 @@ export default function Rules() {
         </div>
         <p className="mini-meta" style={{ marginTop: -6 }}>
           Built-in rules ship with the platform (rules file); custom monitors are yours — created here or via{" "}
-          <a href="#/operations/new" style={{ color: "var(--accent)", fontWeight: 600 }}>New Monitor</a> — and only those can be deleted.
+          <a href="#/operations/new" style={{ color: "var(--accent)", fontWeight: 500 }}>New Monitor</a> — and only those can be deleted.
         </p>
         {loadErr && rules.length === 0 ? (
           <div className="empty" role="alert" style={{ color: "var(--bad)" }}>

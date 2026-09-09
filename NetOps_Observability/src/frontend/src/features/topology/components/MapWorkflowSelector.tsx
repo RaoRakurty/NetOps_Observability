@@ -63,7 +63,7 @@ export default function MapWorkflowSelector({
               <span
                 style={{
                   fontSize: 12.5,
-                  fontWeight: 700,
+                  fontWeight: 600,
                   letterSpacing: 0.4,
                   color: "var(--fg-subtle)",
                   border: "1px solid var(--border)",

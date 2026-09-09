@@ -93,7 +93,7 @@ export function PrefixesPanel({
                 border: `1px solid ${wentry.resource === active ? "var(--accent)" : "var(--border)"}`,
               }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                  <button className="btn-ghost mono" style={{ fontSize: 14, fontWeight: 600, padding: 0 }}
+                  <button className="btn-ghost mono" style={{ fontSize: 14, fontWeight: 500, padding: 0 }}
                     onClick={() => onInvestigate(wentry.resource)}>
                     {wentry.resource}
                   </button>

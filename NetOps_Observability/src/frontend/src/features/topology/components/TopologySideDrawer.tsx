@@ -55,14 +55,14 @@ function HealthBadge({ health }: { health: Health }) {
         alignItems: "center",
         gap: 6,
         fontSize: 12.5,
-        fontWeight: 600,
+        fontWeight: 500,
         color,
         border: `1px solid ${color}`,
         borderRadius: 5,
         padding: "2px 8px",
       }}
     >
-      <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 700 }}>
+      <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 600 }}>
         {HEALTH_GLYPH[health]}
       </span>
       {HEALTH_LABEL[health]}
@@ -72,7 +72,7 @@ function HealthBadge({ health }: { health: Health }) {
 
 const sectionTitle: React.CSSProperties = {
   fontSize: 12.5,
-  fontWeight: 600,
+  fontWeight: 500,
   letterSpacing: 0.4,
   color: "var(--fg-subtle)",
   marginBottom: 8,
@@ -121,7 +121,7 @@ function UnresolvedBlock({ node }: { node: TopologyNode }) {
             type="button"
             title={`${a} — not available yet`}
             style={{
-              fontSize: 12.5, fontWeight: 600, padding: "4px 9px", cursor: "pointer",
+              fontSize: 12.5, fontWeight: 500, padding: "4px 9px", cursor: "pointer",
               color: "var(--fg-muted)", background: "var(--panel)",
               border: "1px solid var(--border)", borderRadius: 6,
             }}
@@ -210,7 +210,7 @@ function NodeBody({ node }: { node: TopologyNode }) {
     <>
       {unresolved && <UnresolvedBlock node={node} />}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "var(--fg)" }}>{node.label}</h2>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 500, color: "var(--fg)" }}>{node.label}</h2>
         <HealthBadge health={node.health} />
       </div>
       <div style={{ fontSize: 12.5, color: "var(--fg-muted)", marginBottom: 14 }}>
@@ -259,7 +259,7 @@ function NodeBody({ node }: { node: TopologyNode }) {
                 <div
                   style={{
                     fontSize: 14,
-                    fontWeight: 600,
+                    fontWeight: 500,
                     color: "var(--fg)",
                     fontFamily: "var(--font-mono, ui-monospace, monospace)",
                   }}
@@ -286,7 +286,7 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "var(--fg)" }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 500, color: "var(--fg)" }}>
           {(src?.label ?? edge.source)} → {(dst?.label ?? edge.target)}
         </h2>
         <HealthBadge health={health} />
@@ -319,7 +319,7 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
             {edge.utilization_pct != null ? (
               <div style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", padding: "7px 9px" }}>
                 <div style={{ fontSize: 12.5, color: "var(--fg-subtle)" }}>Utilization</div>
-                <div style={{ fontSize: 14, fontWeight: 600, color, fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>
+                <div style={{ fontSize: 14, fontWeight: 500, color, fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>
                   {fmtUtil(edge.utilization_pct)}
                 </div>
               </div>
@@ -327,7 +327,7 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
             {edge.errors != null ? (
               <div style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", padding: "7px 9px" }}>
                 <div style={{ fontSize: 12.5, color: "var(--fg-subtle)" }}>Errors</div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: "var(--fg)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>
+                <div style={{ fontSize: 14, fontWeight: 500, color: "var(--fg)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>
                   {edge.errors}
                 </div>
               </div>
@@ -363,7 +363,7 @@ function GroupBody({
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "var(--fg)" }}>{group.label}</h2>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 500, color: "var(--fg)" }}>{group.label}</h2>
         <HealthBadge health={worst} />
       </div>
       <div style={{ fontSize: 12.5, color: "var(--fg-muted)", marginBottom: 14 }}>
@@ -384,7 +384,7 @@ function GroupBody({
           type="button"
           onClick={() => onToggleGroup?.(group.id)}
           style={{
-            width: "100%", padding: "8px 10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+            width: "100%", padding: "8px 10px", fontSize: 12.5, fontWeight: 500, cursor: "pointer",
             color: "var(--fg)", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 7,
           }}
         >

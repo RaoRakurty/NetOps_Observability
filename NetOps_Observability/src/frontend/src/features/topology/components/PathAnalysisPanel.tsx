@@ -58,7 +58,7 @@ function utilColor(u: number): string {
 }
 
 const SECTION: React.CSSProperties = {
-  fontSize: 12.5, fontWeight: 600, letterSpacing: 0.2,
+  fontSize: 12.5, fontWeight: 500, letterSpacing: 0.2,
   color: "var(--fg-subtle)", marginBottom: 10,
 };
 
@@ -104,7 +104,7 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
       {provenance && (
         <div
           title={measured ? "Every hop was observed by a probe" : "Derived from the topology, not observed"}
-          style={{ fontSize: 12.5, fontWeight: 600, color: provenance.color, marginBottom: 8,
+          style={{ fontSize: 12.5, fontWeight: 500, color: provenance.color, marginBottom: 8,
             padding: "4px 8px", border: `1px solid ${provenance.color}`, borderRadius: 5,
             background: `color-mix(in srgb, ${provenance.color} 10%, transparent)`,
             display: "inline-flex", alignItems: "center", gap: 4 }}
@@ -115,7 +115,7 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
       )}
 
       {bottleneckIdx >= 0 && (
-        <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--warn)", marginBottom: 8,
+        <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--warn)", marginBottom: 8,
           padding: "5px 8px", border: "1px solid var(--warn)", borderRadius: 5,
           background: "color-mix(in srgb, var(--warn) 10%, transparent)" }}>
           Likely bottleneck: {byId.get(path[bottleneckIdx])?.label ?? path[bottleneckIdx]} →{" "}
@@ -155,14 +155,14 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
               <div style={{ display: "flex", gap: 10, padding: "8px 10px", border: "1px solid var(--border)",
                 borderLeft: `3px solid ${band}`, borderRadius: 6, background: "var(--surface)", alignItems: "flex-start" }}>
                 <span style={{ flex: "0 0 auto", width: 22, height: 22, borderRadius: "50%", background: "var(--panel)",
-                  border: `1px solid ${band}`, color: "var(--fg)", fontSize: 12.5, fontWeight: 700,
+                  border: `1px solid ${band}`, color: "var(--fg)", fontSize: 12.5, fontWeight: 600,
                   display: "flex", alignItems: "center", justifyContent: "center", fontFamily: MONO }}>
                   {i + 1}
                 </span>
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{node?.label ?? id}</span>
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: band, textTransform: "capitalize" }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg)" }}>{node?.label ?? id}</span>
+                    <span style={{ fontSize: 12.5, fontWeight: 500, color: band, textTransform: "capitalize" }}>
                       {node?.health ?? "unknown"}
                     </span>
                   </div>
@@ -192,7 +192,7 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
                   </div>
                   {rc && (
                     <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 4,
-                      fontSize: 12.5, fontWeight: 700, color: rc.color, border: `1px solid ${rc.color}`,
+                      fontSize: 12.5, fontWeight: 600, color: rc.color, border: `1px solid ${rc.color}`,
                       borderRadius: 4, padding: "1px 6px",
                       background: `color-mix(in srgb, ${rc.color} 12%, transparent)` }}
                       title="This hop is part of the incident's RCA">

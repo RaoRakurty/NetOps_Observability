@@ -103,7 +103,7 @@ export const axisStyle = {
   get axisLine() { return { lineStyle: { color: axisColor() } }; },
   get axisLabel() { return { color: axisColor(), fontSize: 13, hideOverlap: true, margin: 10 }; },
   get axisTick() { return { lineStyle: { color: axisColor() } }; },
-  get nameTextStyle() { return { color: axisColor(), fontSize: 12, fontWeight: 600, padding: [0, 0, 0, 4] }; },
+  get nameTextStyle() { return { color: axisColor(), fontSize: 12, fontWeight: 500, padding: [0, 0, 0, 4] }; },
   get splitLine() { return { lineStyle: { color: gridColor() } }; },
 };
 

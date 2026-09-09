@@ -41,7 +41,7 @@ const channelLabel = (c: string) =>
 const ITSM_SHORT: Record<string, string> = { servicenow: "SN", jira: "Jira" };
 function notifyPill(text: string, tone: string, filled = false): React.ReactNode {
   return <span style={{
-    fontSize: 10.5, fontWeight: 700, letterSpacing: 0.3, padding: "1px 6px", borderRadius: 4,
+    fontSize: 10.5, fontWeight: 600, letterSpacing: 0.3, padding: "1px 6px", borderRadius: 4,
     whiteSpace: "nowrap",
     color: filled ? "#ffffff" : tone, background: filled ? tone : tone + "1c",
     border: `1px solid ${tone}55`,

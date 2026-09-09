@@ -72,7 +72,7 @@ function qualityOf(o: CorrObject): Qual {
 const QUAL_TONE: Record<Qual, string> = { strong: "#E11D48", candidate: "#D97706", weak: "#8A93A6" };
 function pill(text: string, tone: string, filled = false): React.ReactNode {
   return <span style={{
-    fontSize: 12.5, fontWeight: 700, letterSpacing: 0.3, padding: "1px 6px", borderRadius: 4,
+    fontSize: 12.5, fontWeight: 600, letterSpacing: 0.3, padding: "1px 6px", borderRadius: 4,
     whiteSpace: "nowrap",
     color: filled ? "#ffffff" : tone, background: filled ? tone : tone + "1c",
     border: `1px solid ${tone}55`,
@@ -151,7 +151,7 @@ function TierChip({ label, n, tone, active, onClick, title }: {
         fontWeight: active ? 700 : 500,
       }}
     >
-      <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{n ?? "…"}</span>
+      <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{n ?? "…"}</span>
       <span>{label}</span>
     </button>
   );
@@ -454,7 +454,7 @@ export default function Correlations() {
       </NocHeader>
       {deepErr && (
         <div className="cc-panel" style={{ borderColor: "var(--warn)", padding: "10px 13px", marginBottom: 10 }}>
-          <span style={{ color: "var(--warn)", fontWeight: 600 }}>RCA not found.</span>{" "}
+          <span style={{ color: "var(--warn)", fontWeight: 500 }}>RCA not found.</span>{" "}
           <span style={{ color: "var(--muted)", fontSize: 13 }}>
             The linked correlation (<code style={mono}>{deepErr}</code>) is no longer available — it may have been
             resolved and aged out, or you don't have access to it. Showing all current candidates below.
@@ -638,11 +638,11 @@ function SignatureGaps() {
                   background: "var(--surface-2, var(--hover))",
                 }}>
                   <span title="times this gap-shape recurred" style={{
-                    fontVariantNumeric: "tabular-nums", fontWeight: 700, fontSize: 18,
+                    fontVariantNumeric: "tabular-nums", fontWeight: 600, fontSize: 18,
                     minWidth: 34, textAlign: "right", color: "var(--accent)",
                   }}>{c.count}</span>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{c.label}</div>
+                    <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 2 }}>{c.label}</div>
                     <div style={{ fontSize: 12.5, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {c.top_gaps.length > 0
                         ? <>Missing: {c.top_gaps.map((g) => g.clause).join(" · ")}</>

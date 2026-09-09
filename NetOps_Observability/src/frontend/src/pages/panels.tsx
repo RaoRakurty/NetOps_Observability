@@ -141,7 +141,7 @@ function Empty({ msg }: { msg: string }) {
 function Unavailable({ msg = "Source unavailable — this panel could not be refreshed." }: { msg?: string }) {
   return (
     <div className="panel-empty" role="status" style={{ color: "var(--warn)" }}>
-      <span style={{ fontWeight: 600 }}>Unavailable</span>
+      <span style={{ fontWeight: 500 }}>Unavailable</span>
       <div style={{ color: "var(--muted)", marginTop: 2 }}>{msg}</div>
     </div>
   );
@@ -247,7 +247,7 @@ function MetricGauge({
               offsetCenter: [0, "-4%"],
               formatter: v === null ? "—" : `{v|${Math.round(v)}}{u|${unit}}`,
               rich: {
-                v: { fontSize: 34, fontWeight: 800, color: dark ? "#e7ebf3" : "#161d29" },
+                v: { fontSize: 34, fontWeight: 600, color: dark ? "#e7ebf3" : "#161d29" },
                 u: { fontSize: 16, color: dark ? "#9aa6bf" : "#586173", padding: [0, 0, 6, 2] },
               },
             },

@@ -29,7 +29,7 @@ function Section({ title, sub, ask, children }: { title: string; sub?: string; a
   );
 }
 
-const th: React.CSSProperties = { textAlign: "left", fontSize: 12.5, letterSpacing: ".04em", color: "var(--fg-muted)", padding: "4px 12px", fontWeight: 600 };
+const th: React.CSSProperties = { textAlign: "left", fontSize: 12.5, letterSpacing: ".04em", color: "var(--fg-muted)", padding: "4px 12px", fontWeight: 500 };
 const td: React.CSSProperties = { padding: "5px 12px", fontSize: 12.5, borderTop: "1px solid var(--panel-border, var(--border))" };
 const mono: React.CSSProperties = { ...td, fontFamily: "var(--font-mono)" };
 

@@ -294,7 +294,7 @@ export default function SourceOfTruth() {
             <Icon name="directory" size={20} />
           </div>
           <div style={{ flex: 1, minWidth: 180 }}>
-            <div style={{ fontWeight: 700, fontSize: 15 }}>Source of Truth</div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>Source of Truth</div>
           </div>
           <span className={`badge ${st.tone}`}>{st.label}</span>
           {embeddable && (
@@ -370,7 +370,7 @@ export default function SourceOfTruth() {
         </div>
       ) : (
         <div className="card" style={{ textAlign: "center", padding: "40px 20px" }}>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>The inventory service is off</div>
+          <div style={{ fontWeight: 500, fontSize: 14 }}>The inventory service is off</div>
           <p style={{ color: "var(--muted)", fontSize: 13, maxWidth: 460, margin: "8px auto 16px" }}>
             Turn on the built-in Source of Truth to create sites, devices and IPs right here — it's wired
             automatically, no URL or token to paste.

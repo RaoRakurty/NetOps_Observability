@@ -164,7 +164,7 @@ export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false, p
       <ellipse cx="40" cy="30" rx="22" ry="13" fill="#ffffff" opacity={0.14} transform="rotate(-18 40 30)" />
       {glyph && !showProviderGlyph && (
         <text x="50" y="51" textAnchor="middle" dominantBaseline="central"
-          fontSize="28" fill="#ffffff" opacity={0.92} style={{ fontWeight: 800 }}>
+          fontSize="28" fill="#ffffff" opacity={0.92} style={{ fontWeight: 600 }}>
           {GLYPH[kind]}
         </text>
       )}

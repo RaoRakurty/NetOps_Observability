@@ -173,7 +173,7 @@ export function FindingDetailBody({ finding: f, onViewLogs }: { finding: Finding
           <span style={{ fontSize: 12, color: "var(--muted)" }}>score {f.score.toFixed(1)}</span>
         )}
       </div>
-      <div style={{ fontSize: 13, fontWeight: 600 }}>{f.summary}</div>
+      <div style={{ fontSize: 13, fontWeight: 500 }}>{f.summary}</div>
       {f.description && (
         <p style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "pre-wrap", margin: 0 }}>{f.description}</p>
       )}

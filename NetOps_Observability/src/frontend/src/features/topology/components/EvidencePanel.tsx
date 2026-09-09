@@ -27,7 +27,7 @@ export default function EvidencePanel({
       <div
         style={{
           fontSize: 12.5,
-          fontWeight: 600,
+          fontWeight: 500,
           letterSpacing: 0.4,
           color: "var(--fg-subtle)",
           marginBottom: 8,
@@ -65,7 +65,7 @@ export default function EvidencePanel({
                 <span
                   style={{
                     fontSize: 12.5,
-                    fontWeight: 700,
+                    fontWeight: 600,
                     letterSpacing: 0.3,
                     color: "var(--fg)",
                     background: "var(--panel)",
@@ -81,7 +81,7 @@ export default function EvidencePanel({
                   <span
                     style={{
                       fontSize: 12.5,
-                      fontWeight: 700,
+                      fontWeight: 600,
                       letterSpacing: 0.4,
                       color: "var(--accent)",
                       border: "1px solid var(--accent)",

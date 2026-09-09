@@ -37,7 +37,7 @@ function PathHealthCard({ p }: { p: PathHealthItem }) {
   // as a clean bill of health.
   const st = STATE_META[p.health_state] ?? STATE_META.unknown;
   const badge: React.CSSProperties = {
-    fontSize: 11, fontWeight: 800, letterSpacing: 0.3, padding: "1px 7px", borderRadius: 4,
+    fontSize: 11, fontWeight: 600, letterSpacing: 0.3, padding: "1px 7px", borderRadius: 4,
     color: "#fff", background: st.color, whiteSpace: "nowrap",
   };
   const muted: React.CSSProperties = { color: "var(--muted)" };

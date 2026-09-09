@@ -901,7 +901,7 @@ export default function BgpOps() {
           {whois != null && (
             <>
               {(whois as { name?: string }).name && (
-                <p style={{ marginTop: 0, fontSize: 16, fontWeight: 650 }}>{(whois as { name?: string }).name}</p>
+                <p style={{ marginTop: 0, fontSize: 16, fontWeight: 600 }}>{(whois as { name?: string }).name}</p>
               )}
               {contacts.length === 0 ? (
                 <div className="empty">The registry returned no contacts.</div>

@@ -145,7 +145,7 @@ export function ArcGauge({ query, label, unit = "%", max = 100, hue = 0 }: {
                 valueAnimation: true, offsetCenter: [0, "6%"],
                 formatter: v === null ? "—" : `{v|${v >= 100 ? Math.round(v) : v.toFixed(v < 10 ? 1 : 0)}}{u|${unit}}`,
                 rich: {
-                  v: { fontSize: 30, fontWeight: 800, color: INK, fontFamily: "Space Grotesk, inherit" },
+                  v: { fontSize: 30, fontWeight: 600, color: INK, fontFamily: "Space Grotesk, inherit" },
                   u: { fontSize: 13, color: INK_DIM, padding: [0, 0, 5, 2] },
                 },
               },
@@ -382,7 +382,7 @@ export function RacingBars({ query, height = 226, n = 8, unit = "%", fmt }: {
           },
         },
         label: {
-          show: true, position: "right", color: INK, fontSize: 10.5, fontWeight: 600,
+          show: true, position: "right", color: INK, fontSize: 10.5, fontWeight: 500,
           formatter: (p: { dataIndex: number }) => (fmt ? fmt(rows[p.dataIndex].v) : `${rows[p.dataIndex].v.toFixed(1)}${unit}`),
         },
       },

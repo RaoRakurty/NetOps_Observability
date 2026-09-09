@@ -101,7 +101,7 @@ export default function TopologyToolbar({
             borderRadius: 6,
             padding: "5px 10px",
             fontSize: 12.5,
-            fontWeight: 600,
+            fontWeight: 500,
             cursor: "pointer",
           }}
         >
@@ -120,7 +120,7 @@ export default function TopologyToolbar({
               borderRadius: 6,
               padding: "5px 10px",
               fontSize: 12.5,
-              fontWeight: 600,
+              fontWeight: 500,
               cursor: "pointer",
             }}
           >

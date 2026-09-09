@@ -47,7 +47,7 @@ function Swatch({ color, glyph, label }: { color: string; glyph: string; label: 
           alignItems: "center",
           justifyContent: "center",
           fontSize: 12.5,
-          fontWeight: 700,
+          fontWeight: 600,
           color,
           fontFamily: "var(--font-mono, ui-monospace, monospace)",
         }}
@@ -85,7 +85,7 @@ function RcaSwatch({ color, glyph, label, hollow }: { color: string; glyph: stri
           alignItems: "center",
           justifyContent: "center",
           fontSize: 12.5,
-          fontWeight: 700,
+          fontWeight: 600,
           color,
           fontFamily: "var(--font-mono, ui-monospace, monospace)",
         }}
@@ -131,7 +131,7 @@ export default function TopologyLegend({ overlay, showRca = false }: { overlay: 
           cursor: "pointer",
           padding: "8px 10px",
           fontSize: 12.5,
-          fontWeight: 600,
+          fontWeight: 500,
           color: "var(--fg-subtle)",
         }}
       >
@@ -144,7 +144,7 @@ export default function TopologyLegend({ overlay, showRca = false }: { overlay: 
           {showRca && (
             <>
               <div style={{ display: "grid", gap: 5 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--fg-subtle)" }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-subtle)" }}>
                   RCA verdict
                 </div>
                 {RCA_OVERLAY_ORDER.map((s) => (

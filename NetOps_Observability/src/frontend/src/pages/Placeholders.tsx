@@ -52,7 +52,7 @@ export function DashboardList() {
         <h2>Dashboard List</h2>
         {DASHBOARD_GROUPS.map((g) => (
           <div key={g.title} style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "var(--muted)", margin: "0 0 8px" }}>{g.title}</div>
+            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: "var(--muted)", margin: "0 0 8px" }}>{g.title}</div>
             <div
               style={{
                 display: "grid",

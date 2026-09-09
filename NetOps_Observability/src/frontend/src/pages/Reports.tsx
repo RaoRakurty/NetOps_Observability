@@ -371,7 +371,7 @@ export default function Reports() {
 
           {/* Output formats */}
           <div style={{ display: "grid", gap: 4 }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>Output formats</span>
+            <span style={{ fontSize: 13, fontWeight: 500 }}>Output formats</span>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {FORMATS.map((f) => {
                 const on = (draft.formats ?? ["html"]).includes(f.value);
@@ -406,7 +406,7 @@ export default function Reports() {
 
           {/* Recipients — reusable contact points defined in Notifications. */}
           <div style={{ display: "grid", gap: 4 }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>Recipients (contact points)</span>
+            <span style={{ fontSize: 13, fontWeight: 500 }}>Recipients (contact points)</span>
             {contactPoints.length === 0 ? (
               <span className="mini-meta">No contact points yet — create email groups in Administration → Notifications.</span>
             ) : (
@@ -788,7 +788,7 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
                           {e.error && <p style={{ color: "var(--bad)", margin: "6px 0" }}>{e.error}</p>}
                           <div style={{ display: "flex", gap: 24, flexWrap: "wrap", padding: "8px 4px" }}>
                             <div style={{ minWidth: 240 }}>
-                              <div className="fact-line" style={{ fontWeight: 700, marginBottom: 4 }}>Phase timeline</div>
+                              <div className="fact-line" style={{ fontWeight: 600, marginBottom: 4 }}>Phase timeline</div>
                               {(d?.events ?? []).length === 0 ? <span className="fact-line">—</span> : (
                                 <table className="mini-table">
                                   <tbody>
@@ -807,7 +807,7 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
                               )}
                             </div>
                             <div style={{ minWidth: 280 }}>
-                              <div className="fact-line" style={{ fontWeight: 700, marginBottom: 4 }}>Delivery</div>
+                              <div className="fact-line" style={{ fontWeight: 600, marginBottom: 4 }}>Delivery</div>
                               {(e.delivery_status ?? []).length === 0 ? <span className="fact-line">—</span> : (
                                 <table className="mini-table">
                                   <tbody>

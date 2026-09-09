@@ -65,7 +65,7 @@ function Field({ label, hint, error, children }: {
 }) {
   return (
     <label style={{ display: "block", marginBottom: 12 }}>
-      <span style={{ display: "block", fontSize: "var(--fs-meta)", fontWeight: 600, marginBottom: 4 }}>{label}</span>
+      <span style={{ display: "block", fontSize: "var(--fs-meta)", fontWeight: 500, marginBottom: 4 }}>{label}</span>
       {children}
       {hint && <span style={{ display: "block", fontSize: "var(--fs-meta)", color: "var(--muted)", marginTop: 3 }}>{hint}</span>}
       {error && <span role="alert" style={{ display: "block", fontSize: "var(--fs-meta)", color: "var(--crit)", marginTop: 3 }}>{error}</span>}
@@ -282,7 +282,7 @@ export default function VerificationSettingsCard() {
         <Icon name="check" size={20} />
       </div>
       <div style={{ flex: 1 }}>
-        <h3 style={{ fontWeight: 700, fontSize: "inherit", margin: 0 }}>Active verification</h3>
+        <h3 style={{ fontWeight: 600, fontSize: "inherit", margin: 0 }}>Active verification</h3>
         <div className="adm-line">
           {summary.text}
           <AskIris topic="verify.active-verification" label="active verification" />
