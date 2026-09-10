@@ -17,13 +17,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"netops/backend/internal/applog"
 	"netops/backend/internal/platformdb"
 )
 
@@ -75,29 +78,80 @@ func newestFirst(rows []Feedback) {
 
 // FileStore is the non-Postgres backend. Path "" keeps it purely in memory
 // (tests); a real path is loaded at construction and rewritten on every append.
+// ErrStoreUnreadable is returned by every write while the verdict file exists
+// but could not be read or parsed at start-up. It is a REFUSAL, not a failure of
+// the write itself: the file's real contents were never established, so a flush
+// would not update it, it would REPLACE it with whatever this process happens to
+// hold — which after such a load is nothing at all.
+//
+// Why REFUSE rather than let the operator overwrite: a verdict is a HUMAN
+// judgement on whether an RCA was right. Nothing recomputes it, and the whole
+// point of the register is that it accumulates. The repair is an operator act:
+// fix the file's permissions, or remove it deliberately, and the api picks it up
+// on the next start.
+var ErrStoreUnreadable = errors.New("rcafeedback: the verdict file could not be read at start-up, so writes are refused until it is repaired or removed")
+
 type FileStore struct {
 	mu   sync.RWMutex
 	path string
 	rows map[string]map[string][]Feedback // tenant → correlation id → verdicts
+	// loadErr is set when the verdict file EXISTS but its contents could not be
+	// established — an I/O or permission failure, or JSON we could not parse.
+	// It is NOT set for an absent file, which is simply a register nobody has
+	// written yet.
+	loadErr error
 }
 
-// NewFileStore loads persisted verdicts; a missing or corrupt file starts empty
-// (the maintenance/episode convention — these state files are operator input,
-// rebuildable, and a parse failure must not block boot).
+// NewFileStore loads persisted verdicts. A MISSING file starts empty; a file
+// that exists but could not be read or parsed starts empty, is LOGGED, and
+// refuses every write from then on, so the file it could not read is never
+// replaced by an empty one.
 func NewFileStore(path string) *FileStore {
 	s := &FileStore{path: path, rows: map[string]map[string][]Feedback{}}
 	if path == "" {
 		return s
 	}
-	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
-		var list []Feedback
-		if json.Unmarshal(b, &list) == nil {
-			for _, f := range list {
-				s.insertLocked(f)
-			}
-		}
+	b, err := platformdb.Load(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: nobody has filed a verdict yet. That is the normal
+		// first-boot state and an empty register is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together started the
+		// register empty with nothing logged, and the first Add then renamed a
+		// temp file over a file whose contents were never read.
+		s.loadErr = fmt.Errorf("rcafeedback: the verdict file could not be read: %w", err)
+		applog.Error("rcafeedback", "stored RCA verdicts could not be read; the register starts EMPTY and every write is refused until the file is repaired or removed",
+			map[string]any{"err": err.Error(), "path": path})
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
+	}
+	var list []Feedback
+	if uerr := json.Unmarshal(b, &list); uerr != nil {
+		s.loadErr = fmt.Errorf("rcafeedback: the verdict file could not be parsed: %w", uerr)
+		applog.Error("rcafeedback", "stored RCA verdicts could not be parsed; the register starts EMPTY and every write is refused until the file is repaired or removed",
+			map[string]any{"err": uerr.Error(), "path": path})
+		return s
+	}
+	for _, f := range list {
+		s.insertLocked(f)
 	}
 	return s
+}
+
+// LoadErr reports why the verdict file could not be read, or nil. A reader uses
+// it to say "unknown" instead of reporting the empty register as a case nobody
+// ever judged.
+func (s *FileStore) LoadErr() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
 }
 
 // insertLocked appends one row into the tenant→case index (call with mu held,
@@ -114,6 +168,13 @@ func (s *FileStore) insertLocked(f Feedback) {
 // failure is RETURNED, never swallowed — the caller answers 500 rather than
 // reporting a verdict that was not stored (§10).
 func (s *FileStore) flushLocked() error {
+	if s.loadErr != nil {
+		// The file's real contents are unknown, so a flush would not update it
+		// — it would REPLACE it with what this process holds, which after an
+		// unreadable load is nothing. Refuse, and say why: Add rolls its append
+		// back and the operator gets an error instead of a silent loss.
+		return fmt.Errorf("%w: %w", ErrStoreUnreadable, s.loadErr)
+	}
 	if s.path == "" {
 		return nil
 	}

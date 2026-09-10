@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"netops/backend/internal/applog"
 	"netops/backend/internal/platformdb"
 )
 
@@ -64,33 +66,102 @@ func newUUIDv4() (string, error) {
 
 // ── file backend (default; tenant-filtered IN the store) ─────────────────────
 
+// ErrStoreUnreadable is returned by every write while the window file exists but
+// could not be read or parsed at start-up. It is a REFUSAL, not a failure of the
+// write itself: the file's real contents were never established, so a flush
+// would not update it, it would REPLACE it with whatever this process happens to
+// hold — which after such a load is nothing at all.
+//
+// Why REFUSE rather than let the operator overwrite: a maintenance window is an
+// operator's declared intent, written once and relied on for weeks. Nothing
+// rebuilds it, and losing a tenant's windows is silent — alerts simply stop
+// being suppressed, or a change lands outside the window somebody agreed to. The
+// repair is an operator act: fix the file's permissions, or remove it
+// deliberately, and the api picks it up on the next start.
+var ErrStoreUnreadable = errors.New("maintenance: the window file could not be read at start-up, so writes are refused until it is repaired or removed")
+
 type FileStore struct {
 	mu   sync.RWMutex
 	path string
 	rows map[string]map[string]Window // tenant → id → window
+	// loadErr is set when the window file EXISTS but its contents could not be
+	// established — an I/O or permission failure, or JSON we could not parse.
+	// It is NOT set for an absent file, which is simply a store nobody has
+	// written yet.
+	loadErr error
 }
 
-// NewFileStore loads persisted windows; a missing/corrupt file starts empty
-// (the episode-store convention — state files are rebuildable operator input).
+// NewFileStore loads persisted windows. A MISSING file starts empty; a file that
+// exists but could not be read or parsed starts empty, is LOGGED, and refuses
+// every write from then on, so the file it could not read is never replaced by
+// an empty one.
 func NewFileStore(path string) *FileStore {
 	s := &FileStore{path: path, rows: map[string]map[string]Window{}}
-	if b, err := platformdb.Load(path); err == nil {
-		var list []Window
-		if json.Unmarshal(b, &list) == nil {
-			for _, w := range list {
-				t := normTenant(w.TenantID)
-				if s.rows[t] == nil {
-					s.rows[t] = map[string]Window{}
-				}
-				s.rows[t][w.ID] = w
-			}
+	b, err := platformdb.Load(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: no window has been declared yet. That is the normal
+		// first-boot state and an empty store is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together started the store
+		// empty with nothing logged, and the first Create then renamed a temp
+		// file over a file whose contents were never read.
+		s.loadErr = fmt.Errorf("maintenance: the window file could not be read: %w", err)
+		applog.Error("maintenance", "stored maintenance windows could not be read; the store starts EMPTY, nothing is suppressed, and every write is refused until the file is repaired or removed",
+			map[string]any{"err": err.Error(), "path": path})
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
+	}
+	var list []Window
+	if uerr := json.Unmarshal(b, &list); uerr != nil {
+		s.loadErr = fmt.Errorf("maintenance: the window file could not be parsed: %w", uerr)
+		applog.Error("maintenance", "stored maintenance windows could not be parsed; the store starts EMPTY, nothing is suppressed, and every write is refused until the file is repaired or removed",
+			map[string]any{"err": uerr.Error(), "path": path})
+		return s
+	}
+	for _, w := range list {
+		t := normTenant(w.TenantID)
+		if s.rows[t] == nil {
+			s.rows[t] = map[string]Window{}
 		}
+		s.rows[t][w.ID] = w
 	}
 	return s
 }
 
+// LoadErr reports why the window file could not be read, or nil. A reader uses
+// it to say "unknown" instead of reporting the empty store as a tenant that
+// declared no maintenance.
+func (s *FileStore) LoadErr() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
+}
+
+// refuseIfUnreadable is the guard every mutating method opens with, BEFORE it
+// touches s.rows: a refused write must change nothing at all, in memory or on
+// disk. Call it with the write lock held.
+func (s *FileStore) refuseIfUnreadable() error {
+	if s.loadErr == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", ErrStoreUnreadable, s.loadErr)
+}
+
 // flushLocked persists the full set (call with mu held).
 func (s *FileStore) flushLocked() error {
+	// Repeated here because this is the choke point that protects the FILE: a
+	// future write path that forgets the guard above still cannot overwrite a
+	// file nobody read.
+	if err := s.refuseIfUnreadable(); err != nil {
+		return err
+	}
 	var list []Window
 	for _, byID := range s.rows {
 		for _, w := range byID {
@@ -147,6 +218,9 @@ func (s *FileStore) Create(_ context.Context, _ string, _ bool, w Window) (Windo
 	w.CreatedAt, w.UpdatedAt = now, now
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refuseIfUnreadable(); err != nil {
+		return Window{}, err
+	}
 	if len(s.rows[w.TenantID]) >= MaxPerTenant {
 		return Window{}, ErrLimit
 	}
@@ -160,6 +234,9 @@ func (s *FileStore) Create(_ context.Context, _ string, _ bool, w Window) (Windo
 func (s *FileStore) Update(_ context.Context, tenant string, cross bool, id string, in Window) (Window, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refuseIfUnreadable(); err != nil {
+		return Window{}, false, err
+	}
 	t := normTenant(tenant)
 	for tid, byID := range s.rows {
 		if !cross && tid != t {
@@ -182,6 +259,9 @@ func (s *FileStore) Update(_ context.Context, tenant string, cross bool, id stri
 func (s *FileStore) Delete(_ context.Context, tenant string, cross bool, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refuseIfUnreadable(); err != nil {
+		return false, err
+	}
 	t := normTenant(tenant)
 	for tid, byID := range s.rows {
 		if !cross && tid != t {

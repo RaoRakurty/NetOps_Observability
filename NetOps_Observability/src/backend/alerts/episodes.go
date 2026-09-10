@@ -33,6 +33,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"sync"
@@ -150,12 +152,33 @@ type EpisodeStore struct {
 	episodes map[string]*Episode // id → episode
 	open     map[string]string   // fold key → id of the NOT-closed episode
 
+	// loadErr is set when the episode file EXISTS but its contents could not be
+	// established — an I/O or permission failure, or JSON we could not parse.
+	// It is NOT set for an absent file, which is simply a store nobody has
+	// written yet. While it is set the store keeps folding transitions in
+	// memory, because an unwritable disk must never stop alerts from being
+	// evaluated, but every flush is REFUSED so the file is not replaced by
+	// whatever this process happens to hold.
+	loadErr error
+
 	closeWindow time.Duration
 	flapFlips   int
 	flapWindow  time.Duration
 
 	now func() time.Time // test seam (SetNowForTest)
 }
+
+// ErrStoreUnreadable is returned by every flush while the episode file exists
+// but could not be read or parsed at start-up. It is a REFUSAL, not a failure of
+// the write itself: the file's real contents were never established, so a flush
+// would not update it, it would REPLACE it with whatever this process happens to
+// hold — which after such a load is nothing at all.
+//
+// Why REFUSE rather than let the next transition overwrite: an episode carries
+// its own history — first seen, count, flap record, and an operator's triage
+// notes, mutes and snoozes. Nothing rebuilds any of that, and losing it is
+// invisible: the storm just starts again from zero with every mute forgotten.
+var ErrStoreUnreadable = errors.New("alerts: the episode file could not be read at start-up, so writes are refused until it is repaired or removed")
 
 // NewEpisodeStore loads persisted episodes. The fold knobs are the caller's:
 // closeWindow (quiet gap that closes a cleared episode), flapFlips/flapWindow
@@ -184,19 +207,50 @@ func NewEpisodeStore(path string, closeWindow time.Duration, flapFlips int, flap
 		flapWindow:  flapWindow,
 		now:         time.Now,
 	}
-	if b, err := platformdb.Load(path); err == nil {
-		var list []Episode
-		if json.Unmarshal(b, &list) == nil {
-			for i := range list {
-				ep := list[i]
-				s.episodes[ep.ID] = &ep
-				if ep.Status != EpisodeStatusClosed {
-					s.open[episodeKey(ep.TenantID, ep.Resource, ep.Signal, ep.State)] = ep.ID
-				}
-			}
+	b, err := platformdb.Load(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: nothing has fired yet. That is the normal
+		// first-boot state and an empty episode set is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together started the store
+		// empty with nothing logged, and the first transition then renamed a
+		// temp file over a file whose contents were never read.
+		s.loadErr = fmt.Errorf("alerts: the episode file could not be read: %w", err)
+		applog.Error("alerts", "stored alert episodes could not be read; folding starts EMPTY, every triage note and mute is missing, and every write is refused until the file is repaired or removed",
+			map[string]any{"err": err.Error(), "path": path})
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
+	}
+	var list []Episode
+	if uerr := json.Unmarshal(b, &list); uerr != nil {
+		s.loadErr = fmt.Errorf("alerts: the episode file could not be parsed: %w", uerr)
+		applog.Error("alerts", "stored alert episodes could not be parsed; folding starts EMPTY, every triage note and mute is missing, and every write is refused until the file is repaired or removed",
+			map[string]any{"err": uerr.Error(), "path": path})
+		return s
+	}
+	for i := range list {
+		ep := list[i]
+		s.episodes[ep.ID] = &ep
+		if ep.Status != EpisodeStatusClosed {
+			s.open[episodeKey(ep.TenantID, ep.Resource, ep.Signal, ep.State)] = ep.ID
 		}
 	}
 	return s
+}
+
+// LoadErr reports why the episode file could not be read, or nil. A reader uses
+// it to say "unknown" instead of reporting the empty set as a quiet network.
+func (s *EpisodeStore) LoadErr() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
 }
 
 // CloseWindow, FlapFlips and FlapWindow expose the fold knobs read-only (the
@@ -219,6 +273,13 @@ func (s *EpisodeStore) SetNowForTest(now func() time.Time) { s.now = now }
 // failures). "Best effort" is a decision for the caller to make explicitly, not
 // a reason for the store to hide the outcome.
 func (s *EpisodeStore) flushLocked() error {
+	if s.loadErr != nil {
+		// The file's real contents are unknown, so a flush would not update it
+		// — it would REPLACE it with what this process holds. Refuse: the
+		// callers here log and carry on by design, so folding keeps working in
+		// memory while the file on disk is left intact for the operator.
+		return fmt.Errorf("%w: %w", ErrStoreUnreadable, s.loadErr)
+	}
 	list := make([]Episode, 0, len(s.episodes))
 	for _, ep := range s.episodes {
 		list = append(list, *ep)

@@ -34,7 +34,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"sync"
@@ -42,6 +44,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"netops/backend/internal/applog"
 	"netops/backend/internal/platformdb"
 )
 
@@ -299,40 +302,92 @@ func newestConcluded(rows []InvestigationRow) {
 // InvestigationFileStore is the non-Postgres backend. Path "" keeps it purely
 // in memory (tests); a real path is loaded at construction and rewritten on
 // every append.
+// ErrStoreUnreadable is returned by every write while the memory file exists but
+// could not be read or parsed at start-up. It is a REFUSAL, not a failure of the
+// write itself: the file's real contents were never established, so a flush
+// would not update it, it would REPLACE it with whatever this process happens to
+// hold — which after such a load is nothing at all.
+//
+// Why REFUSE rather than let the operator overwrite: this file is every tenant's
+// accumulated investigation history, and nothing rebuilds it — the incidents it
+// records are over. The repair is an operator act: fix the file's permissions,
+// or remove it deliberately, and the api picks it up on the next start.
+var ErrStoreUnreadable = errors.New("ai: the investigation memory file could not be read at start-up, so writes are refused until it is repaired or removed")
+
 type InvestigationFileStore struct {
 	mu   sync.RWMutex
 	path string
 	rows map[string][]InvestigationRow // tenant → rows, oldest first
+	// loadErr is set when the memory file EXISTS but its contents could not be
+	// established — an I/O or permission failure, or JSON we could not parse.
+	// It is NOT set for an absent file, which is simply a memory nobody has
+	// written yet, nor for a row we read and deliberately dropped.
+	loadErr error
 }
 
-// NewInvestigationFileStore loads persisted memory; a missing or corrupt file
-// starts EMPTY (the maintenance/rcafeedback convention — this state file is
-// rebuildable operational history, and a parse failure must not block boot).
+// NewInvestigationFileStore loads persisted memory. A MISSING file starts EMPTY;
+// a file that exists but could not be read or parsed starts empty, is LOGGED,
+// and refuses every write from then on, so the file it could not read is never
+// replaced by an empty one.
 func NewInvestigationFileStore(path string) *InvestigationFileStore {
 	s := &InvestigationFileStore{path: path, rows: map[string][]InvestigationRow{}}
 	if path == "" {
 		return s
 	}
-	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
-		var list []persistedInvestigation
-		if json.Unmarshal(b, &list) == nil {
-			for _, p := range list {
-				row := p.InvestigationRow
-				row.TenantID = normTenant(p.TenantID)
-				if row.TenantID == "" {
-					// A row with no owner is unattributable: loading it under the
-					// empty tenant would make it visible to a caller it may not
-					// belong to. Drop it rather than guess.
-					continue
-				}
-				s.rows[row.TenantID] = append(s.rows[row.TenantID], row)
-			}
-			for t := range s.rows {
-				s.evictLocked(t)
-			}
+	b, err := platformdb.Load(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: nothing has been investigated yet. That is the
+		// normal first-boot state and an empty memory is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together started the memory
+		// empty with nothing logged, and the first Record then renamed a temp
+		// file over a file whose contents were never read.
+		s.loadErr = fmt.Errorf("ai: the investigation memory file could not be read: %w", err)
+		applog.Error("ai", "stored investigation memory could not be read; recall starts EMPTY and every write is refused until the file is repaired or removed",
+			map[string]any{"err": err.Error(), "path": path})
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
+	}
+	var list []persistedInvestigation
+	if uerr := json.Unmarshal(b, &list); uerr != nil {
+		s.loadErr = fmt.Errorf("ai: the investigation memory file could not be parsed: %w", uerr)
+		applog.Error("ai", "stored investigation memory could not be parsed; recall starts EMPTY and every write is refused until the file is repaired or removed",
+			map[string]any{"err": uerr.Error(), "path": path})
+		return s
+	}
+	for _, p := range list {
+		row := p.InvestigationRow
+		row.TenantID = normTenant(p.TenantID)
+		if row.TenantID == "" {
+			// A row with no owner is unattributable: loading it under the empty
+			// tenant would make it visible to a caller it may not belong to.
+			// Drop it rather than guess. A DROPPED ROW IS NOT AN UNREADABLE
+			// FILE — we read the file and made a deliberate choice, so writes
+			// stay allowed and rewriting the file is the intended repair.
+			continue
 		}
+		s.rows[row.TenantID] = append(s.rows[row.TenantID], row)
+	}
+	for t := range s.rows {
+		s.evictLocked(t)
 	}
 	return s
+}
+
+// LoadErr reports why the memory file could not be read, or nil. A reader uses
+// it to say "unknown" instead of reporting the empty memory as a tenant that
+// never investigated anything.
+func (s *InvestigationFileStore) LoadErr() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
 }
 
 // persistedInvestigation carries the owner on the wire. InvestigationRow keeps
@@ -371,6 +426,13 @@ func (s *InvestigationFileStore) evictLocked(tenant string) {
 // failure is RETURNED, never swallowed — the caller logs it rather than
 // reporting a memory that was not stored (§10).
 func (s *InvestigationFileStore) flushLocked() error {
+	if s.loadErr != nil {
+		// The file's real contents are unknown, so a flush would not update it
+		// — it would REPLACE it with what this process holds, which after an
+		// unreadable load is nothing. Refuse, and say why: Record rolls its
+		// append back and the operator gets an error instead of a silent loss.
+		return fmt.Errorf("%w: %w", ErrStoreUnreadable, s.loadErr)
+	}
 	if s.path == "" {
 		return nil
 	}
