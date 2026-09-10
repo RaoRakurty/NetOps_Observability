@@ -6,6 +6,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -88,14 +89,32 @@ func newWanPolicyStore(path string) (*wanPolicyStore, error) {
 
 // Get returns the tenant's policy (with defaults applied) — never fails closed to
 // "no view": an unconfigured tenant gets the measurement baseline.
+//
+// A server built without the store answers the same way. main.go builds it or
+// aborts the boot, so this is a partially-built server and nothing else, but a
+// missing guard is not an error path: without it the nil dereference came out
+// of /api/wan/interfaces as a recovered panic and a 500, which is a failure
+// reported in the wrong way (§10). The baseline is the honest answer, and it is
+// the answer every unconfigured tenant already gets.
 func (s *wanPolicyStore) Get(tenant string, cross bool) WanMeasurementPolicy {
+	if s == nil || s.kv == nil {
+		return wan.MeasurementPolicy{TenantID: tenant}.WithDefaults()
+	}
 	if p, ok := s.kv.Get(tenant, cross, "policy"); ok {
 		return p.WithDefaults()
 	}
 	return wan.MeasurementPolicy{TenantID: tenant}.WithDefaults()
 }
 
-func (s *wanPolicyStore) Put(p WanMeasurementPolicy) error { return s.kv.Upsert(p) }
+// Put persists operator intent. With no store there is nowhere to persist it,
+// and a write that cannot be written down must SAY so rather than panic: the
+// read side can fall back to the baseline, the write side has no such fallback.
+func (s *wanPolicyStore) Put(p WanMeasurementPolicy) error {
+	if s == nil || s.kv == nil {
+		return errors.New("wan measurement policy store is not configured")
+	}
+	return s.kv.Upsert(p)
+}
 
 // ---- projector: interface-IP table × neighbors × policy → endpoints + targets ----
 
