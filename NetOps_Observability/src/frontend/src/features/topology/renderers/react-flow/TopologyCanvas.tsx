@@ -94,7 +94,9 @@ import {
 import { renderedNodeCount, allGroupIds, canAggregateUnderCeiling, expansionWouldExceed } from "../../utils/topologyScale";
 import { focusSummary, focusView } from "../../utils/topologyFocus";
 import { excludeInternalNodes } from "../../utils/topologyFilters";
-import { filterViewByDomain, DOMAINS, type NetworkDomain } from "../../utils/topologyDomains";
+import {
+  filterViewByDomain, domainsForCloudRead, CLOUD_READ_FAILED_NOTE, type NetworkDomain,
+} from "../../utils/topologyDomains";
 import { mergeCloudView } from "../../utils/cloudMerge";
 import { withCarrierOverlay } from "../../utils/carrierOverlay";
 import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
@@ -879,13 +881,27 @@ function CanvasInner({
             value={domain}
             onChange={(e) => setDomain(e.target.value as NetworkDomain)}
           >
-            {DOMAINS.map((d) => (
+            {domainsForCloudRead(cloudStatus === "error").map((d) => (
               <option key={d.id} value={d.id} title={d.blurb}>
                 {d.label}
               </option>
             ))}
           </select>
         </label>
+        {/* The cloud read joins EVERY domain, so a failed one leaves a hole in
+            whichever tab is open. The Cloud tab answers for itself in its own
+            empty state; every other tab has nothing to show the gap, so it is
+            said here, once, beside the control that names the estate. */}
+        {cloudStatus === "error" && domain !== "cloud" && (
+          <span
+            className="topo-select-label"
+            role="alert"
+            data-testid="topo-cloud-read-failed"
+            style={{ color: "var(--bad)", fontSize: 12 }}
+          >
+            {CLOUD_READ_FAILED_NOTE}
+          </span>
+        )}
         <AskIris topic="topo.domain" label="Domain" />
         <button
           className={`topo-render-toggle topo-carrier${carrier ? " on" : ""}`}

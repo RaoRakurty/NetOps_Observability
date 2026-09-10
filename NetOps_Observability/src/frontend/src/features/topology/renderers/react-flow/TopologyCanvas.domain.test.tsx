@@ -70,3 +70,43 @@ describe("domain selector", () => {
     expect(screen.getByLabelText("Arrange by topology shape")).toBeInTheDocument();
   });
 });
+
+// ── a failed cloud read is never drawn as a whole estate ────────────────────
+//
+// 3.11-12. The cloud projection is merged into EVERY domain, and the default
+// one is named "All networks — the whole discovered estate". `cloudStatus ===
+// "error"` was surfaced only inside the CLOUD tab's empty state, so a failed
+// cloud read drew the on-prem fabric under a name claiming it was everything.
+
+describe("a failed cloud read", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  async function renderWithCloudRead(status: "ok" | "error") {
+    const api = await import("../../api/topologyApi");
+    vi.mocked(api.fetchCloudTopology).mockResolvedValue({
+      view: { view_id: "c", layout_type: "cloud_grouped", mode: "explore", nodes: [], edges: [], groups: [] },
+      status,
+    } as never);
+    render(<TopologyCanvas />);
+    return screen.findByLabelText("Network domain");
+  }
+
+  it("stops the default tab claiming the whole estate, and says why", async () => {
+    const select = await renderWithCloudRead("error");
+    await waitFor(() => expect(screen.getByTestId("topo-cloud-read-failed")).toBeInTheDocument());
+    const lan = Array.from(select.querySelectorAll("option")).find((o) => o.value === "lan")!;
+    expect(lan.textContent).not.toMatch(/all networks/i);
+    expect(lan.textContent).toMatch(/on-prem/i);
+    expect(lan.title).not.toMatch(/whole discovered estate/i);
+    expect(screen.getByTestId("topo-cloud-read-failed").textContent).toMatch(/could not be read/i);
+  });
+
+  it("says nothing and claims everything when the cloud read worked", async () => {
+    const select = await renderWithCloudRead("ok");
+    await waitFor(() => {
+      const lan = Array.from(select.querySelectorAll("option")).find((o) => o.value === "lan")!;
+      expect(lan.textContent).toBe("All networks");
+    });
+    expect(screen.queryByTestId("topo-cloud-read-failed")).toBeNull();
+  });
+});

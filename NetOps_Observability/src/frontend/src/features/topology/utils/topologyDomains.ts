@@ -33,6 +33,40 @@ export const DOMAINS: DomainMeta[] = [
   { id: "cloud", label: "Cloud", blurb: "The discovered cloud network and its gateways." },
 ];
 
+// ── what the default tab may CLAIM ──────────────────────────────────────────
+//
+// The default tab merges the cloud projection into the on-prem fabric and calls
+// the result "All networks — the whole discovered estate". That claim is only
+// true if the cloud read succeeded. When it fails there is no projection to
+// merge, so the canvas draws the on-prem fabric and the name above it says the
+// estate is complete. An operator then reads a missing VPC as a VPC that is not
+// there.
+//
+// The canvas is not changed by this — it draws what was read either way. The
+// NAME is changed, so it describes what was read.
+
+export const LAN_LABEL_WITHOUT_CLOUD = "On-prem networks only";
+export const LAN_BLURB_WITHOUT_CLOUD =
+  "The cloud network could not be read, so this canvas leaves it out.";
+/** Said once, beside the tabs, so the gap is on screen and not only in a name. */
+export const CLOUD_READ_FAILED_NOTE =
+  "The cloud network could not be read. What you see is the on-prem estate.";
+
+/**
+ * The domain tabs, told whether the cloud read failed. On success this is
+ * DOMAINS unchanged; on failure the default tab stops claiming the whole
+ * estate. Every other tab is a slice of the on-prem fabric and is unaffected —
+ * except Cloud, which answers for itself in its own empty state.
+ */
+export function domainsForCloudRead(cloudReadFailed: boolean): DomainMeta[] {
+  if (!cloudReadFailed) return DOMAINS.map((d) => ({ ...d }));
+  return DOMAINS.map((d) => (
+    d.id === "lan"
+      ? { ...d, label: LAN_LABEL_WITHOUT_CLOUD, blurb: LAN_BLURB_WITHOUT_CLOUD }
+      : { ...d }
+  ));
+}
+
 const SDWAN_RE = /(wan|sd-?wan|vpn|tunnel|overlay|dmvpn|mpls|transport|gateway|edge|uplink|carrier)/i;
 const DC_RE = /(spine|leaf|tor|fabric|pod|dc[-_ ]|datacenter|data-?center|server|host|storage|compute|aggreg|distribution)/i;
 

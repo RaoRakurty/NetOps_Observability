@@ -5,7 +5,10 @@
 // (default unchanged); SD-WAN/DC slice; cloud nodes route to the cloud domain.
 
 import { describe, it, expect } from "vitest";
-import { domainOfNode, filterViewByDomain, DOMAINS } from "./topologyDomains";
+import {
+  domainOfNode, filterViewByDomain, DOMAINS, domainsForCloudRead,
+  LAN_LABEL_WITHOUT_CLOUD, CLOUD_READ_FAILED_NOTE,
+} from "./topologyDomains";
 import type { TopologyNode, TopologyView } from "../api/topologyTypes";
 
 function node(id: string, kind: TopologyNode["kind"], role?: string, label = id): TopologyNode {
@@ -126,5 +129,53 @@ describe("filterViewByDomain — nested containers survive the cloud slice", () 
   it("still drops a container with nothing below it at all", () => {
     const out = filterViewByDomain(nested, "cloud");
     expect(out.groups.map((g) => g.id)).not.toContain("site:hq");
+  });
+});
+
+// ── the default tab never claims more than was read ─────────────────────────
+//
+// 3.11-12. The cloud projection is merged into EVERY domain, and the default
+// one is named "All networks" and blurbed "The whole discovered estate on one
+// canvas." A failed cloud read leaves nothing to merge, so the canvas draws the
+// on-prem fabric under a name that says the estate is complete. An operator
+// then reads a missing VPC as a VPC that does not exist.
+
+describe("the domain tabs and a failed cloud read", () => {
+  it("leaves the tabs exactly as they are when the cloud read succeeded", () => {
+    expect(domainsForCloudRead(false)).toEqual(DOMAINS);
+  });
+
+  it("stops claiming the whole estate when the cloud read failed", () => {
+    const lan = domainsForCloudRead(true).find((d) => d.id === "lan")!;
+    expect(lan.label).toBe(LAN_LABEL_WITHOUT_CLOUD);
+    // The claim itself, in either half of the tab, is gone.
+    expect(lan.label).not.toMatch(/all networks/i);
+    expect(lan.blurb).not.toMatch(/whole discovered estate/i);
+    expect(lan.blurb).toMatch(/cloud network could not be read/i);
+    // And the label still names what IS on the canvas.
+    expect(lan.label).toMatch(/on-prem/i);
+  });
+
+  it("keeps the id stable, so links and saved layouts still resolve", () => {
+    expect(domainsForCloudRead(true).map((d) => d.id)).toEqual(DOMAINS.map((d) => d.id));
+  });
+
+  it("changes only the default tab; the slices are unaffected", () => {
+    const failed = domainsForCloudRead(true);
+    for (const id of ["sdwan", "dc", "cloud"] as const) {
+      expect(failed.find((d) => d.id === id)).toEqual(DOMAINS.find((d) => d.id === id));
+    }
+  });
+
+  it("returns a fresh list, so a caller cannot rewrite the shared table", () => {
+    const first = domainsForCloudRead(true);
+    first[0].label = "mutated";
+    expect(DOMAINS.find((d) => d.id === "lan")!.label).toBe("All networks");
+    expect(domainsForCloudRead(true)[0].label).toBe(LAN_LABEL_WITHOUT_CLOUD);
+  });
+
+  it("says the gap out loud, not only in a tab name", () => {
+    expect(CLOUD_READ_FAILED_NOTE).toMatch(/could not be read/i);
+    expect(CLOUD_READ_FAILED_NOTE).toMatch(/on-prem/i);
   });
 });
