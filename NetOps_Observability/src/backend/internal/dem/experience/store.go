@@ -243,7 +243,7 @@ func (s *FileStore) flushViewLocked(replace map[string][]ChangeEvent) error {
 		// — it would REPLACE it with what this process holds, which after an
 		// unreadable load is nothing. Refuse, and say why: the caller rolls its
 		// change back and the operator gets an error instead of a silent loss.
-		return fmt.Errorf("%w: %v", ErrStoreUnreadable, s.unreadable)
+		return fmt.Errorf("%w: %w", ErrStoreUnreadable, s.unreadable)
 	}
 	if s.path == "" {
 		return nil
