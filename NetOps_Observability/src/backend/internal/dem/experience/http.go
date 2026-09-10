@@ -1188,7 +1188,14 @@ func (a *API) listChanges(w http.ResponseWriter, r *http.Request) {
 	cq := ChangeQuery{
 		Since: a.deps.Now().UTC().Add(-changeLookbackFor(dur)),
 		App:   strings.TrimSpace(q.Get("app")), Site: strings.TrimSpace(q.Get("site")),
-		Limit: maxPageLimit,
+		// ONE MORE than the ceiling. Reading exactly the ceiling cannot tell
+		// "that is all of them" from "that is all we would fetch", so a caller
+		// asking for the ceiling was told the answer was complete. The extra
+		// row is never needed to fill a page — `limit` cannot exceed the
+		// ceiling — it exists so `total` differs from `returned` when there is
+		// more, which is what makes complete, X-Page-Complete and the
+		// truncation log tell the truth.
+		Limit: maxPageLimit + 1,
 	}
 	if t := strings.ToUpper(strings.TrimSpace(q.Get("type"))); t != "" {
 		cq.Types = []string{t}
@@ -1198,12 +1205,16 @@ func (a *API) listChanges(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteError(w, http.StatusInternalServerError, err)
 		return
 	}
+	atCeiling := len(all) > maxPageLimit
 	rows := httppage.SliceOf(all, page)
 	httppage.LogTruncated(ChangesPath, page, len(rows), len(all))
 	httppage.WriteHeaders(w, page, len(rows), len(all))
 	note := ""
-	if len(all) == 0 {
+	switch {
+	case len(all) == 0:
 		note = "No change was recorded in this window. That may be correct — a quiet estate reports nothing — but it is not proof that nothing changed: only the producers that are wired report here."
+	case atCeiling:
+		note = "More changes matched than this endpoint returns in one read. The count is a floor, not a total. Narrow the window, or filter by type, app or site, to see the rest."
 	}
 	a.deps.WriteJSON(w, http.StatusOK, map[string]any{
 		"window": label, "changes": rows, "total": len(all), "returned": len(rows),

@@ -372,3 +372,89 @@ func TestIncidentSummaryCarriesTheConfidenceBreakdown(t *testing.T) {
 		t.Fatalf("a confirmed verdict carried gate reasons: %v", s.GateReasons)
 	}
 }
+
+// A caller who asks for the whole list and gets exactly the server ceiling must
+// be told the answer is NOT complete. The handler read at the ceiling and then
+// computed total, complete and X-Total-Count from that truncated set, so a
+// caller asking for 500 was told 500 was all there was.
+func TestAChangeListCutAtTheServerCeilingIsNotReportedComplete(t *testing.T) {
+	api, _ := newTestAPI(t, nil)
+	ctx := context.Background()
+	const over = maxPageLimit + 25
+	for i := 0; i < over; i++ {
+		if _, err := api.deps.Store.RecordChange(ctx, ChangeEvent{
+			TenantID: "acme", Type: ChangeConfig, Object: "sw-1",
+			Summary: "vlan edit", App: "checkout", Site: "dc1",
+			Provenance: prov(SourceConfigDrift, -time.Duration(i+1)*time.Second),
+		}); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+
+	r := httptest.NewRequest(http.MethodGet, ChangesPath+"?limit=500", nil)
+	w := httptest.NewRecorder()
+	api.HandleChanges(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", w.Code, w.Body.Bytes())
+	}
+	var resp struct {
+		Changes  []ChangeEvent `json:"changes"`
+		Total    int           `json:"total"`
+		Returned int           `json:"returned"`
+		Complete bool          `json:"complete"`
+		Note     string        `json:"note"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v (%s)", err, w.Body.Bytes())
+	}
+	if resp.Returned != maxPageLimit {
+		t.Fatalf("the page returned %d rows, want the %d ceiling", resp.Returned, maxPageLimit)
+	}
+	if resp.Complete {
+		t.Fatalf("a list cut at the server ceiling reported itself complete (total=%d returned=%d)", resp.Total, resp.Returned)
+	}
+	if done := w.Header().Get("X-Page-Complete"); done != "false" {
+		t.Fatalf("X-Page-Complete is %q on a truncated read", done)
+	}
+	if resp.Note == "" {
+		t.Fatal("a truncated list said nothing about being truncated")
+	}
+	if resp.Total <= maxPageLimit {
+		t.Fatalf("total is %d, which cannot tell a full page from a truncated one", resp.Total)
+	}
+}
+
+// The same list BELOW the ceiling is complete, and says so.
+func TestAChangeListInsideTheCeilingIsReportedComplete(t *testing.T) {
+	api, _ := newTestAPI(t, nil)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if _, err := api.deps.Store.RecordChange(ctx, ChangeEvent{
+			TenantID: "acme", Type: ChangeConfig, Object: "sw-1",
+			Summary: "vlan edit", App: "checkout", Site: "dc1",
+			Provenance: prov(SourceConfigDrift, -time.Duration(i+1)*time.Second),
+		}); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+	r := httptest.NewRequest(http.MethodGet, ChangesPath+"?limit=500", nil)
+	w := httptest.NewRecorder()
+	api.HandleChanges(w, r)
+	var resp struct {
+		Total    int  `json:"total"`
+		Returned int  `json:"returned"`
+		Complete bool `json:"complete"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v (%s)", err, w.Body.Bytes())
+	}
+	if resp.Total != 3 || resp.Returned != 3 || !resp.Complete {
+		t.Fatalf("a whole answer was not reported whole: %+v", resp)
+	}
+	if done := w.Header().Get("X-Page-Complete"); done != "true" {
+		t.Fatalf("X-Page-Complete is %q on a whole answer", done)
+	}
+	if got := w.Header().Get("X-Total-Count"); got != "3" {
+		t.Fatalf("X-Total-Count is %q, want 3", got)
+	}
+}
