@@ -16,7 +16,9 @@ package backend
 // Every sub-search is scoped to the caller's principal (CLAUDE.md §3a): devices
 // via visibleDevices, cloud inventory + connector scopes via principalTenant
 // against tenant-keyed stores, correlation cases via the ClickHouse tenant_scope
-// row policies (chTenantScope). Bounded by design (§9): per-kind cap, total cap,
+// row policies (chTenantScope). On TOP of that every sub-search obeys the
+// operator-visibility restriction (Tenant.OperatorRestricted), resolved ONCE per
+// request into a searchVisibility — see the type. Bounded by design (§9): per-kind cap, total cap,
 // and a hard timeout; the ClickHouse case lookup is best-effort — a storage
 // error degrades that ONE kind (logged, never silent) instead of failing the
 // whole search.
@@ -62,13 +64,26 @@ func (s *server) handleUnifiedSearch(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	tenant, cross := principalTenant(claims)
 
+	// Compliance: per-tenant operator-visibility (Tenant.OperatorRestricted),
+	// resolved ONCE from the same resolver the logs path uses. Deny is the
+	// operator scoped INTO a restricted tenant: search answers with an empty
+	// result set for EVERY kind, which is the answer logs, flows, metrics and
+	// the BMP feed already give. Never a 403 — that would confirm the tenant has
+	// something to find.
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	if deny {
+		writeJSON(w, http.StatusOK, map[string]any{"query": q, "results": []searchrank.Hit{}})
+		return
+	}
+	vis := searchVisibility{exclude: exclude}
+
 	var hits []searchrank.ScoredHit
-	hits = append(hits, s.searchDevices(claims, lq)...)
-	res, apps := s.searchCloud(ctx, tenant, cross, lq)
+	hits = append(hits, s.searchDevices(claims, vis, lq)...)
+	res, apps := s.searchCloud(ctx, tenant, cross, vis, lq)
 	hits = append(hits, res...)
 	hits = append(hits, apps...)
-	hits = append(hits, s.searchAccounts(ctx, tenant, cross, lq)...)
-	hits = append(hits, s.searchCases(ctx, chTenantScope(r), q)...)
+	hits = append(hits, s.searchAccounts(ctx, tenant, cross, vis, lq)...)
+	hits = append(hits, s.searchCases(ctx, chTenantScope(r), vis, q)...)
 
 	sort.SliceStable(hits, func(i, j int) bool {
 		if hits[i].RankScore != hits[j].RankScore {
@@ -89,10 +104,42 @@ func (s *server) handleUnifiedSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"query": q, "results": out})
 }
 
+// searchVisibility is the operator-visibility restriction as this lane needs it.
+// It is resolved ONCE per request, by the handler, from operatorTelemetryRestriction
+// — the same resolver logs.go uses — and then consulted by every sub-search, so
+// there is one rule here rather than a per-kind copy of it.
+//
+// The deny half never reaches this type: the handler answers an empty result set
+// and returns before any store is read. What travels is the EXCLUDE half — the
+// tenant ids whose rows must not appear in the platform owner's Global search.
+type searchVisibility struct{ exclude []string }
+
+// hides reports whether a row owned by tenantID is invisible to this caller.
+// Case-insensitive and blank-tolerant: the two sides of the comparison are minted
+// by different stores (the tenant store and the cloud/connector/ClickHouse rows).
+func (v searchVisibility) hides(tenantID string) bool {
+	if len(v.exclude) == 0 {
+		return false
+	}
+	id := strings.TrimSpace(tenantID)
+	if id == "" {
+		return false
+	}
+	for _, x := range v.exclude {
+		if strings.EqualFold(strings.TrimSpace(x), id) {
+			return true
+		}
+	}
+	return false
+}
+
 // searchDevices matches the principal-visible device inventory by name/id/IP.
-func (s *server) searchDevices(claims jwtClaims, lq string) []searchrank.ScoredHit {
+func (s *server) searchDevices(claims jwtClaims, vis searchVisibility, lq string) []searchrank.ScoredHit {
 	var out []searchrank.ScoredHit
 	for _, d := range visibleDevices(s.discovery.Devices(), claims) {
+		if vis.hides(deviceTenant(d)) {
+			continue
+		}
 		rank := searchrank.Rank(lq, d.Name, d.ID, d.Address)
 		if rank < 0 {
 			continue
@@ -117,7 +164,7 @@ func (s *server) searchDevices(claims jwtClaims, lq string) []searchrank.ScoredH
 
 // searchCloud matches the tenant's cloud inventory (name / id / IPs / URI) and
 // the app registry derived from it. One store read serves both kinds.
-func (s *server) searchCloud(ctx context.Context, tenant string, cross bool, lq string) (resources, apps []searchrank.ScoredHit) {
+func (s *server) searchCloud(ctx context.Context, tenant string, cross bool, vis searchVisibility, lq string) (resources, apps []searchrank.ScoredHit) {
 	if s.cloud == nil {
 		return nil, nil
 	}
@@ -126,6 +173,9 @@ func (s *server) searchCloud(ctx context.Context, tenant string, cross bool, lq 
 		log.Printf("search: cloud inventory unavailable: %v", err)
 		return nil, nil
 	}
+	// A restricted tenant's resources are dropped BEFORE anything reads them, so
+	// the derived app registry below cannot reconstruct them either.
+	res = visibleCloudResources(res, vis)
 	for _, cr := range res {
 		fields := append([]string{cr.ResourceName, cr.ResourceID, cr.ResourceURI}, cr.PrivateIPs...)
 		fields = append(fields, cr.PublicIPs...)
@@ -167,9 +217,27 @@ func (s *server) searchCloud(ctx context.Context, tenant string, cross bool, lq 
 	return searchrank.CapKind(resources), searchrank.CapKind(apps)
 }
 
+// visibleCloudResources drops a restricted tenant's resources from a listing. It
+// is a function rather than an inline loop because the app registry is DERIVED
+// from the same slice: filtering once, here, is what stops a hidden resource from
+// coming back as an app hit.
+func visibleCloudResources(in []cloud.CloudResource, vis searchVisibility) []cloud.CloudResource {
+	if len(vis.exclude) == 0 {
+		return in
+	}
+	out := make([]cloud.CloudResource, 0, len(in))
+	for _, cr := range in {
+		if vis.hides(cr.TenantID) {
+			continue
+		}
+		out = append(out, cr)
+	}
+	return out
+}
+
 // searchAccounts matches the tenant's onboarded provider accounts /
 // subscriptions / projects — the connector collection scopes.
-func (s *server) searchAccounts(ctx context.Context, tenant string, cross bool, lq string) []searchrank.ScoredHit {
+func (s *server) searchAccounts(ctx context.Context, tenant string, cross bool, vis searchVisibility, lq string) []searchrank.ScoredHit {
 	if s.cloudConn == nil {
 		return nil
 	}
@@ -186,6 +254,9 @@ func (s *server) searchAccounts(ctx context.Context, tenant string, cross bool, 
 	seen := map[string]bool{}
 	var out []searchrank.ScoredHit
 	for _, c := range conns {
+		if vis.hides(c.TenantID) {
+			continue
+		}
 		for _, sc := range c.Scopes {
 			switch sc.Type {
 			case cloudconn.ScopeAccount, cloudconn.ScopeSubscription, cloudconn.ScopeProject:
@@ -217,16 +288,24 @@ func (s *server) searchAccounts(ctx context.Context, tenant string, cross bool, 
 // caller's correlation objects. Tenant isolation is the corr_current ClickHouse
 // row policy (tenant_scope), same as every correlations read. Best-effort: a
 // storage error degrades this kind only.
-func (s *server) searchCases(ctx context.Context, scope, q string) []searchrank.ScoredHit {
+func (s *server) searchCases(ctx context.Context, scope string, vis searchVisibility, q string) []searchrank.ScoredHit {
 	hex := searchrank.CaseHex(q)
 	if hex == "" {
 		return nil
+	}
+	// Compliance: a restricted tenant's objects are excluded from the operator's
+	// Global scope. The row policies cannot do this — '__all__' unlocks every
+	// tenant by design — so the exclusion is a predicate on the object's own
+	// tenant_id, the same column logs.go's must_not clause names.
+	restrict := ""
+	if len(vis.exclude) > 0 {
+		restrict = " AND tenant_id NOT IN (" + sqlInList(vis.exclude) + ")"
 	}
 	// hex is validated uppercase [0-9A-F] only — safe to inline.
 	sql := `
 SELECT toString(correlation_id) AS id, state, top_hypothesis
   FROM netops.corr_current FINAL
- WHERE startsWith(upper(replaceAll(toString(correlation_id), '-', '')), '` + hex + `')
+ WHERE startsWith(upper(replaceAll(toString(correlation_id), '-', '')), '` + hex + `')` + restrict + `
  ORDER BY created_at DESC
  LIMIT ` + intToString(searchrank.PerKindCap)
 	rows, err := s.chRowsScope(ctx, scope, sql, "api:/api/search")
