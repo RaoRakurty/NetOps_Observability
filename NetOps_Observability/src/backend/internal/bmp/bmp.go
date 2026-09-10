@@ -27,10 +27,40 @@ type Gate int
 const GateRead Gate = 0
 
 // Principal is the caller's already-authorized scope.
+//
+// It carries the OPERATOR-VISIBILITY restriction as well as the tenant, because
+// a BMP feed is a customer's routing table and the platform owner's cross-tenant
+// read is not automatically a right to read it. The composition root resolves
+// the restriction (it owns the tenant store); this package only obeys it, the
+// same way it only obeys the tenant it is handed.
 type Principal struct {
 	Tenant  string
 	Cross   bool
 	Subject string
+
+	// Deny short-circuits every read to NOTHING. It is set when the caller is
+	// the platform operator scoped INTO a tenant whose operator-visibility
+	// restriction is in force. A denied principal reads no session, no peer and
+	// no prefix — the same answer logs, flows, metrics and igpmon give.
+	Deny bool
+
+	// ExcludeTenants are tenant ids whose sessions must be filtered OUT of a
+	// cross-tenant (Global) view. It is normally empty; it is non-empty only for
+	// the platform operator while some tenant is restricted.
+	ExcludeTenants []string
+}
+
+// Excluded reports whether a session owned by tenantID is hidden from this
+// principal by the operator-visibility restriction. Case-insensitive, because
+// a tenant id is an opaque handle and the two sides of this comparison are
+// minted by different stores.
+func (p Principal) Excluded(tenantID string) bool {
+	for _, id := range p.ExcludeTenants {
+		if strings.EqualFold(strings.TrimSpace(id), tenantID) {
+			return true
+		}
+	}
+	return false
 }
 
 // Deps are the module's injected collaborators.

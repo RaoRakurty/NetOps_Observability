@@ -162,11 +162,11 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteError(w, http.StatusBadRequest, err)
 		return
 	}
-	sessions := a.store.Sessions(p.Tenant, p.Cross)
+	sessions := a.store.Sessions(p)
 	a.deps.WriteJSON(w, http.StatusOK, map[string]any{
 		"sessions": sessions,
 		"count":    len(sessions),
-		"coverage": a.coverageFor(a.store.Stats(p.Tenant, p.Cross)),
+		"coverage": a.coverageFor(a.store.Stats(p)),
 	})
 }
 
@@ -182,7 +182,7 @@ func (a *API) handleStats(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteError(w, http.StatusBadRequest, err)
 		return
 	}
-	st := a.store.Stats(p.Tenant, p.Cross)
+	st := a.store.Stats(p)
 	a.deps.WriteJSON(w, http.StatusOK, map[string]any{
 		"stats":    st,
 		"limits":   a.limits(),
@@ -264,12 +264,12 @@ func (a *API) handleUpdates(w http.ResponseWriter, r *http.Request) {
 		f.Before = before
 	}
 
-	rows := a.store.Updates(p.Tenant, p.Cross, f)
+	rows := a.store.Updates(p, f)
 	body := map[string]any{
 		"updates":  rows,
 		"count":    len(rows),
 		"limit":    limit,
-		"coverage": a.coverageFor(a.store.Stats(p.Tenant, p.Cross)),
+		"coverage": a.coverageFor(a.store.Stats(p)),
 	}
 	// A full page gets a cursor. A short page does NOT: handing back a cursor
 	// that yields nothing makes a walker loop forever on an exhausted feed.

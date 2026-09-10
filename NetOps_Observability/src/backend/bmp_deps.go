@@ -14,6 +14,8 @@ package backend
 // a second thing that can silently be wrong:
 //
 //	Authz         → s.requirePerm(infrastructure:read) + principalTenant
+//	                + operatorTelemetryRestriction (the operator-visibility
+//	                compliance switch, the SAME resolver the logs path uses)
 //	ResolveDevice → s.discovery.Devices() + deviceTenant (the SAME inventory
 //	                and the SAME tenant-of-a-device rule the API uses)
 //	OnAnnounce    → the bgpwatch sighting register (bgp_alerts.go), so a bogon
@@ -68,6 +70,14 @@ func (s *server) buildBMP() (*bmp.API, error) {
 // router — so it is requirePerm + a tenant filter, NOT a platform gate
 // (§3a rule 3). Every route in the module is a READ; there is no write surface,
 // and nothing here can configure a device.
+//
+// It also resolves the OPERATOR-VISIBILITY restriction and hands it to the
+// module on the Principal. A BMP feed is telemetry in exactly the sense that
+// compliance switch means: peers, AS paths and prefixes are the customer's
+// routing table. It is resolved with the SAME primitive the logs path uses
+// (operatorTelemetryRestriction, the tenant_id form) rather than a second
+// implementation, because the store's rows already carry the owning tenant id —
+// no device-keyed translation is needed here.
 func (s *server) bmpAuthz(w http.ResponseWriter, r *http.Request, gate bmp.Gate) (bmp.Principal, bool) {
 	if gate != bmp.GateRead {
 		// The module declares exactly one gate. An unknown gate is a wiring bug,
@@ -80,7 +90,14 @@ func (s *server) bmpAuthz(w http.ResponseWriter, r *http.Request, gate bmp.Gate)
 		return bmp.Principal{}, false
 	}
 	tenant, cross := principalTenant(claims)
-	return bmp.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	return bmp.Principal{
+		Tenant:         tenant,
+		Cross:          cross,
+		Subject:        claims.Sub,
+		Deny:           deny,
+		ExcludeTenants: exclude,
+	}, true
 }
 
 // bmpResolveDevice attributes an inbound BMP session to a device and its

@@ -541,14 +541,29 @@ func cloneStrings(src []string) []string {
 // scope decides which sessions a principal may see. It is the ONE place the
 // rule lives, and it is default-closed: no tenant and no cross-tenant grant
 // reads nothing at all, rather than everything.
-func scopeAdmits(st *sessionState, tenant string, cross bool) bool {
-	if cross {
-		return true
-	}
-	if tenant == "" {
+//
+// Two rules, in this order:
+//
+//  1. The OPERATOR-VISIBILITY restriction (compliance). Deny reads nothing at
+//     all; an excluded tenant's sessions are invisible even to a cross-tenant
+//     principal. It is applied to the scoped path too, not only the cross one:
+//     the caller that resolves it never populates ExcludeTenants for a scoped
+//     read, so checking both costs nothing and cannot be forgotten.
+//  2. The tenant boundary, default-closed.
+func scopeAdmits(st *sessionState, p Principal) bool {
+	if p.Deny {
 		return false
 	}
-	return st.tenantID == tenant
+	if p.Excluded(st.tenantID) {
+		return false
+	}
+	if p.Cross {
+		return true
+	}
+	if p.Tenant == "" {
+		return false
+	}
+	return st.tenantID == p.Tenant
 }
 
 // PeerView is one monitored BGP peer in a response.
@@ -599,12 +614,12 @@ func (v SessionView) TenantOf() string { return v.tenantID }
 
 // Sessions returns the caller's sessions, newest first. A principal with no
 // tenant and no cross-tenant grant gets an EMPTY list, never the fleet's.
-func (s *Store) Sessions(tenant string, cross bool) []SessionView {
+func (s *Store) Sessions(p Principal) []SessionView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]SessionView, 0, len(s.sessions))
 	for _, st := range s.sessions {
-		if !scopeAdmits(st, tenant, cross) {
+		if !scopeAdmits(st, p) {
 			continue
 		}
 		out = append(out, st.view())
@@ -716,7 +731,7 @@ type UpdateView struct {
 // It merges the per-session rings by sequence number. Because each ring is
 // already newest-first, the merge only ever holds f.Limit records — a caller
 // cannot make the server materialize the whole feed.
-func (s *Store) Updates(tenant string, cross bool, f UpdateFilter) []UpdateView {
+func (s *Store) Updates(p Principal, f UpdateFilter) []UpdateView {
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 1
@@ -726,7 +741,7 @@ func (s *Store) Updates(tenant string, cross bool, f UpdateFilter) []UpdateView 
 
 	picked := make([]UpdateRecord, 0, limit)
 	for _, st := range s.sessions {
-		if !scopeAdmits(st, tenant, cross) {
+		if !scopeAdmits(st, p) {
 			continue
 		}
 		if f.Session != "" && st.id != f.Session {
@@ -822,21 +837,21 @@ type StatsView struct {
 }
 
 // Stats aggregates the caller's own sessions.
-func (s *Store) Stats(tenant string, cross bool) StatsView {
+func (s *Store) Stats(p Principal) StatsView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := StatsView{Messages: map[string]uint64{}}
 	for _, st := range s.sessions {
-		if !scopeAdmits(st, tenant, cross) {
+		if !scopeAdmits(st, p) {
 			continue
 		}
 		out.Sessions++
 		if !st.closed {
 			out.SessionsUp++
 		}
-		for _, p := range st.peers {
+		for _, peer := range st.peers {
 			out.Peers++
-			if p.seen && p.up {
+			if peer.seen && peer.up {
 				out.PeersUp++
 			}
 		}

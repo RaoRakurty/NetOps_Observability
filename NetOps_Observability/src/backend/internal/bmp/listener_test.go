@@ -193,7 +193,7 @@ func (f *listenerFixture) waitFor(what string, cond func() bool) {
 }
 
 func (f *listenerFixture) sessions() []SessionView {
-	return f.api.Store().Sessions("", true)
+	return f.api.Store().Sessions(Principal{Cross: true})
 }
 
 // ── the happy path ──────────────────────────────────────────────────────────
@@ -235,7 +235,7 @@ func TestListenerAcceptsAKnownRouterAndStoresItsFeed(t *testing.T) {
 	if s.ParseErrors != 0 {
 		t.Fatalf("a clean stream produced %d parse errors", s.ParseErrors)
 	}
-	rows := f.api.Store().Updates("acme", false, UpdateFilter{Limit: 10})
+	rows := f.api.Store().Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 10})
 	if len(rows) != 3 {
 		t.Fatalf("updates = %+v", rows)
 	}

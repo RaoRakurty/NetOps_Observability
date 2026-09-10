@@ -54,7 +54,7 @@ func TestStoreRefusesASessionWithNoTenant(t *testing.T) {
 	if err := s.Open("bmp-1", "   ", "dev", "1.2.3.4:1"); err == nil {
 		t.Fatal("a whitespace tenant is no tenant")
 	}
-	if got := s.Sessions("", true); len(got) != 0 {
+	if got := s.Sessions(Principal{Cross: true}); len(got) != 0 {
 		t.Fatalf("a refused session was stored anyway: %v", got)
 	}
 }
@@ -64,23 +64,23 @@ func TestStoreSessionsAreOwnTenantOnly(t *testing.T) {
 	feed(t, s, "bmp-1", "acme", "acme-core", initiation("acme-rtr", "d"), announce("192.0.2.10", 64512, "10.1.0.0/24"))
 	feed(t, s, "bmp-2", "globex", "gx-edge", initiation("gx-rtr", "d"), announce("198.51.100.7", 65001, "203.0.113.0/24"))
 
-	acme := s.Sessions("acme", false)
+	acme := s.Sessions(Principal{Tenant: "acme"})
 	if len(acme) != 1 || acme[0].DeviceID != "acme-core" {
 		t.Fatalf("acme sees %+v", acme)
 	}
 	if acme[0].Router != "acme-rtr" {
 		t.Fatalf("router name = %q", acme[0].Router)
 	}
-	globex := s.Sessions("globex", false)
+	globex := s.Sessions(Principal{Tenant: "globex"})
 	if len(globex) != 1 || globex[0].DeviceID != "gx-edge" {
 		t.Fatalf("globex sees %+v", globex)
 	}
 	// Default-closed: no tenant and no cross grant reads NOTHING.
-	if got := s.Sessions("", false); len(got) != 0 {
+	if got := s.Sessions(Principal{}); len(got) != 0 {
 		t.Fatalf("a tenant-less scoped principal read %d sessions — must be 0", len(got))
 	}
 	// Only a cross-tenant principal sees both.
-	if got := s.Sessions("", true); len(got) != 2 {
+	if got := s.Sessions(Principal{Cross: true}); len(got) != 2 {
 		t.Fatalf("cross-tenant sees %d sessions, want 2", len(got))
 	}
 }
@@ -90,7 +90,7 @@ func TestStoreUpdatesAreOwnTenantOnly(t *testing.T) {
 	feed(t, s, "bmp-1", "acme", "acme-core", announce("192.0.2.10", 64512, "10.1.0.0/24"))
 	feed(t, s, "bmp-2", "globex", "gx-edge", announce("198.51.100.7", 65001, "203.0.113.0/24"))
 
-	acme := s.Updates("acme", false, UpdateFilter{Limit: 50})
+	acme := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 50})
 	if len(acme) != 1 || acme[0].Prefix != "10.1.0.0/24" {
 		t.Fatalf("acme updates = %+v", acme)
 	}
@@ -99,10 +99,10 @@ func TestStoreUpdatesAreOwnTenantOnly(t *testing.T) {
 			t.Fatalf("CROSS-TENANT LEAK: %+v", u)
 		}
 	}
-	if got := s.Updates("", false, UpdateFilter{Limit: 50}); len(got) != 0 {
+	if got := s.Updates(Principal{}, UpdateFilter{Limit: 50}); len(got) != 0 {
 		t.Fatalf("a tenant-less scoped principal read %d updates — must be 0", len(got))
 	}
-	if got := s.Updates("", true, UpdateFilter{Limit: 50}); len(got) != 2 {
+	if got := s.Updates(Principal{Cross: true}, UpdateFilter{Limit: 50}); len(got) != 2 {
 		t.Fatalf("cross-tenant sees %d updates, want 2", len(got))
 	}
 }
@@ -115,18 +115,18 @@ func TestStoreStatsAreOwnTenantOnly(t *testing.T) {
 		announce("198.51.100.7", 65001, "203.0.113.0/24"),
 		announce("198.51.100.7", 65001, "203.0.114.0/24"))
 
-	acme := s.Stats("acme", false)
+	acme := s.Stats(Principal{Tenant: "acme"})
 	if acme.Sessions != 1 || acme.UpdatesHeld != 1 || acme.Peers != 1 || acme.PeersUp != 1 {
 		t.Fatalf("acme stats = %+v", acme)
 	}
-	globex := s.Stats("globex", false)
+	globex := s.Stats(Principal{Tenant: "globex"})
 	if globex.UpdatesHeld != 2 {
 		t.Fatalf("globex stats = %+v", globex)
 	}
-	if none := s.Stats("", false); none.Sessions != 0 || none.UpdatesHeld != 0 {
+	if none := s.Stats(Principal{}); none.Sessions != 0 || none.UpdatesHeld != 0 {
 		t.Fatalf("tenant-less stats = %+v, want all zero", none)
 	}
-	if all := s.Stats("", true); all.Sessions != 2 || all.UpdatesHeld != 3 {
+	if all := s.Stats(Principal{Cross: true}); all.Sessions != 2 || all.UpdatesHeld != 3 {
 		t.Fatalf("cross-tenant stats = %+v", all)
 	}
 }
@@ -146,7 +146,7 @@ func TestRingDropsOldestAndCountsIt(t *testing.T) {
 	if total != 7 {
 		t.Fatalf("dropped = %d, want 7 (10 pushed into a ring of 3)", total)
 	}
-	held := s.Updates("acme", false, UpdateFilter{Limit: 50})
+	held := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 50})
 	if len(held) != 3 {
 		t.Fatalf("held = %d, want the ring depth 3", len(held))
 	}
@@ -154,11 +154,11 @@ func TestRingDropsOldestAndCountsIt(t *testing.T) {
 	if held[0].Prefix != "10.0.9.0/24" || held[2].Prefix != "10.0.7.0/24" {
 		t.Fatalf("ring contents = %v %v %v", held[0].Prefix, held[1].Prefix, held[2].Prefix)
 	}
-	st := s.Stats("acme", false)
+	st := s.Stats(Principal{Tenant: "acme"})
 	if st.UpdatesDropped != 7 {
 		t.Fatalf("stats dropped = %d, want 7 — backpressure must be VISIBLE", st.UpdatesDropped)
 	}
-	view := s.Sessions("acme", false)[0]
+	view := s.Sessions(Principal{Tenant: "acme"})[0]
 	if view.Dropped != 7 || view.Updates != 3 {
 		t.Fatalf("session view = %+v", view)
 	}
@@ -181,7 +181,7 @@ func TestSessionRecordsAreCappedAndEvictClosedOnesFirst(t *testing.T) {
 		t.Fatalf("after a close, a new session must fit: %v", err)
 	}
 	ids := map[string]bool{}
-	for _, v := range s.Sessions("acme", false) {
+	for _, v := range s.Sessions(Principal{Tenant: "acme"}) {
 		ids[v.ID] = true
 	}
 	if ids["bmp-1"] || !ids["bmp-2"] || !ids["bmp-3"] {
@@ -197,7 +197,7 @@ func TestDuplicateSessionIDIsRefused(t *testing.T) {
 	if err := s.Open("bmp-1", "globex", "d2", "1.1.1.2:1"); err == nil {
 		t.Fatal("a duplicate session id must be refused — two routers' feeds must never merge")
 	}
-	if v := s.Sessions("globex", false); len(v) != 0 {
+	if v := s.Sessions(Principal{Tenant: "globex"}); len(v) != 0 {
 		t.Fatalf("the refused session leaked into globex: %+v", v)
 	}
 }
@@ -205,11 +205,11 @@ func TestDuplicateSessionIDIsRefused(t *testing.T) {
 func TestClosingASessionMakesPeerStateUnknownNotStaleUp(t *testing.T) {
 	s := newStore(t, 8, 8)
 	feed(t, s, "bmp-1", "acme", "d1", peerUp(0, "192.0.2.10", 64512))
-	if v := s.Sessions("acme", false)[0]; v.Peers[0].State != "up" {
+	if v := s.Sessions(Principal{Tenant: "acme"})[0]; v.Peers[0].State != "up" {
 		t.Fatalf("peer state = %q, want up", v.Peers[0].State)
 	}
 	s.Close("bmp-1", "peer closed")
-	v := s.Sessions("acme", false)[0]
+	v := s.Sessions(Principal{Tenant: "acme"})[0]
 	if v.State != "closed" || v.CloseReason != "peer closed" {
 		t.Fatalf("session = %+v", v)
 	}
@@ -223,7 +223,7 @@ func TestPeerStateIsUnknownUntilObserved(t *testing.T) {
 	// been seen — so the state is unknown, not assumed up.
 	s := newStore(t, 8, 8)
 	feed(t, s, "bmp-1", "acme", "d1", announce("192.0.2.10", 64512, "10.0.0.0/8"))
-	v := s.Sessions("acme", false)[0]
+	v := s.Sessions(Principal{Tenant: "acme"})[0]
 	if len(v.Peers) != 1 || v.Peers[0].State != "unknown" {
 		t.Fatalf("peers = %+v", v.Peers)
 	}
@@ -237,7 +237,7 @@ func TestPeerDownRecordsTheReason(t *testing.T) {
 	feed(t, s, "bmp-1", "acme", "d1",
 		peerUp(0, "192.0.2.10", 64512),
 		peerDownNotification("192.0.2.10", 64512, 6, 2))
-	v := s.Sessions("acme", false)[0]
+	v := s.Sessions(Principal{Tenant: "acme"})[0]
 	if v.Peers[0].State != "down" || v.Peers[0].DownReason != "local_notification" {
 		t.Fatalf("peer = %+v", v.Peers[0])
 	}
@@ -246,7 +246,7 @@ func TestPeerDownRecordsTheReason(t *testing.T) {
 func TestWithdrawCarriesNoPathAttributes(t *testing.T) {
 	s := newStore(t, 8, 8)
 	feed(t, s, "bmp-1", "acme", "d1", withdraw("192.0.2.10", 64512, "10.5.0.0/16"))
-	rows := s.Updates("acme", false, UpdateFilter{Limit: 10})
+	rows := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 10})
 	if len(rows) != 1 || rows[0].Kind != "withdraw" {
 		t.Fatalf("rows = %+v", rows)
 	}
@@ -264,7 +264,7 @@ func TestUpdateFiltersNarrowWithoutWideningScope(t *testing.T) {
 	feed(t, s, "bmp-2", "globex", "d2", announce("192.0.2.10", 64512, "10.1.2.0/24"))
 
 	// A supernet filter finds the more-specific prefixes inside it.
-	byPrefix := s.Updates("acme", false, UpdateFilter{Limit: 10, HasPrefix: true, Prefix: mustPrefix("10.0.0.0/8")})
+	byPrefix := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 10, HasPrefix: true, Prefix: mustPrefix("10.0.0.0/8")})
 	if len(byPrefix) != 2 {
 		t.Fatalf("prefix filter = %+v", byPrefix)
 	}
@@ -275,19 +275,19 @@ func TestUpdateFiltersNarrowWithoutWideningScope(t *testing.T) {
 		}
 	}
 	// A more-specific filter than the record does not match it.
-	if got := s.Updates("acme", false, UpdateFilter{Limit: 10, HasPrefix: true, Prefix: mustPrefix("10.1.2.128/25")}); len(got) != 0 {
+	if got := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 10, HasPrefix: true, Prefix: mustPrefix("10.1.2.128/25")}); len(got) != 0 {
 		t.Fatalf("a /25 filter matched a /24 record: %+v", got)
 	}
-	byPeer := s.Updates("acme", false, UpdateFilter{Limit: 10, Peer: "198.51.100.9"})
+	byPeer := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 10, Peer: "198.51.100.9"})
 	if len(byPeer) != 1 || byPeer[0].Prefix != "172.16.0.0/12" {
 		t.Fatalf("peer filter = %+v", byPeer)
 	}
-	bySession := s.Updates("acme", false, UpdateFilter{Limit: 10, Session: "bmp-2"})
+	bySession := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 10, Session: "bmp-2"})
 	if len(bySession) != 0 {
 		t.Fatalf("session filter must NARROW, never widen: %+v", bySession)
 	}
 	// An IPv6 filter must not match IPv4 records.
-	if got := s.Updates("acme", false, UpdateFilter{Limit: 10, HasPrefix: true, Prefix: mustPrefix("::/0")}); len(got) != 0 {
+	if got := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 10, HasPrefix: true, Prefix: mustPrefix("::/0")}); len(got) != 0 {
 		t.Fatalf("a v6 filter matched v4 records: %+v", got)
 	}
 }
@@ -300,7 +300,7 @@ func TestUpdatesAreNewestFirstAndPageByCursor(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		s.Apply("bmp-1", mustParse(t, announce("192.0.2.10", 64512, cidrN(i))))
 	}
-	page1 := s.Updates("acme", false, UpdateFilter{Limit: 4})
+	page1 := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 4})
 	if len(page1) != 4 || page1[0].Prefix != cidrN(9) {
 		t.Fatalf("page 1 = %+v", page1)
 	}
@@ -309,7 +309,7 @@ func TestUpdatesAreNewestFirstAndPageByCursor(t *testing.T) {
 			t.Fatalf("page is not newest-first: %d then %d", page1[i-1].Seq, page1[i].Seq)
 		}
 	}
-	page2 := s.Updates("acme", false, UpdateFilter{Limit: 4, Before: page1[3].Seq})
+	page2 := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 4, Before: page1[3].Seq})
 	if len(page2) != 4 || page2[0].Prefix != cidrN(5) {
 		t.Fatalf("page 2 = %+v", page2)
 	}
@@ -321,11 +321,11 @@ func TestUpdatesAreNewestFirstAndPageByCursor(t *testing.T) {
 		}
 		seen[u.Seq] = true
 	}
-	page3 := s.Updates("acme", false, UpdateFilter{Limit: 4, Before: page2[3].Seq})
+	page3 := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 4, Before: page2[3].Seq})
 	if len(page3) != 2 {
 		t.Fatalf("final page = %d rows, want the 2 remaining", len(page3))
 	}
-	if last := s.Updates("acme", false, UpdateFilter{Limit: 4, Before: page3[1].Seq}); len(last) != 0 {
+	if last := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 4, Before: page3[1].Seq}); len(last) != 0 {
 		t.Fatalf("walking past the end returned %d rows", len(last))
 	}
 }
@@ -345,7 +345,7 @@ func TestUpdatesMergeSessionsInSequenceOrder(t *testing.T) {
 		}
 		s.Apply(id, mustParse(t, announce("192.0.2.10", 64512, cidrN(i))))
 	}
-	rows := s.Updates("acme", false, UpdateFilter{Limit: 6})
+	rows := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: 6})
 	if len(rows) != 6 {
 		t.Fatalf("rows = %d", len(rows))
 	}
@@ -368,12 +368,12 @@ func TestUpdatesLimitIsHonouredExactly(t *testing.T) {
 		s.Apply("bmp-1", mustParse(t, announce("192.0.2.10", 64512, cidrN(i))))
 	}
 	for _, n := range []int{1, 3, 7, 20} {
-		if got := s.Updates("acme", false, UpdateFilter{Limit: n}); len(got) != n {
+		if got := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{Limit: n}); len(got) != n {
 			t.Fatalf("limit %d returned %d rows", n, len(got))
 		}
 	}
 	// A zero limit must not mean "everything".
-	if got := s.Updates("acme", false, UpdateFilter{}); len(got) > 1 {
+	if got := s.Updates(Principal{Tenant: "acme"}, UpdateFilter{}); len(got) > 1 {
 		t.Fatalf("a zero limit returned %d rows — it must never mean unbounded", len(got))
 	}
 }
@@ -397,10 +397,10 @@ func TestParseErrorsAreCountedAgainstTheSession(t *testing.T) {
 	}
 	s.RecordParseError("bmp-1")
 	s.RecordParseError("bmp-1")
-	if v := s.Sessions("acme", false)[0]; v.ParseErrors != 2 {
+	if v := s.Sessions(Principal{Tenant: "acme"})[0]; v.ParseErrors != 2 {
 		t.Fatalf("parse errors = %d, want 2", v.ParseErrors)
 	}
-	if st := s.Stats("acme", false); st.ParseErrors != 2 {
+	if st := s.Stats(Principal{Tenant: "acme"}); st.ParseErrors != 2 {
 		t.Fatalf("stats parse errors = %d", st.ParseErrors)
 	}
 }
@@ -414,7 +414,7 @@ func TestUnsupportedElementsAreCountedAgainstTheSession(t *testing.T) {
 		attr(0xC0, 200, []byte{1}),
 	), nil)
 	feed(t, s, "bmp-1", "acme", "d1", routeMonitoring(0, "192.0.2.10", 64512, body))
-	if st := s.Stats("acme", false); st.Unsupported != 2 {
+	if st := s.Stats(Principal{Tenant: "acme"}); st.Unsupported != 2 {
 		t.Fatalf("unsupported = %d, want 2 (one family + one attribute)", st.Unsupported)
 	}
 }
@@ -424,7 +424,7 @@ func TestSessionRIBIsRecordedPerPeer(t *testing.T) {
 	feed(t, s, "bmp-1", "acme", "d1",
 		peerUp(peerFlagL, "192.0.2.10", 64512),
 		peerUp(peerFlagO, "192.0.2.11", 64512))
-	v := s.Sessions("acme", false)[0]
+	v := s.Sessions(Principal{Tenant: "acme"})[0]
 	got := map[string]string{}
 	for _, p := range v.Peers {
 		got[p.Address] = p.RIB
@@ -442,11 +442,11 @@ func TestMessageCountsPerSession(t *testing.T) {
 		announce("192.0.2.10", 64512, "10.0.0.0/8"),
 		announce("192.0.2.10", 64512, "10.1.0.0/16"),
 		statsReport("192.0.2.10", map[uint16]uint32{0: 1}))
-	v := s.Sessions("acme", false)[0]
+	v := s.Sessions(Principal{Tenant: "acme"})[0]
 	if v.Messages["route_monitoring"] != 2 || v.Messages["initiation"] != 1 || v.Messages["statistics_report"] != 1 {
 		t.Fatalf("messages = %+v", v.Messages)
 	}
-	if st := s.Stats("acme", false); st.Messages["route_monitoring"] != 2 {
+	if st := s.Stats(Principal{Tenant: "acme"}); st.Messages["route_monitoring"] != 2 {
 		t.Fatalf("stats messages = %+v", st.Messages)
 	}
 }
@@ -460,7 +460,7 @@ func TestPeerTableIsCappedAndSaysSo(t *testing.T) {
 		addr := peerAddrN(i)
 		s.Apply("bmp-1", mustParse(t, peerUp(0, addr, 64512)))
 	}
-	v := s.Sessions("acme", false)[0]
+	v := s.Sessions(Principal{Tenant: "acme"})[0]
 	if len(v.Peers) != maxPeersPerSession {
 		t.Fatalf("peers = %d, want the cap %d", len(v.Peers), maxPeersPerSession)
 	}
@@ -472,7 +472,7 @@ func TestPeerTableIsCappedAndSaysSo(t *testing.T) {
 func TestTerminationMarksTheReasonWithoutClosing(t *testing.T) {
 	s := newStore(t, 4, 4)
 	feed(t, s, "bmp-1", "acme", "d1", termination(0))
-	v := s.Sessions("acme", false)[0]
+	v := s.Sessions(Principal{Tenant: "acme"})[0]
 	if v.CloseReason != "router sent termination" {
 		t.Fatalf("close note = %q", v.CloseReason)
 	}
@@ -512,5 +512,46 @@ func TestNewStoreFallsBackToSafeBounds(t *testing.T) {
 	}
 	if s.now == nil {
 		t.Fatal("a nil clock must fall back to time.Now")
+	}
+}
+
+// The OPERATOR-VISIBILITY restriction (CLAUDE.md §3a) must reach this store the
+// same way the tenant does: on the Principal. Deny reads nothing at all, and an
+// excluded tenant is invisible even to a cross-tenant principal — because a BMP
+// feed IS the customer's routing table.
+func TestStoreHonoursTheOperatorVisibilityRestriction(t *testing.T) {
+	s := newStore(t, 16, 16)
+	feed(t, s, "bmp-1", "acme", "acme-core", announce("192.0.2.10", 64512, "10.1.0.0/24"))
+	feed(t, s, "bmp-2", "globex", "gx-edge", announce("198.51.100.7", 65001, "203.0.113.0/24"))
+
+	// The operator scoped INTO a restricted tenant reads NOTHING on every route.
+	denied := Principal{Tenant: "acme", Deny: true}
+	if got := s.Sessions(denied); len(got) != 0 {
+		t.Errorf("a denied principal read %d sessions, want 0: %+v", len(got), got)
+	}
+	if got := s.Updates(denied, UpdateFilter{Limit: 50}); len(got) != 0 {
+		t.Errorf("a denied principal read %d updates, want 0", len(got))
+	}
+	if st := s.Stats(denied); st.Sessions != 0 || st.Peers != 0 || st.UpdatesHeld != 0 {
+		t.Errorf("a denied principal read stats %+v, want an empty aggregate", st)
+	}
+
+	// The operator's Global view excludes the restricted tenant and keeps the rest.
+	global := Principal{Cross: true, ExcludeTenants: []string{"ACME"}} // case-insensitive on purpose
+	sessions := s.Sessions(global)
+	if len(sessions) != 1 || sessions[0].DeviceID != "gx-edge" {
+		t.Fatalf("global view = %+v, want globex's session only", sessions)
+	}
+	rows := s.Updates(global, UpdateFilter{Limit: 50})
+	if len(rows) != 1 || rows[0].Prefix != "203.0.113.0/24" {
+		t.Fatalf("global updates = %+v, want globex's prefix only", rows)
+	}
+	if st := s.Stats(global); st.Sessions != 1 || st.UpdatesHeld != 1 {
+		t.Fatalf("global stats = %+v, want one session and one update", st)
+	}
+
+	// A restricted tenant's OWN users are never restricted from their own feed.
+	if got := s.Sessions(Principal{Tenant: "acme"}); len(got) != 1 {
+		t.Fatalf("acme's own read = %d sessions, want its own 1", len(got))
 	}
 }

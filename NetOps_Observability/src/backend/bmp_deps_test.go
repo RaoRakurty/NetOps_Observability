@@ -437,7 +437,7 @@ func TestBMPUnknownSourceConnectionIsRejectedAndStoredNowhere(t *testing.T) {
 		t.Fatal("an unattributable source was NOT disconnected")
 	}
 	// Nothing was stored — under any tenant, including the empty one.
-	got := f.api.Store().Sessions("", true)
+	got := f.api.Store().Sessions(bmp.Principal{Cross: true})
 	if len(got) != 2 {
 		t.Fatalf("session count changed to %d — the rejected connection was stored", len(got))
 	}
@@ -479,5 +479,154 @@ func TestBMPReceiverIsLaunchedAsATrackedWorker(t *testing.T) {
 	if !strings.Contains(src, `workers.start("bmp-receiver"`) {
 		t.Error(`main.go no longer launches the BMP receiver via workers.start("bmp-receiver", ...) — ` +
 			"an untracked listener is abandoned mid-feed on SIGTERM")
+	}
+}
+
+// ── the operator-visibility restriction (CLAUDE.md §3a) ─────────────────────
+
+// restrictedBMPFixture is the fixture above plus a REAL tenant store, so the
+// compliance switch under test is the production one (Tenant.OperatorRestricted
+// → effectiveRestrictedIDs → operatorTelemetryRestriction) and the tenant ids
+// are the opaque ones the store mints, never the human slug.
+type restrictedBMPFixture struct {
+	t      *testing.T
+	s      *server
+	api    *bmp.API
+	acme   string
+	globex string
+}
+
+func newRestrictedBMPFixture(t *testing.T) *restrictedBMPFixture {
+	t.Helper()
+	t.Setenv(bmp.EnvListen, "127.0.0.1:0")
+	roles, err := newRoleStore(t.TempDir() + "/roles.json")
+	if err != nil {
+		t.Fatalf("roleStore: %v", err)
+	}
+	tenants, err := newTenantStore(t.TempDir() + "/tenants.json")
+	if err != nil {
+		t.Fatalf("tenantStore: %v", err)
+	}
+	acme, err := tenants.Create("Acme", "acme", "", "", "")
+	if err != nil {
+		t.Fatalf("create acme: %v", err)
+	}
+	globex, err := tenants.Create("Globex", "globex", "", "", "")
+	if err != nil {
+		t.Fatalf("create globex: %v", err)
+	}
+	d := discovery.NewDiscoveryAggregator()
+	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "192.0.2.1", TenantID: acme.ID})
+	d.Upsert(models.Device{ID: "globex-core", Name: "gx-edge", Address: "198.51.100.1", TenantID: globex.ID})
+
+	s := &server{roles: roles, tenants: tenants, discovery: d, workers: &workerGroup{}}
+	api, err := s.buildBMP()
+	if err != nil {
+		t.Fatalf("buildBMP: %v", err)
+	}
+	s.bmpAPI = api
+
+	st := api.Store()
+	if err := st.Open("bmp-1", acme.ID, "acme-core", "192.0.2.1:45000"); err != nil {
+		t.Fatalf("open acme session: %v", err)
+	}
+	if err := st.Open("bmp-2", globex.ID, "globex-core", "198.51.100.1:45000"); err != nil {
+		t.Fatalf("open globex session: %v", err)
+	}
+	st.Apply("bmp-1", bmpAnnounce(t, "10.10.0.1", 64512, "10.0.0.0/8"))
+	st.Apply("bmp-2", bmpAnnounce(t, "10.20.0.1", 65001, "172.16.0.0/12"))
+	return &restrictedBMPFixture{t: t, s: s, api: api, acme: acme.ID, globex: globex.ID}
+}
+
+func (f *restrictedBMPFixture) get(path string, claims jwtClaims) *httptest.ResponseRecorder {
+	f.t.Helper()
+	w := httptest.NewRecorder()
+	f.api.Handler()(w, req(http.MethodGet, path, "", claims))
+	return w
+}
+
+// bmpRowCount reads the honest row count out of a response body.
+func bmpRowCount(t *testing.T, w *httptest.ResponseRecorder) float64 {
+	t.Helper()
+	var body struct {
+		Count float64 `json:"count"`
+		Stats struct {
+			Sessions float64 `json:"sessions"`
+		} `json:"stats"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %q: %v", w.Body.String(), err)
+	}
+	if body.Count > 0 {
+		return body.Count
+	}
+	return body.Stats.Sessions
+}
+
+// TestBMPHonoursTheOperatorVisibilityRestriction is the §3a rule-5 test for the
+// compliance switch on this feed. A BMP session is a customer's routing table:
+// peers, AS paths and prefixes. Where logs, flows, metrics and igpmon serve a
+// restricted tenant's telemetry to NOBODY at the platform level, this feed must
+// do the same — on every registered route.
+func TestBMPHonoursTheOperatorVisibilityRestriction(t *testing.T) {
+	f := newRestrictedBMPFixture(t)
+	owner := jwtClaims{Sub: "root", Role: RoleSuperAdmin, Tenant: TenantGlobal}
+
+	// Before anything is restricted the platform owner reads both, so the test
+	// cannot pass by serving nothing.
+	for _, route := range bmpRoutes {
+		if got := bmpRowCount(t, f.get(route, owner)); got != 2 {
+			t.Fatalf("GET %s (owner, nothing restricted) = %v, want both tenants", route, got)
+		}
+	}
+
+	if _, err := f.s.tenants.SetOperatorRestricted("acme", true); err != nil {
+		t.Fatalf("restrict acme: %v", err)
+	}
+
+	// Global view: acme is gone, globex is untouched, on every route.
+	for _, route := range bmpRoutes {
+		w := f.get(route, owner)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s (owner) = %d", route, w.Code)
+		}
+		if got := bmpRowCount(t, w); got != 1 {
+			t.Errorf("GET %s (owner, acme restricted) = %v rows, want globex's 1: %s", route, got, w.Body.String())
+		}
+		for _, hidden := range []string{"acme-core", "bmp-1", "10.10.0.1", "10.0.0.0/8"} {
+			if strings.Contains(w.Body.String(), hidden) {
+				t.Errorf("RESTRICTION LEAK on %s — the platform owner saw %q: %s", route, hidden, w.Body.String())
+			}
+		}
+	}
+
+	// Operator scoped INTO the restricted tenant: a 200 with nothing in it, the
+	// same answer the logs path gives. Never a 403, which would confirm the
+	// tenant has a feed at all.
+	scoped := ownerActing(owner, f.acme)
+	for _, route := range bmpRoutes {
+		w := f.get(route, scoped)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s (owner→acme) = %d, want 200 with no rows", route, w.Code)
+		}
+		if got := bmpRowCount(t, w); got != 0 {
+			t.Errorf("GET %s (owner→acme, restricted) = %v rows, want 0: %s", route, got, w.Body.String())
+		}
+	}
+
+	// Operator scoped into the UNRESTRICTED tenant still reads it.
+	if got := bmpRowCount(t, f.get("/api/bgp/bmp/sessions", ownerActing(owner, f.globex))); got != 1 {
+		t.Errorf("owner→globex = %v sessions, want 1", got)
+	}
+
+	// And acme's OWN admin is never restricted from acme's own feed — the switch
+	// hides a tenant from the PLATFORM, never from itself.
+	acmeAdmin := jwtClaims{Sub: "a@acme", Role: RoleOperator, Tenant: f.acme}
+	w := f.get("/api/bgp/bmp/sessions", acmeAdmin)
+	if got := bmpRowCount(t, w); got != 1 {
+		t.Fatalf("acme's own admin = %v sessions, want its own 1: %s", got, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "acme-core") {
+		t.Fatalf("acme's own admin did not see its own device: %s", w.Body.String())
 	}
 }

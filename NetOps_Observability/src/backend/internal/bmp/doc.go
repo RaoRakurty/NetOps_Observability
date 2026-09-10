@@ -65,6 +65,14 @@
 // caller's principal. A cross-tenant read returns the caller's own rows only;
 // it never 200s with another tenant's feed and never reveals that another
 // tenant's session exists.
+//
+// The principal also carries the OPERATOR-VISIBILITY restriction, and this
+// package obeys it exactly as it obeys the tenant. A BMP feed is the customer's
+// routing table — peers, AS paths, prefixes — so a tenant that has switched the
+// compliance restriction on is invisible to the platform operator here, the
+// same way it is invisible on logs, flows, metrics and igpmon. The restriction
+// is RESOLVED by the composition root (it owns the tenant store) and applied in
+// scopeAdmits, the one place the read rule lives.
 package bmp
 
 import "time"

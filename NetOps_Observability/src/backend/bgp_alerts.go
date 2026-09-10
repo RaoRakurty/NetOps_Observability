@@ -395,7 +395,11 @@ func (s *server) bgpWatchPeers(_ context.Context, tenant string) ([]bgpwatch.Pee
 	}
 	out := []bgpwatch.PeerObservation{}
 	badTimes, sample := 0, ""
-	for _, sess := range store.Sessions(tenant, false) {
+	// The evaluator is a SYSTEM reader over one tenant's own feed, not an
+	// operator read, so it carries no operator-visibility restriction: hiding a
+	// restricted tenant's peers from its OWN alerting would stop that tenant
+	// being told its session went down.
+	for _, sess := range store.Sessions(bmp.Principal{Tenant: tenant}) {
 		for _, p := range sess.Peers {
 			changed, ok := bgpWatchEventTime(p.ChangedAt)
 			if !ok {
@@ -428,7 +432,7 @@ func (s *server) bgpWatchSightings(_ context.Context, tenant string) ([]bgpwatch
 	if s.bmpAPI != nil {
 		if store := s.bmpAPI.Store(); store != nil {
 			badTimes, sample := 0, ""
-			for _, u := range store.Updates(tenant, false, bmp.UpdateFilter{Limit: bgpWatchSightingLimit}) {
+			for _, u := range store.Updates(bmp.Principal{Tenant: tenant}, bmp.UpdateFilter{Limit: bgpWatchSightingLimit}) {
 				at, ok := bgpWatchEventTime(u.At)
 				if !ok {
 					badTimes++

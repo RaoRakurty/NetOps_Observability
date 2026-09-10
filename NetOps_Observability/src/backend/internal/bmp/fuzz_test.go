@@ -126,7 +126,7 @@ func FuzzParseMessage(f *testing.F) {
 			t.Fatal(err)
 		}
 		s.Apply("bmp-1", msg)
-		if got := s.Sessions("globex", false); len(got) != 0 {
+		if got := s.Sessions(Principal{Tenant: "globex"}); len(got) != 0 {
 			t.Fatal("a fuzzed frame reached another tenant's view")
 		}
 	})
@@ -222,17 +222,17 @@ func FuzzConnStream(f *testing.F) {
 		_ = server.Close()
 
 		// Whatever arrived, the bounds hold and the tenant boundary holds.
-		v := store.Sessions("acme", false)
+		v := store.Sessions(Principal{Tenant: "acme"})
 		if len(v) != 1 {
 			t.Fatalf("sessions = %d", len(v))
 		}
 		if v[0].Updates > 16 {
 			t.Fatalf("ring overflowed its depth: %d", v[0].Updates)
 		}
-		if got := store.Sessions("globex", false); len(got) != 0 {
+		if got := store.Sessions(Principal{Tenant: "globex"}); len(got) != 0 {
 			t.Fatal("a fuzzed stream reached another tenant's view")
 		}
-		if got := store.Updates("", false, UpdateFilter{Limit: 100}); len(got) != 0 {
+		if got := store.Updates(Principal{}, UpdateFilter{Limit: 100}); len(got) != 0 {
 			t.Fatal("a tenant-less principal read a fuzzed stream's updates")
 		}
 	})
