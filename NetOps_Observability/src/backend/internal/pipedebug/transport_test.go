@@ -5,6 +5,8 @@ package pipedebug
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -164,5 +166,132 @@ func TestVictoriaExportRefusesAnEmptySelector(t *testing.T) {
 func TestUDPInjectorRefusesAnUnconfiguredTarget(t *testing.T) {
 	if err := NewUDPInjector("", time.Second)(context.Background(), []byte("x")); err == nil {
 		t.Error("the injector guessed a target rather than refusing")
+	}
+}
+
+// ── 3.9-01: the flow probe's bus needle must reach the sidecar ──────────────
+//
+// A NetFlow v5 record has no free-text field, so it cannot carry the marker.
+// KafkaStage knows that and sets ProbeSrc — the probe's RFC 5737 source
+// address — as the alternative needle, and it PRINTS it in the query it shows
+// the operator. The peek body did not send it, so the sidecar only ever looked
+// for the text marker and every flow trace's bus hop reported a false
+// not_seen while ClickHouse reported seen.
+//
+// sidecarStandIn is the Python sidecar's contract in Go: it matches a record
+// on EITHER needle and refuses a probe_src outside the closed grammar.
+func sidecarStandIn(t *testing.T, recordPayload string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Topic    string `json:"topic"`
+			Marker   string `json:"marker"`
+			ProbeSrc string `json:"probe_src"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"detail":"body is not JSON"}`, http.StatusBadRequest)
+			return
+		}
+		if body.ProbeSrc != "" && !ValidProbeSrc(body.ProbeSrc) {
+			http.Error(w, `{"detail":"probe_src outside the closed grammar"}`, http.StatusBadRequest)
+			return
+		}
+		needles := []string{"cx_debug=" + body.Marker}
+		if body.ProbeSrc != "" {
+			needles = append(needles, body.ProbeSrc)
+		}
+		for _, n := range needles {
+			if strings.Contains(recordPayload, n) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"records":[{"topic":%q,"partition":0,"offset":7,"timestamp_ms":1700,"excerpt":%q}],"scanned":4,"elapsed_s":0.2}`,
+					body.Topic, recordPayload)
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"records":[],"scanned":4,"elapsed_s":0.2}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestFlowBusHopIsSeenBecauseTheProbeSrcNeedleIsSent(t *testing.T) {
+	fp := NewFlowFingerprint(testMarker)
+	// What goflow2 actually puts on netops.flows.raw: numbers and addresses,
+	// no marker text anywhere.
+	record := fmt.Sprintf(`{"src_addr":"%s","dst_addr":"%s","src_port":%d,"dst_port":%d,"proto":17,"bytes":1,"packets":1}`,
+		fp.SrcAddr, fp.DstAddr, fp.SrcPort, fp.DstPort)
+	srv := sidecarStandIn(t, record)
+
+	api := New(Deps{KafkaPeek: NewKafkaPeek(srv.Client(), srv.URL, "tok")})
+	e := api.KafkaStage(context.Background(), KindFlow, testMarker)
+	if e.Verdict != VerdictSeen {
+		t.Fatalf("the flow bus hop reported %s (%s) — the record IS on the bus", e.Verdict, e.Reason)
+	}
+	if e.EvidenceRef != "netops.flows.raw[0]@7" {
+		t.Errorf("evidence ref = %q", e.EvidenceRef)
+	}
+	if !strings.Contains(e.Query, "probe_src="+fp.SrcAddr) {
+		t.Errorf("the query shown to the operator does not name the needle actually sent: %q", e.Query)
+	}
+}
+
+// A syslog record carries the marker verbatim, so the text needle still works
+// and no probe_src is sent for it.
+func TestSyslogBusHopSendsNoProbeSrc(t *testing.T) {
+	var sent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ProbeSrc string `json:"probe_src"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sent = body.ProbeSrc
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"records":[],"scanned":1,"elapsed_s":0.1}`))
+	}))
+	defer srv.Close()
+	api := New(Deps{KafkaPeek: NewKafkaPeek(srv.Client(), srv.URL, "tok")})
+	if e := api.KafkaStage(context.Background(), KindSyslog, testMarker); e.Verdict != VerdictNotSeen {
+		t.Fatalf("verdict = %s", e.Verdict)
+	}
+	if sent != "" {
+		t.Errorf("a syslog peek sent probe_src=%q; the text marker is its only needle", sent)
+	}
+}
+
+// Zero trust in BOTH directions (§3): a probe_src outside the closed grammar
+// never reaches the wire, so the sidecar cannot be steered into scanning the
+// bus for arbitrary content by way of this API.
+func TestKafkaPeekRefusesAProbeSrcOutsideTheClosedGrammar(t *testing.T) {
+	var dialled bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		dialled = true
+		_, _ = w.Write([]byte(`{"records":[]}`))
+	}))
+	defer srv.Close()
+	peek := NewKafkaPeek(srv.Client(), srv.URL, "tok")
+	for _, bad := range []string{"192.0.2.0", "192.0.2.255", "192.0.2.1 OR 1", "10.0.0.1", "192.0.2.", "192.0.2.01", "198.51.100.4"} {
+		if _, err := peek(context.Background(), PeekRequest{
+			Topic: "netops.flows.raw", Marker: testMarker, ProbeSrc: bad,
+		}); err == nil {
+			t.Errorf("probe_src %q was accepted", bad)
+		}
+	}
+	if dialled {
+		t.Error("a malformed probe_src reached the sidecar")
+	}
+}
+
+// Every address the fingerprint can mint must pass the grammar both sides
+// validate, or a legitimate trace would be refused.
+func TestEveryFlowProbeSrcSatisfiesTheClosedGrammar(t *testing.T) {
+	for i := 0; i < 2000; i++ {
+		src := NewFlowFingerprint(NewMarker(time.Unix(int64(1757000000+i), 0))).SrcAddr
+		if !ValidProbeSrc(src) {
+			t.Fatalf("the fingerprint minted %q, which the grammar refuses", src)
+		}
+	}
+	if ValidProbeSrc("") {
+		t.Error("the empty string is the ABSENCE of a needle, not a needle")
 	}
 }

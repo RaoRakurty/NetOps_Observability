@@ -13534,6 +13534,16 @@ CORR_DEBUG_MARKER_LEN = 26
 # validates. Kept as an explicit set so the two implementations can be diffed.
 CORR_DEBUG_MARKER_CHARS = frozenset("0123456789abcdefghjkmnpqrstvwxyz")
 _DEBUG_TOPIC_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
+# The flow probe's alternative needle, as a CLOSED grammar: 192.0.2.1 through
+# 192.0.2.254 in canonical form, and nothing else.
+#
+# A NetFlow record has no free-text field, so the marker cannot ride inside it
+# and the API sends the probe's RFC 5737 source address as a second needle
+# (internal/pipedebug/flow.go, ValidProbeSrc). A needle is a substring this
+# process scans the bus for, so it is re-validated HERE rather than trusted:
+# the API is a peer, not an authority (§3, zero trust). 254 values of
+# documentation address space cannot be steered into a content search.
+_DEBUG_PROBE_SRC_RE = re.compile(r"^192\.0\.2\.(?:[1-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-4])$")
 
 DEBUG_LEVEL_REVERT_TIMER: threading.Timer | None = None
 DEBUG_PEEKS_TOTAL = 0
@@ -13588,6 +13598,16 @@ def _debug_peek_params(body: bytes) -> dict:
     if not _valid_debug_marker(marker):
         raise ValueError(f"marker must be {CORR_DEBUG_MARKER_LEN} Crockford base32 characters")
 
+    # probe_src is OPTIONAL and REFUSED when malformed — never ignored. An
+    # empty value is the ABSENCE of the second needle, not a blank one: an
+    # empty needle is a substring of every payload, so accepting "" as a needle
+    # would return the whole topic. Anything else outside the grammar is a
+    # caller trying to make this process scan the bus for its own string, and
+    # it gets a named 400 rather than a best-effort scan.
+    probe_src = str(req.get("probe_src", "")).strip()
+    if probe_src and not _DEBUG_PROBE_SRC_RE.match(probe_src):
+        raise ValueError("probe_src must be an RFC 5737 documentation address 192.0.2.1-192.0.2.254")
+
     def _clamp(name: str, default: float, lo: float, hi: float) -> float:
         raw = req.get(name, default)
         try:
@@ -13599,10 +13619,29 @@ def _debug_peek_params(body: bytes) -> dict:
     return {
         "topic": topic,
         "marker": marker,
+        "probe_src": probe_src,
         "max_seconds": _clamp("max_seconds", CORR_DEBUG_PEEK_MAX_S, 1.0, CORR_DEBUG_PEEK_MAX_S),
         "max_records": int(_clamp("max_records", 5, 1, CORR_DEBUG_MAX_RECORDS)),
         "lookback_seconds": int(_clamp("lookback_seconds", 900, 1, CORR_DEBUG_MAX_LOOKBACK_S)),
     }
+
+
+def _debug_peek_needles(params: dict) -> list[bytes]:
+    """The byte needles a record may match, in the order they are tried.
+
+    The text marker is always one. For a kind whose record cannot carry text —
+    flow — the caller also supplies probe_src, and a record matching EITHER is
+    returned. The needle is deliberately LOOSE; the API re-verifies every
+    returned record against the probe's full flow fingerprint before it
+    believes one, so a loose bus scan cannot promote another trace's record.
+
+    An empty probe_src adds NO needle: b"" is in every payload.
+    """
+    needles = [("cx_debug=" + params["marker"]).encode()]
+    probe_src = params.get("probe_src") or ""
+    if probe_src:
+        needles.append(probe_src.encode())
+    return needles
 
 
 async def _debug_kafka_peek(params: dict) -> dict:
@@ -13614,7 +13653,7 @@ async def _debug_kafka_peek(params: dict) -> dict:
     """
     started = time.monotonic()
     deadline = started + params["max_seconds"]
-    needle = ("cx_debug=" + params["marker"]).encode()
+    needles = _debug_peek_needles(params)
     consumer = AIOKafkaConsumer(
         bootstrap_servers=KAFKA_BOOTSTRAP,
         enable_auto_commit=False,
@@ -13653,7 +13692,7 @@ async def _debug_kafka_peek(params: dict) -> dict:
                 for msg in msgs:
                     scanned += 1
                     payload = msg.value or b""
-                    if needle not in payload:
+                    if not any(n in payload for n in needles):
                         continue
                     excerpt = payload[:CORR_DEBUG_MAX_EXCERPT]
                     if len(payload) > CORR_DEBUG_MAX_EXCERPT:

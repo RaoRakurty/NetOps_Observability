@@ -106,10 +106,27 @@ func NewKafkaPeek(client *http.Client, base, token string) func(context.Context,
 		if !ValidMarker(req.Marker) {
 			return PeekResult{}, errors.New("refusing to peek with a malformed marker")
 		}
+		// The flow needle (3.9-01). A NetFlow record has no free-text field, so
+		// the marker is not IN it and the sidecar has to be told the probe's
+		// RFC 5737 source address instead. Omitting it made the sidecar look
+		// for a marker that could never be there, and every flow trace's bus
+		// hop reported a false not_seen while ClickHouse reported seen.
+		//
+		// It is validated HERE as well as at the sidecar: a needle is a
+		// substring the peer scans the bus for, so a caller must never be able
+		// to put an arbitrary one on the wire (§3 — and the sidecar does not
+		// trust us either, it re-validates the same closed grammar).
+		if req.ProbeSrc != "" && !ValidProbeSrc(req.ProbeSrc) {
+			return PeekResult{}, fmt.Errorf("refusing to peek with probe_src %q: not an address the flow probe can mint", req.ProbeSrc)
+		}
 		body := map[string]any{
 			"topic": req.Topic, "marker": req.Marker,
 			"max_seconds": req.MaxSeconds, "max_records": req.MaxRecords,
 			"lookback_seconds": req.LookbackSeconds,
+			// Always present. "" is the ABSENCE of the alternative needle, not
+			// a blank one: an empty needle would match every record on the
+			// topic, so both ends treat it as "text marker only".
+			"probe_src": req.ProbeSrc,
 		}
 		raw, err := postJSON(ctx, client, base+"/debug/kafka-peek", token, body, maxSidecarResponse)
 		if err != nil {

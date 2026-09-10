@@ -169,6 +169,82 @@ def test_matching_records_are_returned_verbatim():
     assert got["records"][0]["offset"] == 41 and got["scanned"] == 12
 
 
+# ── the flow needle (3.9-01) ────────────────────────────────────────────────
+#
+# A NetFlow record has no free-text field, so the marker cannot ride inside it.
+# The API sends the probe's RFC 5737 source address as a SECOND needle; without
+# it the sidecar looked for a marker that could never be there and every flow
+# trace's bus hop reported a false not_seen. The grammar is closed and
+# re-validated HERE: the API is a peer, not an authority (§3).
+
+PROBE_SRC = "192.0.2.42"
+
+
+def test_probe_src_is_accepted_and_becomes_a_second_needle():
+    p = main._debug_peek_params(peek_body(topic="netops.flows.raw", probe_src=PROBE_SRC))
+    assert p["probe_src"] == PROBE_SRC
+    assert main._debug_peek_needles(p) == [b"cx_debug=" + MARKER.encode(), PROBE_SRC.encode()]
+
+
+def test_a_flow_record_matches_on_the_probe_src_needle_alone():
+    """The record goflow2 actually writes: addresses and numbers, no marker."""
+    p = main._debug_peek_params(peek_body(topic="netops.flows.raw", probe_src=PROBE_SRC))
+    record = (b'{"src_addr":"' + PROBE_SRC.encode() +
+              b'","dst_addr":"198.51.100.7","src_port":50001,"proto":17}')
+    assert any(n in record for n in main._debug_peek_needles(p))
+
+
+@pytest.mark.parametrize("bad", [
+    "192.0.2.0",          # network address: the probe never mints it
+    "192.0.2.255",        # broadcast address
+    "192.0.2.01",         # non-canonical spelling
+    "192.0.2.",
+    "192.0.2.1 OR 1=1",
+    "10.0.0.1",           # real address space
+    "198.51.100.4",       # the DESTINATION prefix is not the source needle
+    "192.0.2.1x",
+    "192.0.2.1/24",
+    "0.0.0.0",
+    ".",
+])
+def test_malformed_probe_src_is_refused_not_ignored(bad):
+    """REFUSED, never quietly dropped: a caller must not be able to make this
+    process scan the bus for a string of its choosing, and a caller who sends a
+    broken needle must be told rather than handed a silent miss."""
+    status, _, body = main._sidecar_debug_response(
+        "/debug/kafka-peek",
+        peek_body(topic="netops.flows.raw", probe_src=bad),
+        auth())
+    assert status == 400, body
+    assert "probe_src" in json.loads(body)["detail"]
+
+
+def test_probe_src_is_stripped_then_matched_against_the_grammar():
+    """Surrounding whitespace is normalised away, exactly as topic and marker
+    are. What survives is the canonical address or a 400 — never a needle with
+    a stray byte on it."""
+    p = main._debug_peek_params(peek_body(topic="netops.flows.raw", probe_src="  192.0.2.42\n"))
+    assert p["probe_src"] == PROBE_SRC
+    assert main._debug_peek_needles(p)[-1] == PROBE_SRC.encode()
+
+
+def test_probe_src_is_optional_and_empty_is_not_a_needle():
+    """b"" is a substring of EVERY payload. "no probe_src" must therefore stay
+    distinct from "a probe_src that happens to be blank", or a syslog peek
+    would return the whole topic."""
+    for body in (peek_body(), peek_body(probe_src="")):
+        p = main._debug_peek_params(body)
+        assert p["probe_src"] == ""
+        assert main._debug_peek_needles(p) == [b"cx_debug=" + MARKER.encode()]
+        assert not any(n in b'{"src_addr":"192.0.2.42"}' for n in main._debug_peek_needles(p))
+
+
+def test_probe_src_grammar_admits_exactly_the_254_addresses_the_probe_can_mint():
+    admitted = [n for n in range(256)
+                if main._DEBUG_PROBE_SRC_RE.match(f"192.0.2.{n}")]
+    assert admitted == list(range(1, 255))
+
+
 # ── the peek cannot perturb the engine ──────────────────────────────────────
 
 def test_peek_consumer_is_group_less_and_never_commits():

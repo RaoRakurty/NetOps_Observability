@@ -226,7 +226,7 @@ func (a *API) KafkaStage(ctx context.Context, kind Kind, marker string) Entry {
 			"a %s update does not cross the bus in this deployment: gnmic writes straight to VictoriaMetrics over prometheus_write, and only the opt-in correlation lane (GNMIC_CONFIG_FILE=gnmic-correlation.yaml) adds a Kafka output", kind))
 	}
 	// A flow record carries no text marker, so the bus needle is the probe's
-	// RFC 5737 source address — a closed, 256-value grammar the sidecar
+	// RFC 5737 source address — a closed, 254-value grammar the sidecar
 	// validates independently. It is a LOOSE needle by design; every record it
 	// returns is then verified against the full fingerprint here, so a loose
 	// bus scan can never promote another probe's record into this trace.

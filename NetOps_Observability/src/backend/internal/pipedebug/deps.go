@@ -43,9 +43,11 @@ type PeekRequest struct {
 	LookbackSeconds int
 	// ProbeSrc is the alternative needle for a kind whose record carries no
 	// text marker (today: flow). It is an RFC 5737 documentation address, a
-	// 512-value closed grammar the sidecar re-validates independently — it can
-	// never be used to scan the bus for arbitrary content, and the API verifies
-	// every returned record against the full fingerprint before believing it.
+	// 254-value closed grammar (192.0.2.1 … 192.0.2.254, ValidProbeSrc) which
+	// the sidecar re-validates independently — it can never be used to scan the
+	// bus for arbitrary content, and the API verifies every returned record
+	// against the full fingerprint before believing it. Empty means "no
+	// alternative needle": the text marker is the only one.
 	ProbeSrc string
 }
 

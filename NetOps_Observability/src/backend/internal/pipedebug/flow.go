@@ -41,6 +41,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -97,6 +98,35 @@ func NewFlowFingerprint(marker string) FlowFingerprint {
 		DstAS:   uint16(flowASBase + int(binary.BigEndian.Uint16(h[8:10]))%flowASSpan),    // #nosec G115 -- same bound
 		Proto:   17,
 	}
+}
+
+// ValidProbeSrc reports whether s is an address the flow fingerprint can
+// actually mint: 192.0.2.1 through 192.0.2.254, in canonical form, and nothing
+// else.
+//
+// This is the CLOSED GRAMMAR the debug sidecar's bus needle rides on, written
+// here and re-implemented independently in src/correlation/main.py
+// (_DEBUG_PROBE_SRC_RE) because the sidecar must not trust its caller (§3).
+// It is 254 values of RFC 5737 documentation space, so the needle can never be
+// used to scan the bus for arbitrary content, and it is not a needle at all
+// when empty: the empty string matches every payload, so "no probe_src" must
+// stay distinct from "a probe_src that happens to be blank".
+func ValidProbeSrc(s string) bool {
+	rest, ok := strings.CutPrefix(s, flowSrcPrefix)
+	if !ok || rest == "" || len(rest) > 3 {
+		return false
+	}
+	if rest[0] == '0' { // no leading zeros: one canonical spelling per address
+		return false
+	}
+	n := 0
+	for i := 0; i < len(rest); i++ {
+		if rest[i] < '0' || rest[i] > '9' {
+			return false
+		}
+		n = n*10 + int(rest[i]-'0')
+	}
+	return n >= 1 && n <= 254
 }
 
 // String renders the fingerprint the way the stage reasons and the log files
