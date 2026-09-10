@@ -10,6 +10,7 @@ package dialects
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 
 	"netops/backend/internal/hardening"
@@ -172,7 +173,15 @@ var (
 	reSRLNTPServer    = regexp.MustCompile(`^set / system ntp server \S+`)
 	reSRLNTPAdmin     = regexp.MustCompile(`^set / system ntp admin-state enable\b`)
 	reSRLCommunity    = regexp.MustCompile(`^set / system snmp access-group (\S+) community-entry (\S+)`)
-	reSRLWeakPassword = regexp.MustCompile(`^set / system aaa authentication \S+ password\s+[^$\s]`)
+	// SR Linux stores local credentials in TWO shapes, and the rule has to read
+	// both. The two BUILT-IN accounts carry the leaf directly
+	// (`admin-user password …`, `linuxadmin-user password …`); every account an
+	// operator adds is a LIST entry (`user <name> password …`), which is two
+	// tokens, not one. The old pattern allowed exactly one token between
+	// `authentication` and `password`, so it only ever saw the two built-ins:
+	// every configured user went unexamined while the rule still reported a
+	// clean verdict over "all locally stored passwords".
+	reSRLLocalPassword = regexp.MustCompile(`^set / system aaa authentication (user \S+|\S+-user) password\s+(\S+)`)
 )
 
 // srlJSONRPCPlaintext trips when the JSON-RPC management server serves the
@@ -237,11 +246,50 @@ func srlTLSNoClientAuth(c *hardening.Config) hardening.DetectResult {
 // crypt value. Every hashed secret this OS writes begins with a `$scheme$`
 // marker (`$y$` yescrypt, `$6$` sha512-crypt, `$aes1$` for reversible key
 // material); a value that starts with anything else was written in the clear.
+//
+// It walks EVERY account rather than stopping at the first match, so the clean
+// verdict can name what was actually examined. "All locally stored passwords
+// carry a hash marker" is a claim about coverage, and a detector that examined
+// two built-in accounts out of nine must not make it.
+//
+// The evidence never quotes the stored value: a cleartext credential belongs in
+// a finding no more than it belongs in a log (§8).
 func srlWeakLocalSecret(c *hardening.Config) hardening.DetectResult {
-	if line, ok := c.FirstMatch(reSRLWeakPassword); ok {
-		return hardening.DetectResult{Tripped: true, Evidence: line}
+	examined := make([]string, 0, 4)
+	weak := make([]string, 0, 2)
+	for _, ln := range c.Lines() {
+		m := reSRLLocalPassword.FindStringSubmatch(strings.TrimSpace(ln))
+		if m == nil {
+			continue
+		}
+		account := m[1]
+		examined = append(examined, account)
+		if !strings.HasPrefix(m[2], "$") {
+			weak = append(weak, account)
+		}
 	}
-	return hardening.DetectResult{Tripped: false, Evidence: "all locally stored passwords carry a `$scheme$` hash marker"}
+	switch {
+	case len(weak) > 0:
+		return hardening.DetectResult{
+			Tripped: true,
+			Evidence: "password stored without a `$scheme$` crypt marker (written in the clear) for: " +
+				strings.Join(weak, ", ") + " — of " + strconv.Itoa(len(examined)) + " local account(s) examined",
+		}
+	case len(examined) == 0:
+		// Nothing was examined, so nothing may be claimed clean. No account
+		// carries a password leaf at all, which is a statement about THIS
+		// config, not about credential hygiene in general.
+		return hardening.DetectResult{
+			Tripped:  false,
+			Evidence: "no local account carries an `aaa authentication … password` leaf: no stored password to examine",
+		}
+	default:
+		return hardening.DetectResult{
+			Tripped: false,
+			Evidence: strconv.Itoa(len(examined)) + " local account(s) examined (" + strings.Join(examined, ", ") +
+				"); each stored password carries a `$scheme$` hash marker",
+		}
+	}
 }
 
 // srlSNMPCommunity trips when any SNMP access-group carries a v1/v2c community

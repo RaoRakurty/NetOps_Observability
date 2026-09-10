@@ -65,6 +65,14 @@ func fixedClock() func() time.Time {
 // verbatim: reaching privileged exec during verification took a two-line
 // `enable` prelude. It is stripped by the eos-command volatile rule before the
 // capture is ever hashed, and the hardening engine does not read it.
+//
+// srlinux_listusers_synthetic.txt is the ONE file under testdata/ that is NOT a
+// capture, and its header says so. Neither lab spine had a LIST user
+// (`set / system aaa authentication user <name> …`), which is the account shape
+// an operator actually adds and the one the weak-secret rule used to be blind
+// to, so that shape is hand-written rather than borrowed from a device that
+// never had it. Editing a real capture to carry a line the device never
+// returned would destroy the only thing the other two files are for.
 
 const (
 	platformEOS     = "Arista EOS 4.36"
@@ -463,5 +471,85 @@ func TestFabricDetectionsAreNotFooledByNearMisses(t *testing.T) {
 	clear := hardening.NewConfig(hardening.VendorSRLinux, "set / system aaa authentication admin-user password NokiaSrl1\n")
 	if r := srlWeakLocalSecret(clear); !r.Tripped {
 		t.Error("srlWeakLocalSecret did not trip on a cleartext password")
+	}
+}
+
+// TestSRLinuxWeakSecretSeesConfiguredUsers — the two built-in accounts are not
+// the account list. Everything an operator adds arrives as
+// `user <name> password …`, two tokens where the built-ins have one, and a rule
+// that reads only the built-ins reports a device clean on the strength of the
+// two accounts nobody logs in with.
+func TestSRLinuxWeakSecretSeesConfiguredUsers(t *testing.T) {
+	listUserClear := hardening.NewConfig(hardening.VendorSRLinux, strings.Join([]string{
+		"set / system aaa authentication admin-user password $y$REDACTED",
+		"set / system aaa authentication linuxadmin-user password $6$REDACTED",
+		"set / system aaa authentication user field-tech password PlaintextPlaceholder1",
+		"",
+	}, "\n"))
+	r := srlWeakLocalSecret(listUserClear)
+	if !r.Tripped {
+		t.Fatalf("a configured LIST user with a cleartext password was not detected: %q", r.Evidence)
+	}
+	if !strings.Contains(r.Evidence, "field-tech") {
+		t.Errorf("evidence must name the account that is stored in the clear, got %q", r.Evidence)
+	}
+	if strings.Contains(r.Evidence, "PlaintextPlaceholder1") {
+		t.Errorf("evidence quoted the stored secret; a cleartext credential belongs in a finding "+
+			"no more than in a log: %q", r.Evidence)
+	}
+
+	// A hashed list user is clean, and the clean verdict says WHAT it examined
+	// instead of making a claim about every password on the device.
+	listUserHashed := hardening.NewConfig(hardening.VendorSRLinux, strings.Join([]string{
+		"set / system aaa authentication admin-user password $y$REDACTED",
+		"set / system aaa authentication user noc-readonly password $y$REDACTED",
+		"",
+	}, "\n"))
+	r = srlWeakLocalSecret(listUserHashed)
+	if r.Tripped {
+		t.Fatalf("hashed list user tripped the rule: %q", r.Evidence)
+	}
+	for _, want := range []string{"admin-user", "noc-readonly", "examined"} {
+		if !strings.Contains(r.Evidence, want) {
+			t.Errorf("clean evidence must name what was examined; %q is missing from %q", want, r.Evidence)
+		}
+	}
+	if strings.Contains(r.Evidence, "all locally stored passwords") {
+		t.Errorf("the clean verdict still claims universal coverage: %q", r.Evidence)
+	}
+
+	// A config with no password leaf at all must not read as "all hashed".
+	none := hardening.NewConfig(hardening.VendorSRLinux, "set / system aaa authentication idle-timeout 7200\n")
+	r = srlWeakLocalSecret(none)
+	if r.Tripped {
+		t.Fatalf("nothing to examine must not trip: %q", r.Evidence)
+	}
+	if !strings.Contains(r.Evidence, "no stored password to examine") {
+		t.Errorf("with nothing examined the evidence must say so, got %q", r.Evidence)
+	}
+}
+
+// TestSRLinuxListUserFixtureFails drives the same gap through the BINDING and
+// the shipped catalog, not just the helper: the rule as wired must FAIL a
+// config whose only weak credential belongs to a configured user.
+func TestSRLinuxListUserFixtureFails(t *testing.T) {
+	fs := evaluateFixture(t, platformSRLinux, loadFabricFixture(t, "srlinux_listusers_synthetic.txt"))
+	if got := statusOf(t, fs, "local-user-weak-secret"); got != secfindings.StatusFail {
+		t.Fatalf("local-user-weak-secret = %s, want Fail — the cleartext list user is invisible to the rule", got)
+	}
+	f, _ := findingFor(fs, "local-user-weak-secret")
+	if !strings.Contains(f.Observed+f.Detail, "field-tech") {
+		t.Errorf("the finding must name the account: observed=%q detail=%q", f.Observed, f.Detail)
+	}
+
+	// And the real spine, whose one stored password IS hashed, stays clean —
+	// while saying which account that verdict covers.
+	real := evaluateFixture(t, platformSRLinux, loadFabricFixture(t, "srlinux_spine1_running.txt"))
+	if got := statusOf(t, real, "local-user-weak-secret"); got != secfindings.StatusPass {
+		t.Fatalf("spine1 local-user-weak-secret = %s, want Pass", got)
+	}
+	rf, _ := findingFor(real, "local-user-weak-secret")
+	if !strings.Contains(rf.Observed+rf.Detail, "linuxadmin-user") {
+		t.Errorf("the clean verdict must name the account it examined: observed=%q detail=%q", rf.Observed, rf.Detail)
 	}
 }
