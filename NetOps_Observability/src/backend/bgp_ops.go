@@ -307,23 +307,38 @@ func newBGPFetcher() *bgpFetcher {
 // 169.254.169.254 would sail through. Redirects are re-screened by CheckRedirect
 // for the same reason (a 302 into the metadata service is the classic bypass).
 //
-// One exemption, stated plainly: when an egress proxy is configured, the dial
-// target IS the proxy — often a private address — and the proxy, not us,
-// resolves the host. The address gate is therefore skipped for proxied requests
+// One exemption, stated plainly and NARROWLY: when the dial target IS an egress
+// proxy, the address being dialled is the proxy — often a private address — and
+// the proxy, not us, resolves the host. That one dial skips the address gate
 // (the URL gate still applies); an enterprise that inspects egress already
 // controls where these requests may go.
+//
+// The exemption is decided PER DIAL, by comparing the address being dialled
+// against the proxies this process is actually configured with. It used to be a
+// process-wide boolean that included ALL_PROXY — and http.ProxyFromEnvironment
+// has never read ALL_PROXY (it reads HTTP_PROXY, HTTPS_PROXY and NO_PROXY, see
+// golang.org/x/net/http/httpproxy). Setting ALL_PROXY therefore turned the
+// address gate OFF while every request was still dialled DIRECT, and
+// SafeOutboundURL screens IP literals only, so a hostname resolving to
+// 169.254.169.254 sailed through. A per-dial comparison cannot drift from the
+// resolver that way: a dial that does not land on a configured proxy is gated,
+// whatever the environment says.
 func newBGPWebClient(tlsCfg *tls.Config) *http.Client {
-	proxied := os.Getenv("HTTPS_PROXY") != "" || os.Getenv("https_proxy") != "" ||
-		os.Getenv("ALL_PROXY") != "" || os.Getenv("all_proxy") != ""
-	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	if !proxied {
-		d.Control = func(_, address string, _ syscall.RawConn) error {
+	proxies := proxyDialTargets()
+	direct := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	gated := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
 			return bgpdepth.CheckDialAddress(address)
+		}}
+	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
+		if _, ok := proxies[address]; ok {
+			return direct.DialContext(ctx, network, address)
 		}
+		return gated.DialContext(ctx, network, address)
 	}
 	tr := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           d.DialContext,
+		DialContext:           dial,
 		TLSClientConfig:       tlsCfg,
 		MaxIdleConns:          4,
 		IdleConnTimeout:       60 * time.Second,
@@ -341,6 +356,58 @@ func newBGPWebClient(tlsCfg *tls.Config) *http.Client {
 			return err
 		},
 	}
+}
+
+// proxyDialTargets returns the host:port of every egress proxy THIS process is
+// configured with, in the exact spelling net/http dials it: the proxy URL's
+// hostname joined to its port, defaulted by scheme the way canonicalAddr does.
+//
+// Only the variables http.ProxyFromEnvironment actually reads are consulted, so
+// the skip and the resolver can never disagree. A variable the resolver ignores
+// (ALL_PROXY is the one people set) buys no exemption at all. Anything
+// unparseable yields no entry, which means the dial stays GATED.
+func proxyDialTargets() map[string]struct{} {
+	out := make(map[string]struct{}, 4)
+	for _, name := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"} {
+		if addr := proxyDialAddr(os.Getenv(name)); addr != "" {
+			out[addr] = struct{}{}
+		}
+	}
+	return out
+}
+
+// proxyDialAddr renders one proxy setting as the address net/http would dial.
+// It accepts both spellings the stdlib accepts: a full URL, and a bare
+// "host:port" with no scheme.
+func proxyDialAddr(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		// No scheme: the stdlib retries it as http://host:port, so we do too.
+		u, err = url.Parse("http://" + raw)
+		if err != nil || u.Host == "" {
+			return ""
+		}
+	}
+	host := u.Hostname()
+	if host == "" {
+		return ""
+	}
+	port := u.Port()
+	if port == "" {
+		switch u.Scheme {
+		case "https":
+			port = "443"
+		case "socks5", "socks5h":
+			port = "1080"
+		default:
+			port = "80"
+		}
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func (f *bgpFetcher) cached(key string) ([]byte, bool) {
