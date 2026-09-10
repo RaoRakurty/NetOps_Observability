@@ -100,8 +100,15 @@ func newDEMStore() dem.Catalogue {
 	}
 	fs := dem.NewFileStore(envOr(dem.EnvTargetsFile, "/data/dem_targets.json"))
 	if err := fs.LoadErr(); err != nil {
-		logError("dem", "the experience target catalogue could not be read — it starts EMPTY and NO target will be measured until it is re-added or the file is repaired",
-			map[string]any{"err": err.Error()})
+		// The two conditions read differently, so they are SAID differently: an
+		// unreadable file serves nothing, an over-cap one serves what it could
+		// take. Claiming an empty catalogue for the second would be the same
+		// class of untrue report the store itself was just fixed to stop making.
+		msg := "the experience target catalogue could not be read — it starts EMPTY and NO target will be measured until it is re-added or the file is repaired"
+		if errors.Is(err, dem.ErrCatalogueOverCap) {
+			msg = "the experience target catalogue holds a tenant over the per-tenant cap — the excess targets were NOT loaded and are NOT being measured, and every write is refused until the file is trimmed or imported"
+		}
+		logError("dem", msg, map[string]any{"err": err.Error()})
 	}
 	return fs
 }
