@@ -115,6 +115,47 @@ const junosShowInterfacesExtensive = `Physical interface: ge-0/0/0, Enabled, Phy
     Carrier transitions: 5, Errors: 0, Drops: 4, Collisions: 0, Aged packets: 0
 `
 
+// FIXTURE PROVENANCE: SYNTHETIC, authored 2026-09-10. Not a device capture.
+// It is the VRP form of the shape review 3.5-03 names: an operator DESCRIPTION
+// carrying both the comma-separated "Key: value" tokens the parameter loop reads
+// AND the two distinct phrases VRP prints for MTU and for the interface address,
+// sitting above the device's own lines, which carry DIFFERENT values. The
+// description says speed 10000, duplex HALF, MTU 9000 and 192.0.2.99/32; the
+// device says 1000, FULL, 1500 and 10.0.0.1/30. GigabitEthernet0/0/2 carries NO
+// description and is the guard that refusing the free-text line costs an
+// ordinary record nothing.
+const vrpInterfaceDescriptionTrap = `GigabitEthernet0/0/1 current state : UP
+Line protocol current state : UP
+Description:core uplink, Speed : 10000, Duplex: HALF, The Maximum Transmit Unit is 9000, Internet Address is 192.0.2.99/32
+Route Port,The Maximum Transmit Unit is 1500
+Internet Address is 10.0.0.1/30
+IP Sending Frames' Format is PKTFMT_ETHNT_2, Hardware address is 00e0-fc12-3456
+Port Mode: FORCE COPPER
+Speed : 1000,  Loopback: NONE
+Duplex: FULL,  Negotiation: ENABLE
+    Input:
+      Unicast: 1234567, Multicast: 1000
+      CRC: 7, Overrun: 0, Fragment: 0
+      Total Error: 12, Drop: 3
+    Output:
+      Unicast: 2345678, Multicast: 500
+      Total Error: 0, Drop: 4
+GigabitEthernet0/0/2 current state : UP
+Line protocol current state : UP
+Route Port,The Maximum Transmit Unit is 1500
+Internet Address is 10.0.0.5/30
+Port Mode: FORCE COPPER
+Speed : 1000,  Loopback: NONE
+Duplex: FULL,  Negotiation: ENABLE
+    Input:
+      Unicast: 10, Multicast: 1
+      CRC: 0, Overrun: 0, Fragment: 0
+      Total Error: 0, Drop: 0
+    Output:
+      Unicast: 20, Multicast: 2
+      Total Error: 0, Drop: 0
+`
+
 const vrpDisplayInterface = `GigabitEthernet0/0/1 current state : UP
 Line protocol current state : UP
 Description:uplink to core-02

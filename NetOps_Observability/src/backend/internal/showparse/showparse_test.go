@@ -350,6 +350,56 @@ func TestParse_JunosInterfaces(t *testing.T) {
 	wantStrP(t, "LastFlap", i.LastFlap, "2026-08-30 12:11:03 UTC (2d 03:12:44 ago)")
 }
 
+// TestParse_VRPDescriptionIsNotADeviceReading is review 3.5-03 in its VRP form.
+// The description line fell through into the comma-split "Key: value" loop, so
+// an operator label reading "Speed : 10000, Duplex: HALF" fabricated a speed and
+// a duplex on a port the device had reported as 1000 and FULL.
+//
+// MTU and the interface address were no safer for being read from their own
+// distinct VRP phrases: a description can carry those phrases too, and this
+// fixture does. Every one of these fields is first-write-wins and the
+// description is printed ABOVE the device's own lines, so the label won every
+// race and the device could no longer correct it.
+//
+// LastFlap is asserted nil for the same reason it is asserted in the Cisco and
+// Junos tests: VRP's `display interface` carries no last-flap phrase, so any
+// value in that field could only have come from free text.
+func TestParse_VRPDescriptionIsNotADeviceReading(t *testing.T) {
+	res := mustParse(t, CmdInterfaceDetail, DialectHuaweiVRP, vrpInterfaceDescriptionTrap)
+	if len(res.Interfaces) != 2 {
+		t.Fatalf("got %d interfaces, want 2", len(res.Interfaces))
+	}
+	i0 := res.Interfaces[0]
+	// The description is still READ — it is the operator's label and belongs on
+	// the record. It is simply not a source of measurements.
+	wantStrP(t, "Description", i0.Description,
+		"core uplink, Speed : 10000, Duplex: HALF, The Maximum Transmit Unit is 9000, Internet Address is 192.0.2.99/32")
+	wantI64P(t, "SpeedMbps", i0.SpeedMbps, 1000)
+	wantStrP(t, "Duplex", i0.Duplex, "FULL")
+	wantIntP(t, "MTU", i0.MTU, 1500)
+	wantStrP(t, "IPv4", i0.IPv4, "10.0.0.1/30")
+	if i0.LastFlap != nil {
+		t.Errorf("LastFlap = %q, want nil — VRP reports no last flap here", *i0.LastFlap)
+	}
+	// The counters under the record are untouched by the refusal.
+	wantI64P(t, "CRC", i0.CRC, 7)
+	wantI64P(t, "InErrors", i0.InErrors, 12)
+	wantI64P(t, "InDrops", i0.InDrops, 3)
+	wantI64P(t, "OutDrops", i0.OutDrops, 4)
+
+	// The guard: an ordinary record with NO description is unchanged by the
+	// refusal, so the fix cost the parser nothing it used to read.
+	i1 := res.Interfaces[1]
+	if i1.Description != nil {
+		t.Errorf("Description = %q, want nil for an interface with none", *i1.Description)
+	}
+	wantStr(t, "Name", &i1.Name, "GigabitEthernet0/0/2")
+	wantI64P(t, "SpeedMbps", i1.SpeedMbps, 1000)
+	wantStrP(t, "Duplex", i1.Duplex, "FULL")
+	wantIntP(t, "MTU", i1.MTU, 1500)
+	wantStrP(t, "IPv4", i1.IPv4, "10.0.0.5/30")
+}
+
 func TestParse_VRPInterfaces(t *testing.T) {
 	res := mustParse(t, CmdInterfaceDetail, DialectHuaweiVRP, vrpDisplayInterface)
 	if len(res.Interfaces) != 1 {

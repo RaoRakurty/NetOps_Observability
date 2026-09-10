@@ -512,10 +512,32 @@ func parseVRPInterfaces(lines []string) Result {
 			section = "out"
 			continue
 		}
-		if v, ok := strings.CutPrefix(t, "Description:"); ok {
-			if d := trim(v); d != "" {
-				cur.Description = strPtr(d)
+		// THE DESCRIPTION IS OPERATOR FREE TEXT, and it is the one line in the
+		// record the DEVICE does not author. It is read for the description and
+		// the line is then DONE: none of the value scans below may see it.
+		//
+		// They all used to. VRP's description fell through into the comma-split
+		// "Key: value" loop, so a description reading "core uplink, Speed :
+		// 10000, Duplex: HALF" put speed 10000 and duplex HALF on a port the
+		// device had reported as 1000 and FULL. MTU and the IPv4 address were no
+		// safer for being read from their own distinct phrases: those phrases can
+		// be typed into a description too, and "core uplink, The Maximum
+		// Transmit Unit is 9000, Internet Address is 192.0.2.99/32" wrote both.
+		// Every one of these fields is first-write-wins and the description is
+		// printed ABOVE the device's own lines, so the label won every race and
+		// the device could no longer correct it. The wrong number then flowed
+		// into RCA and into LLM evidence as if the device had reported it.
+		//
+		// The alternative — accepting these fields only from their canonical
+		// POSITIONS — was rejected for the same reason it was rejected on the
+		// Cisco (d80c7492) and Junos sides: one parser serves several dialects
+		// here precisely because it does not care where in the record a line
+		// falls, and pinning positions re-opens review H5's class of bug.
+		if strings.HasPrefix(strings.ToLower(t), "description:") {
+			if v, ok := valueAfter(t, "escription:"); ok && v != "" {
+				cur.Description = strPtr(v)
 			}
+			continue
 		}
 		if v, ok := valueAfter(t, "The Maximum Transmit Unit is "); ok && cur.MTU == nil {
 			// The " x" sentinel guarantees Fields returns at least one element:
