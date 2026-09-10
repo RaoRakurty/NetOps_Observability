@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -220,15 +221,36 @@ func (s *PGStore) ListChanges(ctx context.Context, tenant string, q ChangeQuery)
 	if since.IsZero() {
 		since = time.Unix(0, 0).UTC()
 	}
+	// The type/app/site predicates go into SQL beside the time bound, against
+	// the columns RecordChange already writes and dem_change_events already
+	// indexes on. Applying them in Go AFTER the row limit bounds a DIFFERENT
+	// set from the one the caller asked for: on a busy tenant the limit is
+	// spent on rows that do not match, and the answer comes back "nothing
+	// changed" while the deploy sits one page down. The file backend filters
+	// first, so leaving them in Go here also made the two backends disagree
+	// about the same question.
+	var types []string
+	for _, raw := range q.Types {
+		if v := strings.ToUpper(strings.TrimSpace(raw)); v != "" {
+			types = append(types, v)
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
 	defer cancel()
 	out := []ChangeEvent{}
 	err = s.db.WithTenant(ctx, t, false, func(tx pgx.Tx) error {
 		// The predicate is pushed into SQL rather than applied in Go: the whole
 		// point of a bounded query is that the rows never leave the database.
+		// An empty type list, app or site is "no such filter", expressed in the
+		// statement so one prepared shape serves every combination.
 		rows, qerr := tx.Query(ctx,
-			`SELECT data FROM dem_change_events WHERE event_at >= $1 ORDER BY event_at DESC LIMIT $2`,
-			since, limit)
+			`SELECT data FROM dem_change_events
+			  WHERE event_at >= $1
+			    AND ($2::text[] IS NULL OR change_type = ANY($2::text[]))
+			    AND ($3::text = '' OR app = $3::text)
+			    AND ($4::text = '' OR site = $4::text)
+			  ORDER BY event_at DESC LIMIT $5`,
+			since, types, q.App, q.Site, limit)
 		if qerr != nil {
 			return qerr
 		}
@@ -249,8 +271,10 @@ func (s *PGStore) ListChanges(ctx context.Context, tenant string, q ChangeQuery)
 	if err != nil {
 		return nil, err
 	}
-	// The remaining filters (type/app/site) are applied in Go so both backends
-	// answer identically from ONE implementation of the predicate.
+	// filterChanges stays as the shared POST-CHECK, so both backends still fold
+	// the answer through one implementation of the predicate (and one sort and
+	// one limit). It must now be a no-op on these rows; it is kept because the
+	// alternative is two predicates that can drift apart unnoticed.
 	return filterChanges(out, q), nil
 }
 
