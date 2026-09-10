@@ -56,7 +56,7 @@ import (
 // defend (LLM04/LLM10).
 const (
 	aiTopoTimeout      = 6 * time.Second // adjacency/metric gather deadline (§9: all IO has a timeout)
-	aiTopoMaxLinks     = 200             // links scanned for one device's adjacencies
+	aiTopoMaxNeighbors = 200             // adjacencies reported for ONE device (the SUBJECT's own edges, see aiDeviceNeighbors)
 	aiPathDefsScanned  = 200             // path definitions scanned before matching stops
 	aiFindingsMaxLimit = 50              // hard cap on findings handed to a prompt
 
@@ -481,23 +481,10 @@ func (s *server) aiTopologyContext(claims jwtClaims) func(context.Context, ai.Pr
 		// caller's own inventory, then to this device's own edges.
 		devs := visibleDevices(s.discovery.Devices(), claims)
 		links := s.gatherTopoLinks(tctx, devs)
-		if len(links) > aiTopoMaxLinks {
-			links = links[:aiTopoMaxLinks]
-			out.Notes = append(out.Notes, "the adjacency set was capped before matching — some neighbours may not be listed")
-		}
-		for _, l := range links {
-			switch {
-			case l.Source == dev.ID:
-				out.Neighbors = append(out.Neighbors, ai.TopologyNeighbor{
-					LocalPort: l.LocalPort, PeerName: aiFirst(l.TargetName, l.Target),
-					PeerPort: l.RemotePort, Source: l.SourceProto,
-				})
-			case l.Target == dev.ID:
-				out.Neighbors = append(out.Neighbors, ai.TopologyNeighbor{
-					LocalPort: l.RemotePort, PeerName: aiFirst(l.SourceName, l.Source),
-					PeerPort: l.LocalPort, Source: l.SourceProto,
-				})
-			}
+		neighbors, capped := aiDeviceNeighbors(links, dev.ID)
+		out.Neighbors = append(out.Neighbors, neighbors...)
+		if capped {
+			out.Notes = append(out.Notes, aiNeighborCapNote)
 		}
 
 		// Seams: the tenant-scoped seam register. A deployment without the store
@@ -530,6 +517,53 @@ func (s *server) aiTopologyContext(claims jwtClaims) func(context.Context, ai.Pr
 		}
 		return out, nil
 	}
+}
+
+// aiNeighborCapNote is what the answer says when the SUBJECT device has more
+// adjacencies than one turn can carry.
+//
+// It says INCOMPLETE FOR THIS DEVICE, not "some neighbours may not be listed".
+// The old wording described a partial view of the fleet, which is a much
+// smaller claim than the truth it was covering: the cap used to be applied to
+// the fleet-wide link set BEFORE the subject's edges were selected out of it,
+// so on an estate with more links than the bound the subject could lose EVERY
+// neighbour and the assistant would go on to reason about a device it had been
+// told was isolated. A total loss must never be reported as a partial one.
+const aiNeighborCapNote = "this device has more adjacencies than this answer can carry, so the neighbour list below is INCOMPLETE FOR THIS DEVICE — treat a missing neighbour as unknown, not as absent"
+
+// aiDeviceNeighbors selects the SUBJECT device's own edges out of the
+// fleet-wide link set and only then bounds them. capped reports that the
+// subject's own adjacencies were cut, which is the only condition the caller
+// may narrate.
+//
+// THE ORDER IS THE POINT. Bounding the fleet slice first meant the bound was
+// spent on links belonging to other devices — the link set is ordered by the
+// collector, not by relevance to the subject — so on a 40-device estate a
+// device whose edges sorted past the bound came back with no neighbours at all.
+// Selecting first costs one pass over a slice that is already in memory.
+func aiDeviceNeighbors(links []topoLink, deviceID string) (out []ai.TopologyNeighbor, capped bool) {
+	for _, l := range links {
+		var n ai.TopologyNeighbor
+		switch {
+		case l.Source == deviceID:
+			n = ai.TopologyNeighbor{
+				LocalPort: l.LocalPort, PeerName: aiFirst(l.TargetName, l.Target),
+				PeerPort: l.RemotePort, Source: l.SourceProto,
+			}
+		case l.Target == deviceID:
+			n = ai.TopologyNeighbor{
+				LocalPort: l.RemotePort, PeerName: aiFirst(l.SourceName, l.Source),
+				PeerPort: l.LocalPort, Source: l.SourceProto,
+			}
+		default:
+			continue
+		}
+		if len(out) >= aiTopoMaxNeighbors {
+			return out, true
+		}
+		out = append(out, n)
+	}
+	return out, false
 }
 
 // aiSeamTouchesDevice reports whether any seam endpoint names this device. Seam
