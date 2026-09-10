@@ -99,6 +99,15 @@ type ASPathGraph struct {
 }
 
 // ParseBGPState extracts AS paths from a RIPEstat bgp-state payload.
+//
+// Like ParseLookingGlass, a returned path may contain the reserved AS0
+// (unreadableHop) where the source wrote a hop we could not read. bgp-state is
+// the PRIMARY source, so getting this wrong here is worse than getting it wrong
+// in the fallback: until 2026-09-08 this parser dropped an unreadable element
+// and joined the survivors, which spliced two ASes that are not neighbours into
+// a fabricated adjacency and then reported full coverage (PathsDropped 0) for
+// it. The three states are kept apart: readable, reserved (a well-formed "no
+// AS", RFC 7607, benign), and unreadable (a fault in the upstream, marked).
 func ParseBGPState(data json.RawMessage) [][]uint32 {
 	var body struct {
 		BGPState []struct {
@@ -115,13 +124,24 @@ func ParseBGPState(data json.RawMessage) [][]uint32 {
 		}
 		p := make([]uint32, 0, len(e.Path))
 		for _, n := range e.Path {
-			v, ok := ParseASNValue(n)
-			if !ok {
-				continue // a hop we cannot read is dropped, never guessed
+			v, outcome := parseASNValue(n)
+			switch outcome {
+			case asnReserved:
+				continue // a well-formed "no AS here" — benign, not a fault
+			case asnUnreadable:
+				// A hop we cannot READ is a fault in the upstream, not an
+				// absent hop. Mark the gap (never guess the ASN) so
+				// BuildASPathGraph can count it and refuse to fabricate an
+				// adjacency across it.
+				p = append(p, unreadableHop)
+			default:
+				p = append(p, v)
 			}
-			p = append(p, v)
+			if len(p) >= maxPathLen {
+				break // the gap marker counts against the path bound too (§9)
+			}
 		}
-		if len(p) > 0 {
+		if p = trimUnreadableEdges(p); len(p) > 0 {
 			out = append(out, p)
 		}
 	}

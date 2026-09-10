@@ -268,3 +268,96 @@ func TestReservedAS0IsNotTreatedAsAnUpstreamFailure(t *testing.T) {
 		t.Errorf("error = %q, want none for a reserved-AS hop", g.Error)
 	}
 }
+
+// bgp-state is the PRIMARY AS-path source, and it must obey the same rule its
+// looking-glass sibling obeys: an element the upstream wrote in a form we
+// cannot read is a FAULT, not an absent hop. Dropping it and joining the
+// survivors splices two ASes that are not neighbours into an adjacency that
+// does not exist, and then reports full coverage for it (CLAUDE.md §10).
+func TestBGPStateUnreadableInteriorHopDoesNotFabricateAnAdjacency(t *testing.T) {
+	payload := `{"bgp_state":[
+	 {"target_prefix":"193.0.0.0/21","source_id":"a","path":[6939,"garbage",3333]},
+	 {"target_prefix":"193.0.0.0/21","source_id":"b","path":[7018,1299,3333]}]}`
+	paths := ParseBGPState(json.RawMessage(payload))
+	if len(paths) != 2 {
+		t.Fatalf("got %d paths: %v", len(paths), paths)
+	}
+	if !hasUnreadableHop(paths[0]) {
+		t.Fatalf("the unreadable hop was spliced out instead of marked: %v", paths[0])
+	}
+	g := BuildASPathGraph("193.0.0.0/21", paths, nil, "bgp-state", nowFixed())
+	if g.PathsDropped != 1 {
+		t.Fatalf("paths_dropped = %d, want 1 — the damaged path was folded in and reported as clean coverage", g.PathsDropped)
+	}
+	if g.Paths != 1 || g.PathsSeen != 2 {
+		t.Fatalf("paths = %d/%d, want 1/2 (the healthy path still counts)", g.Paths, g.PathsSeen)
+	}
+	for _, e := range g.Edges {
+		if e.From == 6939 && e.To == 3333 {
+			t.Fatalf("a fabricated adjacency 6939->3333 was drawn across an unreadable hop: %+v", g.Edges)
+		}
+	}
+	var kept bool
+	for _, e := range g.Edges {
+		if e.From == 1299 && e.To == 3333 {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatalf("the healthy path was lost with the broken one: %+v", g.Edges)
+	}
+	if g.Error != "" {
+		t.Errorf("a partially damaged answer must not be reported as a total failure: %q", g.Error)
+	}
+}
+
+// The guard against over-correcting into "everything is damaged". A reserved
+// AS0 hop, a gap at either END of a path, and the real captured payload must
+// all still read as clean, full coverage.
+func TestBGPStateOnlyInteriorFaultsCountAsDamage(t *testing.T) {
+	// The verbatim RIPEstat capture: four paths, nothing dropped.
+	clean := BuildASPathGraph("193.0.0.0/21", ParseBGPState(json.RawMessage(realBGPState)), nil, "bgp-state", nowFixed())
+	if clean.Paths != 4 || clean.PathsDropped != 0 || clean.Error != "" {
+		t.Fatalf("the real payload no longer reads as clean: paths=%d dropped=%d err=%q",
+			clean.Paths, clean.PathsDropped, clean.Error)
+	}
+
+	// AS0 is a well-formed "no AS here" (RFC 7607), not an unreadable token.
+	reserved := ParseBGPState(json.RawMessage(`{"bgp_state":[{"path":[7018,0,3333]}]}`))
+	if len(reserved) != 1 || hasUnreadableHop(reserved[0]) {
+		t.Fatalf("a reserved AS0 hop was marked as an upstream fault: %v", reserved)
+	}
+	gr := BuildASPathGraph("193.0.0.0/21", reserved, nil, "bgp-state", nowFixed())
+	if gr.Paths != 1 || gr.PathsDropped != 0 || gr.Error != "" {
+		t.Fatalf("paths = %d, dropped = %d, err = %q, want 1/0/none", gr.Paths, gr.PathsDropped, gr.Error)
+	}
+
+	// A gap at either END splices nothing, so it is trimmed, not counted.
+	edges := ParseBGPState(json.RawMessage(
+		`{"bgp_state":[{"path":["junk",7018,1299,3333]},{"path":[7018,1299,3333,"junk"]}]}`))
+	if len(edges) != 2 {
+		t.Fatalf("got %d paths: %v", len(edges), edges)
+	}
+	for i, p := range edges {
+		if hasUnreadableHop(p) {
+			t.Fatalf("an edge gap was kept as damage on path %d: %v", i, p)
+		}
+	}
+	ge := BuildASPathGraph("193.0.0.0/21", edges, nil, "bgp-state", nowFixed())
+	if ge.PathsDropped != 0 || ge.Paths != 2 {
+		t.Fatalf("paths = %d, dropped = %d, want 2/0 — an edge gap fabricates nothing", ge.Paths, ge.PathsDropped)
+	}
+}
+
+// When EVERY bgp-state path carries an interior fault the graph must say the
+// source FAILED, not render as "this prefix has no observed paths".
+func TestBGPStateAllUnreadableIsAFailedGraphNotAnEmptyOne(t *testing.T) {
+	g := BuildASPathGraph("193.0.0.0/21", ParseBGPState(json.RawMessage(
+		`{"bgp_state":[{"path":[6939,"x",3333]},{"path":[7018,{"as":1},3333]}]}`)), nil, "bgp-state", nowFixed())
+	if g.Paths != 0 || g.PathsDropped != 2 {
+		t.Fatalf("paths = %d, dropped = %d, want 0/2", g.Paths, g.PathsDropped)
+	}
+	if g.Error == "" {
+		t.Fatal("an all-unreadable bgp-state answer rendered as an empty-but-healthy graph")
+	}
+}
