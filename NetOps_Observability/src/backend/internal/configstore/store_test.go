@@ -342,3 +342,69 @@ func TestPruneDoesNotLoseRowsWhenTheFlushFails(t *testing.T) {
 		}
 	}
 }
+
+// TestStoreSetGoldenKeepsTheMarkWhenTheTargetIsAbsent — REGRESSION (review
+// 3.5-01). The golden mark is OPERATOR INTENT: nothing recomputes it, and the
+// only way back is for a human to set it again on a version they have to find.
+// A SetGolden that cannot find its target must therefore be a pure refusal —
+// the device keeps the baseline it had. The scan used to clear every row first
+// and only discover the miss afterwards, so a mistyped sha, a pruned one, or the
+// synthetic sha of a FAILED capture (well-formed, so it passes validation, but
+// never eligible) left the device with no baseline at all and every later drift
+// verdict measured against nothing.
+func TestStoreSetGoldenKeepsTheMarkWhenTheTargetIsAbsent(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+
+	// Each case is a sha that is well-formed but not a version this device can
+	// be golden on.
+	cases := map[string]func(t *testing.T, s Store) string{
+		"unknown sha": func(*testing.T, Store) string { return SHA256Hex("never-captured") },
+		"pruned sha": func(t *testing.T, s Store) string {
+			// A REAL prune: seed past the retention budget and use the sha
+			// retention actually removed.
+			seedRow(t, s, "acme", "d1", "cfg-c", base.Add(2*time.Hour))
+			seedRow(t, s, "acme", "d1", "cfg-d", base.Add(3*time.Hour))
+			removed, err := s.Prune(ctx, "acme", false, "d1", minKeepVersions)
+			if err != nil || len(removed) != 1 {
+				t.Fatalf("prune to mint a dead sha: removed %d err %v", len(removed), err)
+			}
+			return removed[0].SHA
+		},
+		"failed capture row": func(t *testing.T, s Store) string {
+			sha := failureSHA("d1", base.Add(2*time.Hour))
+			row := Version{TenantID: "acme", DeviceID: "d1", SHA: sha,
+				CapturedAt: base.Add(2 * time.Hour), Status: StatusFailed,
+				Error: "unreachable", Drift: DriftUnknown}
+			if err := s.Put(ctx, "acme", false, row); err != nil {
+				t.Fatalf("seed failed row: %v", err)
+			}
+			return sha
+		},
+	}
+	for name, mint := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := NewFileStore("")
+			good := seedRow(t, s, "acme", "d1", "cfg-a", base)
+			seedRow(t, s, "acme", "d1", "cfg-b", base.Add(time.Hour))
+			if err := s.SetGolden(ctx, "acme", false, "d1", good.SHA); err != nil {
+				t.Fatalf("seed golden: %v", err)
+			}
+			miss := mint(t, s)
+
+			if err := s.SetGolden(ctx, "acme", false, "d1", miss); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("SetGolden(%s) = %v, want ErrNotFound", name, err)
+			}
+			g, ok, err := s.Golden(ctx, "acme", false, "d1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				t.Fatalf("a refused SetGolden LEFT THE DEVICE WITH NO GOLDEN: the operator's baseline is gone and nothing recomputes it")
+			}
+			if g.SHA != good.SHA {
+				t.Fatalf("golden moved to %s, want the untouched %s", g.SHA, good.SHA)
+			}
+		})
+	}
+}

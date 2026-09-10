@@ -346,31 +346,51 @@ func (s *FileStore) Put(_ context.Context, _ string, _ bool, v Version) error {
 }
 
 // SetGolden implements Store.
+//
+// FIND FIRST, MUTATE SECOND. The scan used to clear each row's mark as it went
+// and only discover afterwards that the requested version was not there, so
+// every 404 — a mistyped sha, one retention had already pruned, or the synthetic
+// sha of a FAILED capture row, which is well-formed and passes validation but is
+// never eligible — left the device with NO golden at all. The golden mark is
+// OPERATOR INTENT: nothing recomputes it, and the only way back is a human
+// finding the right version again. A refusal must therefore change nothing.
+// The Postgres backend never had the hole, because its refusal rolls the
+// transaction back.
 func (s *FileStore) SetGolden(_ context.Context, tenant string, cross bool, deviceID, sha string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.refuseIfUnreadable(); err != nil {
 		return err
 	}
-	found := false
+	if !s.goldenTargetExistsLocked(tenant, cross, deviceID, sha) {
+		return ErrNotFound
+	}
 	for k, rows := range s.rows {
 		if k.device != deviceID || !visible(tenant, cross, k.tenant) {
 			continue
 		}
 		for i := range rows {
-			switch {
-			case rows[i].SHA == sha && rows[i].Status == StatusOK:
-				rows[i].Golden = true
-				found = true
-			default:
-				rows[i].Golden = false
+			rows[i].Golden = rows[i].SHA == sha && rows[i].Status == StatusOK
+		}
+	}
+	return s.flushLocked()
+}
+
+// goldenTargetExistsLocked reports whether the caller may mark (device, sha)
+// golden: the row has to be visible to this scope AND be a SUCCESSFUL capture.
+// Call it with the lock held.
+func (s *FileStore) goldenTargetExistsLocked(tenant string, cross bool, deviceID, sha string) bool {
+	for k, rows := range s.rows {
+		if k.device != deviceID || !visible(tenant, cross, k.tenant) {
+			continue
+		}
+		for i := range rows {
+			if rows[i].SHA == sha && rows[i].Status == StatusOK {
+				return true
 			}
 		}
 	}
-	if !found {
-		return ErrNotFound
-	}
-	return s.flushLocked()
+	return false
 }
 
 // RecordDrift implements Store.
