@@ -111,11 +111,24 @@ type NotifyStateStore struct {
 // still-firing alert), and refusing to start the alert engine over it would be
 // a far worse trade. The error is returned so the caller can log it (§10).
 func NewNotifyStateStore(path string) (*NotifyStateStore, error) {
+	return newNotifyStateStoreAt(path, time.Now)
+}
+
+// newNotifyStateStoreAt is NewNotifyStateStore with the clock supplied up front.
+// The age-out below runs DURING the load, so a caller that injects a clock after
+// construction has already had its records judged against the wall clock. Tests
+// that pin a date must therefore pass the clock in here, not call SetNowForTest
+// afterwards: doing the latter made two restart tests pass only while the pinned
+// date sat inside the seven-day window, and start failing every run after it.
+func newNotifyStateStoreAt(path string, now func() time.Time) (*NotifyStateStore, error) {
+	if now == nil {
+		now = time.Now
+	}
 	s := &NotifyStateStore{
 		path:     path,
 		byTenant: map[string]map[string]NotifiedAlert{},
 		maxAge:   notifyStateMaxAge,
-		now:      time.Now,
+		now:      now,
 	}
 	if path == "" {
 		return s, nil
@@ -131,7 +144,7 @@ func NewNotifyStateStore(path string) (*NotifyStateStore, error) {
 	if err := json.Unmarshal(b, &list); err != nil {
 		return s, err
 	}
-	now := s.now().UTC()
+	asOf := s.now().UTC()
 	for _, rec := range list {
 		if rec.Alert.ID == "" {
 			continue
@@ -139,7 +152,7 @@ func NewNotifyStateStore(path string) (*NotifyStateStore, error) {
 		if rec.LastSeen.IsZero() {
 			rec.LastSeen = rec.NotifiedAt
 		}
-		if !rec.LastSeen.IsZero() && now.Sub(rec.LastSeen) > s.maxAge {
+		if !rec.LastSeen.IsZero() && asOf.Sub(rec.LastSeen) > s.maxAge {
 			continue // aged out while we were down
 		}
 		s.put(rec)

@@ -70,12 +70,12 @@ func (r *notifyRig) quiet(t *testing.T, sent, resolved int) {
 // process would: load the file, seed the engine, evaluate.
 func newNotifyRig(t *testing.T, path string, at time.Time, eval func(Rule) ([]Sample, error)) (*notifyRig, int) {
 	t.Helper()
-	st, err := NewNotifyStateStore(path)
-	if err != nil {
-		t.Fatalf("NewNotifyStateStore: %v", err)
-	}
 	clock := &fakeClock{t: at}
-	st.SetNowForTest(clock.now)
+	// The clock goes in BEFORE the load, because the age-out runs during it.
+	st, err := newNotifyStateStoreAt(path, clock.now)
+	if err != nil {
+		t.Fatalf("newNotifyStateStoreAt: %v", err)
+	}
 	ch := &fakeResolveChannel{}
 	d := notify.NewDispatcher()
 	d.Register(ch)
