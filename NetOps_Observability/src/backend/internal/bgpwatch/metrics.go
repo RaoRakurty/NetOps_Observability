@@ -32,8 +32,13 @@ type Metrics struct {
 	// still unproven, and this counter is how an operator sees the difference
 	// between "it cleared" and "we went blind" (review 2026-09-08).
 	MeasurementLost atomic.Int64
-	BogonSightings  atomic.Int64
-	BogonFeedErrors atomic.Int64
+	// PeerStateUnmeasured counts peer reports that carried no measured state
+	// (the documented "unknown"). Those peers are neither paged for nor
+	// resolved, so this counter is the only place their number is visible
+	// (review 2026-09-08).
+	PeerStateUnmeasured atomic.Int64
+	BogonSightings      atomic.Int64
+	BogonFeedErrors     atomic.Int64
 
 	// Evidence is the bus producer's own counter block.
 	Evidence EvidenceMetrics
@@ -50,23 +55,24 @@ func (m *Metrics) Snapshot() map[string]int64 {
 	}
 	ev := m.Evidence.Snapshot()
 	return map[string]int64{
-		"runs_total":               m.Runs.Load(),
-		"runs_skipped_total":       m.RunsSkipped.Load(),
-		"run_errors_total":         m.RunErrors.Load(),
-		"prefixes_evaluated_total": m.PrefixesEvaluated.Load(),
-		"observe_errors_total":     m.ObserveErrors.Load(),
-		"peer_errors_total":        m.PeerErrors.Load(),
-		"sighting_errors_total":    m.SightingErrors.Load(),
-		"alerts_notified_total":    m.AlertsNotified.Load(),
-		"alerts_resolved_total":    m.AlertsResolved.Load(),
-		"alerts_suppressed_total":  m.AlertsSuppressed.Load(),
-		"measurement_lost_total":   m.MeasurementLost.Load(),
-		"bogon_sightings_total":    m.BogonSightings.Load(),
-		"bogon_feed_errors_total":  m.BogonFeedErrors.Load(),
-		"evidence_published_total": ev.Published,
-		"evidence_retries_total":   ev.Retries,
-		"evidence_skipped_total":   ev.Skipped,
-		"evidence_dropped_total":   ev.Dropped,
+		"runs_total":                  m.Runs.Load(),
+		"runs_skipped_total":          m.RunsSkipped.Load(),
+		"run_errors_total":            m.RunErrors.Load(),
+		"prefixes_evaluated_total":    m.PrefixesEvaluated.Load(),
+		"observe_errors_total":        m.ObserveErrors.Load(),
+		"peer_errors_total":           m.PeerErrors.Load(),
+		"sighting_errors_total":       m.SightingErrors.Load(),
+		"alerts_notified_total":       m.AlertsNotified.Load(),
+		"alerts_resolved_total":       m.AlertsResolved.Load(),
+		"alerts_suppressed_total":     m.AlertsSuppressed.Load(),
+		"measurement_lost_total":      m.MeasurementLost.Load(),
+		"peer_state_unmeasured_total": m.PeerStateUnmeasured.Load(),
+		"bogon_sightings_total":       m.BogonSightings.Load(),
+		"bogon_feed_errors_total":     m.BogonFeedErrors.Load(),
+		"evidence_published_total":    ev.Published,
+		"evidence_retries_total":      ev.Retries,
+		"evidence_skipped_total":      ev.Skipped,
+		"evidence_dropped_total":      ev.Dropped,
 	}
 }
 
@@ -84,6 +90,7 @@ var metricHelp = [][2]string{
 	{"alerts_resolved_total", "BGP alerts resolved (the condition cleared)"},
 	{"alerts_suppressed_total", "BGP alerts held back by the per-incident cool-down"},
 	{"measurement_lost_total", "Open BGP incidents that stopped being measured (a notice went out; the incident was NOT resolved)"},
+	{"peer_state_unmeasured_total", "BGP peer reports carrying no measured state (never counted as up, and they never resolve a peer-down alert)"},
 	{"bogon_sightings_total", "Distinct bogon prefixes observed on a tenant's live feeds"},
 	{"bogon_feed_errors_total", "Full-bogons feed refreshes that failed (the embedded set still stands)"},
 	{"evidence_published_total", "BGP evidence records accepted by the bus"},

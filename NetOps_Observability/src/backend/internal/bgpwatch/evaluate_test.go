@@ -280,6 +280,171 @@ func TestEvaluatorVanishedPeerIsNotAResolution(t *testing.T) {
 	}
 }
 
+// setPeers replaces the tenant's peer report.
+func (h *harness) setPeers(tenant string, ps ...PeerObservation) {
+	h.mu.Lock()
+	h.peers[tenant] = ps
+	h.mu.Unlock()
+}
+
+// A peer we cannot SEE is not a peer that is UP.
+//
+// bmp.Store.Close sets every peer of a dropped session to the documented third
+// state "unknown" (pinned by internal/bmp/store_test.go). Before 2026-09-08
+// checkPeers computed down as State == "down" and treated everything else as
+// up, so the very next pass after a BMP session dropped dispatched "BGP peer
+// 10.0.0.5 on edge-r1 is back up" and closed a live peer-down incident for a
+// peer nobody could see.
+func TestEvaluatorUnknownPeerIsNotAResolution(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.setPeers("acme", PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "down"})
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if fired, _, _ := h.snapshot(); len(fired) != 1 || fired[0].Rule != "bgp_peer_down" {
+		t.Fatalf("want one peer-down alert, got %+v", fired)
+	}
+
+	// The BMP session drops: the peer is reported unknown, twice.
+	h.setPeers("acme", PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "unknown", Reason: "bmp session closed"})
+	for i := 0; i < 2; i++ {
+		h.advance(time.Minute)
+		if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+			t.Fatalf("blind run %d: %v", i, err)
+		}
+	}
+
+	fired, resolved, _ := h.snapshot()
+	if len(resolved) != 0 {
+		t.Fatalf("a peer we cannot measure was reported as recovered: %+v", resolved)
+	}
+	for _, a := range fired {
+		if a.Resolved {
+			t.Fatalf("an unmeasured peer produced a resolution record: %+v", a)
+		}
+		if strings.Contains(a.Summary, "back up") {
+			t.Fatalf("an unmeasured peer was announced as back up: %q", a.Summary)
+		}
+	}
+	// The going-blind episode is SAID, once, on its own dedup id.
+	var notices []Alert
+	for _, a := range fired {
+		if a.Rule == "bgp_peer_measurement_lost" {
+			notices = append(notices, a)
+		}
+	}
+	if len(notices) != 1 {
+		t.Fatalf("want exactly one measurement-lost notice, got %d (%+v)", len(notices), fired)
+	}
+	if notices[0].ID == fired[0].ID {
+		t.Fatalf("the notice reuses the peer-down dedup id %q, so it would close the incident it is warning about", notices[0].ID)
+	}
+	if notices[0].Resolved {
+		t.Fatal("the measurement-lost notice must never carry Resolved")
+	}
+	if h.eval.Metrics().PeerStateUnmeasured.Load() != 2 {
+		t.Fatalf("peer_state_unmeasured_total = %d, want 2 — an unmeasured peer must be counted, not invisible",
+			h.eval.Metrics().PeerStateUnmeasured.Load())
+	}
+	if h.eval.Metrics().MeasurementLost.Load() != 1 {
+		t.Fatalf("measurement_lost_total = %d, want 1", h.eval.Metrics().MeasurementLost.Load())
+	}
+	tm, err := h.eval.TenantMetrics("acme")
+	if err != nil {
+		t.Fatalf("tenant metrics: %v", err)
+	}
+	if tm["peer_state_unmeasured_total"] != 2 {
+		t.Fatalf("the tenant's own counters hide the unmeasured peers: %+v", tm)
+	}
+}
+
+// The guard against over-correcting into "nothing is ever up again": a peer
+// that is genuinely up still reads up, and a REAL recovery still resolves even
+// when it arrives after a run of unmeasured passes.
+func TestEvaluatorMeasuredUpStillResolvesAcrossAnUnknownGap(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	// A peer that has always been up pages nobody and resolves nothing.
+	h.setPeers("acme", PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "up"})
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if fired, resolved, _ := h.snapshot(); len(fired) != 0 || len(resolved) != 0 {
+		t.Fatalf("an up peer must produce nothing: fired %+v resolved %+v", fired, resolved)
+	}
+
+	// Down → one page.
+	h.setPeers("acme", PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "down"})
+	h.advance(time.Minute)
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	if fired, _, _ := h.snapshot(); len(fired) != 1 {
+		t.Fatalf("want one peer-down page, got %+v", fired)
+	}
+
+	// Three unmeasured passes.
+	h.setPeers("acme", PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "unknown"})
+	for i := 0; i < 3; i++ {
+		h.advance(time.Minute)
+		if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+			t.Fatalf("blind run %d: %v", i, err)
+		}
+	}
+	if _, resolved, _ := h.snapshot(); len(resolved) != 0 {
+		t.Fatalf("the blind passes resolved the incident: %+v", resolved)
+	}
+
+	// The session comes back and the peer is MEASURED up → the resolution the
+	// operator is owed, exactly once, with mixed case accepted.
+	h.setPeers("acme", PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "Up"})
+	h.advance(time.Minute)
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("recovery run: %v", err)
+	}
+	_, resolved, _ := h.snapshot()
+	if len(resolved) != 1 || !resolved[0].Resolved || resolved[0].Rule != "bgp_peer_down" {
+		t.Fatalf("a measured recovery after a blind gap must resolve exactly once: %+v", resolved)
+	}
+
+	// And the next real outage still pages: the state machine is not stuck.
+	h.setPeers("acme", PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "down"})
+	h.advance(31 * time.Minute) // past the harness cool-down
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("second outage: %v", err)
+	}
+	fired, _, _ := h.snapshot()
+	downs := 0
+	for _, a := range fired {
+		if a.Rule == "bgp_peer_down" {
+			downs++
+		}
+	}
+	if downs != 2 {
+		t.Fatalf("the second outage did not page: %d peer-down alerts in %+v", downs, fired)
+	}
+}
+
+// A peer that has NEVER been seen down and is reported unknown holds nothing
+// open, so it must not page and must not emit a measurement-lost notice.
+func TestEvaluatorUnknownPeerWithNothingOpenIsQuiet(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.setPeers("acme", PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "unknown"})
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	fired, resolved, recs := h.snapshot()
+	if len(fired) != 0 || len(resolved) != 0 || len(recs) != 0 {
+		t.Fatalf("an unmeasured peer with no open alert must be silent: fired %+v resolved %+v recs %d", fired, resolved, len(recs))
+	}
+	if h.eval.Metrics().PeerStateUnmeasured.Load() != 1 {
+		t.Fatal("it must still be COUNTED — silent is not the same as invisible")
+	}
+}
+
 func TestEvaluatorBogonSightingsAreRecordedOnce(t *testing.T) {
 	h := newHarness(t)
 	h.mu.Lock()

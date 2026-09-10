@@ -26,6 +26,12 @@ package bgpwatch
 //   - An unmeasurable prefix produces ClassUnknown and NO incident alert. "We
 //     could not look" is never rendered, notified or grounded as "we looked and
 //     it is fine"; the failure is counted (observe_errors_total) instead.
+//   - The SAME rule binds the peer lane. A peer report is a TRI-STATE (up,
+//     down, unknown), and only the word "up" resolves a peer-down alert. A peer
+//     reported unknown - which is what bmp.Store.Close writes for every peer of
+//     a session that dropped - keeps its alert open, is counted
+//     (peer_state_unmeasured_total) and, when an alert is held, produces its
+//     own "no longer being measured" notice that is never Resolved.
 
 import (
 	"context"
@@ -222,6 +228,7 @@ var tenantCounterNames = []string{
 	"alerts_resolved_total",
 	"alerts_suppressed_total",
 	"measurement_lost_total",
+	"peer_state_unmeasured_total",
 	"bogon_sightings_total",
 	"evidence_skipped_total",
 }
@@ -527,7 +534,43 @@ func (e *Evaluator) applyIncident(st *tenantState, tenant string, inc Incident, 
 	return []Record{{Key: tenant, Value: ev}}
 }
 
+// peerReport is the TRI-STATE one peer report can carry. The upstream
+// (bmp.PeerView) documents exactly three values, and the store sets the third
+// for EVERY peer of a session it closes. Collapsing the three into a boolean is
+// what made a peer we cannot see read as up (review 2026-09-08).
+type peerReport int
+
+const (
+	// peerNotMeasured: the report says "unknown" (or says nothing readable).
+	// No Peer Up / Peer Down has been observed, or the BMP session carrying
+	// this peer closed. It is NOT a state, it is the absence of one.
+	peerNotMeasured peerReport = iota
+	peerIsUp
+	peerIsDown
+)
+
+// readPeerState classifies ONE peer report. Anything that is not the word "up"
+// or the word "down" is NOT MEASURED — never up. An empty or unexpected string
+// means the source told us nothing, and "we were told nothing" must not render
+// as "we looked and it is fine" (§10).
+func readPeerState(s string) peerReport {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "down":
+		return peerIsDown
+	case "up":
+		return peerIsUp
+	default:
+		return peerNotMeasured
+	}
+}
+
 // checkPeers evaluates the BMP/device peer-down rule.
+//
+// st.peerDown is the set of peers a destination is currently HOLDING a
+// peer-down alert for. It is deliberately the open set and not a record of what
+// the last pass measured, which is why the peer lane needs no second map the
+// way the prefix lane does: a pass that could not measure simply does not touch
+// it, so the alert stays open and the next MEASURED "up" still resolves it.
 func (e *Evaluator) checkPeers(ctx context.Context, st *tenantState, tenant string, now time.Time) []Record {
 	if e.deps.Peers == nil {
 		return nil
@@ -543,16 +586,34 @@ func (e *Evaluator) checkPeers(ctx context.Context, st *tenantState, tenant stri
 	for _, p := range peers {
 		key := clip(p.DeviceID, 128) + "|" + clip(p.Peer, 64)
 		seen[key] = true
-		down := strings.EqualFold(strings.TrimSpace(p.State), "down")
+		state := readPeerState(p.State)
 		e.mu.Lock()
 		_, wasDown := st.peerDown[key]
-		if down && !wasDown {
-			st.peerDown[key] = now
-		} else if !down && wasDown {
-			delete(st.peerDown, key)
+		switch state {
+		case peerIsDown:
+			if !wasDown {
+				st.peerDown[key] = now
+			}
+		case peerIsUp:
+			if wasDown {
+				delete(st.peerDown, key)
+			}
+		case peerNotMeasured:
+			// Touch NOTHING. Before 2026-09-08 this fell in with "up": when a
+			// BMP session closed, bmp.Store.Close set every one of its peers to
+			// "unknown" and the very next pass dispatched "BGP peer X on Y is
+			// back up" and closed the incident, for peers nobody could see.
 		}
 		e.mu.Unlock()
-		if down && !wasDown {
+
+		if state == peerNotMeasured {
+			e.bump(st, "peer_state_unmeasured_total", &e.metrics.PeerStateUnmeasured)
+			if wasDown {
+				e.noticePeerMeasurementLost(st, tenant, p, key, now)
+			}
+			continue
+		}
+		if state == peerIsDown && !wasDown {
 			a := Alert{
 				ID: "bgp:" + tenant + ":peer:" + key, Rule: "bgp_peer_down", Severity: SevHigh,
 				Tenant: tenant, Resource: p.DeviceID, Class: ClassNone,
@@ -575,7 +636,10 @@ func (e *Evaluator) checkPeers(ctx context.Context, st *tenantState, tenant stri
 				e.bump(st, "alerts_suppressed_total", &e.metrics.AlertsSuppressed)
 			}
 		}
-		if !down && wasDown && e.deps.Resolve != nil {
+		// ONLY a measured "up" resolves. This is the peer lane's single
+		// resolution path, and it is reached across any number of unmeasured
+		// passes because those left st.peerDown alone.
+		if state == peerIsUp && wasDown && e.deps.Resolve != nil {
 			t := now
 			e.deps.Resolve(Alert{
 				ID: "bgp:" + tenant + ":peer:" + key, Rule: "bgp_peer_down", Severity: SevHigh,
@@ -595,6 +659,43 @@ func (e *Evaluator) checkPeers(ctx context.Context, st *tenantState, tenant stri
 	}
 	e.mu.Unlock()
 	return out
+}
+
+// noticePeerMeasurementLost tells the operator that a HELD peer-down alert
+// stopped being measured. It mirrors noticeMeasurementLost in the prefix lane
+// and is deliberately NOT a resolution:
+//
+//   - Resolved stays false, so a destination that dedups does not close the
+//     peer-down incident. That peer is unproven, not recovered.
+//   - It carries its OWN dedup id (the peer key plus ":unmeasured"), so it can
+//     never overwrite or close the peer-down notification itself.
+//   - It is cooled down like every other emission, so a router that stays gone
+//     produces one notice per cool-down window, not one per tick.
+func (e *Evaluator) noticePeerMeasurementLost(st *tenantState, tenant string, p PeerObservation, key string, now time.Time) {
+	id := "bgp:" + tenant + ":peer:" + key + ":unmeasured"
+	if !e.coolDownPassed(st, id, now) {
+		e.bump(st, "alerts_suppressed_total", &e.metrics.AlertsSuppressed)
+		return
+	}
+	a := Alert{
+		ID: id, Rule: "bgp_peer_measurement_lost", Severity: SevWarning,
+		Tenant: tenant, Resource: p.DeviceID, Class: ClassUnknown,
+		Summary: fmt.Sprintf("BGP peer %s on %s is NO LONGER BEING MEASURED while it is down. "+
+			"The peer-down alert stays open: this is an absent measurement, not a recovery.",
+			clip(p.Peer, 64), clip(p.DeviceID, 128)),
+		Detail:  clip(p.Reason, 200),
+		FiredAt: now,
+		Labels: map[string]string{
+			"device": clip(p.DeviceID, 128), "peer": clip(p.Peer, 64),
+			"state": "unmeasured", "source": "bgp-watch",
+		},
+	}
+	e.recordAlert(st, a)
+	e.bump(st, "measurement_lost_total", &e.metrics.MeasurementLost)
+	if e.deps.Notify != nil {
+		e.deps.Notify(a)
+		e.bump(st, "alerts_notified_total", &e.metrics.AlertsNotified)
+	}
 }
 
 // checkSightings records bogon sightings from the tenant's live feeds.
