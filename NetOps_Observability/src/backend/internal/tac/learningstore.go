@@ -34,12 +34,24 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"sort"
 	"sync"
 	"time"
 
 	"netops/backend/internal/platformdb"
 )
+
+// ErrStoreUnreadable is returned by every write of BOTH file stores in this
+// package (the learning backlog here and the templates in templatestore.go)
+// while their file exists but could not be read or parsed at start-up. It is a
+// REFUSAL, not a failure of the write itself: the file's real contents were
+// never established, so a save would not update the file, it would REPLACE it
+// with whatever this process happens to hold — which after such a load is
+// nothing at all. The operator repairs or removes the file and the api picks it
+// up on the next start.
+var ErrStoreUnreadable = errors.New("tac: the stored file could not be read at start-up, so writes are refused until it is repaired or removed")
 
 // MaxRecordsPerTenant bounds a tenant's learning backlog.
 const MaxRecordsPerTenant = 200
@@ -94,15 +106,23 @@ type FileLearningStore struct {
 	// rows is tenant → bucket. The tenant key IS the isolation boundary.
 	rows    map[string]*learningBucket
 	loadErr error
-	now     func() time.Time
+	// unreadable is the stricter half of loadErr: it is set only when the file
+	// EXISTS but its contents could not be established — an I/O or permission
+	// failure, or JSON we could not parse. loadErr on its own also covers rows
+	// we read and deliberately dropped, where rewriting the file IS the
+	// intended repair. When the contents are unknown, every write is refused.
+	unreadable error
+	now        func() time.Time
 }
 
 var _ LearningStore = (*FileLearningStore)(nil)
 
-// NewFileLearningStore loads the persisted backlog. A missing file starts
-// empty; a CORRUPT file starts empty AND records the error, which the
-// integrator logs — a backlog that failed to load must never look like one
-// nothing was ever filed into (§10).
+// NewFileLearningStore loads the persisted backlog. A MISSING file starts
+// empty; a file that exists but could not be read or parsed starts empty AND
+// records the error, which the integrator logs — a backlog that failed to load
+// must never look like one nothing was ever filed into (§10) — AND refuses
+// every write from then on, so the file it could not read is never replaced by
+// an empty one.
 func NewFileLearningStore(path string) *FileLearningStore {
 	s := &FileLearningStore{
 		path: path,
@@ -113,12 +133,26 @@ func NewFileLearningStore(path string) *FileLearningStore {
 		return s
 	}
 	b, err := platformdb.Load(path)
-	if err != nil {
-		return s // absent store → empty, not an error
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: nothing has been filed yet. That is the normal
+		// first-boot state and an empty backlog is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together starts empty with
+		// nothing logged, and the first write then renames a temp file over a
+		// file whose contents were never read.
+		s.loadErr = fmt.Errorf("tac: the learning file could not be read: %w", err)
+		s.unreadable = s.loadErr
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
 	}
 	var raw map[string]*learningBucket
 	if uerr := json.Unmarshal(b, &raw); uerr != nil {
-		s.loadErr = uerr
+		s.loadErr = fmt.Errorf("tac: the learning file could not be parsed: %w", uerr)
+		s.unreadable = s.loadErr
 		return s
 	}
 	for rawTenant, bucket := range raw {
@@ -169,6 +203,13 @@ func (s *FileLearningStore) bucketLocked(t string) *learningBucket {
 // change back when this fails, so a failed write never leaves the in-memory
 // view ahead of the file.
 func (s *FileLearningStore) flushLocked() error {
+	if s.unreadable != nil {
+		// The file's real contents are unknown, so a flush would not update it
+		// — it would REPLACE it with what this process holds, which after an
+		// unreadable load is nothing. Refuse, and say why: the caller rolls its
+		// change back and the operator gets an error instead of a silent loss.
+		return fmt.Errorf("%w: %w", ErrStoreUnreadable, s.unreadable)
+	}
 	if s.path == "" {
 		return nil
 	}

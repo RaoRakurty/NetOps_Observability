@@ -34,6 +34,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"strings"
 	"sync"
 	"time"
@@ -90,15 +92,23 @@ type FileTemplateStore struct {
 	// rows is tenant → id → template. The tenant key IS the isolation boundary.
 	rows    map[string]map[string]Template
 	loadErr error
-	now     func() time.Time
+	// unreadable is the stricter half of loadErr: it is set only when the file
+	// EXISTS but its contents could not be established — an I/O or permission
+	// failure, or JSON we could not parse. loadErr on its own also covers rows
+	// we read and deliberately dropped, where rewriting the file IS the
+	// intended repair. When the contents are unknown, every write is refused.
+	unreadable error
+	now        func() time.Time
 }
 
 var _ TemplateStore = (*FileTemplateStore)(nil)
 
-// NewFileTemplateStore loads the persisted templates. A missing file starts
-// empty; a CORRUPT file starts empty AND records the error, which the integrator
-// logs — a template set that failed to load must never look like one a tenant
-// never wrote (§10).
+// NewFileTemplateStore loads the persisted templates. A MISSING file starts
+// empty; a file that exists but could not be read or parsed starts empty AND
+// records the error, which the integrator logs — a template set that failed to
+// load must never look like one a tenant never wrote (§10) — AND refuses every
+// write from then on, so the file it could not read is never replaced by an
+// empty one.
 func NewFileTemplateStore(path string) *FileTemplateStore {
 	s := &FileTemplateStore{
 		path: path,
@@ -109,12 +119,26 @@ func NewFileTemplateStore(path string) *FileTemplateStore {
 		return s
 	}
 	b, err := platformdb.Load(path)
-	if err != nil {
-		return s // absent store → empty, not an error
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: no tenant has written a template yet. That is the
+		// normal first-boot state and an empty set is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together starts empty with
+		// nothing logged, and the first write then renames a temp file over a
+		// file whose contents were never read.
+		s.loadErr = fmt.Errorf("tac: the template file could not be read: %w", err)
+		s.unreadable = s.loadErr
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
 	}
 	var rows map[string][]Template
 	if uerr := json.Unmarshal(b, &rows); uerr != nil {
-		s.loadErr = uerr
+		s.loadErr = fmt.Errorf("tac: the template file could not be parsed: %w", uerr)
+		s.unreadable = s.loadErr
 		return s
 	}
 	for rawTenant, list := range rows {
@@ -151,6 +175,13 @@ func (s *FileTemplateStore) LoadErr() error { return s.loadErr }
 // change back when this fails, so a failed write never leaves the in-memory view
 // ahead of the file.
 func (s *FileTemplateStore) flushLocked() error {
+	if s.unreadable != nil {
+		// The file's real contents are unknown, so a flush would not update it
+		// — it would REPLACE it with what this process holds, which after an
+		// unreadable load is nothing. Refuse, and say why: the caller rolls its
+		// change back and the operator gets an error instead of a silent loss.
+		return fmt.Errorf("%w: %w", ErrStoreUnreadable, s.unreadable)
+	}
 	if s.path == "" {
 		return nil
 	}
