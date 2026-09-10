@@ -207,16 +207,53 @@ func (s *FileStore) LoadErr() error {
 	return s.loadErr
 }
 
+// insertLocked inserts a version, or REFRESHES the one already filed under the
+// same (tenant, device, content address).
+//
+// A refresh is not a replacement. The incoming row is built by the CAPTURE, and
+// the capture knows nothing about the marks an operator has put on that version,
+// so carrying the whole struct over cleared them. See carryOperatorFields.
 func (s *FileStore) insertLocked(v Version) {
 	v.TenantID = NormTenant(v.TenantID)
 	k := deviceKey{v.TenantID, v.DeviceID}
 	for i, existing := range s.rows[k] {
 		if existing.SHA == v.SHA {
-			s.rows[k][i] = v
+			s.rows[k][i] = carryOperatorFields(existing, v)
 			return
 		}
 	}
 	s.rows[k] = append(s.rows[k], v)
+}
+
+// carryOperatorFields brings the OPERATOR-OWNED half of a stored row across a
+// refresh. Everything else on Version belongs to the capture that produced it
+// and is meant to be overwritten:
+//
+//	TenantID, DeviceID, SHA          the row's identity, stamped from the device
+//	                                 record and the content address
+//	CapturedAt, SizeBytes, BlobRef   the capture's own facts ("last verified",
+//	Vendor, Status, Error            size, sealed blob, platform, outcome)
+//	Drift, Added, Removed            the drift verdict, restamped by
+//	                                 RecordDrift right after every capture
+//	Golden                           OPERATOR INTENT. Only SetGolden writes it,
+//	                                 nothing recomputes it, and the way back is
+//	                                 a human finding the right version again.
+//
+// The case that bit: an operator marks a version golden, the device drifts, the
+// operator REVERTS it to the golden configuration, and the next sweep captures
+// it. Same bytes means the same content address, so the capture lands on the
+// golden row. It is not the "unchanged" path, because the previous successful
+// version is the drifted one, so the row it writes is freshly built and carries
+// no mark. The golden mark disappeared exactly when the device was put right.
+//
+// Postgres never lost it: its ON CONFLICT list does not carry `golden`. The two
+// backends now agree.
+func carryOperatorFields(existing, fresh Version) Version {
+	// OR, not assignment: a row that arrives already marked (the unchanged-
+	// capture path copies the stored row, and so does a register reload) keeps
+	// its mark too.
+	fresh.Golden = fresh.Golden || existing.Golden
+	return fresh
 }
 
 // flushLocked persists the whole register. A failure is RETURNED, never

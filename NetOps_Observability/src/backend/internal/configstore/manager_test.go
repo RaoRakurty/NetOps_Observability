@@ -638,3 +638,54 @@ func TestAFailedFirstWriteStillRemovesItsOrphanBlob(t *testing.T) {
 		t.Errorf("ORPHAN LEFT ON DISK: sealed configuration no row can reach or delete (%v)", err)
 	}
 }
+
+// TestCaptureAfterARevertKeepsTheGoldenMark — REGRESSION (review 3.5-02),
+// through the real capture path. The operator marks a version golden, the device
+// drifts, the operator REVERTS it to the golden configuration, and the next
+// sweep captures it. That capture is content-addressed onto the golden row (same
+// bytes, same sha) but is not the "unchanged" path, because the previous
+// successful version is the drifted one. The store therefore refreshes the
+// golden row with a capture-built row that knows nothing about the mark.
+func TestCaptureAfterARevertKeepsTheGoldenMark(t *testing.T) {
+	f := newFixture(t, nil)
+	dev := f.addDevice("d1", "acme", "Cisco IOS-XE")
+	ctx := context.Background()
+
+	f.gw.set("d1", sampleConfig("edge-01"))
+	v1, err := f.mgr.Capture(ctx, dev, "acme", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.SetGolden(ctx, "acme", false, "d1", v1.SHA); err != nil {
+		t.Fatal(err)
+	}
+
+	// It drifts.
+	f.now = f.now.Add(time.Hour)
+	f.gw.set("d1", sampleConfig("edge-02"))
+	if _, err := f.mgr.Capture(ctx, dev, "acme", "t"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The operator puts it back and the next sweep captures the golden bytes.
+	f.now = f.now.Add(time.Hour)
+	f.gw.set("d1", sampleConfig("edge-01"))
+	back, err := f.mgr.Capture(ctx, dev, "acme", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.SHA != v1.SHA {
+		t.Fatalf("the revert did not land on the golden content address: %s vs %s", back.SHA, v1.SHA)
+	}
+
+	g, ok, err := f.store.Golden(ctx, "acme", false, "d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("re-capturing the golden configuration CLEARED the golden mark: the device now has no baseline")
+	}
+	if g.SHA != v1.SHA {
+		t.Fatalf("golden = %s, want %s", g.SHA, v1.SHA)
+	}
+}

@@ -408,3 +408,44 @@ func TestStoreSetGoldenKeepsTheMarkWhenTheTargetIsAbsent(t *testing.T) {
 		})
 	}
 }
+
+// TestStorePutKeepsTheOperatorsGoldenMark — REGRESSION (review 3.5-02). Put
+// refreshes a row that already exists (same tenant, device and content address).
+// The refreshed row is built by the CAPTURE, which has no idea an operator ever
+// marked it golden, so replacing the stored row wholesale silently cleared the
+// mark. Postgres never did: its ON CONFLICT list does not carry `golden`.
+func TestStorePutKeepsTheOperatorsGoldenMark(t *testing.T) {
+	s := NewFileStore("")
+	ctx := context.Background()
+	base := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	v := seedRow(t, s, "acme", "d1", "cfg-a", base)
+	if err := s.SetGolden(ctx, "acme", false, "d1", v.SHA); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exactly the row a fresh capture of the same configuration builds: same
+	// content address, new capture instant, Golden unset.
+	fresh := Version{
+		TenantID: "acme", DeviceID: "d1", SHA: v.SHA, CapturedAt: base.Add(2 * time.Hour),
+		SizeBytes: v.SizeBytes, BlobRef: v.BlobRef, Vendor: v.Vendor,
+		Status: StatusOK, Drift: DriftUnknown,
+	}
+	if err := s.Put(ctx, "acme", false, fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Get(ctx, "acme", false, "d1", v.SHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Golden {
+		t.Fatal("re-capturing the golden configuration CLEARED the golden mark")
+	}
+	// The capture still owns everything it does carry.
+	if !got.CapturedAt.Equal(base.Add(2 * time.Hour)) {
+		t.Fatalf("the capture's own fields were not refreshed: %+v", got)
+	}
+	if g, ok, _ := s.Golden(ctx, "acme", false, "d1"); !ok || g.SHA != v.SHA {
+		t.Fatalf("Golden() = %+v ok=%v", g, ok)
+	}
+}
