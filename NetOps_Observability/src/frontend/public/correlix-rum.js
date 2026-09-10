@@ -183,6 +183,69 @@
     enqueue(businessQueue, ev);
   }
 
+  // ── delivery health ───────────────────────────────────────────────────────
+  // A failed POST is one of two things and they need opposite answers.
+  //
+  // RETRYABLE: the endpoint is there and busy or briefly broken (503 from the
+  // API's bounded queue, 429, 408, any 5xx, or no answer at all because the
+  // browser is offline). Keep the batch, back off, try again.
+  //
+  // PERMANENT: the request itself is wrong and every retry will be wrong the
+  // same way — a refused key (401/403), a body the API will not decode (400,
+  // which is what a custom CorrelixRUM.cohort key produces, because the API
+  // decodes the cohort with DisallowUnknownFields), a wrong endpoint (404).
+  // Retrying that forever is how an installer ends up unable to tell a healthy
+  // application from a broken key: nothing on the console, nothing in Correlix.
+  // Say what it is, once, and stop.
+  var MAX_BACKOFF_MS = 60000;
+  var backoffMs = 0;
+  var retryAfter = 0;
+  var halted = false;
+  var said = {};
+
+  function say(kind, msg) {
+    if (said[kind] || !window.console) return;
+    said[kind] = true;
+    var write = kind === "halt" && console.error ? console.error : console.warn;
+    write.call(console, "correlix-rum: " + msg);
+  }
+
+  function listFor(path) { return path === "/api/dem/events" ? queue : businessQueue; }
+
+  // requeue puts a spliced batch back, through the SAME bounded enqueue the
+  // rest of the beacon uses, so a batch is never silently thrown away and the
+  // queue can still never grow without limit.
+  function requeue(path, events) {
+    var list = listFor(path);
+    for (var i = 0; i < events.length; i++) enqueue(list, events[i]);
+  }
+
+  function retryLater(what) {
+    backoffMs = backoffMs ? Math.min(backoffMs * 2, MAX_BACKOFF_MS) : 1000;
+    retryAfter = Date.now() + Math.round(backoffMs * (0.5 + Math.random()));
+    say("retry", what + " The batch is kept and will be retried with backoff.");
+  }
+
+  function halt(status, lost) {
+    halted = true;
+    var why;
+    if (status === 401 || status === 403) {
+      why = "the ingest key was refused (HTTP " + status + "). Mint a key with the ingest:experience scope for this tenant and set data-key to it.";
+    } else if (status === 400) {
+      why = "the endpoint refused the batch as malformed (HTTP 400). The usual cause is a CorrelixRUM.cohort key the API does not define; the accepted keys are site, isp, region, device_type, browser, app_version, network_type and feature_flag.";
+    } else if (status === 404) {
+      why = "no ingest endpoint at " + endpoint + " (HTTP 404). Check data-endpoint.";
+    } else if (status === 413) {
+      why = "the endpoint rejected the batch as too large (HTTP 413).";
+    } else {
+      why = "the endpoint answered HTTP " + status + " and will answer the same for every batch.";
+    }
+    say("halt", why + " Collection has STOPPED and " + lost + " events were discarded.");
+    queue.length = 0;
+    businessQueue.length = 0;
+    dropped = 0;
+  }
+
   function post(path, events) {
     if (!events.length) return;
     var body = JSON.stringify({ events: events });
@@ -202,15 +265,29 @@
       mode: "cors",
       credentials: "omit"
     }).then(function (res) {
-      if (res.status === 503) {
-        // Honest backpressure from the API's bounded queue. Put the batch back
-        // (bounded) and let the next flush retry it rather than dropping it.
-        for (var i = 0; i < events.length; i++) enqueue(path === "/api/dem/events" ? queue : businessQueue, events[i]);
+      var status = res && res.status;
+      if (status >= 200 && status < 300) {
+        backoffMs = 0;
+        retryAfter = 0;
+        return;
       }
-    }).catch(function () { /* offline: the events stay dropped, not retried forever */ });
+      if (status === 408 || status === 429 || status >= 500) {
+        requeue(path, events);
+        retryLater("the endpoint answered HTTP " + status + ".");
+        return;
+      }
+      halt(status, events.length + queue.length + businessQueue.length);
+    }).catch(function () {
+      // No answer at all: offline, DNS, or a CORS preflight the deployment has
+      // not allowed. All three can come back, so this is retryable.
+      requeue(path, events);
+      retryLater("could not reach " + endpoint + " (offline, or this origin is not in CORS_ALLOWED_ORIGINS).");
+    });
   }
 
   function flush() {
+    if (halted) return;
+    if (retryAfter && Date.now() < retryAfter) return;
     if (dropped > 0 && queue.length < MAX_QUEUE) {
       queue.push({
         id: uuid(), session_id: sessionId, app: app, type: "error", success: false,
