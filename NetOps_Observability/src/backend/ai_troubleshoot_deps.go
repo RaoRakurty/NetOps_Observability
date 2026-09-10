@@ -105,9 +105,41 @@ var aiStateBattery = sync.OnceValue(protocoldiag.DefaultStateBattery)
 // aiTroubleshootDeps builds the Phase-A read seams for ONE request. Fields are
 // left nil when the backing subsystem is absent on this deployment; the tool
 // registry then simply does not expose that tool.
+//
+// It is also the ONE place this lane applies the operator-visibility restriction
+// (Tenant.OperatorRestricted). It is the sole constructor for every Phase-A seam
+// and it holds the claims before any of them close over them, so a rule applied
+// here cannot be forgotten by a seam added later — which is the property that
+// matters, because there are thirteen of them and they read thirteen different
+// stores.
+//
+// The rule is resolved with the SAME resolver the logs path uses
+// (operatorTelemetryRestriction) rather than a second copy of it, and BOTH of its
+// answers mean the same thing here: no seam is wired, so no troubleshooting tool
+// is registered, so the assistant cannot ground an answer on a restricted tenant.
+//
+//   - deny — the operator has scoped INTO a restricted tenant. Nothing of that
+//     tenant is readable, and this lane reads its inventory, its live CLI output,
+//     its findings, its case timeline, its topology and its BGP posture.
+//
+//   - exclude is non-empty — a tenant is restricted while the operator is in the
+//     cross-tenant Global view. A row-level exclusion cannot be PROVEN on this
+//     lane: three of the row types it returns (bgpwatch.WatchEntry, a decoded
+//     secapi finding, a BGP feed update) carry no tenant id at all, and the seams
+//     fuse into free prose rather than a table a filter can be applied to. Fail closed: the operator selects a
+//     tenant, where the rule is exact, or asks a question these tools do not
+//     answer. This is the posture aiBGPFeedRecent already takes for its own ring.
+//
+// The log tool is unaffected: ai_datasource_ops.go applies the tenant_id form of
+// the same restriction per query, so the assistant keeps its most-used evidence
+// class with an exact exclusion.
 func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.TroubleshootDeps {
 	deps := ai.TroubleshootDeps{}
 	if s == nil {
+		return deps
+	}
+	tenant, cross := principalTenant(claims)
+	if exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny || len(exclude) > 0 {
 		return deps
 	}
 	if s.discovery != nil {
