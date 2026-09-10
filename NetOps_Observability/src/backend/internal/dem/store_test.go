@@ -10,6 +10,7 @@ package dem
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -203,5 +204,68 @@ func TestNonConcreteBucketOnDiskIsDropped(t *testing.T) {
 	all, _ := s.ListAll(context.Background())
 	if len(all) != 0 {
 		t.Fatalf("wildcard bucket became %d real rows", len(all))
+	}
+}
+
+// An UNREADABLE catalogue file is not an ABSENT one. Folding the two together
+// starts the catalogue empty with nothing logged, and the first write then
+// renames a temp file over a file whose contents were never read — every
+// tenant's targets gone, silently. The load must say so, and the write must
+// refuse.
+func TestUnreadableCatalogueFileIsNotAnEmptyOneAndIsNeverOverwritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dem_targets.json")
+	seed := NewFileStore(path)
+	kept := mustCreate(t, seed, newTarget("acme", "spine1", "10.0.0.1"))
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read seeded file: %v", err)
+	}
+
+	// A permissions change is all it takes. The directory stays writable, so
+	// the atomic rename in the next write would succeed.
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("this environment can read a 0000 file (running as root?), so the case cannot be staged")
+	}
+
+	s := NewFileStore(path)
+	if s.LoadErr() == nil {
+		t.Fatal("an unreadable catalogue loaded silently — the operator sees an empty table with no reason, and the next write destroys the file")
+	}
+	if _, err := s.Create(context.Background(), newTarget("acme", "spine2", "10.0.0.2")); err == nil {
+		t.Fatal("a write was accepted over a catalogue whose file could not be read")
+	}
+
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("chmod back: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file after: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("the catalogue file was rewritten while it could not be read:\nbefore %s\nafter  %s", before, after)
+	}
+	reopened := NewFileStore(path)
+	if reopened.LoadErr() != nil {
+		t.Fatalf("the repaired file no longer loads: %v", reopened.LoadErr())
+	}
+	got, gerr := reopened.Get(context.Background(), "acme", kept.ID)
+	if gerr != nil || got.Name != "spine1" {
+		t.Fatalf("the seeded target did not survive: %v %+v", gerr, got)
+	}
+}
+
+// A file that is ABSENT is still just an empty catalogue, with nothing reported.
+func TestAbsentCatalogueFileStaysAnEmptyCatalogue(t *testing.T) {
+	s := NewFileStore(filepath.Join(t.TempDir(), "nothing-here.json"))
+	if err := s.LoadErr(); err != nil {
+		t.Fatalf("a catalogue that was never written reported %v", err)
+	}
+	if _, err := s.Create(context.Background(), newTarget("acme", "first", "10.0.0.1")); err != nil {
+		t.Fatalf("the first write on a fresh catalogue failed: %v", err)
 	}
 }

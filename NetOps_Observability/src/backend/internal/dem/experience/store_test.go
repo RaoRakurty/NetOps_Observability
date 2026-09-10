@@ -216,3 +216,78 @@ func TestRecordChangeDoesNotCorruptTheChangeLogWhenTheFlushFails(t *testing.T) {
 	}
 	assertLog("on disk", onDisk, []string{"sw-5", "sw-3", "sw-2", "sw-1"})
 }
+
+// An UNREADABLE store file is not an ABSENT one. Folding the two together
+// starts the store empty with nothing logged, and the first write then renames
+// a temp file over a file whose contents were never read — every tenant's
+// journeys, changes and promotions gone, silently. The load must say so, and
+// the write must refuse.
+func TestUnreadableStoreFileIsNotAnEmptyOneAndIsNeverOverwritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "exp.json")
+	seed := NewFileStore(path)
+	kept, err := seed.CreateJourney(context.Background(), newJourney("acme", "Checkout"))
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read seeded file: %v", err)
+	}
+
+	// A permissions change is all it takes. The directory stays writable, so
+	// the atomic rename in the next write would succeed.
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("this environment can read a 0000 file (running as root?), so the case cannot be staged")
+	}
+
+	s := NewFileStore(path)
+	if s.LoadErr() == nil {
+		t.Fatal("an unreadable store loaded silently — the operator sees an empty table with no reason, and the next write destroys the file")
+	}
+
+	// The write must REFUSE while the file's real contents are unknown.
+	if _, err := s.CreateJourney(context.Background(), newJourney("acme", "New")); err == nil {
+		t.Fatal("a write was accepted over a store whose file could not be read")
+	}
+	if _, err := s.RecordChange(context.Background(), ChangeEvent{
+		TenantID: "acme", Type: ChangeConfig, Object: "sw-1", Summary: "vlan edit",
+		Provenance: prov(SourceConfigDrift, -5*time.Minute),
+	}); err == nil {
+		t.Fatal("a change was recorded over a store whose file could not be read")
+	}
+
+	// And the file on disk must still hold what it held.
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("chmod back: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file after: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("the store file was rewritten while it could not be read:\nbefore %s\nafter  %s", before, after)
+	}
+	reopened := NewFileStore(path)
+	if reopened.LoadErr() != nil {
+		t.Fatalf("the repaired file no longer loads: %v", reopened.LoadErr())
+	}
+	got, gerr := reopened.GetJourney(context.Background(), "acme", kept.ID)
+	if gerr != nil || got.Name != "Checkout" {
+		t.Fatalf("the seeded journey did not survive: %v %+v", gerr, got)
+	}
+}
+
+// A file that is ABSENT is still just an empty store, with nothing reported.
+func TestAbsentStoreFileStaysAnEmptyStore(t *testing.T) {
+	s := NewFileStore(filepath.Join(t.TempDir(), "nothing-here.json"))
+	if err := s.LoadErr(); err != nil {
+		t.Fatalf("a store that was never written reported %v", err)
+	}
+	if _, err := s.CreateJourney(context.Background(), newJourney("acme", "First")); err != nil {
+		t.Fatalf("the first write on a fresh store failed: %v", err)
+	}
+}

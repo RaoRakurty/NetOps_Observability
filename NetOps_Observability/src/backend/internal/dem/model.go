@@ -138,6 +138,12 @@ const (
 // creates a NEW target. Updating an existing one always succeeds.
 var ErrCatalogueFull = fmt.Errorf("dem: target catalogue is full (max %d targets per tenant)", MaxTargetsPerTenant)
 
+// ErrCatalogueUnreadable is returned by every write while the catalogue file
+// exists but could not be read or parsed at start-up. It is a REFUSAL, not a
+// failure of the write itself: the operator repairs or removes the file, and
+// the api picks it up on the next start.
+var ErrCatalogueUnreadable = errors.New("dem: the target file could not be read at start-up, so writes are refused until it is repaired or removed")
+
 // ErrNotFound is the store's miss. The HTTP layer turns it into 404 — including
 // for a cross-tenant id, so another tenant's id is never confirmed to exist.
 var ErrNotFound = errors.New("dem: target not found")

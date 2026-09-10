@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"sync"
@@ -38,6 +39,12 @@ var ErrNotFound = errors.New("experience: not found")
 
 // ErrFull is returned when a tenant is at its journey ceiling.
 var ErrFull = fmt.Errorf("experience: the journey catalogue is full (max %d journeys per tenant)", MaxJourneysPerTenant)
+
+// ErrStoreUnreadable is returned by every write while the store file exists but
+// could not be read or parsed at start-up. It is a REFUSAL, not a failure of
+// the write itself: the operator repairs or removes the file, and the api picks
+// it up on the next start.
+var ErrStoreUnreadable = errors.New("experience: the store file could not be read at start-up, so writes are refused until it is repaired or removed")
 
 // ErrPromotionsFull is returned when a tenant is at its promotion ceiling.
 var ErrPromotionsFull = fmt.Errorf("experience: the promoted-incident table is full (max %d per tenant)", MaxPromotionsPerTenant)
@@ -102,6 +109,14 @@ type FileStore struct {
 	// promotions is tenant → derived incident id → the durable link.
 	promotions map[string]map[string]Promotion
 	loadErr    error
+	// unreadable is set when the store file EXISTS but its contents could not
+	// be established — an I/O or permission failure, or JSON we could not
+	// parse. It is the stricter half of loadErr: loadErr also covers rows we
+	// read and deliberately dropped, where rewriting the file is the intended
+	// repair. When the contents are unknown, every write is refused, because a
+	// flush would replace the whole file with what this process happens to
+	// hold, which after such a load is nothing at all.
+	unreadable error
 	now        func() time.Time
 }
 
@@ -113,9 +128,11 @@ type filePayload struct {
 	Promotions map[string][]Promotion         `json:"promotions,omitempty"`
 }
 
-// NewFileStore loads the persisted state. A missing file starts empty; a
-// CORRUPT one starts empty AND records the error for the integrator to log — a
-// store that failed to load must never look like one a tenant never wrote.
+// NewFileStore loads the persisted state. A MISSING file starts empty; a file
+// that exists but could not be read or parsed starts empty AND records the
+// error for the integrator to log — a store that failed to load must never look
+// like one a tenant never wrote — AND refuses every write from then on, so the
+// file it could not read is never replaced by an empty one.
 func NewFileStore(path string) *FileStore {
 	s := &FileStore{
 		path:       path,
@@ -128,12 +145,23 @@ func NewFileStore(path string) *FileStore {
 		return s
 	}
 	b, err := platformdb.Load(path)
-	if err != nil {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: nobody has written this store yet. That is the
+		// normal first-boot state and an empty store is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together starts empty with
+		// nothing logged, and the first write then renames a temp file over a
+		// file whose contents were never read.
+		s.loadErr = fmt.Errorf("experience: the store file could not be read: %w", err)
+		s.unreadable = s.loadErr
 		return s
 	}
 	var payload filePayload
 	if err := json.Unmarshal(b, &payload); err != nil {
-		s.loadErr = err
+		s.loadErr = fmt.Errorf("experience: the store file could not be parsed: %w", err)
+		s.unreadable = s.loadErr
 		return s
 	}
 	for rawTenant, list := range payload.Journeys {
@@ -210,6 +238,13 @@ func (s *FileStore) flushLocked() error { return s.flushViewLocked(nil) }
 // other thing and corrupted the log every time the write failed (see
 // RecordChange).
 func (s *FileStore) flushViewLocked(replace map[string][]ChangeEvent) error {
+	if s.unreadable != nil {
+		// The file's real contents are unknown, so a flush would not update it
+		// — it would REPLACE it with what this process holds, which after an
+		// unreadable load is nothing. Refuse, and say why: the caller rolls its
+		// change back and the operator gets an error instead of a silent loss.
+		return fmt.Errorf("%w: %v", ErrStoreUnreadable, s.unreadable)
+	}
 	if s.path == "" {
 		return nil
 	}

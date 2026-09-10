@@ -23,6 +23,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"sync"
 	"time"
 
@@ -116,16 +118,24 @@ type FileStore struct {
 	// rows is tenant → id → target. The tenant key IS the isolation boundary.
 	rows    map[string]map[string]Target
 	loadErr error
-	now     func() time.Time
+	// unreadable is set when the catalogue file EXISTS but its contents could
+	// not be established — an I/O or permission failure, or JSON we could not
+	// parse. It is the stricter half of loadErr: loadErr also covers rows we
+	// read and deliberately dropped, where rewriting the file is the intended
+	// repair. When the contents are unknown, every write is refused, because a
+	// flush would replace the whole file with what this process happens to
+	// hold, which after such a load is nothing at all.
+	unreadable error
+	now        func() time.Time
 }
 
 var _ Catalogue = (*FileStore)(nil)
 
-// NewFileStore loads the persisted catalogue. A missing file starts empty; a
-// CORRUPT file starts empty AND records the error, which the integrator logs —
-// a catalogue that failed to load must never look like one a tenant never
-// wrote (§10). It is never silently overwritten either: the first successful
-// write rewrites the file, and the operator has been told why.
+// NewFileStore loads the persisted catalogue. A MISSING file starts empty; a
+// file that exists but could not be read or parsed starts empty AND records the
+// error, which the integrator logs — a catalogue that failed to load must never
+// look like one a tenant never wrote (§10) — AND refuses every write from then
+// on, so the file it could not read is never replaced by an empty one.
 func NewFileStore(path string) *FileStore {
 	s := &FileStore{
 		path: path,
@@ -136,12 +146,23 @@ func NewFileStore(path string) *FileStore {
 		return s
 	}
 	b, err := platformdb.Load(path)
-	if err != nil {
-		return s // absent store → empty, not an error
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: nobody has written this catalogue yet. That is the
+		// normal first-boot state and an empty catalogue is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together starts empty with
+		// nothing logged, and the first write then renames a temp file over a
+		// file whose contents were never read.
+		s.loadErr = fmt.Errorf("dem: the target file could not be read: %w", err)
+		s.unreadable = s.loadErr
+		return s
 	}
 	var rows map[string][]Target
 	if err := json.Unmarshal(b, &rows); err != nil {
-		s.loadErr = err
+		s.loadErr = fmt.Errorf("dem: the target file could not be parsed: %w", err)
+		s.unreadable = s.loadErr
 		return s
 	}
 	for rawTenant, list := range rows {
@@ -179,6 +200,13 @@ func (s *FileStore) LoadErr() error { return s.loadErr }
 // roll their change back when this fails, so a failed write never leaves the
 // in-memory view ahead of the file.
 func (s *FileStore) flushLocked() error {
+	if s.unreadable != nil {
+		// The file's real contents are unknown, so a flush would not update it
+		// — it would REPLACE it with what this process holds, which after an
+		// unreadable load is nothing. Refuse, and say why: the caller rolls its
+		// change back and the operator gets an error instead of a silent loss.
+		return fmt.Errorf("%w: %v", ErrCatalogueUnreadable, s.unreadable)
+	}
 	if s.path == "" {
 		return nil
 	}
