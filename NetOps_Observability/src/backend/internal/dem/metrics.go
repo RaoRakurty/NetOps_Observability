@@ -34,6 +34,11 @@ type Metrics struct {
 	RunsDropped     atomic.Int64 // refused: the store is at its definition bound
 	RunIntakeErrors atomic.Int64
 	RunsTracked     atomic.Int64 // definitions currently holding a ring
+	// FlowRowsUnreadable counts passive-flow aggregate rows that carried no
+	// readable server endpoint and therefore reached no experience subject.
+	// A dropped row is missing evidence, and missing evidence that nobody
+	// counts reads exactly like a quiet wire (§10).
+	FlowRowsUnreadable atomic.Int64
 }
 
 // NewMetrics builds an empty counter set.
@@ -45,19 +50,20 @@ func (m *Metrics) Snapshot() map[string]int64 {
 		return map[string]int64{}
 	}
 	return map[string]int64{
-		"targets_created_total":   m.TargetsCreated.Load(),
-		"targets_updated_total":   m.TargetsUpdated.Load(),
-		"targets_deleted_total":   m.TargetsDeleted.Load(),
-		"scores_served_total":     m.ScoresServed.Load(),
-		"query_errors_total":      m.QueryErrors.Load(),
-		"targets_projected_total": m.TargetsProjected.Load(),
-		"project_errors_total":    m.ProjectErrors.Load(),
-		"runs_recorded_total":     m.RunsRecorded.Load(),
-		"runs_duplicate_total":    m.RunsDuplicate.Load(),
-		"runs_rejected_total":     m.RunsRejected.Load(),
-		"runs_dropped_total":      m.RunsDropped.Load(),
-		"run_intake_errors_total": m.RunIntakeErrors.Load(),
-		"runs_tracked":            m.RunsTracked.Load(),
+		"targets_created_total":      m.TargetsCreated.Load(),
+		"targets_updated_total":      m.TargetsUpdated.Load(),
+		"targets_deleted_total":      m.TargetsDeleted.Load(),
+		"scores_served_total":        m.ScoresServed.Load(),
+		"query_errors_total":         m.QueryErrors.Load(),
+		"targets_projected_total":    m.TargetsProjected.Load(),
+		"project_errors_total":       m.ProjectErrors.Load(),
+		"runs_recorded_total":        m.RunsRecorded.Load(),
+		"runs_duplicate_total":       m.RunsDuplicate.Load(),
+		"runs_rejected_total":        m.RunsRejected.Load(),
+		"runs_dropped_total":         m.RunsDropped.Load(),
+		"run_intake_errors_total":    m.RunIntakeErrors.Load(),
+		"runs_tracked":               m.RunsTracked.Load(),
+		"flow_rows_unreadable_total": m.FlowRowsUnreadable.Load(),
 	}
 }
 
@@ -79,6 +85,7 @@ var metricHelp = [][3]string{
 	{"runs_dropped_total", "Run records refused because the run store is at its definition bound", "counter"},
 	{"run_intake_errors_total", "Drains of the prober's run channel that failed", "counter"},
 	{"runs_tracked", "Checks currently holding a run ring", "gauge"},
+	{"flow_rows_unreadable_total", "Passive-flow aggregate rows dropped because they carried no readable server endpoint", "counter"},
 }
 
 // Write emits the exposition text at scrape time, in a fixed order so a scrape

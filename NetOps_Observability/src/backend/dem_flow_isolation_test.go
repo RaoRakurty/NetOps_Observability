@@ -143,28 +143,29 @@ func TestFoldDEMFlowRowsAttributesOnlyDeclaredEndpoints(t *testing.T) {
 			Endpoints: []experience.FlowEndpoint{{Addr: "10.1.0.9"}}}, // any port
 	}
 	rows := []map[string]any{
-		{"ep": "10.1.0.1:443", "exporter": "10.0.0.7", "flows": float64(100), "tcp_flows": float64(90),
+		{"ep_addr": "10.1.0.1", "ep_port": float64(443), "exporter": "10.0.0.7", "flows": float64(100), "tcp_flows": float64(90),
 			"flag_flows": float64(80), "reset_flows": float64(8), "bytes": "5000", "packets": "60",
 			"first_seen": float64(1000), "last_seen": float64(1900)},
-		{"ep": "10.1.0.1:443", "exporter": "10.0.0.8", "flows": float64(20), "tcp_flows": float64(20),
+		{"ep_addr": "10.1.0.1", "ep_port": float64(443), "exporter": "10.0.0.8", "flows": float64(20), "tcp_flows": float64(20),
 			"flag_flows": float64(20), "reset_flows": float64(2), "bytes": "500", "packets": "6",
 			"first_seen": float64(900), "last_seen": float64(1800)},
 		// A different port on the same address: the checkout subject declared
 		// 443 and must NOT absorb it.
-		{"ep": "10.1.0.1:9200", "exporter": "10.0.0.7", "flows": float64(70), "tcp_flows": float64(70),
+		{"ep_addr": "10.1.0.1", "ep_port": float64(9200), "exporter": "10.0.0.7", "flows": float64(70), "tcp_flows": float64(70),
 			"flag_flows": float64(70), "reset_flows": float64(70), "bytes": "1", "packets": "1",
 			"first_seen": float64(1000), "last_seen": float64(1000)},
 		// The port-agnostic subject takes any port on its address.
-		{"ep": "10.1.0.9:53", "exporter": "10.0.0.7", "flows": float64(5), "tcp_flows": float64(0),
+		{"ep_addr": "10.1.0.9", "ep_port": float64(53), "exporter": "10.0.0.7", "flows": float64(5), "tcp_flows": float64(0),
 			"flag_flows": float64(0), "reset_flows": float64(0), "bytes": "9", "packets": "5",
 			"first_seen": float64(1100), "last_seen": float64(1100)},
 		// Nobody declared this.
-		{"ep": "10.9.9.9:443", "exporter": "10.0.0.7", "flows": float64(999)},
-		// Malformed keys are dropped, never guessed at.
-		{"ep": "not-an-endpoint", "exporter": "10.0.0.7", "flows": float64(999)},
+		{"ep_addr": "10.9.9.9", "ep_port": float64(443), "exporter": "10.0.0.7", "flows": float64(999)},
 	}
 
-	got := foldDEMFlowRows(subjects, rows)
+	got, unreadable := foldDEMFlowRows(subjects, rows)
+	if unreadable != 0 {
+		t.Fatalf("%d well-formed rows were counted unreadable", unreadable)
+	}
 	if len(got) != 2 {
 		t.Fatalf("expected the two declared subjects, got %d: %+v", len(got), got)
 	}
@@ -190,6 +191,89 @@ func TestFoldDEMFlowRowsAttributesOnlyDeclaredEndpoints(t *testing.T) {
 	// And the whole point: an ungraded aggregate produces no evidence.
 	if r := got[1].ResetRatio(); r.Measured {
 		t.Fatalf("a subject with no TCP flows was graded: %+v", r)
+	}
+}
+
+// An IPv6 subject's flow evidence must be FOLDED, not dropped. The endpoint used
+// to be one "addr:port" string split on the FIRST colon, so every IPv6 address
+// failed the port parse and every IPv6 subject's evidence vanished with no
+// counter and no log. The passive-flow anchor then never fired for IPv6.
+func TestFoldDEMFlowRowsFoldsIPv6Endpoints(t *testing.T) {
+	subjects := []experience.FlowSubject{
+		{Subject: "api@dc1", App: "api", Site: "dc1",
+			Endpoints: []experience.FlowEndpoint{{Addr: "2001:db8::1", Port: 443}}},
+		{Subject: "dns6@dc1", App: "dns", Site: "dc1",
+			Endpoints: []experience.FlowEndpoint{{Addr: "2001:db8::53"}}}, // any port
+	}
+	rows := []map[string]any{
+		{"ep_addr": "2001:db8::1", "ep_port": float64(443), "exporter": "10.0.0.7",
+			"flows": float64(42), "tcp_flows": float64(40), "flag_flows": float64(40),
+			"reset_flows": float64(4), "bytes": "900", "packets": "30",
+			"first_seen": float64(1000), "last_seen": float64(1900)},
+		// The port-agnostic IPv6 subject, and a port that would have parsed as
+		// part of the address under the old composite key.
+		{"ep_addr": "2001:db8::53", "ep_port": float64(53), "exporter": "10.0.0.7", "flows": float64(9)},
+		// A declared IPv6 address on a port nobody declared.
+		{"ep_addr": "2001:db8::1", "ep_port": float64(9200), "exporter": "10.0.0.7", "flows": float64(999)},
+	}
+
+	got, unreadable := foldDEMFlowRows(subjects, rows)
+	if unreadable != 0 {
+		t.Fatalf("%d well-formed IPv6 rows were counted unreadable", unreadable)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected both IPv6 subjects, got %d: %+v", len(got), got)
+	}
+	if got[0].Subject != "api@dc1" || got[0].Flows != 42 || got[0].ResetFlows != 4 {
+		t.Fatalf("the IPv6 subject's evidence was not folded: %+v", got[0])
+	}
+	if got[1].Subject != "dns6@dc1" || got[1].Flows != 9 {
+		t.Fatalf("the port-agnostic IPv6 subject did not take its address's traffic: %+v", got[1])
+	}
+}
+
+// A row that names no endpoint at all is COUNTED, so the caller can report it.
+// A silently dropped row is missing evidence that reads exactly like a quiet
+// wire (§10).
+func TestFoldDEMFlowRowsCountsRowsItCannotRead(t *testing.T) {
+	subjects := []experience.FlowSubject{{
+		Subject: "checkout@dc1", App: "checkout", Site: "dc1",
+		Endpoints: []experience.FlowEndpoint{{Addr: "10.1.0.1", Port: 443}},
+	}}
+	rows := []map[string]any{
+		{"ep_addr": "10.1.0.1", "ep_port": float64(443), "exporter": "10.0.0.7", "flows": float64(10)},
+		{"exporter": "10.0.0.7", "flows": float64(999)},                                         // no address, no port
+		{"ep_addr": "", "ep_port": float64(443), "exporter": "10.0.0.7", "flows": float64(999)}, // empty address
+		{"ep_addr": "10.1.0.1", "ep_port": "not-a-port", "exporter": "10.0.0.7", "flows": float64(999)},
+		{"ep_addr": "10.1.0.1", "ep_port": float64(70000), "exporter": "10.0.0.7", "flows": float64(999)},
+	}
+
+	got, unreadable := foldDEMFlowRows(subjects, rows)
+	if unreadable != 4 {
+		t.Fatalf("unreadable rows counted %d, want 4", unreadable)
+	}
+	if len(got) != 1 || got[0].Flows != 10 {
+		t.Fatalf("an unreadable row leaked into a subject's counters: %+v", got)
+	}
+}
+
+// The statement must select the endpoint as TWO columns. One "addr:port" string
+// has to be split again in Go, and an IPv6 address is full of colons.
+func TestDEMFlowQuerySelectsAddressAndPortSeparately(t *testing.T) {
+	queries := fakeCH(t)
+	q := demFlowQuerier{s: flowsTestServer(t)}
+	if _, err := q.FlowStats(demFlowCtx(acme()), "acme", demFlowSubjects(),
+		time.Unix(1000, 0), time.Unix(2000, 0)); err != nil {
+		t.Fatalf("FlowStats: %v", err)
+	}
+	sql := (*queries)[0]
+	for _, want := range []string{"AS ep_addr", "AS ep_port", "GROUP BY ep_addr, ep_port, exporter"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("the flow read is missing %q:\n%s", want, sql)
+		}
+	}
+	if strings.Contains(sql, "concat(dst_addr") || strings.Contains(sql, "concat(src_addr") {
+		t.Errorf("the flow read still builds a composite endpoint key:\n%s", sql)
 	}
 }
 

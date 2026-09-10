@@ -263,8 +263,14 @@ func (q demFlowQuerier) FlowStats(ctx context.Context, tenant string, subjects [
 	// The server-side endpoint of each flow: the declared address is whichever
 	// end of the conversation we recognise, and its port is that end's port. A
 	// flow between two declared endpoints is attributed to its destination.
-	epExpr := "multiIf(dst_addr IN (" + in + "), concat(dst_addr, ':', toString(dst_port)), concat(src_addr, ':', toString(src_port)))"
-	sql := "SELECT " + epExpr + " AS ep, sampler_address AS exporter, " +
+	//
+	// ADDRESS AND PORT ARE TWO COLUMNS, never one "addr:port" string. The
+	// composite key had to be split again in Go, and an IPv6 address is full of
+	// colons, so every IPv6 subject's flow evidence failed the port parse and
+	// was dropped. Selecting the two values separately removes the parse.
+	addrExpr := "multiIf(dst_addr IN (" + in + "), dst_addr, src_addr)"
+	portExpr := "multiIf(dst_addr IN (" + in + "), dst_port, src_port)"
+	sql := "SELECT " + addrExpr + " AS ep_addr, " + portExpr + " AS ep_port, sampler_address AS exporter, " +
 		"count() AS flows, " +
 		"countIf(proto = 6) AS tcp_flows, " +
 		"countIf(proto = 6 AND tcp_flags != 0) AS flag_flows, " +
@@ -275,13 +281,23 @@ func (q demFlowQuerier) FlowStats(ctx context.Context, tenant string, subjects [
 		"FROM netops.flows WHERE ts >= toDateTime(" + strconv.FormatInt(start.Unix(), 10) + ") " +
 		"AND ts < toDateTime(" + strconv.FormatInt(end.Unix(), 10) + ") " +
 		"AND (src_addr IN (" + in + ") OR dst_addr IN (" + in + "))" + clause + " " +
-		"GROUP BY ep, exporter ORDER BY flows DESC LIMIT " + strconv.Itoa(demFlowMaxRows) + " FORMAT JSON"
+		"GROUP BY ep_addr, ep_port, exporter ORDER BY flows DESC LIMIT " + strconv.Itoa(demFlowMaxRows) + " FORMAT JSON"
 
 	rows, err := q.s.chRowsScope(ctx, scope, sql, "api:dem-flow")
 	if err != nil {
 		return nil, err
 	}
-	return foldDEMFlowRows(subjects, rows), nil
+	stats, unreadable := foldDEMFlowRows(subjects, rows)
+	if unreadable > 0 {
+		// §10: a dropped row is missing evidence, and missing evidence that
+		// nobody counts reads exactly like a quiet wire.
+		if q.s.demMetrics != nil {
+			q.s.demMetrics.FlowRowsUnreadable.Add(int64(unreadable))
+		}
+		logWarn("dem-flow", "flow aggregate rows carried no readable server endpoint and reached no experience subject",
+			map[string]any{"tenant": scope, "dropped": unreadable, "rows": len(rows)})
+	}
+	return stats, nil
 }
 
 // foldDEMFlowRows attributes each (endpoint, exporter) aggregate to the DEM
@@ -291,7 +307,10 @@ func (q demFlowQuerier) FlowStats(ctx context.Context, tenant string, subjects [
 // A row may land on more than one subject when two subjects declare the same
 // address; that is the operator's declaration, and splitting the counters
 // between them would invent a division nothing measured.
-func foldDEMFlowRows(subjects []experience.FlowSubject, rows []map[string]any) []experience.FlowStats {
+//
+// It returns the number of rows whose server endpoint could not be read at all.
+// Those are reported by the caller, never dropped in silence.
+func foldDEMFlowRows(subjects []experience.FlowSubject, rows []map[string]any) ([]experience.FlowStats, int) {
 	type agg struct {
 		st        experience.FlowStats
 		exporters map[string]bool
@@ -299,18 +318,19 @@ func foldDEMFlowRows(subjects []experience.FlowSubject, rows []map[string]any) [
 	acc := map[string]*agg{}
 	order := make([]string, 0, len(subjects))
 
+	unreadable := 0
 	for _, row := range rows {
-		ep, _ := row["ep"].(string)
-		addr, portStr, found := strings.Cut(ep, ":")
-		if !found {
-			continue
-		}
-		port, perr := strconv.Atoi(portStr)
-		if perr != nil {
+		addr, _ := row["ep_addr"].(string)
+		addr = strings.TrimSpace(addr)
+		port, portOK := chRowIntOK(row["ep_port"])
+		if addr == "" || !portOK || port < 0 || port > 65535 {
+			// Not "no subject declared this endpoint" — this row does not name
+			// an endpoint at all. Counted and reported by the caller.
+			unreadable++
 			continue
 		}
 		for _, sub := range subjects {
-			if !flowSubjectOwns(sub, addr, port) {
+			if !flowSubjectOwns(sub, addr, int(port)) {
 				continue
 			}
 			a, ok := acc[sub.Subject]
@@ -355,7 +375,7 @@ func foldDEMFlowRows(subjects []experience.FlowSubject, rows []map[string]any) [
 		a.st.Exporters = exporters
 		out = append(out, a.st)
 	}
-	return out
+	return out, unreadable
 }
 
 // flowSubjectOwns reports whether a subject declared this server endpoint. A
@@ -378,19 +398,29 @@ func flowSubjectOwns(sub experience.FlowSubject, addr string, port int) bool {
 // 0 — the counters it feeds are all sums, and a malformed one must not be
 // guessed at.
 func chRowInt(v any) int64 {
+	n, _ := chRowIntOK(v)
+	return n
+}
+
+// chRowIntOK is the same read with the "was it readable" bit kept. A field
+// where 0 is a legitimate value (a port) cannot use chRowInt: an unreadable
+// value and a real zero would be the same answer.
+func chRowIntOK(v any) (int64, bool) {
 	switch t := v.(type) {
 	case float64:
-		return int64(t)
+		return int64(t), true
 	case int64:
-		return t
+		return t, true
+	case int:
+		return int64(t), true
 	case string:
 		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
 		if err != nil {
-			return 0
+			return 0, false
 		}
-		return n
+		return n, true
 	default:
-		return 0
+		return 0, false
 	}
 }
 
