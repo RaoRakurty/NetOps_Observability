@@ -639,14 +639,27 @@ func (e *Evaluator) checkPeers(ctx context.Context, st *tenantState, tenant stri
 		// ONLY a measured "up" resolves. This is the peer lane's single
 		// resolution path, and it is reached across any number of unmeasured
 		// passes because those left st.peerDown alone.
-		if state == peerIsUp && wasDown && e.deps.Resolve != nil {
-			t := now
-			e.deps.Resolve(Alert{
-				ID: "bgp:" + tenant + ":peer:" + key, Rule: "bgp_peer_down", Severity: SevHigh,
-				Tenant: tenant, Resource: p.DeviceID, FiredAt: now, Resolved: true, ResolvedAt: &t,
-				Summary: fmt.Sprintf("BGP peer %s on %s is back up.", clip(p.Peer, 64), clip(p.DeviceID, 128)),
-			})
-			e.bump(st, "alerts_resolved_total", &e.metrics.AlertsResolved)
+		if state == peerIsUp && wasDown {
+			alertID := "bgp:" + tenant + ":peer:" + key
+			// The episode is OVER, so its cool-down stamps go with it —
+			// exactly what resolveAlert does in the prefix lane. Without this
+			// a peer that flapped down again inside the cool-down window
+			// produced no page and no evidence record, only a suppression
+			// counter, because the closed episode's stamp was still standing
+			// (review 2026-09-08, 3.4-02).
+			e.mu.Lock()
+			delete(st.cooldown, alertID)
+			delete(st.cooldown, alertID+":unmeasured")
+			e.mu.Unlock()
+			if e.deps.Resolve != nil {
+				t := now
+				e.deps.Resolve(Alert{
+					ID: alertID, Rule: "bgp_peer_down", Severity: SevHigh,
+					Tenant: tenant, Resource: p.DeviceID, FiredAt: now, Resolved: true, ResolvedAt: &t,
+					Summary: fmt.Sprintf("BGP peer %s on %s is back up.", clip(p.Peer, 64), clip(p.DeviceID, 128)),
+				})
+				e.bump(st, "alerts_resolved_total", &e.metrics.AlertsResolved)
+			}
 		}
 	}
 	// A peer that VANISHED from the report is not a recovery — we stopped being

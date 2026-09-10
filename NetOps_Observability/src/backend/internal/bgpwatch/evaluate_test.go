@@ -1031,3 +1031,98 @@ func (e *Evaluator) mustHistory(t *testing.T, tenant string) []Alert {
 	}
 	return a
 }
+
+// A peer that FLAPS must page again. The prefix lane already gets this right:
+// resolveAlert deletes the cool-down stamp when the episode closes, so the next
+// episode is a fresh one. The peer lane's recovery branch did not, so a peer
+// that went down again inside the 60-minute cool-down window produced no
+// notification and no evidence record — only a suppression counter (review
+// 2026-09-08, 3.4-02).
+func TestEvaluatorPeerFlapInsideTheCoolDownPagesAgain(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	down := PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "down", Reason: "hold timer expired"}
+	up := PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "up"}
+
+	h.setPeers("acme", down)
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if fired, _, _ := h.snapshot(); len(fired) != 1 {
+		t.Fatalf("want the first peer-down page, got %+v", fired)
+	}
+
+	// It comes back, well inside the 30-minute cool-down this harness runs.
+	h.setPeers("acme", up)
+	h.advance(time.Minute)
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	if _, resolved, _ := h.snapshot(); len(resolved) != 1 {
+		t.Fatalf("the recovery must resolve: %+v", resolved)
+	}
+
+	// And it drops again, still inside the window. This is a NEW episode.
+	h.setPeers("acme", down)
+	h.advance(time.Minute)
+	if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+		t.Fatalf("run 3: %v", err)
+	}
+	fired, _, recs := h.snapshot()
+	var downs []Alert
+	for _, a := range fired {
+		if a.Rule == "bgp_peer_down" {
+			downs = append(downs, a)
+		}
+	}
+	if len(downs) != 2 {
+		t.Fatalf("a peer that flapped down again produced %d pages, want 2: %+v", len(downs), fired)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("the second peer-down episode grounded %d evidence records, want 2", len(recs))
+	}
+	if n := h.eval.Metrics().AlertsSuppressed.Load(); n != 0 {
+		t.Errorf("the second episode was suppressed by the closed episode's stamp (suppressed=%d)", n)
+	}
+}
+
+// The going-blind notice belongs to the episode too. resolveAlert clears both
+// stamps for exactly this reason; the peer lane owes the same, or a peer that
+// goes down, goes unmeasured, recovers, and then repeats says nothing the second
+// time about having stopped being measured.
+func TestEvaluatorPeerRecoveryClearsTheMeasurementLostStamp(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	down := PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "down"}
+	blind := PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "unknown", Reason: "bmp session closed"}
+	up := PeerObservation{DeviceID: "edge-r1", Peer: "10.0.0.5", State: "up"}
+
+	notices := func() int {
+		fired, _, _ := h.snapshot()
+		n := 0
+		for _, a := range fired {
+			if a.Rule == "bgp_peer_measurement_lost" {
+				n++
+			}
+		}
+		return n
+	}
+	step := func(name string, p PeerObservation) {
+		h.setPeers("acme", p)
+		h.advance(time.Minute)
+		if err := h.eval.EvaluateTenant(ctx, "acme"); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	step("down", down)
+	step("blind", blind)
+	if notices() != 1 {
+		t.Fatalf("the first going-blind episode was not announced: %d", notices())
+	}
+	step("up", up)
+	step("down again", down)
+	step("blind again", blind)
+	if got := notices(); got != 2 {
+		t.Fatalf("the second going-blind episode said nothing: %d notices, want 2", got)
+	}
+}
