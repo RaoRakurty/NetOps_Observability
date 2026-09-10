@@ -296,6 +296,32 @@ Neighbor        V           AS MsgRcvd MsgSent   TblVer  InQ OutQ Up/Down  State
 10.0.0.5        4        65005       0       0        1    0    0 never    Idle (Admin)
 `
 
+// FIXTURE PROVENANCE: SYNTHETIC, authored 2026-09-10 from the documented IOS-XR
+// `show bgp summary` layout. Not a device capture. The point of the fixture is
+// the SECOND COLUMN: XR heads it "Spk" and prints the BGP speaker id (0 on an
+// ordinary router) where IOS prints the BGP version. The preamble lines are kept
+// because they are what a row head has to refuse — "Speaker" and "Table ID" are
+// not peer addresses.
+const iosxrBGPSummary = `BGP router identifier 10.255.0.1, local AS number 65001
+BGP generic scan interval 60 secs
+Non-stop routing is enabled
+BGP table state: Active
+Table ID: 0xe0000000   RD version: 1234
+BGP main routing table version 1234
+BGP scan interval 60 secs
+
+BGP is operating in STANDALONE mode.
+
+Process       RcvTblVer   bRIB/RIB   LabelVer  ImportVer  SendTblVer  StandbyVer
+Speaker            1234       1234       1234       1234        1234        1234
+
+Neighbor        Spk    AS MsgRcvd MsgSent   TblVer  InQ OutQ  Up/Down  St/PfxRcd
+10.0.0.2          0 65002    1234    1235     1234    0    0 02:31:11         12
+10.0.0.3          0 65003       0       0        0    0    0 00:00:12      Idle
+10.0.0.4          0 65004       0       0        0    0    0 00:00:00      Active
+10.0.0.5          0 65005       0       0        0    0    0 00:00:00 Idle (Admin)
+`
+
 const eosBGPSummary = `BGP summary information for VRF default
 Router identifier 10.255.0.1, local AS number 65001
 Neighbor         V  AS           MsgRcvd   MsgSent  InQ OutQ  Up/Down State   PfxRcd PfxAcc

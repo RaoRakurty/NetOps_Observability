@@ -780,6 +780,52 @@ func TestParse_BGPSummary(t *testing.T) {
 		wantStr(t, "State", &res.BGPPeers[2].State, "Active")
 		wantStr(t, "State", &res.BGPPeers[3].State, "Idle (Admin)")
 	})
+	// Review 3.5-07: IOS-XR heads the second column "Spk" and prints the BGP
+	// SPEAKER ID there, not the BGP version. The row head demanded a version, so
+	// every XR row was refused, the typed binding was dead, and every XR summary
+	// fell through to the regex analyzer with nothing saying so.
+	t.Run("iosxr-speaker-id-column", func(t *testing.T) {
+		res := mustParse(t, CmdBGPSummary, DialectCiscoIOSXR, iosxrBGPSummary)
+		if len(res.BGPPeers) != 4 {
+			t.Fatalf("got %d peers, want 4", len(res.BGPPeers))
+		}
+		p0 := res.BGPPeers[0]
+		wantStr(t, "Peer", &p0.Peer, "10.0.0.2")
+		wantI64P(t, "AS", p0.AS, 65002)
+		wantStr(t, "State", &p0.State, "Established")
+		if !p0.Established {
+			t.Error("a numeric St/PfxRcd column means Established")
+		}
+		wantI64P(t, "PrefixesRx", p0.PrefixesRx, 12)
+		wantI64P(t, "MsgRcvd", p0.MsgRcvd, 1234)
+		wantI64P(t, "MsgSent", p0.MsgSent, 1235)
+		wantStrP(t, "UpDown", p0.UpDown, "02:31:11")
+		wantStr(t, "State", &res.BGPPeers[1].State, "Idle")
+		if res.BGPPeers[1].PrefixesRx != nil {
+			t.Error("a non-established peer has NO prefix count — it must be nil, not 0")
+		}
+		wantStr(t, "State", &res.BGPPeers[2].State, "Active")
+		wantStr(t, "State", &res.BGPPeers[3].State, "Idle (Admin)")
+	})
+	// The IOS shape must be unchanged by the XR shape being accepted, and NX-OS
+	// shares it. Both are asserted against the same capture through their own
+	// dialects, so a future edit cannot fix one family by breaking the other.
+	t.Run("nxos-shares-the-ios-shape", func(t *testing.T) {
+		res := mustParse(t, CmdBGPSummary, DialectCiscoNXOS, ciscoBGPSummary)
+		if len(res.BGPPeers) != 4 {
+			t.Fatalf("got %d peers, want 4", len(res.BGPPeers))
+		}
+		wantStr(t, "State", &res.BGPPeers[0].State, "Established")
+		wantI64P(t, "PrefixesRx", res.BGPPeers[0].PrefixesRx, 12)
+		wantStr(t, "State", &res.BGPPeers[3].State, "Idle (Admin)")
+	})
+	t.Run("ios-shape-through-the-plain-ios-dialect", func(t *testing.T) {
+		res := mustParse(t, CmdBGPSummary, DialectCiscoIOS, ciscoBGPSummary)
+		if len(res.BGPPeers) != 4 {
+			t.Fatalf("got %d peers, want 4", len(res.BGPPeers))
+		}
+		wantI64P(t, "AS", res.BGPPeers[0].AS, 65002)
+	})
 	t.Run("eos-split-state-column", func(t *testing.T) {
 		res := mustParse(t, CmdBGPSummary, DialectAristaEOS, eosBGPSummary)
 		if len(res.BGPPeers) != 2 {
@@ -1102,6 +1148,10 @@ func TestParse_CrossDialect(t *testing.T) {
 		{CmdOSPFNeighbor, DialectJunos, ciscoOSPFNeighbor},
 		{CmdOSPFNeighbor, DialectHuaweiVRP, junosOSPFNeighbor},
 		{CmdBGPSummary, DialectHuaweiVRP, ciscoBGPSummary},
+		// The version column is still demanded by the IOS parser: an XR capture
+		// handed to it skips rather than being read with a speaker id in the
+		// slot the IOS layout reserves for the BGP version.
+		{CmdBGPSummary, DialectCiscoIOSXE, iosxrBGPSummary},
 		{CmdBGPSummary, DialectNokiaSROS, junosBGPSummary},
 		{CmdLogs, DialectJunos, ciscoLogging},
 		{CmdLogs, DialectHuaweiVRP, junosLogMessages},
