@@ -84,6 +84,12 @@ type DiscoveryAggregator struct {
 	// entirely, which is what every test and every build without the wiring
 	// gets. See os_version.go.
 	osLadder *osprobe.Ladder
+	// detectVendor is the SNMP vendor/sysDescr read enrichVendors performs,
+	// INJECTED rather than called through the package (§2: no hidden coupling,
+	// §5: external dependencies behind a seam). Nil means the real one, so no
+	// caller has to wire it; a test supplies its own and the enrichment path
+	// becomes testable without an SNMP agent.
+	detectVendor func(ctx context.Context, addr, community string) (vendor, sysDescr string)
 	// osProbeAt is when each device was last PROBED (whatever the outcome),
 	// keyed by device id — the cool-down that stops an unanswerable fleet from
 	// turning the two-minute enrichment tick into a permanent dial storm. It
@@ -179,11 +185,15 @@ func (a *DiscoveryAggregator) enrichVendors(ctx context.Context, community strin
 		}
 		pending = append(pending, todo{id, d.Address})
 	}
+	detect := a.detectVendor
 	a.mu.RUnlock()
+	if detect == nil {
+		detect = collectors.DetectVendor
+	}
 
 	for _, p := range pending {
 		dctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		vendor, descr := collectors.DetectVendor(dctx, p.addr, community)
+		vendor, descr := detect(dctx, p.addr, community)
 		cancel()
 		if vendor == "" {
 			continue // leave it for a later cycle (negative result not cached)
@@ -210,9 +220,32 @@ func (a *DiscoveryAggregator) enrichVendors(ctx context.Context, community strin
 			// wins over an authored label; it is never overwritten by a later,
 			// EMPTY read (the `descr != ""` guard), so a probe that answered
 			// with nothing cannot erase what an earlier one learned.
-			if descr != "" && d.OSVersion != TruncateDescr(descr) {
-				d.OSVersion = TruncateDescr(descr)
-				changed = true
+			//
+			// THE VERSION AND ITS PROVENANCE ARE WRITTEN TOGETHER (review
+			// 3.5-21). This value was read off the device over SNMP, so the row
+			// says so and says when. Writing the version alone left
+			// os_version_source empty, which internal/osprobe reads as "a person
+			// put this here" — and its overwrite rule refuses to let any rung
+			// replace an operator's value, so osprobe.Plan returned NO rungs and
+			// the whole version ladder was locked out for every device
+			// discovery had enriched. A row that cannot say where its version
+			// came from cannot be reasoned about, refreshed, or aged out.
+			//
+			// The second arm is the row that already HOLDS this exact sysDescr
+			// from an earlier run and was written before the provenance was
+			// stamped: the value needs no change, the provenance does. It fills
+			// an EMPTY source only, so a version an operator wrote (source
+			// "manual") is never relabelled as something a probe read.
+			if descr != "" {
+				v, now := TruncateDescr(descr), time.Now().UTC()
+				switch {
+				case d.OSVersion != v:
+					d.OSVersion, d.OSVersionSource, d.OSVersionAt = v, string(osprobe.MethodSNMP), now
+					changed = true
+				case d.OSVersionSource == "":
+					d.OSVersionSource, d.OSVersionAt = string(osprobe.MethodSNMP), now
+					changed = true
+				}
 			}
 			if changed {
 				a.cache[p.id] = d
