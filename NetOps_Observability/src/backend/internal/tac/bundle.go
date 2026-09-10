@@ -374,11 +374,24 @@ func BuildBundle(ctx context.Context, in BundleInput, n Narrator, now func() tim
 	}
 	for i, cc := range in.Capture.Commands {
 		f := bundleFile{name: outputFileName(i, cc), trimmable: true}
-		if cc.SpillPath != "" {
+		switch {
+		case cc.SpillPath != "":
 			f.head = []byte(renderOutputHeader(cc))
 			f.path = cc.SpillPath
 			f.size = int64(cc.Bytes)
-		} else {
+		case cc.Bytes > 0 && cc.Output == "":
+			// A command that captured bytes but carries neither an in-memory
+			// body nor a spill file is a STREAMED output whose file was released
+			// under this build. Writing the in-memory form here would put a
+			// header-only stub in the bundle and hash it into SHA256SUMS as if
+			// it were the evidence, which nothing downstream could tell apart
+			// from the real thing. So the build FAILS and says which output
+			// (§10). The capture lease is what normally prevents this; this is
+			// the assertion that it did.
+			return nil, fmt.Errorf(
+				"tac: bundle: the streamed output for %q was released before it could be written; collect again",
+				cc.Intent)
+		default:
 			f.data = []byte(renderOutput(cc))
 		}
 		files = append(files, f)

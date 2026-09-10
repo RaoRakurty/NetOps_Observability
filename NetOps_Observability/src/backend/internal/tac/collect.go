@@ -156,6 +156,24 @@ type Capture struct {
 	CatalogVersion string `json:"catalog_version"`
 	PlanVersion    string `json:"plan_version,omitempty"`
 	EngineVersion  string `json:"engine_version"`
+
+	// mu guards this capture's RELEASE — SpillDir, every command's SpillPath,
+	// and the reader count below. It is the capture's own lock and never the
+	// service's: a bundle is streamed from the spill files WITHOUT the service
+	// lock held, on purpose, so the service lock cannot be what protects them.
+	//
+	// A Capture is always passed by pointer (go vet's copylocks check keeps it
+	// that way), so this costs nothing but the words.
+	mu sync.Mutex
+	// readers is how many bundle builds are streaming this capture right now.
+	readers int
+	// closeAsked records a Close that arrived while a reader held a lease. The
+	// LAST reader out does the removal, so a capture is released exactly once
+	// and never underneath a build that is already reading it.
+	closeAsked bool
+	// released records that the removal has run. A released capture can never
+	// be leased again: the honest answer to "bundle this" is a refusal.
+	released bool
 }
 
 // Close releases the capture's streamed outputs. It is idempotent, and it is
@@ -167,14 +185,85 @@ type Capture struct {
 // reachable. It is not tied to the bundle: a bundle can be built many times from
 // one capture (once per profile the operator tries), so the bundle cannot own
 // the bytes it reads.
+//
+// It does not, however, get to delete them out from under a build that is
+// already reading them. A Close that arrives while a bundle holds a read lease
+// (Retain) is DEFERRED to the last reader out, so the capture stops being
+// reachable immediately and its bytes survive exactly as long as the build that
+// needs them.
 func (c *Capture) Close() error {
-	if c == nil || c.SpillDir == "" {
+	if c == nil {
 		return nil
 	}
+	c.mu.Lock()
+	if c.released {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closeAsked = true
+	if c.readers > 0 {
+		// A bundle is mid-build from these files. The removal is DEFERRED to
+		// the last reader out rather than skipped: the caller has still asked
+		// for the capture to stop being reachable, and it is.
+		c.mu.Unlock()
+		return nil
+	}
+	return c.releaseLocked()
+}
+
+// Retain takes a read lease on the capture's streamed outputs, so they cannot
+// be removed while a bundle is being built from them.
+//
+// It reports FALSE when the outputs are already gone, or are about to be: a
+// caller that cannot lease must refuse honestly rather than build a bundle from
+// what is left, because a streamed command's in-memory body is empty by
+// construction and the bundle would carry a header-only stub with a real
+// checksum over it.
+//
+// Every Retain is paired with exactly one Release.
+func (c *Capture) Retain() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.released || c.closeAsked {
+		return false
+	}
+	c.readers++
+	return true
+}
+
+// Release drops one read lease. When it is the last one out of a capture whose
+// Close was deferred, it performs the removal and returns its error — which is
+// the only place that error can still be reported (§10).
+func (c *Capture) Release() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	if c.readers > 0 {
+		c.readers--
+	}
+	if c.readers > 0 || !c.closeAsked || c.released {
+		c.mu.Unlock()
+		return nil
+	}
+	return c.releaseLocked()
+}
+
+// releaseLocked blanks the paths and removes the directory. It is called with
+// c.mu HELD and unlocks it.
+func (c *Capture) releaseLocked() error {
+	defer c.mu.Unlock()
+	c.released = true
 	dir := c.SpillDir
 	c.SpillDir = ""
 	for i := range c.Commands {
 		c.Commands[i].SpillPath = ""
+	}
+	if dir == "" {
+		return nil
 	}
 	return os.RemoveAll(dir)
 }

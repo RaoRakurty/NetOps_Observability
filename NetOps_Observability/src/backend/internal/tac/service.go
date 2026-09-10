@@ -609,6 +609,14 @@ func (s *Service) Cancel(tenant, incident string) bool {
 }
 
 // Bundle assembles and stores the bundle for a collected escalation.
+//
+// THE ZIP IS BUILT WITHOUT THE SERVICE LOCK. A first-ask collection is tens of
+// megabytes streamed off disk, and holding s.mu across it would put every other
+// escalation on this api behind one operator's download. What protects the
+// evidence instead is a READ LEASE on the capture, taken here under the lock
+// that every Capture.Close is also taken under: while the lease is held the
+// spill files cannot be removed, and a capture whose files are already gone
+// refuses the build outright rather than assembling a bundle of stubs.
 func (s *Service) Bundle(ctx context.Context, tenant, incident string, in BundleInput) (*Bundle, StoredBundle, error) {
 	s.mu.Lock()
 	st := s.states[tenant][incident]
@@ -616,14 +624,29 @@ func (s *Service) Bundle(ctx context.Context, tenant, incident string, in Bundle
 		s.mu.Unlock()
 		return nil, StoredBundle{}, errors.New("tac: nothing has been collected for this escalation yet")
 	}
+	capt := st.Capture
+	if !capt.Retain() {
+		s.mu.Unlock()
+		return nil, StoredBundle{}, errors.New(
+			"tac: this collection's outputs have already been released; collect again before building a bundle")
+	}
 	in.TenantID = tenant
 	in.IncidentID = incident
-	in.Capture = st.Capture
+	in.Capture = capt
 	in.Plan = st.Plan
 	if st.Classification != nil {
 		in.Class = *st.Classification
 	}
 	s.mu.Unlock()
+	defer func() {
+		// The lease is what a deferred Close was waiting for, so the removal it
+		// asked for happens HERE — and its error is reported here or nowhere.
+		if rerr := capt.Release(); rerr != nil {
+			s.warn("a TAC capture's streamed outputs could not be removed", map[string]any{
+				"incident_id": incident, "error": rerr.Error(),
+			})
+		}
+	}()
 
 	b, err := BuildBundle(ctx, in, s.narrator, s.now)
 	if err != nil {
