@@ -123,6 +123,14 @@ func (st *osStub) record(r *http.Request, body []byte) {
 	}
 }
 
+// allRequests is every request line the module issued, in order, as
+// "METHOD /path?query".
+func (st *osStub) allRequests() []string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return append([]string(nil), st.requests...)
+}
+
 func (st *osStub) sent(substr string) bool {
 	st.mu.Lock()
 	defer st.mu.Unlock()

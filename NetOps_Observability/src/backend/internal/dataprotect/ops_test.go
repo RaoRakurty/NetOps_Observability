@@ -29,6 +29,8 @@ package dataprotect
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -801,4 +803,124 @@ func TestRepositoryHeadroomSources(t *testing.T) {
 			t.Errorf("the detail must say why it is null and where the number can be got: %q", v.DiskDetail)
 		}
 	})
+}
+
+// TestInPlaceRestoreKeepsTheRequestLineUnderOpenSearchsLimit — REGRESSION
+// (review 3.8-06). An in_place restore with NO index list means "everything in
+// the snapshot", and the plan materialises the snapshot's whole index set so the
+// close and reopen steps have concrete names. Those two steps put the names in
+// the REQUEST LINE (`POST /a,b,c/_close`), and OpenSearch caps the initial line
+// at 4 kb by default. Past roughly 130 daily indices the close step was rejected
+// by the transport before the cluster ever saw it.
+//
+// The estate here is the shipped one: nine daily index families over a month of
+// retention, which is not a large install.
+func TestInPlaceRestoreKeepsTheRequestLineUnderOpenSearchsLimit(t *testing.T) {
+	families := []string{
+		"netops-applogs", "netops-platformlogs", "netops-syslog", "netops-flows",
+		"netops-snmptrap", "netops-cloudlogs", "netops-secfindings",
+		"netops-deadletter", "security-auditlog",
+	}
+	indices := make([]string, 0, len(families)*30)
+	for day := 1; day <= 30; day++ {
+		for _, f := range families {
+			indices = append(indices, fmt.Sprintf("%s-2026.08.%02d", f, day))
+		}
+	}
+	if len(indices) < 130 {
+		t.Fatalf("the fixture must exceed the reported threshold: %d indices", len(indices))
+	}
+
+	stub := newOSStub()
+	const name = "netops-daily-2026-09-02"
+	stub.snapshots[0]["indices"] = indices
+	h := newHarness(t, stub)
+
+	// No "indices" key: the whole snapshot, which is what materialises the set.
+	st, b := h.do(t, "POST", "/api/system/backup/snapshots/restore", map[string]any{
+		"snapshot": name, "mode": "in_place", "confirm": name,
+	})
+	if st != 202 {
+		t.Fatalf("in_place restore: %d %s", st, b)
+	}
+	op := h.waitForOperation(t, h.operationFrom(t, b).ID)
+	if op.State != OpStateSucceeded {
+		t.Fatalf("in_place state %s: %s", op.State, op.Error)
+	}
+
+	closed, opened := map[string]bool{}, map[string]bool{}
+	for _, req := range h.stub.allRequests() {
+		// The wire's initial line is "METHOD SP request-target SP HTTP/1.1".
+		if line := len(req) + len(" HTTP/1.1"); line > osMaxInitialLine {
+			t.Fatalf("a %d-byte request line exceeds OpenSearch's %d-byte initial-line limit; the request is rejected by the transport before the cluster sees it: %.120s…",
+				line, osMaxInitialLine, req)
+		}
+		method, target, ok := strings.Cut(req, " ")
+		if !ok || method != http.MethodPost {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(target, "/_close"):
+			for _, idx := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(target, "/"), "/_close"), ",") {
+				closed[idx] = true
+			}
+		case strings.HasSuffix(target, "/_open"):
+			for _, idx := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(target, "/"), "/_open"), ",") {
+				opened[idx] = true
+			}
+		}
+	}
+	// Staying under the limit must not mean quietly restoring less: EVERY index
+	// in the snapshot still has to be closed and reopened.
+	for _, idx := range indices {
+		if !closed[idx] {
+			t.Fatalf("index %s was never closed, so the restore silently skipped it", idx)
+		}
+		if !opened[idx] {
+			t.Fatalf("index %s was left CLOSED", idx)
+		}
+	}
+	if len(closed) != len(indices) || len(opened) != len(indices) {
+		t.Fatalf("closed %d / opened %d indices, want %d of each", len(closed), len(opened), len(indices))
+	}
+}
+
+// TestIndexBatchesNeverDropsOrOverflows pins the splitter's edges. Losing a name
+// here means an index the restore silently skips, so the round-trip is asserted
+// as well as the width.
+func TestIndexBatchesNeverDropsOrOverflows(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		in      []string
+		budget  int
+		batches int
+	}{
+		{"empty", nil, 10, 0},
+		{"one fits", []string{"abc"}, 10, 1},
+		{"exactly the budget", []string{"abc", "def"}, 7, 1},
+		{"one byte over", []string{"abc", "def"}, 6, 2},
+		// A name wider than the whole budget cannot be split. It gets its own
+		// call so OpenSearch refuses it BY NAME rather than us dropping it.
+		{"single oversized name", []string{"aaaaaaaaaa", "b"}, 4, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := indexBatches(tc.in, tc.budget)
+			if len(got) != tc.batches {
+				t.Fatalf("%d batches, want %d: %v", len(got), tc.batches, got)
+			}
+			flat := []string{}
+			for _, b := range got {
+				if len(b) == 0 {
+					t.Fatal("an empty batch would issue a request with no index at all")
+				}
+				if w := len(strings.Join(b, ",")); w > tc.budget && len(b) > 1 {
+					t.Fatalf("batch %v is %d bytes, over the %d budget", b, w, tc.budget)
+				}
+				flat = append(flat, b...)
+			}
+			if strings.Join(flat, ",") != strings.Join(tc.in, ",") {
+				t.Fatalf("round trip lost or reordered names: %v vs %v", flat, tc.in)
+			}
+		})
+	}
 }

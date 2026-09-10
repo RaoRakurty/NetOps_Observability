@@ -85,6 +85,18 @@ const (
 	// snapshotRestoreMaxIndices bounds an explicit index list on a restore.
 	snapshotRestoreMaxIndices = 200
 
+	// osMaxInitialLine is OpenSearch's `http.max_initial_line_length` default:
+	// 4 kb for the WHOLE request line, "METHOD SP request-target SP HTTP/1.1".
+	// A longer one is rejected by the transport before the cluster ever sees
+	// the call, so it is a bound on what we may put in a PATH, not advice.
+	osMaxInitialLine = 4096
+	// osRequestLineReserve is what the rest of the line may cost around a
+	// comma-joined index list: the method, the leading "/", the verb suffix
+	// ("/_close"), the HTTP version, and any base path the configured
+	// OpenSearch URL carries. Generous on purpose — the cost of one extra
+	// round trip is nothing next to a refused restore.
+	osRequestLineReserve = 512
+
 	// SnapshotNeverProbedDetail is the honest answer for a restore point no
 	// probe has ever touched. It is NOT "fine".
 	SnapshotNeverProbedDetail = "never probed — a backup that has never been restored is not a proven backup"
@@ -1263,20 +1275,70 @@ func (p restorePlan) run(s *Service, opID string) func(ctx context.Context, prog
 	}
 }
 
-// closeIndices closes every named index.
-func (s *Service) closeIndices(ctx context.Context, idx []string) error {
+// indexBatches splits a list of index names into groups whose comma-joined form
+// fits the request-line budget.
+//
+// It exists because an in_place restore with no client list materialises the
+// SNAPSHOT'S WHOLE INDEX SET, and that set is not bounded by the 200-index cap
+// on a client-supplied list — it is bounded by the estate. Nine daily index
+// families over a month of retention is 270 names, and comma-joining those into
+// a path blows past OpenSearch's 4 kb initial line, which fails the close step
+// of a restore an operator has already type-to-confirmed.
+//
+// The bound belongs on the REQUEST, not on the restore: capping the materialised
+// set instead would refuse a full-cluster restore that is perfectly legal, and
+// "restore everything" quietly meaning "restore the first 200" is worse than
+// either. The `_restore` call itself is unaffected — its index list goes in the
+// BODY, which has no such limit.
+//
+// A name longer than the whole budget still gets its own batch: it cannot be
+// split, and letting OpenSearch refuse it by name beats dropping it here.
+func indexBatches(idx []string, budget int) [][]string {
 	if len(idx) == 0 {
 		return nil
 	}
-	return s.osDo(ctx, http.MethodPost, "/"+strings.Join(idx, ",")+"/_close", nil, nil, 5*time.Minute)
+	batches := [][]string{}
+	current, width := []string{}, 0
+	for _, name := range idx {
+		cost := len(name)
+		if len(current) > 0 {
+			cost++ // the comma
+		}
+		if len(current) > 0 && width+cost > budget {
+			batches = append(batches, current)
+			current, width = []string{}, 0
+			cost = len(name)
+		}
+		current = append(current, name)
+		width += cost
+	}
+	return append(batches, current)
 }
 
-// openIndices reopens every named index.
-func (s *Service) openIndices(ctx context.Context, idx []string) error {
-	if len(idx) == 0 {
-		return nil
+// closeIndices closes every named index, in as many calls as the request-line
+// budget needs. A failure stops there: the caller aborts the restore and reopens
+// everything, and closing more indices first would only widen the outage.
+func (s *Service) closeIndices(ctx context.Context, idx []string) error {
+	for _, batch := range indexBatches(idx, osMaxInitialLine-osRequestLineReserve) {
+		if err := s.osDo(ctx, http.MethodPost, "/"+strings.Join(batch, ",")+"/_close", nil, nil, 5*time.Minute); err != nil {
+			return err
+		}
 	}
-	return s.osDo(ctx, http.MethodPost, "/"+strings.Join(idx, ",")+"/_open", nil, nil, 5*time.Minute)
+	return nil
+}
+
+// openIndices reopens every named index. Unlike the close, EVERY batch is
+// attempted even after one fails: this is the path that undoes a close, and
+// stopping at the first error would leave the rest of the search tier down with
+// only the first failure reported (§10).
+func (s *Service) openIndices(ctx context.Context, idx []string) error {
+	var errs []error
+	for _, batch := range indexBatches(idx, osMaxInitialLine-osRequestLineReserve) {
+		if err := s.osDo(ctx, http.MethodPost, "/"+strings.Join(batch, ",")+"/_open", nil, nil, 5*time.Minute); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // reopenNote attempts the reopen after a failed in_place step and reports
