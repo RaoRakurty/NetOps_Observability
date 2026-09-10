@@ -466,7 +466,9 @@ func (a *EscalateAPI) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
 		return
 	}
-	subj, ok := a.deps.Resolve(w, r, false)
+	// A refresh reads the VENDOR, spends this case's manual-refresh budget and
+	// writes the answer back onto the incident record → write level.
+	subj, ok := a.deps.Resolve(w, r, true)
 	if !ok {
 		return
 	}
@@ -581,7 +583,9 @@ func (a *EscalateAPI) HandleClassify(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
 		return
 	}
-	subj, ok := a.deps.Resolve(w, r, false)
+	// Classifying RECORDS the class on the escalation and nulls a plan built for
+	// the old one → write level.
+	subj, ok := a.deps.Resolve(w, r, true)
 	if !ok {
 		return
 	}
@@ -610,7 +614,8 @@ func (a *EscalateAPI) HandlePlan(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
 		return
 	}
-	subj, ok := a.deps.Resolve(w, r, false)
+	// Planning OVERWRITES the escalation's prepared plan → write level.
+	subj, ok := a.deps.Resolve(w, r, true)
 	if !ok {
 		return
 	}
