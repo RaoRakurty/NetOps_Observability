@@ -304,14 +304,72 @@ type RunStore struct {
 	mu   sync.RWMutex
 	runs map[string]map[string]RunRecord // tenant → correlation_id → latest
 	path string
+	// loadErr is set when the run file EXISTS but its contents could not be
+	// established — an I/O or permission failure, or JSON we could not parse.
+	// It is NOT set for an absent file, which is simply a store nobody has
+	// written yet. While it is set the store keeps serving this process's own
+	// runs from memory, but every persist is REFUSED so a file we never read is
+	// not replaced by whatever this process happens to hold.
+	//
+	// Put has no error channel — it is called from the run loop, which cannot
+	// fail a verification because a disk is unwritable — so the LOG is the
+	// observability here, exactly as it already is for a failed write.
+	loadErr error
 }
 
+// NewRunStore opens the run register. A MISSING file starts empty; a file that
+// exists but could not be read or parsed starts empty, is LOGGED, and refuses
+// every persist from then on, so the file it could not read is never replaced by
+// an empty one.
 func NewRunStore(path string) *RunStore {
 	s := &RunStore{runs: map[string]map[string]RunRecord{}, path: path}
-	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
-		_ = json.Unmarshal(b, &s.runs) // best-effort: corrupt state file starts from defaults
+	if path == "" {
+		return s
+	}
+	b, err := platformdb.Load(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		// Genuinely absent: nothing has been verified yet. That is the normal
+		// first-boot state and an empty register is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together started the
+		// register empty with nothing logged, and the first run then renamed a
+		// temp file over a file whose contents were never read.
+		s.loadErr = fmt.Errorf("verify: the run file could not be read: %w", err)
+		applog.Error("verify", "stored verification runs could not be read; the register starts EMPTY and every persist is refused until the file is repaired or removed",
+			map[string]any{"err": err.Error(), "path": path})
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
+	}
+	// Decode into a SEPARATE map: unmarshalling straight into s.runs leaves it
+	// half-filled when the document is only partly valid, which is a register
+	// nobody wrote.
+	var runs map[string]map[string]RunRecord
+	if uerr := json.Unmarshal(b, &runs); uerr != nil {
+		s.loadErr = fmt.Errorf("verify: the run file could not be parsed: %w", uerr)
+		applog.Error("verify", "stored verification runs could not be parsed; the register starts EMPTY and every persist is refused until the file is repaired or removed",
+			map[string]any{"err": uerr.Error(), "path": path})
+		return s
+	}
+	if runs != nil {
+		s.runs = runs
 	}
 	return s
+}
+
+// Unavailable reports why the run register could not be read, or nil. A reader
+// uses it to say "unknown" instead of reporting the empty register as a case
+// nobody ever verified.
+func (s *RunStore) Unavailable() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
 }
 
 func (s *RunStore) Latest(tenant, caseID string) (RunRecord, bool) {
@@ -350,6 +408,14 @@ func (s *RunStore) Put(rec RunRecord) {
 		for _, e := range all[:len(byCase)-verifyRunsPerTenantCap] {
 			delete(byCase, e.id)
 		}
+	}
+	if s.loadErr != nil {
+		// The file's real contents are unknown, so a save would not update it —
+		// it would REPLACE it with what this process holds. Refuse and say so;
+		// the run itself still stands in memory for this process.
+		applog.Warn("verify", "verification run not persisted: the stored run file was never read, so writing it would replace it",
+			map[string]any{"err": s.loadErr.Error()})
+		return
 	}
 	if s.path != "" {
 		if b, err := json.Marshal(s.runs); err == nil {

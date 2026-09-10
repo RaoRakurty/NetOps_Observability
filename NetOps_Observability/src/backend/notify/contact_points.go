@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"sync"
@@ -54,7 +55,16 @@ type ContactPointStore struct {
 	items map[string]ContactPoint
 }
 
-// NewContactPointStore opens the registry ("" → the standard location).
+// NewContactPointStore opens the registry ("" → the standard location). A file
+// that exists but cannot be read or parsed is an ERROR, which the entrypoint
+// turns into a refusal to boot — the same answer it has always given a corrupt
+// file, now given to an unreadable one too.
+//
+// Why an error and not an empty registry: a contact point is WHERE AN ALERT
+// GOES. Starting empty means every alert is delivered to nobody, and the first
+// admin save then renames a temp file over the file it never read, making the
+// loss permanent. A platform that will not start is loud; a platform that
+// silently notifies nobody is the 2026-09-02 outage.
 func NewContactPointStore(path string) (*ContactPointStore, error) {
 	if path == "" {
 		path = "/data/contact_points.json"
@@ -68,12 +78,22 @@ func NewContactPointStore(path string) (*ContactPointStore, error) {
 
 func (s *ContactPointStore) load() error {
 	b, err := platformdb.Load(s.path)
-	if err != nil {
-		return nil // absent store → empty (errors.Is(os.ErrNotExist) for both backends)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Absent store → empty. Both backends wrap os.ErrNotExist for a key
+		// that was never written, which is the normal first-boot state.
+		return nil
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. The comment here used to claim this branch
+		// checked ErrNotExist; the code did not, so a permissions change on the
+		// file started the registry EMPTY and the next admin save destroyed it.
+		return fmt.Errorf("read contact points %s: %w", s.path, err)
+	case len(b) == 0:
+		return nil // present but empty: nothing stored yet, nothing broken
 	}
 	var list []ContactPoint
 	if err := json.Unmarshal(b, &list); err != nil {
-		return err
+		return fmt.Errorf("decode contact points %s: %w", s.path, err)
 	}
 	for _, c := range list {
 		s.items[c.ID] = c
