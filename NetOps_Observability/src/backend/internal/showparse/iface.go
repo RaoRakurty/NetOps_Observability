@@ -346,8 +346,39 @@ func parseJunosInterfaces(lines []string) Result {
 			section = "out"
 			continue
 		}
-		if v, ok := strings.CutPrefix(t, "Description: "); ok {
-			cur.Description = strPtr(trim(v))
+		// THE DESCRIPTION IS OPERATOR FREE TEXT, and it is the one line in the
+		// record the DEVICE does not author. It is read for the description and
+		// the line is then DONE: neither the Last-flapped scan nor the
+		// comma-split parameter loop below may ever see it.
+		//
+		// Both used to. This parser is the WORST form of the defect the Cisco
+		// parser carried (d80c7492): the description line fell through into the
+		// "Key: value" loop AND into the Last-flapped scan, and every one of
+		// those fields is first-write-wins while the description is printed
+		// ABOVE the device's own link-level line. So a description reading
+		// "core uplink, MTU: 9000, Speed: 10000mbps, Link-mode: Half-duplex,
+		// Last flapped: yesterday" put FOUR values on the record — MTU 9000,
+		// speed 10000, duplex Half-duplex, last flap "yesterday" — against a
+		// device that had said MTU 1514, 1000mbps, nothing about duplex and a
+		// real flap timestamp. Those numbers then flowed into RCA and into LLM
+		// evidence as measurements the device never reported.
+		//
+		// The alternative — accepting these fields only from their canonical
+		// POSITIONS — was rejected for the same reason it was rejected on the
+		// Cisco side: one parser serves several dialects here precisely because
+		// it does not care where in the record a line falls, and pinning
+		// positions re-opens review H5's class of bug. Skipping the free-text
+		// line removes the fabrication source and narrows nothing that is a
+		// genuine reading off a device.
+		//
+		// The empty-value guard is the same invariant: a capture cut off right
+		// after "Description:" must leave the field ABSENT. A pointer to "" is
+		// not "we did not read it", it is "the device said nothing".
+		if strings.HasPrefix(strings.ToLower(t), "description:") {
+			if v, ok := valueAfter(t, "escription:"); ok && v != "" {
+				cur.Description = strPtr(v)
+			}
+			continue
 		}
 		if v, ok := valueAfter(t, "Last flapped"); ok && cur.LastFlap == nil {
 			v = trim(strings.TrimPrefix(trim(v), ":"))

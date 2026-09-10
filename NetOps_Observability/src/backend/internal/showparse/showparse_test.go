@@ -281,6 +281,55 @@ func TestParse_DescriptionIsNotADeviceReading(t *testing.T) {
 	wantStrP(t, "IPv4", i1.IPv4, "10.0.0.5/30")
 }
 
+// TestParse_JunosDescriptionIsNotADeviceReading is review 3.5-03 in its Junos
+// form, which is the worst instance of the class in this package: the
+// description line fell through into BOTH the comma-split "Key: value"
+// parameter loop and the Last-flapped scan, so one line of operator free text
+// could fabricate four separate device readings.
+//
+// The description in the fixture says "MTU: 9000, Speed: 10000mbps, Link-mode:
+// Half-duplex, Last flapped: yesterday". The device says MTU 1514, 1000mbps,
+// nothing at all about duplex, and a real flap timestamp. Every one of those
+// fields is first-write-wins and the description is printed ABOVE the device's
+// own lines, so the description won every race and the device could no longer
+// correct it. Duplex is the sharpest of the four: the device never reported one,
+// so the value could only have come from the operator's label.
+func TestParse_JunosDescriptionIsNotADeviceReading(t *testing.T) {
+	res := mustParse(t, CmdInterfaceDetail, DialectJunos, junosInterfacesDescriptionTrap)
+	if len(res.Interfaces) != 2 {
+		t.Fatalf("got %d interfaces, want 2", len(res.Interfaces))
+	}
+	i0 := res.Interfaces[0]
+	// The description is still READ — it is the operator's label and belongs on
+	// the record. It is simply not a source of measurements.
+	wantStrP(t, "Description", i0.Description,
+		"core uplink, MTU: 9000, Speed: 10000mbps, Link-mode: Half-duplex, Last flapped: yesterday")
+	wantIntP(t, "MTU", i0.MTU, 1514)
+	wantI64P(t, "SpeedMbps", i0.SpeedMbps, 1000)
+	wantStrP(t, "LastFlap", i0.LastFlap, "2026-08-30 12:11:03 UTC (2d 03:12:44 ago)")
+	if i0.Duplex != nil {
+		t.Errorf("Duplex = %q, want nil — the device reported no duplex, the description did", *i0.Duplex)
+	}
+	// The counters under the record are untouched by the refusal.
+	wantI64P(t, "InErrors", i0.InErrors, 12)
+	wantI64P(t, "CRC", i0.CRC, 7)
+	wantI64P(t, "InDrops", i0.InDrops, 3)
+	wantI64P(t, "OutDrops", i0.OutDrops, 4)
+	wantI64P(t, "CarrierTransitions", i0.CarrierTransitions, 5)
+
+	// The guard: an ordinary record with NO description is unchanged by the
+	// refusal, so the fix cost the parser nothing it used to read.
+	i1 := res.Interfaces[1]
+	if i1.Description != nil {
+		t.Errorf("Description = %q, want nil for an interface with none", *i1.Description)
+	}
+	wantStr(t, "Name", &i1.Name, "ge-0/0/1")
+	wantIntP(t, "MTU", i1.MTU, 1514)
+	wantI64P(t, "SpeedMbps", i1.SpeedMbps, 1000)
+	wantStrP(t, "LastFlap", i1.LastFlap, "2026-08-30 12:11:05 UTC (2d 03:12:42 ago)")
+	wantI64P(t, "CarrierTransitions", i1.CarrierTransitions, 1)
+}
+
 func TestParse_JunosInterfaces(t *testing.T) {
 	res := mustParse(t, CmdInterfaceDetail, DialectJunos, junosShowInterfacesExtensive)
 	if len(res.Interfaces) != 1 {

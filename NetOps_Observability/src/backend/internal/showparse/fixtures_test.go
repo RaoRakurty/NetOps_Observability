@@ -66,6 +66,36 @@ GigabitEthernet0/1 is up, line protocol is up
   Full Duplex, 100Mbps, link type is auto, media type is RJ45
 `
 
+// FIXTURE PROVENANCE: SYNTHETIC, authored 2026-09-10. Not a device capture.
+// It is the Junos form of the shape review 3.5-03 names, and the worst one in
+// the package: an operator DESCRIPTION carrying the very "Key: value" tokens the
+// comma-split parameter loop reads AND the words the Last-flapped scan reads,
+// printed ABOVE the device's own link-level and Last-flapped lines. Every value
+// in the description is deliberately unlike the device's own, so a reading taken
+// from the wrong line cannot be mistaken for the right one: the description says
+// MTU 9000 / 10000mbps / Half-duplex / "yesterday", the device says MTU 1514 /
+// 1000mbps / no duplex at all / a real flap timestamp. ge-0/0/1 carries NO
+// description and is the guard that refusing the free-text line costs an
+// ordinary record nothing.
+const junosInterfacesDescriptionTrap = `Physical interface: ge-0/0/0, Enabled, Physical link is Up
+  Interface index: 148, SNMP ifIndex: 526, Generation: 151
+  Description: core uplink, MTU: 9000, Speed: 10000mbps, Link-mode: Half-duplex, Last flapped: yesterday
+  Link-level type: Ethernet, MTU: 1514, MRU: 1522, LAN-PHY mode, Speed: 1000mbps, BPDU Error: None
+  Last flapped   : 2026-08-30 12:11:03 UTC (2d 03:12:44 ago)
+  Input errors:
+    Errors: 12, Drops: 3, Framing errors: 7, Runts: 0, Policed discards: 0
+  Output errors:
+    Carrier transitions: 5, Errors: 0, Drops: 4, Collisions: 0, Aged packets: 0
+Physical interface: ge-0/0/1, Enabled, Physical link is Up
+  Interface index: 149, SNMP ifIndex: 527, Generation: 152
+  Link-level type: Ethernet, MTU: 1514, MRU: 1522, LAN-PHY mode, Speed: 1000mbps, BPDU Error: None
+  Last flapped   : 2026-08-30 12:11:05 UTC (2d 03:12:42 ago)
+  Input errors:
+    Errors: 0, Drops: 0, Framing errors: 0, Runts: 0, Policed discards: 0
+  Output errors:
+    Carrier transitions: 1, Errors: 0, Drops: 0, Collisions: 0, Aged packets: 0
+`
+
 const junosShowInterfacesExtensive = `Physical interface: ge-0/0/0, Enabled, Physical link is Up
   Interface index: 148, SNMP ifIndex: 526, Generation: 151
   Description: uplink to core-02
