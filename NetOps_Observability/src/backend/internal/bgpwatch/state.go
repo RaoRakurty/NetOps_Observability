@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"sync"
@@ -30,6 +31,16 @@ import (
 
 	"netops/backend/internal/platformdb"
 )
+
+// ErrStoreUnreadable is returned by every write of BOTH file stores in this
+// package (the policy store here and the watchlist store in watchlist.go) while
+// their file exists but could not be read or parsed at start-up. It is a
+// REFUSAL, not a failure of the write itself: the file's real contents were
+// never established, so a save would not update the file, it would REPLACE it
+// with whatever this process happens to hold — which after such a load is
+// nothing at all. The operator repairs or removes the file and the api picks it
+// up on the next start.
+var ErrStoreUnreadable = errors.New("bgpwatch: the stored file could not be read at start-up, so writes are refused until it is repaired or removed")
 
 // Store bounds (§9 — operator input is still bounded input).
 const (
@@ -149,23 +160,45 @@ type FileStore struct {
 	path    string
 	rows    map[string]TenantPolicy
 	loadErr error
+	// unreadable is the stricter half of loadErr: it is set only when the file
+	// EXISTS but its contents could not be established — an I/O or permission
+	// failure, or JSON we could not parse. loadErr on its own also covers rows
+	// we read and deliberately dropped, where rewriting the file IS the
+	// intended repair. When the contents are unknown, every write is refused.
+	unreadable error
 }
 
-// NewFileStore loads persisted state. A missing file starts empty; a CORRUPT
-// file starts empty AND records the error, which the integrator logs — a policy
-// that failed to load must never look like a policy the tenant never set (§10).
+// NewFileStore loads persisted state. A MISSING file starts empty; a file that
+// exists but could not be read or parsed starts empty AND records the error,
+// which the integrator logs — a policy that failed to load must never look like
+// a policy the tenant never set (§10) — AND refuses every write from then on,
+// so the file it could not read is never replaced by an empty one.
 func NewFileStore(path string) *FileStore {
 	s := &FileStore{path: path, rows: map[string]TenantPolicy{}}
 	if path == "" {
 		return s
 	}
 	b, err := platformdb.Load(path)
-	if err != nil {
-		return s // absent store → empty, not an error
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: no tenant has set a policy yet. That is the normal
+		// first-boot state and an empty register is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together starts empty with
+		// nothing logged, and the first SetPolicy then renames a temp file over
+		// a file whose contents were never read.
+		s.loadErr = fmt.Errorf("bgpwatch: the policy file could not be read: %w", err)
+		s.unreadable = s.loadErr
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
 	}
 	var rows map[string]TenantPolicy
 	if err := json.Unmarshal(b, &rows); err != nil {
-		s.loadErr = err
+		s.loadErr = fmt.Errorf("bgpwatch: the policy file could not be parsed: %w", err)
+		s.unreadable = s.loadErr
 		return s
 	}
 	for k, v := range rows {
@@ -221,6 +254,13 @@ func (s *FileStore) SetPolicy(_ context.Context, tenant, owner string, p TenantP
 }
 
 func (s *FileStore) flushLocked() error {
+	if s.unreadable != nil {
+		// The file's real contents are unknown, so a flush would not update it
+		// — it would REPLACE it with what this process holds, which after an
+		// unreadable load is nothing. Refuse, and say why: SetPolicy rolls its
+		// change back and the operator gets an error instead of a silent loss.
+		return fmt.Errorf("%w: %w", ErrStoreUnreadable, s.unreadable)
+	}
 	if s.path == "" {
 		return nil
 	}

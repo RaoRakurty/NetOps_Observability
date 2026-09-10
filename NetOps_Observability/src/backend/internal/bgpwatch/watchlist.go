@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"sync"
 	"time"
@@ -82,14 +83,21 @@ type WatchFileStore struct {
 	// boundary: no read or write can reach a bucket it was not handed.
 	rows    map[string]map[string]WatchEntry
 	loadErr error
-	now     func() time.Time
+	// unreadable is the stricter half of loadErr: it is set only when the file
+	// EXISTS but its contents could not be established — an I/O or permission
+	// failure, or JSON we could not parse. loadErr on its own also covers rows
+	// we read and deliberately dropped, where rewriting the file IS the
+	// intended repair. When the contents are unknown, every write is refused.
+	unreadable error
+	now        func() time.Time
 }
 
-// NewWatchFileStore loads the persisted watchlist. A missing file starts empty;
-// a CORRUPT file starts empty AND records the error, which the integrator logs —
-// a watchlist that failed to load must never look like a watchlist a tenant
-// never wrote (§10). It is never silently overwritten either: the first
-// successful Add rewrites the file, and the operator has been told why.
+// NewWatchFileStore loads the persisted watchlist. A MISSING file starts empty;
+// a file that exists but could not be read or parsed starts empty AND records
+// the error, which the integrator logs — a watchlist that failed to load must
+// never look like a watchlist a tenant never wrote (§10) — AND refuses every
+// write from then on, so the file it could not read is never replaced by an
+// empty one.
 func NewWatchFileStore(path string) *WatchFileStore {
 	s := &WatchFileStore{
 		path: path,
@@ -100,12 +108,26 @@ func NewWatchFileStore(path string) *WatchFileStore {
 		return s
 	}
 	b, err := platformdb.Load(path)
-	if err != nil {
-		return s // absent store → empty, not an error
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Genuinely absent: nobody has written this watchlist yet. That is the
+		// normal first-boot state and an empty watchlist is the right answer.
+		return s
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. Folding the two together starts empty with
+		// nothing logged, and the first Add then renames a temp file over a
+		// file whose contents were never read.
+		s.loadErr = fmt.Errorf("bgpwatch: the watchlist file could not be read: %w", err)
+		s.unreadable = s.loadErr
+		return s
+	case len(b) == 0:
+		// Present but empty: nothing stored yet, nothing broken.
+		return s
 	}
 	var rows map[string][]WatchEntry
 	if err := json.Unmarshal(b, &rows); err != nil {
-		s.loadErr = err
+		s.loadErr = fmt.Errorf("bgpwatch: the watchlist file could not be parsed: %w", err)
+		s.unreadable = s.loadErr
 		return s
 	}
 	for rawTenant, list := range rows {
@@ -275,6 +297,13 @@ func (s *WatchFileStore) Delete(_ context.Context, tenant string, resource strin
 // temp-file + rename on the file backend). A failure is RETURNED, never
 // swallowed.
 func (s *WatchFileStore) flushLocked() error {
+	if s.unreadable != nil {
+		// The file's real contents are unknown, so a flush would not update it
+		// — it would REPLACE it with what this process holds, which after an
+		// unreadable load is nothing. Refuse, and say why: the caller rolls its
+		// change back and the operator gets an error instead of a silent loss.
+		return fmt.Errorf("%w: %w", ErrStoreUnreadable, s.unreadable)
+	}
 	if s.path == "" {
 		return nil
 	}
