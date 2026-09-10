@@ -438,7 +438,7 @@ func (o *TACOpener) missingFields(ctx context.Context, req tac.CaseRequest, form
 		// An attach-to-existing connector needs the case it is attaching TO and
 		// the per-case upload credential. Both now cross the seam, so this
 		// reports what is still BLANK rather than refusing the path outright.
-		for _, f := range attachOnlyMissingFields(req) {
+		for _, f := range attachOnlyMissingFields(o.Connector.Name(), req) {
 			add(f)
 		}
 		return miss
@@ -529,7 +529,7 @@ func (o *TACOpener) SubmitCase(ctx context.Context, req tac.CaseRequest) (tac.Ca
 		// is a form field (rendered, echoed, logged), the token is
 		// tac.CaseSecrets (redacted under every rendering Go has). Neither is
 		// smuggled through a field meant for something else.
-		if miss := attachOnlyMissingFields(req); len(miss) > 0 {
+		if miss := attachOnlyMissingFields(o.Connector.Name(), req); len(miss) > 0 {
 			return res, fmt.Errorf("%w: %s", tac.ErrFormIncomplete, strings.Join(miss, ", "))
 		}
 		ref = CaseRef{
@@ -601,16 +601,46 @@ func (o *TACOpener) SubmitCase(ctx context.Context, req tac.CaseRequest) (tac.Ca
 // never silently degraded to a download.
 //
 // It reads the request rather than returning a constant list, so a form the
-// operator HAS completed submits instead of being refused on principle.
-func attachOnlyMissingFields(req tac.CaseRequest) []string {
+// operator HAS completed submits instead of being refused on principle. And it
+// asks the connector's OWN required-field row what it needs, rather than
+// assuming every attach-only path is Cisco CXD.
+//
+// That assumption was a shipped bug. It demanded an upload token from every
+// attach-only connector, and the email transport never reads one — the mail is
+// addressed to the vendor's attach mailbox and the SR number goes in the
+// subject. So `email-cisco` could never submit: the operator was blocked on a
+// credential the path does not use and the UI had nowhere to type it.
+func attachOnlyMissingFields(connectorID string, req tac.CaseRequest) []string {
 	var miss []string
 	if strings.TrimSpace(req.Form.ExistingCaseNumber) == "" {
 		miss = append(miss, "existing_case_number (the SR or case this bundle attaches to)")
 	}
-	if strings.TrimSpace(req.Secrets.UploadToken) == "" {
+	if attachOnlyNeedsUploadToken(connectorID) && strings.TrimSpace(req.Secrets.UploadToken) == "" {
 		miss = append(miss, "upload_token (the per-case credential from the vendor's portal)")
 	}
 	return miss
+}
+
+// attachOnlyNeedsUploadToken asks the design-doc-backed required-field table
+// (caseconn_required.go, source of record TAC_CASE_FIELDS_2026-09-07.md §3)
+// whether THIS connector's attach needs a per-case upload credential. Cisco CXD
+// does — the token is the Basic-auth password. The email routes do not.
+//
+// A connector the table does not know is treated as needing one. That is the
+// fail-closed answer: blocking submit with a named reason is recoverable, and
+// caseconn_required_test.go already refuses to let a registered connector go
+// missing from the table, so the unknown case is not a real deployment.
+func attachOnlyNeedsUploadToken(connectorID string) bool {
+	fields := RequiredCaseFields(connectorID)
+	if len(fields) == 0 {
+		return true
+	}
+	for _, f := range fields {
+		if f.Key == "upload_token" {
+			return true
+		}
+	}
+	return false
 }
 
 // PollStatus reads a case's status back.

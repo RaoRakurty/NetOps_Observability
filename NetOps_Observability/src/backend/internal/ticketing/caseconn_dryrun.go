@@ -119,7 +119,7 @@ func (o *TACOpener) DryRun(ctx context.Context, req tac.CaseRequest) (tac.DryRun
 			Step: "open the case", Method: "-", URL: "-",
 			Note: "This path attaches to a case you have already opened; it opens nothing itself.",
 		})
-		for _, miss := range attachOnlyMissingFields(req) {
+		for _, miss := range attachOnlyMissingFields(o.Connector.Name(), req) {
 			rep.Blockers = append(rep.Blockers, tac.RequiredField{
 				Key: strings.SplitN(miss, " ", 2)[0], Label: miss,
 				Why:          "this path attaches to an existing case and needs its reference and per-case credential",
@@ -231,7 +231,10 @@ func (o *TACOpener) describeAttach(req tac.CaseRequest) tac.DryRunCall {
 		{Name: "profile", Value: string(req.Form.Profile),
 			Note: "the bundle profile this path's attachment ceiling implies"},
 	}
-	if o.Connector.Capabilities().AttachToExistingOnly {
+	// Only the attach-only paths that actually AUTHENTICATE with a per-case
+	// token render one. An email attach does not: showing the field there would
+	// promise a credential the transport never sends.
+	if o.Connector.Capabilities().AttachToExistingOnly && attachOnlyNeedsUploadToken(o.Connector.Name()) {
 		call.Fields = append(call.Fields, tac.DryRunField{
 			Name: "upload_token", Value: "[REDACTED]", Secret: true,
 			Note: "the per-case credential you copy from the vendor's portal; it is never stored",
