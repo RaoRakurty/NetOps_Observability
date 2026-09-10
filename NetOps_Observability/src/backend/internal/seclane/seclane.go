@@ -123,6 +123,11 @@ const (
 	// EnvDeadLetterFile is the local durable spool, used only when the bus
 	// dead-letter topic is itself unreachable.
 	EnvDeadLetterFile = "SECURITY_DEADLETTER_FILE"
+	// EnvWatermarkFile is the durable per-tenant DETECTION HIGH-WATER MARK: the
+	// end of the last threat window that was actually assessed. It is what lets
+	// the next pass start where the last one stopped instead of re-deriving
+	// [now-interval, now] and leaving the difference unread.
+	EnvWatermarkFile = "SECURITY_WATERMARK_FILE"
 )
 
 const (
@@ -132,6 +137,8 @@ const (
 	DefaultMaxFindings = 5000
 	// DefaultDeadLetterFile is the shipped local spool path.
 	DefaultDeadLetterFile = "/data/security_deadletter.jsonl"
+	// DefaultWatermarkFile is the shipped detection high-water-mark path.
+	DefaultWatermarkFile = "/data/security_watermarks.json"
 
 	// scanJitterFrac is the ±fraction of full jitter applied to every interval,
 	// so N replicas never scan in lockstep (§9).
@@ -148,6 +155,14 @@ const (
 	statusErrorsMax = 8
 	// DeadLetterMaxBytes bounds the local spool file.
 	DeadLetterMaxBytes = 64 << 20
+	// maxLookbackIntervals bounds a CATCH-UP detection window, in multiples of
+	// the configured interval. A pass that resumes from a stale high-water mark
+	// reads from that mark forward, but never further back than this: a lane
+	// that was down for a week must not open a week-wide read across every
+	// tenant's syslog and flow tables on its first tick back (§9 bounded IO).
+	// When the clamp bites, the uncovered stretch is reported as an UNASSESSED
+	// verdict rather than passed over in silence (§10).
+	maxLookbackIntervals = 4
 )
 
 // Scan outcomes — the closed `outcome` label vocabulary (bounded cardinality).
@@ -288,6 +303,12 @@ type Deps struct {
 	// Spool is the local durable dead-letter fallback. Optional: nil means the
 	// ladder ends at the dead-letter topic.
 	Spool func(tenant string, recs []Record, cause error) error
+	// Watermarks persists the per-tenant DETECTION HIGH-WATER MARK across
+	// restarts. Optional: nil means the lane cannot remember where the last
+	// pass stopped, and it SAYS SO — the first pass for each tenant then emits
+	// an UNASSESSED detection verdict instead of quietly starting at
+	// now-interval as if nothing had been missed.
+	Watermarks Watermarks
 	// Scrub sanitizes an untrusted string before it reaches a log or a status
 	// row (§8 log hygiene). Required.
 	Scrub func(string) string
@@ -364,7 +385,13 @@ type Lane struct {
 	statusMu sync.Mutex
 	status   map[string]ScanStatus
 
+	// marks is the in-memory view of the per-tenant detection high-water mark,
+	// seeded from Deps.Watermarks at construction and written through to it.
+	marksMu sync.Mutex
+	marks   map[string]time.Time
+
 	interval    time.Duration
+	maxLookback time.Duration
 	maxFindings int
 }
 
@@ -392,6 +419,21 @@ func New(d Deps) (*Lane, error) {
 	if d.Advisory == nil && d.AdvisoryFeed != nil {
 		d.Advisory = advisory.NewOfflineProvider(d.AdvisoryFeed)
 	}
+	// The high-water marks are loaded ONCE, here, and the lane refuses to start
+	// if they cannot be read. Starting empty on an unreadable store would look
+	// exactly like a first run and would silently discard every tenant's
+	// resume point — the gap this state exists to close.
+	marks := map[string]time.Time{}
+	if d.Watermarks != nil {
+		loaded, err := d.Watermarks.Load()
+		if err != nil {
+			return nil, fmt.Errorf("seclane: detection watermarks could not be read, and starting "+
+				"without them would silently re-scan from now and leave the gap unassessed: %w", err)
+		}
+		for tenant, at := range loaded {
+			marks[tenant] = at.UTC()
+		}
+	}
 	return &Lane{
 		deps:        d,
 		producer:    prod,
@@ -399,7 +441,9 @@ func New(d Deps) (*Lane, error) {
 		inflight:    map[string]bool{},
 		queue:       make(chan string, scanQueueDepth),
 		status:      map[string]ScanStatus{},
+		marks:       marks,
 		interval:    interval,
+		maxLookback: interval * maxLookbackIntervals,
 		maxFindings: maxFindings,
 	}, nil
 }
@@ -821,21 +865,39 @@ func (l *Lane) threatFindings(ctx context.Context, tenant, scanID string,
 
 	cat := threatlane.DefaultCatalog()
 	until := l.deps.Now()
-	since := until.Add(-l.interval)
+	win := l.detectionWindow(tenant, until)
+	// Record where this pass STARTS before reading anything. The mark means
+	// "everything before this instant is either read or written off", so a
+	// tenant that has none yet gets one now — which is what lets a FAILED pass
+	// be retried from the same place instead of being stepped over by the next
+	// tick's now-minus-interval.
+	l.seedMark(tenant, win.since)
 	out := make([]secfindings.Finding, 0, 32)
 
-	logEng := threatlane.NewEngine(cat, l.LogSource(tenant, devices, since, until), threatlane.MemFlowSource(nil),
+	read := true
+	logEng := threatlane.NewEngine(cat, l.LogSource(tenant, devices, win.since, until), threatlane.MemFlowSource(nil),
 		threatlane.WithClock(l.deps.Now), threatlane.WithScanID(scanID))
 	if fs, err := logEng.Detect(ctx); err != nil {
 		addErr("threat-device-log", err)
+		read = false
 	} else {
 		out = append(out, fs...)
 	}
 
-	flowEng := threatlane.NewEngine(cat, threatlane.MemLogSource(nil), l.FlowSource(tenant, devices, l.interval),
+	// The flow reader measures its window backwards from the DATABASE clock, so
+	// it takes the window's LENGTH rather than its start. A zero-or-negative
+	// span (a mark at or ahead of the clock) means there is nothing new to read
+	// and is floored at one second, never left to fall back to a default that
+	// would silently widen the read.
+	flowWindow := until.Sub(win.since)
+	if flowWindow <= 0 {
+		flowWindow = time.Second
+	}
+	flowEng := threatlane.NewEngine(cat, threatlane.MemLogSource(nil), l.FlowSource(tenant, devices, flowWindow),
 		threatlane.WithClock(l.deps.Now), threatlane.WithScanID(scanID))
 	if fs, err := flowEng.Detect(ctx); err != nil {
 		addErr("threat-flow", err)
+		read = false
 	} else {
 		out = append(out, fs...)
 	}
@@ -847,7 +909,161 @@ func (l *Lane) threatFindings(ctx context.Context, tenant, scanID string,
 		}
 		kept = append(kept, f)
 	}
+
+	// The mark advances ONLY when both readers succeeded. A failed read leaves
+	// the mark where it was, so the next pass re-covers the window instead of
+	// stepping over telemetry nobody ever looked at.
+	if read {
+		l.advanceMark(tenant, until)
+	}
+
+	// A stretch of time that was NOT read is reported, per device, as an
+	// UNASSESSED verdict. Silence here is indistinguishable from "we looked and
+	// found nothing", which is the one thing a detection lane must never say
+	// about a window it skipped (§5g, §10).
+	if win.gap {
+		l.deps.LogWarn("threat-detection window gap — the period before this scan was NOT assessed",
+			map[string]any{
+				"tenant_seg": l.deps.TenantSeg(tenant), "scan_id": scanID,
+				"gap_from": win.gapFrom.UTC().Format(time.RFC3339), "gap_to": win.gapTo.UTC().Format(time.RFC3339),
+				"reason": win.reason,
+			})
+		for _, d := range devices {
+			kept = append(kept, unassessedDetection(tenant, scanID, l.deps.Now(), d, win))
+		}
+	}
 	return kept
+}
+
+// detectWindow is one pass's resolved detection window, plus the stretch of
+// time (if any) this pass will NOT read.
+type detectWindow struct {
+	// since is the start of the window this pass reads; the end is always now.
+	since time.Time
+	// gap is true when time before `since` went unread and nothing else will
+	// ever come back for it.
+	gap            bool
+	gapFrom, gapTo time.Time
+	reason         string
+}
+
+// detectionWindow resolves [since, until] for one tenant from the high-water
+// mark, and reports whatever it could not cover.
+//
+// The old rule was `since = until - interval`, recomputed every pass. The real
+// spacing between passes is a JITTERED interval PLUS the scan's own duration,
+// so that rule left a sliver unread on EVERY tick, a whole interval unread on a
+// skipped tick, and the entire outage unread across a restart — with no finding
+// and no verdict. Resuming from the mark closes all three.
+func (l *Lane) detectionWindow(tenant string, until time.Time) detectWindow {
+	last, ok := l.mark(tenant)
+	if !ok {
+		w := detectWindow{since: until.Add(-l.interval)}
+		if l.deps.Watermarks == nil {
+			// No mark and nowhere to keep one. This pass cannot know what the
+			// last one covered — including whether there WAS a last one — so it
+			// says that rather than implying the interval before it was clean.
+			w.gap, w.gapTo = true, w.since
+			w.reason = "no detection high-water mark is persisted (" + EnvWatermarkFile +
+				" is not configured), so any period before this window — a restart or a missed tick included — was not assessed"
+		}
+		return w
+	}
+	if last.After(until) {
+		// A mark ahead of the clock (a clock step, or a pinned test clock).
+		// Reading nothing is correct; claiming a gap would not be.
+		return detectWindow{since: until}
+	}
+	if floor := until.Add(-l.maxLookback); last.Before(floor) {
+		return detectWindow{
+			since: floor, gap: true, gapFrom: last, gapTo: floor,
+			reason: "the detection lane resumed after " + until.Sub(last).Round(time.Second).String() +
+				", which is further back than one pass may read; the stretch before this window was not assessed",
+		}
+	}
+	return detectWindow{since: last}
+}
+
+// mark reads one tenant's high-water mark.
+func (l *Lane) mark(tenant string) (time.Time, bool) {
+	l.marksMu.Lock()
+	defer l.marksMu.Unlock()
+	at, ok := l.marks[tenant]
+	return at, ok
+}
+
+// advanceMark moves one tenant's high-water mark forward. It only ever moves
+// forward: a late or replayed pass can never pull the resume point backwards.
+func (l *Lane) advanceMark(tenant string, until time.Time) {
+	l.marksMu.Lock()
+	prev, ok := l.marks[tenant]
+	if ok && !until.After(prev) {
+		l.marksMu.Unlock()
+		return
+	}
+	l.marks[tenant] = until.UTC()
+	l.marksMu.Unlock()
+	l.persistMark(tenant, until)
+}
+
+// seedMark sets a tenant's first mark to the start of the window about to be
+// read. It never overwrites one that already exists.
+func (l *Lane) seedMark(tenant string, since time.Time) {
+	l.marksMu.Lock()
+	if _, ok := l.marks[tenant]; ok {
+		l.marksMu.Unlock()
+		return
+	}
+	l.marks[tenant] = since.UTC()
+	l.marksMu.Unlock()
+	l.persistMark(tenant, since)
+}
+
+// persistMark writes a mark through to the durable store. A store that refuses
+// the write is LOGGED, never swallowed: the in-memory mark stands (this process
+// knows what it read), but the operator is told that a restart will re-open the
+// window as a gap.
+func (l *Lane) persistMark(tenant string, at time.Time) {
+	if l.deps.Watermarks == nil {
+		return
+	}
+	if err := l.deps.Watermarks.Save(tenant, at); err != nil {
+		l.deps.LogWarn("detection high-water mark could not be persisted — a restart will re-open this window as a gap",
+			map[string]any{"tenant_seg": l.deps.TenantSeg(tenant), "err": l.deps.Scrub(err.Error())})
+	}
+}
+
+// unassessedDetection is the honest non-verdict for a stretch of time the
+// detection lane did not read, stamped on one device so it grounds like every
+// other finding (the advisory lane's unassessed verdict works the same way).
+func unassessedDetection(tenant, scanID string, now time.Time, d Device, w detectWindow) secfindings.Finding {
+	res := secfindings.Resource{
+		DeviceID: d.ID, DeviceName: d.Name, Hostname: d.Name, Address: d.Address,
+		Kind: secfindings.KindNetworkDevice, Platform: d.Platform(),
+	}.ResolvePlatform()
+	detail := w.reason
+	if !w.gapFrom.IsZero() {
+		detail += " (" + w.gapFrom.UTC().Format(time.RFC3339) + " to " + w.gapTo.UTC().Format(time.RFC3339) + ")"
+	}
+	f := secfindings.Finding{
+		ID:            "detection-window-unassessed",
+		Source:        secfindings.SourceNetRule,
+		ScanID:        scanID,
+		Time:          now,
+		TenantID:      tenant,
+		EvidenceClass: secfindings.EvidenceSignal,
+		ControlID:     "detection-window-unassessed",
+		ControlTitle:  "Threat detection window not fully assessed",
+		Category:      "detection",
+		Severity:      secfindings.SeverityInfo,
+		Resource:      res,
+		Intended:      "Every minute of device-log and flow telemetry is read by the detection rules exactly once.",
+		Detail:        detail,
+		Remediation:   "Persist the detection high-water mark (" + EnvWatermarkFile + ") and keep the lane running; re-run a scan once the source is available again.",
+		RawRuleID:     "detection-window-unassessed",
+	}
+	f.SetStatus(secfindings.StatusUnknown)
+	return f
 }
 
 // ── emit ────────────────────────────────────────────────────────────────────

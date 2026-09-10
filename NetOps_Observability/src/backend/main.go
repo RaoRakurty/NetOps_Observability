@@ -5526,6 +5526,11 @@ func (s *server) securityLaneDeps() seclane.Deps {
 			seclane.DeadLetterMaxBytes,
 			func() time.Time { return time.Now().UTC() },
 			seclane.TenantSeg, scrubLogValue),
+		// The detection high-water mark. Without it every restart re-derives the
+		// window as [now-interval, now] and the outage in between is never
+		// assessed by anything.
+		Watermarks: seclane.NewFileWatermarks(
+			envOr(seclane.EnvWatermarkFile, seclane.DefaultWatermarkFile)),
 	}
 }
 
