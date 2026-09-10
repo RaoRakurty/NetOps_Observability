@@ -30,6 +30,11 @@ const (
 	OutcomeAtCapacity = "at_capacity"
 	// OutcomeBadAddress — the accepted connection had no usable remote IP.
 	OutcomeBadAddress = "bad_address"
+	// OutcomeAcceptFailed — accept() itself failed, so no connection was ever
+	// handed to us. Under fd exhaustion this is the ONLY signal that the
+	// receiver is in trouble, which is why it is counted separately from the
+	// outcomes that describe a connection we did get.
+	OutcomeAcceptFailed = "accept_failed"
 )
 
 // Parse-error stages (the `stage` label on netops_bmp_parse_errors_total).

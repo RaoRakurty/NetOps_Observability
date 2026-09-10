@@ -24,12 +24,37 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
+)
+
+// receiverState is the receiver's OWN account of whether it is listening. It
+// exists because "the routes are registered" and "a router can reach us" are
+// two different facts, and the read API used to report the first as if it were
+// the second: after the accept loop returned, the listener was closed for the
+// process lifetime while every response still said receiver_enabled: true and
+// told the operator to go and configure a router.
+type receiverState int32
+
+const (
+	// receiverIdle — built, but Run has not bound yet. This is also the state of
+	// a module whose Run is never called, which is what the read-surface tests
+	// hold; it is not a failure and is not reported as one.
+	receiverIdle receiverState = iota
+	// receiverListening — a bound socket is accepting.
+	receiverListening
+	// receiverStopped — the context was cancelled. The process is going down.
+	receiverStopped
+	// receiverFailed — the bind was refused, or the accept loop died. NOTHING
+	// will be received until the process is restarted, and every read says so.
+	receiverFailed
 )
 
 // Listener terminates BMP sessions and folds them into a Store.
@@ -41,11 +66,130 @@ type Listener struct {
 	ln       net.Listener
 	seq      atomic.Uint64
 	liveConn atomic.Int64
+
+	state  atomic.Int32   // receiverState
+	reason atomic.Value   // string: why it is not listening
+	rnd    func() float64 // backoff jitter
 }
 
 // NewListener builds the receiver over an already-validated Deps.
 func NewListener(d Deps, store *Store) *Listener {
-	return &Listener{deps: d, store: store}
+	// #nosec G404 -- jitter for a retry backoff, not a security decision: this
+	// value never authenticates, authorizes, seeds a key or names a resource
+	// (the bgpwatch.NewEvaluator precedent).
+	rng := rand.New(rand.NewSource(d.Now().UnixNano()))
+	var mu sync.Mutex
+	return &Listener{deps: d, store: store,
+		rnd: func() float64 { mu.Lock(); defer mu.Unlock(); return rng.Float64() }}
+}
+
+// setState records what the receiver is doing and why, so a read can report it
+// instead of guessing.
+func (l *Listener) setState(st receiverState, reason string) {
+	l.reason.Store(reason)
+	l.state.Store(int32(st))
+}
+
+// Down reports whether the receiver is NOT listening, and why. It is false for
+// a receiver that has simply not been started (a read-only assembly), because
+// that is not a failure to report to an operator.
+func (l *Listener) Down() (bool, string) {
+	if l == nil {
+		return false, ""
+	}
+	switch receiverState(l.state.Load()) {
+	case receiverStopped, receiverFailed:
+		reason, _ := l.reason.Load().(string)
+		return true, reason
+	case receiverIdle, receiverListening:
+		return false, ""
+	default:
+		return false, ""
+	}
+}
+
+// acceptBackoff grows the pause between retries, jittered, and caps it.
+func (l *Listener) acceptBackoff(prev time.Duration) time.Duration {
+	next := prev * 2
+	if next < AcceptBackoff {
+		next = AcceptBackoff
+	}
+	if next > MaxAcceptBackoff {
+		next = MaxAcceptBackoff
+	}
+	jitter := 1.0
+	if l.rnd != nil {
+		jitter = 0.75 + 0.5*l.rnd()
+	}
+	return time.Duration(float64(next) * jitter)
+}
+
+// acceptOutcome is the decision about ONE accept() failure. It is a value
+// rather than a branch inside the loop so the rule can be tested directly: a
+// receiver's behaviour under fd exhaustion is not something to find out in
+// production.
+type acceptOutcome struct {
+	// Retry says whether the loop keeps going, after Wait.
+	Retry bool
+	Wait  time.Duration
+	// Log and Reason are filled in only when Retry is false: the log line for
+	// the operator's console, and the sentence every read response carries.
+	Log    string
+	Reason string
+}
+
+// classifyAcceptFailure decides what one accept() failure means. retries is how
+// many CONSECUTIVE transient failures have already been ridden out, prev the
+// last pause.
+func (l *Listener) classifyAcceptFailure(err error, retries int, prev time.Duration) acceptOutcome {
+	if !transientAcceptError(err) {
+		return acceptOutcome{
+			Log:    "BMP receiver stopped accepting and will NOT recover — NO router feed will be received until the platform is restarted",
+			Reason: "The BMP receiver stopped accepting connections and cannot recover, so no router feed is being received. Restart the platform.",
+		}
+	}
+	if retries >= MaxAcceptRetries {
+		return acceptOutcome{
+			Log:    "BMP receiver could not accept a connection after repeated retries — NO router feed will be received until the platform is restarted",
+			Reason: "The BMP receiver has been unable to accept connections for a sustained period, which usually means the platform has run out of file descriptors. No router feed is being received. Restart the platform.",
+		}
+	}
+	return acceptOutcome{Retry: true, Wait: l.acceptBackoff(prev)}
+}
+
+// transientAcceptError reports whether an accept() failure is one the receiver
+// can ride out. The kernel errors below mean "not right now" — a file-descriptor
+// or buffer ceiling, a connection the peer aborted between SYN and accept, a
+// signal — and they clear on their own. Everything else (a closed or revoked
+// socket, an unrecognised failure) is treated as PERMANENT, because a receiver
+// that quietly retries a socket it can never accept on again is a receiver that
+// is down while claiming to be up.
+//
+// The old test was `net.Error.Timeout()`, and it was DEAD CODE: no deadline is
+// ever set on this listener, so Accept never returns a timeout. It is kept in
+// the set anyway, ahead of the errno checks, because a future deadline would be
+// a transient condition and this is where that answer belongs.
+func transientAcceptError(err error) bool {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	for _, errno := range []syscall.Errno{
+		syscall.EMFILE,  // this process is out of file descriptors
+		syscall.ENFILE,  // the machine is out of file descriptors
+		syscall.ENOBUFS, // no buffer space
+		syscall.ENOMEM,  // no memory for the socket
+		syscall.ECONNABORTED,
+		syscall.EINTR,
+	} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
 }
 
 // Run binds the listen address and serves until ctx is cancelled. It is the
@@ -67,11 +211,13 @@ func (l *Listener) Run(ctx context.Context) {
 			"listen": addr,
 			"error":  err.Error(),
 		})
+		l.setState(receiverFailed, "The BMP receiver could not bind "+addr+", so no router feed is being received. Restart the platform once the address is free.")
 		return
 	}
 	l.mu.Lock()
 	l.ln = ln
 	l.mu.Unlock()
+	l.setState(receiverListening, "")
 	l.deps.LogInfo("BMP receiver listening", map[string]any{"listen": addr})
 
 	// Closing the listener is what unblocks Accept on cancellation.
@@ -80,6 +226,11 @@ func (l *Listener) Run(ctx context.Context) {
 	shutdown := func() {
 		closeOnce.Do(func() {
 			close(stop)
+			// A receiver that failed keeps that reason; a clean stop replaces an
+			// idle/listening state with the honest "not listening any more".
+			if receiverState(l.state.Load()) != receiverFailed {
+				l.setState(receiverStopped, "The BMP receiver has shut down, so no router feed is being received.")
+			}
 			if cerr := ln.Close(); cerr != nil {
 				l.deps.LogWarn("BMP listener close failed", map[string]any{"error": cerr.Error()})
 			}
@@ -94,6 +245,9 @@ func (l *Listener) Run(ctx context.Context) {
 	var conns sync.WaitGroup
 	defer conns.Wait()
 
+	// Consecutive transient accept failures. A successful accept resets both,
+	// so a single EMFILE spike costs one backoff and nothing else.
+	retries, backoff := 0, time.Duration(0)
 	for {
 		conn, aerr := ln.Accept()
 		if aerr != nil {
@@ -102,19 +256,38 @@ func (l *Listener) Run(ctx context.Context) {
 				return
 			default:
 			}
-			var ne net.Error
-			if errors.As(aerr, &ne) && ne.Timeout() {
-				// A transient accept failure must not spin the CPU.
-				select {
-				case <-stop:
-					return
-				case <-time.After(AcceptBackoff):
-					continue
-				}
+			l.deps.Metrics.Session(OutcomeAcceptFailed)
+			out := l.classifyAcceptFailure(aerr, retries, backoff)
+			if !out.Retry {
+				// Die LOUDLY, and tell the READS, so the API stops offering a
+				// receiver that is not there (§10: no silent failures).
+				l.deps.LogError(out.Log, map[string]any{
+					"listen":  addr,
+					"error":   aerr.Error(),
+					"retries": retries,
+				})
+				l.setState(receiverFailed, out.Reason)
+				return
 			}
-			l.deps.LogWarn("BMP accept failed", map[string]any{"error": aerr.Error()})
-			return
+			retries++
+			backoff = out.Wait
+			// One line PER RETRY is bounded by MaxAcceptRetries, and the backoff
+			// spreads them, so a wedged listener is visible without becoming the
+			// log volume it is reporting on.
+			l.deps.LogWarn("BMP accept failed — retrying", map[string]any{
+				"listen":  addr,
+				"error":   aerr.Error(),
+				"retry":   retries,
+				"backoff": backoff.String(),
+			})
+			select {
+			case <-stop:
+				return
+			case <-time.After(backoff):
+				continue
+			}
 		}
+		retries, backoff = 0, 0
 		if l.liveConn.Load() >= int64(l.maxConns()) {
 			l.deps.Metrics.Session(OutcomeAtCapacity)
 			l.deps.LogWarn("BMP connection refused — receiver at its connection ceiling", map[string]any{

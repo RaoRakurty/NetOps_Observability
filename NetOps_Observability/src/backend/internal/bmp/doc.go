@@ -129,7 +129,20 @@ const (
 	// dribbles it is a slowloris; this is the bound that ends it.
 	MessageTimeout = 30 * time.Second
 
-	// AcceptBackoff is the pause after a temporary accept() failure, so a
-	// wedged listener cannot spin the CPU.
+	// AcceptBackoff is the FIRST pause after a transient accept() failure, so a
+	// wedged listener cannot spin the CPU. It doubles, jittered, up to
+	// MaxAcceptBackoff.
 	AcceptBackoff = 250 * time.Millisecond
+
+	// MaxAcceptBackoff caps that growth. Long enough that an fd exhaustion has
+	// a chance to clear, short enough that a receiver which recovers starts
+	// accepting again within a scrape interval.
+	MaxAcceptBackoff = 30 * time.Second
+
+	// MaxAcceptRetries bounds how many CONSECUTIVE transient accept failures the
+	// receiver rides out before it declares itself down. Retrying forever would
+	// leave a receiver that has been broken for hours still reporting itself as
+	// enabled; giving up on the first error would kill it on a single EMFILE
+	// spike. A success resets the count.
+	MaxAcceptRetries = 20
 )

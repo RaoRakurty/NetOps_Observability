@@ -113,8 +113,10 @@ func rejectUnknownQuery(r *http.Request, allowed ...string) error {
 // answer is BUILT FROM, so an empty feed reads as "nothing is exporting to us"
 // rather than as "your network announced nothing".
 type coverage struct {
-	// Receiver is always true where these routes are registered — they only
-	// exist when FEATURE_BMP is on.
+	// Receiver answers "is a router able to reach us RIGHT NOW", not "is the
+	// feature switched on". Those are different facts, and reporting the second
+	// as the first is how a dead receiver kept telling operators to go and
+	// configure a router that was already configured.
 	Receiver bool `json:"receiver_enabled"`
 	// SessionsUp is how many routers are currently exporting to this platform.
 	SessionsUp int `json:"sessions_up"`
@@ -127,6 +129,18 @@ type coverage struct {
 
 func (a *API) coverageFor(st StatsView) coverage {
 	c := coverage{Receiver: true, SessionsUp: st.SessionsUp, Complete: true}
+	// The receiver's own account comes FIRST. When it is down, nothing below is
+	// worth saying: the feed is not empty because the network is quiet, it is
+	// empty because nothing can arrive.
+	if down, why := a.listener.Down(); down {
+		c.Receiver = false
+		c.Complete = false
+		c.Notes = append(c.Notes, why)
+		if st.Sessions > 0 {
+			c.Notes = append(c.Notes, "The records below are historical: they were received before the receiver stopped.")
+		}
+		return c
+	}
 	if st.Sessions == 0 {
 		c.Complete = false
 		c.Notes = append(c.Notes, "No router is exporting BMP to this platform. This is an empty FEED, not an empty routing table — point a router's BMP export at the receiver (see the ingestion guide).")
