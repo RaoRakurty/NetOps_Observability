@@ -143,6 +143,7 @@ func (c *ChangeEvent) Validate() error {
 	c.ReleaseID = clip(strings.TrimSpace(c.ReleaseID), MaxIDBytes)
 	c.RollbackRef = clip(strings.TrimSpace(c.RollbackRef), MaxIDBytes)
 	c.Site, c.App, c.Seam = labelSafe(c.Site), labelSafe(c.App), labelSafe(c.Seam)
+	c.Cohort.normalize()
 	return c.Provenance.Validate()
 }
 

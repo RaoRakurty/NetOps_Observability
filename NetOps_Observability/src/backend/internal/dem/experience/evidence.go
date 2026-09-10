@@ -374,6 +374,7 @@ func (e *EvidenceItem) Validate() error {
 	}
 	e.SupportsHypotheses = dedupIDs(e.SupportsHypotheses)
 	e.ContradictsHypotheses = dedupIDs(e.ContradictsHypotheses)
+	e.Cohort.normalize()
 	return e.Provenance.Validate()
 }
 

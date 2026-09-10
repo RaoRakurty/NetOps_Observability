@@ -184,6 +184,7 @@ func (e *ExperienceEvent) Validate() error {
 	}
 	e.JourneyID = clip(strings.TrimSpace(e.JourneyID), MaxIDBytes)
 	e.StepID = labelSafe(e.StepID)
+	e.Cohort.normalize()
 	if err := boundMap(e.FeatureFlags, "feature_flags"); err != nil {
 		return fmt.Errorf("experience event %s: %w", e.ID, err)
 	}
@@ -283,6 +284,7 @@ func (s *ExperienceSession) Validate() error {
 		return fmt.Errorf("experience session %s: ended_at precedes started_at", s.ID)
 	}
 	s.ReplayRef = clip(strings.TrimSpace(s.ReplayRef), MaxIDBytes)
+	s.Cohort.normalize()
 	switch s.Health {
 	case SessionGood, SessionDegraded, SessionFailed:
 	case "":
@@ -351,6 +353,7 @@ func (b *BusinessEvent) Validate() error {
 	if b.Quantity < 0 {
 		return fmt.Errorf("business event %s: quantity must not be negative", b.ID)
 	}
+	b.Cohort.normalize()
 	if err := boundMap(b.Attributes, "attributes"); err != nil {
 		return fmt.Errorf("business event %s: %w", b.ID, err)
 	}

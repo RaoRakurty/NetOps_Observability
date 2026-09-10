@@ -31,10 +31,21 @@ import (
 
 // Bounds. A journey with 200 steps is a process diagram, not a user journey.
 const (
-	MaxJourneySteps        = 40
-	MaxJourneysPerTenant   = 100
-	MaxStepNextFanout      = 8
-	MaxCohortDimensionsLen = 12
+	MaxJourneySteps      = 40
+	MaxJourneysPerTenant = 100
+	MaxStepNextFanout    = 8
+	// MaxCohortDimensionsLen bounds ONE cohort dimension. A dimension is a
+	// grouping key, not a description: it is rendered into [Cohort.Key], which
+	// is used as a map key, as a metric label and as on-screen text. 64 bytes
+	// holds every real ISP, site, region, browser and release string and keeps
+	// the composed key under half a kilobyte.
+	//
+	// It was declared as 12 and referenced nowhere (review 2026-09-08, 3.2-09).
+	// 12 could not be the cap it names: "amsterdam-dc1", "chrome-mobile" and
+	// "Deutsche Telekom" are all longer, so a 12-byte clip would have silently
+	// fabricated cohort identity — two different populations folding into one
+	// key — which is the opposite of what cohorts exist to do.
+	MaxCohortDimensionsLen = 64
 )
 
 // Business importance — drives triage order and the coverage model's "which
@@ -295,6 +306,30 @@ func (c Cohort) Key() string {
 // Empty reports whether no dimension was recorded.
 func (c Cohort) Empty() bool { return c.Key() == "all" }
 
+// normalize bounds every dimension the way every sibling label in this package
+// is bounded: the labelSafe charset, then [MaxCohortDimensionsLen].
+//
+// Cohort dimensions are WIRE fields. They arrive on the operator change route
+// and on the beacon ingest route, whose credential ingest.go says must be
+// assumed public, so they are hostile input like every other field on those
+// shapes (§3). Unbounded they were an unbounded allocation per event and a
+// control-character path into a map key, a metric label and rendered text.
+//
+// Every Validate that carries a Cohort calls this. A dimension already inside
+// the bound is returned unchanged, because rewriting honest data would split
+// one population into two cohorts.
+func (c *Cohort) normalize() {
+	dim := func(s string) string { return clip(labelSafe(s), MaxCohortDimensionsLen) }
+	c.Site = dim(c.Site)
+	c.ISP = dim(c.ISP)
+	c.Region = dim(c.Region)
+	c.DeviceType = dim(c.DeviceType)
+	c.Browser = dim(c.Browser)
+	c.AppVersion = dim(c.AppVersion)
+	c.NetworkType = dim(c.NetworkType)
+	c.FeatureFlag = dim(c.FeatureFlag)
+}
+
 // JourneyObservation is ONE actual traversal. Immutable (Phase B.E).
 type JourneyObservation struct {
 	ID             string `json:"id"`
@@ -361,6 +396,7 @@ func (o *JourneyObservation) Validate() error {
 	if o.BusinessValue > 0 && o.Currency == "" {
 		return fmt.Errorf("journey observation %s: a business value needs a currency", o.ID)
 	}
+	o.Cohort.normalize()
 	return o.Provenance.Validate()
 }
 
