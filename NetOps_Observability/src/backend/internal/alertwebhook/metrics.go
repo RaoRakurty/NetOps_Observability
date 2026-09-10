@@ -22,10 +22,14 @@ import (
 // Metrics is the receiver's counter set. Every method is nil-safe, so a
 // metric-less deployment (or a test) needs no branching at the call sites.
 type Metrics struct {
-	requests        atomic.Int64
-	unauthorized    atomic.Int64
-	malformed       atomic.Int64
-	alertsReceived  atomic.Int64
+	requests       atomic.Int64
+	unauthorized   atomic.Int64
+	malformed      atomic.Int64
+	alertsReceived atomic.Int64
+	// alertsTruncated counts alerts CUT by the per-request cap and therefore
+	// never delivered. It is a loss counter, not a rate counter: any non-zero
+	// value means a sender was refused fan-out it asked for.
+	alertsTruncated atomic.Int64
 	dispatched      atomic.Int64
 	suppressed      atomic.Int64
 	droppedTenant   atomic.Int64
@@ -182,6 +186,7 @@ func (m *Metrics) Write(w io.Writer) {
 	c("netops_alert_webhook_unauthorized_total", "Webhook requests refused for a bad or missing shared secret.", m.unauthorized.Load())
 	c("netops_alert_webhook_malformed_total", "Webhook requests refused for an unparseable or oversize body.", m.malformed.Load())
 	c("netops_alert_webhook_alerts_received_total", "Alerts parsed out of accepted webhook requests.", m.alertsReceived.Load())
+	c("netops_alert_webhook_alerts_truncated_total", "Alerts CUT by the per-request cap and never delivered (any non-zero value is real alert loss).", m.alertsTruncated.Load())
 	c("netops_alert_webhook_dispatched_total", "Alerts fanned out to the notification channels.", m.dispatched.Load())
 	c("netops_alert_webhook_suppressed_total", "Alerts suppressed by the cool-down window (duplicate of a recent delivery).", m.suppressed.Load())
 	c("netops_alert_webhook_dropped_tenant_total", "Alerts DROPPED for carrying a tenant/org label on the platform-global path (CLAUDE.md 3a).", m.droppedTenant.Load())

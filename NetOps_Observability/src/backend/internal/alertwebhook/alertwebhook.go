@@ -404,17 +404,33 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	alerts, err := readAlerts(w, req)
+	alerts, cut, err := readAlerts(w, req)
 	if err != nil {
 		r.deps.Metrics.inc(&r.deps.Metrics.malformed)
 		r.log("warn", "vmalert webhook payload rejected", map[string]any{"error": err.Error()})
 		writeErr(w, http.StatusBadRequest, "malformed payload")
 		return
 	}
+	// The per-request cap is a real bound (§9) and stays. What must never
+	// happen is losing alerts QUIETLY on the delivery path the 2026-09-02
+	// outage post-mortem hardened: a cut gets a counter, a WARN line and a
+	// field in the answer, exactly like every other per-alert outcome here.
+	if cut > 0 {
+		r.deps.Metrics.add(&r.deps.Metrics.alertsTruncated, int64(cut))
+		r.log("warn", "vmalert webhook payload truncated at the per-request cap: alerts past the cap were NOT delivered",
+			map[string]any{
+				"cap":     maxAlertsPerRequest,
+				"dropped": cut,
+				"parsed":  len(alerts) + cut,
+			})
+	}
 
-	var received, dispatched, suppressed, dropped, droppedCustomer, heartbeats int
+	// received counts the PARSED total, cut alerts included. Counting it after
+	// the cut told the sender every alert had landed, which is the one thing a
+	// delivery receiver must never say (§10).
+	received := len(alerts) + cut
+	var dispatched, suppressed, dropped, droppedCustomer, heartbeats int
 	for _, a := range alerts {
-		received++
 		switch res := r.handleAlert(a); res {
 		case resultDispatched:
 			dispatched++
@@ -451,6 +467,9 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 		"dropped":          dropped,
 		"dropped_customer": droppedCustomer,
 		"heartbeat":        heartbeats,
+		// Always present, 0 in the normal case: an absent field would read as
+		// "nothing was cut" on a receiver that had not learned to say so.
+		"truncated": cut,
 	})
 }
 
@@ -479,38 +498,44 @@ func (r *receiver) authorized(req *http.Request) bool {
 }
 
 // readAlerts reads a BOUNDED body and accepts either wire shape.
-func readAlerts(w http.ResponseWriter, req *http.Request) ([]wireAlert, error) {
+//
+// It returns the alerts it will hand on AND how many the per-request cap cut,
+// so the caller can report the loss rather than swallow it. A cut is a real
+// loss of alerts: nobody ever delivers them.
+func readAlerts(w http.ResponseWriter, req *http.Request) ([]wireAlert, int, error) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, req.Body, maxBodyBytes))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	trimmed := strings.TrimLeftFunc(string(body), func(rn rune) bool {
 		return rn == ' ' || rn == '\t' || rn == '\n' || rn == '\r'
 	})
 	if trimmed == "" {
-		return nil, errors.New("empty body")
+		return nil, 0, errors.New("empty body")
 	}
 	var alerts []wireAlert
 	switch trimmed[0] {
 	case '[':
 		// vmalert's own shape: the Alertmanager v2 API bare array.
 		if err := json.Unmarshal([]byte(trimmed), &alerts); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	case '{':
 		// The classic webhook-receiver envelope.
 		var env wireEnvelope
 		if err := json.Unmarshal([]byte(trimmed), &env); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		alerts = env.Alerts
 	default:
-		return nil, errors.New("body is neither a JSON array nor a JSON object")
+		return nil, 0, errors.New("body is neither a JSON array nor a JSON object")
 	}
+	cut := 0
 	if len(alerts) > maxAlertsPerRequest {
+		cut = len(alerts) - maxAlertsPerRequest
 		alerts = alerts[:maxAlertsPerRequest]
 	}
-	return alerts, nil
+	return alerts, cut, nil
 }
 
 // ── per-alert handling ──────────────────────────────────────────────────────

@@ -65,11 +65,32 @@ func (c *testClock) advance(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
+// logLine is one captured structured log record. The receiver must never fail
+// silently (§10), so several tests assert on what it SAID as well as on what
+// it counted.
+type logLine struct {
+	level  string
+	msg    string
+	fields map[string]any
+}
+
 type rig struct {
 	h     http.HandlerFunc
 	disp  *fakeDispatcher
 	clock *testClock
 	mx    *Metrics
+
+	logMu sync.Mutex
+	logs  []logLine
+}
+
+// lines returns a copy of what the receiver logged so far.
+func (r *rig) lines() []logLine {
+	r.logMu.Lock()
+	defer r.logMu.Unlock()
+	out := make([]logLine, len(r.logs))
+	copy(out, r.logs)
+	return out
 }
 
 func newRig(t *testing.T, cooldown time.Duration) *rig {
@@ -77,17 +98,24 @@ func newRig(t *testing.T, cooldown time.Duration) *rig {
 	d := &fakeDispatcher{}
 	c := &testClock{t: time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)}
 	m := NewMetrics()
+	r := &rig{disp: d, clock: c, mx: m}
 	h, err := Handler(Deps{
 		Dispatcher: d,
 		Token:      testToken,
 		Cooldown:   cooldown,
 		Now:        c.now,
 		Metrics:    m,
+		Log: func(level, msg string, fields map[string]any) {
+			r.logMu.Lock()
+			defer r.logMu.Unlock()
+			r.logs = append(r.logs, logLine{level: level, msg: msg, fields: fields})
+		},
 	})
 	if err != nil {
 		t.Fatalf("Handler: %v", err)
 	}
-	return &rig{h: h, disp: d, clock: c, mx: m}
+	r.h = h
+	return r
 }
 
 func (r *rig) post(t *testing.T, body string, auth func(*http.Request)) *httptest.ResponseRecorder {
@@ -486,6 +514,91 @@ func TestAlertsPerRequestAreBounded(t *testing.T) {
 	}
 	if fired, _ := r.disp.counts(); fired != maxAlertsPerRequest {
 		t.Fatalf("fired = %d, want the per-request cap %d", fired, maxAlertsPerRequest)
+	}
+}
+
+// 3.9-10: the cap is fine, the SILENCE was not. Alerts past the per-request cap
+// used to be cut with no counter, no log and no field in the response, and
+// `received` was counted AFTER the cut — so the sender was told every alert it
+// posted had landed. This is the delivery path the 2026-09-02 outage
+// post-mortem hardened; a loss on it must be visible in all three places (§10).
+func TestOverCapAlertsAreCountedLoggedAndReported(t *testing.T) {
+	const over = 50
+	r := newRig(t, time.Nanosecond)
+	var sb strings.Builder
+	sb.WriteString("[")
+	for i := 0; i < maxAlertsPerRequest+over; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `{"status":"firing","labels":{"alertname":"R%d","layer":"stack"}}`, i)
+	}
+	sb.WriteString("]")
+
+	w := r.post(t, sb.String(), bearer)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	var body struct {
+		Received   int `json:"received"`
+		Dispatched int `json:"dispatched"`
+		Truncated  int `json:"truncated"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// received counts what the sender ACTUALLY sent, not what survived the cap.
+	if body.Received != maxAlertsPerRequest+over {
+		t.Errorf("received = %d, want the parsed total %d — the sender must not be told the cut alerts landed",
+			body.Received, maxAlertsPerRequest+over)
+	}
+	if body.Truncated != over {
+		t.Errorf("response truncated = %d, want %d", body.Truncated, over)
+	}
+	if body.Dispatched != maxAlertsPerRequest {
+		t.Errorf("dispatched = %d, want the cap %d", body.Dispatched, maxAlertsPerRequest)
+	}
+
+	// A counter, like every other per-alert outcome in this handler.
+	txt := metricsText(r.mx)
+	if !strings.Contains(txt, fmt.Sprintf("netops_alert_webhook_alerts_truncated_total %d", over)) {
+		t.Errorf("no truncation counter in /metrics:\n%s", txt)
+	}
+	if !strings.Contains(txt, fmt.Sprintf("netops_alert_webhook_alerts_received_total %d", maxAlertsPerRequest+over)) {
+		t.Errorf("alerts_received_total must count the PARSED total:\n%s", txt)
+	}
+
+	// And a WARN line naming how many were dropped.
+	var found bool
+	for _, l := range r.lines() {
+		if l.level != "warn" || !strings.Contains(l.msg, "truncat") {
+			continue
+		}
+		found = true
+		if got := fmt.Sprintf("%v", l.fields["dropped"]); got != fmt.Sprint(over) {
+			t.Errorf("warn line dropped field = %q, want %d", got, over)
+		}
+	}
+	if !found {
+		t.Errorf("over-cap truncation was not logged; lines = %+v", r.lines())
+	}
+}
+
+// A request inside the cap must stay quiet: no counter movement, no warning,
+// and no truncated field dangling in the response.
+func TestUnderCapRequestReportsNoTruncation(t *testing.T) {
+	r := newRig(t, time.Minute)
+	if w := r.post(t, bareArray, bearer); w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if txt := metricsText(r.mx); !strings.Contains(txt, "netops_alert_webhook_alerts_truncated_total 0") {
+		t.Errorf("truncation counter must be present and zero:\n%s", txt)
+	}
+	for _, l := range r.lines() {
+		if strings.Contains(l.msg, "truncat") {
+			t.Errorf("an under-cap request logged a truncation: %+v", l)
+		}
 	}
 }
 
