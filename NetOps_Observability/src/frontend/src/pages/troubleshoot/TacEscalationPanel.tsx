@@ -88,6 +88,11 @@ import {
   CASE_SUBMIT_FAILED,
   CLASSIFY_FAILED,
   CASE_NUMBER_LABEL,
+  UPLOAD_TOKEN_LABEL,
+  UPLOAD_TOKEN_HINT,
+  needsUploadToken,
+  confirmReady,
+  unresolvedBlockers,
   capturesHaveRun,
   caseNumberLooksValid,
   caseNumberRefusal,
@@ -338,8 +343,11 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
   const [caseTipFromConfirm, setCaseTipFromConfirm] = useState("");
   // The per-case upload credential a vendor's portal mints (Cisco CXD). It is
   // typed here, sent once and never stored or echoed back.
+  //
+  // There is no upload HOST control beside it on purpose. The client pins the
+  // vendor's published upload host and refuses any other, so a box asking an
+  // operator to name one could only produce a refusal.
   const [uploadToken, setUploadToken] = useState("");
-  const [uploadHost, setUploadHost] = useState("");
   // The dry run (internal/tac/dryrun.go): authenticate for real, describe the
   // rest, create nothing. Secondary to Open case, always.
   const [dryRun, setDryRun] = useState<TacDryRunReport | null>(null);
@@ -414,7 +422,7 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
     setRoute(null); setRouteNote(""); setEscalateErr(""); setProposal(null); setPrepareErr("");
     setConfirmFields(EMPTY_FIELDS); setConfirmErr(""); setCaseLink(null);
     setCaseLineFromConfirm(""); setCaseTipFromConfirm("");
-    setUploadToken(""); setUploadHost("");
+    setUploadToken("");
     setDryRun(null); setDryRunErr("");
     void readState();
   }, [incidentId, readState]);
@@ -553,7 +561,7 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
     try {
       const r = await api.tacEscalateConfirm(
         incidentId,
-        buildConfirmRequest(confirmFields, { token: uploadToken, host: uploadHost }),
+        buildConfirmRequest(confirmFields, { token: uploadToken }),
       );
       if (!alive.current) return;
       setCaseResult(r.result);
@@ -561,7 +569,7 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
       setCaseLineFromConfirm((r.status_line ?? "").trim());
       setCaseTipFromConfirm((r.tooltip ?? "").trim());
       onCaseOpened?.(r.case);
-      setUploadToken(""); setUploadHost("");
+      setUploadToken("");
       await readState();
     } catch (e) {
       if (alive.current) setConfirmErr(tacError(e, CONFIRM_FAILED));
@@ -851,6 +859,13 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
   // rather than being filed on the incident.
   const portalNumberOK = !route?.portal ||
     caseNumberLooksValid(routedConnector?.case_number_pattern, confirmFields.existing_case_number);
+  // What the operator has typed into the two boxes this screen owns. The
+  // proposal was built before they reached the keyboard, so both are missing
+  // on it by definition; a blocker naming one of them is cleared HERE.
+  const suppliedOnScreen = {
+    existingCaseNumber: confirmFields.existing_case_number,
+    uploadToken,
+  };
   // Which routes the "Send to vendor" chooser offers, and whether there is
   // anything to send yet.
   const deviceVendor = dialectVendor(plan?.dialect ?? capture?.dialect ?? "");
@@ -1152,6 +1167,32 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
                     />
                   </label>
                 )}
+                {/* THE UPLOAD TOKEN. A route that attaches to a case the vendor
+                    already opened authenticates the upload with a per-case
+                    credential the administrator copies out of the vendor's own
+                    portal. The server names it as a blocker whenever it is
+                    needed, so this box appears exactly where a case cannot be
+                    filed without it and nowhere else.
+
+                    It is a CREDENTIAL and it is treated as one: masked at the
+                    keyboard, never pre-filled, sent once, and cleared the
+                    moment the case is filed. Nothing stores it and nothing
+                    reads it back. */}
+                {needsUploadToken(proposal) && (
+                  <label className="tac-field">
+                    <span>{UPLOAD_TOKEN_LABEL}</span>
+                    <input
+                      type="password"
+                      maxLength={512}
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={uploadToken}
+                      data-testid="tac-confirm-upload-token"
+                      onChange={(e) => setUploadToken(e.target.value)}
+                    />
+                    <span className="fact-line">{UPLOAD_TOKEN_HINT}</span>
+                  </label>
+                )}
                 {/* THE NUMBER THAT COMES BACK. On a manual route the case is
                     created in the vendor's own portal, so this is the one value
                     Correlix cannot derive — and the one the next operator will
@@ -1199,9 +1240,9 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
                 </ul>
               )}
 
-              {(proposal.blockers ?? []).length > 0 && (
+              {unresolvedBlockers(proposal, suppliedOnScreen).length > 0 && (
                 <ul className="tac-blockers" role="alert" data-testid="tac-blockers">
-                  {(proposal.blockers ?? []).slice(0, ROW_RENDER_CAP).map((b, i) => (
+                  {unresolvedBlockers(proposal, suppliedOnScreen).slice(0, ROW_RENDER_CAP).map((b, i) => (
                     <li key={`blk-${b.key}-${i}`} data-testid={`tac-blocker-${b.key}`}>
                       {blockerLine(b)}{" "}
                       {settingsHref(b.settings_hint) ? (
@@ -1232,8 +1273,8 @@ export default function TacEscalationPanel({ incidentId, autoStart = false, onCa
                 <button
                   type="button"
                   className="btn accent"
-                  disabled={!proposal.ready || confirming || !portalNumberOK}
-                  aria-disabled={!proposal.ready || !portalNumberOK}
+                  disabled={!confirmReady(proposal, suppliedOnScreen) || confirming || !portalNumberOK}
+                  aria-disabled={!confirmReady(proposal, suppliedOnScreen) || !portalNumberOK}
                   data-testid="tac-confirm-btn"
                   onClick={() => { void runConfirm(); }}
                 >

@@ -57,6 +57,7 @@ import {
   DRY_RUN_SENTENCE,
   ESCALATE_FAILED,
   PREPARING_NOTE,
+  UPLOAD_TOKEN_LABEL,
 } from "./tacModel";
 
 const INC = "corr-abc1234567890";
@@ -742,5 +743,131 @@ describe("the escalation refuses to invent anything", () => {
     const box = await screen.findByTestId("tac-confirm-statement");
     expect((box as HTMLTextAreaElement).value).toBe("<script>alert(1)</script>");
     expect(box.querySelector("script")).toBeNull();
+  });
+});
+
+// ── the per-case upload credential ───────────────────────────────────────────
+//
+// 3.1-11. The attach-to-existing Cisco route needs two things a create route
+// does not: the case it attaches to, and the per-case upload token the vendor's
+// portal mints. The token was declared, cleared and sent, but no control on the
+// screen ever set it, so the server blocked the route for a field the operator
+// had no way to fill and the blocker's own hint ("the case form") named a box
+// that did not exist.
+//
+// The token is a credential, not a case field: masked, never pre-filled, sent
+// once and cleared the moment the case is filed.
+//
+// ASSUMED OF THE SERVER: the proposal names the field as a blocker with the key
+// `upload_token` whenever the route needs it, and the confirm body carries it
+// as top-level `upload_token` beside `form`. Both are the contract at
+// internal/tac/escalatehttp.go today. The screen reads the blocker list rather
+// than deciding for itself which vendors need a token, so a server that stops
+// demanding it (for the email-cisco route, say) simply stops rendering the box.
+
+const cxdRoute = { ...ROUTE, connector_id: "cisco-cxd", display: "Cisco CXD" };
+
+const UPLOAD_BLOCKER = {
+  key: "upload_token",
+  label: "the per-case CXD upload token",
+  why: "the token from Support Case Manager is the Basic-auth password; it is valid 72 days, is supplied per attach and is never stored by Correlix",
+  settings_hint: "the case form (copy it from Cisco Support Case Manager)",
+};
+
+/** A CXD proposal blocked exactly the way the server blocks one: the case
+ *  reference and the upload token, both of which are typed on this screen. */
+const cxdBlocked = (): TacProposal => proposal({
+  route: cxdRoute,
+  ready: false,
+  form: { ...proposal().form, connector_id: "cisco-cxd", existing_case_number: "" },
+  blocker_note: "this case still needs the SR it attaches to and the per-case upload token",
+  blockers: [
+    {
+      key: "existing_case_number", label: "the Cisco SR number",
+      why: "CXD authenticates the upload with the SR number as the Basic-auth user.",
+      settings_hint: "the case form (copy it from Cisco Support Case Manager)",
+    },
+    UPLOAD_BLOCKER,
+  ],
+});
+
+async function escalateCXD(p: TacProposal) {
+  mocks.tacEscalate.mockResolvedValue({
+    incident_id: INC, route: cxdRoute, state: state(), can_collect: true, collect_note: "",
+    capture_note: "", evidence_sources: [], evidence_missing: [], connectors: [CXD, PORTAL],
+  });
+  mocks.tacEscalatePrepare.mockResolvedValue({ proposal: p, state: state() });
+  await escalate(stateResponse({ connectors: [CXD, PORTAL] }));
+  await screen.findByTestId("tac-confirm");
+}
+
+describe("the per-case upload credential has a box on the screen that asks for it", () => {
+  it("renders the box the blocker names, masked and empty", async () => {
+    await escalateCXD(cxdBlocked());
+    const box = await screen.findByTestId("tac-confirm-upload-token") as HTMLInputElement;
+    expect(box).toBeInTheDocument();
+    expect(box.type).toBe("password");
+    expect(box.value).toBe("");
+    // The label the blocker's hint sends the operator to is on this screen.
+    expect(screen.getByText(UPLOAD_TOKEN_LABEL)).toBeInTheDocument();
+  });
+
+  it("does not ask for one on a route the server did not block on it", async () => {
+    await escalateCXD(proposal({ route: cxdRoute }));
+    expect(screen.queryByTestId("tac-confirm-upload-token")).toBeNull();
+  });
+
+  it("the button stays shut until both boxes are filled, then opens", async () => {
+    await escalateCXD(cxdBlocked());
+    const btn = await screen.findByTestId("tac-confirm-btn");
+    expect(btn).toBeDisabled();
+    fireEvent.change(screen.getByTestId("tac-confirm-existing-case"), { target: { value: "695123456" } });
+    expect(btn).toBeDisabled();
+    fireEvent.change(screen.getByTestId("tac-confirm-upload-token"), { target: { value: "cxd-secret" } });
+    expect(btn).toBeEnabled();
+    // And the refusal stops naming boxes the operator has now filled in.
+    expect(screen.queryByTestId("tac-blockers")).toBeNull();
+  });
+
+  it("a blocker set somewhere else still holds the button shut", async () => {
+    await escalateCXD(proposal({
+      route: cxdRoute, ready: false,
+      blockers: [
+        UPLOAD_BLOCKER,
+        {
+          key: "account_id", label: "your CCO-ID",
+          why: "Cisco opens a case against the account that owns the contract.",
+          settings_hint: "Administration → Ticket delivery → Vendor contracts",
+        },
+      ],
+    }));
+    const btn = await screen.findByTestId("tac-confirm-btn");
+    fireEvent.change(screen.getByTestId("tac-confirm-upload-token"), { target: { value: "cxd-secret" } });
+    expect(btn).toBeDisabled();
+    expect(screen.getByTestId("tac-blocker-account_id")).toBeInTheDocument();
+  });
+
+  it("sends the token once, beside the form and never inside it, then clears it", async () => {
+    mocks.tacEscalateConfirm.mockResolvedValue({
+      result: { connector_id: "cisco-cxd", case_id: "695123456", attached: true, submitted_at: "" },
+      case: {
+        connector: "cisco-cxd", case_id: "695123456", opened_at: "2026-09-07T09:05:00Z",
+        tier: "high", attached: true, pollable: false, closed: false, status: "existing", auth_mode: "basic",
+      },
+    });
+    await escalateCXD(cxdBlocked());
+    await screen.findByTestId("tac-confirm-btn");
+    fireEvent.change(screen.getByTestId("tac-confirm-existing-case"), { target: { value: "695123456" } });
+    fireEvent.change(screen.getByTestId("tac-confirm-upload-token"), { target: { value: "cxd-secret" } });
+    await act(async () => { fireEvent.click(screen.getByTestId("tac-confirm-btn")); });
+
+    expect(mocks.tacEscalateConfirm).toHaveBeenCalledTimes(1);
+    const [, body] = mocks.tacEscalateConfirm.mock.calls[0];
+    expect(body.upload_token).toBe("cxd-secret");
+    expect(body.form.existing_case_number).toBe("695123456");
+    // A credential never travels in a field meant for something else.
+    expect(JSON.stringify(body.form)).not.toContain("cxd-secret");
+    // No upload host is invented: the client pins the vendor's published one.
+    expect(body.upload_host).toBeUndefined();
   });
 });

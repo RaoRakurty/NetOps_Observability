@@ -1204,6 +1204,12 @@ export function safePortalHref(url: string | undefined): string {
 /** The box the operator pastes the vendor's case number back into. */
 export const CASE_NUMBER_LABEL = "Case number from the vendor";
 
+/** The box the operator pastes the per-case upload credential into, and the
+ *  one line saying where it comes from and what happens to it. */
+export const UPLOAD_TOKEN_LABEL = "Upload token from the vendor";
+export const UPLOAD_TOKEN_HINT =
+  "Copy it from the vendor's own support portal for this case. It is sent once with this case and never stored.";
+
 /** The refusal when what they pasted is not a case number for this vendor. It
  *  is the CLIENT's copy of the server's rule, so the typo is caught at the
  *  keyboard; the server checks again and is the authority. */
@@ -1330,6 +1336,68 @@ export function settingsHref(hint: string): string {
  *  free text when it does not. Empty is a FACT about the vendor, not a gap. */
 export function severityChoices(info: TacConnectorInfo | undefined): string[] {
   return (info?.severity_values ?? []).filter((v) => (v || "").trim() !== "");
+}
+
+/** Does the server say this route still needs the per-case upload credential?
+ *
+ *  ASKED OF THE SERVER, NOT GUESSED FROM THE VENDOR. The token is a Cisco CXD
+ *  idea today, but which connectors demand it is the server's table to keep
+ *  (internal/ticketing/caseconn_required.go), and it names the field in the
+ *  blockers on the proposal. Reading the blockers means this control appears
+ *  exactly where a case cannot be filed without it and nowhere else, and it
+ *  keeps working if the server's table changes.
+ *
+ *  The token is a CREDENTIAL, not a case field: it is typed here, sent once,
+ *  never stored and never echoed back — which is why it does not live in
+ *  CaseFields with the rest of the form. */
+export function needsUploadToken(proposal: TacProposal | null): boolean {
+  if ((proposal?.blockers ?? []).some((b) => b.key === UPLOAD_TOKEN_KEY)) return true;
+  return (proposal?.form.missing_fields ?? []).some((f) => f === UPLOAD_TOKEN_KEY || f.startsWith(`${UPLOAD_TOKEN_KEY} `));
+}
+
+/** The server's own name for the field, on both the blocker and the confirm
+ *  body. One constant so the two can never drift apart. */
+export const UPLOAD_TOKEN_KEY = "upload_token";
+
+/** What the operator has typed into the two boxes this screen owns. */
+export type SuppliedOnScreen = { existingCaseNumber: string; uploadToken: string };
+
+/** The blockers the operator can clear WITHOUT leaving this screen. Everything
+ *  else on the server's list is set on a settings page or in inventory. */
+const CLEARABLE_HERE = ["existing_case_number", UPLOAD_TOKEN_KEY] as const;
+
+/** The blockers still standing, once what the operator has typed here counts.
+ *
+ *  Prepare builds the proposal BEFORE the person reaches the keyboard, so a
+ *  case reference and an upload token are always missing at that moment and are
+ *  always on the list. Leaving them there once they are filled in would leave a
+ *  refusal on screen naming a box that is no longer empty. */
+export function unresolvedBlockers(proposal: TacProposal | null, supplied: SuppliedOnScreen): TacRequiredField[] {
+  const filled: Record<string, boolean> = {
+    existing_case_number: (supplied.existingCaseNumber || "").trim() !== "",
+    [UPLOAD_TOKEN_KEY]: (supplied.uploadToken || "").trim() !== "",
+  };
+  return (proposal?.blockers ?? []).filter((b) => !filled[b.key]);
+}
+
+/** May the operator press the button that opens the case?
+ *
+ *  The server's `ready` is the answer whenever it is true. When it is false the
+ *  ONLY thing that can change the answer here is a blocker the operator has now
+ *  supplied at the keyboard: a proposal held shut by anything else — an
+ *  unconfigured connector, a missing CCO-ID, a serial number that lives in
+ *  inventory — stays shut, and a proposal with no blockers at all is being
+ *  refused for a reason this screen cannot see, so it stays shut too.
+ *
+ *  The server checks every value again and refuses by name. This decides what
+ *  is worth offering, never what is allowed. */
+export function confirmReady(proposal: TacProposal | null, supplied: SuppliedOnScreen): boolean {
+  if (!proposal) return false;
+  if (proposal.ready) return true;
+  const blockers = proposal.blockers ?? [];
+  if (blockers.length === 0) return false;
+  if (!blockers.every((b) => (CLEARABLE_HERE as readonly string[]).includes(b.key))) return false;
+  return unresolvedBlockers(proposal, supplied).length === 0;
 }
 
 /** Does this connector need the case it is attaching to? Cisco CXD and an
